@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# Credentials and secrets
+.env
+token.json
+credentials.json
+*.json.bak
+
+# Runtime
+*.db
+*.db-wal
+*.db-shm
+*.parquet
+*.pid
+*.log
+
+# macOS
+.DS_Store
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code
+.claude/settings.local.json
