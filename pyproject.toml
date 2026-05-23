@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ibkr_core_mcp"
+version = "0.1.0"
+description = "IBKR Client Portal API client, Drive cache, SQLite store, Claude tools"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "urllib3>=2.0",
+    "anthropic>=0.28",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "plotly>=5.22",
+    "RestrictedPython>=7.0",
+    "pyarrow>=16.0",
+    "google-api-python-client>=2.130",
+    "google-auth-httplib2>=0.2",
+    "google-auth-oauthlib>=1.2",
+    "python-dotenv>=1.0",
+    "browser-cookie3>=0.19",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12", "mypy>=1.8", "ruff>=0.3"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ibkr_core_mcp*"]
+
+[tool.pytest.ini_options]
+markers = ["integration: requires live IBKR gateway and credentials"]
