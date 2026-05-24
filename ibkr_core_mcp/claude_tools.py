@@ -10,6 +10,10 @@ from ibkr_core_mcp.client import IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import CacheMissError
 from ibkr_core_mcp.store import SQLiteStore
+from ibkr_core_mcp import analytics as _analytics
+from ibkr_core_mcp import indicators as _indicators
+from ibkr_core_mcp.backtest import run_backtest as _run_backtest
+from ibkr_core_mcp import pinescript as _pinescript
 
 _TODAY = lambda: str(date.today())
 
@@ -163,6 +167,83 @@ TOOL_DEFINITIONS = [
             "required": [],
         },
     },
+    {
+        "name": "add_indicators",
+        "description": (
+            "Load cached market data for a symbol and compute all technical indicators "
+            "(RSI, MACD, Bollinger Bands, ATR, VWAP, OBV, Stochastic, Williams %R, Keltner Channels). "
+            "Returns a summary of current indicator values."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "timeframe": {"type": "string", "description": "e.g. '1D'"},
+                "period": {"type": "string", "description": "e.g. '1Y'"},
+                "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+            "required": ["symbol", "timeframe", "period", "end"],
+        },
+    },
+    {
+        "name": "run_backtest",
+        "description": (
+            "Execute a Python strategy in a sandboxed environment against cached market data. "
+            "Strategy code receives a pandas DataFrame `df` with OHLCV columns and must set "
+            "df['signal'] = 1 (long), 0 (flat), or -1 (short). "
+            "Returns Sharpe ratio, total return, max drawdown, trade count, and win rate."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python strategy code string"},
+                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "timeframe": {"type": "string", "description": "e.g. '1D'"},
+                "period": {"type": "string", "description": "e.g. '1Y'"},
+                "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "strategy_name": {"type": "string", "description": "Human-readable name", "default": ""},
+            },
+            "required": ["code", "symbol", "timeframe", "period", "end"],
+        },
+    },
+    {
+        "name": "generate_pinescript",
+        "description": (
+            "Generate a PineScript v5 script for TradingView from a list of indicators "
+            "or from a previously run backtest strategy. "
+            "Output can be pasted directly into the TradingView Pine Editor."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "indicators": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of indicators: 'rsi', 'macd', 'bollinger_bands', 'ema', 'sma', 'atr'",
+                },
+                "strategy_name": {"type": "string", "description": "Optional name for the script", "default": ""},
+            },
+            "required": ["symbol", "indicators"],
+        },
+    },
+    {
+        "name": "get_analytics",
+        "description": (
+            "Compute full portfolio/strategy analytics on cached OHLCV data: "
+            "Sharpe ratio, Sortino ratio, Calmar ratio, CAGR, max drawdown, and drawdown duration."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "timeframe": {"type": "string", "description": "e.g. '1D'"},
+                "period": {"type": "string", "description": "e.g. '1Y'"},
+                "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+            "required": ["symbol", "timeframe", "period", "end"],
+        },
+    },
 ]
 
 
@@ -203,6 +284,10 @@ class ClaudeToolkit:
             "get_option_chain": self._get_option_chain,
             "run_scanner": self._run_scanner,
             "get_notifications": self._get_notifications,
+            "add_indicators": self._add_indicators,
+            "run_backtest": self._run_backtest,
+            "generate_pinescript": self._generate_pinescript,
+            "get_analytics": self._get_analytics,
         }
         handler = handlers.get(name)
         if not handler:
@@ -422,3 +507,82 @@ class ClaudeToolkit:
             for n in notifications
         ]
         return f"FYI Notifications ({unread} unread):\n" + "\n".join(lines), None
+
+    def _add_indicators(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        timeframe = inputs["timeframe"]
+        period = inputs["period"]
+        end = inputs["end"]
+        if not self._cache.check(symbol, timeframe, period, end):
+            return f"No cached data for {symbol} {timeframe} {period}. Fetch it first with fetch_market_data.", None
+        df = self._cache.load(symbol, timeframe, period, end)
+        df = _indicators.add_all(df)
+        last = df.iloc[-1]
+        lines = [
+            f"Indicators for {symbol} (last bar: {df.index[-1].date()}):",
+            f"  RSI(14):          {last.get('rsi', float('nan')):.1f}",
+            f"  MACD:             {last.get('macd', float('nan')):.4f}  Signal: {last.get('macd_signal', float('nan')):.4f}",
+            f"  BB Upper/Mid/Low: {last.get('bb_upper', float('nan')):.2f} / {last.get('bb_mid', float('nan')):.2f} / {last.get('bb_lower', float('nan')):.2f}",
+            f"  ATR(14):          {last.get('atr', float('nan')):.4f}",
+            f"  VWAP:             {last.get('vwap', float('nan')):.2f}",
+            f"  Stoch %K/%D:      {last.get('stoch_k', float('nan')):.1f} / {last.get('stoch_d', float('nan')):.1f}",
+            f"  Williams %R:      {last.get('williams_r', float('nan')):.1f}",
+            f"  Volume Ratio:     {last.get('volume_ratio', float('nan')):.2f}x avg",
+        ]
+        return "\n".join(lines), None
+
+    def _run_backtest(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        timeframe = inputs["timeframe"]
+        period = inputs["period"]
+        end = inputs["end"]
+        code = inputs["code"]
+        strategy_name = inputs.get("strategy_name", "")
+        if not self._cache.check(symbol, timeframe, period, end):
+            return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
+        df = self._cache.load(symbol, timeframe, period, end)
+        result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol)
+        try:
+            self._store.save_backtest(result.to_dict())
+        except Exception:
+            pass
+        lines = [
+            f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period})",
+            f"  Total Return:  {result.total_return:.1%}",
+            f"  Sharpe Ratio:  {result.sharpe:.2f}",
+            f"  Sortino Ratio: {result.sortino:.2f}",
+            f"  Max Drawdown:  {result.max_drawdown:.1%}",
+            f"  Num Trades:    {result.num_trades}",
+            f"  Win Rate:      {result.win_rate:.1%}",
+        ]
+        return "\n".join(lines), None
+
+    def _generate_pinescript(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        indicators_list = inputs.get("indicators", ["rsi", "macd"])
+        strategy_name = inputs.get("strategy_name", f"{symbol} Indicators")
+        script = _pinescript.indicator_script(strategy_name, indicators_list, {})
+        return script, None
+
+    def _get_analytics(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        timeframe = inputs["timeframe"]
+        period = inputs["period"]
+        end = inputs["end"]
+        if not self._cache.check(symbol, timeframe, period, end):
+            return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
+        df = self._cache.load(symbol, timeframe, period, end)
+        returns = df["close"].pct_change().dropna()
+        report = _analytics.full_report(returns)
+        lines = [
+            f"Analytics for {symbol} {timeframe} ({period}–{end}):",
+            f"  Total Return:       {report['total_return']:.1%}",
+            f"  CAGR:               {report['cagr']:.1%}",
+            f"  Sharpe Ratio:       {report['sharpe']:.2f}",
+            f"  Sortino Ratio:      {report['sortino']:.2f}",
+            f"  Calmar Ratio:       {report['calmar']:.2f}",
+            f"  Max Drawdown:       {report['max_drawdown']:.1%}",
+            f"  Max DD Duration:    {report['max_drawdown_duration']} bars",
+            f"  Bars analyzed:      {report['num_bars']}",
+        ]
+        return "\n".join(lines), None

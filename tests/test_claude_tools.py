@@ -82,3 +82,72 @@ def test_execute_get_notifications(toolkit):
     text, fig = toolkit.execute("get_notifications", {})
     assert len(text) > 0
     assert fig is None
+
+
+def test_tools_count_at_least_19(toolkit):
+    assert len(toolkit.tools) >= 19
+
+
+def test_execute_add_indicators(toolkit):
+    import pandas as pd
+    import numpy as np
+    n = 100
+    np.random.seed(0)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = df
+    text, fig = toolkit.execute("add_indicators", {
+        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
+    })
+    assert len(text) > 0
+    assert fig is None
+
+
+def test_execute_run_backtest_tool(toolkit):
+    import pandas as pd
+    import numpy as np
+    n = 100
+    np.random.seed(0)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = df
+    toolkit._store.save_backtest.return_value = 1
+    text, fig = toolkit.execute("run_backtest", {
+        "code": "df['signal'] = 1",
+        "symbol": "AAPL", "timeframe": "1D", "period": "1Y",
+        "end": "2026-05-22", "strategy_name": "test"
+    })
+    assert len(text) > 0
+
+
+def test_execute_generate_pinescript_tool(toolkit):
+    text, fig = toolkit.execute("generate_pinescript", {
+        "symbol": "AAPL", "indicators": ["rsi", "macd"]
+    })
+    assert "//@version=5" in text
+
+
+def test_execute_get_analytics_tool(toolkit):
+    import pandas as pd
+    import numpy as np
+    n = 100
+    np.random.seed(0)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = df
+    text, fig = toolkit.execute("get_analytics", {
+        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
+    })
+    assert "sharpe" in text.lower() or "Sharpe" in text
