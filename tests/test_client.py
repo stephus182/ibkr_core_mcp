@@ -175,6 +175,36 @@ def test_reply_order_calls_both_gates(client):
     mock_post.assert_called_once()
 
 
+def test_modify_order_aborts_if_dialog_cancelled(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=HumanAuthError("cancelled")), \
+         _patch.object(client._session, "post") as mock_post:
+        with pytest.raises(HumanAuthError):
+            client.modify_order("U1234567", "ORD123", {"side": "SELL"})
+    mock_post.assert_not_called()
+
+
+def test_cancel_order_aborts_if_dialog_cancelled(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=HumanAuthError("cancelled")), \
+         _patch.object(client._session, "delete") as mock_del:
+        with pytest.raises(HumanAuthError):
+            client.cancel_order("U1234567", "ORD456")
+    mock_del.assert_not_called()
+
+
+def test_reply_order_aborts_if_dialog_cancelled(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
+         _patch.object(client._session, "post") as mock_post:
+        with pytest.raises(HumanAuthError):
+            client.reply_order("RPL789")
+    mock_post.assert_not_called()
+
+
 def test_get_order_preview_has_no_gate(client):
     """whatif endpoint is read-only — must NOT trigger Touch ID."""
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
