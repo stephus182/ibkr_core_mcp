@@ -205,6 +205,73 @@ report = analytics.full_report(equity_returns, trades)
 # → { sharpe, sortino, calmar, max_drawdown, win_rate, profit_factor, ... }
 ```
 
+### Place a live order (Touch ID + confirmation required)
+
+> ⚠ See [Security — Order Write Protection](#security--order-write-protection) for the full two-gate architecture.
+> Every order write triggers a Touch ID prompt **and** a visual confirmation dialog. Both must pass or the call raises `HumanAuthError` and nothing reaches IBKR.
+
+```python
+from ibkr_core_mcp import IBKRClient, Config, HumanAuthError
+
+cfg = Config.from_env()
+client = IBKRClient(cfg)
+
+# Step 1 — resolve conid
+contracts = client.search_contract("AAPL")
+conid = contracts[0]["conid"]
+
+# Step 2 — preview (no auth required — read-only whatif call)
+order = {
+    "conid": conid,
+    "ticker": "AAPL",
+    "side": "BUY",
+    "quantity": 10,
+    "orderType": "LIMIT",
+    "price": 182.50,
+    "tif": "DAY",
+}
+preview = client.get_order_preview(account_id, order)
+print(f"Estimated cost: {preview.get('equity', '?')}")
+
+# Step 3 — place (triggers Gate 1: Touch ID, then Gate 2: confirmation dialog)
+try:
+    responses = client.place_order(account_id, order)
+    # IBKR may return a reply_id requiring confirmation
+    for resp in responses:
+        if "id" in resp:
+            client.reply_order(resp["id"])   # Gate 1 + Gate 2 again for confirmation
+except HumanAuthError as e:
+    print(f"Order cancelled or auth failed: {e}")
+```
+
+### Modify or cancel an existing order (Touch ID + confirmation required)
+
+```python
+from ibkr_core_mcp import IBKRClient, Config, HumanAuthError
+
+cfg = Config.from_env()
+client = IBKRClient(cfg)
+
+# Inspect open orders first (no auth required — read-only)
+orders = client.get_live_orders()
+for o in orders:
+    print(f"{o['orderId']}  {o.get('ticker')}  {o.get('side')}  {o.get('remainingQuantity')}")
+
+order_id = "123456789"
+
+# Modify — triggers Touch ID + modify dialog
+try:
+    client.modify_order(account_id, order_id, {"price": 180.00, "tif": "DAY"})
+except HumanAuthError as e:
+    print(f"Modification cancelled: {e}")
+
+# Cancel — triggers Touch ID + cancel dialog
+try:
+    client.cancel_order(account_id, order_id)
+except HumanAuthError as e:
+    print(f"Cancellation cancelled: {e}")
+```
+
 ---
 
 ## Adding a New IBKR Endpoint
