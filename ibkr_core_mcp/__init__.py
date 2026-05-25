@@ -16,6 +16,7 @@ from ibkr_core_mcp.exceptions import (
     ConfigError,
     HumanAuthError,
 )
+from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.auth import BrowserCookieAuth, TokenAuth, NoAuth
 from ibkr_core_mcp.client import IBKRClient
 from ibkr_core_mcp.cache import GDriveCache
@@ -76,4 +77,5 @@ __all__ = [
     "BacktestRuntimeError",
     "ConfigError",
     "HumanAuthError",
+    "require_touch_id",
 ]

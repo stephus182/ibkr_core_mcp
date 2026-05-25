@@ -1,0 +1,42 @@
+from __future__ import annotations
+import threading
+from ibkr_core_mcp.exceptions import HumanAuthError
+
+_TIMEOUT = 60
+
+
+def require_touch_id(reason: str) -> None:
+    """Block until Touch ID succeeds. Raises HumanAuthError on any failure."""
+    try:
+        from LocalAuthentication import (  # type: ignore[import]
+            LAContext,
+            LAPolicyDeviceOwnerAuthenticationWithBiometrics,
+        )
+    except (ImportError, TypeError):
+        raise HumanAuthError(
+            "Touch ID unavailable: pyobjc-framework-LocalAuthentication not installed"
+        )
+
+    ctx = LAContext.new()
+    can_eval, err = ctx.canEvaluatePolicy_error_(
+        LAPolicyDeviceOwnerAuthenticationWithBiometrics, None
+    )
+    if not can_eval:
+        raise HumanAuthError(f"Touch ID unavailable: {err}")
+
+    done = threading.Event()
+    result: dict = {}
+
+    def _reply(success: bool, error: object) -> None:
+        result["ok"] = success
+        result["error"] = error
+        done.set()
+
+    ctx.evaluatePolicy_localizedReason_reply_(
+        LAPolicyDeviceOwnerAuthenticationWithBiometrics, reason, _reply
+    )
+
+    if not done.wait(timeout=_TIMEOUT):
+        raise HumanAuthError(f"Touch ID timed out after {_TIMEOUT}s")
+    if not result.get("ok"):
+        raise HumanAuthError(f"Touch ID denied: {result.get('error')}")
