@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ibkr_core_mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "IBKR Client Portal API client, Drive cache, SQLite store, Claude tools"
 requires-python = ">=3.11"
 dependencies = [

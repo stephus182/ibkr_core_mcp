@@ -36,7 +36,7 @@ from ibkr_core_mcp import indicators
 from ibkr_core_mcp import analytics
 from ibkr_core_mcp import pinescript
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     # Core
     "Config",
