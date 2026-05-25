@@ -1,6 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
-from unittest.mock import patch as _patch
+from unittest.mock import MagicMock, patch, patch as _patch
 
 
 @pytest.fixture
@@ -116,36 +115,63 @@ def test_place_order_aborts_if_dialog_cancelled(client):
     mock_post.assert_not_called()
 
 
+def test_modify_order_aborts_if_touch_id_fails(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
+         _patch.object(client._session, "post") as mock_post:
+        with pytest.raises(HumanAuthError):
+            client.modify_order("U1234567", "ORD123", {"side": "SELL"})
+    mock_post.assert_not_called()
+
+
+def test_cancel_order_aborts_if_touch_id_fails(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
+         _patch.object(client._session, "delete") as mock_del:
+        with pytest.raises(HumanAuthError):
+            client.cancel_order("U1234567", "ORD456")
+    mock_del.assert_not_called()
+
+
+def test_reply_order_aborts_if_touch_id_fails(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
+         _patch.object(client._session, "post") as mock_post:
+        with pytest.raises(HumanAuthError):
+            client.reply_order("RPL789")
+    mock_post.assert_not_called()
+
+
 def test_modify_order_calls_both_gates(client):
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog") as mock_dlg, \
+    call_order = []
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=lambda o_id, o, a: call_order.append("dialog")), \
          _patch.object(client._session, "post") as mock_post:
         mock_post.return_value = _make_ok_response({"status": "modified"})
         client.modify_order("U1234567", "ORD123", {"side": "SELL"})
-    mock_tid.assert_called_once()
-    mock_dlg.assert_called_once()
+    assert call_order == ["touch_id", "dialog"]
     mock_post.assert_called_once()
 
 
 def test_cancel_order_calls_both_gates(client):
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_cancel_dialog") as mock_dlg, \
+    call_order = []
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
+         _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=lambda o_id, a: call_order.append("dialog")), \
          _patch.object(client._session, "delete") as mock_del:
         mock_del.return_value = _make_ok_response({"status": "cancelled"})
         client.cancel_order("U1234567", "ORD456")
-    mock_tid.assert_called_once()
-    mock_dlg.assert_called_once()
+    assert call_order == ["touch_id", "dialog"]
     mock_del.assert_called_once()
 
 
 def test_reply_order_calls_both_gates(client):
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_dlg, \
+    call_order = []
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=lambda r: call_order.append("dialog")), \
          _patch.object(client._session, "post") as mock_post:
         mock_post.return_value = _make_ok_response([{"status": "submitted"}])
         client.reply_order("RPL789")
-    mock_tid.assert_called_once()
-    mock_dlg.assert_called_once()
+    assert call_order == ["touch_id", "dialog"]
     mock_post.assert_called_once()
 
 

@@ -38,7 +38,11 @@ def confirm_modify_dialog(order_id: str, order: dict, account_id: str) -> None:
     """Gate 2 for modify_order."""
     _show_confirm_dialog(
         title="⚠  MODIFY ORDER CONFIRMATION",
-        details={**{k: str(v) for k, v in order.items()}, "Order ID": order_id, "Account": account_id},
+        details={
+            **{k: str(v) for k, v in order.items() if k not in ("Order ID", "Account")},
+            "Order ID": order_id,
+            "Account": account_id,
+        },
         disclaimer="This will MODIFY a live order at Interactive Brokers.",
         confirm_label="MODIFY ORDER",
     )
