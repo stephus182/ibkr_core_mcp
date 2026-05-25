@@ -1,6 +1,15 @@
-from ibkr_core_mcp.exceptions import IBKRCoreError, HumanAuthError
-from ibkr_core_mcp import HumanAuthError as _HumanAuthErrorPublic
+import sys
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from ibkr_core_mcp import HumanAuthError as _HumanAuthErrorPublic
+from ibkr_core_mcp.exceptions import HumanAuthError, IBKRCoreError
+
+
+# ---------------------------------------------------------------------------
+# Exception class
+# ---------------------------------------------------------------------------
 
 def test_human_auth_error_is_ibkr_core_error():
     err = HumanAuthError("denied")
@@ -12,11 +21,9 @@ def test_human_auth_error_exported_from_package():
     assert _HumanAuthErrorPublic is HumanAuthError
 
 
-import sys
-import threading
-from unittest.mock import MagicMock, patch
-import pytest
-
+# ---------------------------------------------------------------------------
+# require_touch_id
+# ---------------------------------------------------------------------------
 
 def _make_la_mock(can_eval=True, eval_err=None, reply_success=True, reply_error=None):
     """Build a LocalAuthentication sys.modules mock."""
@@ -38,6 +45,15 @@ def test_require_touch_id_success(monkeypatch):
     monkeypatch.setitem(sys.modules, "LocalAuthentication", mock_la)
     from ibkr_core_mcp.human_auth import require_touch_id
     require_touch_id("Test order")  # must not raise
+
+
+def test_require_touch_id_reason_forwarded(monkeypatch):
+    mock_la = _make_la_mock(can_eval=True, reply_success=True)
+    monkeypatch.setitem(sys.modules, "LocalAuthentication", mock_la)
+    from ibkr_core_mcp.human_auth import require_touch_id
+    require_touch_id("IBKR: Place order — BUY 100 AAPL")
+    call_args = mock_la.LAContext.new.return_value.evaluatePolicy_localizedReason_reply_.call_args
+    assert call_args[0][1] == "IBKR: Place order — BUY 100 AAPL"
 
 
 def test_require_touch_id_denied(monkeypatch):
@@ -66,7 +82,6 @@ def test_require_touch_id_not_installed(monkeypatch):
 def test_require_touch_id_timeout(monkeypatch):
     mock_ctx = MagicMock()
     mock_ctx.canEvaluatePolicy_error_.return_value = (True, None)
-    # evaluatePolicy never calls reply — simulates timeout
     mock_ctx.evaluatePolicy_localizedReason_reply_.side_effect = lambda p, r, cb: None
     mock_la = MagicMock()
     mock_la.LAContext.new.return_value = mock_ctx
@@ -74,7 +89,6 @@ def test_require_touch_id_timeout(monkeypatch):
     monkeypatch.setitem(sys.modules, "LocalAuthentication", mock_la)
 
     from ibkr_core_mcp.human_auth import require_touch_id
-    # Patch threading.Event.wait to return False immediately (simulates timeout)
     with patch("ibkr_core_mcp.human_auth.threading.Event") as mock_event_cls:
         mock_event = MagicMock()
         mock_event.wait.return_value = False
