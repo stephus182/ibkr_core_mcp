@@ -7,6 +7,13 @@ from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import IBKRAuthError
 from ibkr_core_mcp.rate_limiter import with_retry
+from ibkr_core_mcp.human_auth import require_touch_id
+from ibkr_core_mcp.order_confirm import (
+    confirm_order_dialog,
+    confirm_modify_dialog,
+    confirm_cancel_dialog,
+    confirm_reply_dialog,
+)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -267,20 +274,31 @@ class IBKRClient:
     def get_event_contract(self, conid: int) -> dict:
         return self._get("/events/show", {"conid": conid})
 
-    # Order Management (write — for future use)
+    # Order Management (write — human auth required)
     def place_order(self, account_id: str, order: dict) -> list[dict]:
+        symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
+        side = order.get("side", "?")
+        qty = order.get("quantity", "?")
+        require_touch_id(f"IBKR: Place order — {side} {qty} {symbol}")
+        confirm_order_dialog(order, account_id)
         data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [order]})
         return data if isinstance(data, list) else []
 
     def modify_order(self, account_id: str, order_id: str, order: dict) -> dict:
+        require_touch_id(f"IBKR: Modify order {order_id}")
+        confirm_modify_dialog(order_id, order, account_id)
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", order)
 
     def cancel_order(self, account_id: str, order_id: str) -> dict:
+        require_touch_id(f"IBKR: Cancel order {order_id}")
+        confirm_cancel_dialog(order_id, account_id)
         url = f"{self._base}/iserver/account/{account_id}/order/{order_id}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30))
         return resp.json()
 
     def reply_order(self, reply_id: str, confirmed: bool = True) -> list[dict]:
+        require_touch_id(f"IBKR: Confirm order reply {reply_id}")
+        confirm_reply_dialog(reply_id)
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": confirmed})
         return data if isinstance(data, list) else []
 

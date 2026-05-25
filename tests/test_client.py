@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from unittest.mock import patch as _patch
 
 
 @pytest.fixture
@@ -67,3 +68,92 @@ def test_live_search_aapl(mock_config):
     results = client.search_contract("AAPL")
     assert len(results) > 0
     assert any(r.get("symbol") == "AAPL" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Order gate tests
+# ---------------------------------------------------------------------------
+
+def _make_ok_response(payload=None):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = payload or {}
+    return mock_resp
+
+
+def test_place_order_calls_touch_id_before_post(client):
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100, "orderType": "LIMIT", "price": 182.5}
+    call_order = []
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")) as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=lambda o, a: call_order.append("dialog")) as mock_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response([{"orderId": "1"}])
+        client.place_order("U1234567", order)
+    assert call_order == ["touch_id", "dialog"]
+    mock_tid.assert_called_once()
+    mock_dlg.assert_called_once()
+    mock_post.assert_called_once()
+
+
+def test_place_order_aborts_if_touch_id_fails(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
+    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
+         _patch.object(client._session, "post") as mock_post:
+        with pytest.raises(HumanAuthError):
+            client.place_order("U1234567", order)
+    mock_post.assert_not_called()
+
+
+def test_place_order_aborts_if_dialog_cancelled(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=HumanAuthError("cancelled")), \
+         _patch.object(client._session, "post") as mock_post:
+        with pytest.raises(HumanAuthError):
+            client.place_order("U1234567", order)
+    mock_post.assert_not_called()
+
+
+def test_modify_order_calls_both_gates(client):
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog") as mock_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response({"status": "modified"})
+        client.modify_order("U1234567", "ORD123", {"side": "SELL"})
+    mock_tid.assert_called_once()
+    mock_dlg.assert_called_once()
+    mock_post.assert_called_once()
+
+
+def test_cancel_order_calls_both_gates(client):
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_cancel_dialog") as mock_dlg, \
+         _patch.object(client._session, "delete") as mock_del:
+        mock_del.return_value = _make_ok_response({"status": "cancelled"})
+        client.cancel_order("U1234567", "ORD456")
+    mock_tid.assert_called_once()
+    mock_dlg.assert_called_once()
+    mock_del.assert_called_once()
+
+
+def test_reply_order_calls_both_gates(client):
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response([{"status": "submitted"}])
+        client.reply_order("RPL789")
+    mock_tid.assert_called_once()
+    mock_dlg.assert_called_once()
+    mock_post.assert_called_once()
+
+
+def test_get_order_preview_has_no_gate(client):
+    """whatif endpoint is read-only — must NOT trigger Touch ID."""
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response({"equity": 5000})
+        client.get_order_preview("U1234567", order)
+    mock_tid.assert_not_called()
