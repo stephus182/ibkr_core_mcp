@@ -6,6 +6,44 @@ Standalone pip-installable Python package providing a complete IBKR Client Porta
 
 ---
 
+## Security — Order Write Protection
+
+**ALL order write operations require two sequential human validations. There is no bypass.**
+
+### Two-gate architecture
+
+Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` on `IBKRClient` must pass both gates — in order — before any network call is made:
+
+1. **Gate 1 — Touch ID** (`human_auth.require_touch_id`): Apple biometric auth via `LocalAuthentication`. Policy: `LAPolicyDeviceOwnerAuthenticationWithBiometrics` — Touch ID only, no password fallback. 60-second timeout.
+2. **Gate 2 — Visual confirmation** (`order_confirm`): tkinter modal dialog showing full order details and a live-order disclaimer. Requires explicit mouse click on the action button. Enter key does not confirm.
+
+If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and the IBKR endpoint is never contacted.
+
+### Gated endpoints
+
+| Method | Gate |
+|---|---|
+| `place_order` | Touch ID + confirm dialog |
+| `modify_order` | Touch ID + modify dialog |
+| `cancel_order` | Touch ID + cancel dialog |
+| `reply_order` | Touch ID + reply dialog |
+
+### Explicitly ungated
+
+| Method | Reason |
+|---|---|
+| `get_order_preview` | IBKR `whatif` — read-only, no execution |
+| `create_alert` / `delete_alert` / `activate_alert` | Price notifications, not order execution |
+
+### Rules for contributors
+
+- **Never add a bypass flag, session cache, or fallback** to `require_touch_id` or any dialog function.
+- **Never move the gates** out of `IBKRClient` into a higher layer — enforcement must be at the innermost call site.
+- **Never add password/PIN fallback** — `LAPolicyDeviceOwnerAuthenticationWithBiometrics` is the required policy.
+- Any PR that weakens these gates will be rejected.
+
+---
+
 ## Install
 
 ```bash
