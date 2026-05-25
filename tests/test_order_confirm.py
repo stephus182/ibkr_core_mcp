@@ -90,6 +90,18 @@ def test_show_confirm_dialog_window_close_raises():
             )
 
 
+def test_show_confirm_dialog_raises_when_tk_unavailable():
+    with patch("ibkr_core_mcp.order_confirm.tk", None):
+        from ibkr_core_mcp.order_confirm import _show_confirm_dialog
+        with pytest.raises(HumanAuthError, match="tkinter is not available"):
+            _show_confirm_dialog(
+                title="Test",
+                details={"Symbol": "AAPL"},
+                disclaimer="warning",
+                confirm_label="GO",
+            )
+
+
 # ---------------------------------------------------------------------------
 # Public helpers — verify they call _show_confirm_dialog with right args
 # ---------------------------------------------------------------------------

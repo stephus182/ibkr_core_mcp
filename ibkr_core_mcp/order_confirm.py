@@ -1,7 +1,7 @@
 from __future__ import annotations
 try:
     import tkinter as tk  # type: ignore[import]
-except ModuleNotFoundError:  # Python without Tk support (CI, headless)
+except (ModuleNotFoundError, ImportError):  # Python without Tk support (CI, headless)
     tk = None  # type: ignore[assignment]
 from ibkr_core_mcp.exceptions import HumanAuthError
 
@@ -38,8 +38,7 @@ def confirm_modify_dialog(order_id: str, order: dict, account_id: str) -> None:
     """Gate 2 for modify_order."""
     _show_confirm_dialog(
         title="⚠  MODIFY ORDER CONFIRMATION",
-        details={"Order ID": order_id, "Account": account_id,
-                 **{k: str(v) for k, v in order.items()}},
+        details={**{k: str(v) for k, v in order.items()}, "Order ID": order_id, "Account": account_id},
         disclaimer="This will MODIFY a live order at Interactive Brokers.",
         confirm_label="MODIFY ORDER",
     )
@@ -70,7 +69,7 @@ def _show_confirm_dialog(
 ) -> None:
     """Render modal dialog. Raises HumanAuthError if user cancels or closes."""
     if tk is None:
-        raise RuntimeError(
+        raise HumanAuthError(
             "tkinter is not available in this Python installation. "
             "Install a Tk-enabled Python to use the GUI confirmation dialog."
         )
