@@ -48,3 +48,7 @@ class BacktestRuntimeError(BacktestError):
 
 class ConfigError(IBKRCoreError):
     """Missing or invalid configuration."""
+
+
+class HumanAuthError(IBKRCoreError):
+    """Raised when Touch ID is denied, times out, unavailable, or the user cancels the confirmation dialog."""

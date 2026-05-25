@@ -14,6 +14,7 @@ from ibkr_core_mcp.exceptions import (
     BacktestSyntaxError,
     BacktestRuntimeError,
     ConfigError,
+    HumanAuthError,
 )
 from ibkr_core_mcp.auth import BrowserCookieAuth, TokenAuth, NoAuth
 from ibkr_core_mcp.client import IBKRClient
@@ -74,4 +75,5 @@ __all__ = [
     "BacktestSyntaxError",
     "BacktestRuntimeError",
     "ConfigError",
+    "HumanAuthError",
 ]
