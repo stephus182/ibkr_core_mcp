@@ -33,6 +33,7 @@ from ibkr_core_mcp.models import (
     bars_to_dataframe,
 )
 from ibkr_core_mcp.backtest import run_backtest, BacktestResult
+from ibkr_core_mcp.flex_query import FlexQueryClient
 from ibkr_core_mcp import indicators
 from ibkr_core_mcp import analytics
 from ibkr_core_mcp import pinescript
@@ -45,6 +46,7 @@ __all__ = [
     "GDriveCache",
     "SQLiteStore",
     "ClaudeToolkit",
+    "FlexQueryClient",
     # Auth
     "BrowserCookieAuth",
     "TokenAuth",
