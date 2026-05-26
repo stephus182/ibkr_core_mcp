@@ -14,6 +14,8 @@ class Config:
     sqlite_path: Path
     gdrive_token_file: Path
     gdrive_credentials_file: Path
+    flex_token: str = ""
+    flex_query_id: str = ""
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> "Config":
@@ -41,4 +43,6 @@ class Config:
                     "GDRIVE_CREDENTIALS_FILE", "~/.ibkr_core/credentials.json"
                 )
             ).expanduser(),
+            flex_token=os.environ.get("IBKR_FLEX_TOKEN", ""),
+            flex_query_id=os.environ.get("IBKR_FLEX_QUERY_ID", ""),
         )

@@ -52,3 +52,7 @@ class ConfigError(IBKRCoreError):
 
 class HumanAuthError(IBKRCoreError):
     """Raised when Touch ID is denied, times out, unavailable, or the user cancels the confirmation dialog."""
+
+
+class FlexQueryError(IBKRCoreError):
+    """Raised when a Flex Query request fails, times out, or returns unexpected XML."""

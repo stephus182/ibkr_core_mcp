@@ -15,6 +15,7 @@ from ibkr_core_mcp.exceptions import (
     BacktestRuntimeError,
     ConfigError,
     HumanAuthError,
+    FlexQueryError,
 )
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.auth import BrowserCookieAuth, TokenAuth, NoAuth
@@ -77,5 +78,6 @@ __all__ = [
     "BacktestRuntimeError",
     "ConfigError",
     "HumanAuthError",
+    "FlexQueryError",
     "require_touch_id",
 ]
