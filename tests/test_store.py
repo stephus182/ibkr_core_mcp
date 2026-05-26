@@ -20,6 +20,7 @@ def test_initialize_creates_tables(store):
     assert "position_snapshots" in tables
     assert "signals" in tables
     assert "backtest_results" in tables
+    assert "price_alerts" in tables
 
 
 def test_upsert_and_get_trades(store):
