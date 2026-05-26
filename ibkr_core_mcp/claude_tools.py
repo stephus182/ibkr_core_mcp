@@ -67,12 +67,38 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_trades",
-        "description": "Get recent trade history (last 6 days from IBKR, all-time from SQLite store).",
+        "description": (
+            "Get trade history. source='live' queries IBKR directly (last 6 days only). "
+            "source='store' queries the local SQLite store — unlimited history, includes all data "
+            "synced via sync_flex_trades. Use source='store' for any analysis beyond 6 days."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Filter by symbol (optional)"},
-                "source": {"type": "string", "description": "'live' (IBKR, last 6 days) or 'store' (SQLite, all-time)", "default": "live"},
+                "source": {
+                    "type": "string",
+                    "description": "'live' (IBKR API, last 6 days) or 'store' (SQLite, unlimited history including Flex syncs)",
+                    "default": "store",
+                },
+                "start": {"type": "string", "description": "Start date YYYY-MM-DD (store source only, optional)"},
+                "end": {"type": "string", "description": "End date YYYY-MM-DD (store source only, optional)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "sync_flex_trades",
+        "description": (
+            "Fetch the full historical trade history from IBKR Flex Web Service and store it in "
+            "the local SQLite database and Google Drive cache. Requires IBKR_FLEX_TOKEN and "
+            "IBKR_FLEX_QUERY_ID to be configured. Run this once or daily to keep historical "
+            "trade data current beyond the 6-day API limit."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string", "description": "IBKR account ID (optional — resolved automatically if omitted)"},
             },
             "required": [],
         },
@@ -275,6 +301,7 @@ class ClaudeToolkit:
             "get_account_summary": self._get_account_summary,
             "get_positions": self._get_positions,
             "get_trades": self._get_trades,
+            "sync_flex_trades": self._sync_flex_trades,
             "get_live_orders": self._get_live_orders,
             "get_ledger": self._get_ledger,
             "get_allocation": self._get_allocation,
@@ -377,14 +404,20 @@ class ClaudeToolkit:
         return f"Open positions ({len(positions)}):\n" + "\n".join(lines), None
 
     def _get_trades(self, inputs: dict) -> tuple[str, Any]:
-        source = inputs.get("source", "live")
+        source = inputs.get("source", "store")
         symbol = inputs.get("symbol")
         if source == "store":
-            trades = self._store.get_trades(symbol=symbol)
+            trades = self._store.get_trades(
+                symbol=symbol,
+                start=inputs.get("start"),
+                end=inputs.get("end"),
+            )
             if not trades:
                 return "No trades found in local store.", None
             lines = [f"- {t['time'][:10]} {t['symbol']} {t['side']} {t['size']} @ {t['price']}" for t in trades[:20]]
-            return f"Trade history (SQLite, {len(trades)} total):\n" + "\n".join(lines), None
+            suffix = f"  (showing first 20 of {len(trades)})" if len(trades) > 20 else ""
+            return f"Trade history (SQLite, {len(trades)} total){suffix}:\n" + "\n".join(lines), None
+        # source == 'live'
         trades = self._client.get_trades()
         if symbol:
             trades = [t for t in trades if t.get("symbol", "").upper() == symbol.upper()]
@@ -414,6 +447,32 @@ class ClaudeToolkit:
             for t in trades[:20]
         ]
         return f"Recent trades (last 6 days, {len(trades)} total):\n" + "\n".join(lines), None
+
+    def _sync_flex_trades(self, inputs: dict) -> tuple[str, Any]:
+        from ibkr_core_mcp.flex_query import FlexQueryClient
+        from ibkr_core_mcp.exceptions import FlexQueryError
+        if not self._config.flex_token or not self._config.flex_query_id:
+            return (
+                "Flex Query not configured. Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in .env. "
+                "Token and Query ID must be created manually on the IBKR website under Reports → Flex Queries.",
+                None,
+            )
+        account_id = inputs.get("account_id", "")
+        if not account_id:
+            accounts = self._client.get_accounts()
+            account_id = accounts[0].get("accountId", accounts[0].get("id", "")) if accounts else ""
+        if not account_id:
+            return "Could not resolve account ID. Pass account_id explicitly.", None
+        try:
+            flex = FlexQueryClient(self._config, self._store, self._cache)
+            trades = flex.fetch_trades(account_id)
+        except FlexQueryError as e:
+            return f"Flex Query failed: {e}", None
+        return (
+            f"Flex sync complete: {len(trades)} trades loaded for account {account_id}. "
+            "Full history now available via get_trades with source='store'.",
+            None,
+        )
 
     def _get_live_orders(self, inputs: dict) -> tuple[str, Any]:
         orders = self._client.get_live_orders()
