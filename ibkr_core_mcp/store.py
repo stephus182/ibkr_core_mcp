@@ -72,6 +72,16 @@ class SQLiteStore:
                     win_rate      REAL,
                     metadata      TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS price_alerts (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid        INTEGER NOT NULL,
+                    symbol       TEXT    NOT NULL,
+                    threshold    REAL    NOT NULL,
+                    direction    TEXT    NOT NULL CHECK (direction IN ('above', 'below')),
+                    created_at   TEXT    NOT NULL,
+                    triggered_at TEXT
+                );
             """)
 
     def upsert_trades(self, trades: list[dict]) -> None:
@@ -256,3 +266,37 @@ class SQLiteStore:
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
+
+    def add_alert(self, conid: int, symbol: str, threshold: float, direction: str) -> int:
+        """Insert a price alert. direction must be 'above' or 'below'. Returns new id."""
+        if direction not in ("above", "below"):
+            raise ValueError(f"direction must be 'above' or 'below', got {direction!r}")
+        self.initialize()
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO price_alerts (conid, symbol, threshold, direction, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (conid, symbol.upper(), threshold, direction, now),
+            )
+            return cur.lastrowid or 0
+
+    def get_alerts(self, active_only: bool = True) -> list[dict]:
+        """Return alerts; active_only=True excludes already-triggered alerts."""
+        self.initialize()
+        query = "SELECT * FROM price_alerts"
+        if active_only:
+            query += " WHERE triggered_at IS NULL"
+        query += " ORDER BY created_at DESC"
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute(query).fetchall()]
+
+    def mark_alert_triggered(self, alert_id: int) -> None:
+        """Record that an alert fired by setting triggered_at to now."""
+        self.initialize()
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE price_alerts SET triggered_at = ? WHERE id = ?",
+                (now, alert_id),
+            )

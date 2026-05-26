@@ -56,3 +56,7 @@ class HumanAuthError(IBKRCoreError):
 
 class FlexQueryError(IBKRCoreError):
     """Raised when a Flex Query request fails, times out, or returns unexpected XML."""
+
+
+class StreamingError(IBKRCoreError):
+    """Raised when the IBKR WebSocket connection fails or returns an unexpected message."""
