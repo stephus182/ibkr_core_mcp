@@ -16,6 +16,7 @@ from ibkr_core_mcp.exceptions import (
     ConfigError,
     HumanAuthError,
     FlexQueryError,
+    StreamingError,
 )
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.auth import BrowserCookieAuth, TokenAuth, NoAuth
@@ -37,8 +38,9 @@ from ibkr_core_mcp.flex_query import FlexQueryClient
 from ibkr_core_mcp import indicators
 from ibkr_core_mcp import analytics
 from ibkr_core_mcp import pinescript
+from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote, AlertManager
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     # Core
     "Config",
@@ -62,6 +64,10 @@ __all__ = [
     # Backtest
     "run_backtest",
     "BacktestResult",
+    # Streaming
+    "IBKRWebSocket",
+    "LiveQuote",
+    "AlertManager",
     # Functional modules
     "indicators",
     "analytics",
@@ -81,5 +87,6 @@ __all__ = [
     "ConfigError",
     "HumanAuthError",
     "FlexQueryError",
+    "StreamingError",
     "require_touch_id",
 ]
