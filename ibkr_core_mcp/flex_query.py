@@ -1,6 +1,6 @@
 from __future__ import annotations
 import time
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
 
 _BASE_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService"
+_ALLOWED_URL_PREFIX = "https://gdcdyn.interactivebrokers.com/"
 _MAX_POLL_RETRIES = 5
 _POLL_SLEEP = 3
 
@@ -62,6 +63,8 @@ class FlexQueryClient:
             raise FlexQueryError(f"Flex SendRequest unexpected response: status={status!r}")
         if not url:
             raise FlexQueryError("Flex SendRequest did not return a statement URL")
+        if not url.startswith(_ALLOWED_URL_PREFIX):
+            raise FlexQueryError(f"Flex SendRequest returned unexpected URL: {url!r}")
 
         return ref_code, url
 

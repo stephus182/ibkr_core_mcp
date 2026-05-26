@@ -1,6 +1,7 @@
 from __future__ import annotations
 import io
 import json
+import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -48,6 +49,7 @@ class GDriveCache:
                 creds = flow.run_local_server(port=0)
             self._config.gdrive_token_file.parent.mkdir(parents=True, exist_ok=True)
             self._config.gdrive_token_file.write_text(creds.to_json())
+            os.chmod(self._config.gdrive_token_file, 0o600)
         self._service = build("drive", "v3", credentials=creds)
         return self._service
 

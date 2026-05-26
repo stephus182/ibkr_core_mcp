@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 from datetime import date
 from typing import Any
 
@@ -273,6 +274,41 @@ TOOL_DEFINITIONS = [
 ]
 
 
+_ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
+
+
+def _safe_error(tool: str, exc: Exception) -> str:
+    """Return a controlled error string that doesn't leak internal details to the LLM."""
+    from ibkr_core_mcp.exceptions import (
+        IBKRAuthError, IBKRRateLimitError, IBKRAPIError,
+        CacheError, BacktestError, FlexQueryError, ConfigError,
+    )
+    if isinstance(exc, IBKRAuthError):
+        return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
+    if isinstance(exc, IBKRRateLimitError):
+        return f"Tool '{tool}' failed: IBKR rate limit hit. Retry in a few seconds."
+    if isinstance(exc, IBKRAPIError):
+        return f"Tool '{tool}' failed: IBKR gateway returned an error (HTTP {exc.status_code})."
+    if isinstance(exc, CacheError):
+        return f"Tool '{tool}' failed: Google Drive cache error. Check Drive credentials."
+    if isinstance(exc, BacktestError):
+        return f"Tool '{tool}' failed: {exc}"
+    if isinstance(exc, FlexQueryError):
+        return f"Tool '{tool}' failed: Flex Query error. Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID."
+    if isinstance(exc, ConfigError):
+        return f"Tool '{tool}' failed: configuration error. Check .env settings."
+    if isinstance(exc, KeyError):
+        return f"Tool '{tool}' failed: missing required input field."
+    return f"Tool '{tool}' encountered an unexpected error."
+
+
+def _validate_account_id(account_id: str) -> str:
+    """Raise ValueError if account_id is not a valid IBKR account ID format."""
+    if not _ACCOUNT_ID_RE.match(account_id):
+        raise ValueError(f"Invalid account ID format: {account_id!r}")
+    return account_id
+
+
 class ClaudeToolkit:
     """Ready-made Claude tool layer for IBKR research. Portable across any Claude-powered app."""
 
@@ -322,7 +358,7 @@ class ClaudeToolkit:
         try:
             return handler(inputs)
         except Exception as e:
-            return f"Tool '{name}' error: {e}", None
+            return _safe_error(name, e), None
 
     def _fetch_market_data(self, inputs: dict) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
@@ -464,6 +500,7 @@ class ClaudeToolkit:
         if not account_id:
             return "Could not resolve account ID. Pass account_id explicitly.", None
         try:
+            _validate_account_id(account_id)
             flex = FlexQueryClient(self._config, self._store, self._cache)
             trades = flex.fetch_trades(account_id)
         except FlexQueryError as e:

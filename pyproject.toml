@@ -21,6 +21,7 @@ dependencies = [
     "google-auth-httplib2>=0.2",
     "google-auth-oauthlib>=1.2",
     "python-dotenv>=1.0",
+    "defusedxml>=0.7",
     "browser-cookie3>=0.19",
     "pyobjc-framework-LocalAuthentication; sys_platform == 'darwin'",
 ]

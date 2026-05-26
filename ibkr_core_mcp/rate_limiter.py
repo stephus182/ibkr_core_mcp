@@ -25,7 +25,7 @@ def with_retry(
         resp = fn()
         status = resp.status_code
 
-        if status == 200:
+        if 200 <= status < 300:
             return resp
         if status == 401:
             raise IBKRAuthError("IBKR session not authenticated (401)")

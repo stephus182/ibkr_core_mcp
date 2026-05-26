@@ -1,13 +1,78 @@
 from __future__ import annotations
+import concurrent.futures
+import types
 from dataclasses import dataclass, field
-import pandas as pd
-import numpy as np
 
+import numpy as np
+import pandas as pd
 from RestrictedPython import compile_restricted, safe_globals, limited_builtins
 from RestrictedPython.Guards import safer_getattr, full_write_guard
 
 from ibkr_core_mcp.exceptions import BacktestSyntaxError, BacktestRuntimeError
 from ibkr_core_mcp import analytics as _analytics
+
+_MAX_CODE_LEN = 4096
+_EXEC_TIMEOUT = 10  # seconds
+
+
+def _write_guard(ob: object) -> object:
+    """Block writes to modules and safe namespaces; allow all other writes.
+
+    Strategy code must assign columns (df['signal'] = ..., df.loc[...] = ...)
+    but must not mutate the shared pd/np namespaces passed into the sandbox.
+    We block writes to `types.ModuleType` and `types.SimpleNamespace` (our safe
+    namespace wrappers) and allow everything else through untouched.
+    """
+    if isinstance(ob, (types.ModuleType, types.SimpleNamespace)):
+        return full_write_guard(ob)
+    return ob
+
+# Safe numpy namespace — math/array operations only, no file I/O
+_SAFE_NP = types.SimpleNamespace(
+    array=np.array,
+    zeros=np.zeros,
+    ones=np.ones,
+    nan=np.nan,
+    inf=np.inf,
+    where=np.where,
+    isnan=np.isnan,
+    isinf=np.isinf,
+    mean=np.mean,
+    std=np.std,
+    sum=np.sum,
+    cumsum=np.cumsum,
+    cumprod=np.cumprod,
+    diff=np.diff,
+    log=np.log,
+    log2=np.log2,
+    exp=np.exp,
+    sqrt=np.sqrt,
+    abs=np.abs,
+    maximum=np.maximum,
+    minimum=np.minimum,
+    clip=np.clip,
+    percentile=np.percentile,
+    arange=np.arange,
+    linspace=np.linspace,
+    sign=np.sign,
+    floor=np.floor,
+    ceil=np.ceil,
+    round=np.round,
+    argmax=np.argmax,
+    argmin=np.argmin,
+)
+
+# Safe pandas namespace — in-memory constructors only, no read_*/to_* I/O
+_SAFE_PD = types.SimpleNamespace(
+    DataFrame=pd.DataFrame,
+    Series=pd.Series,
+    concat=pd.concat,
+    to_datetime=pd.to_datetime,
+    isna=pd.isna,
+    notna=pd.notna,
+    NaT=pd.NaT,
+    NA=pd.NA,
+)
 
 
 @dataclass
@@ -45,18 +110,22 @@ def run_backtest(
 
     Strategy code receives `df` (OHLCV DataFrame) and must set df['signal']:
         1 = long, 0 = flat, -1 = short
-    Allowed: pandas (pd), numpy (np), basic builtins.
-    Blocked: network, file I/O, os, sys.
+    Allowed: pd (safe subset), np (safe subset), basic builtins.
+    Blocked: network, file I/O, os, sys, module mutation.
     """
+    if len(code) > _MAX_CODE_LEN:
+        raise BacktestSyntaxError(
+            f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)"
+        )
+
     try:
         byte_code = compile_restricted(code, "<strategy>", "exec")
     except SyntaxError as e:
         raise BacktestSyntaxError(f"Strategy syntax error: {e}") from e
 
-    # RestrictedPython requires explicit write/getattr guards in the sandbox dict
     sandbox: dict = {
         **safe_globals,
-        "_write_": lambda ob: ob,       # allow writes to all objects (pd/np trusted)
+        "_write_": _write_guard,
         "_getattr_": safer_getattr,
         "_getitem_": lambda ob, key: ob[key],
         "_getiter_": iter,
@@ -64,8 +133,8 @@ def run_backtest(
             k: v for k, v in limited_builtins.items()
             if k not in ("__import__", "open", "eval", "exec", "compile")
         },
-        "pd": pd,
-        "np": np,
+        "pd": _SAFE_PD,
+        "np": _SAFE_NP,
         "float": float,
         "int": int,
         "abs": abs,
@@ -74,10 +143,19 @@ def run_backtest(
         "df": df.copy(),
     }
 
-    try:
+    def _run(byte_code: object, sandbox: dict) -> None:
         exec(byte_code, sandbox)  # noqa: S102
-    except Exception as e:
-        raise BacktestRuntimeError(f"Strategy runtime error: {e}") from e
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_run, byte_code, sandbox)
+        try:
+            fut.result(timeout=_EXEC_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            raise BacktestRuntimeError(
+                f"Strategy timed out after {_EXEC_TIMEOUT}s"
+            )
+        except Exception as e:
+            raise BacktestRuntimeError(f"Strategy runtime error: {e}") from e
 
     result_df: pd.DataFrame = sandbox.get("df", df)
 
@@ -94,17 +172,14 @@ def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> Backt
 
     equity = (1 + strategy_returns).cumprod()
 
-    # Count trades (signal changes)
     signal_changes = (sig.diff().abs() > 0).sum()
     num_trades = int(signal_changes)
 
-    # Win rate: fraction of non-zero return bars where we profited
     active = strategy_returns[sig != 0]
     wr = float((active > 0).sum() / len(active)) if len(active) > 0 else 0.0
 
     total_return = float(equity.iloc[-1] - 1) if len(equity) > 0 else 0.0
 
-    # Flat strategy
     if (sig == 0).all():
         return BacktestResult(
             symbol=symbol,

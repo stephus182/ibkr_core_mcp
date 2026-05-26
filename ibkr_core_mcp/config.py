@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import os
 
@@ -9,12 +9,12 @@ from dotenv import load_dotenv
 @dataclass
 class Config:
     gateway_url: str
-    anthropic_api_key: str
+    anthropic_api_key: str = field(repr=False)
     gdrive_folder_id: str
     sqlite_path: Path
     gdrive_token_file: Path
     gdrive_credentials_file: Path
-    flex_token: str = ""
+    flex_token: str = field(default="", repr=False)
     flex_query_id: str = ""
 
     @classmethod

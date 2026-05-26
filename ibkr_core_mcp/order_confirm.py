@@ -5,6 +5,8 @@ except (ModuleNotFoundError, ImportError):  # Python without Tk support (CI, hea
     tk = None  # type: ignore[assignment]
 from ibkr_core_mcp.exceptions import HumanAuthError
 
+_DIALOG_TIMEOUT_MS = 60_000  # 60 s — matches Touch ID timeout; auto-cancels if unattended
+
 
 def confirm_order_dialog(order: dict, account_id: str) -> None:
     """Gate 2 for place_order. Raises HumanAuthError if user does not confirm."""
@@ -117,6 +119,8 @@ def _show_confirm_dialog(
     btn_frame = tk.Frame(dialog, pady=10)
     btn_frame.pack()
 
+    remaining: dict = {"secs": _DIALOG_TIMEOUT_MS // 1000}
+
     def on_cancel() -> None:
         confirmed["value"] = False
         dialog.destroy()
@@ -132,6 +136,19 @@ def _show_confirm_dialog(
     tk.Button(btn_frame, text=confirm_label, command=on_confirm, width=18,
               bg="#e74c3c", fg="white", font=("Helvetica", 11, "bold")).pack(side="left", padx=10)
 
+    countdown_var = tk.StringVar(value=f"Auto-cancels in {remaining['secs']}s")
+    tk.Label(dialog, textvariable=countdown_var, fg="#888888",
+             font=("Helvetica", 9)).pack(pady=(0, 6))
+
+    def _tick() -> None:
+        remaining["secs"] -= 1
+        if remaining["secs"] <= 0:
+            on_cancel()
+        else:
+            countdown_var.set(f"Auto-cancels in {remaining['secs']}s")
+            dialog.after(1000, _tick)
+
+    dialog.after(1000, _tick)
     dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
     dialog.update_idletasks()
