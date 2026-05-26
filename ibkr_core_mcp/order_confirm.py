@@ -126,6 +126,11 @@ def _show_confirm_dialog(
         dialog.destroy()
         root.destroy()
 
+    # Security note: on_confirm runs inside the same process as all pip dependencies.
+    # A compromised dependency with access to tk._default_root could call root.after(0, on_confirm)
+    # to synthetically confirm without user interaction. Touch ID (Gate 1) already ran before
+    # this dialog was created, providing defense-in-depth. Full isolation requires running the
+    # dialog in a subprocess so the tkinter event loop is unreachable from the parent process.
     def on_confirm() -> None:
         confirmed["value"] = True
         dialog.destroy()

@@ -3,6 +3,7 @@ import json
 import ssl
 from dataclasses import dataclass
 from typing import AsyncGenerator, TYPE_CHECKING
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
@@ -44,6 +45,13 @@ class IBKRWebSocket:
 
     async def connect(self) -> None:
         import websockets  # optional dep — only imported when streaming is used
+
+        parsed = urlparse(self._ws_url)
+        if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+            from ibkr_core_mcp.exceptions import StreamingError
+            raise StreamingError(
+                f"IBKRWebSocket only connects to localhost; got {parsed.hostname!r}"
+            )
 
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ssl_ctx.check_hostname = False      # self-signed cert on localhost

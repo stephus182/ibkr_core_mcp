@@ -131,7 +131,7 @@ def run_backtest(
         "_getiter_": iter,
         "__builtins__": {
             k: v for k, v in limited_builtins.items()
-            if k not in ("__import__", "open", "eval", "exec", "compile")
+            if k not in ("__import__", "open", "eval", "exec", "compile", "print")
         },
         "pd": _SAFE_PD,
         "np": _SAFE_NP,

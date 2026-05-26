@@ -160,7 +160,7 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
 
     init_opts = InitializationOptions(
         server_name="ibkr-core-mcp",
-        server_version="0.4.0",
+        server_version=__version__,
         capabilities=server.get_capabilities(
             notification_options=NotificationOptions(),
             experimental_capabilities={},

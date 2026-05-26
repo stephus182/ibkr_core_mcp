@@ -281,7 +281,8 @@ def _safe_error(tool: str, exc: Exception) -> str:
     """Return a controlled error string that doesn't leak internal details to the LLM."""
     from ibkr_core_mcp.exceptions import (
         IBKRAuthError, IBKRRateLimitError, IBKRAPIError,
-        CacheError, BacktestError, FlexQueryError, ConfigError,
+        CacheError, BacktestError, BacktestSyntaxError, BacktestRuntimeError,
+        FlexQueryError, ConfigError,
     )
     if isinstance(exc, IBKRAuthError):
         return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
@@ -291,8 +292,12 @@ def _safe_error(tool: str, exc: Exception) -> str:
         return f"Tool '{tool}' failed: IBKR gateway returned an error (HTTP {exc.status_code})."
     if isinstance(exc, CacheError):
         return f"Tool '{tool}' failed: Google Drive cache error. Check Drive credentials."
+    if isinstance(exc, BacktestSyntaxError):
+        return f"Tool '{tool}' failed: strategy has a syntax error."
+    if isinstance(exc, BacktestRuntimeError):
+        return f"Tool '{tool}' failed: strategy raised a runtime error."
     if isinstance(exc, BacktestError):
-        return f"Tool '{tool}' failed: {exc}"
+        return f"Tool '{tool}' failed: backtest error."
     if isinstance(exc, FlexQueryError):
         return f"Tool '{tool}' failed: Flex Query error. Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID."
     if isinstance(exc, ConfigError):
@@ -499,12 +504,9 @@ class ClaudeToolkit:
             account_id = accounts[0].get("accountId", accounts[0].get("id", "")) if accounts else ""
         if not account_id:
             return "Could not resolve account ID. Pass account_id explicitly.", None
-        try:
-            _validate_account_id(account_id)
-            flex = FlexQueryClient(self._config, self._store, self._cache)
-            trades = flex.fetch_trades(account_id)
-        except FlexQueryError as e:
-            return f"Flex Query failed: {e}", None
+        _validate_account_id(account_id)
+        flex = FlexQueryClient(self._config, self._store, self._cache)
+        trades = flex.fetch_trades(account_id)
         return (
             f"Flex sync complete: {len(trades)} trades loaded for account {account_id}. "
             "Full history now available via get_trades with source='store'.",

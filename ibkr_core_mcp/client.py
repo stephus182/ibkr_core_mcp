@@ -1,11 +1,12 @@
 from __future__ import annotations
 import urllib3
 from typing import Any
+from urllib.parse import urlparse
 import requests
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import IBKRAuthError
+from ibkr_core_mcp.exceptions import IBKRAuthError, ConfigError
 from ibkr_core_mcp.rate_limiter import with_retry
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.order_confirm import (
@@ -27,6 +28,12 @@ class IBKRClient:
         auth: AuthStrategy | None = None,
     ) -> None:
         self._base = config.gateway_url.rstrip("/")
+        _host = urlparse(config.gateway_url).hostname
+        if _host not in ("localhost", "127.0.0.1", "::1"):
+            raise ConfigError(
+                f"IBKRClient: verify=False is only permitted for localhost; "
+                f"got {_host!r}. Set IBKR_GATEWAY_URL to a localhost address."
+            )
         self._session = requests.Session()
         self._session.verify = False
         auth = auth or BrowserCookieAuth()

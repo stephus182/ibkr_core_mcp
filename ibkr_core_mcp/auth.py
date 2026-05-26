@@ -7,6 +7,10 @@ import requests
 _log = logging.getLogger(__name__)
 
 _ALLOWED_BROWSERS = frozenset({"chrome", "chromium", "firefox", "safari", "edge"})
+_BROWSER_LOADERS: dict[str, str] = {
+    "chrome": "chrome", "chromium": "chromium", "firefox": "firefox",
+    "safari": "safari", "edge": "edge",
+}
 
 
 class AuthStrategy(Protocol):
@@ -28,6 +32,11 @@ class TokenAuth:
 
     def apply(self, session: requests.Session) -> None:
         session.headers.update({"Cookie": self._cookie_string})
+
+    def __repr__(self) -> str:
+        return "TokenAuth(cookie_string='<redacted>')"
+
+    __str__ = __repr__
 
 
 class BrowserCookieAuth:
@@ -51,7 +60,7 @@ class BrowserCookieAuth:
             return  # headless — library not installed, silently skip
 
         try:
-            loader = getattr(browser_cookie3, self._browser)
+            loader = getattr(browser_cookie3, _BROWSER_LOADERS[self._browser])
             jar = loader(domain_name="localhost")
             if parts := [f"{c.name}={c.value}" for c in jar]:
                 session.headers.update({"Cookie": "; ".join(parts)})
