@@ -186,6 +186,17 @@ def test_parse_trades_raises_on_malformed_datetime(flex_client):
         flex_client._parse_trades(xml.decode())
 
 
+def test_parse_trades_tolerates_non_numeric_quantity(flex_client):
+    xml = """<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
+        <Trade tradeID="X1" symbol="AAPL" buySell="BUY" quantity="N/A"
+               tradePrice="182.50" dateTime="20230415;091530" ibCommission="-1.05" accountId="U1234567" />
+    </Trades></FlexStatement></FlexStatements></FlexQueryResponse>"""
+    trades = flex_client._parse_trades(xml)
+    assert len(trades) == 1
+    assert trades[0]["size"] == 0.0
+    assert trades[0]["price"] == 182.50
+
+
 # ---------------------------------------------------------------------------
 # fetch_trades
 # ---------------------------------------------------------------------------

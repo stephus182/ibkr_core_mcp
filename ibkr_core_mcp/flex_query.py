@@ -104,10 +104,10 @@ class FlexQueryClient:
                 "execution_id": trade_el.get("tradeID", ""),
                 "symbol": (trade_el.get("symbol") or "").upper(),
                 "side": trade_el.get("buySell", ""),
-                "size": float(trade_el.get("quantity") or 0),
-                "price": float(trade_el.get("tradePrice") or 0),
+                "size": _safe_float(trade_el.get("quantity")),
+                "price": _safe_float(trade_el.get("tradePrice")),
                 "time": time_iso,
-                "commission": abs(float(trade_el.get("ibCommission") or 0)),
+                "commission": abs(_safe_float(trade_el.get("ibCommission"))),
                 "account": trade_el.get("accountId", ""),
             })
         return trades
@@ -120,3 +120,10 @@ def _parse_flex_datetime(raw: str) -> str:
         return f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}T{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}"
     except ValueError as exc:
         raise FlexQueryError(f"Unexpected Flex dateTime format: {raw!r}") from exc
+
+
+def _safe_float(val: str | None) -> float:
+    try:
+        return float(val or 0)
+    except (ValueError, TypeError):
+        return 0.0
