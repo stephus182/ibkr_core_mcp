@@ -303,10 +303,10 @@ class IBKRClient:
         resp = with_retry(lambda: self._session.delete(url, timeout=30))
         return resp.json()
 
-    def reply_order(self, reply_id: str, confirmed: bool = True) -> list[dict]:
+    def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict]:
         require_touch_id(f"IBKR: Confirm order reply {reply_id}")
         confirm_reply_dialog(reply_id)
-        data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": confirmed})
+        data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
         return data if isinstance(data, list) else []
 
     def get_order_preview(self, account_id: str, order: dict) -> dict:
