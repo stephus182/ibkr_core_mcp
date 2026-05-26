@@ -20,7 +20,6 @@ def test_mcp_server_importable():
     assert callable(build_server)
 
 
-@pytest.mark.asyncio
 async def test_server_has_22_tools(toolkit, store):
     from ibkr_core_mcp.mcp_server import build_server
     from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS

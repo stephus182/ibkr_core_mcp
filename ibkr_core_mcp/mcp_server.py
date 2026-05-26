@@ -17,8 +17,8 @@ from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool, Resource
 from pydantic import AnyUrl
 
+from ibkr_core_mcp import __version__
 from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
-from ibkr_core_mcp.exceptions import IBKRCoreError
 
 if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
@@ -127,8 +127,8 @@ def build_server(toolkit: ClaudeToolkit, store: "SQLiteStore") -> Server:
                 return json.dumps(toolkit._client.get_positions(account_id), indent=2)
             if path == "ibkr://trades/recent":
                 return json.dumps(store.get_trades()[:100], indent=2)
-        except IBKRCoreError:
-            pass
+        except Exception as exc:
+            logger.warning("read_resource %s failed: %s", path, type(exc).__name__)
         return "[]"
 
     return server
@@ -142,7 +142,7 @@ async def _run_stdio(server: Server) -> None:
             read_stream, write_stream,
             InitializationOptions(
                 server_name="ibkr-core-mcp",
-                server_version="0.4.0",
+                server_version=__version__,
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},
@@ -237,8 +237,8 @@ def main() -> None:
     from ibkr_core_mcp import Config, IBKRClient, GDriveCache, SQLiteStore, ClaudeToolkit
 
     cfg = Config.from_env()
-    toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg)
     store = SQLiteStore(cfg)
+    toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), store, cfg)
     server = build_server(toolkit, store)
 
     if args.transport == "stdio":
