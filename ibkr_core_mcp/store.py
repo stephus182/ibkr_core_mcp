@@ -82,6 +82,13 @@ class SQLiteStore:
                     created_at   TEXT    NOT NULL,
                     triggered_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS session_log (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts       TEXT NOT NULL,
+                    event    TEXT NOT NULL,
+                    data     TEXT
+                );
             """)
 
     def upsert_trades(self, trades: list[dict]) -> None:
@@ -290,6 +297,30 @@ class SQLiteStore:
         query += " ORDER BY created_at DESC"
         with self._connect() as conn:
             return [dict(r) for r in conn.execute(query).fetchall()]
+
+    def log_entry(self, event: str, **data: Any) -> None:
+        """Append an event to the local session_log table."""
+        self.initialize()
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO session_log (ts, event, data) VALUES (?, ?, ?)",
+                (now, event, json.dumps(data) if data else None),
+            )
+
+    def get_log(self, n: int = 100, event: str | None = None) -> list[dict]:
+        """Return the last n session log entries, optionally filtered by event name."""
+        self.initialize()
+        query = "SELECT * FROM session_log"
+        params: list[Any] = []
+        if event:
+            query += " WHERE event = ?"
+            params.append(event)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(n)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in reversed(rows)]
 
     def mark_alert_triggered(self, alert_id: int) -> None:
         """Record that an alert fired by setting triggered_at to now."""
