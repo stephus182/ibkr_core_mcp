@@ -39,3 +39,6 @@ credentials.json
 
 # Git worktrees
 .worktrees/
+
+# Superpowers brainstorming sessions
+.superpowers/
