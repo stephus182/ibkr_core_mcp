@@ -21,6 +21,7 @@ from ibkr_core_mcp.exceptions import CacheMissError, CacheWriteError
 _SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_TTL = 60.0
+_LOG_NAME = "ibkr_session_log.jsonl"
 
 _SAFE_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,20}$")
 _SAFE_PERIOD_RE = re.compile(r"^[A-Z0-9]{1,10}$")
@@ -220,6 +221,69 @@ class GDriveCache:
         """Return list of all manifest entries."""
         manifest = self._load_manifest()
         return [{"key": k, **v} for k, v in manifest.items()]
+
+    def log_entry(self, event: str, **data: Any) -> None:
+        """Append a JSONL entry to ibkr_session_log.jsonl in Drive."""
+        entry = json.dumps({
+            "ts": datetime.now(tz=timezone.utc).isoformat(),
+            "event": event,
+            **data,
+        })
+        svc = self._get_service()
+        folder_id = self._config.gdrive_folder_id
+
+        results = (
+            svc.files()
+            .list(
+                q=f"name='{_LOG_NAME}' and '{folder_id}' in parents and trashed=false",
+                fields="files(id)",
+            )
+            .execute()
+        )
+        files = results.get("files", [])
+
+        if files:
+            buf_dl = io.BytesIO()
+            downloader = MediaIoBaseDownload(buf_dl, svc.files().get_media(fileId=files[0]["id"]))
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            existing = buf_dl.getvalue()
+        else:
+            existing = b""
+
+        new_content = existing + (entry + "\n").encode()
+        buf_up = io.BytesIO(new_content)
+        media = MediaIoBaseUpload(buf_up, mimetype="text/plain")
+
+        if files:
+            svc.files().update(fileId=files[0]["id"], media_body=media).execute()
+        else:
+            metadata = {"name": _LOG_NAME, "parents": [folder_id]}
+            svc.files().create(body=metadata, media_body=media, fields="id").execute()
+
+    def get_log(self, n: int = 100) -> list[dict]:
+        """Return the last n log entries from Drive."""
+        svc = self._get_service()
+        folder_id = self._config.gdrive_folder_id
+        results = (
+            svc.files()
+            .list(
+                q=f"name='{_LOG_NAME}' and '{folder_id}' in parents and trashed=false",
+                fields="files(id)",
+            )
+            .execute()
+        )
+        files = results.get("files", [])
+        if not files:
+            return []
+        buf = io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        lines = buf.getvalue().decode().strip().splitlines()
+        return [json.loads(l) for l in lines[-n:]]
 
     def delete(self, symbol: str, timeframe: str, period: str, end: str) -> None:
         """Remove a cached file and its manifest entry."""
