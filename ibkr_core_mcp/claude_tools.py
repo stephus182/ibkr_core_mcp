@@ -271,6 +271,40 @@ TOOL_DEFINITIONS = [
             "required": ["symbol", "timeframe", "period", "end"],
         },
     },
+    {
+        "name": "preview_order",
+        "description": (
+            "Preview an order using IBKR's whatif endpoint — returns estimated cost, "
+            "commission, margin impact, and buying power effect WITHOUT placing the order. "
+            "Use this before proposing a trade to verify feasibility and cost."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol, e.g. AAPL"},
+                "action": {"type": "string", "description": "'BUY' or 'SELL'"},
+                "quantity": {"type": "integer", "description": "Number of shares"},
+                "order_type": {
+                    "type": "string",
+                    "description": "'MKT', 'LMT', or 'STP'",
+                    "default": "MKT",
+                },
+                "limit_price": {
+                    "type": "number",
+                    "description": "Limit price (required if order_type='LMT')",
+                },
+            },
+            "required": ["symbol", "action", "quantity"],
+        },
+    },
+    {
+        "name": "get_pnl",
+        "description": (
+            "Get real-time partitioned P&L for the IBKR account: "
+            "daily P&L, unrealized P&L, and realized P&L broken down by position."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -356,6 +390,8 @@ class ClaudeToolkit:
             "run_backtest": self._run_backtest,
             "generate_pinescript": self._generate_pinescript,
             "get_analytics": self._get_analytics,
+            "preview_order": self._preview_order,
+            "get_pnl": self._get_pnl,
         }
         handler = handlers.get(name)
         if not handler:
@@ -661,6 +697,69 @@ class ClaudeToolkit:
         strategy_name = inputs.get("strategy_name", f"{symbol} Indicators")
         script = _pinescript.indicator_script(strategy_name, indicators_list, {})
         return script, None
+
+    def _preview_order(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        action = inputs["action"].upper()
+        quantity = int(inputs["quantity"])
+        order_type = inputs.get("order_type", "MKT").upper()
+        limit_price = inputs.get("limit_price")
+
+        contracts = self._client.search_contract(symbol)
+        if not contracts:
+            return f"No contract found for {symbol}.", None
+        conid = contracts[0].get("conid")
+        if not conid:
+            return f"Contract found for {symbol} but conid missing.", None
+
+        accounts = self._client.get_accounts()
+        if not accounts:
+            return "No accounts found.", None
+        account_id = accounts[0].get("accountId", accounts[0].get("id", ""))
+
+        order: dict = {
+            "conid": conid,
+            "orderType": order_type,
+            "side": action,
+            "quantity": quantity,
+            "tif": "DAY",
+        }
+        if order_type == "LMT" and limit_price is not None:
+            order["price"] = limit_price
+
+        result = self._client.get_order_preview(account_id, order)
+        lines = [
+            f"Order Preview: {action} {quantity} {symbol} ({order_type})",
+            f"  Commission est.:      {result.get('commission', 'N/A')}",
+            f"  Equity with loan:     {result.get('equity', {}).get('amount', 'N/A')}",
+            f"  Initial margin:       {result.get('initMarginChange', 'N/A')}",
+            f"  Maintenance margin:   {result.get('maintMarginChange', 'N/A')}",
+            f"  Buying power effect:  {result.get('equity', {}).get('change', 'N/A')}",
+        ]
+        return "\n".join(lines), None
+
+    def _get_pnl(self, inputs: dict) -> tuple[str, Any]:
+        pnl = self._client.get_pnl()
+        if not pnl:
+            return "No P&L data returned. Ensure IBKR gateway is connected.", None
+        lines = ["Real-time P&L:"]
+        upnl_total = 0.0
+        dpnl_total = 0.0
+        for acct, data in pnl.items():
+            if not isinstance(data, dict):
+                continue
+            for conid, pos_pnl in data.items():
+                if not isinstance(pos_pnl, dict):
+                    continue
+                symbol = pos_pnl.get("ticker", str(conid))
+                upnl = pos_pnl.get("uPnl", 0) or 0
+                dpnl = pos_pnl.get("dPnl", 0) or 0
+                upnl_total += float(upnl)
+                dpnl_total += float(dpnl)
+                lines.append(f"  {symbol}: unrealized={upnl:+.2f}  daily={dpnl:+.2f}")
+        lines.append(f"\nTotal unrealized P&L: {upnl_total:+.2f}")
+        lines.append(f"Total daily P&L:      {dpnl_total:+.2f}")
+        return "\n".join(lines), None
 
     def _get_analytics(self, inputs: dict) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
