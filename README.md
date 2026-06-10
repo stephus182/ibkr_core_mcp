@@ -224,9 +224,14 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** The `place_order` and `reply_order` methods on `IBKRClient` exist but are gated behind `require_touch_id()` — a macOS biometric authentication check (Apple Touch ID / LocalAuthentication framework) that must pass before the HTTP call is made.
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `modify_order`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library:
 
-A second gate (tkinter modal with a 60-second countdown, Enter key disabled) is provided in downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui).
+- **Gate 1** (`human_auth.py`): Apple Touch ID / macOS LocalAuthentication — biometric-only policy, no password fallback, 60-second timeout.
+- **Gate 2** (`order_confirm.py`): tkinter modal displaying full order details, 60-second countdown timer, Enter key disabled — requires explicit mouse click to confirm.
+
+Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a "Stage this order" button click) before `place_order` is ever invoked.
+
+`GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts. See [SECURITY.md](SECURITY.md) for the full security model.
 
 ---
 

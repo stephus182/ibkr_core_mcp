@@ -233,6 +233,71 @@ Import and extraction failures are handled distinctly to prevent silent unauthen
 
 ---
 
+## Docker Gateway Isolation — GatewayManager
+
+`GatewayManager` (`ibkr_core_mcp/gateway/`) manages the Docker container that runs the IBKR Client Portal Gateway Java process. The following properties are verified:
+
+### Container Isolation Model
+
+The gateway container is started with `-p 5055:5055` — a single port binding to `localhost`. No host networking (`--network host`) is used, no host volumes are mounted, and no `--privileged` flag is passed. The gateway is unreachable from outside the machine.
+
+### Subprocess Injection Analysis
+
+All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The three values that appear in subprocess arguments are:
+
+| Value | Type | Source | Injection risk |
+|---|---|---|---|
+| `self._port` | `int` | Constructor parameter | None — integers cannot carry shell metacharacters |
+| `self.IMAGE_NAME` | class constant `"ibkr-core-gateway"` | Hardcoded | None |
+| `self.CONTAINER_NAME` | class constant `"ibkr_core_gateway"` | Hardcoded | None |
+
+No user-supplied string reaches any subprocess argument.
+
+### Shell Scripts (tickler.sh, healthcheck.sh, run_gateway.sh)
+
+The three bundled shell scripts receive all configuration via Docker environment variables set by `manager.py`:
+
+| Variable | Set to | How |
+|---|---|---|
+| `GATEWAY_PORT` | `int` port value | `-e GATEWAY_PORT={self._port}` |
+| `TICKLE_BASE_URL` | `https://host.docker.internal:{port}/v1/api` | `-e TICKLE_BASE_URL=...` |
+| `TICKLE_INTERVAL` | `"60"` (literal) | `-e TICKLE_INTERVAL=60` |
+| `TICKLE_ENDPOINT` | `"/tickle"` (literal) | `-e TICKLE_ENDPOINT=/tickle` |
+
+All values originate from `manager.py` constants or the integer `port` parameter. No external input is expanded by the shell inside the container.
+
+### conf.yaml Security Decisions
+
+The gateway configuration file (`gateway/conf.yaml`) is a derivative of the IBKR-provided template. Each security-relevant setting is intentional:
+
+| Setting | Value | Rationale |
+|---|---|---|
+| `cors.origin.allowed` | `"*"` | IBKR default; mitigated by `allowCredentials: false` — the browser will not send authentication cookies in cross-origin requests, so any cross-origin request will receive HTTP 401 |
+| `cors.allowCredentials` | `false` | Prevents credential forwarding in CORS requests; effective mitigation for the wildcard origin |
+| `ips.allow` | `127.*`, `192.*`, `172.*`, `131.216.*` | IBKR-required set: loopback + RFC 1918 private ranges + IBKR's own proxy infrastructure (`131.216.*`) needed for `proxyRemoteHost: api.ibkr.com` |
+| `sslPwd` | `"mywebapi"` | Well-known default password for the IBKR-bundled self-signed JKS keystore. Not a secret — all IBKR Client Portal users share this default cert and password. The certificate is self-signed and localhost-only. |
+| `listenSsl` | `true` | Gateway always uses HTTPS, even on loopback |
+
+### Supply Chain — Dockerfile
+
+The Dockerfile downloads the IBKR Client Portal zip at build time:
+
+```dockerfile
+RUN curl -O https://download2.interactivebrokers.com/portal/clientportal.gw.zip
+```
+
+TLS certificate verification is performed (no `-k` flag). There is no SHA-256 checksum verification of the zip — this is an accepted risk in the same class as `pip install` or `apt-get install` without a separately verified hash. The download source is IBKR's official distribution server over HTTPS.
+
+The Docker layer cache means the download only occurs on the first `docker build`. Subsequent starts use the cached image.
+
+### urllib3.disable_warnings — Scope
+
+`manager.py` calls `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)` at module import time. This is a **process-global** side effect: it suppresses `InsecureRequestWarning` for all `requests` calls in the same Python process, not only gateway health-check calls.
+
+This is intentional — the only `verify=False` calls anywhere in the package are the gateway health and auth polls (`is_gateway_reachable`, `is_authenticated`), which connect to a known self-signed certificate on loopback. No external IBKR or third-party call uses `verify=False`. The warning suppression prevents console noise from expected behaviour; it does not weaken any other connection's actual TLS verification.
+
+---
+
 ## Secrets Management
 
 ### API Keys and Tokens in Config
@@ -290,11 +355,12 @@ This directly addresses the [SSRF attack class](https://modelcontextprotocol.io/
 
 | Connection | TLS verification |
 |---|---|
-| IBKR Client Portal Gateway (`localhost:5055`) | `verify=False` — intentional; self-signed cert on loopback only |
+| IBKR Client Portal Gateway (`localhost:5055`) — Python | `verify=False` — intentional; self-signed cert on loopback only |
+| IBKR Client Portal Gateway — container-internal (`tickler.sh`, `healthcheck.sh`) | `curl -sk` — verification disabled; self-signed cert on loopback within the Docker network |
 | IBKR Flex Web Service (`gdcdyn.interactivebrokers.com`) | Standard TLS, no overrides |
 | Google Drive API | Standard TLS via Google client library |
 
-No external IBKR gateway connections are made with verification disabled.
+No external IBKR or third-party connections are made with verification disabled.
 
 ### Rate Limiting and Retry Safety
 
@@ -375,6 +441,9 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | SQL injection | Parameterized queries throughout `store.py` | LLM input validated before reaching query construction |
 | Unauthenticated session on cookie failure | `warnings.warn` on extraction error (not silent) | `browser_cookie3` access restricted to allowlisted browser names |
 | Session credential exposure in 401 retry | 401 raises `IBKRAuthError` immediately, never retried | — |
+| Docker supply chain (IBKR zip download) | HTTPS with server cert verification from IBKR's official distribution server | Accepted risk: same class as `pip install` without a separately-verified hash |
+| Cross-origin browser requests to gateway | `allowCredentials: false` prevents session cookie forwarding in CORS requests | IP allowlist (`127.*`, `192.*`, `172.*`, `131.216.*`) restricts inbound connections to loopback and private ranges |
+| Gateway container compromise / escape | Port-only exposure (`-p 5055:5055`), no `--privileged`, no host volume mounts | Standard Docker isolation; gateway has no access to host filesystem or other containers |
 
 ---
 
@@ -399,5 +468,6 @@ The following rules are enforced at PR review. Any PR that violates them will be
 |---|---|---|---|
 | 2026-05-25 | `4dbe6ad` | All production modules | 2 Critical, 5 High, 5 Medium resolved. 3 Low/Info accepted. |
 | 2026-05-25 | `5f7b5ab` | `flex_query.py` | URL validation, datetime error handling hardened. |
+| 2026-06-10 | `bc8032b` | `gateway/` module — `GatewayManager`, `Dockerfile`, `tickler.sh`, `healthcheck.sh`, `conf.yaml` | 5 Low/Informational findings (GW-01 – GW-05) accepted. No code changes required. All subprocess calls use list form; no user input reaches shell. Docker container exposed on localhost only, no privileged mode. |
 
 Full audit report: [`docs/security-audit-2026-05-25.md`](docs/security-audit-2026-05-25.md)
