@@ -102,7 +102,7 @@ class AccountSummary(BaseModel):
     def _normalize(cls, data: Any) -> Any:
         if isinstance(data, dict):
             def _amount(key: str) -> float:
-                v = data.get(key, data.get(key.replace("_", ""), {}))
+                v = data.get(key, {})
                 if isinstance(v, dict):
                     return float(v.get("amount", 0))
                 return float(v or 0)
@@ -118,7 +118,7 @@ class AccountSummary(BaseModel):
 class Notification(BaseModel):
     id: str = ""
     date: str = ""
-    headline: str = Field(default="", alias="headline")
+    headline: str = ""
     body: str = ""
     is_read: bool = Field(default=False, alias="isRead")
 

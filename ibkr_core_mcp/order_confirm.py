@@ -120,8 +120,21 @@ def _show_confirm_dialog(
     btn_frame.pack()
 
     remaining: dict = {"secs": _DIALOG_TIMEOUT_MS // 1000}
+    # Store the pending after-callback ID so we can cancel it before destroying
+    # widgets; without this, the next _tick fires on a destroyed widget and raises
+    # TclError (after-callbacks are NOT auto-cancelled when a widget is destroyed).
+    _after_id: dict = {"id": None}
+
+    def _cancel_tick() -> None:
+        if _after_id["id"] is not None:
+            try:
+                dialog.after_cancel(_after_id["id"])
+            except Exception:
+                pass
+            _after_id["id"] = None
 
     def on_cancel() -> None:
+        _cancel_tick()
         confirmed["value"] = False
         dialog.destroy()
         root.destroy()
@@ -132,6 +145,7 @@ def _show_confirm_dialog(
     # this dialog was created, providing defense-in-depth. Full isolation requires running the
     # dialog in a subprocess so the tkinter event loop is unreachable from the parent process.
     def on_confirm() -> None:
+        _cancel_tick()
         confirmed["value"] = True
         dialog.destroy()
         root.destroy()
@@ -151,9 +165,9 @@ def _show_confirm_dialog(
             on_cancel()
         else:
             countdown_var.set(f"Auto-cancels in {remaining['secs']}s")
-            dialog.after(1000, _tick)
+            _after_id["id"] = dialog.after(1000, _tick)
 
-    dialog.after(1000, _tick)
+    _after_id["id"] = dialog.after(1000, _tick)
     dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
     dialog.update_idletasks()

@@ -69,7 +69,14 @@ class FlexQueryClient:
         return ref_code, url
 
     def _get_statement(self, url: str, reference_code: str) -> str:
-        """Step 2: Poll until statement is ready, return XML string."""
+        """Step 2: Poll until statement is ready, return XML string.
+
+        URL allowlist enforcement is the responsibility of _send_request, which
+        validates every URL returned by the IBKR API before passing it here.
+        fetch_trades() is the only public entry point and always calls
+        _send_request first, so the invariant is maintained at the call-graph
+        level rather than repeated here.
+        """
         for attempt in range(_MAX_POLL_RETRIES):
             resp = requests.get(
                 url,

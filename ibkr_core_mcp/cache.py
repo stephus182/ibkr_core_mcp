@@ -5,7 +5,6 @@ import os
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -80,7 +79,7 @@ class GDriveCache:
         return self._service
 
     def _cache_key(self, symbol: str, timeframe: str, period: str, end: str) -> str:
-        return f"{symbol.upper()}_{timeframe.upper()}_{period}_{end}"
+        return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}"
 
     def _filename(self, key: str) -> str:
         return f"{key}.parquet"
@@ -144,7 +143,7 @@ class GDriveCache:
             return False
         cached_end = datetime.strptime(entry["end"], "%Y-%m-%d").date()
         today = date.today()
-        if end in ("today", str(today)):
+        if end == str(today):
             return cached_end >= today - timedelta(days=1)
         return True
 
@@ -210,7 +209,7 @@ class GDriveCache:
             "symbol": symbol.upper(),
             "timeframe": timeframe.upper(),
             "period": period,
-            "end": end if end != "today" else str(date.today()),
+            "end": end,
             "rows": len(df),
             "cached_at": datetime.now(tz=timezone.utc).isoformat(),
         }
@@ -223,6 +222,7 @@ class GDriveCache:
 
     def delete(self, symbol: str, timeframe: str, period: str, end: str) -> None:
         """Remove a cached file and its manifest entry."""
+        _validate_cache_inputs(symbol, timeframe, period, end)
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
         svc = self._get_service()

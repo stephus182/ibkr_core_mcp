@@ -92,13 +92,23 @@ class IBKRWebSocket:
             msg = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             return None
+        if not isinstance(msg, dict):
+            return None
         topic = msg.get("topic", "")
         if not topic.startswith("smd+"):
             return None
         data_list = msg.get("data", [])
-        if not data_list:
+        # IBKR may send data as a list or as a bare dict; normalise to a dict.
+        if isinstance(data_list, list):
+            if not data_list:
+                return None
+            data = data_list[0]
+        elif isinstance(data_list, dict):
+            data = data_list
+        else:
             return None
-        data = data_list[0]
+        if not isinstance(data, dict):
+            return None
         try:
             conid = int(data.get("conid", topic.split("+")[1]))
         except (ValueError, IndexError):

@@ -8,7 +8,6 @@ from typing import Any
 import pandas as pd
 
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import StoreError
 
 
 class SQLiteStore:
@@ -181,6 +180,11 @@ class SQLiteStore:
         query += " ORDER BY snapshot_at"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
+        if not rows:
+            return pd.DataFrame(
+                columns=["id", "snapshot_at", "conid", "symbol", "position",
+                         "mkt_price", "mkt_value", "unrealized_pnl"]
+            )
         return pd.DataFrame([dict(r) for r in rows])
 
     def log_signal(
@@ -228,6 +232,10 @@ class SQLiteStore:
         query += " ORDER BY logged_at"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
+        if not rows:
+            return pd.DataFrame(
+                columns=["id", "logged_at", "symbol", "signal_type", "value", "metadata"]
+            )
         return pd.DataFrame([dict(r) for r in rows])
 
     def save_backtest(self, result: dict) -> int:

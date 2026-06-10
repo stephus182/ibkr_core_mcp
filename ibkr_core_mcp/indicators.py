@@ -79,7 +79,7 @@ def keltner_channels(df: pd.DataFrame, period: int = 20, atr_mult: float = 2.0) 
 
 
 def obv(df: pd.DataFrame) -> pd.Series:
-    direction = df["close"].diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    direction = np.sign(df["close"].diff()).fillna(0)
     return (direction * df["volume"]).cumsum()
 
 

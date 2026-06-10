@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
-from RestrictedPython import compile_restricted, safe_globals, limited_builtins
+from RestrictedPython import compile_restricted, safe_globals
 from RestrictedPython.Guards import safer_getattr, full_write_guard
+from RestrictedPython.Limits import limited_range
 
 from ibkr_core_mcp.exceptions import BacktestSyntaxError, BacktestRuntimeError
 from ibkr_core_mcp import analytics as _analytics
@@ -123,22 +124,23 @@ def run_backtest(
     except SyntaxError as e:
         raise BacktestSyntaxError(f"Strategy syntax error: {e}") from e
 
+    # safe_globals already sets __builtins__ = safe_builtins, which excludes
+    # __import__, open, eval, exec, compile, print and all introspection attrs.
+    # We do NOT override __builtins__ further — replacing it with the tiny
+    # limited_builtins dict would strip most safe builtins and make strategies
+    # unable to use isinstance, bool, etc.
     sandbox: dict = {
         **safe_globals,
         "_write_": _write_guard,
         "_getattr_": safer_getattr,
         "_getitem_": lambda ob, key: ob[key],
         "_getiter_": iter,
-        "__builtins__": {
-            k: v for k, v in limited_builtins.items()
-            if k not in ("__import__", "open", "eval", "exec", "compile", "print")
-        },
         "pd": _SAFE_PD,
         "np": _SAFE_NP,
         "float": float,
         "int": int,
         "abs": abs,
-        "range": range,
+        "range": limited_range,
         "len": len,
         "df": df.copy(),
     }
@@ -146,16 +148,20 @@ def run_backtest(
     def _run(byte_code: object, sandbox: dict) -> None:
         exec(byte_code, sandbox)  # noqa: S102
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         fut = pool.submit(_run, byte_code, sandbox)
         try:
             fut.result(timeout=_EXEC_TIMEOUT)
         except concurrent.futures.TimeoutError:
+            fut.cancel()
             raise BacktestRuntimeError(
                 f"Strategy timed out after {_EXEC_TIMEOUT}s"
             )
         except Exception as e:
             raise BacktestRuntimeError(f"Strategy runtime error: {e}") from e
+    finally:
+        pool.shutdown(wait=False)
 
     result_df: pd.DataFrame = sandbox.get("df", df)
 

@@ -7,6 +7,8 @@ _TIMEOUT = 60
 
 def require_touch_id(reason: str) -> None:
     """Block until Touch ID succeeds. Raises HumanAuthError on any failure."""
+    if not reason or not reason.strip():
+        raise HumanAuthError("require_touch_id: reason must be a non-empty string")
     try:
         from LocalAuthentication import (  # type: ignore[import]
             LAContext,
@@ -39,4 +41,4 @@ def require_touch_id(reason: str) -> None:
     if not done.wait(timeout=_TIMEOUT):
         raise HumanAuthError(f"Touch ID timed out after {_TIMEOUT}s")
     if not result.get("ok"):
-        raise HumanAuthError(f"Touch ID denied: {result.get('error')}")
+        raise HumanAuthError(f"Touch ID denied: {result.get('error')!r}")

@@ -6,7 +6,7 @@ import pandas as pd
 def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
     excess = returns - risk_free / periods
     std = excess.std()
-    if std == 0:
+    if not std or pd.isna(std):
         return 0.0
     return float(excess.mean() / std * np.sqrt(periods))
 
@@ -14,16 +14,16 @@ def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> fl
 def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
     excess = returns - risk_free / periods
     downside = excess[excess < 0].std()
-    if downside == 0:
+    if not downside or pd.isna(downside):
         return 0.0
     return float(excess.mean() / downside * np.sqrt(periods))
 
 
 def max_drawdown(returns: pd.Series) -> float:
     equity = (1 + returns).cumprod()
-    peak = equity.cummax()
+    peak = equity.cummax().replace(0, float("nan"))
     dd = (equity - peak) / peak
-    return float(dd.min())
+    return float(dd.min()) if len(dd) > 0 else 0.0
 
 
 def max_drawdown_duration(returns: pd.Series) -> int:

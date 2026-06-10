@@ -186,14 +186,50 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     uv_server = uvicorn.Server(config)
 
-    tasks: list[asyncio.Task] = [asyncio.create_task(uv_server.serve())]
+    uv_task = asyncio.create_task(uv_server.serve())
     if streaming:
-        tasks.append(asyncio.create_task(_stream_loop(toolkit, store)))
-    await asyncio.gather(*tasks)
+        # Run the stream loop as an independent background task so that a
+        # WebSocket error does not propagate to gather() and cancel the HTTP
+        # server.  The loop retries internally; we only cancel it on clean exit.
+        stream_task = asyncio.create_task(_stream_loop_with_retry(toolkit, store))
+        try:
+            await uv_task
+        finally:
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+    else:
+        await uv_task
+
+
+async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
+    """Background task wrapper: reconnect on transient errors with exponential backoff."""
+    _RETRY_DELAYS = [5, 10, 30, 60]  # seconds between reconnect attempts
+    attempt = 0
+    while True:
+        try:
+            await _stream_loop(toolkit, store)
+            # _stream_loop only returns without exception if the WebSocket closed
+            # cleanly (e.g. gateway shutdown).  Retry after a short delay.
+            logger.info("ibkr-core-mcp: WebSocket closed cleanly; reconnecting in 5s")
+            await asyncio.sleep(5)
+            attempt = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+            logger.error(
+                "WebSocket stream error (attempt %d), retrying in %ds: %s",
+                attempt + 1, delay, exc,
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 async def _stream_loop(toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
-    """Background task: connect WebSocket, stream quotes, fire alerts."""
+    """Single-attempt WebSocket loop: connect, stream quotes, fire alerts."""
     import requests as _requests
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.streaming import IBKRWebSocket, AlertManager
@@ -211,9 +247,15 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
         subscribed: set[int] = set()
         async for quote in ws.listen():
             active_conids = {a["conid"] for a in store.get_alerts(active_only=True)}
+            # Subscribe to newly-added alert conids.
             for cid in active_conids - subscribed:
                 await ws.subscribe(cid)
                 subscribed.add(cid)
+            # Unsubscribe from conids that no longer have active alerts to avoid
+            # accumulating stale subscriptions after alerts are triggered/removed.
+            for cid in subscribed - active_conids:
+                await ws.unsubscribe(cid)
+                subscribed.discard(cid)
             triggered = manager.check_quote(quote)
             for alert in triggered:
                 logger.warning(
@@ -221,8 +263,6 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
                     alert["id"], alert["symbol"], alert["direction"],
                     alert["threshold"], quote.last or 0,
                 )
-    except Exception as exc:
-        logger.error("WebSocket stream error: %s", exc)
     finally:
         await ws.disconnect()
 

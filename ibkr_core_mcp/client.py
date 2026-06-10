@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import urllib3
 from typing import Any
 from urllib.parse import urlparse
@@ -6,7 +7,7 @@ import requests
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import IBKRAuthError, ConfigError
+from ibkr_core_mcp.exceptions import ConfigError
 from ibkr_core_mcp.rate_limiter import with_retry
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.order_confirm import (
@@ -17,6 +18,18 @@ from ibkr_core_mcp.order_confirm import (
 )
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Account IDs must be alphanumeric only (e.g. "U1234567", "DU12345").
+# This prevents path traversal in URLs constructed from caller-supplied IDs.
+_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9]+$")
+
+
+def _validate_account_id(account_id: str) -> None:
+    """Raise ConfigError if account_id contains characters unsafe for URL paths."""
+    if not account_id or not _ACCOUNT_ID_RE.fullmatch(account_id):
+        raise ConfigError(
+            f"Invalid account_id {account_id!r}: must be non-empty alphanumeric."
+        )
 
 
 class IBKRClient:
@@ -176,18 +189,23 @@ class IBKRClient:
         return data if isinstance(data, list) else []
 
     def get_account_meta(self, account_id: str) -> dict:
+        _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/meta")
 
     def get_account_summary(self, account_id: str) -> dict:
+        _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/summary")
 
     def get_account_ledger(self, account_id: str) -> dict:
+        _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/ledger")
 
     def get_account_allocation(self, account_id: str) -> dict:
+        _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/allocation")
 
     def get_positions(self, account_id: str, page: int = 0) -> list[dict]:
+        _validate_account_id(account_id)
         data = self._get(f"/portfolio/{account_id}/positions/{page}")
         return data if isinstance(data, list) else []
 
@@ -196,9 +214,11 @@ class IBKRClient:
         return data if isinstance(data, list) else []
 
     def get_position(self, account_id: str, conid: int) -> dict:
+        _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/position/{conid}")
 
     def get_combo_positions(self, account_id: str) -> list[dict]:
+        _validate_account_id(account_id)
         data = self._get(f"/portfolio/{account_id}/combo/positions")
         return data if isinstance(data, list) else []
 
@@ -206,6 +226,7 @@ class IBKRClient:
         return self._post("/portfolio/allocation", {"acctIds": account_ids})
 
     def invalidate_positions_cache(self, account_id: str) -> dict:
+        _validate_account_id(account_id)
         return self._post(f"/portfolio/{account_id}/positions/invalidate")
 
     # Orders (read-only)
@@ -262,6 +283,7 @@ class IBKRClient:
         return self._get("/iserver/account/mta")
 
     def get_alerts(self, account_id: str) -> list[dict]:
+        _validate_account_id(account_id)
         data = self._get(f"/iserver/account/{account_id}/alerts")
         return data if isinstance(data, list) else []
 
@@ -283,6 +305,7 @@ class IBKRClient:
 
     # Order Management (write — human auth required)
     def place_order(self, account_id: str, order: dict) -> list[dict]:
+        _validate_account_id(account_id)
         symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
         side = order.get("side", "?")
         qty = order.get("quantity", "?")
@@ -292,11 +315,13 @@ class IBKRClient:
         return data if isinstance(data, list) else []
 
     def modify_order(self, account_id: str, order_id: str, order: dict) -> dict:
+        _validate_account_id(account_id)
         require_touch_id(f"IBKR: Modify order {order_id}")
         confirm_modify_dialog(order_id, order, account_id)
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", order)
 
     def cancel_order(self, account_id: str, order_id: str) -> dict:
+        _validate_account_id(account_id)
         require_touch_id(f"IBKR: Cancel order {order_id}")
         confirm_cancel_dialog(order_id, account_id)
         url = f"{self._base}/iserver/account/{account_id}/order/{order_id}"
@@ -310,18 +335,22 @@ class IBKRClient:
         return data if isinstance(data, list) else []
 
     def get_order_preview(self, account_id: str, order: dict) -> dict:
+        _validate_account_id(account_id)
         return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": [order]})
 
     # Alerts (write)
     def create_alert(self, account_id: str, alert: dict) -> dict:
+        _validate_account_id(account_id)
         return self._post(f"/iserver/account/{account_id}/alert", alert)
 
     def delete_alert(self, account_id: str, alert_id: str) -> dict:
+        _validate_account_id(account_id)
         url = f"{self._base}/iserver/account/{account_id}/alert/{alert_id}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30))
         return resp.json()
 
     def activate_alert(self, account_id: str, alert_id: str, activate: bool = True) -> dict:
+        _validate_account_id(account_id)
         return self._post(f"/iserver/account/{account_id}/alert/activate", {"alertId": alert_id, "alertActive": int(activate)})
 
     # Watchlists (write)
@@ -342,6 +371,7 @@ class IBKRClient:
 
     # Account / Admin
     def switch_account(self, account_id: str) -> dict:
+        _validate_account_id(account_id)
         return self._post("/iserver/account", {"acctId": account_id})
 
     def get_brokerage_accounts(self) -> dict:
