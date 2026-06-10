@@ -1,8 +1,7 @@
-import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import patch, MagicMock
 from datetime import date, timedelta
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 @pytest.fixture
@@ -64,9 +63,11 @@ def test_list_cached_returns_keys(cache):
 # ── CA-02: token file permissions ─────────────────────────────────────────────
 
 def test_token_file_created_with_restricted_permissions(tmp_path):
-    import os, stat
+    import os
+    import stat
+    from unittest.mock import MagicMock
+
     from ibkr_core_mcp.cache import GDriveCache
-    from unittest.mock import MagicMock, patch
 
     token_file = tmp_path / "token.json"
     token_file.write_text('{"existing": "token"}')
@@ -121,9 +122,10 @@ def test_cache_key_accepts_valid_inputs(cache):
 # ── C-02: folder_id validation ────────────────────────────────────────────────
 
 def test_get_service_raises_on_empty_folder_id(tmp_path):
+    from unittest.mock import MagicMock
+
     from ibkr_core_mcp.cache import GDriveCache
     from ibkr_core_mcp.exceptions import CacheError
-    from unittest.mock import MagicMock, patch
 
     token_file = tmp_path / "token.json"
     token_file.write_text('{}')

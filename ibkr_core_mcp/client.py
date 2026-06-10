@@ -1,21 +1,23 @@
 from __future__ import annotations
+
 import re
-import urllib3
 from typing import Any
 from urllib.parse import urlparse
+
 import requests
+import urllib3
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import ConfigError
-from ibkr_core_mcp.rate_limiter import with_retry
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.order_confirm import (
-    confirm_order_dialog,
-    confirm_modify_dialog,
     confirm_cancel_dialog,
+    confirm_modify_dialog,
+    confirm_order_dialog,
     confirm_reply_dialog,
 )
+from ibkr_core_mcp.rate_limiter import with_retry
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -269,6 +271,7 @@ class IBKRClient:
 
     # FYI / Notifications
     def get_notifications(self, max_results: int = 10) -> list[dict]:
+        max_results = min(max(1, max_results), 100)
         data = self._get("/fyi/notifications", {"max": max_results})
         return data if isinstance(data, list) else []
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import io
 import json
 import os
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -211,7 +212,7 @@ class GDriveCache:
             "period": period,
             "end": end,
             "rows": len(df),
-            "cached_at": datetime.now(tz=timezone.utc).isoformat(),
+            "cached_at": datetime.now(tz=UTC).isoformat(),
         }
         self._save_manifest()
 

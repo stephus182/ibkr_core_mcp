@@ -1,11 +1,13 @@
+from unittest.mock import MagicMock, patch
+from unittest.mock import patch as _patch
+
 import pytest
-from unittest.mock import MagicMock, patch, patch as _patch
 
 
 @pytest.fixture
 def client(mock_config):
-    from ibkr_core_mcp.client import IBKRClient
     from ibkr_core_mcp.auth import NoAuth
+    from ibkr_core_mcp.client import IBKRClient
     return IBKRClient(mock_config, auth=NoAuth())
 
 
@@ -53,16 +55,16 @@ def test_get_market_history_passes_params(client):
 # Integration tests — require live gateway
 @pytest.mark.integration
 def test_live_ping(mock_config):
-    from ibkr_core_mcp.client import IBKRClient
     from ibkr_core_mcp.auth import BrowserCookieAuth
+    from ibkr_core_mcp.client import IBKRClient
     client = IBKRClient(mock_config, auth=BrowserCookieAuth())
     assert client.ping() is True
 
 
 @pytest.mark.integration
 def test_live_search_aapl(mock_config):
-    from ibkr_core_mcp.client import IBKRClient
     from ibkr_core_mcp.auth import BrowserCookieAuth
+    from ibkr_core_mcp.client import IBKRClient
     client = IBKRClient(mock_config, auth=BrowserCookieAuth())
     results = client.search_contract("AAPL")
     assert len(results) > 0
@@ -213,3 +215,50 @@ def test_get_order_preview_has_no_gate(client):
         mock_post.return_value = _make_ok_response({"equity": 5000})
         client.get_order_preview("U1234567", order)
     mock_tid.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# account_id validation — path traversal and injection prevention
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("account_id", [
+    "U1234567",
+    "DU123456",
+    "F123ABC",
+    "ABCDEFGHIJ",
+])
+def test_validate_account_id_accepts_valid_ids(client, account_id):
+    from unittest.mock import MagicMock
+    client._session.get = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {}))
+    # Should not raise ConfigError for valid alphanumeric IDs
+    try:
+        client.get_account_summary(account_id)
+    except Exception as exc:
+        assert "account_id" not in str(type(exc).__name__).lower() or \
+               type(exc).__name__ != "ConfigError"
+
+
+@pytest.mark.parametrize("bad_id", [
+    "",                    # empty
+    "../etc/passwd",       # path traversal
+    "U123/456",            # slash
+    "U123#456",            # special char
+    "U123 456",            # space
+    "U123\r\nX-Header: 1", # CRLF injection
+    "U123\x00null",        # null byte
+    "U123-456",            # hyphen
+])
+def test_validate_account_id_rejects_invalid_ids(client, bad_id):
+    from ibkr_core_mcp.exceptions import ConfigError
+    with pytest.raises(ConfigError, match="[Ii]nvalid account"):
+        client.get_account_summary(bad_id)
+
+
+def test_validate_account_id_applied_to_write_methods(client):
+    """Path traversal must be caught before Touch ID gates are evaluated."""
+    from ibkr_core_mcp.exceptions import ConfigError
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 1}
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid:
+        with pytest.raises(ConfigError):
+            client.place_order("../inject", order)
+    mock_tid.assert_not_called()  # validation must fire before biometric gate

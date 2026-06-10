@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import threading
+
 from ibkr_core_mcp.exceptions import HumanAuthError
 
 _TIMEOUT = 60
@@ -17,7 +19,7 @@ def require_touch_id(reason: str) -> None:
     except (ImportError, TypeError):
         raise HumanAuthError(
             "Touch ID unavailable: pyobjc-framework-LocalAuthentication not installed"
-        )
+        ) from None
 
     ctx = LAContext.new()
     can_eval, err = ctx.canEvaluatePolicy_error_(

@@ -6,7 +6,6 @@ import pytest
 from ibkr_core_mcp import HumanAuthError as _HumanAuthErrorPublic
 from ibkr_core_mcp.exceptions import HumanAuthError, IBKRCoreError
 
-
 # ---------------------------------------------------------------------------
 # Exception class
 # ---------------------------------------------------------------------------

@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import logging
 import re
 import warnings
 from typing import Protocol
+
 import requests
 
 _log = logging.getLogger(__name__)

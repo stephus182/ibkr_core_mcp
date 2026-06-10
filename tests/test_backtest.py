@@ -1,6 +1,6 @@
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def ohlcv():
 
 
 def test_simple_long_strategy(ohlcv):
-    from ibkr_core_mcp.backtest import run_backtest, BacktestResult
+    from ibkr_core_mcp.backtest import BacktestResult, run_backtest
     code = "df['signal'] = 1"  # always long
     result = run_backtest(code, ohlcv, strategy_name="always_long", symbol="TEST")
     assert isinstance(result, BacktestResult)

@@ -1,6 +1,6 @@
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
-from datetime import date
 
 
 @pytest.fixture
@@ -89,8 +89,8 @@ def test_tools_count_at_least_19(toolkit):
 
 
 def test_execute_add_indicators(toolkit):
-    import pandas as pd
     import numpy as np
+    import pandas as pd
     n = 100
     np.random.seed(0)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
@@ -108,8 +108,8 @@ def test_execute_add_indicators(toolkit):
 
 
 def test_execute_run_backtest_tool(toolkit):
-    import pandas as pd
     import numpy as np
+    import pandas as pd
     n = 100
     np.random.seed(0)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
@@ -136,8 +136,8 @@ def test_execute_generate_pinescript_tool(toolkit):
 
 
 def test_execute_get_analytics_tool(toolkit):
-    import pandas as pd
     import numpy as np
+    import pandas as pd
     n = 100
     np.random.seed(0)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)

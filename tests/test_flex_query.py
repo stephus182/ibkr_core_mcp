@@ -1,8 +1,8 @@
-import pytest
 from unittest.mock import MagicMock, patch
 
-from ibkr_core_mcp.exceptions import FlexQueryError
+import pytest
 
+from ibkr_core_mcp.exceptions import FlexQueryError
 
 SEND_REQUEST_XML_SUCCESS = b"""<?xml version="1.0" ?>
 <FlexStatementResponse timestamp="20230415;091500">

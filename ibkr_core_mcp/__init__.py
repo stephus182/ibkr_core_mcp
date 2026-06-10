@@ -1,46 +1,47 @@
 """ibkr_core_mcp — IBKR Client Portal API package."""
+import logging
 
+from ibkr_core_mcp import analytics, indicators, pinescript
+from ibkr_core_mcp.auth import BrowserCookieAuth, NoAuth, TokenAuth
+from ibkr_core_mcp.backtest import BacktestResult, run_backtest
+from ibkr_core_mcp.cache import GDriveCache
+from ibkr_core_mcp.claude_tools import ClaudeToolkit
+from ibkr_core_mcp.client import IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import (
-    IBKRCoreError,
-    IBKRAuthError,
-    IBKRRateLimitError,
-    IBKRAPIError,
+    BacktestError,
+    BacktestRuntimeError,
+    BacktestSyntaxError,
     CacheError,
     CacheMissError,
     CacheWriteError,
-    StoreError,
-    BacktestError,
-    BacktestSyntaxError,
-    BacktestRuntimeError,
     ConfigError,
-    HumanAuthError,
     FlexQueryError,
-    StreamingError,
     GatewayError,
+    HumanAuthError,
+    IBKRAPIError,
+    IBKRAuthError,
+    IBKRCoreError,
+    IBKRRateLimitError,
+    StoreError,
+    StreamingError,
 )
+from ibkr_core_mcp.flex_query import FlexQueryClient
+from ibkr_core_mcp.gateway import GatewayManager
 from ibkr_core_mcp.human_auth import require_touch_id
-from ibkr_core_mcp.auth import BrowserCookieAuth, TokenAuth, NoAuth
-from ibkr_core_mcp.client import IBKRClient
-from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.store import SQLiteStore
-from ibkr_core_mcp.claude_tools import ClaudeToolkit
 from ibkr_core_mcp.models import (
+    AccountSummary,
     Contract,
+    Notification,
+    Order,
     Position,
     Trade,
-    Order,
-    AccountSummary,
-    Notification,
     bars_to_dataframe,
 )
-from ibkr_core_mcp.backtest import run_backtest, BacktestResult
-from ibkr_core_mcp.flex_query import FlexQueryClient
-from ibkr_core_mcp import indicators
-from ibkr_core_mcp import analytics
-from ibkr_core_mcp import pinescript
-from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote, AlertManager
-from ibkr_core_mcp.gateway import GatewayManager
+from ibkr_core_mcp.store import SQLiteStore
+from ibkr_core_mcp.streaming import AlertManager, IBKRWebSocket, LiveQuote
+
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __version__ = "0.4.0"
 __all__ = [

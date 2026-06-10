@@ -1,6 +1,6 @@
-import pytest
+from unittest.mock import MagicMock, patch
+
 import requests
-from unittest.mock import patch, MagicMock
 
 
 def test_no_auth_applies_nothing():

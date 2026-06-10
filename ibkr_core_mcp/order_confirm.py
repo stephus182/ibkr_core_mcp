@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 try:
     import tkinter as tk  # type: ignore[import]
 except (ModuleNotFoundError, ImportError):  # Python without Tk support (CI, headless)

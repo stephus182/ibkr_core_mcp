@@ -1,6 +1,6 @@
 import json
-import pytest
 
+import pytest
 
 # ── SQLiteStore alert methods (sync) ─────────────────────────────────────────
 
@@ -45,7 +45,7 @@ def test_live_quote_fields():
 
 def test_alert_above_triggered(tmp_db, mock_config):
     from ibkr_core_mcp.store import SQLiteStore
-    from ibkr_core_mcp.streaming import LiveQuote, AlertManager
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
     store = SQLiteStore(mock_config)
     store.add_alert(265598, "AAPL", 185.0, "above")
     mgr = AlertManager(store)
@@ -56,7 +56,7 @@ def test_alert_above_triggered(tmp_db, mock_config):
 
 def test_alert_above_not_triggered(tmp_db, mock_config):
     from ibkr_core_mcp.store import SQLiteStore
-    from ibkr_core_mcp.streaming import LiveQuote, AlertManager
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
     store = SQLiteStore(mock_config)
     store.add_alert(265598, "AAPL", 195.0, "above")
     mgr = AlertManager(store)
@@ -65,7 +65,7 @@ def test_alert_above_not_triggered(tmp_db, mock_config):
 
 def test_alert_below_triggered(tmp_db, mock_config):
     from ibkr_core_mcp.store import SQLiteStore
-    from ibkr_core_mcp.streaming import LiveQuote, AlertManager
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
     store = SQLiteStore(mock_config)
     store.add_alert(265598, "AAPL", 175.0, "below")
     mgr = AlertManager(store)
@@ -75,7 +75,7 @@ def test_alert_below_triggered(tmp_db, mock_config):
 
 def test_alert_not_fired_twice(tmp_db, mock_config):
     from ibkr_core_mcp.store import SQLiteStore
-    from ibkr_core_mcp.streaming import LiveQuote, AlertManager
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
     store = SQLiteStore(mock_config)
     store.add_alert(265598, "AAPL", 185.0, "above")
     mgr = AlertManager(store)
@@ -85,7 +85,7 @@ def test_alert_not_fired_twice(tmp_db, mock_config):
 
 def test_check_quote_skips_no_last_price(tmp_db, mock_config):
     from ibkr_core_mcp.store import SQLiteStore
-    from ibkr_core_mcp.streaming import LiveQuote, AlertManager
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
     store = SQLiteStore(mock_config)
     store.add_alert(265598, "AAPL", 185.0, "above")
     mgr = AlertManager(store)

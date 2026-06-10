@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -134,7 +135,7 @@ class SQLiteStore:
     def snapshot_positions(self, positions: list[dict]) -> None:
         """Save a timestamped snapshot of current positions."""
         self.initialize()
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
         rows = [
             {
                 "snapshot_at": now,
@@ -203,7 +204,7 @@ class SQLiteStore:
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    datetime.now(tz=timezone.utc).isoformat(),
+                    datetime.now(tz=UTC).isoformat(),
                     symbol.upper(),
                     signal_type,
                     value,
@@ -241,7 +242,7 @@ class SQLiteStore:
     def save_backtest(self, result: dict) -> int:
         """Store a backtest result dict. Returns row id."""
         self.initialize()
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -287,7 +288,7 @@ class SQLiteStore:
         if direction not in ("above", "below"):
             raise ValueError(f"direction must be 'above' or 'below', got {direction!r}")
         self.initialize()
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO price_alerts (conid, symbol, threshold, direction, created_at)"
@@ -309,7 +310,7 @@ class SQLiteStore:
     def log_entry(self, event: str, **data: Any) -> None:
         """Append an event to the local session_log table."""
         self.initialize()
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO session_log (ts, event, data) VALUES (?, ?, ?)",
@@ -333,7 +334,7 @@ class SQLiteStore:
     def mark_alert_triggered(self, alert_id: int) -> None:
         """Record that an alert fired by setting triggered_at to now."""
         self.initialize()
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
         with self._connect() as conn:
             conn.execute(
                 "UPDATE price_alerts SET triggered_at = ? WHERE id = ?",

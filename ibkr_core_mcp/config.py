@@ -1,13 +1,16 @@
 from __future__ import annotations
+
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-import os
 
 from dotenv import load_dotenv
 
 
 @dataclass
 class Config:
+    """Configuration for all ibkr_core_mcp services. Use Config.from_env() to load from environment variables."""
+
     gateway_url: str
     anthropic_api_key: str = field(repr=False)
     gdrive_folder_id: str
@@ -18,7 +21,7 @@ class Config:
     flex_query_id: str = ""
 
     @classmethod
-    def from_env(cls, dotenv_path: str | None = None) -> "Config":
+    def from_env(cls, dotenv_path: str | None = None) -> Config:
         load_dotenv(dotenv_path, override=False)
 
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")

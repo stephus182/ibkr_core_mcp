@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import json
 import ssl
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import AsyncGenerator, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -131,7 +133,7 @@ class IBKRWebSocket:
 class AlertManager:
     """Check live quotes against active price alerts; mark triggered ones in SQLite."""
 
-    def __init__(self, store: "SQLiteStore") -> None:
+    def __init__(self, store: SQLiteStore) -> None:
         self._store = store
 
     def check_quote(self, quote: LiveQuote) -> list[dict]:

@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import time
-import defusedxml.ElementTree as ET
 from datetime import date
 from typing import TYPE_CHECKING
 
+import defusedxml.ElementTree as ET
 import requests
 
 from ibkr_core_mcp.config import Config
@@ -22,7 +23,7 @@ _POLL_SLEEP = 3
 class FlexQueryClient:
     """Fetches historical account data from IBKR Flex Web Service."""
 
-    def __init__(self, config: Config, store: "SQLiteStore", cache: "GDriveCache") -> None:
+    def __init__(self, config: Config, store: SQLiteStore, cache: GDriveCache) -> None:
         self._config = config
         self._store = store
         self._cache = cache

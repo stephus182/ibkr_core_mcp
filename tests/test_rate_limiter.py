@@ -1,6 +1,7 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 import requests
-from unittest.mock import MagicMock, patch
 
 
 def _make_response(status_code: int, json_data: dict | None = None):
@@ -22,8 +23,8 @@ def test_success_returns_response():
 
 
 def test_429_retries_then_raises():
-    from ibkr_core_mcp.rate_limiter import with_retry
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
     mock_fn = MagicMock(return_value=_make_response(429))
     with patch("time.sleep"):
         with pytest.raises(IBKRRateLimitError):
@@ -42,8 +43,8 @@ def test_429_succeeds_on_retry():
 
 
 def test_401_raises_auth_error_immediately():
-    from ibkr_core_mcp.rate_limiter import with_retry
     from ibkr_core_mcp.exceptions import IBKRAuthError
+    from ibkr_core_mcp.rate_limiter import with_retry
     mock_fn = MagicMock(return_value=_make_response(401))
     with pytest.raises(IBKRAuthError):
         with_retry(mock_fn)
@@ -51,8 +52,8 @@ def test_401_raises_auth_error_immediately():
 
 
 def test_other_http_error_raises_api_error():
-    from ibkr_core_mcp.rate_limiter import with_retry
     from ibkr_core_mcp.exceptions import IBKRAPIError
+    from ibkr_core_mcp.rate_limiter import with_retry
     mock_fn = MagicMock(return_value=_make_response(500))
     with pytest.raises(IBKRAPIError) as exc_info:
         with_retry(mock_fn)

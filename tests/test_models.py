@@ -1,6 +1,6 @@
-import pytest
+
 import pandas as pd
-from datetime import datetime
+import pytest
 
 
 def test_contract_parses_ibkr_dict():
@@ -14,7 +14,7 @@ def test_contract_parses_ibkr_dict():
 
 def test_contract_missing_conid_raises():
     from ibkr_core_mcp.models import Contract
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         Contract.model_validate({"symbol": "AAPL"})
 
 

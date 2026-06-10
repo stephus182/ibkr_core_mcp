@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import concurrent.futures
 import types
 from dataclasses import dataclass, field
@@ -6,11 +7,11 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 from RestrictedPython import compile_restricted, safe_globals
-from RestrictedPython.Guards import safer_getattr, full_write_guard
+from RestrictedPython.Guards import full_write_guard, safer_getattr
 from RestrictedPython.Limits import limited_range
 
-from ibkr_core_mcp.exceptions import BacktestSyntaxError, BacktestRuntimeError
 from ibkr_core_mcp import analytics as _analytics
+from ibkr_core_mcp.exceptions import BacktestRuntimeError, BacktestSyntaxError
 
 _MAX_CODE_LEN = 4096
 _EXEC_TIMEOUT = 10  # seconds
@@ -78,6 +79,8 @@ _SAFE_PD = types.SimpleNamespace(
 
 @dataclass
 class BacktestResult:
+    """Performance metrics returned by run_backtest()."""
+
     symbol: str
     strategy_name: str
     total_return: float
@@ -112,7 +115,9 @@ def run_backtest(
     Strategy code receives `df` (OHLCV DataFrame) and must set df['signal']:
         1 = long, 0 = flat, -1 = short
     Allowed: pd (safe subset), np (safe subset), basic builtins.
-    Blocked: network, file I/O, os, sys, module mutation.
+    Blocked: network access, os, sys, imports, attribute/name mutation.
+    Not blocked: DataFrame public methods (df.to_csv etc.) — accepted residual
+    risk, documented in SECURITY.md §Residual risk.
     """
     if len(code) > _MAX_CODE_LEN:
         raise BacktestSyntaxError(
@@ -157,7 +162,7 @@ def run_backtest(
             fut.cancel()
             raise BacktestRuntimeError(
                 f"Strategy timed out after {_EXEC_TIMEOUT}s"
-            )
+            ) from None
         except Exception as e:
             raise BacktestRuntimeError(f"Strategy runtime error: {e}") from e
     finally:

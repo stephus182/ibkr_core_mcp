@@ -1,6 +1,6 @@
-import json
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 
 @pytest.fixture
@@ -21,9 +21,10 @@ def test_mcp_server_importable():
 
 
 async def test_server_has_22_tools(toolkit, store):
-    from ibkr_core_mcp.mcp_server import build_server
-    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
     from mcp.types import ListToolsRequest
+
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+    from ibkr_core_mcp.mcp_server import build_server
     server = build_server(toolkit, store)
     req = ListToolsRequest(method="tools/list")
     result = await server.request_handlers[type(req)](req)

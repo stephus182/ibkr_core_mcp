@@ -1,7 +1,8 @@
 from unittest.mock import MagicMock, patch
-import pytest
-from ibkr_core_mcp.exceptions import HumanAuthError
 
+import pytest
+
+from ibkr_core_mcp.exceptions import HumanAuthError
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from typing import Any
+
 import pandas as pd
-from pydantic import BaseModel, model_validator, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Contract(BaseModel):

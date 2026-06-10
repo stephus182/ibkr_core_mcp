@@ -6,15 +6,16 @@ Run:
     python -m ibkr_core_mcp.mcp_server --transport sse --stream  # + WebSocket streaming
 """
 from __future__ import annotations
+
 import argparse
 import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING
 
-from mcp.server import Server, NotificationOptions
+from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
-from mcp.types import TextContent, Tool, Resource
+from mcp.types import Resource, TextContent, Tool
 from pydantic import AnyUrl
 
 from ibkr_core_mcp import __version__
@@ -58,7 +59,7 @@ _ALL_TOOL_DEFS: list[dict] = list(TOOL_DEFINITIONS) + [_ADD_ALERT_DEF, _GET_ALER
 _EXISTING_TOOL_NAMES: frozenset[str] = frozenset(t["name"] for t in TOOL_DEFINITIONS)
 
 
-def _dispatch(name: str, args: dict, toolkit: ClaudeToolkit, store: "SQLiteStore") -> str:
+def _dispatch(name: str, args: dict, toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
     """Route a tool call to the right handler. Never raises — always returns str."""
     try:
         if name in _EXISTING_TOOL_NAMES:
@@ -85,7 +86,7 @@ def _dispatch(name: str, args: dict, toolkit: ClaudeToolkit, store: "SQLiteStore
         return _safe_error(name, exc)
 
 
-def build_server(toolkit: ClaudeToolkit, store: "SQLiteStore") -> Server:
+def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
     """Build and return a configured MCP Server instance."""
     server = Server("ibkr-core-mcp")
 
@@ -151,12 +152,12 @@ async def _run_stdio(server: Server) -> None:
         )
 
 
-async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
+async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
     import uvicorn
-    from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
-    from starlette.responses import Response
     from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.responses import Response
+    from starlette.routing import Mount, Route
 
     init_opts = InitializationOptions(
         server_name="ibkr-core-mcp",
@@ -204,7 +205,7 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
         await uv_task
 
 
-async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
+async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
     """Background task wrapper: reconnect on transient errors with exponential backoff."""
     _RETRY_DELAYS = [5, 10, 30, 60]  # seconds between reconnect attempts
     attempt = 0
@@ -222,17 +223,18 @@ async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: "SQLiteStore") 
             delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
             logger.error(
                 "WebSocket stream error (attempt %d), retrying in %ds: %s",
-                attempt + 1, delay, exc,
+                attempt + 1, delay, type(exc).__name__,
             )
             await asyncio.sleep(delay)
             attempt += 1
 
 
-async def _stream_loop(toolkit: ClaudeToolkit, store: "SQLiteStore") -> None:
+async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
     """Single-attempt WebSocket loop: connect, stream quotes, fire alerts."""
     import requests as _requests
+
     from ibkr_core_mcp.auth import BrowserCookieAuth
-    from ibkr_core_mcp.streaming import IBKRWebSocket, AlertManager
+    from ibkr_core_mcp.streaming import AlertManager, IBKRWebSocket
 
     session = _requests.Session()
     BrowserCookieAuth().apply(session)
@@ -274,7 +276,7 @@ def main() -> None:
     parser.add_argument("--stream", action="store_true", help="Enable WebSocket live streaming")
     args = parser.parse_args()
 
-    from ibkr_core_mcp import Config, IBKRClient, GDriveCache, SQLiteStore, ClaudeToolkit
+    from ibkr_core_mcp import ClaudeToolkit, Config, GDriveCache, IBKRClient, SQLiteStore
 
     cfg = Config.from_env()
     store = SQLiteStore(cfg)

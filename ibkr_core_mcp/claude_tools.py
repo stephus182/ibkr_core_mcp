@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import logging
 import re
@@ -7,14 +8,14 @@ from typing import Any
 
 import pandas as pd
 
+from ibkr_core_mcp import analytics as _analytics
+from ibkr_core_mcp import indicators as _indicators
+from ibkr_core_mcp import pinescript as _pinescript
+from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.store import SQLiteStore
-from ibkr_core_mcp import analytics as _analytics
-from ibkr_core_mcp import indicators as _indicators
-from ibkr_core_mcp.backtest import run_backtest as _run_backtest
-from ibkr_core_mcp import pinescript as _pinescript
 
 log = logging.getLogger(__name__)
 
@@ -318,9 +319,15 @@ _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 def _safe_error(tool: str, exc: Exception) -> str:
     """Return a controlled error string that doesn't leak internal details to the LLM."""
     from ibkr_core_mcp.exceptions import (
-        IBKRAuthError, IBKRRateLimitError, IBKRAPIError,
-        CacheError, BacktestError, BacktestSyntaxError, BacktestRuntimeError,
-        FlexQueryError, ConfigError,
+        BacktestError,
+        BacktestRuntimeError,
+        BacktestSyntaxError,
+        CacheError,
+        ConfigError,
+        FlexQueryError,
+        IBKRAPIError,
+        IBKRAuthError,
+        IBKRRateLimitError,
     )
     if isinstance(exc, IBKRAuthError):
         return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
@@ -760,7 +767,7 @@ class ClaudeToolkit:
         lines = ["Real-time P&L:"]
         upnl_total = 0.0
         dpnl_total = 0.0
-        for acct, data in pnl.items():
+        for _acct, data in pnl.items():
             if not isinstance(data, dict):
                 continue
             for conid, pos_pnl in data.items():

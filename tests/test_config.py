@@ -1,6 +1,6 @@
-import os
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 def test_from_env_reads_required_vars(monkeypatch):

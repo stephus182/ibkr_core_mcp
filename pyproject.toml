@@ -6,10 +6,27 @@ build-backend = "setuptools.build_meta"
 name = "ibkr_core_mcp"
 version = "0.4.0"
 description = "IBKR Client Portal API client, Drive cache, SQLite store, Claude tools"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+authors = [{name = "Stephane Menard", email = "stephane.menard@gmail.com"}]
+keywords = ["ibkr", "interactive-brokers", "trading", "mcp", "claude", "anthropic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "requests>=2.31",
-    "urllib3>=2.0",
+    "urllib3>=2.2.2",
     "pydantic>=2.0",
     "anthropic>=0.28",
     "pandas>=2.2",
@@ -35,6 +52,11 @@ server = [
 ]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "mypy>=1.8", "ruff>=0.3"]
 
+[project.urls]
+Homepage = "https://github.com/stephus182/ibkr_core_mcp"
+Repository = "https://github.com/stephus182/ibkr_core_mcp"
+Issues = "https://github.com/stephus182/ibkr_core_mcp/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ibkr_core_mcp*"]
@@ -49,3 +71,51 @@ ibkr_core_mcp = [
 [tool.pytest.ini_options]
 markers = ["integration: requires live IBKR gateway and credentials"]
 asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "LocalAuthentication",
+    "AppKit",
+    "tkinter",
+    "tkinter.*",
+    "browser_cookie3",
+    "browser_cookie3.*",
+    "RestrictedPython",
+    "RestrictedPython.*",
+    "plotly",
+    "plotly.*",
+    "googleapiclient",
+    "googleapiclient.*",
+    "google.auth",
+    "google.auth.*",
+    "google.oauth2",
+    "google.oauth2.*",
+    "defusedxml",
+    "defusedxml.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "S", "B"]
+ignore = [
+    "E501",   # line too long — string literals, test fixtures, and tool descriptions exceed 120 chars
+    "S101",   # assert — used in tests
+    "S603",   # subprocess — all calls use list form, never shell=True
+    "S105",   # hardcoded-password-string — IBKR JKS defaults in conf.yaml tests
+    "S311",   # random — not used for cryptography
+    "S501",   # verify=False — intentional, IBKR gateway uses a self-signed localhost cert (documented in SECURITY.md)
+    "S607",   # partial executable path — docker/open are standard OS tools; full paths would be OS-specific
+    "S110",   # try-except-pass — intentional in optional store saves and tkinter after_cancel guard
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S106", "S108", "S603", "S607"]

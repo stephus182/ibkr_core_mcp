@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import time
-from typing import Callable
+from collections.abc import Callable
+
 import requests
 
-from ibkr_core_mcp.exceptions import IBKRAuthError, IBKRRateLimitError, IBKRAPIError
+from ibkr_core_mcp.exceptions import IBKRAPIError, IBKRAuthError, IBKRRateLimitError
 
 _DEFAULT_MAX_RETRIES = 3
 _BASE_BACKOFF = 1.0  # seconds
