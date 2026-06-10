@@ -470,5 +470,6 @@ The following rules are enforced at PR review. Any PR that violates them will be
 | 2026-05-25 | `4dbe6ad` | All production modules | 2 Critical, 5 High, 5 Medium resolved. 3 Low/Info accepted. |
 | 2026-05-25 | `5f7b5ab` | `flex_query.py` | URL validation, datetime error handling hardened. |
 | 2026-06-10 | `bc8032b` | `gateway/` module — `GatewayManager`, `Dockerfile`, `tickler.sh`, `healthcheck.sh`, `conf.yaml` | 5 Low/Informational findings (GW-01 – GW-05) accepted. No code changes required. All subprocess calls use list form; no user input reaches shell. Docker container exposed on localhost only, no privileged mode. |
+| 2026-06-10 | `015e379` | All 14 production modules — full codebase audit (security + code quality) | 3 High, 7 Medium, 9 Low resolved. 5 Informational (dead code, style) cleaned up. 4 code-quality refactors (duplicate patterns extracted). |
 
-Full audit report: [`docs/security-audit-2026-05-25.md`](docs/security-audit-2026-05-25.md)
+Full audit reports: [`docs/security-audit-2026-05-25.md`](docs/security-audit-2026-05-25.md) · [`docs/security-audit-2026-06-10.md`](docs/security-audit-2026-06-10.md)
