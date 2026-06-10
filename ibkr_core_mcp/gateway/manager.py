@@ -22,11 +22,13 @@ Programmatic (non-interactive, e.g. Chainlit)::
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import platform
 import subprocess
 import time
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 
 import requests
@@ -34,7 +36,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from ibkr_core_mcp.exceptions import GatewayError
+from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -177,7 +179,7 @@ class GatewayManager:
 
     def is_authenticated(self) -> bool:
         """True if the gateway holds an active authenticated IBKR session."""
-        try:
+        with contextlib.suppress(Exception):
             resp = requests.get(
                 f"{self._api_url}/iserver/auth/status",
                 verify=False,
@@ -185,8 +187,25 @@ class GatewayManager:
             )
             if resp.status_code == 200:
                 return bool(resp.json().get("authenticated", False))
-        except Exception:
-            pass
+        return False
+
+    # ── Polling helper ────────────────────────────────────────────────────────
+
+    def _poll_until(
+        self,
+        check: Callable[[], bool],
+        ready_msg: str,
+        timeout_msg: str,
+        timeout: int,
+        poll_interval: int,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if check():
+                log.info(ready_msg)
+                return True
+            time.sleep(poll_interval)
+        log.warning(timeout_msg)
         return False
 
     def wait_for_gateway(self, timeout: int = 120, poll_interval: int = 3) -> bool:
@@ -195,14 +214,13 @@ class GatewayManager:
         Returns True if ready within *timeout* seconds, False otherwise.
         """
         log.info("Waiting for IBKR gateway (timeout=%ds) ...", timeout)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.is_gateway_reachable():
-                log.info("Gateway is reachable")
-                return True
-            time.sleep(poll_interval)
-        log.warning("Gateway did not become reachable within %ds", timeout)
-        return False
+        return self._poll_until(
+            self.is_gateway_reachable,
+            "Gateway is reachable",
+            f"Gateway did not become reachable within {timeout}s",
+            timeout,
+            poll_interval,
+        )
 
     def wait_for_auth(self, timeout: int = 300, poll_interval: int = 5) -> bool:
         """Block until the session is authenticated.
@@ -210,14 +228,13 @@ class GatewayManager:
         Returns True if authenticated within *timeout* seconds, False otherwise.
         """
         log.info("Waiting for IBKR authentication (timeout=%ds) ...", timeout)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.is_authenticated():
-                log.info("IBKR session authenticated")
-                return True
-            time.sleep(poll_interval)
-        log.warning("IBKR session not authenticated within %ds", timeout)
-        return False
+        return self._poll_until(
+            self.is_authenticated,
+            "IBKR session authenticated",
+            f"IBKR session not authenticated within {timeout}s",
+            timeout,
+            poll_interval,
+        )
 
     # ── Auth flow ─────────────────────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import re
 from datetime import date
 from typing import Any
@@ -9,14 +10,17 @@ import pandas as pd
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import IBKRClient
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import CacheMissError
 from ibkr_core_mcp.store import SQLiteStore
 from ibkr_core_mcp import analytics as _analytics
 from ibkr_core_mcp import indicators as _indicators
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp import pinescript as _pinescript
 
-_TODAY = lambda: str(date.today())
+log = logging.getLogger(__name__)
+
+
+def _TODAY() -> str:
+    return str(date.today())
 
 TOOL_DEFINITIONS = [
     {
@@ -545,7 +549,6 @@ class ClaudeToolkit:
 
     def _sync_flex_trades(self, inputs: dict) -> tuple[str, Any]:
         from ibkr_core_mcp.flex_query import FlexQueryClient
-        from ibkr_core_mcp.exceptions import FlexQueryError
         if not self._config.flex_token or not self._config.flex_query_id:
             return (
                 "Flex Query not configured. Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in .env. "
