@@ -31,6 +31,21 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 - An **Interactive Brokers** account (live or paper)
 - Anthropic API key (for Claude AI tools / MCP server)
 
+### macOS — required for order execution
+
+Order write methods (`place_order`, `modify_order`, `cancel_order`, `reply_order`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
+
+| Requirement | Minimum |
+|---|---|
+| Operating system | macOS 10.12.1 (Sierra) |
+| Hardware | Any Mac with a built-in Touch ID sensor or a [Touch ID keyboard](https://www.apple.com/shop/product/MK293LL/A/) |
+| Python package | `pyobjc-framework-LocalAuthentication` (installed automatically with `ibkr_core_mcp`) |
+| Policy | `LAPolicyDeviceOwnerAuthenticationWithBiometrics` — biometric only, **no password fallback** |
+
+Touch ID is available on: MacBook Pro (late 2016+), MacBook Air (2018+), Mac mini (2020+), iMac (2021+), Mac Studio, Mac Pro (2023+).
+
+**Linux / Windows:** All read-only tools (market data, portfolio queries, backtesting, analytics, MCP server) work on any platform. Order execution is macOS-only by design.
+
 ---
 
 ## Installation
@@ -234,10 +249,28 @@ Copy `.env.example` to `.env` and fill in:
 
 **ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `modify_order`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library:
 
-- **Gate 1** (`human_auth.py`): Apple Touch ID / macOS LocalAuthentication — biometric-only policy, no password fallback, 60-second timeout.
-- **Gate 2** (`order_confirm.py`): tkinter modal displaying full order details, 60-second countdown timer, Enter key disabled — requires explicit mouse click to confirm.
+### Gate 1 — Touch ID (macOS LocalAuthentication)
 
-Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a "Stage this order" button click) before `place_order` is ever invoked.
+Implemented in `human_auth.py` using the macOS `LocalAuthentication` framework via `pyobjc-framework-LocalAuthentication`.
+
+- **Policy:** `LAPolicyDeviceOwnerAuthenticationWithBiometrics` — fingerprint or Face ID only
+- **No fallback:** Password / PIN entry is explicitly excluded. If biometrics are unavailable the call raises `HumanAuthError` immediately.
+- **Timeout:** 60 seconds. An unanswered prompt raises `HumanAuthError` and the order is not submitted.
+- **Prompt text:** The caller-supplied `reason` string appears in the macOS Touch ID dialog (e.g. *"Confirm order: BUY 100 AAPL"*).
+- **Thread-safe:** Uses a `threading.Event` to wait for the async `LAContext` reply callback without blocking the main run loop.
+
+If `pyobjc-framework-LocalAuthentication` is not installed, or if the Mac hardware does not support biometrics (e.g. a Mac mini without a Touch ID keyboard attached), the gate raises `HumanAuthError` and the order is never submitted.
+
+### Gate 2 — Visual confirmation dialog (tkinter)
+
+Implemented in `order_confirm.py`.
+
+- Full order details displayed in a modal window
+- 60-second countdown timer — dialog auto-cancels on timeout
+- **Enter key disabled** — confirmation requires a deliberate mouse click on the "Confirm" button
+- Runs on the main thread; the tkinter event loop is driven internally
+
+Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a Chainlit "Stage this order" button click) before `place_order` is ever invoked.
 
 `GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts. See [SECURITY.md](SECURITY.md) for the full security model.
 
