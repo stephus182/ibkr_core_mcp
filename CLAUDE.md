@@ -66,10 +66,17 @@ ibkr_core_mcp/
 ├── backtest.py        # RestrictedPython sandbox executor
 ├── indicators.py      # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py       # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
-├── claude_tools.py    # Claude tool definitions + handlers (18 tools, portable)
+├── claude_tools.py    # Claude tool definitions + handlers (22 tools, portable)
 ├── pinescript.py      # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py    # Token-bucket rate limiter + exponential backoff on 429
-└── config.py          # Config dataclass loaded from environment variables
+├── config.py          # Config dataclass loaded from environment variables
+└── gateway/
+    ├── manager.py     # GatewayManager — Docker lifecycle, auth polling
+    ├── Dockerfile     # eclipse-temurin:21 + IBKR Client Portal zip
+    ├── conf.yaml      # Gateway config (port, SSL, CORS, IP allowlist)
+    ├── run_gateway.sh # Entrypoint: start Java process + tickler
+    ├── tickler.sh     # Periodic POST /tickle to keep session alive
+    └── healthcheck.sh # curl-based readiness probe used by run_gateway.sh
 ```
 
 ---
@@ -376,7 +383,7 @@ toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg
 client   = anthropic.Anthropic()
 response = client.messages.create(
     model="claude-sonnet-4-6",
-    tools=toolkit.tools,          # 19 IBKR tools, ready to use
+    tools=toolkit.tools,          # 22 IBKR tools, ready to use
     messages=[{"role": "user", "content": "Show my open positions and run a backtest on AAPL"}],
 )
 for block in response.content:
@@ -459,9 +466,9 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 The server binds to `127.0.0.1` only — never exposed to external networks.
 Connect MCP clients to `http://localhost:5174/sse`.
 
-### Tools (22)
+### Tools (24)
 
-All 20 `ClaudeToolkit` tools plus:
+All 22 `ClaudeToolkit` tools plus:
 - `add_price_alert` — register a threshold alert (persisted to SQLite)
 - `get_price_alerts` — list active or all alerts
 
@@ -527,7 +534,10 @@ See: https://github.com/tradesdontlie/tradingview-mcp
 
 1. **`client.py`** — add method, return typed model
 2. **`models.py`** — add Pydantic model for response if new shape
-3. **`claude_tools.py`** — add tool definition + handler if useful for Claude
+3. **`claude_tools.py`** — add tool definition to `TOOL_DEFINITIONS` + handler method to `ClaudeToolkit`
+   - If the handler needs an account ID, use `self._first_account_id()` (single) or `self._all_account_ids()` (all). Do **not** inline `get_accounts()` — the helpers centralise the `"accountId"` / `"id"` key fallback.
+   - If the handler needs a `conid`, use `contracts[0].get("conid") or contracts[0].get("con_id")` to match `_fetch_market_data`.
+   - Register the handler in the `execute()` dispatch dict.
 4. **`tests/test_client.py`** — add integration test marked `@pytest.mark.integration`
 5. Update `__init__.py` if new model needs to be exported
 
