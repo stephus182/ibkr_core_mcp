@@ -364,6 +364,10 @@ class ClaudeToolkit:
         self._config = config
 
     @property
+    def client(self) -> IBKRClient:
+        return self._client
+
+    @property
     def tools(self) -> list[dict]:
         return TOOL_DEFINITIONS
 
@@ -400,6 +404,22 @@ class ClaudeToolkit:
             return handler(inputs)
         except Exception as e:
             return _safe_error(name, e), None
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _first_account_id(self) -> tuple[str, str | None]:
+        """Return (account_id, None) for the first account, or ("", error_msg) if none."""
+        accounts = self._client.get_accounts()
+        if not accounts:
+            return "", "No accounts found."
+        return accounts[0].get("accountId", accounts[0].get("id", "")), None
+
+    def _all_account_ids(self) -> tuple[list[str], str | None]:
+        """Return (list_of_account_ids, None), or ([], error_msg) if no accounts."""
+        accounts = self._client.get_accounts()
+        if not accounts:
+            return [], "No accounts found."
+        return [a.get("accountId", a.get("id", "")) for a in accounts], None
 
     def _fetch_market_data(self, inputs: dict) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
@@ -456,18 +476,16 @@ class ClaudeToolkit:
         return f"Cached datasets ({len(entries)}):\n" + "\n".join(lines), None
 
     def _get_account_summary(self, inputs: dict) -> tuple[str, Any]:
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_id = accounts[0].get("accountId", accounts[0].get("id", ""))
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
         summary = self._client.get_account_summary(account_id)
         return json.dumps(summary, indent=2), None
 
     def _get_positions(self, inputs: dict) -> tuple[str, Any]:
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_id = accounts[0].get("accountId", accounts[0].get("id", ""))
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
         positions = self._client.get_positions(account_id)
         if not positions:
             return "No open positions.", None
@@ -536,8 +554,7 @@ class ClaudeToolkit:
             )
         account_id = inputs.get("account_id", "")
         if not account_id:
-            accounts = self._client.get_accounts()
-            account_id = accounts[0].get("accountId", accounts[0].get("id", "")) if accounts else ""
+            account_id, _ = self._first_account_id()
         if not account_id:
             return "Could not resolve account ID. Pass account_id explicitly.", None
         _validate_account_id(account_id)
@@ -562,34 +579,30 @@ class ClaudeToolkit:
         return f"Live orders ({len(orders)}):\n" + "\n".join(lines), None
 
     def _get_ledger(self, inputs: dict) -> tuple[str, Any]:
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_id = accounts[0].get("accountId", accounts[0].get("id", ""))
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
         ledger = self._client.get_account_ledger(account_id)
         return json.dumps(ledger, indent=2), None
 
     def _get_allocation(self, inputs: dict) -> tuple[str, Any]:
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_id = accounts[0].get("accountId", accounts[0].get("id", ""))
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
         allocation = self._client.get_account_allocation(account_id)
         return json.dumps(allocation, indent=2), None
 
     def _get_pa_performance(self, inputs: dict) -> tuple[str, Any]:
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_ids = [a.get("accountId", a.get("id", "")) for a in accounts]
+        account_ids, err = self._all_account_ids()
+        if err:
+            return err, None
         perf = self._client.get_pa_performance(account_ids, inputs["period"])
         return json.dumps(perf, indent=2), None
 
     def _get_pa_transactions(self, inputs: dict) -> tuple[str, Any]:
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_ids = [a.get("accountId", a.get("id", "")) for a in accounts]
+        account_ids, err = self._all_account_ids()
+        if err:
+            return err, None
         txns = self._client.get_pa_transactions(account_ids, inputs["period"])
         return json.dumps(txns, indent=2), None
 
@@ -708,14 +721,13 @@ class ClaudeToolkit:
         contracts = self._client.search_contract(symbol)
         if not contracts:
             return f"No contract found for {symbol}.", None
-        conid = contracts[0].get("conid")
+        conid = contracts[0].get("conid") or contracts[0].get("con_id")
         if not conid:
-            return f"Contract found for {symbol} but conid missing.", None
+            return f"Contract found for {symbol} but conid missing: {contracts[0]}", None
 
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "No accounts found.", None
-        account_id = accounts[0].get("accountId", accounts[0].get("id", ""))
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
 
         order: dict = {
             "conid": conid,
@@ -752,10 +764,14 @@ class ClaudeToolkit:
                 if not isinstance(pos_pnl, dict):
                     continue
                 symbol = pos_pnl.get("ticker", str(conid))
-                upnl = pos_pnl.get("uPnl", 0) or 0
-                dpnl = pos_pnl.get("dPnl", 0) or 0
-                upnl_total += float(upnl)
-                dpnl_total += float(dpnl)
+                try:
+                    upnl = float(pos_pnl.get("uPnl") or 0)
+                    dpnl = float(pos_pnl.get("dPnl") or 0)
+                except (ValueError, TypeError):
+                    log.warning("Non-numeric P&L for %s, skipping position", symbol)
+                    continue
+                upnl_total += upnl
+                dpnl_total += dpnl
                 lines.append(f"  {symbol}: unrealized={upnl:+.2f}  daily={dpnl:+.2f}")
         lines.append(f"\nTotal unrealized P&L: {upnl_total:+.2f}")
         lines.append(f"Total daily P&L:      {dpnl_total:+.2f}")
