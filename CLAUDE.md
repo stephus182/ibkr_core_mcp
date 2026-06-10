@@ -134,11 +134,27 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 
 `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`. On first use:
 
-1. Start the gateway: `docker compose up` in the IB_MCP repo
+1. Start the gateway using the built-in `GatewayManager` (see below)
 2. Open `https://localhost:5055` in Chrome
 3. Log in with IBKR credentials + 2FA (approve push notification on phone)
 4. Wait for "Client login succeeds" in browser
 5. The package reads the session cookie automatically
+
+**Starting the gateway:**
+```python
+from ibkr_core_mcp import GatewayManager
+
+gm = GatewayManager()
+gm.startup()   # builds Docker image on first run, then opens browser for login
+```
+
+Or from a script:
+```bash
+python -c "from ibkr_core_mcp import GatewayManager; GatewayManager().startup()"
+```
+
+The gateway Docker image (`ibkr-core-gateway`) is built from assets bundled
+inside `ibkr_core_mcp/gateway/`. No external repo is required.
 
 For headless use (ML batch jobs), pass a pre-extracted cookie string:
 ```python
@@ -536,7 +552,7 @@ pytest tests/test_indicators.py -v
 
 | Project | Repo | Uses |
 |---|---|---|
-| IBKR Research Dashboard | `github.com/stephus182/IB_MCP` | IBKRClient, GDriveCache, ClaudeToolkit, indicators, run_backtest, pinescript |
+| ClaudIA Trading Assistant | `github.com/stephus182/claudia_ui` | IBKRClient, GDriveCache, SQLiteStore, ClaudeToolkit, GatewayManager |
 | Order Management UI | (future) | IBKRClient (order endpoints), SQLiteStore, ClaudeToolkit |
 | ML Feature Pipeline | (future) | IBKRClient, GDriveCache, SQLiteStore, indicators |
 | PineScript Generator | (future) | IBKRClient, GDriveCache, indicators, pinescript |
