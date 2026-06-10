@@ -84,15 +84,23 @@ gm.wait_for_auth(timeout=300)  # poll until authenticated
 ### 2. Query IBKR
 
 ```python
-from ibkr_core_mcp import IBKRClient, BrowserCookieAuth, SQLiteStore, Config
+from ibkr_core_mcp import IBKRClient, SQLiteStore, Config
 
-config = Config()                      # reads env vars / .env
-store  = SQLiteStore(config.sqlite_path)
-client = IBKRClient(auth=BrowserCookieAuth(), store=store, config=config)
+config = Config.from_env()             # reads env vars / .env
+store  = SQLiteStore(config)
+client = IBKRClient(config)            # BrowserCookieAuth used by default
 
-summary   = client.get_account_summary()
-positions = client.get_positions()
-bars      = client.get_market_data("AAPL", period="1Y", bar="1d")
+# Most endpoints need an account ID first
+accounts   = client.get_accounts()
+account_id = accounts[0]["accountId"]
+
+summary   = client.get_account_summary(account_id)
+positions = client.get_positions(account_id)
+
+# Market data requires a contract ID (conid), not a symbol string
+contracts = client.search_contract("AAPL")
+conid     = contracts[0]["conid"]
+bars      = client.get_market_history(conid, period="1Y", bar="1d")
 ```
 
 ### 3. Use Claude AI tools
@@ -101,25 +109,25 @@ bars      = client.get_market_data("AAPL", period="1Y", bar="1d")
 import anthropic
 from ibkr_core_mcp import ClaudeToolkit, IBKRClient, SQLiteStore, GDriveCache, Config
 
-config  = Config()
-store   = SQLiteStore(config.sqlite_path)
+config  = Config.from_env()
+store   = SQLiteStore(config)
 cache   = GDriveCache(config)
-client  = IBKRClient(auth=BrowserCookieAuth(), store=store, config=config)
-toolkit = ClaudeToolkit(client=client, store=store, cache=cache, config=config)
+client  = IBKRClient(config)
+toolkit = ClaudeToolkit(client=client, cache=cache, store=store, config=config)
 
 ai = anthropic.Anthropic()
 
 response = ai.messages.create(
     model="claude-opus-4-8",
     max_tokens=4096,
-    tools=toolkit.tool_definitions(),       # drop-in for Anthropic SDK
+    tools=toolkit.tools,               # drop-in for Anthropic SDK
     messages=[{"role": "user", "content": "What are my current positions?"}],
 )
 
 # Route tool calls back through the toolkit
 for block in response.content:
     if block.type == "tool_use":
-        result = toolkit.call_tool(block.name, block.input)
+        text, fig = toolkit.execute(block.name, block.input)
 ```
 
 ---
@@ -155,7 +163,7 @@ for block in response.content:
 
 ## MCP server
 
-Expose all 22 tools to any MCP-compatible client (Claude Desktop, Cursor, etc.):
+Expose all 24 tools to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
 # stdio transport (Claude Desktop / Cursor)
