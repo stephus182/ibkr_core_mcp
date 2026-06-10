@@ -60,3 +60,7 @@ class FlexQueryError(IBKRCoreError):
 
 class StreamingError(IBKRCoreError):
     """Raised when the IBKR WebSocket connection fails or returns an unexpected message."""
+
+
+class GatewayError(IBKRCoreError):
+    """Raised when the IBKR Client Portal Gateway cannot be started or reached."""

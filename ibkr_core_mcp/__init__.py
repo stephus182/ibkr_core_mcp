@@ -17,6 +17,7 @@ from ibkr_core_mcp.exceptions import (
     HumanAuthError,
     FlexQueryError,
     StreamingError,
+    GatewayError,
 )
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.auth import BrowserCookieAuth, TokenAuth, NoAuth
@@ -39,6 +40,7 @@ from ibkr_core_mcp import indicators
 from ibkr_core_mcp import analytics
 from ibkr_core_mcp import pinescript
 from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote, AlertManager
+from ibkr_core_mcp.gateway import GatewayManager
 
 __version__ = "0.4.0"
 __all__ = [
@@ -89,4 +91,8 @@ __all__ = [
     "FlexQueryError",
     "StreamingError",
     "require_touch_id",
+    # Gateway
+    "GatewayManager",
+    # Exceptions (continued)
+    "GatewayError",
 ]
