@@ -400,6 +400,65 @@ TOOL_DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "create_price_alert",
+        "description": (
+            "Create a native IBKR price alert for a symbol. "
+            "The alert fires server-side (even when the app is closed) when the price "
+            "crosses the threshold. Use '>=' for above and '<=' for below."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol, e.g. AAPL, CL"},
+                "sec_type": {
+                    "type": "string",
+                    "description": "Security type: STK, FUT, OPT, FX (default: STK)",
+                },
+                "operator": {
+                    "type": "string",
+                    "enum": [">=", "<="],
+                    "description": "'>=' triggers when price reaches or exceeds threshold; '<=' when it falls to or below",
+                },
+                "price": {"type": "number", "description": "Price threshold"},
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable alert name (default: auto-generated from symbol and price)",
+                },
+                "repeat": {
+                    "type": "boolean",
+                    "description": "Whether to repeat the alert after it fires (default: false)",
+                },
+            },
+            "required": ["symbol", "operator", "price"],
+        },
+    },
+    {
+        "name": "delete_alert",
+        "description": "Delete an IBKR price alert by its alert ID. Use get_alerts first to find the ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alert_id": {"type": "string", "description": "Alert ID from get_alerts"},
+            },
+            "required": ["alert_id"],
+        },
+    },
+    {
+        "name": "activate_alert",
+        "description": "Activate or deactivate an existing IBKR price alert without deleting it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alert_id": {"type": "string", "description": "Alert ID from get_alerts"},
+                "activate": {
+                    "type": "boolean",
+                    "description": "true to activate, false to deactivate (default: true)",
+                },
+            },
+            "required": ["alert_id"],
+        },
+    },
+    {
         "name": "get_watchlists",
         "description": "List all IBKR watchlists and their contents.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -534,6 +593,9 @@ class ClaudeToolkit:
             "get_market_snapshot": self._get_market_snapshot,
             "get_trading_schedule": self._get_trading_schedule,
             "get_alerts": self._get_alerts,
+            "create_price_alert": self._create_price_alert,
+            "delete_alert": self._delete_alert,
+            "activate_alert": self._activate_alert,
             "get_watchlists": self._get_watchlists,
             "get_order_status": self._get_order_status,
             "delete_cache": self._delete_cache,
@@ -987,6 +1049,60 @@ class ClaudeToolkit:
         if not alerts:
             return "No price alerts configured.", None
         return json.dumps(alerts, indent=2), None
+
+    def _create_price_alert(self, inputs: dict) -> tuple[str, Any]:
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
+        symbol = inputs["symbol"].upper()
+        sec_type = inputs.get("sec_type", "STK")
+        operator = inputs["operator"]
+        price = inputs["price"]
+        repeat = inputs.get("repeat", False)
+        contracts = self._client.search_contract(symbol, sec_type)
+        if not contracts:
+            return f"No contract found for {symbol} ({sec_type}).", None
+        conid = contracts[0].get("conid")
+        if not conid:
+            return f"Contract found for {symbol} but conid missing.", None
+        name = inputs.get("name") or f"{symbol} {operator} {price}"
+        alert = {
+            "orderId": 0,
+            "alertName": name,
+            "alertMessage": "",
+            "alertRepeatable": int(repeat),
+            "expireTime": "",
+            "tif": "GTC",
+            "outsideRth": False,
+            "isSizeCondition": False,
+            "conditions": [
+                {
+                    "type": 1,
+                    "conid": int(conid),
+                    "exchange": "SMART",
+                    "condition_type": "Price",
+                    "operator": operator,
+                    "value": str(price),
+                }
+            ],
+        }
+        result = self._client.create_alert(account_id, alert)
+        return json.dumps(result, indent=2), None
+
+    def _delete_alert(self, inputs: dict) -> tuple[str, Any]:
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
+        result = self._client.delete_alert(account_id, inputs["alert_id"])
+        return json.dumps(result, indent=2), None
+
+    def _activate_alert(self, inputs: dict) -> tuple[str, Any]:
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
+        activate = inputs.get("activate", True)
+        result = self._client.activate_alert(account_id, inputs["alert_id"], activate)
+        return json.dumps(result, indent=2), None
 
     def _get_watchlists(self, inputs: dict) -> tuple[str, Any]:
         watchlists = self._client.get_watchlists()

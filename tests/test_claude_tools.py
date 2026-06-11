@@ -151,3 +151,80 @@ def test_execute_get_analytics_tool(toolkit):
         "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
     })
     assert "sharpe" in text.lower() or "Sharpe" in text
+
+
+def test_execute_get_alerts_empty(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alerts.return_value = []
+    text, fig = toolkit.execute("get_alerts", {})
+    assert "No price alerts" in text
+    assert fig is None
+
+
+def test_execute_get_alerts_returns_json(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alerts.return_value = [
+        {"orderId": 1, "alertName": "AAPL >= 200", "alertActive": 1}
+    ]
+    text, fig = toolkit.execute("get_alerts", {})
+    assert "AAPL" in text
+    assert fig is None
+
+
+def test_execute_create_price_alert_resolves_symbol(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
+    toolkit._client.create_alert.return_value = {"orderId": 42, "alertName": "AAPL >= 200"}
+    text, fig = toolkit.execute("create_price_alert", {
+        "symbol": "AAPL", "operator": ">=", "price": 200.0
+    })
+    toolkit._client.search_contract.assert_called_once_with("AAPL", "STK")
+    toolkit._client.create_alert.assert_called_once()
+    call_alert = toolkit._client.create_alert.call_args[0][1]
+    assert call_alert["conditions"][0]["conid"] == 265598
+    assert call_alert["conditions"][0]["operator"] == ">="
+    assert call_alert["conditions"][0]["value"] == "200.0"
+    assert fig is None
+
+
+def test_execute_create_price_alert_no_contract(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = []
+    text, fig = toolkit.execute("create_price_alert", {
+        "symbol": "FAKE", "operator": "<=", "price": 50.0
+    })
+    assert "No contract found" in text
+    toolkit._client.create_alert.assert_not_called()
+
+
+def test_execute_create_price_alert_custom_name(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.create_alert.return_value = {"orderId": 5}
+    toolkit.execute("create_price_alert", {
+        "symbol": "AAPL", "operator": ">=", "price": 200.0, "name": "My alert"
+    })
+    call_alert = toolkit._client.create_alert.call_args[0][1]
+    assert call_alert["alertName"] == "My alert"
+
+
+def test_execute_delete_alert(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.delete_alert.return_value = {"success": True}
+    text, fig = toolkit.execute("delete_alert", {"alert_id": "42"})
+    toolkit._client.delete_alert.assert_called_once_with("U123", "42")
+    assert fig is None
+
+
+def test_execute_activate_alert_default_true(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.activate_alert.return_value = {"success": True}
+    toolkit.execute("activate_alert", {"alert_id": "42"})
+    toolkit._client.activate_alert.assert_called_once_with("U123", "42", True)
+
+
+def test_execute_activate_alert_deactivate(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.activate_alert.return_value = {"success": True}
+    toolkit.execute("activate_alert", {"alert_id": "42", "activate": False})
+    toolkit._client.activate_alert.assert_called_once_with("U123", "42", False)
