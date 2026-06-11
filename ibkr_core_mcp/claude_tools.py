@@ -310,6 +310,128 @@ TOOL_DEFINITIONS = [
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "search_contract",
+        "description": (
+            "Search for IBKR contracts by symbol and security type. "
+            "Returns conid, exchange, currency, and description. "
+            "Use this to discover conids before calling tools that require one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, AAPL, SPY"},
+                "sec_type": {
+                    "type": "string",
+                    "description": "Security type: STK, FUT, OPT, FX, IND, CFD, BOND (default: STK)",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_futures",
+        "description": (
+            "Look up futures contracts for one or more symbols. "
+            "Returns available expiry months, conids, and exchange info. "
+            "Useful for CL, ES, NQ, GC, and other futures."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of root symbols, e.g. ['CL', 'ES']",
+                },
+            },
+            "required": ["symbols"],
+        },
+    },
+    {
+        "name": "get_market_snapshot",
+        "description": (
+            "Get live real-time market data snapshot for one or more symbols: "
+            "last price, bid, ask, volume, high, low, and change%. "
+            "Resolves symbols to conids automatically."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of symbols, e.g. ['CL', 'GLD', 'SPY']",
+                },
+                "sec_type": {
+                    "type": "string",
+                    "description": "Security type for contract lookup: STK, FUT, etc. (default: STK)",
+                },
+            },
+            "required": ["symbols"],
+        },
+    },
+    {
+        "name": "get_trading_schedule",
+        "description": (
+            "Get the trading schedule and session hours for a symbol: "
+            "regular trading hours, pre/post-market sessions, and next trading date. "
+            "Useful for futures (e.g. CL on NYMEX) and equities."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, AAPL"},
+                "asset_class": {
+                    "type": "string",
+                    "description": "Asset class: STK, FUT, OPT, FX (default: STK)",
+                },
+                "exchange": {
+                    "type": "string",
+                    "description": "Exchange, e.g. NYMEX, NYSE, NASDAQ (default: SMART)",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_alerts",
+        "description": "List all IBKR price alerts configured on the account.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_watchlists",
+        "description": "List all IBKR watchlists and their contents.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_order_status",
+        "description": "Get the status and details of a specific order by its order ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "IBKR order ID"},
+            },
+            "required": ["order_id"],
+        },
+    },
+    {
+        "name": "delete_cache",
+        "description": (
+            "Delete a specific dataset from the Google Drive cache. "
+            "Use when cached data is stale and needs to be re-fetched."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "timeframe": {"type": "string", "description": "Bar size, e.g. 1D, 1H"},
+                "period": {"type": "string", "description": "Lookback period, e.g. 1Y, 6M"},
+                "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+            "required": ["symbol", "timeframe", "period", "end"],
+        },
+    },
 ]
 
 
@@ -407,6 +529,14 @@ class ClaudeToolkit:
             "get_analytics": self._get_analytics,
             "preview_order": self._preview_order,
             "get_pnl": self._get_pnl,
+            "search_contract": self._search_contract,
+            "get_futures": self._get_futures,
+            "get_market_snapshot": self._get_market_snapshot,
+            "get_trading_schedule": self._get_trading_schedule,
+            "get_alerts": self._get_alerts,
+            "get_watchlists": self._get_watchlists,
+            "get_order_status": self._get_order_status,
+            "delete_cache": self._delete_cache,
         }
         handler = handlers.get(name)
         if not handler:
@@ -809,3 +939,72 @@ class ClaudeToolkit:
             f"  Bars analyzed:      {report['num_bars']}",
         ]
         return "\n".join(lines), None
+
+    def _search_contract(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        sec_type = inputs.get("sec_type", "STK")
+        contracts = self._client.search_contract(symbol, sec_type)
+        if not contracts:
+            return f"No contracts found for {symbol} ({sec_type}).", None
+        return json.dumps(contracts, indent=2), None
+
+    def _get_futures(self, inputs: dict) -> tuple[str, Any]:
+        symbols = [s.upper() for s in inputs["symbols"]]
+        futures = self._client.get_futures(symbols)
+        if not futures:
+            return f"No futures found for {', '.join(symbols)}.", None
+        return json.dumps(futures, indent=2), None
+
+    def _get_market_snapshot(self, inputs: dict) -> tuple[str, Any]:
+        symbols = [s.upper() for s in inputs["symbols"]]
+        sec_type = inputs.get("sec_type", "STK")
+        conids = []
+        for sym in symbols:
+            contracts = self._client.search_contract(sym, sec_type)
+            if contracts:
+                conid = contracts[0].get("conid")
+                if conid:
+                    conids.append(int(conid))
+        if not conids:
+            return f"Could not resolve conids for: {', '.join(symbols)}.", None
+        snapshot = self._client.get_market_snapshot(conids)
+        if not snapshot:
+            return "No market snapshot data returned.", None
+        return json.dumps(snapshot, indent=2), None
+
+    def _get_trading_schedule(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        asset_class = inputs.get("asset_class", "STK")
+        exchange = inputs.get("exchange", "SMART")
+        schedule = self._client.get_trading_schedule(asset_class, symbol, exchange)
+        return json.dumps(schedule, indent=2), None
+
+    def _get_alerts(self, inputs: dict) -> tuple[str, Any]:
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
+        alerts = self._client.get_alerts(account_id)
+        if not alerts:
+            return "No price alerts configured.", None
+        return json.dumps(alerts, indent=2), None
+
+    def _get_watchlists(self, inputs: dict) -> tuple[str, Any]:
+        watchlists = self._client.get_watchlists()
+        if not watchlists:
+            return "No watchlists found.", None
+        return json.dumps(watchlists, indent=2), None
+
+    def _get_order_status(self, inputs: dict) -> tuple[str, Any]:
+        order_id = inputs["order_id"]
+        status = self._client.get_order_status(order_id)
+        return json.dumps(status, indent=2), None
+
+    def _delete_cache(self, inputs: dict) -> tuple[str, Any]:
+        symbol = inputs["symbol"].upper()
+        timeframe = inputs["timeframe"]
+        period = inputs["period"]
+        end = inputs["end"]
+        if not self._cache.check(symbol, timeframe, period, end):
+            return f"No cached entry for {symbol} {timeframe} ({period}, end={end}).", None
+        self._cache.delete(symbol, timeframe, period, end)
+        return f"Deleted cache entry for {symbol} {timeframe} ({period}, end={end}).", None
