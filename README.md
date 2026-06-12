@@ -12,7 +12,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 |---|---|
 | `GatewayManager` | Builds and runs the official IBKR Client Portal Gateway as a Docker container, guides browser login + 2FA |
 | `IBKRClient` | Full REST client for the Client Portal API — market data, positions, orders, scanners |
-| `ClaudeToolkit` | 22 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
+| `ClaudeToolkit` | 33 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
 | `SQLiteStore` | Local SQLite store — trade history, price alerts, session log |
 | `GDriveCache` | Google Drive Parquet cache for OHLCV data |
 | `streaming` | IBKR WebSocket live quotes + price alert engine |
@@ -20,7 +20,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Beta, return attribution |
 | `pinescript` | PineScript v5 generator |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 22 tools to any MCP client |
+| `mcp_server` | MCP server (stdio + SSE) exposing all 33 tools to any MCP client |
 
 ---
 
@@ -149,36 +149,49 @@ for block in response.content:
 
 ## Available tools (Claude AI / MCP)
 
+See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs and output shapes.
+
 | Tool | Description |
 |---|---|
 | `fetch_market_data` | OHLCV history with Google Drive cache |
 | `check_cache` | Check whether data is cached |
 | `list_cache` | List all cached datasets |
+| `delete_cache` | Delete a cached dataset |
 | `get_account_summary` | Net liquidation, cash, P&L |
 | `get_positions` | All open positions |
-| `get_trades` | Trade history (live: last 6 days; store: unlimited) |
-| `sync_flex_trades` | Sync full history via IBKR Flex Web Service |
-| `get_live_orders` | Open / pending orders |
+| `get_pnl` | Real-time P&L partitioned by position |
 | `get_ledger` | Cash balances by currency |
 | `get_allocation` | Portfolio breakdown by asset class |
+| `get_trades` | Trade history (live: last 6 days; store: unlimited) |
+| `sync_flex_trades` | Sync full history via IBKR Flex Web Service |
+| `get_live_orders` | Working orders (Submitted, PreSubmitted, Inactive, …) |
+| `get_order_status` | Status of a specific order by ID |
+| `preview_order` | Whatif order preview — no order placed |
 | `get_pa_performance` | Portfolio Analyst NAV performance |
 | `get_pa_transactions` | Portfolio Analyst transactions |
-| `get_contract_info` | Contract details (conid, exchange, trading hours) |
+| `search_contract` | Resolve symbol → conid, exchange, currency |
+| `get_contract_info` | Full contract details (exchange, trading hours, etc.) |
 | `get_option_chain` | Options chain — expirations, strikes, conids |
+| `get_futures` | Futures contracts — expiry months, conids |
+| `get_market_snapshot` | Live bid/ask/last/volume for one or more symbols |
+| `get_trading_schedule` | Trading hours and next session for a symbol |
 | `run_scanner` | Market scanner (top gainers, losers, most active, …) |
-| `get_notifications` | IBKR account notifications |
+| `get_notifications` | IBKR FYI account notifications |
+| `get_alerts` | List IBKR native price alerts |
+| `create_price_alert` | Create a server-side IBKR price alert |
+| `delete_alert` | Delete an IBKR price alert |
+| `activate_alert` | Enable or disable an IBKR price alert |
+| `get_watchlists` | List IBKR watchlists and their contents |
 | `add_indicators` | Compute RSI, MACD, Bollinger, ATR, VWAP, … |
-| `run_backtest` | Sandboxed strategy backtester |
+| `run_backtest` | Sandboxed RestrictedPython strategy backtester |
 | `generate_pinescript` | Generate PineScript v5 strategy/indicator |
-| `get_analytics` | Drawdown, Sharpe, Beta, return attribution |
-| `preview_order` | Whatif order preview — no order placed |
-| `get_pnl` | Real-time P&L partitioned by account/position |
+| `get_analytics` | Sharpe, Sortino, Calmar, CAGR, max drawdown |
 
 ---
 
 ## MCP server
 
-Expose all 24 tools to any MCP-compatible client (Claude Desktop, Cursor, etc.):
+Expose all 33 tools to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
 # stdio transport (Claude Desktop / Cursor)
@@ -190,22 +203,27 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 8765 --streaming
 
 ---
 
-## Streaming (live quotes + price alerts)
+## Streaming (live quotes)
 
 ```python
-from ibkr_core_mcp.streaming import IBKRWebSocket, AlertManager, SQLiteStore, Config
+import asyncio
+from ibkr_core_mcp.streaming import IBKRWebSocket
 
-config = Config()
-store  = SQLiteStore(config.sqlite_path)
+# IBKRWebSocket takes the gateway URL and a session cookie string
+ws = IBKRWebSocket(gateway_url="wss://localhost:5055", session_cookie="")
 
-# Live quotes
-ws = IBKRWebSocket(config=config)
-await ws.subscribe(["AAPL", "TSLA"])
+async def main():
+    await ws.connect()
+    conid = 265598  # AAPL — use search_contract() to find conids
+    await ws.subscribe(conid)
+    async for quote in ws.listen():
+        print(quote.symbol, quote.last, quote.bid, quote.ask)
 
-# Price alerts
-manager = AlertManager(store=store, client=client, config=config)
-await manager.add_alert("AAPL", target_price=200.0, direction="above")
+asyncio.run(main())
 ```
+
+For price alerts, use the native IBKR alert system via `ClaudeToolkit.execute("create_price_alert", ...)`
+— alerts fire server-side and deliver to the IBKR mobile app even when the app is closed.
 
 ---
 
@@ -214,17 +232,20 @@ await manager.add_alert("AAPL", target_price=200.0, direction="above")
 ```python
 from ibkr_core_mcp.backtest import run_backtest
 
-result = run_backtest(
-    bars=bars_dataframe,       # pandas DataFrame with OHLCV columns
-    strategy_code="""
-def strategy(bars):
-    return bars['close'].pct_change().fillna(0)
-""",
-)
-print(result.sharpe, result.max_drawdown)
+# Strategy code receives a DataFrame `df` and must set df['signal']
+# 1 = long, 0 = flat, -1 = short
+code = """
+fast = df['close'].ewm(span=12).mean()
+slow = df['close'].ewm(span=26).mean()
+df['signal'] = (fast > slow).astype(int)
+"""
+
+result = run_backtest(code=code, df=bars_dataframe, strategy_name="EMA crossover", symbol="AAPL")
+print(result.sharpe, result.max_drawdown, result.total_return)
 ```
 
 Strategy code runs in a `RestrictedPython` sandbox — no file system or network access.
+4096-character limit; 10-second timeout. Available: `df`, `pd`, `np`.
 
 ---
 
@@ -234,7 +255,7 @@ Copy `.env.example` to `.env` and fill in:
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | if using Claude tools | Anthropic API key |
+| `ANTHROPIC_API_KEY` | ✅ for `Config.from_env()` | Anthropic API key (required by `ClaudeToolkit`; `Config.from_env()` raises if absent) |
 | `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055`) |
 | `IBKR_SQLITE_PATH` | ✅ | SQLite store path (e.g. `~/.ibkr_core/store.db`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | for GDrive cache | Drive folder for Parquet cache |
