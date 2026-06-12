@@ -153,6 +153,26 @@ def test_execute_get_analytics_tool(toolkit):
     assert "sharpe" in text.lower() or "Sharpe" in text
 
 
+def test_execute_get_live_orders_filters_filled(toolkit):
+    # The client-layer filtering is already tested in test_client.py;
+    # this confirms the tool correctly labels an empty working set.
+    toolkit._client.get_live_orders.return_value = []
+    text, fig = toolkit.execute("get_live_orders", {})
+    assert "No open orders" in text
+    assert fig is None
+
+
+def test_execute_get_live_orders_shows_working_orders(toolkit):
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 1, "ticker": "AAPL", "side": "BUY",
+         "totalSize": 100, "price": 185.0, "status": "Submitted"},
+    ]
+    text, fig = toolkit.execute("get_live_orders", {})
+    assert "AAPL" in text
+    assert "Submitted" in text
+    assert fig is None
+
+
 def test_execute_get_alerts_empty(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.get_alerts.return_value = []

@@ -262,3 +262,65 @@ def test_validate_account_id_applied_to_write_methods(client):
         with pytest.raises(ConfigError):
             client.place_order("../inject", order)
     mock_tid.assert_not_called()  # validation must fire before biometric gate
+
+
+# ── get_live_orders filtering ─────────────────────────────────────────────────
+
+def _mock_orders_response(client, orders):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"orders": orders}
+    return patch.object(client._session, "get", return_value=mock_resp)
+
+
+def test_get_live_orders_excludes_filled(client):
+    orders = [
+        {"orderId": 1, "ticker": "AAPL", "status": "Submitted"},
+        {"orderId": 2, "ticker": "CL", "status": "Filled"},
+    ]
+    with _mock_orders_response(client, orders):
+        result = client.get_live_orders()
+    assert len(result) == 1
+    assert result[0]["status"] == "Submitted"
+
+
+def test_get_live_orders_excludes_cancelled(client):
+    orders = [
+        {"orderId": 1, "ticker": "AAPL", "status": "Cancelled"},
+        {"orderId": 2, "ticker": "SPY", "status": "ApiCancelled"},
+        {"orderId": 3, "ticker": "GLD", "status": "PreSubmitted"},
+    ]
+    with _mock_orders_response(client, orders):
+        result = client.get_live_orders()
+    assert len(result) == 1
+    assert result[0]["status"] == "PreSubmitted"
+
+
+def test_get_live_orders_includes_all_working_statuses(client):
+    working = ["PreSubmitted", "Submitted", "ApiPending", "PendingSubmit", "PendingCancel", "Inactive"]
+    orders = [{"orderId": i, "ticker": "X", "status": s} for i, s in enumerate(working)]
+    with _mock_orders_response(client, orders):
+        result = client.get_live_orders()
+    assert len(result) == len(working)
+
+
+def test_get_live_orders_empty_when_all_filled(client):
+    orders = [
+        {"orderId": 1, "ticker": "CL", "status": "Filled"},
+        {"orderId": 2, "ticker": "IGV", "status": "Filled"},
+    ]
+    with _mock_orders_response(client, orders):
+        result = client.get_live_orders()
+    assert result == []
+
+
+def test_get_live_orders_handles_missing_status(client):
+    # Orders with no status field should be excluded (unknown state, not working)
+    orders = [
+        {"orderId": 1, "ticker": "AAPL"},
+        {"orderId": 2, "ticker": "SPY", "status": "Submitted"},
+    ]
+    with _mock_orders_response(client, orders):
+        result = client.get_live_orders()
+    assert len(result) == 1
+    assert result[0]["ticker"] == "SPY"

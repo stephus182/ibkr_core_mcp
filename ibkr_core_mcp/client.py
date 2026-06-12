@@ -232,10 +232,21 @@ class IBKRClient:
         return self._post(f"/portfolio/{account_id}/positions/invalidate")
 
     # Orders (read-only)
+
+    # Statuses that indicate an order is still active in the market.
+    # Filled/Cancelled orders are executions, not live orders.
+    _WORKING_STATUSES = frozenset({
+        "PreSubmitted", "Submitted", "ApiPending",
+        "PendingSubmit", "PendingCancel", "Inactive",
+    })
+
     def get_live_orders(self) -> list[dict]:
+        """Return only working orders (not Filled or Cancelled)."""
         data = self._get("/iserver/account/orders")
         orders = data.get("orders", data) if isinstance(data, dict) else data
-        return orders if isinstance(orders, list) else []
+        if not isinstance(orders, list):
+            return []
+        return [o for o in orders if o.get("status") in self._WORKING_STATUSES]
 
     def get_order_status(self, order_id: str) -> dict:
         return self._get(f"/iserver/account/order/status/{order_id}")

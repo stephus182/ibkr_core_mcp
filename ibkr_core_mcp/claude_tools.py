@@ -111,7 +111,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_live_orders",
-        "description": "Get currently open/pending orders from IBKR.",
+        "description": (
+            "Get working orders from IBKR — Submitted, PreSubmitted, PendingSubmit, "
+            "ApiPending, PendingCancel, and Inactive. "
+            "Filled and Cancelled orders are excluded; use get_trades for executions."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
