@@ -59,6 +59,8 @@ OHLCV bars for a contract.
 
 **Endpoint:** `GET /iserver/marketdata/history`
 
+**⚠ Hard cap:** This endpoint caps at ~84 daily bars regardless of the `period` parameter. Use `get_hmds_history()` for any request longer than ~4 months.
+
 ---
 
 ### `get_market_snapshot(conids, fields) -> list[dict]`
@@ -80,8 +82,9 @@ are normal — retry after ≈1s.
 ---
 
 ### `get_hmds_history(conid, period, bar, outside_rth) -> dict`
-Historical Market Data Service — same parameters and return shape as `get_market_history()` but
-uses the HMDS endpoint (longer history available for some instruments).
+Historical Market Data Service — same parameters and return shape as `get_market_history()`.
+Use this for all requests beyond ~4 months; supports up to 7Y of daily data for equities.
+**This is the endpoint `ClaudeToolkit.fetch_market_data` uses.**
 
 **Endpoint:** `GET /hmds/history`
 

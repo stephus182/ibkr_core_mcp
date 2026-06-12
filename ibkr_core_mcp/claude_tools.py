@@ -651,7 +651,7 @@ class ClaudeToolkit:
         if not conid:
             return f"Contract found for {symbol} but conid missing: {contracts[0]}", None
 
-        raw = self._client.get_market_history(conid, period=period, bar=bar)
+        raw = self._client.get_hmds_history(conid, period=period, bar=bar)
         data = raw.get("data", [])
         if not data:
             return f"IBKR returned no data for {symbol} (period={period}, bar={bar})", None
