@@ -69,13 +69,23 @@ class IBKRClient:
 
     # Session
     def ping(self) -> bool:
-        try:
-            resp = self._session.get(f"{self._base}/iserver/auth/status", timeout=5)
-            if resp.status_code == 401:
+        # /iserver/auth/status returns authenticated=false on the very first request of a new
+        # gateway session (IBKR quirk) even when the user is fully logged in.
+        # Retry once after a tickle() to let the gateway warm up.
+        for attempt in range(2):
+            try:
+                resp = self._session.get(f"{self._base}/iserver/auth/status", timeout=5)
+                if resp.status_code == 401:
+                    return False
+                if resp.json().get("authenticated", False):
+                    return True
+                if attempt == 0:
+                    import time
+                    self.tickle()
+                    time.sleep(1)
+            except Exception:
                 return False
-            return resp.json().get("authenticated", False)
-        except Exception:
-            return False
+        return False
 
     def get_auth_status(self) -> dict:
         return self._get("/iserver/auth/status")
