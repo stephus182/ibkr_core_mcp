@@ -258,9 +258,10 @@ Copy `.env.example` to `.env` and fill in:
 | `ANTHROPIC_API_KEY` | ✅ for `Config.from_env()` | Anthropic API key (required by `ClaudeToolkit`; `Config.from_env()` raises if absent) |
 | `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055`) |
 | `IBKR_SQLITE_PATH` | ✅ | SQLite store path (e.g. `~/.ibkr_core/store.db`) |
-| `GOOGLE_DRIVE_FOLDER_ID` | for GDrive cache | Drive folder for Parquet cache |
-| `GDRIVE_TOKEN_FILE` | for GDrive cache | OAuth2 token path |
-| `GDRIVE_CREDENTIALS_FILE` | for GDrive cache | OAuth2 credentials path |
+| `GOOGLE_DRIVE_FOLDER_ID` | for GDrive | Root Drive folder — claudia.db sync parent + cache subfolder parent |
+| `GDRIVE_CACHE_FOLDER_ID` | optional | Explicit Drive folder for Parquet cache. If unset, auto-created as `market_data/` subfolder inside `GOOGLE_DRIVE_FOLDER_ID` |
+| `GDRIVE_TOKEN_FILE` | for GDrive | OAuth2 token path |
+| `GDRIVE_CREDENTIALS_FILE` | for GDrive | OAuth2 credentials path |
 | `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token |
 | `IBKR_FLEX_QUERY_ID` | for Flex sync | Flex query ID |
 

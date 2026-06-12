@@ -47,6 +47,8 @@ class GDriveCache:
         self._service: Any = None
         self._manifest: dict = {}
         self._manifest_loaded_at: float = 0.0
+        # Resolved at runtime: GDRIVE_CACHE_FOLDER_ID, or auto-created market_data/ subfolder.
+        self._resolved_cache_folder: str = ""
 
     def _get_service(self) -> Any:
         if self._service:
@@ -70,14 +72,51 @@ class GDriveCache:
             with os.fdopen(fd, "w") as fh:
                 fh.write(creds.to_json())
             os.chmod(token_path, 0o600)  # enforce on pre-existing files too
-        if not self._config.gdrive_folder_id:
+        if not self._config.gdrive_folder_id and not self._config.gdrive_cache_folder_id:
             from ibkr_core_mcp.exceptions import CacheError
             raise CacheError(
-                "GOOGLE_DRIVE_FOLDER_ID is required for Drive cache but is not set. "
-                "Set it in .env or pass it to Config."
+                "GOOGLE_DRIVE_FOLDER_ID (or GDRIVE_CACHE_FOLDER_ID) is required for "
+                "Drive cache but is not set. Set it in .env or pass it to Config."
             )
         self._service = build("drive", "v3", credentials=creds)
         return self._service
+
+    def _resolve_cache_folder(self) -> str:
+        """Return the Drive folder ID for Parquet files.
+
+        Uses GDRIVE_CACHE_FOLDER_ID if set. Otherwise finds or creates a
+        'market_data' subfolder inside GOOGLE_DRIVE_FOLDER_ID on first call
+        and caches the result for the lifetime of this instance.
+        """
+        if self._config.gdrive_cache_folder_id:
+            return self._config.gdrive_cache_folder_id
+        if self._resolved_cache_folder:
+            return self._resolved_cache_folder
+        svc = self._get_service()
+        parent = self._config.gdrive_folder_id
+        results = (
+            svc.files()
+            .list(
+                q=(
+                    f"name='market_data' and '{parent}' in parents "
+                    "and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                ),
+                fields="files(id)",
+            )
+            .execute()
+        )
+        files = results.get("files", [])
+        if files:
+            self._resolved_cache_folder = files[0]["id"]
+        else:
+            meta = {
+                "name": "market_data",
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent],
+            }
+            f = svc.files().create(body=meta, fields="id").execute()
+            self._resolved_cache_folder = f["id"]
+        return self._resolved_cache_folder
 
     def _cache_key(self, symbol: str, timeframe: str, period: str, end: str) -> str:
         return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}"
@@ -90,7 +129,7 @@ class GDriveCache:
         if self._manifest_loaded_at > 0 and (now - self._manifest_loaded_at) < _MANIFEST_TTL:
             return self._manifest
         svc = self._get_service()
-        folder_id = self._config.gdrive_folder_id
+        folder_id = self._resolve_cache_folder()
         results = (
             svc.files()
             .list(
@@ -115,7 +154,7 @@ class GDriveCache:
 
     def _save_manifest(self) -> None:
         svc = self._get_service()
-        folder_id = self._config.gdrive_folder_id
+        folder_id = self._resolve_cache_folder()
         data = json.dumps(self._manifest, indent=2).encode()
         buf = io.BytesIO(data)
         media = MediaIoBaseUpload(buf, mimetype="application/json")
@@ -154,7 +193,7 @@ class GDriveCache:
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
         svc = self._get_service()
-        folder_id = self._config.gdrive_folder_id
+        folder_id = self._resolve_cache_folder()
         results = (
             svc.files()
             .list(
@@ -182,7 +221,7 @@ class GDriveCache:
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
         svc = self._get_service()
-        folder_id = self._config.gdrive_folder_id
+        folder_id = self._resolve_cache_folder()
         buf = io.BytesIO()
         df.to_parquet(buf, index=True)
         buf.seek(0)
@@ -227,7 +266,7 @@ class GDriveCache:
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
         svc = self._get_service()
-        folder_id = self._config.gdrive_folder_id
+        folder_id = self._resolve_cache_folder()
         results = (
             svc.files()
             .list(

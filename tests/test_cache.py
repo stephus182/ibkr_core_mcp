@@ -132,6 +132,7 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
 
     cfg = MagicMock()
     cfg.gdrive_folder_id = ""
+    cfg.gdrive_cache_folder_id = ""
     cfg.gdrive_token_file = token_file
     cfg.gdrive_credentials_file = tmp_path / "creds.json"
 
@@ -143,6 +144,7 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
     cache._service = None
     cache._manifest = {}
     cache._manifest_loaded_at = 0.0
+    cache._resolved_cache_folder = ""
 
     with patch("ibkr_core_mcp.cache.Credentials.from_authorized_user_file", return_value=fake_creds), \
          patch("ibkr_core_mcp.cache.build") as mock_build:
