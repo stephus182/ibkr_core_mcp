@@ -153,6 +153,28 @@ def test_execute_get_analytics_tool(toolkit):
     assert "sharpe" in text.lower() or "Sharpe" in text
 
 
+def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):
+    # AAPL resolves; BADTICKER does not — output must name the skipped symbol
+    def search_side_effect(sym, sec_type):
+        if sym == "AAPL":
+            return [{"conid": 265598, "exchange": "NASDAQ"}]
+        return []
+    toolkit._client.search_contract.side_effect = search_side_effect
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 265598, "31": "185.0"}]
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL", "BADTICKER"]})
+    assert "BADTICKER" in text
+    assert "omitted" in text.lower() or "could not resolve" in text.lower()
+    assert fig is None
+
+
+def test_execute_get_market_snapshot_invalid_conid_skipped(toolkit):
+    toolkit._client.search_contract.return_value = [{"conid": "N/A"}]
+    toolkit._client.get_market_snapshot.return_value = []
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL"]})
+    assert "Could not resolve" in text
+    toolkit._client.get_market_snapshot.assert_not_called()
+
+
 def test_execute_get_live_orders_filters_filled(toolkit):
     # The client-layer filtering is already tested in test_client.py;
     # this confirms the tool correctly labels an empty working set.
@@ -193,7 +215,7 @@ def test_execute_get_alerts_returns_json(toolkit):
 
 def test_execute_create_price_alert_resolves_symbol(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL", "exchange": "NASDAQ"}]
     toolkit._client.create_alert.return_value = {"orderId": 42, "alertName": "AAPL >= 200"}
     text, fig = toolkit.execute("create_price_alert", {
         "symbol": "AAPL", "operator": ">=", "price": 200.0
@@ -204,7 +226,30 @@ def test_execute_create_price_alert_resolves_symbol(toolkit):
     assert call_alert["conditions"][0]["conid"] == 265598
     assert call_alert["conditions"][0]["operator"] == ">="
     assert call_alert["conditions"][0]["value"] == "200.0"
+    assert call_alert["conditions"][0]["exchange"] == "NASDAQ"
+    assert call_alert["conditions"][0]["conditionType"] == "Price"
     assert fig is None
+
+
+def test_execute_create_price_alert_futures_uses_contract_exchange(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 12345, "symbol": "CL", "exchange": "NYMEX"}]
+    toolkit._client.create_alert.return_value = {"orderId": 7}
+    toolkit.execute("create_price_alert", {
+        "symbol": "CL", "sec_type": "FUT", "operator": ">=", "price": 85.0
+    })
+    call_alert = toolkit._client.create_alert.call_args[0][1]
+    assert call_alert["conditions"][0]["exchange"] == "NYMEX"
+
+
+def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": "N/A", "symbol": "AAPL"}]
+    text, fig = toolkit.execute("create_price_alert", {
+        "symbol": "AAPL", "operator": ">=", "price": 200.0
+    })
+    assert "Invalid conid" in text
+    toolkit._client.create_alert.assert_not_called()
 
 
 def test_execute_create_price_alert_no_contract(toolkit):

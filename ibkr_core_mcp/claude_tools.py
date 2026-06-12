@@ -113,7 +113,8 @@ TOOL_DEFINITIONS = [
         "name": "get_live_orders",
         "description": (
             "Get working orders from IBKR — Submitted, PreSubmitted, PendingSubmit, "
-            "ApiPending, PendingCancel, and Inactive. "
+            "ApiPending, and PendingCancel. Also returns Inactive orders (exist on IBKR "
+            "but stalled — e.g. failed risk check — and require user action to reactivate). "
             "Filled and Cancelled orders are excluded; use get_trades for executions."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -1025,18 +1026,30 @@ class ClaudeToolkit:
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
         conids = []
+        failed = []
         for sym in symbols:
             contracts = self._client.search_contract(sym, sec_type)
             if contracts:
                 conid = contracts[0].get("conid")
-                if conid:
-                    conids.append(int(conid))
+                try:
+                    conid_int = int(conid) if conid else 0
+                except (ValueError, TypeError):
+                    conid_int = 0
+                if conid_int > 0:
+                    conids.append(conid_int)
+                else:
+                    failed.append(sym)
+            else:
+                failed.append(sym)
         if not conids:
             return f"Could not resolve conids for: {', '.join(symbols)}.", None
         snapshot = self._client.get_market_snapshot(conids)
         if not snapshot:
             return "No market snapshot data returned.", None
-        return json.dumps(snapshot, indent=2), None
+        result = json.dumps(snapshot, indent=2)
+        if failed:
+            result = f"Note: could not resolve {', '.join(failed)} as {sec_type} — omitted.\n\n" + result
+        return result, None
 
     def _get_trading_schedule(self, inputs: dict) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
@@ -1069,6 +1082,11 @@ class ClaudeToolkit:
         conid = contracts[0].get("conid")
         if not conid:
             return f"Contract found for {symbol} but conid missing.", None
+        try:
+            conid_int = int(conid)
+        except (ValueError, TypeError):
+            return f"Invalid conid '{conid}' returned for {symbol}.", None
+        exchange = contracts[0].get("exchange", "SMART")
         name = inputs.get("name") or f"{symbol} {operator} {price}"
         alert = {
             "orderId": 0,
@@ -1081,10 +1099,10 @@ class ClaudeToolkit:
             "isSizeCondition": False,
             "conditions": [
                 {
-                    "type": 1,
-                    "conid": int(conid),
-                    "exchange": "SMART",
-                    "condition_type": "Price",
+                    "type": 1,          # 1 = Price per IBKR Client Portal API
+                    "conid": conid_int,
+                    "exchange": exchange,
+                    "conditionType": "Price",
                     "operator": operator,
                     "value": str(price),
                 }

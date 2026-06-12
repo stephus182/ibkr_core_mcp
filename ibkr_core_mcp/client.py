@@ -158,11 +158,19 @@ class IBKRClient:
 
     def get_futures(self, symbols: list[str]) -> list[dict]:
         data = self._get("/trsrv/futures", {"symbols": ",".join(symbols)})
-        return data if isinstance(data, list) else []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [c for contracts in data.values() for c in (contracts or [])]
+        return []
 
     def get_stocks(self, symbols: list[str]) -> list[dict]:
         data = self._get("/trsrv/stocks", {"symbols": ",".join(symbols)})
-        return data if isinstance(data, list) else []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [c for contracts in data.values() for c in (contracts or [])]
+        return []
 
     def get_trading_schedule(self, asset_class: str, symbol: str, exchange: str, exchange_filter: str = "") -> dict:
         params = {"assetClass": asset_class, "symbol": symbol, "exchange": exchange}

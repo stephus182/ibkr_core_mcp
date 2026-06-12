@@ -264,6 +264,54 @@ def test_validate_account_id_applied_to_write_methods(client):
     mock_tid.assert_not_called()  # validation must fire before biometric gate
 
 
+# ── get_stocks / get_futures dict-response fix ───────────────────────────────
+
+def test_get_stocks_handles_dict_response(client):
+    """IBKR /trsrv/stocks returns {"AAPL": [{conid: ...}]}, not a list."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "AAPL": [{"conid": 265598, "assetClass": "STK"}],
+        "MSFT": [{"conid": 272093, "assetClass": "STK"}],
+    }
+    with patch.object(client._session, "get", return_value=mock_resp):
+        result = client.get_stocks(["AAPL", "MSFT"])
+    assert len(result) == 2
+    conids = {c["conid"] for c in result}
+    assert conids == {265598, 272093}
+
+
+def test_get_stocks_handles_list_response(client):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = [{"conid": 265598, "symbol": "AAPL"}]
+    with patch.object(client._session, "get", return_value=mock_resp):
+        result = client.get_stocks(["AAPL"])
+    assert len(result) == 1
+
+
+def test_get_stocks_returns_empty_on_unexpected_type(client):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = "unexpected"
+    with patch.object(client._session, "get", return_value=mock_resp):
+        result = client.get_stocks(["AAPL"])
+    assert result == []
+
+
+def test_get_futures_handles_dict_response(client):
+    """IBKR /trsrv/futures returns {"ES": [{conid: ...}]}, not a list."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "ES": [{"conid": 495512557, "expiry": "20240920"}],
+    }
+    with patch.object(client._session, "get", return_value=mock_resp):
+        result = client.get_futures(["ES"])
+    assert len(result) == 1
+    assert result[0]["conid"] == 495512557
+
+
 # ── get_live_orders filtering ─────────────────────────────────────────────────
 
 def _mock_orders_response(client, orders):
