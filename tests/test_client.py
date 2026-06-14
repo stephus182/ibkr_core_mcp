@@ -384,7 +384,7 @@ def test_ping_retries_once_when_first_call_returns_unauthenticated(client):
     ]
     with patch.object(client._session, "get", side_effect=responses), \
          patch.object(client, "tickle", return_value=True), \
-         patch("time.sleep"):
+         patch("ibkr_core_mcp.client.time.sleep"):
         result = client.ping()
     assert result is True
 
@@ -392,11 +392,12 @@ def test_ping_retries_once_when_first_call_returns_unauthenticated(client):
 def test_ping_returns_false_when_both_attempts_unauthenticated(client):
     """ping() returns False if authenticated=false on both the first and second attempt."""
     not_authed = MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False}))
-    with patch.object(client._session, "get", return_value=not_authed), \
+    with patch.object(client._session, "get", return_value=not_authed) as mock_get, \
          patch.object(client, "tickle", return_value=True), \
-         patch("time.sleep"):
+         patch("ibkr_core_mcp.client.time.sleep"):
         result = client.ping()
     assert result is False
+    assert mock_get.call_count == 2, "ping() must attempt exactly twice when not authenticated"
 
 
 def test_ping_calls_tickle_between_first_and_second_attempt(client):
@@ -407,7 +408,7 @@ def test_ping_calls_tickle_between_first_and_second_attempt(client):
     ]
     with patch.object(client._session, "get", side_effect=responses), \
          patch.object(client, "tickle", return_value=True) as mock_tickle, \
-         patch("time.sleep"):
+         patch("ibkr_core_mcp.client.time.sleep"):
         client.ping()
     mock_tickle.assert_called_once()
 
