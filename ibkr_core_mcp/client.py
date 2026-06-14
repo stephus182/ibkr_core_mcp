@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -80,7 +81,6 @@ class IBKRClient:
                 if resp.json().get("authenticated", False):
                     return True
                 if attempt == 0:
-                    import time
                     self.tickle()
                     time.sleep(1)
             except Exception:

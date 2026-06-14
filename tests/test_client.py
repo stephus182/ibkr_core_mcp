@@ -372,3 +372,52 @@ def test_get_live_orders_handles_missing_status(client):
         result = client.get_live_orders()
     assert len(result) == 1
     assert result[0]["ticker"] == "SPY"
+
+
+# ── ping() retry behaviour (Fix #2 — IBKR first-call quirk) ─────────────────
+
+def test_ping_retries_once_when_first_call_returns_unauthenticated(client):
+    """ping() retries once when first call returns authenticated=false (IBKR quirk)."""
+    responses = [
+        MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False})),
+        MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": True})),
+    ]
+    with patch.object(client._session, "get", side_effect=responses), \
+         patch.object(client, "tickle", return_value=True), \
+         patch("time.sleep"):
+        result = client.ping()
+    assert result is True
+
+
+def test_ping_returns_false_when_both_attempts_unauthenticated(client):
+    """ping() returns False if authenticated=false on both the first and second attempt."""
+    not_authed = MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False}))
+    with patch.object(client._session, "get", return_value=not_authed), \
+         patch.object(client, "tickle", return_value=True), \
+         patch("time.sleep"):
+        result = client.ping()
+    assert result is False
+
+
+def test_ping_calls_tickle_between_first_and_second_attempt(client):
+    """ping() must call tickle() exactly once, between the two attempts."""
+    responses = [
+        MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False})),
+        MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": True})),
+    ]
+    with patch.object(client._session, "get", side_effect=responses), \
+         patch.object(client, "tickle", return_value=True) as mock_tickle, \
+         patch("time.sleep"):
+        client.ping()
+    mock_tickle.assert_called_once()
+
+
+def test_ping_returns_false_immediately_on_401_without_retry(client):
+    """ping() must return False immediately on HTTP 401 — no retry, no tickle."""
+    resp_401 = MagicMock(status_code=401)
+    with patch.object(client._session, "get", return_value=resp_401) as mock_get, \
+         patch.object(client, "tickle") as mock_tickle:
+        result = client.ping()
+    assert result is False
+    assert mock_get.call_count == 1, "Must not retry on 401"
+    mock_tickle.assert_not_called()
