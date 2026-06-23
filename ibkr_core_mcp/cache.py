@@ -45,7 +45,7 @@ class GDriveCache:
     def __init__(self, config: Config) -> None:
         self._config = config
         self._service: Any = None
-        self._manifest: dict = {}
+        self._manifest: dict[str, Any] = {}
         self._manifest_loaded_at: float = 0.0
         # Resolved at runtime: GDRIVE_CACHE_FOLDER_ID, or auto-created market_data/ subfolder.
         self._resolved_cache_folder: str = ""
@@ -124,7 +124,7 @@ class GDriveCache:
     def _filename(self, key: str) -> str:
         return f"{key}.parquet"
 
-    def _load_manifest(self) -> dict:
+    def _load_manifest(self) -> dict[str, Any]:
         now = time.monotonic()
         if self._manifest_loaded_at > 0 and (now - self._manifest_loaded_at) < _MANIFEST_TTL:
             return self._manifest
@@ -255,7 +255,7 @@ class GDriveCache:
         }
         self._save_manifest()
 
-    def list_cached(self) -> list[dict]:
+    def list_cached(self) -> list[dict[str, Any]]:
         """Return list of all manifest entries."""
         manifest = self._load_manifest()
         return [{"key": k, **v} for k, v in manifest.items()]

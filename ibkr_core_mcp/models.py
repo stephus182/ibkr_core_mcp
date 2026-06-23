@@ -135,7 +135,7 @@ class Notification(BaseModel):
         return data
 
 
-def bars_to_dataframe(raw: dict) -> pd.DataFrame:
+def bars_to_dataframe(raw: dict[str, Any]) -> pd.DataFrame:
     """Convert IBKR market history API response to standard OHLCV DataFrame."""
     bars = raw.get("data", [])
     if not bars:

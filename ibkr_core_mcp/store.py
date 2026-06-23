@@ -91,7 +91,7 @@ class SQLiteStore:
                 );
             """)
 
-    def upsert_trades(self, trades: list[dict]) -> None:
+    def upsert_trades(self, trades: list[dict[str, Any]]) -> None:
         """Insert or update trades by execution_id."""
         self.initialize()
         with self._connect() as conn:
@@ -113,7 +113,7 @@ class SQLiteStore:
         symbol: str | None = None,
         start: str | None = None,
         end: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Return trades, optionally filtered by symbol and date range."""
         self.initialize()
         query = "SELECT * FROM trades WHERE 1=1"
@@ -132,7 +132,7 @@ class SQLiteStore:
             rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
-    def snapshot_positions(self, positions: list[dict]) -> None:
+    def snapshot_positions(self, positions: list[dict[str, Any]]) -> None:
         """Save a timestamped snapshot of current positions."""
         self.initialize()
         now = datetime.now(tz=UTC).isoformat()
@@ -193,7 +193,7 @@ class SQLiteStore:
         symbol: str,
         signal_type: str,
         value: float,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record a signal (from ML model, scanner, or indicator)."""
         self.initialize()
@@ -239,8 +239,8 @@ class SQLiteStore:
             )
         return pd.DataFrame([dict(r) for r in rows])
 
-    def save_backtest(self, result: dict) -> int:
-        """Store a backtest result dict. Returns row id."""
+    def save_backtest(self, result: dict[str, Any]) -> int:
+        """Store a backtest result dict[str, Any]. Returns row id."""
         self.initialize()
         now = datetime.now(tz=UTC).isoformat()
         with self._connect() as conn:
@@ -268,7 +268,7 @@ class SQLiteStore:
 
     def get_backtests(
         self, symbol: str | None = None, strategy: str | None = None
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         self.initialize()
         query = "SELECT * FROM backtest_results WHERE 1=1"
         params: list[Any] = []
@@ -297,7 +297,7 @@ class SQLiteStore:
             )
             return cur.lastrowid or 0
 
-    def get_alerts(self, active_only: bool = True) -> list[dict]:
+    def get_alerts(self, active_only: bool = True) -> list[dict[str, Any]]:
         """Return alerts; active_only=True excludes already-triggered alerts."""
         self.initialize()
         query = "SELECT * FROM price_alerts"
@@ -317,7 +317,7 @@ class SQLiteStore:
                 (now, event, json.dumps(data) if data else None),
             )
 
-    def get_log(self, n: int = 100, event: str | None = None) -> list[dict]:
+    def get_log(self, n: int = 100, event: str | None = None) -> list[dict[str, Any]]:
         """Return the last n session log entries, optionally filtered by event name."""
         self.initialize()
         query = "SELECT * FROM session_log"

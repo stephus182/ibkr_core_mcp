@@ -565,10 +565,10 @@ class ClaudeToolkit:
         return self._client
 
     @property
-    def tools(self) -> list[dict]:
+    def tools(self) -> list[dict[str, Any]]:
         return TOOL_DEFINITIONS
 
-    def execute(self, name: str, inputs: dict) -> tuple[str, Any]:
+    def execute(self, name: str, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Execute a tool call. Returns (text_result, optional_plotly_fig)."""
         handlers = {
             "fetch_market_data": self._fetch_market_data,
@@ -629,7 +629,7 @@ class ClaudeToolkit:
             return [], "No accounts found."
         return [a.get("accountId", a.get("id", "")) for a in accounts], None
 
-    def _fetch_market_data(self, inputs: dict) -> tuple[str, Any]:
+    def _fetch_market_data(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         period = inputs["period"]
         bar = inputs.get("bar", "1d")
@@ -669,28 +669,28 @@ class ClaudeToolkit:
             None,
         )
 
-    def _check_cache(self, inputs: dict) -> tuple[str, Any]:
+    def _check_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         hit = self._cache.check(
             inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"]
         )
         label = "HIT" if hit else "MISS"
         return f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']}", None
 
-    def _list_cache(self, inputs: dict) -> tuple[str, Any]:
+    def _list_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         entries = self._cache.list_cached()
         if not entries:
             return "Drive cache is empty.", None
         lines = [f"- {e['key']}: {e.get('rows', '?')} bars, cached {e.get('cached_at', '?')[:10]}" for e in entries]
         return f"Cached datasets ({len(entries)}):\n" + "\n".join(lines), None
 
-    def _get_account_summary(self, inputs: dict) -> tuple[str, Any]:
+    def _get_account_summary(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
         summary = self._client.get_account_summary(account_id)
         return json.dumps(summary, indent=2), None
 
-    def _get_positions(self, inputs: dict) -> tuple[str, Any]:
+    def _get_positions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -706,7 +706,7 @@ class ClaudeToolkit:
             lines.append(f"- {symbol}: {pos} shares, mktVal={mkt_val:.2f}, unrealPnL={pnl:.2f}")
         return f"Open positions ({len(positions)}):\n" + "\n".join(lines), None
 
-    def _get_trades(self, inputs: dict) -> tuple[str, Any]:
+    def _get_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         source = inputs.get("source", "store")
         symbol = inputs.get("symbol")
         if source == "store":
@@ -751,7 +751,7 @@ class ClaudeToolkit:
         ]
         return f"Recent trades (last 6 days, {len(trades)} total):\n" + "\n".join(lines), None
 
-    def _sync_flex_trades(self, inputs: dict) -> tuple[str, Any]:
+    def _sync_flex_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         from ibkr_core_mcp.flex_query import FlexQueryClient
         if not self._config.flex_token or not self._config.flex_query_id:
             return (
@@ -773,7 +773,7 @@ class ClaudeToolkit:
             None,
         )
 
-    def _get_live_orders(self, inputs: dict) -> tuple[str, Any]:
+    def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         orders = self._client.get_live_orders()
         if not orders:
             return "No open orders.", None
@@ -785,35 +785,35 @@ class ClaudeToolkit:
         ]
         return f"Live orders ({len(orders)}):\n" + "\n".join(lines), None
 
-    def _get_ledger(self, inputs: dict) -> tuple[str, Any]:
+    def _get_ledger(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
         ledger = self._client.get_account_ledger(account_id)
         return json.dumps(ledger, indent=2), None
 
-    def _get_allocation(self, inputs: dict) -> tuple[str, Any]:
+    def _get_allocation(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
         allocation = self._client.get_account_allocation(account_id)
         return json.dumps(allocation, indent=2), None
 
-    def _get_pa_performance(self, inputs: dict) -> tuple[str, Any]:
+    def _get_pa_performance(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
         perf = self._client.get_pa_performance(account_ids, inputs["period"])
         return json.dumps(perf, indent=2), None
 
-    def _get_pa_transactions(self, inputs: dict) -> tuple[str, Any]:
+    def _get_pa_transactions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
         txns = self._client.get_pa_transactions(account_ids, inputs["period"])
         return json.dumps(txns, indent=2), None
 
-    def _get_contract_info(self, inputs: dict) -> tuple[str, Any]:
+    def _get_contract_info(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
         contracts = self._client.search_contract(symbol, sec_type)
@@ -825,13 +825,13 @@ class ClaudeToolkit:
         info = self._client.get_contract_info_and_rules(conid)
         return json.dumps(info, indent=2), None
 
-    def _get_option_chain(self, inputs: dict) -> tuple[str, Any]:
+    def _get_option_chain(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         exchange = inputs.get("exchange", "SMART")
         chain = self._client.get_option_chain(symbol, exchange=exchange)
         return json.dumps(chain, indent=2), None
 
-    def _run_scanner(self, inputs: dict) -> tuple[str, Any]:
+    def _run_scanner(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         params = {
             "instrument": inputs.get("instrument", "STK"),
             "location": inputs.get("location_code", "STK.US.MAJOR"),
@@ -850,7 +850,7 @@ class ClaudeToolkit:
         ]
         return f"Scanner: {inputs['scan_code']} — {len(results)} results:\n" + "\n".join(lines), None
 
-    def _get_notifications(self, inputs: dict) -> tuple[str, Any]:
+    def _get_notifications(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         max_r = inputs.get("max_results", 10)
         notifications = self._client.get_notifications(max_r)
         unread = self._client.get_unread_count()
@@ -862,7 +862,7 @@ class ClaudeToolkit:
         ]
         return f"FYI Notifications ({unread} unread):\n" + "\n".join(lines), None
 
-    def _add_indicators(self, inputs: dict) -> tuple[str, Any]:
+    def _add_indicators(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -885,7 +885,7 @@ class ClaudeToolkit:
         ]
         return "\n".join(lines), None
 
-    def _run_backtest(self, inputs: dict) -> tuple[str, Any]:
+    def _run_backtest(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -911,14 +911,14 @@ class ClaudeToolkit:
         ]
         return "\n".join(lines), None
 
-    def _generate_pinescript(self, inputs: dict) -> tuple[str, Any]:
+    def _generate_pinescript(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         indicators_list = inputs.get("indicators", ["rsi", "macd"])
         strategy_name = inputs.get("strategy_name", f"{symbol} Indicators")
         script = _pinescript.indicator_script(strategy_name, indicators_list, {})
         return script, None
 
-    def _preview_order(self, inputs: dict) -> tuple[str, Any]:
+    def _preview_order(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
         quantity = int(inputs["quantity"])
@@ -936,7 +936,7 @@ class ClaudeToolkit:
         if err:
             return err, None
 
-        order: dict = {
+        order: dict[str, Any] = {
             "conid": conid,
             "orderType": order_type,
             "side": action,
@@ -957,7 +957,7 @@ class ClaudeToolkit:
         ]
         return "\n".join(lines), None
 
-    def _get_pnl(self, inputs: dict) -> tuple[str, Any]:
+    def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         pnl = self._client.get_pnl()
         if not pnl:
             return "No P&L data returned. Ensure IBKR gateway is connected.", None
@@ -984,7 +984,7 @@ class ClaudeToolkit:
         lines.append(f"Total daily P&L:      {dpnl_total:+.2f}")
         return "\n".join(lines), None
 
-    def _get_analytics(self, inputs: dict) -> tuple[str, Any]:
+    def _get_analytics(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -1007,7 +1007,7 @@ class ClaudeToolkit:
         ]
         return "\n".join(lines), None
 
-    def _search_contract(self, inputs: dict) -> tuple[str, Any]:
+    def _search_contract(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
         contracts = self._client.search_contract(symbol, sec_type)
@@ -1015,14 +1015,14 @@ class ClaudeToolkit:
             return f"No contracts found for {symbol} ({sec_type}).", None
         return json.dumps(contracts, indent=2), None
 
-    def _get_futures(self, inputs: dict) -> tuple[str, Any]:
+    def _get_futures(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbols = [s.upper() for s in inputs["symbols"]]
         futures = self._client.get_futures(symbols)
         if not futures:
             return f"No futures found for {', '.join(symbols)}.", None
         return json.dumps(futures, indent=2), None
 
-    def _get_market_snapshot(self, inputs: dict) -> tuple[str, Any]:
+    def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
         conids = []
@@ -1051,14 +1051,14 @@ class ClaudeToolkit:
             result = f"Note: could not resolve {', '.join(failed)} as {sec_type} — omitted.\n\n" + result
         return result, None
 
-    def _get_trading_schedule(self, inputs: dict) -> tuple[str, Any]:
+    def _get_trading_schedule(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         asset_class = inputs.get("asset_class", "STK")
         exchange = inputs.get("exchange", "SMART")
         schedule = self._client.get_trading_schedule(asset_class, symbol, exchange)
         return json.dumps(schedule, indent=2), None
 
-    def _get_alerts(self, inputs: dict) -> tuple[str, Any]:
+    def _get_alerts(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1067,7 +1067,7 @@ class ClaudeToolkit:
             return "No price alerts configured.", None
         return json.dumps(alerts, indent=2), None
 
-    def _create_price_alert(self, inputs: dict) -> tuple[str, Any]:
+    def _create_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1111,14 +1111,14 @@ class ClaudeToolkit:
         result = self._client.create_alert(account_id, alert)
         return json.dumps(result, indent=2), None
 
-    def _delete_alert(self, inputs: dict) -> tuple[str, Any]:
+    def _delete_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
         result = self._client.delete_alert(account_id, inputs["alert_id"])
         return json.dumps(result, indent=2), None
 
-    def _activate_alert(self, inputs: dict) -> tuple[str, Any]:
+    def _activate_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1126,18 +1126,18 @@ class ClaudeToolkit:
         result = self._client.activate_alert(account_id, inputs["alert_id"], activate)
         return json.dumps(result, indent=2), None
 
-    def _get_watchlists(self, inputs: dict) -> tuple[str, Any]:
+    def _get_watchlists(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         watchlists = self._client.get_watchlists()
         if not watchlists:
             return "No watchlists found.", None
         return json.dumps(watchlists, indent=2), None
 
-    def _get_order_status(self, inputs: dict) -> tuple[str, Any]:
+    def _get_order_status(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         order_id = inputs["order_id"]
         status = self._client.get_order_status(order_id)
         return json.dumps(status, indent=2), None
 
-    def _delete_cache(self, inputs: dict) -> tuple[str, Any]:
+    def _delete_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
