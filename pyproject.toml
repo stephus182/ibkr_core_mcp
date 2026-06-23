@@ -101,7 +101,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["numpy", "numpy.*", "pandas", "pandas.*"]
-ignore_errors = true
+follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = ["ibkr_core_mcp.client"]
