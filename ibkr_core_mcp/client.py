@@ -22,16 +22,16 @@ from ibkr_core_mcp.rate_limiter import with_retry
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Account IDs must be alphanumeric only (e.g. "U1234567", "DU12345").
-# This prevents path traversal in URLs constructed from caller-supplied IDs.
-_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9]+$")
+# Account IDs are uppercase alphanumeric, 4–12 chars (e.g. "U1234567", "DU12345").
+# This prevents path traversal in URLs and matches the claude_tools validator.
+_ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 
 
 def _validate_account_id(account_id: str) -> None:
-    """Raise ConfigError if account_id contains characters unsafe for URL paths."""
+    """Raise ConfigError if account_id is not a valid IBKR account ID."""
     if not account_id or not _ACCOUNT_ID_RE.fullmatch(account_id):
         raise ConfigError(
-            f"Invalid account_id {account_id!r}: must be non-empty alphanumeric."
+            f"Invalid account_id {account_id!r}: must be 4–12 uppercase alphanumeric chars."
         )
 
 
@@ -76,15 +76,18 @@ class IBKRClient:
         for attempt in range(2):
             try:
                 resp = self._session.get(f"{self._base}/iserver/auth/status", timeout=5)
-                if resp.status_code == 401:
-                    return False
-                if resp.json().get("authenticated", False):
-                    return True
-                if attempt == 0:
-                    self.tickle()
-                    time.sleep(1)
             except Exception:
                 return False
+            if resp.status_code == 401:
+                return False
+            try:
+                if resp.json().get("authenticated", False):
+                    return True
+            except Exception:
+                return False
+            if attempt == 0:
+                self.tickle()
+                time.sleep(1)
         return False
 
     def get_auth_status(self) -> dict[str, Any]:

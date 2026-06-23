@@ -293,3 +293,206 @@ def test_execute_activate_alert_deactivate(toolkit):
     toolkit._client.activate_alert.return_value = {"success": True}
     toolkit.execute("activate_alert", {"alert_id": "42", "activate": False})
     toolkit._client.activate_alert.assert_called_once_with("U123", "42", False)
+
+
+# ── _safe_error — all exception branches ────────────────────────────────────
+
+def test_safe_error_ibkr_auth():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import IBKRAuthError
+    msg = _safe_error("some_tool", IBKRAuthError("session expired"))
+    assert "authenticated" in msg.lower()
+
+
+def test_safe_error_rate_limit():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    msg = _safe_error("some_tool", IBKRRateLimitError("429"))
+    assert "rate limit" in msg.lower()
+
+
+def test_safe_error_api_error():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+    msg = _safe_error("some_tool", IBKRAPIError("error", status_code=500))
+    assert "500" in msg
+
+
+def test_safe_error_cache():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import CacheError
+    msg = _safe_error("some_tool", CacheError("drive down"))
+    assert "drive" in msg.lower() or "cache" in msg.lower()
+
+
+def test_safe_error_backtest_syntax():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import BacktestSyntaxError
+    msg = _safe_error("run_backtest", BacktestSyntaxError("bad indent"))
+    assert "syntax" in msg.lower()
+
+
+def test_safe_error_backtest_runtime():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
+    msg = _safe_error("run_backtest", BacktestRuntimeError("ZeroDivision"))
+    assert "runtime" in msg.lower()
+
+
+def test_safe_error_backtest_generic():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import BacktestError
+    msg = _safe_error("run_backtest", BacktestError("failed"))
+    assert "backtest" in msg.lower()
+
+
+def test_safe_error_flex_query():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import FlexQueryError
+    msg = _safe_error("sync_flex_trades", FlexQueryError("timeout"))
+    assert "flex" in msg.lower()
+
+
+def test_safe_error_config():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    from ibkr_core_mcp.exceptions import ConfigError
+    msg = _safe_error("some_tool", ConfigError("missing key"))
+    assert "configuration" in msg.lower()
+
+
+def test_safe_error_key_error():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    msg = _safe_error("some_tool", KeyError("symbol"))
+    assert "missing" in msg.lower() or "field" in msg.lower()
+
+
+def test_safe_error_unexpected():
+    from ibkr_core_mcp.claude_tools import _safe_error
+    msg = _safe_error("some_tool", RuntimeError("something odd"))
+    assert "unexpected" in msg.lower()
+
+
+# ── _fetch_market_data — live (cache-miss) path ──────────────────────────────
+
+def test_fetch_market_data_live_path(toolkit):
+    import pandas as pd
+    import numpy as np
+
+    n = 50
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+
+    toolkit._cache.check.return_value = False
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    # Simulate IBKR raw response that bars_to_dataframe can parse
+    data_rows = [
+        {"t": int(ts.timestamp() * 1000), "o": r["open"], "h": r["high"],
+         "l": r["low"], "c": r["close"], "v": r["volume"]}
+        for ts, r in df.iterrows()
+    ]
+    toolkit._client.get_hmds_history.return_value = {"data": data_rows}
+
+    text, fig = toolkit.execute("fetch_market_data", {
+        "symbol": "AAPL", "period": "1Y", "bar": "1d"
+    })
+    assert "AAPL" in text
+    assert "IBKR" in text
+    toolkit._cache.save.assert_called_once()
+
+
+def test_fetch_market_data_no_contract(toolkit):
+    toolkit._cache.check.return_value = False
+    toolkit._client.search_contract.return_value = []
+    text, fig = toolkit.execute("fetch_market_data", {"symbol": "FAKE", "period": "1Y", "bar": "1d"})
+    assert "No contract" in text
+
+
+def test_fetch_market_data_empty_data(toolkit):
+    toolkit._cache.check.return_value = False
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_hmds_history.return_value = {"data": []}
+    text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
+    assert "no data" in text.lower()
+
+
+# ── _sync_flex_trades — missing token ────────────────────────────────────────
+
+def test_sync_flex_trades_no_token(toolkit):
+    text, fig = toolkit.execute("sync_flex_trades", {})
+    assert "IBKR_FLEX_TOKEN" in text
+
+
+# ── _get_positions — empty and field fallback ─────────────────────────────────
+
+def test_get_positions_empty(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_positions.return_value = []
+    text, fig = toolkit.execute("get_positions", {})
+    assert "No open positions" in text
+
+
+def test_get_positions_field_fallback(toolkit):
+    """Position summary should use contractDesc → ticker → symbol in that order."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_positions.return_value = [
+        {"contractDesc": "AAPL", "position": 100, "mktValue": 18000.0, "unrealizedPnl": 500.0},
+        {"ticker": "TSLA", "position": 10, "mktValue": 2500.0, "unrealizedPnl": -50.0},
+        {"symbol": "GOOG", "position": 5, "mktValue": 7500.0, "unrealizedPnl": 100.0},
+    ]
+    text, fig = toolkit.execute("get_positions", {})
+    assert "AAPL" in text
+    assert "TSLA" in text
+    assert "GOOG" in text
+
+
+# ── _get_pnl — empty and non-numeric guards ──────────────────────────────────
+
+def test_get_pnl_empty(toolkit):
+    toolkit._client.get_pnl.return_value = {}
+    text, fig = toolkit.execute("get_pnl", {})
+    assert "No P&L" in text or "P&L" in text
+
+
+def test_get_pnl_skips_non_numeric(toolkit):
+    toolkit._client.get_pnl.return_value = {
+        "U1234": {
+            "265598": {"ticker": "AAPL", "uPnl": "N/A", "dPnl": "N/A"},
+        }
+    }
+    text, fig = toolkit.execute("get_pnl", {})
+    # Should not raise; AAPL line skipped, total should still print
+    assert "Total" in text
+
+
+# ── _preview_order — LMT includes price in order payload ─────────────────────
+
+def test_preview_order_lmt_includes_price(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = {
+        "commission": "1.05",
+        "equity": {"amount": 99000, "change": -18200},
+        "initMarginChange": "500",
+        "maintMarginChange": "300",
+    }
+    text, fig = toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "BUY", "quantity": 100,
+        "order_type": "LMT", "limit_price": 182.50,
+    })
+    call_order = toolkit._client.get_order_preview.call_args[0][1]
+    assert call_order["price"] == 182.50
+    assert "Order Preview" in text
+
+
+def test_preview_order_mkt_no_price(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = {"commission": "0.00"}
+    toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "BUY", "quantity": 10, "order_type": "MKT"
+    })
+    call_order = toolkit._client.get_order_preview.call_args[0][1]
+    assert "price" not in call_order

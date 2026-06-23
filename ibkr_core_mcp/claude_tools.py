@@ -13,6 +13,7 @@ from ibkr_core_mcp import indicators as _indicators
 from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
+from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.client import IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.store import SQLiteStore
@@ -652,14 +653,10 @@ class ClaudeToolkit:
             return f"Contract found for {symbol} but conid missing: {contracts[0]}", None
 
         raw = self._client.get_hmds_history(conid, period=period, bar=bar)
-        data = raw.get("data", [])
-        if not data:
+        if not raw.get("data"):
             return f"IBKR returned no data for {symbol} (period={period}, bar={bar})", None
 
-        df = pd.DataFrame(data)
-        df["t"] = pd.to_datetime(df["t"], unit="ms")
-        df = df.rename(columns={"t": "date", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
-        df = df.set_index("date").sort_index()
+        df = _bars_to_dataframe(raw)
 
         self._cache.save(df, symbol, timeframe, period, end)
         return (

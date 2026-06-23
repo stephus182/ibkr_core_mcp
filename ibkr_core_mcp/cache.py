@@ -81,7 +81,7 @@ class GDriveCache:
         self._service = build("drive", "v3", credentials=creds)
         return self._service
 
-    def _resolve_cache_folder(self) -> str:
+    def _resolve_cache_folder(self, *, _retry: bool = True) -> str:
         """Return the Drive folder ID for Parquet files.
 
         Uses GDRIVE_CACHE_FOLDER_ID if set. Otherwise finds or creates a
@@ -101,12 +101,21 @@ class GDriveCache:
                     f"name='market_data' and '{parent}' in parents "
                     "and mimeType='application/vnd.google-apps.folder' and trashed=false"
                 ),
+                # Sort oldest-first so the canonical folder is stable across restarts.
+                orderBy="createdTime asc",
                 fields="files(id)",
             )
             .execute()
         )
         files = results.get("files", [])
         if files:
+            if len(files) > 1:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "GDriveCache: %d 'market_data' folders found in Drive; "
+                    "using oldest. Delete duplicates to avoid data split.",
+                    len(files),
+                )
             self._resolved_cache_folder = files[0]["id"]
         else:
             meta = {
@@ -117,6 +126,13 @@ class GDriveCache:
             f = svc.files().create(body=meta, fields="id").execute()
             self._resolved_cache_folder = f["id"]
         return self._resolved_cache_folder
+
+    def _reset_cache_folder(self) -> None:
+        """Clear the resolved cache folder ID so the next call re-discovers it.
+
+        Call this after a Drive 404 to recover from a deleted market_data folder.
+        """
+        self._resolved_cache_folder = ""
 
     def _cache_key(self, symbol: str, timeframe: str, period: str, end: str) -> str:
         return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}"
@@ -193,15 +209,20 @@ class GDriveCache:
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
         svc = self._get_service()
-        folder_id = self._resolve_cache_folder()
-        results = (
-            svc.files()
-            .list(
-                q=f"name='{fname}' and '{folder_id}' in parents and trashed=false",
-                fields="files(id)",
+        try:
+            folder_id = self._resolve_cache_folder()
+            results = (
+                svc.files()
+                .list(
+                    q=f"name='{fname}' and '{folder_id}' in parents and trashed=false",
+                    fields="files(id)",
+                )
+                .execute()
             )
-            .execute()
-        )
+        except Exception as e:
+            # Drive folder may have been deleted mid-session; reset and surface as miss.
+            self._reset_cache_folder()
+            raise CacheMissError(f"No cached file for {key} (Drive folder unavailable)") from e
         files = results.get("files", [])
         if not files:
             raise CacheMissError(f"No cached file for {key}")

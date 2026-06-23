@@ -46,7 +46,13 @@ class IBKRWebSocket:
         self._ws: Any = None
 
     async def connect(self) -> None:
-        import websockets  # optional dep — only imported when streaming is used
+        try:
+            import websockets  # optional dep — only imported when streaming is used
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "websockets is required for IBKRWebSocket. "
+                "Install it with: pip install 'ibkr_core_mcp[server]'"
+            ) from exc
 
         parsed = urlparse(self._ws_url)
         if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):

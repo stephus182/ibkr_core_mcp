@@ -16,6 +16,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
     "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -62,6 +64,7 @@ include = ["ibkr_core_mcp*"]
 
 [tool.setuptools.package-data]
 ibkr_core_mcp = [
+    "py.typed",
     "gateway/Dockerfile",
     "gateway/conf.yaml",
     "gateway/*.sh",

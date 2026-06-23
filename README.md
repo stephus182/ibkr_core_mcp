@@ -18,7 +18,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `streaming` | IBKR WebSocket live quotes + price alert engine |
 | `backtest` | Safe sandboxed strategy backtester |
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
-| `analytics` | Portfolio analytics — drawdown, Sharpe, Beta, return attribution |
+| `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
 | `mcp_server` | MCP server (stdio + SSE) exposing all 33 tools to any MCP client |
 
@@ -51,7 +51,13 @@ Touch ID is available on: MacBook Pro (late 2016+), MacBook Air (2018+), Mac min
 ## Installation
 
 ```bash
-pip install ibkr_core_mcp
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git
+```
+
+Or pin to a specific version:
+
+```bash
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v0.4.0
 ```
 
 Or for local development:
@@ -133,7 +139,7 @@ toolkit = ClaudeToolkit(client=client, cache=cache, store=store, config=config)
 ai = anthropic.Anthropic()
 
 response = ai.messages.create(
-    model="claude-opus-4-8",
+    model="claude-sonnet-4-6",
     max_tokens=4096,
     tools=toolkit.tools,               # drop-in for Anthropic SDK
     messages=[{"role": "user", "content": "What are my current positions?"}],
@@ -198,7 +204,7 @@ Expose all 33 tools to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 python -m ibkr_core_mcp.mcp_server
 
 # SSE transport with live streaming
-python -m ibkr_core_mcp.mcp_server --transport sse --port 8765 --streaming
+python -m ibkr_core_mcp.mcp_server --transport sse --port 8765 --stream
 ```
 
 ---
@@ -257,7 +263,7 @@ Copy `.env.example` to `.env` and fill in:
 |---|---|---|
 | `ANTHROPIC_API_KEY` | ✅ for `Config.from_env()` | Anthropic API key (required by `ClaudeToolkit`; `Config.from_env()` raises if absent) |
 | `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055`) |
-| `IBKR_SQLITE_PATH` | ✅ | SQLite store path (e.g. `~/.ibkr_core/store.db`) |
+| `IBKR_SQLITE_PATH` | optional | SQLite store path (default: `~/.ibkr_core/store.db`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | for GDrive | Root Drive folder — parent of `db/` and `market_data/` subfolders |
 | `GDRIVE_DB_FOLDER_ID` | optional | Explicit folder for claudia.db. If unset, auto-created as `db/` inside `GOOGLE_DRIVE_FOLDER_ID` |
 | `GDRIVE_CACHE_FOLDER_ID` | optional | Explicit Drive folder for Parquet cache. If unset, auto-created as `market_data/` inside `GOOGLE_DRIVE_FOLDER_ID` |

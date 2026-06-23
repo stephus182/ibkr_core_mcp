@@ -2,7 +2,7 @@
 import logging
 
 from ibkr_core_mcp import analytics, indicators, pinescript
-from ibkr_core_mcp.auth import BrowserCookieAuth, NoAuth, TokenAuth
+from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth, NoAuth, TokenAuth
 from ibkr_core_mcp.backtest import BacktestResult, run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.claude_tools import ClaudeToolkit
@@ -53,6 +53,7 @@ __all__ = [
     "ClaudeToolkit",
     "FlexQueryClient",
     # Auth
+    "AuthStrategy",
     "BrowserCookieAuth",
     "TokenAuth",
     "NoAuth",
