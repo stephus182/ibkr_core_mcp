@@ -120,7 +120,7 @@ class TestStart:
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "is_running", return_value=True),
+            patch.object(gm, "container_exists", return_value=True),
             patch.object(gm, "stop") as mock_stop,
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run"),
@@ -132,7 +132,7 @@ class TestStart:
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "is_running", return_value=False),
+            patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=False),
             patch.object(gm, "build_image") as mock_build,
             patch("subprocess.run"),
@@ -144,7 +144,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "is_running", return_value=False),
+            patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
         ):

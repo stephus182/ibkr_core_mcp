@@ -123,15 +123,22 @@ class GatewayManager:
         )
         return result.returncode == 0 and "true" in result.stdout
 
+    def container_exists(self) -> bool:
+        """True if the container exists in any state (running, stopped, or exited)."""
+        return subprocess.run(
+            ["docker", "inspect", "--format", "{{.Name}}", self.CONTAINER_NAME],
+            capture_output=True,
+        ).returncode == 0
+
     def start(self) -> None:
         """Build image if needed, then start the gateway container.
 
-        If the container is already running it is stopped first so the new
-        container starts with a clean unauthenticated session.
+        Any existing container (running or stopped) is removed first so the
+        new container starts with a clean unauthenticated session.
         """
         self.ensure_docker_running()
-        if self.is_running():
-            log.info("Stopping existing gateway container for clean restart")
+        if self.container_exists():
+            log.info("Removing existing gateway container for clean restart")
             self.stop()
         if not self.image_exists():
             self.build_image()
