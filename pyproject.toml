@@ -72,7 +72,7 @@ markers = ["integration: requires live IBKR gateway and credentials"]
 asyncio_mode = "auto"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
@@ -99,9 +99,6 @@ module = [
 ]
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = ["numpy", "numpy.*", "pandas", "pandas.*"]
-follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = ["ibkr_core_mcp.client"]
