@@ -30,6 +30,11 @@ credentials.json
 .ruff_cache/
 .pytest_cache/
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
 # IDE
 .idea/
 .vscode/
