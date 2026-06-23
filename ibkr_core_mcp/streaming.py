@@ -4,7 +4,7 @@ import json
 import ssl
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -43,7 +43,7 @@ class IBKRWebSocket:
         base = gateway_url.rstrip("/")
         self._ws_url = base.replace("https://", "wss://").replace("http://", "ws://") + "/v1/api/ws"
         self._cookie = session_cookie   # not logged anywhere
-        self._ws = None
+        self._ws: Any = None
 
     async def connect(self) -> None:
         import websockets  # optional dep — only imported when streaming is used
@@ -115,7 +115,7 @@ class IBKRWebSocket:
             conid = int(data.get("conid", topic.split("+")[1]))
         except (ValueError, IndexError):
             return None
-        kwargs: dict = {"conid": conid}
+        kwargs: dict[str, Any] = {"conid": conid}
         for code, attr in _FIELD_MAP.items():
             if code not in data:
                 continue
@@ -136,7 +136,7 @@ class AlertManager:
     def __init__(self, store: SQLiteStore) -> None:
         self._store = store
 
-    def check_quote(self, quote: LiveQuote) -> list[dict]:
+    def check_quote(self, quote: LiveQuote) -> list[dict[str, Any]]:
         """Return newly-triggered alerts and mark them triggered. Returns [] if last is None."""
         if quote.last is None:
             return []

@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import types
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -91,7 +92,7 @@ class BacktestResult:
     win_rate: float
     equity_curve: pd.Series = field(default_factory=pd.Series)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
             "strategy_name": self.strategy_name,
@@ -134,7 +135,7 @@ def run_backtest(
     # We do NOT override __builtins__ further — replacing it with the tiny
     # limited_builtins dict would strip most safe builtins and make strategies
     # unable to use isinstance, bool, etc.
-    sandbox: dict = {
+    sandbox: dict[str, Any] = {
         **safe_globals,
         "_write_": _write_guard,
         "_getattr_": safer_getattr,
@@ -150,7 +151,7 @@ def run_backtest(
         "df": df.copy(),
     }
 
-    def _run(byte_code: object, sandbox: dict) -> None:
+    def _run(byte_code: types.CodeType, sandbox: dict[str, Any]) -> None:
         exec(byte_code, sandbox)  # noqa: S102
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)

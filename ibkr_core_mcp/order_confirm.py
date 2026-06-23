@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
 try:
-    import tkinter as tk  # type: ignore[import]
+    import tkinter as tk
 except (ModuleNotFoundError, ImportError):  # Python without Tk support (CI, headless)
     tk = None  # type: ignore[assignment]
 from ibkr_core_mcp.exceptions import HumanAuthError
@@ -9,7 +11,7 @@ from ibkr_core_mcp.exceptions import HumanAuthError
 _DIALOG_TIMEOUT_MS = 60_000  # 60 s — matches Touch ID timeout; auto-cancels if unattended
 
 
-def confirm_order_dialog(order: dict, account_id: str) -> None:
+def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     """Gate 2 for place_order. Raises HumanAuthError if user does not confirm."""
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     side = order.get("side", "?")
@@ -37,7 +39,7 @@ def confirm_order_dialog(order: dict, account_id: str) -> None:
     )
 
 
-def confirm_modify_dialog(order_id: str, order: dict, account_id: str) -> None:
+def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str) -> None:
     """Gate 2 for modify_order."""
     _show_confirm_dialog(
         title="⚠  MODIFY ORDER CONFIRMATION",
@@ -72,7 +74,7 @@ def confirm_reply_dialog(reply_id: str) -> None:
 
 
 def _show_confirm_dialog(
-    title: str, details: dict, disclaimer: str, confirm_label: str
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
 ) -> None:
     """Render modal dialog. Raises HumanAuthError if user cancels or closes."""
     if tk is None:
@@ -80,7 +82,7 @@ def _show_confirm_dialog(
             "tkinter is not available in this Python installation. "
             "Install a Tk-enabled Python to use the GUI confirmation dialog."
         )
-    confirmed: dict = {"value": False}
+    confirmed: dict[str, Any] = {"value": False}
 
     root = tk.Tk()
     root.withdraw()
@@ -120,11 +122,11 @@ def _show_confirm_dialog(
     btn_frame = tk.Frame(dialog, pady=10)
     btn_frame.pack()
 
-    remaining: dict = {"secs": _DIALOG_TIMEOUT_MS // 1000}
+    remaining: dict[str, Any] = {"secs": _DIALOG_TIMEOUT_MS // 1000}
     # Store the pending after-callback ID so we can cancel it before destroying
     # widgets; without this, the next _tick fires on a destroyed widget and raises
     # TclError (after-callbacks are NOT auto-cancelled when a widget is destroyed).
-    _after_id: dict = {"id": None}
+    _after_id: dict[str, Any] = {"id": None}
 
     def _cancel_tick() -> None:
         if _after_id["id"] is not None:

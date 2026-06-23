@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 from ibkr_core_mcp.exceptions import HumanAuthError
 
@@ -12,7 +13,7 @@ def require_touch_id(reason: str) -> None:
     if not reason or not reason.strip():
         raise HumanAuthError("require_touch_id: reason must be a non-empty string")
     try:
-        from LocalAuthentication import (  # type: ignore[import]
+        from LocalAuthentication import (
             LAContext,
             LAPolicyDeviceOwnerAuthenticationWithBiometrics,
         )
@@ -29,7 +30,7 @@ def require_touch_id(reason: str) -> None:
         raise HumanAuthError(f"Touch ID unavailable: {err}")
 
     done = threading.Event()
-    result: dict = {}
+    result: dict[str, Any] = {}
 
     def _reply(success: bool, error: object) -> None:
         result["ok"] = success

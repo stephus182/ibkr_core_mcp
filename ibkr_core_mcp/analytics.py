@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -54,14 +56,14 @@ def calmar(returns: pd.Series, periods: int = 252) -> float:
     return float(cagr(returns, periods) / abs(mdd))
 
 
-def win_rate(trades: list[dict]) -> float:
+def win_rate(trades: list[dict[str, Any]]) -> float:
     if not trades:
         return 0.0
     wins = sum(1 for t in trades if _pnl(t) > 0)
     return wins / len(trades)
 
 
-def profit_factor(trades: list[dict]) -> float:
+def profit_factor(trades: list[dict[str, Any]]) -> float:
     gains = sum(_pnl(t) for t in trades if _pnl(t) > 0)
     losses = sum(abs(_pnl(t)) for t in trades if _pnl(t) < 0)
     if losses == 0:
@@ -69,7 +71,7 @@ def profit_factor(trades: list[dict]) -> float:
     return gains / losses
 
 
-def avg_win_loss_ratio(trades: list[dict]) -> float:
+def avg_win_loss_ratio(trades: list[dict[str, Any]]) -> float:
     wins = [_pnl(t) for t in trades if _pnl(t) > 0]
     losses = [abs(_pnl(t)) for t in trades if _pnl(t) < 0]
     avg_w = sum(wins) / len(wins) if wins else 0.0
@@ -79,7 +81,7 @@ def avg_win_loss_ratio(trades: list[dict]) -> float:
     return avg_w / avg_l
 
 
-def trade_summary(trades: list[dict]) -> dict:
+def trade_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total_trades": len(trades),
         "win_rate": win_rate(trades),
@@ -88,8 +90,8 @@ def trade_summary(trades: list[dict]) -> dict:
     }
 
 
-def full_report(returns: pd.Series, trades: list[dict] | None = None) -> dict:
-    report: dict = {
+def full_report(returns: pd.Series, trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    report: dict[str, Any] = {
         "total_return": float((1 + returns).prod() - 1),
         "cagr": cagr(returns),
         "sharpe": sharpe(returns),
@@ -104,5 +106,5 @@ def full_report(returns: pd.Series, trades: list[dict] | None = None) -> dict:
     return report
 
 
-def _pnl(trade: dict) -> float:
+def _pnl(trade: dict[str, Any]) -> float:
     return float(trade.get("pnl", trade.get("realizedPnl", 0)))

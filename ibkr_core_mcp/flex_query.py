@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import defusedxml.ElementTree as ET
 import requests
@@ -28,7 +28,7 @@ class FlexQueryClient:
         self._store = store
         self._cache = cache
 
-    def fetch_trades(self, account_id: str) -> list[dict]:
+    def fetch_trades(self, account_id: str) -> list[dict[str, Any]]:
         """Full workflow: fetch → parse → upsert SQLite → save GDrive parquet."""
         import pandas as pd
 
@@ -101,7 +101,7 @@ class FlexQueryClient:
 
         raise FlexQueryError(f"Flex statement not ready after {_MAX_POLL_RETRIES} attempts")
 
-    def _parse_trades(self, xml_text: str) -> list[dict]:
+    def _parse_trades(self, xml_text: str) -> list[dict[str, Any]]:
         """Parse <Trade> elements from Flex XML into dicts matching trades table schema."""
         root = ET.fromstring(xml_text)
         trades = []

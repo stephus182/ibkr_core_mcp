@@ -11,7 +11,7 @@ import argparse
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ADD_ALERT_DEF: dict = {
+_ADD_ALERT_DEF: dict[str, Any] = {
     "name": "add_price_alert",
     "description": (
         "Create a price alert that fires when a symbol crosses a threshold. "
@@ -44,7 +44,7 @@ _ADD_ALERT_DEF: dict = {
     },
 }
 
-_GET_ALERTS_DEF: dict = {
+_GET_ALERTS_DEF: dict[str, Any] = {
     "name": "get_price_alerts",
     "description": "List price alerts. active_only=true returns only untriggered alerts.",
     "input_schema": {
@@ -55,11 +55,11 @@ _GET_ALERTS_DEF: dict = {
     },
 }
 
-_ALL_TOOL_DEFS: list[dict] = list(TOOL_DEFINITIONS) + [_ADD_ALERT_DEF, _GET_ALERTS_DEF]
-_EXISTING_TOOL_NAMES: frozenset[str] = frozenset(t["name"] for t in TOOL_DEFINITIONS)
+_ALL_TOOL_DEFS: list[dict[str, Any]] = list(TOOL_DEFINITIONS) + [_ADD_ALERT_DEF, _GET_ALERTS_DEF]
+_EXISTING_TOOL_NAMES: frozenset[str] = frozenset(str(t["name"]) for t in TOOL_DEFINITIONS)
 
 
-def _dispatch(name: str, args: dict, toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
+def _dispatch(name: str, args: dict[str, Any], toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
     """Route a tool call to the right handler. Never raises — always returns str."""
     try:
         if name in _EXISTING_TOOL_NAMES:
@@ -102,7 +102,7 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
         ]
 
     @server.call_tool()
-    async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
+    async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
         text = _dispatch(name, arguments or {}, toolkit, store)
         return [TextContent(type="text", text=text)]
 
@@ -170,7 +170,7 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
 
     sse_transport = SseServerTransport("/messages/")
 
-    async def handle_sse(request):
+    async def handle_sse(request: Any) -> Response:
         async with sse_transport.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:

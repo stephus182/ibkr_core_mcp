@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import pandas as pd
 
@@ -119,7 +120,7 @@ plot(ta.ema(close, 26), "EMA 26", color.red)
 def indicator_script(
     name: str,
     indicators: list[str],
-    params: dict,
+    params: dict[str, Any],
 ) -> str:
     """Generate a PineScript v5 indicator study with the requested indicators."""
     safe_name = _sanitize(name)
