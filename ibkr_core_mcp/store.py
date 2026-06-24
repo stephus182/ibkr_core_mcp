@@ -246,9 +246,25 @@ class SQLiteStore:
         (XLON=LSE, XTOK=Tokyo, XASX=Sydney, XETR=Frankfurt, XHKG=Hong Kong, XTSE=Toronto…).
         """
         if exchanges is None:
-            # Major markets — US equities/futures + key international exchanges
-            # for volume and macro context awareness
-            exchanges = ["XNYS", "CME", "XLON", "XETR", "XTKS", "XHKG", "XASX", "XTSE"]
+            # Full G20 coverage + Eurex futures. Excludes Russia (XMOS — IBKR
+            # suspended most Russian securities since 2022 sanctions) and
+            # Argentina (XBUE — capital controls, very limited IBKR access).
+            # Saudi Arabia (XSAU) trades Sun–Thu; Fridays appear as "holidays"
+            # from a Mon–Fri perspective — this is correct, not a data error.
+            exchanges = [
+                # US
+                "XNYS", "CME",
+                # Europe — equities + Eurex derivatives
+                "XLON", "XETR", "XEUR", "XPAR", "XMIL",
+                # Asia-Pacific
+                "XTKS", "XHKG", "XSHG", "XBOM", "XKRX", "XASX",
+                # Americas (ex-US)
+                "XTSE", "BVMF", "XMEX",
+                # Africa / Middle East
+                "XJSE", "XSAU",
+                # Other G20
+                "XIDX", "XIST",
+            ]
         try:
             from datetime import date as _date
             _cache_key = (_date.today().isoformat(), tuple(exchanges))
@@ -276,9 +292,11 @@ class SQLiteStore:
                 if (year_start + timedelta(days=i)).weekday() < 5
             }
 
+            import contextlib
+
             holidays_by_exchange: dict[str, list[str]] = {}
             for xcode in exchanges:
-                try:
+                with contextlib.suppress(Exception):
                     cal = ec.get_calendar(xcode)
                     # Cap end to calendar's precomputed range (~1 year from today)
                     cal_end = min(year_end, cal.last_session.date())
@@ -292,12 +310,10 @@ class SQLiteStore:
                     holidays_by_exchange[xcode] = sorted(
                         d.isoformat() for d in (weekdays_in_range - sessions)
                     )
-                except Exception:
-                    pass
 
             # Days CME trades when NYSE is closed — futures keep going on equity holidays
             cme_extra: list[str] = []
-            try:
+            with contextlib.suppress(Exception):
                 cme_cal = ec.get_calendar("CME")
                 nyse_cal = ec.get_calendar("XNYS")
                 cme_cap = min(year_end, cme_cal.last_session.date())
@@ -310,8 +326,6 @@ class SQLiteStore:
                     nyse_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date
                 )
                 cme_extra = sorted(d.isoformat() for d in (cme_sessions - nyse_sessions))
-            except Exception:
-                pass
 
             result = {
                 "today": today.isoformat(),
