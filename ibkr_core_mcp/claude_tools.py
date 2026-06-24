@@ -676,19 +676,32 @@ class ClaudeToolkit:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _first_account_id(self) -> tuple[str, str | None]:
-        """Return (account_id, None) for the first account, or ("", error_msg) if none."""
-        accounts = self._client.get_accounts()
-        if not accounts:
-            return "", "No accounts found."
-        return accounts[0].get("accountId", accounts[0].get("id", "")), None
-
-    def _all_account_ids(self) -> tuple[list[str], str | None]:
-        """Return (list_of_account_ids, None), or ([], error_msg) if no accounts."""
+    def _get_accounts(self) -> tuple[list[dict], str | None]:
         accounts = self._client.get_accounts()
         if not accounts:
             return [], "No accounts found."
+        return accounts, None
+
+    def _first_account_id(self) -> tuple[str, str | None]:
+        accounts, err = self._get_accounts()
+        if err:
+            return "", err
+        return accounts[0].get("accountId", accounts[0].get("id", "")), None
+
+    def _all_account_ids(self) -> tuple[list[str], str | None]:
+        accounts, err = self._get_accounts()
+        if err:
+            return [], err
         return [a.get("accountId", a.get("id", "")) for a in accounts], None
+
+    def _resolve_conid(self, symbol: str, sec_type: str = "STK") -> tuple[str, str | None]:
+        contracts = self._client.search_contract(symbol, sec_type)
+        if not contracts:
+            return "", f"No contract found for {symbol}."
+        conid = contracts[0].get("conid") or contracts[0].get("con_id")
+        if not conid:
+            return "", f"Contract found for {symbol} but conid missing: {contracts[0]}"
+        return str(conid), None
 
     def _fetch_market_data(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
@@ -705,12 +718,9 @@ class ClaudeToolkit:
                 None,
             )
 
-        contracts = self._client.search_contract(symbol)
-        if not contracts:
-            return f"No contract found for {symbol}. Is IBKR connected?", None
-        conid = contracts[0].get("conid") or contracts[0].get("con_id")
-        if not conid:
-            return f"Contract found for {symbol} but conid missing: {contracts[0]}", None
+        conid, err = self._resolve_conid(symbol)
+        if err:
+            return f"{err} Is IBKR connected?", None
 
         raw = self._client.get_hmds_history(conid, period=period, bar=bar)
         if not raw.get("data"):
@@ -911,12 +921,9 @@ class ClaudeToolkit:
     def _get_contract_info(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
-        contracts = self._client.search_contract(symbol, sec_type)
-        if not contracts:
-            return f"No contract found for {symbol}.", None
-        conid = contracts[0].get("conid")
-        if not conid:
-            return f"Contract found but conid missing: {contracts[0]}", None
+        conid, err = self._resolve_conid(symbol, sec_type)
+        if err:
+            return err, None
         info = self._client.get_contract_info_and_rules(conid)
         return json.dumps(info, indent=2), None
 
@@ -1020,12 +1027,9 @@ class ClaudeToolkit:
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
 
-        contracts = self._client.search_contract(symbol)
-        if not contracts:
-            return f"No contract found for {symbol}.", None
-        conid = contracts[0].get("conid") or contracts[0].get("con_id")
-        if not conid:
-            return f"Contract found for {symbol} but conid missing: {contracts[0]}", None
+        conid, err = self._resolve_conid(symbol)
+        if err:
+            return err, None
 
         account_id, err = self._first_account_id()
         if err:
