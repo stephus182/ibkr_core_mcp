@@ -10,6 +10,10 @@ import pandas as pd
 
 from ibkr_core_mcp.config import Config
 
+# Process-level cache for market calendar context.
+# Key: (date_str, tuple(exchange_codes)) — recomputed only when the date changes.
+_market_calendar_cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+
 
 class SQLiteStore:
     """Persistent SQLite store for trades, position snapshots, and signals."""
@@ -187,6 +191,11 @@ class SQLiteStore:
             # for volume and macro context awareness
             exchanges = ["XNYS", "CME", "XLON", "XETR", "XTKS", "XHKG", "XASX", "XTSE"]
         try:
+            from datetime import date as _date
+            _cache_key = (_date.today().isoformat(), tuple(exchanges))
+            if _cache_key in _market_calendar_cache:
+                return _market_calendar_cache[_cache_key]
+
             import exchange_calendars as ec
             from pandas import Timestamp
             from datetime import date, timedelta
@@ -227,7 +236,7 @@ class SQLiteStore:
                 except Exception:
                     pass
 
-            return {
+            result = {
                 "today": today.isoformat(),
                 "is_trading_day": is_trading_day,
                 "last_trading_day": last_td.isoformat(),
@@ -235,6 +244,8 @@ class SQLiteStore:
                 "primary_exchange": exchanges[0],
                 "holidays_by_exchange": holidays_by_exchange,
             }
+            _market_calendar_cache[_cache_key] = result
+            return result
         except Exception:
             return {}
 
