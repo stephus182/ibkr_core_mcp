@@ -108,6 +108,15 @@ class FlexQueryClient:
         ref_code = root.findtext("ReferenceCode") or ""
         url = root.findtext("Url") or ""
 
+        if status == "Fail":
+            error_code = root.findtext("ErrorCode") or "?"
+            error_msg = root.findtext("ErrorMessage") or "unknown"
+            if error_code == "1001":
+                raise FlexQueryError(
+                    "IBKR rate limit (error 1001) — wait ~5 minutes and retry. "
+                    "This happens when the same query is called too frequently."
+                )
+            raise FlexQueryError(f"Flex error {error_code}: {error_msg}")
         if status not in ("Success", "WhenAvailable") or not ref_code:
             raise FlexQueryError(f"Flex SendRequest unexpected response: status={status!r}")
         if not url:
