@@ -170,6 +170,46 @@ class SQLiteStore:
         }
 
     @staticmethod
+    def get_market_calendar_context(exchange: str = "XNYS", horizon_days: int = 60) -> dict[str, Any]:
+        """Return NYSE trading calendar context: last/next trading day, upcoming holidays.
+
+        Used to inject market-awareness into the system prompt so the assistant
+        can reason about settlement dates, order timing, and upcoming closures.
+        """
+        try:
+            import exchange_calendars as ec
+            from pandas import Timestamp
+            from datetime import timedelta
+
+            cal = ec.get_calendar(exchange)
+            now = Timestamp.now(tz="UTC")
+            today = date.today()
+
+            last_td = cal.previous_close(now).date()
+            next_td = cal.next_open(now).date()
+            is_trading_day = cal.is_session(Timestamp(today))
+
+            end_ts = Timestamp(today + timedelta(days=horizon_days))
+            sessions = set(cal.sessions_in_range(Timestamp(today), end_ts).date)
+            all_weekdays = {
+                today + timedelta(days=i)
+                for i in range(horizon_days + 1)
+                if (today + timedelta(days=i)).weekday() < 5
+            }
+            upcoming_holidays = sorted(all_weekdays - sessions)
+
+            return {
+                "today": today.isoformat(),
+                "is_trading_day": bool(is_trading_day),
+                "last_trading_day": last_td.isoformat(),
+                "next_trading_day": next_td.isoformat(),
+                "upcoming_holidays": [d.isoformat() for d in upcoming_holidays],
+                "exchange": exchange,
+            }
+        except Exception:
+            return {}
+
+    @staticmethod
     def _apply_filters(
         query: str,
         params: list[Any],

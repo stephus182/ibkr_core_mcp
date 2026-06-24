@@ -305,6 +305,37 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 
 ---
 
+## Market Calendar
+
+`SQLiteStore.get_market_calendar_context()` uses [`exchange_calendars`](https://github.com/rsheftel/pandas_market_calendars) to provide trading-day-aware context without any API calls:
+
+```python
+from ibkr_core_mcp.store import SQLiteStore
+from ibkr_core_mcp.config import Config
+
+store = SQLiteStore(Config.from_env())
+cal = store.get_market_calendar_context()  # defaults to NYSE (XNYS)
+
+# {
+#   "today": "2026-06-24",
+#   "is_trading_day": True,
+#   "last_trading_day": "2026-06-23",
+#   "next_trading_day": "2026-06-25",
+#   "upcoming_holidays": ["2026-07-03"],   ← Independence Day eve
+#   "exchange": "XNYS"
+# }
+```
+
+**Supported exchanges:** any exchange code from `exchange_calendars` — XNYS (NYSE), XNAS (NASDAQ), XCME (CME), XLON (LSE), XTSE (TSX), and [100+ more](https://github.com/rsheftel/exchange_calendars#calendars).
+
+**Used for:**
+- **Staleness check** — `get_trade_date_coverage()` uses the NYSE calendar to determine if Flex data is current. `newest == last_trading_day` means fully up to date, regardless of whether today is a weekend or holiday.
+- **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and all upcoming NYSE holidays at session start. This lets it reason correctly about order timing, settlement windows, and data availability.
+
+**Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works without a running gateway.
+
+---
+
 ## ClaudIA integration
 
 [ClaudIA](https://github.com/stephus182/claudia_ui) is a Chainlit-based trading assistant that imports `ibkr_core_mcp` directly as a Python package and drives it via `ClaudeToolkit`. If you want a ready-made conversational UI on top of this library, start there.
