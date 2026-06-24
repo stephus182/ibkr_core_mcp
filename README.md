@@ -311,28 +311,43 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 
 ```python
 from ibkr_core_mcp.store import SQLiteStore
-from ibkr_core_mcp.config import Config
 
-store = SQLiteStore(Config.from_env())
-cal = store.get_market_calendar_context()  # defaults to NYSE (XNYS)
+# Default: 8 major global exchanges — no Config needed for this call
+cal = SQLiteStore.get_market_calendar_context()
 
 # {
 #   "today": "2026-06-24",
 #   "is_trading_day": True,
 #   "last_trading_day": "2026-06-23",
 #   "next_trading_day": "2026-06-25",
-#   "upcoming_holidays": ["2026-07-03"],   ← Independence Day eve
-#   "exchange": "XNYS"
+#   "primary_exchange": "XNYS",
+#   "holidays_by_exchange": {
+#     "XNYS":  ["2026-01-01", "2026-01-19", "2026-02-16", ...],   # NYSE
+#     "CME":   ["2026-01-01", "2026-07-04", ...],                  # CME Futures
+#     "XLON":  ["2026-01-01", "2026-04-03", "2026-04-06", ...],   # LSE London
+#     "XETR":  ["2026-01-01", "2026-04-03", ...],                  # Xetra Frankfurt
+#     "XTKS":  ["2026-01-01", "2026-01-02", ...],                  # TSE Tokyo
+#     "XHKG":  ["2026-01-01", "2026-01-28", ...],                  # HKEX Hong Kong
+#     "XASX":  ["2026-01-01", "2026-01-26", ...],                  # ASX Sydney
+#     "XTSE":  ["2026-01-01", "2026-02-16", ...]                   # TSX Toronto
+#   }
 # }
+
+# Custom exchange list
+cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"])
 ```
 
-**Supported exchanges:** any exchange code from `exchange_calendars` — XNYS (NYSE), XNAS (NASDAQ), XCME (CME), XLON (LSE), XTSE (TSX), and [100+ more](https://github.com/rsheftel/exchange_calendars#calendars).
+**Coverage:** full current year + next year (past and future holidays) — ~10–28 per exchange, negligible payload.
+
+**Default 8 exchanges:** NYSE (XNYS), CME Futures (CME), LSE London (XLON), Xetra Frankfurt (XETR), TSE Tokyo (XTKS), HKEX Hong Kong (XHKG), ASX Sydney (XASX), TSX Toronto (XTSE). This covers the major US, European, and Asia-Pacific markets, enabling ClaudIA to reason about cross-regional volume patterns and macro events.
+
+**100+ supported markets** including XNAS (NASDAQ), XPAR (Euronext Paris), XKRX (Korea), XBOM (Bombay), SSE (Shanghai), BVMF (Brazil), and more — [full list](https://github.com/rsheftel/exchange_calendars#calendars).
 
 **Used for:**
 - **Staleness check** — `get_trade_date_coverage()` uses the NYSE calendar to determine if Flex data is current. `newest == last_trading_day` means fully up to date, regardless of whether today is a weekend or holiday.
-- **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and all upcoming NYSE holidays at session start. This lets it reason correctly about order timing, settlement windows, and data availability.
+- **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and full-year holidays for all 8 exchanges at session start. This lets it reason about order timing, settlement windows, cross-regional volume effects, and upcoming closures proactively — without any API calls or gateway dependency.
 
-**Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works without a running gateway.
+**Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works offline.
 
 ---
 

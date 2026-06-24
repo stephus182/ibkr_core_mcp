@@ -170,41 +170,70 @@ class SQLiteStore:
         }
 
     @staticmethod
-    def get_market_calendar_context(exchange: str = "XNYS", horizon_days: int = 60) -> dict[str, Any]:
-        """Return NYSE trading calendar context: last/next trading day, upcoming holidays.
+    def get_market_calendar_context(
+        exchanges: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Return trading calendar context for one or more exchanges.
 
-        Used to inject market-awareness into the system prompt so the assistant
-        can reason about settlement dates, order timing, and upcoming closures.
+        Covers the full current year (past + future) plus the next calendar year,
+        giving complete holiday visibility with minimal data (~10-15 holidays/exchange/year).
+
+        Default exchanges: NYSE (XNYS) and CME (XCME) — covers US equities and futures.
+        Pass additional exchange codes for international coverage
+        (XLON=LSE, XTOK=Tokyo, XASX=Sydney, XETR=Frankfurt, XHKG=Hong Kong, XTSE=Toronto…).
         """
+        if exchanges is None:
+            # Major markets — US equities/futures + key international exchanges
+            # for volume and macro context awareness
+            exchanges = ["XNYS", "CME", "XLON", "XETR", "XTKS", "XHKG", "XASX", "XTSE"]
         try:
             import exchange_calendars as ec
             from pandas import Timestamp
-            from datetime import timedelta
+            from datetime import date, timedelta
 
-            cal = ec.get_calendar(exchange)
             now = Timestamp.now(tz="UTC")
             today = date.today()
+            year_start = date(today.year, 1, 1)
+            year_end = date(today.year + 1, 12, 31)
 
-            last_td = cal.previous_close(now).date()
-            next_td = cal.next_open(now).date()
-            is_trading_day = cal.is_session(Timestamp(today))
+            primary = ec.get_calendar(exchanges[0])
+            last_td = primary.previous_close(now).date()
+            next_td = primary.next_open(now).date()
+            is_trading_day = bool(primary.is_session(Timestamp(today)))
 
-            end_ts = Timestamp(today + timedelta(days=horizon_days))
-            sessions = set(cal.sessions_in_range(Timestamp(today), end_ts).date)
+            # Build all weekdays in current year + next year
             all_weekdays = {
-                today + timedelta(days=i)
-                for i in range(horizon_days + 1)
-                if (today + timedelta(days=i)).weekday() < 5
+                year_start + timedelta(days=i)
+                for i in range((year_end - year_start).days + 1)
+                if (year_start + timedelta(days=i)).weekday() < 5
             }
-            upcoming_holidays = sorted(all_weekdays - sessions)
+
+            holidays_by_exchange: dict[str, list[str]] = {}
+            for xcode in exchanges:
+                try:
+                    cal = ec.get_calendar(xcode)
+                    # Cap end to calendar's precomputed range (~1 year from today)
+                    cal_end = min(year_end, cal.last_session.date())
+                    cal_start = max(year_start, cal.first_session.date())
+                    sessions = set(
+                        cal.sessions_in_range(Timestamp(cal_start), Timestamp(cal_end)).date
+                    )
+                    weekdays_in_range = {
+                        d for d in all_weekdays if cal_start <= d <= cal_end
+                    }
+                    holidays_by_exchange[xcode] = sorted(
+                        d.isoformat() for d in (weekdays_in_range - sessions)
+                    )
+                except Exception:
+                    pass
 
             return {
                 "today": today.isoformat(),
-                "is_trading_day": bool(is_trading_day),
+                "is_trading_day": is_trading_day,
                 "last_trading_day": last_td.isoformat(),
                 "next_trading_day": next_td.isoformat(),
-                "upcoming_holidays": [d.isoformat() for d in upcoming_holidays],
-                "exchange": exchange,
+                "primary_exchange": exchanges[0],
+                "holidays_by_exchange": holidays_by_exchange,
             }
         except Exception:
             return {}
