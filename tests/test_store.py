@@ -177,14 +177,129 @@ def test_get_log_event_filter(store):
     store.log_entry("ping", result="ok")
     pings = store.get_log(event="ping")
     assert len(pings) == 2
-    assert all(e["event"] == "ping" for e in pings)
+    assert pings[0]["event"] == "ping"
+    assert pings[1]["event"] == "ping"
 
 
 def test_get_log_n_limit(store):
-    for i in range(5):
-        store.log_entry("event", i=i)
+    store.log_entry("event", i=0)
+    store.log_entry("event", i=1)
+    store.log_entry("event", i=2)
+    store.log_entry("event", i=3)
+    store.log_entry("event", i=4)
     assert len(store.get_log(n=3)) == 3
     assert len(store.get_log(n=10)) == 5
+
+
+# ---------------------------------------------------------------------------
+# get_trade_date_coverage() — gap detection
+# ---------------------------------------------------------------------------
+
+def _trade(eid: str, day: str) -> dict:
+    return {"execution_id": eid, "symbol": "AAPL", "side": "BUY",
+            "size": 1, "price": 100, "time": f"{day}T10:00:00",
+            "commission": 1, "account": ""}
+
+
+def test_coverage_empty_store(store):
+    cov = store.get_trade_date_coverage()
+    assert cov["oldest"] is None
+    assert cov["newest"] is None
+    assert cov["total_trades"] == 0
+    assert cov["gaps"] == []
+
+
+def test_coverage_single_trade_no_gap(store):
+    store.upsert_trades([_trade("E1", "2026-01-15")])
+    cov = store.get_trade_date_coverage()
+    assert cov["oldest"] == cov["newest"] == "2026-01-15"
+    assert cov["gaps"] == []
+
+
+def test_coverage_no_gap_within_threshold(store):
+    """Two trade dates 45 days apart — at threshold, not over it — no gap flagged."""
+    store.upsert_trades([
+        _trade("E1", "2026-01-01"),
+        _trade("E2", "2026-02-15"),  # 45 days later
+    ])
+    cov = store.get_trade_date_coverage()
+    assert cov["gaps"] == [], f"45-day gap should not be flagged, got: {cov['gaps']}"
+
+
+def test_coverage_gap_just_over_threshold(store):
+    """46 days apart — one day over the threshold — must be flagged."""
+    store.upsert_trades([
+        _trade("E1", "2026-01-01"),
+        _trade("E2", "2026-02-16"),  # 46 days later
+    ])
+    cov = store.get_trade_date_coverage()
+    assert len(cov["gaps"]) == 1
+    gap = cov["gaps"][0]
+    assert gap["gap_start"] == "2026-01-01"
+    assert gap["gap_end"] == "2026-02-16"
+    assert gap["calendar_days"] == 46
+
+
+def test_coverage_gap_request_range_excludes_trade_dates(store):
+    """request_from/to must be the day AFTER last trade and day BEFORE next trade —
+    not the trade dates themselves, to avoid re-importing existing records."""
+    store.upsert_trades([
+        _trade("E1", "2026-01-01"),
+        _trade("E2", "2026-04-01"),  # 89 days later
+    ])
+    cov = store.get_trade_date_coverage()
+    assert len(cov["gaps"]) == 1
+    gap = cov["gaps"][0]
+    assert gap["request_from"] == "2026-01-02", "request_from must be day after last trade"
+    assert gap["request_to"] == "2026-03-31", "request_to must be day before next trade"
+
+
+def test_coverage_multiple_gaps(store):
+    """Dataset with two separate large gaps — both must be reported."""
+    store.upsert_trades([
+        _trade("E1", "2024-01-01"),
+        _trade("E2", "2024-06-01"),  # 152 days — gap 1
+        _trade("E3", "2024-06-15"),  # 14 days — normal
+        _trade("E4", "2025-03-01"),  # 259 days — gap 2
+    ])
+    cov = store.get_trade_date_coverage()
+    assert len(cov["gaps"]) == 2
+    assert cov["gaps"][0]["gap_start"] == "2024-01-01"
+    assert cov["gaps"][1]["gap_start"] == "2024-06-15"
+
+
+def test_coverage_custom_gap_threshold(store):
+    """A lower threshold flags shorter gaps; a higher threshold ignores them."""
+    store.upsert_trades([
+        _trade("E1", "2026-01-01"),
+        _trade("E2", "2026-02-01"),  # 31 days
+    ])
+    assert store.get_trade_date_coverage(gap_threshold_days=30)["gaps"] != []
+    assert store.get_trade_date_coverage(gap_threshold_days=90)["gaps"] == []
+
+
+def test_coverage_same_day_trades_count_as_one_date(store):
+    """Multiple trades on the same day are deduplicated for gap detection.
+    total_trades counts raw rows; gap logic uses distinct dates."""
+    store.upsert_trades([
+        _trade("E1", "2026-01-01"),
+        _trade("E2", "2026-01-01"),  # same day, different execution
+        _trade("E3", "2026-04-01"),
+    ])
+    cov = store.get_trade_date_coverage()
+    assert cov["total_trades"] == 3           # raw row count
+    assert len(cov["gaps"]) == 1              # only one gap interval
+
+
+def test_coverage_oldest_newest_correct(store):
+    store.upsert_trades([
+        _trade("E3", "2026-06-01"),
+        _trade("E1", "2026-01-15"),
+        _trade("E2", "2026-03-20"),
+    ])
+    cov = store.get_trade_date_coverage()
+    assert cov["oldest"] == "2026-01-15"
+    assert cov["newest"] == "2026-06-01"
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +310,13 @@ def test_market_calendar_context_structure():
     from ibkr_core_mcp.store import SQLiteStore
     mkt = SQLiteStore.get_market_calendar_context()
     assert mkt, "returned empty dict — exchange_calendars may be unavailable"
-    for key in ("today", "is_trading_day", "last_trading_day", "next_trading_day",
-                "primary_exchange", "holidays_by_exchange", "futures"):
-        assert key in mkt, f"missing key: {key}"
+    assert "today" in mkt
+    assert "is_trading_day" in mkt
+    assert "last_trading_day" in mkt
+    assert "next_trading_day" in mkt
+    assert "primary_exchange" in mkt
+    assert "holidays_by_exchange" in mkt
+    assert "futures" in mkt
 
 
 def test_market_calendar_all_20_exchanges_loaded():
@@ -233,8 +352,10 @@ def test_market_calendar_futures_block_structure():
     assert "maintenance_break_ct" in fut
     assert "product_groups" in fut
     groups = fut["product_groups"]
-    for expected_group in ("equity_index", "energy", "metals", "agriculture_grains"):
-        assert expected_group in groups, f"missing product group: {expected_group}"
+    assert "equity_index" in groups
+    assert "energy" in groups
+    assert "metals" in groups
+    assert "agriculture_grains" in groups
 
 
 def test_market_calendar_process_cache_returns_same_object():
@@ -253,9 +374,9 @@ def test_market_calendar_cache_key_is_date_and_exchanges():
     first = SQLiteStore.get_market_calendar_context()
     # Verify cache holds exactly one entry with today's date as key
     today_str = date.today().isoformat()
-    assert any(k[0] == today_str for k in _market_calendar_cache), (
-        "cache key does not include today's date string"
-    )
+    assert _market_calendar_cache, "cache should be non-empty after first call"
+    first_key = next(iter(_market_calendar_cache))
+    assert first_key[0] == today_str, "cache key does not include today's date string"
     # Clearing forces a recompute — new object, same structure
     _market_calendar_cache.clear()
     second = SQLiteStore.get_market_calendar_context()
@@ -365,8 +486,9 @@ def test_futures_schedule_grains_shorter_hours():
 
 def test_futures_schedule_financial_products_23h():
     from ibkr_core_mcp.store import _FUTURES_SCHEDULE
-    for group in ("equity_index", "energy", "metals", "foreign_currency", "interest_rates"):
-        g = _FUTURES_SCHEDULE["product_groups"][group]
-        assert "23h" in g["hours_per_day"], (
-            f"{group} should trade ~23h/day but hours_per_day={g['hours_per_day']!r}"
-        )
+    pg = _FUTURES_SCHEDULE["product_groups"]
+    assert "23h" in pg["equity_index"]["hours_per_day"]
+    assert "23h" in pg["energy"]["hours_per_day"]
+    assert "23h" in pg["metals"]["hours_per_day"]
+    assert "23h" in pg["foreign_currency"]["hours_per_day"]
+    assert "23h" in pg["interest_rates"]["hours_per_day"]
