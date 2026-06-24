@@ -588,7 +588,7 @@ def _safe_error(tool: str, exc: Exception) -> str:
     if isinstance(exc, BacktestError):
         return f"Tool '{tool}' failed: backtest error."
     if isinstance(exc, FlexQueryError):
-        return f"Tool '{tool}' failed: Flex Query error. Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID."
+        return f"Tool '{tool}' failed: {exc}"
     if isinstance(exc, ConfigError):
         return f"Tool '{tool}' failed: configuration error. Check .env settings."
     if isinstance(exc, KeyError):
