@@ -148,11 +148,23 @@ class SQLiteStore:
         newest = dates[-1]
         days_since_newest = (date.today() - newest).days
 
+        try:
+            import exchange_calendars as ec
+            from pandas import Timestamp
+            _cal = ec.get_calendar("XNYS")
+            last_trading_day = _cal.previous_close(Timestamp.now(tz="UTC")).date()
+            stale = newest < last_trading_day
+        except Exception:
+            # Fallback: stale if missing more than 1 calendar day
+            last_trading_day = None
+            stale = days_since_newest > 1
+
         return {
             "oldest": dates[0].isoformat(),
             "newest": newest.isoformat(),
             "days_since_newest": days_since_newest,
-            "stale": days_since_newest > 1,
+            "last_trading_day": last_trading_day.isoformat() if last_trading_day else None,
+            "stale": stale,
             "total_trades": total,
             "gaps": gaps,
         }

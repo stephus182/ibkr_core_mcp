@@ -40,6 +40,7 @@ dependencies = [
     "google-auth-oauthlib>=1.2",
     "python-dotenv>=1.0",
     "defusedxml>=0.7",
+    "exchange_calendars>=4.5",
     "browser-cookie3>=0.19",
     "pyobjc-framework-LocalAuthentication; sys_platform == 'darwin'",
 ]
