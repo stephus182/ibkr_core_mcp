@@ -152,7 +152,7 @@ class SQLiteStore:
             "oldest": dates[0].isoformat(),
             "newest": newest.isoformat(),
             "days_since_newest": days_since_newest,
-            "stale": days_since_newest > 2,
+            "stale": days_since_newest > 1,
             "total_trades": total,
             "gaps": gaps,
         }
