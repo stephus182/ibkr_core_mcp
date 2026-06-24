@@ -218,3 +218,136 @@ def test_fetch_trades_returns_empty_list_on_no_trades(flex_client):
     assert result == []
     flex_client._store.upsert_trades.assert_called_once_with([])
     flex_client._cache.save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _send_request — IBKR error codes (regression guard for 1001/1025 incident)
+# ---------------------------------------------------------------------------
+
+def _mock_get(content: bytes):
+    """Return a requests.get mock that responds with HTTP 200 and given content."""
+    resp = MagicMock(status_code=200, content=content)
+    return patch("ibkr_core_mcp.flex_query.requests.get", return_value=resp)
+
+
+_FAIL_1001 = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Fail</Status>
+  <ErrorCode>1001</ErrorCode>
+  <ErrorMessage>Too many requests</ErrorMessage>
+</FlexStatementResponse>"""
+
+_WARN_1025 = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Warn</Status>
+  <ErrorCode>1025</ErrorCode>
+  <ErrorMessage>Query locked due to too many failed attempts</ErrorMessage>
+</FlexStatementResponse>"""
+
+_FAIL_UNKNOWN = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Fail</Status>
+  <ErrorCode>9999</ErrorCode>
+  <ErrorMessage>Unrecognised condition</ErrorMessage>
+</FlexStatementResponse>"""
+
+_WARN_UNKNOWN = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Warn</Status>
+  <ErrorCode>8888</ErrorCode>
+  <ErrorMessage>Some transient warning</ErrorMessage>
+</FlexStatementResponse>"""
+
+_BAD_URL = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Success</Status>
+  <ReferenceCode>1234567890</ReferenceCode>
+  <Url>https://evil.example.com/steal?t=TOKEN</Url>
+</FlexStatementResponse>"""
+
+
+def test_send_request_error_1001_rate_limit(flex_client):
+    """Error 1001 must raise with a human-readable wait instruction, not a raw IBKR error."""
+    with _mock_get(_FAIL_1001):
+        with pytest.raises(FlexQueryError, match="rate limit"):
+            flex_client._send_request()
+
+
+def test_send_request_error_1001_message_mentions_wait(flex_client):
+    """The 1001 message must tell the user to wait ~5 minutes — not just raise."""
+    with _mock_get(_FAIL_1001):
+        with pytest.raises(FlexQueryError, match="5 minutes"):
+            flex_client._send_request()
+
+
+def test_send_request_warn_1025_lockout(flex_client):
+    """Error 1025 (Warn status) must raise with token regeneration instructions."""
+    with _mock_get(_WARN_1025):
+        with pytest.raises(FlexQueryError, match="1025"):
+            flex_client._send_request()
+
+
+def test_send_request_warn_1025_mentions_regenerate(flex_client):
+    """The 1025 message must tell the user to regenerate the Flex token."""
+    with _mock_get(_WARN_1025):
+        with pytest.raises(FlexQueryError, match="regenerate"):
+            flex_client._send_request()
+
+
+def test_send_request_fail_unknown_error_code(flex_client):
+    """Unknown Fail codes must still raise (not silently succeed)."""
+    with _mock_get(_FAIL_UNKNOWN):
+        with pytest.raises(FlexQueryError, match="9999"):
+            flex_client._send_request()
+
+
+def test_send_request_warn_unknown_error_code(flex_client):
+    """Unknown Warn codes must still raise (not silently succeed)."""
+    with _mock_get(_WARN_UNKNOWN):
+        with pytest.raises(FlexQueryError, match="8888"):
+            flex_client._send_request()
+
+
+def test_send_request_rejects_non_ibkr_url(flex_client):
+    """URL allowlist must reject any URL not under gdcdyn.interactivebrokers.com."""
+    with _mock_get(_BAD_URL):
+        with pytest.raises(FlexQueryError, match="unexpected URL"):
+            flex_client._send_request()
+
+
+# ---------------------------------------------------------------------------
+# _parse_trades — 20% integrity guard boundary
+# ---------------------------------------------------------------------------
+
+def _flex_xml(valid_count: int, invalid_count: int) -> str:
+    """Build Flex XML with valid trades and trades missing tradeID (which are skipped)."""
+    valid = "".join(
+        f'<Trade tradeID="V{i}" symbol="AAPL" buySell="BUY" quantity="1"'
+        f' tradePrice="100" dateTime="20230415;091530" ibCommission="0" accountId="U1" />'
+        for i in range(valid_count)
+    )
+    # Missing tradeID — the required-field check causes these to be skipped
+    bad = "".join(
+        f'<Trade symbol="BAD{i}" buySell="BUY" quantity="1"'
+        f' tradePrice="100" dateTime="20230415;091530" ibCommission="0" accountId="U1" />'
+        for i in range(invalid_count)
+    )
+    return (
+        "<FlexQueryResponse><FlexStatements><FlexStatement><Trades>"
+        + valid + bad
+        + "</Trades></FlexStatement></FlexStatements></FlexQueryResponse>"
+    )
+
+
+def test_parse_trades_integrity_guard_at_threshold_does_not_raise(flex_client):
+    """8 valid + 2 invalid = 20% skipped — exactly at the threshold, must NOT raise."""
+    xml = _flex_xml(valid_count=8, invalid_count=2)
+    trades = flex_client._parse_trades(xml)
+    assert len(trades) == 8
+
+
+def test_parse_trades_integrity_guard_above_threshold_raises(flex_client):
+    """7 valid + 3 invalid = 30% skipped — above threshold, must raise FlexQueryError."""
+    xml = _flex_xml(valid_count=7, invalid_count=3)
+    with pytest.raises(FlexQueryError, match="Data integrity"):
+        flex_client._parse_trades(xml)
