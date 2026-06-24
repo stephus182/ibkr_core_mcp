@@ -834,10 +834,16 @@ class ClaudeToolkit:
         _validate_account_id(account_id)
         flex = FlexQueryClient(self._config, self._store, self._cache)
         trades = flex.fetch_trades(account_id)
-        lines = [
-            f"Flex sync complete: {len(trades)} trades fetched for account {account_id}.",
-        ]
-        lines.extend(_format_coverage(self._store.get_trade_date_coverage()))
+        cov = self._store.get_trade_date_coverage()
+        self._store.log_entry(
+            "flex_sync",
+            account=account_id,
+            trades_fetched=len(trades),
+            newest=cov.get("newest"),
+            total=cov.get("total_trades"),
+        )
+        lines = [f"Flex sync complete: {len(trades)} trades fetched for account {account_id}."]
+        lines.extend(_format_coverage(cov))
         return "\n".join(lines), None
 
     def _sync_flex_archive(self, inputs: dict[str, Any]) -> tuple[str, Any]:
