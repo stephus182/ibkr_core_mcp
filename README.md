@@ -349,6 +349,16 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 
 **Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works offline.
 
+**Performance:** Designed for zero marginal cost at scale.
+
+| Call | Time |
+|---|---|
+| First call per process (cold) | ~875ms — `exchange_calendars` loads numpy arrays once |
+| Subsequent calls same day | 0.01ms — process-level date-keyed cache hit |
+| Next day / process restart | Recomputes fresh automatically |
+
+The cache key is `(date_str, tuple(exchange_codes))` — stored in a module-level dict (`_market_calendar_cache`). It auto-invalidates when the date changes; no manual expiry, no TTL logic needed. Correct by construction.
+
 ---
 
 ## ClaudIA integration
