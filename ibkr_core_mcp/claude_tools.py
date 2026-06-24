@@ -796,7 +796,7 @@ class ClaudeToolkit:
                 {
                     "execution_id": t.get("execution_id", t.get("orderId", str(i))),
                     "symbol": t.get("symbol", ""),
-                    "side": t.get("side", ""),
+                    "side": {"B": "BUY", "S": "SELL"}.get(t.get("side", ""), t.get("side", "")),
                     "size": float(t.get("size", t.get("filledQuantity", 0))),
                     "price": float(t.get("price", t.get("avgPrice", 0))),
                     "time": str(t.get("trade_time", t.get("time", ""))),
