@@ -117,6 +117,16 @@ class FlexQueryClient:
                     "This happens when the same query is called too frequently."
                 )
             raise FlexQueryError(f"Flex error {error_code}: {error_msg}")
+        if status == "Warn":
+            error_code = root.findtext("ErrorCode") or "?"
+            error_msg = root.findtext("ErrorMessage") or "unknown"
+            if error_code == "1025":
+                raise FlexQueryError(
+                    "IBKR locked this query (error 1025 — too many failed attempts). "
+                    "Regenerate your Flex token: IBKR → Reports → Flex Web Service → regenerate token, "
+                    "update IBKR_FLEX_TOKEN in .env, then restart ClaudIA."
+                )
+            raise FlexQueryError(f"Flex Warn {error_code}: {error_msg}")
         if status not in ("Success", "WhenAvailable") or not ref_code:
             raise FlexQueryError(f"Flex SendRequest unexpected response: status={status!r}")
         if not url:
