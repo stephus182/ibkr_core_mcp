@@ -344,6 +344,32 @@ class GDriveCache:
             results.append((f["name"], buf.getvalue()))
         return results
 
+    def upload_account_file(self, local_path: "str | Path", filename: str) -> None:
+        """Upload a local file to account_data/ on Drive, replacing any existing file of the same name."""
+        from pathlib import Path as _Path
+        data = _Path(local_path).read_bytes()
+        svc = self._get_service()
+        folder_id = self._resolve_account_folder()
+        existing = (
+            svc.files()
+            .list(
+                q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+                fields="files(id)",
+            )
+            .execute()
+            .get("files", [])
+        )
+        buf = io.BytesIO(data)
+        media = MediaIoBaseUpload(buf, mimetype="application/octet-stream")
+        if existing:
+            svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            svc.files().create(
+                body={"name": filename, "parents": [folder_id]},
+                media_body=media,
+                fields="id",
+            ).execute()
+
     def download_files_from_subfolder(self, subfolder_name: str) -> list[tuple[str, bytes]]:
         """List and download all files from a named subfolder of account_data/.
 
