@@ -14,6 +14,65 @@ from ibkr_core_mcp.config import Config
 # Key: (date_str, tuple(exchange_codes)) — recomputed only when the date changes.
 _market_calendar_cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
 
+# Static CME Globex product schedule.
+# Futures are NOT securities — most trade ~23h/day with a 1h maintenance break.
+# All times are CT (Chicago Time). IBKR routes all CME products via Globex (electronic).
+# Source: CME Group — cmegroup.com/trading-hours.html
+_FUTURES_SCHEDULE: dict[str, Any] = {
+    "note": (
+        "Futures are not securities. Most CME Globex products trade ~23h/day "
+        "Sunday 5:00 PM CT → Friday 4:00 PM CT, with a daily 4:00–5:00 PM CT maintenance break. "
+        "CME stays open on several NYSE holidays (see cme_open_nyse_closed). "
+        "IBKR routes all CME products electronically via Globex — no pit sessions."
+    ),
+    "maintenance_break_ct": "4:00 PM – 5:00 PM CT daily (Mon–Thu)",
+    "product_groups": {
+        "equity_index": {
+            "exchange": "CME",
+            "products": ["ES", "NQ", "RTY", "YM", "MES", "MNQ"],
+            "globex_hours_ct": "Sun 5:00 PM – Fri 4:00 PM",
+            "hours_per_day": "~23h (maintenance break 4–5 PM CT)",
+        },
+        "energy": {
+            "exchange": "NYMEX",
+            "products": ["CL", "NG", "RB", "HO", "MCL"],
+            "globex_hours_ct": "Sun 5:00 PM – Fri 4:00 PM",
+            "hours_per_day": "~23h (maintenance break 4–5 PM CT)",
+        },
+        "metals": {
+            "exchange": "COMEX",
+            "products": ["GC", "SI", "HG", "PL", "PA", "MGC"],
+            "globex_hours_ct": "Sun 5:00 PM – Fri 4:00 PM",
+            "hours_per_day": "~23h (maintenance break 4–5 PM CT)",
+        },
+        "foreign_currency": {
+            "exchange": "CME",
+            "products": ["6E", "6J", "6B", "6A", "6C", "6S", "M6E"],
+            "globex_hours_ct": "Sun 5:00 PM – Fri 4:00 PM",
+            "hours_per_day": "~23h (maintenance break 4–5 PM CT)",
+        },
+        "interest_rates": {
+            "exchange": "CBOT",
+            "products": ["ZN", "ZB", "ZF", "ZT", "ZQ", "SR3"],
+            "globex_hours_ct": "Sun 5:00 PM – Fri 4:00 PM",
+            "hours_per_day": "~23h (maintenance break 4–5 PM CT)",
+        },
+        "agriculture_grains": {
+            "exchange": "CBOT",
+            "products": ["ZC", "ZS", "ZW", "ZO", "ZR", "KE"],
+            "globex_hours_ct": "Sun 7:00 PM – Fri 1:20 PM (with 45-min break 7:45–8:30 AM CT)",
+            "hours_per_day": "~17h — significantly shorter than other CME products",
+            "note": "Grains close at 1:20 PM CT, not 4:00 PM. Thin liquidity after 1 PM CT.",
+        },
+        "softs_livestock": {
+            "exchange": "CME/CBOT",
+            "products": ["LE", "GF", "HE", "CC", "KC", "SB", "CT", "OJ"],
+            "globex_hours_ct": "Varies by product — generally shorter than financial futures",
+            "note": "Check CME product specs individually. Hours vary more than financial products.",
+        },
+    },
+}
+
 
 class SQLiteStore:
     """Persistent SQLite store for trades, position snapshots, and signals."""
@@ -236,6 +295,24 @@ class SQLiteStore:
                 except Exception:
                     pass
 
+            # Days CME trades when NYSE is closed — futures keep going on equity holidays
+            cme_extra: list[str] = []
+            try:
+                cme_cal = ec.get_calendar("CME")
+                nyse_cal = ec.get_calendar("XNYS")
+                cme_cap = min(year_end, cme_cal.last_session.date())
+                nyse_cap = min(year_end, nyse_cal.last_session.date())
+                range_cap = min(cme_cap, nyse_cap)
+                cme_sessions = set(
+                    cme_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date
+                )
+                nyse_sessions = set(
+                    nyse_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date
+                )
+                cme_extra = sorted(d.isoformat() for d in (cme_sessions - nyse_sessions))
+            except Exception:
+                pass
+
             result = {
                 "today": today.isoformat(),
                 "is_trading_day": is_trading_day,
@@ -243,6 +320,7 @@ class SQLiteStore:
                 "next_trading_day": next_td.isoformat(),
                 "primary_exchange": exchanges[0],
                 "holidays_by_exchange": holidays_by_exchange,
+                "futures": _FUTURES_SCHEDULE | {"cme_open_nyse_closed": cme_extra},
             }
             _market_calendar_cache[_cache_key] = result
             return result
