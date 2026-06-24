@@ -108,6 +108,75 @@ class SQLiteStore:
                 trades,
             )
 
+    def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
+        """Return coverage stats and actionable gaps in the trades table.
+
+        A gap is a period longer than gap_threshold_days with no trades. Gaps this
+        large almost certainly represent missing imports rather than inactivity.
+        Each gap entry includes the exact date range to request from IBKR.
+        Returns: oldest, newest, total_trades, gaps.
+        """
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT substr(time, 1, 10) as d FROM trades WHERE time LIKE '____-__-__%' ORDER BY d"
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+
+        if not rows:
+            return {"oldest": None, "newest": None, "total_trades": 0, "gaps": []}
+
+        from datetime import date, timedelta
+
+        dates = [date.fromisoformat(r["d"]) for r in rows]
+        gaps = []
+        for i in range(1, len(dates)):
+            delta = (dates[i] - dates[i - 1]).days
+            if delta > gap_threshold_days:
+                # The missing window starts the day after the last trade and ends
+                # the day before the next trade — that's the exact range to request.
+                fill_from = (dates[i - 1] + timedelta(days=1)).isoformat()
+                fill_to = (dates[i] - timedelta(days=1)).isoformat()
+                gaps.append({
+                    "gap_start": dates[i - 1].isoformat(),
+                    "gap_end": dates[i].isoformat(),
+                    "calendar_days": delta,
+                    "request_from": fill_from,
+                    "request_to": fill_to,
+                })
+
+        newest = dates[-1]
+        days_since_newest = (date.today() - newest).days
+
+        return {
+            "oldest": dates[0].isoformat(),
+            "newest": newest.isoformat(),
+            "days_since_newest": days_since_newest,
+            "stale": days_since_newest > 2,
+            "total_trades": total,
+            "gaps": gaps,
+        }
+
+    @staticmethod
+    def _apply_filters(
+        query: str,
+        params: list[Any],
+        symbol: str | None,
+        start: str | None,
+        end: str | None,
+        time_col: str,
+    ) -> tuple[str, list[Any]]:
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol.upper())
+        if start:
+            query += f" AND {time_col} >= ?"
+            params.append(start)
+        if end:
+            query += f" AND {time_col} <= ?"
+            params.append(end)
+        return query, params
+
     def get_trades(
         self,
         symbol: str | None = None,
@@ -116,17 +185,9 @@ class SQLiteStore:
     ) -> list[dict[str, Any]]:
         """Return trades, optionally filtered by symbol and date range."""
         self.initialize()
-        query = "SELECT * FROM trades WHERE 1=1"
-        params: list[Any] = []
-        if symbol:
-            query += " AND symbol = ?"
-            params.append(symbol.upper())
-        if start:
-            query += " AND time >= ?"
-            params.append(start)
-        if end:
-            query += " AND time <= ?"
-            params.append(end)
+        query, params = self._apply_filters(
+            "SELECT * FROM trades WHERE 1=1", [], symbol, start, end, "time"
+        )
         query += " ORDER BY time DESC"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -167,17 +228,9 @@ class SQLiteStore:
     ) -> pd.DataFrame:
         """Return position snapshot history as DataFrame."""
         self.initialize()
-        query = "SELECT * FROM position_snapshots WHERE 1=1"
-        params: list[Any] = []
-        if symbol:
-            query += " AND symbol = ?"
-            params.append(symbol.upper())
-        if start:
-            query += " AND snapshot_at >= ?"
-            params.append(start)
-        if end:
-            query += " AND snapshot_at <= ?"
-            params.append(end)
+        query, params = self._apply_filters(
+            "SELECT * FROM position_snapshots WHERE 1=1", [], symbol, start, end, "snapshot_at"
+        )
         query += " ORDER BY snapshot_at"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -219,17 +272,9 @@ class SQLiteStore:
         end: str | None = None,
     ) -> pd.DataFrame:
         self.initialize()
-        query = "SELECT * FROM signals WHERE 1=1"
-        params: list[Any] = []
-        if symbol:
-            query += " AND symbol = ?"
-            params.append(symbol.upper())
-        if start:
-            query += " AND logged_at >= ?"
-            params.append(start)
-        if end:
-            query += " AND logged_at <= ?"
-            params.append(end)
+        query, params = self._apply_filters(
+            "SELECT * FROM signals WHERE 1=1", [], symbol, start, end, "logged_at"
+        )
         query += " ORDER BY logged_at"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()

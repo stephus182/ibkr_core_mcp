@@ -25,6 +25,9 @@ class Config:
     # Optional dedicated folder for claudia.db.
     # If empty, GDriveSync auto-creates a 'db/' subfolder inside gdrive_folder_id.
     gdrive_db_folder_id: str = ""
+    # Optional dedicated folder for account-level data (flex XMLs, etc.).
+    # If empty, GDriveCache auto-creates an 'account_data/' subfolder inside gdrive_folder_id.
+    gdrive_account_folder_id: str = ""
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
@@ -56,4 +59,5 @@ class Config:
             flex_query_id=os.environ.get("IBKR_FLEX_QUERY_ID", ""),
             gdrive_cache_folder_id=os.environ.get("GDRIVE_CACHE_FOLDER_ID", ""),
             gdrive_db_folder_id=os.environ.get("GDRIVE_DB_FOLDER_ID", ""),
+            gdrive_account_folder_id=os.environ.get("GDRIVE_ACCOUNT_FOLDER_ID", ""),
         )

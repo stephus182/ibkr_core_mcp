@@ -24,6 +24,27 @@ log = logging.getLogger(__name__)
 def _TODAY() -> str:
     return str(date.today())
 
+
+def _format_coverage(cov: dict[str, Any]) -> list[str]:
+    """Format trade date coverage into human-readable lines, with staleness and gap instructions."""
+    days_old = cov.get("days_since_newest", 0)
+    stale_note = f" ⚠ DATA STALE ({days_old}d old) — run sync_flex_trades to refresh" if cov.get("stale") else ""
+    lines = [
+        f"\nTrade history: {cov['oldest']} → {cov['newest']}  ({cov['total_trades']} trades total){stale_note}",
+    ]
+    gaps = cov.get("gaps", [])
+    if not gaps:
+        lines.append("Coverage integrity: OK — no significant gaps detected.")
+    else:
+        lines.append(f"Coverage integrity: {len(gaps)} gap(s) require attention:")
+        for g in gaps:
+            lines.append(
+                f"  Gap {g['gap_start']} → {g['gap_end']} ({g['calendar_days']} days). "
+                f"To fill: download Flex XML for {g['request_from']} to {g['request_to']} "
+                f"from IBKR website → upload to account_data/ on Drive → run sync_flex_archive."
+            )
+    return lines
+
 TOOL_DEFINITIONS = [
     {
         "name": "fetch_market_data",
@@ -93,6 +114,42 @@ TOOL_DEFINITIONS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "sync_flex_archive",
+        "description": (
+            "Download all Flex XML files from the 'ibkr_flex_archive' Google Drive subfolder "
+            "and import them into the local SQLite trade store. Use for historical backfill: "
+            "upload year-by-year XML files to Drive first, then run this once. "
+            "Duplicates are handled automatically. Runs check_flex_coverage at the end."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "import_flex_file",
+        "description": (
+            "Import a locally downloaded IBKR Flex XML file into the SQLite trade store. "
+            "Use for historical backfill: download year-by-year XMLs from the IBKR website "
+            "(Performance & Reports → Flex Queries → Run with custom date range), save each "
+            "file to ~/.ibkr_core/flex_archive/, then call this tool for each file. "
+            "Duplicates are handled automatically (idempotent)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the Flex XML file"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "check_flex_coverage",
+        "description": (
+            "Check the date coverage of historical trade data in the local SQLite store. "
+            "Reports oldest and newest trade dates, total trade count, and any gaps larger "
+            "than 5 calendar days that may indicate missing historical imports."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "sync_flex_trades",
@@ -578,6 +635,9 @@ class ClaudeToolkit:
             "get_account_summary": self._get_account_summary,
             "get_positions": self._get_positions,
             "get_trades": self._get_trades,
+            "sync_flex_archive": self._sync_flex_archive,
+            "import_flex_file": self._import_flex_file,
+            "check_flex_coverage": self._check_flex_coverage,
             "sync_flex_trades": self._sync_flex_trades,
             "get_live_orders": self._get_live_orders,
             "get_ledger": self._get_ledger,
@@ -764,11 +824,49 @@ class ClaudeToolkit:
         _validate_account_id(account_id)
         flex = FlexQueryClient(self._config, self._store, self._cache)
         trades = flex.fetch_trades(account_id)
-        return (
-            f"Flex sync complete: {len(trades)} trades loaded for account {account_id}. "
-            "Full history now available via get_trades with source='store'.",
-            None,
-        )
+        lines = [
+            f"Flex sync complete: {len(trades)} trades fetched for account {account_id}.",
+        ]
+        lines.extend(_format_coverage(self._store.get_trade_date_coverage()))
+        return "\n".join(lines), None
+
+    def _sync_flex_archive(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        from ibkr_core_mcp.flex_query import FlexQueryClient
+        flex = FlexQueryClient(self._config, self._store, self._cache)
+        try:
+            result = flex.sync_archive_from_drive()
+        except FileNotFoundError as e:
+            return str(e), None
+        if result["files"] == 0:
+            return "No XML files found in account_data/ on Drive.", None
+        lines = [f"Imported {result['trades']} trades from {result['files']} file(s):"]
+        for p in result.get("processed", []):
+            lines.append(f"  {p['file']}: {p['trades']} trades ({p['range']})")
+        lines.extend(_format_coverage(self._store.get_trade_date_coverage()))
+        return "\n".join(lines), None
+
+    def _import_flex_file(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        from ibkr_core_mcp.flex_query import FlexQueryClient
+        from pathlib import Path
+        path = inputs["path"]
+        if not Path(path).exists():
+            return f"File not found: {path}", None
+        flex = FlexQueryClient(self._config, self._store, self._cache)
+        trades = flex.import_from_file(path)
+        if not trades:
+            return f"No trades found in {path}.", None
+        dates = sorted(t["time"][:10] for t in trades)
+        lines = [
+            f"Imported {len(trades)} trades from {Path(path).name}: {dates[0]} → {dates[-1]}.",
+        ]
+        lines.extend(_format_coverage(self._store.get_trade_date_coverage()))
+        return "\n".join(lines), None
+
+    def _check_flex_coverage(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        cov = self._store.get_trade_date_coverage()
+        if not cov["oldest"]:
+            return "No trade history in store. Run sync_flex_archive or sync_flex_trades first.", None
+        return "\n".join(_format_coverage(cov)), None
 
     def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         orders = self._client.get_live_orders()

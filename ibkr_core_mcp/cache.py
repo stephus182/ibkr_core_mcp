@@ -18,7 +18,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import CacheMissError, CacheWriteError
 
-_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+_SCOPES = ["https://www.googleapis.com/auth/drive"]
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_TTL = 60.0
 
@@ -49,6 +49,8 @@ class GDriveCache:
         self._manifest_loaded_at: float = 0.0
         # Resolved at runtime: GDRIVE_CACHE_FOLDER_ID, or auto-created market_data/ subfolder.
         self._resolved_cache_folder: str = ""
+        # Resolved at runtime: GDRIVE_ACCOUNT_FOLDER_ID, or auto-created account_data/ subfolder.
+        self._resolved_account_folder: str = ""
 
     def _get_service(self) -> Any:
         if self._service:
@@ -126,6 +128,43 @@ class GDriveCache:
             f = svc.files().create(body=meta, fields="id").execute()
             self._resolved_cache_folder = f["id"]
         return self._resolved_cache_folder
+
+    def _resolve_account_folder(self) -> str:
+        """Return the Drive folder ID for account-level data (flex XMLs, etc.).
+
+        Uses GDRIVE_ACCOUNT_FOLDER_ID if set. Otherwise finds or creates an
+        'account_data' subfolder inside GOOGLE_DRIVE_FOLDER_ID.
+        """
+        if self._config.gdrive_account_folder_id:
+            return self._config.gdrive_account_folder_id
+        if hasattr(self, "_resolved_account_folder") and self._resolved_account_folder:
+            return self._resolved_account_folder
+        svc = self._get_service()
+        parent = self._config.gdrive_folder_id
+        results = (
+            svc.files()
+            .list(
+                q=(
+                    f"name='account_data' and '{parent}' in parents "
+                    "and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                ),
+                orderBy="createdTime asc",
+                fields="files(id)",
+            )
+            .execute()
+        )
+        files = results.get("files", [])
+        if files:
+            self._resolved_account_folder = files[0]["id"]
+        else:
+            meta = {
+                "name": "account_data",
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent],
+            }
+            f = svc.files().create(body=meta, fields="id").execute()
+            self._resolved_account_folder = f["id"]
+        return self._resolved_account_folder
 
     def _reset_cache_folder(self) -> None:
         """Clear the resolved cache folder ID so the next call re-discovers it.
@@ -275,6 +314,83 @@ class GDriveCache:
             "cached_at": datetime.now(tz=UTC).isoformat(),
         }
         self._save_manifest()
+
+    def download_account_files(self, extension: str = ".xml") -> list[tuple[str, bytes]]:
+        """List and download all files with the given extension from account_data/.
+
+        Returns list of (filename, content_bytes), ordered by filename.
+        """
+        svc = self._get_service()
+        folder_id = self._resolve_account_folder()
+        file_list = (
+            svc.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields="files(id,name)",
+                orderBy="name",
+            )
+            .execute()
+            .get("files", [])
+        )
+        results = []
+        for f in file_list:
+            if not f["name"].lower().endswith(extension):
+                continue
+            buf = io.BytesIO()
+            downloader = MediaIoBaseDownload(buf, svc.files().get_media(fileId=f["id"]))
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            results.append((f["name"], buf.getvalue()))
+        return results
+
+    def download_files_from_subfolder(self, subfolder_name: str) -> list[tuple[str, bytes]]:
+        """List and download all files from a named subfolder of account_data/.
+
+        Returns list of (filename, content_bytes). Used for importing flex XML archives.
+        """
+        svc = self._get_service()
+        account_folder_id = self._resolve_account_folder()
+        # Find the subfolder inside account_data/
+        folders = (
+            svc.files()
+            .list(
+                q=(
+                    f"name='{subfolder_name}' and '{account_folder_id}' in parents "
+                    "and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                ),
+                fields="files(id,name)",
+            )
+            .execute()
+            .get("files", [])
+        )
+        if not folders:
+            raise FileNotFoundError(
+                f"Subfolder '{subfolder_name}' not found in account_data/ on Drive."
+            )
+        folder_id = folders[0]["id"]
+
+        # List all files in that subfolder
+        file_list = (
+            svc.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields="files(id,name)",
+                orderBy="name",
+            )
+            .execute()
+            .get("files", [])
+        )
+
+        results = []
+        for f in file_list:
+            buf = io.BytesIO()
+            downloader = MediaIoBaseDownload(buf, svc.files().get_media(fileId=f["id"]))
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            results.append((f["name"], buf.getvalue()))
+        return results
 
     def list_cached(self) -> list[dict[str, Any]]:
         """Return list of all manifest entries."""
