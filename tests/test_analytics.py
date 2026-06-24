@@ -104,8 +104,14 @@ def test_profit_factor_equal_wins_losses():
 def test_full_report_keys(positive_returns):
     from ibkr_core_mcp.analytics import full_report
     report = full_report(positive_returns)
-    for key in ["total_return", "cagr", "sharpe", "sortino", "calmar", "max_drawdown", "max_drawdown_duration", "num_bars"]:
-        assert key in report
+    assert "total_return" in report
+    assert "cagr" in report
+    assert "sharpe" in report
+    assert "sortino" in report
+    assert "calmar" in report
+    assert "max_drawdown" in report
+    assert "max_drawdown_duration" in report
+    assert "num_bars" in report
 
 
 def test_full_report_with_trades(positive_returns):
@@ -114,3 +120,51 @@ def test_full_report_with_trades(positive_returns):
     report = full_report(positive_returns, trades=trades)
     assert "win_rate" in report
     assert "profit_factor" in report
+
+
+# ---------------------------------------------------------------------------
+# Edge-case branches (zero / empty inputs)
+# ---------------------------------------------------------------------------
+
+def test_sortino_no_negative_returns_is_zero():
+    """All-positive returns → downside std is NaN → sortino returns 0.0, not ZeroDivisionError."""
+    from ibkr_core_mcp.analytics import sortino
+    import pandas as pd
+    all_positive = pd.Series([0.01, 0.02, 0.005, 0.015])
+    assert sortino(all_positive) == 0.0
+
+
+def test_cagr_empty_series_returns_zero():
+    """n = 0/252 = 0 → cagr returns 0.0 instead of raising."""
+    from ibkr_core_mcp.analytics import cagr
+    import pandas as pd
+    assert cagr(pd.Series([], dtype=float)) == 0.0
+
+
+def test_calmar_zero_drawdown_returns_zero():
+    """Flat equity (mdd == 0) → calmar returns 0.0, not ZeroDivisionError."""
+    from ibkr_core_mcp.analytics import calmar
+    import pandas as pd
+    flat = pd.Series([0.0, 0.0, 0.0, 0.0])
+    assert calmar(flat) == 0.0
+
+
+def test_profit_factor_all_zero_pnl_returns_zero():
+    """No wins and no losses (all pnl == 0) → avg_l == 0, avg_w == 0 → returns 0.0, not inf."""
+    from ibkr_core_mcp.analytics import profit_factor
+    trades = [{"pnl": 0.0}, {"pnl": 0.0}]
+    assert profit_factor(trades) == 0.0
+
+
+def test_avg_win_loss_ratio_with_losses():
+    """Normal path: avg_w / avg_l when both sides exist."""
+    from ibkr_core_mcp.analytics import avg_win_loss_ratio
+    trades = [{"pnl": 200.0}, {"pnl": -100.0}]
+    assert avg_win_loss_ratio(trades) == 2.0
+
+
+def test_avg_win_loss_ratio_all_zero_returns_zero():
+    """avg_l == 0 and avg_w == 0 (all pnl zero) → returns 0.0, not inf."""
+    from ibkr_core_mcp.analytics import avg_win_loss_ratio
+    trades = [{"pnl": 0.0}, {"pnl": 0.0}]
+    assert avg_win_loss_ratio(trades) == 0.0

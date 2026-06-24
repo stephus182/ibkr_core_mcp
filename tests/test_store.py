@@ -306,9 +306,14 @@ def test_coverage_oldest_newest_correct(store):
 # Market calendar context — get_market_calendar_context()
 # ---------------------------------------------------------------------------
 
-def test_market_calendar_context_structure():
+@pytest.fixture(scope="module")
+def mkt():
+    """Shared market calendar context — cold load is ~3.4s, so share across tests."""
     from ibkr_core_mcp.store import SQLiteStore
-    mkt = SQLiteStore.get_market_calendar_context()
+    return SQLiteStore.get_market_calendar_context()
+
+
+def test_market_calendar_context_structure(mkt):
     assert mkt, "returned empty dict — exchange_calendars may be unavailable"
     assert "today" in mkt
     assert "is_trading_day" in mkt
@@ -319,9 +324,7 @@ def test_market_calendar_context_structure():
     assert "futures" in mkt
 
 
-def test_market_calendar_all_20_exchanges_loaded():
-    from ibkr_core_mcp.store import SQLiteStore
-    mkt = SQLiteStore.get_market_calendar_context()
+def test_market_calendar_all_20_exchanges_loaded(mkt):
     h = mkt.get("holidays_by_exchange", {})
     expected = {
         "XNYS", "CME", "XLON", "XETR", "XEUR", "XPAR", "XMIL",
@@ -332,11 +335,9 @@ def test_market_calendar_all_20_exchanges_loaded():
     assert not missing, f"exchanges missing from context: {missing}"
 
 
-def test_market_calendar_cme_open_nyse_closed():
+def test_market_calendar_cme_open_nyse_closed(mkt):
     """CME trades on NYSE equity holidays — this list must be non-empty
     and must contain known dates (MLK Day is always a NYSE holiday, CME trades)."""
-    from ibkr_core_mcp.store import SQLiteStore
-    mkt = SQLiteStore.get_market_calendar_context()
     extra = mkt.get("futures", {}).get("cme_open_nyse_closed", [])
     assert extra, "cme_open_nyse_closed is empty — CME/NYSE divergence not captured"
     # MLK Day (third Monday in January) is always NYSE-closed, CME-open
@@ -344,9 +345,7 @@ def test_market_calendar_cme_open_nyse_closed():
     assert mlk_days, f"No January MLK Day found in cme_open_nyse_closed: {extra[:5]}"
 
 
-def test_market_calendar_futures_block_structure():
-    from ibkr_core_mcp.store import SQLiteStore
-    mkt = SQLiteStore.get_market_calendar_context()
+def test_market_calendar_futures_block_structure(mkt):
     fut = mkt.get("futures", {})
     assert "note" in fut
     assert "maintenance_break_ct" in fut
@@ -492,3 +491,10 @@ def test_futures_schedule_financial_products_23h():
     assert "23h" in pg["metals"]["hours_per_day"]
     assert "23h" in pg["foreign_currency"]["hours_per_day"]
     assert "23h" in pg["interest_rates"]["hours_per_day"]
+
+
+def test_get_signals_empty_returns_dataframe_with_columns(store):
+    """Empty signal query must return a typed DataFrame, not None or an empty list."""
+    df = store.get_signals(symbol="SYMBOL_THAT_DOES_NOT_EXIST_XYZ")
+    assert list(df.columns) == ["id", "logged_at", "symbol", "signal_type", "value", "metadata"]
+    assert len(df) == 0

@@ -89,3 +89,21 @@ def test_result_to_dict(ohlcv):
     assert "equity_curve" not in d
     assert "total_return" in d
     assert "sharpe" in d
+
+
+# ---------------------------------------------------------------------------
+# Safety boundary tests
+# ---------------------------------------------------------------------------
+
+def test_code_length_limit_raises(ohlcv):
+    from ibkr_core_mcp.backtest import BacktestSyntaxError, _MAX_CODE_LEN, run_backtest
+    too_long = "x = 1\n" * (_MAX_CODE_LEN // 6 + 1)
+    with pytest.raises(BacktestSyntaxError, match="character limit"):
+        run_backtest(too_long, ohlcv)
+
+
+def test_missing_signal_column_raises(ohlcv):
+    """Strategy that never sets df['signal'] must raise, not silently return wrong metrics."""
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    with pytest.raises(BacktestRuntimeError, match="signal"):
+        run_backtest("# no signal set", ohlcv)

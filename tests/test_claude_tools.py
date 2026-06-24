@@ -589,3 +589,41 @@ def test_preview_order_mkt_no_price(toolkit):
     })
     call_order = toolkit._client.get_order_preview.call_args[0][1]
     assert "price" not in call_order
+
+
+# ---------------------------------------------------------------------------
+# _format_coverage — pure formatting helper for trade history summaries
+# ---------------------------------------------------------------------------
+
+def test_format_coverage_no_gaps():
+    from ibkr_core_mcp.claude_tools import _format_coverage
+    cov = {"oldest": "2024-01-01", "newest": "2024-12-31",
+           "total_trades": 500, "stale": False, "gaps": []}
+    text = "\n".join(_format_coverage(cov))
+    assert "OK" in text
+    assert "gap(s)" not in text
+
+
+def test_format_coverage_with_gaps():
+    from ibkr_core_mcp.claude_tools import _format_coverage
+    cov = {
+        "oldest": "2024-01-01", "newest": "2024-12-31",
+        "total_trades": 500, "stale": False,
+        "gaps": [{
+            "gap_start": "2024-03-01", "gap_end": "2024-06-01",
+            "calendar_days": 92,
+            "request_from": "2024-03-02", "request_to": "2024-05-31",
+        }],
+    }
+    text = "\n".join(_format_coverage(cov))
+    assert "1 gap" in text
+    assert "2024-03-02" in text
+
+
+def test_format_coverage_stale_flag():
+    from ibkr_core_mcp.claude_tools import _format_coverage
+    cov = {"oldest": "2024-01-01", "newest": "2024-06-01",
+           "total_trades": 100, "stale": True, "days_since_newest": 15, "gaps": []}
+    text = "\n".join(_format_coverage(cov))
+    assert "STALE" in text
+    assert "15" in text

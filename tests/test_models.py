@@ -82,3 +82,57 @@ def test_notification_model():
     n = Notification.model_validate(raw)
     assert n.headline == "Price alert"
     assert n.is_read is False
+
+
+# ---------------------------------------------------------------------------
+# Alias normalization (IBKR API field name variants)
+# ---------------------------------------------------------------------------
+
+def test_contract_normalizes_con_id_alias():
+    """IBKR sometimes returns 'con_id' instead of 'conid' — must be normalized."""
+    from ibkr_core_mcp.models import Contract
+    raw = {"con_id": 265598, "symbol": "AAPL"}
+    c = Contract.model_validate(raw)
+    assert c.conid == 265598
+
+
+def test_contract_normalizes_company_name_alias():
+    """'companyName' (IBKR search result) must map to 'description'."""
+    from ibkr_core_mcp.models import Contract
+    raw = {"conid": 265598, "symbol": "AAPL", "companyName": "Apple Inc."}
+    c = Contract.model_validate(raw)
+    assert c.description == "Apple Inc."
+
+
+def test_order_normalizes_ibkr_field_aliases():
+    """IBKR order responses use camelCase aliases — must all normalize correctly."""
+    from ibkr_core_mcp.models import Order
+    raw = {
+        "orderId": "42",
+        "ticker": "AAPL",
+        "totalSize": 10.0,
+        "orderType": "LMT",
+        "side": "BUY",
+        "price": 180.0,
+        "status": "Submitted",
+    }
+    o = Order.model_validate(raw)
+    assert o.order_id == "42"
+    assert o.symbol == "AAPL"
+    assert o.qty == 10.0
+    assert o.order_type == "LMT"
+
+
+def test_account_summary_parses_scalar_amounts():
+    """AccountSummary must handle raw scalar floats, not only nested {'amount': x} dicts."""
+    from ibkr_core_mcp.models import AccountSummary
+    raw = {
+        "netliquidation": 100000.0,
+        "totalcashvalue": 50000.0,
+        "unrealizedpnl": 1500.0,
+        "realizedpnl": 300.0,
+    }
+    s = AccountSummary.model_validate(raw)
+    assert s.net_liquidation == 100000.0
+    assert s.total_cash == 50000.0
+    assert s.unrealized_pnl == 1500.0
