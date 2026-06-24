@@ -603,6 +603,54 @@ def _validate_account_id(account_id: str) -> str:
     return account_id
 
 
+_SIDE_MAP = {"B": "BUY", "S": "SELL", "BUY": "BUY", "SELL": "SELL"}
+
+
+def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Validate and normalise raw IBKR live trade records into store schema.
+
+    Mirrors the integrity guarantees of FlexQueryClient._parse_trades:
+    - Skips records missing execution_id, symbol, side, or time.
+    - Never falls back to a loop index for execution_id (would cause cross-call collisions).
+    - Normalises side: B→BUY, S→SELL.
+    - Applies abs() to commission (IBKR reports negative values).
+
+    Returns (parsed_records, skipped_count).
+    """
+    parsed: list[dict[str, Any]] = []
+    skipped = 0
+    for t in raw:
+        execution_id = (t.get("execution_id") or t.get("execId") or "").strip()
+        symbol = (t.get("symbol") or t.get("ticker") or "").upper().strip()
+        raw_side = (t.get("side") or "").strip()
+        side = _SIDE_MAP.get(raw_side.upper())
+        time_val = str(t.get("trade_time") or t.get("time") or "").strip()
+
+        if not execution_id or not symbol or not side or not time_val:
+            skipped += 1
+            continue
+
+        try:
+            size = float(t.get("size") or t.get("filledQuantity") or 0)
+            price = float(t.get("price") or t.get("avgPrice") or 0)
+            commission = abs(float(t.get("commission") or 0))
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+
+        parsed.append({
+            "execution_id": execution_id,
+            "symbol": symbol,
+            "side": side,
+            "size": size,
+            "price": price,
+            "time": time_val,
+            "commission": commission,
+            "account": str(t.get("account") or t.get("acctID") or ""),
+        })
+    return parsed, skipped
+
+
 class ClaudeToolkit:
     """Ready-made Claude tool layer for IBKR research. Portable across any Claude-powered app."""
 
@@ -791,32 +839,27 @@ class ClaudeToolkit:
         trades = self._client.get_trades()
         if symbol:
             trades = [t for t in trades if t.get("symbol", "").upper() == symbol.upper()]
-        try:
-            self._store.upsert_trades([
-                {
-                    "execution_id": t.get("execution_id", t.get("orderId", str(i))),
-                    "symbol": t.get("symbol", ""),
-                    "side": {"B": "BUY", "S": "SELL"}.get(t.get("side", ""), t.get("side", "")),
-                    "size": float(t.get("size", t.get("filledQuantity", 0))),
-                    "price": float(t.get("price", t.get("avgPrice", 0))),
-                    "time": str(t.get("trade_time", t.get("time", ""))),
-                    "commission": float(t.get("commission", 0)),
-                    "account": str(t.get("account", "")),
-                }
-                for i, t in enumerate(trades)
-                if t.get("symbol")
-            ])
-        except Exception:
-            pass
+
+        parsed, skipped = _parse_live_trades(trades)
+        upsert_note = ""
+        if parsed:
+            try:
+                self._store.upsert_trades(parsed)
+            except Exception as exc:
+                upsert_note = f"\n⚠ Store upsert failed: {exc}"
+        skip_note = f" ({skipped} record(s) skipped — missing required fields)" if skipped else ""
+
         if not trades:
             return "No trades in last 6 days.", None
         lines = [
-            f"- {t.get('trade_time', t.get('time', '?'))[:19]} "
-            f"{t.get('symbol', '?')} {t.get('side', '?')} "
-            f"{t.get('size', t.get('filledQuantity', '?'))} @ {t.get('price', t.get('avgPrice', '?'))}"
-            for t in trades[:20]
+            f"- {t['time'][:19]} {t['symbol']} {t['side']} {t['size']} @ {t['price']}"
+            for t in parsed[:20]
         ]
-        return f"Recent trades (last 6 days, {len(trades)} total):\n" + "\n".join(lines), None
+        suffix = f"  (showing first 20 of {len(parsed)})" if len(parsed) > 20 else ""
+        return (
+            f"Recent trades (last 6 days, {len(parsed)} total){skip_note}{suffix}:\n"
+            + "\n".join(lines) + upsert_note
+        ), None
 
     def _sync_flex_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         from ibkr_core_mcp.flex_query import FlexQueryClient
