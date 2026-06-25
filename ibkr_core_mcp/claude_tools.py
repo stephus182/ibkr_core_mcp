@@ -870,7 +870,26 @@ class ClaudeToolkit:
         if err:
             return err, None
         summary = self._client.get_account_summary(account_id)
-        return json.dumps(summary, indent=2), None
+
+        def _fmt(key: str) -> str:
+            item = summary.get(key, {})
+            amt = item.get("amount")
+            cur = item.get("currency") or "USD"
+            val = item.get("value")
+            if amt is not None and amt != 0.0:
+                return f"${amt:,.2f} {cur}"
+            return str(val) if val else "—"
+
+        lines = [
+            f"Account:             {summary.get('accountcode', {}).get('value', account_id)}",
+            f"Net Liquidation:     {_fmt('netliquidation')}",
+            f"Cash:                {_fmt('totalcashvalue')}",
+            f"Gross Position Val:  {_fmt('grosspositionvalue')}",
+            f"Unrealized P&L:      {_fmt('unrealizedpnl')}",
+            f"Realized P&L:        {_fmt('realizedpnl')}",
+            f"Buying Power:        {_fmt('buyingpower')}",
+        ]
+        return "\n".join(lines), None
 
     def _get_positions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
