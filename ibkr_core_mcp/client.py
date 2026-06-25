@@ -374,6 +374,10 @@ class IBKRClient:
         return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": [order]})
 
     # Alerts (write)
+    def get_alert(self, account_id: str, alert_id: str) -> dict[str, Any]:
+        _validate_account_id(account_id)
+        return self._get(f"/iserver/account/{account_id}/alert/{alert_id}")
+
     def create_alert(self, account_id: str, alert: dict[str, Any]) -> dict[str, Any]:
         _validate_account_id(account_id)
         return self._post(f"/iserver/account/{account_id}/alert", alert)

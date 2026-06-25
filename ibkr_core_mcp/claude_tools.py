@@ -531,6 +531,37 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "modify_price_alert",
+        "description": (
+            "Modify an existing IBKR price alert. Fetches the current alert by ID and "
+            "applies only the fields you provide, leaving others unchanged. "
+            "Use get_alerts first to find the alert ID."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alert_id": {"type": "string", "description": "Alert ID from get_alerts"},
+                "price": {"type": "number", "description": "New price threshold"},
+                "operator": {
+                    "type": "string",
+                    "enum": [">=", "<="],
+                    "description": "New operator: '>=' (above) or '<=' (below)",
+                },
+                "tif": {
+                    "type": "string",
+                    "enum": ["GTC", "DAY"],
+                    "description": "New time in force: GTC or DAY",
+                },
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "New session scope: true = extended hours, false = regular hours only",
+                },
+                "name": {"type": "string", "description": "New alert name"},
+            },
+            "required": ["alert_id"],
+        },
+    },
+    {
         "name": "get_watchlists",
         "description": "List all IBKR watchlists and their contents.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -717,6 +748,7 @@ class ClaudeToolkit:
             "get_trading_schedule": self._get_trading_schedule,
             "get_alerts": self._get_alerts,
             "create_price_alert": self._create_price_alert,
+            "modify_price_alert": self._modify_price_alert,
             "delete_alert": self._delete_alert,
             "activate_alert": self._activate_alert,
             "get_watchlists": self._get_watchlists,
@@ -1268,6 +1300,31 @@ class ClaudeToolkit:
             ],
         }
         result = self._client.create_alert(account_id, alert)
+        return json.dumps(result, indent=2), None
+
+    def _modify_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        account_id, err = self._first_account_id()
+        if err:
+            return err, None
+        alert_id = inputs["alert_id"]
+        existing = self._client.get_alert(account_id, alert_id)
+        if not existing:
+            return f"Alert {alert_id} not found.", None
+        # Apply only the fields provided — leave everything else unchanged
+        if "name" in inputs:
+            existing["alertName"] = inputs["name"]
+        if "tif" in inputs:
+            existing["tif"] = inputs["tif"]
+        if "outside_rth" in inputs:
+            existing["outsideRth"] = inputs["outside_rth"]
+        if "price" in inputs or "operator" in inputs:
+            conditions = existing.get("conditions", [])
+            if conditions:
+                if "price" in inputs:
+                    conditions[0]["value"] = str(inputs["price"])
+                if "operator" in inputs:
+                    conditions[0]["operator"] = inputs["operator"]
+        result = self._client.create_alert(account_id, existing)
         return json.dumps(result, indent=2), None
 
     def _delete_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
