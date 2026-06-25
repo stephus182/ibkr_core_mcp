@@ -994,18 +994,21 @@ class ClaudeToolkit:
             price = o.get("price", "MKT")
             status = o.get("status", "?")
             tif = o.get("timeInForce") or o.get("tif") or ""
-            order_ref = o.get("orderRef") or o.get("clientOrderId") or ""
-            # clientId=0 or absent typically means mobile/TWS/external origin
+            order_ref = o.get("orderRef") or o.get("cOID") or o.get("clientOrderId") or ""
             client_id = o.get("clientId")
-            if client_id is None or client_id == 0:
-                origin = "EXTERNAL (mobile/TWS) — read-only via API"
-            else:
+            # Determine origin: CLAUDIA-prefixed cOID is definitive; clientId is unreliable
+            # because both ClaudIA (Client Portal API) and mobile orders may show clientId=0
+            if order_ref.startswith("CLAUDIA-"):
+                origin = "ClaudIA-staged"
+            elif client_id and client_id != 0:
                 origin = f"API (clientId={client_id})"
+            else:
+                origin = "EXTERNAL (mobile/TWS/web portal) — read-only via API"
             line = (
                 f"- orderId={o.get('orderId', '?')} {ticker} {side} {qty} @ {price} "
                 f"[{status}] TIF={tif} origin={origin}"
             )
-            if order_ref:
+            if order_ref and not order_ref.startswith("CLAUDIA-"):
                 line += f" ref={order_ref}"
             lines.append(line)
         return f"Live orders ({len(orders)}):\n" + "\n".join(lines), None
@@ -1041,13 +1044,15 @@ class ClaudeToolkit:
         for o in orders:
             status = o.get("status", "MISSING")
             filtered = " [FILTERED by get_live_orders]" if status in terminal or not status else ""
+            order_ref = o.get("orderRef") or o.get("cOID") or ""
+            client_id = o.get("clientId", "absent")
             lines.append(
                 f"orderId={o.get('orderId')} ticker={o.get('ticker', o.get('symbol'))} "
                 f"side={o.get('side')} qty={o.get('totalSize')} price={o.get('price')} "
-                f"status={status}{filtered}"
+                f"status={status} clientId={client_id} ref={order_ref or 'none'}{filtered}"
             )
         return (
-            f"Raw IBKR orders ({len(orders)} total):\n" + "\n".join(lines)
+            f"Endpoint used: {path}\nRaw IBKR orders ({len(orders)} total):\n" + "\n".join(lines)
         ), None
 
     def _get_ledger(self, inputs: dict[str, Any]) -> tuple[str, Any]:
