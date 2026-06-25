@@ -170,10 +170,11 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_live_orders",
         "description": (
-            "Get working orders from IBKR — Submitted, PreSubmitted, PendingSubmit, "
-            "ApiPending, and PendingCancel. Also returns Inactive orders (exist on IBKR "
-            "but stalled — e.g. failed risk check — and require user action to reactivate). "
-            "Filled and Cancelled orders are excluded; use get_trades for executions."
+            "Get all non-terminal orders from IBKR across all asset classes (equities, futures, FX, options). "
+            "Excludes only Filled, Cancelled, and Expired — any other status is returned. "
+            "If this returns empty and the user believes they have open orders, cross-reference "
+            "with get_trades source='live' to check for recent fills: "
+            "an order not filled and not cancelled must still be working."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },

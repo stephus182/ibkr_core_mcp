@@ -256,22 +256,23 @@ class IBKRClient:
 
     # Statuses that indicate an order is still active in the market.
     # Filled/Cancelled orders are executions, not live orders.
-    _WORKING_STATUSES = frozenset({
-        "PreSubmitted", "Submitted", "ApiPending",
-        "PendingSubmit", "PendingCancel", "Inactive",
+    _TERMINAL_STATUSES = frozenset({
+        "Filled", "Cancelled", "Expired",
     })
 
     def get_live_orders(self) -> list[dict[str, Any]]:
-        """Return only working orders (not Filled or Cancelled), across all asset classes.
+        """Return all non-terminal orders across all asset classes (equities, futures, FX).
 
-        force=true bypasses IBKR's server-side cache so futures and orders placed
-        outside this session (TWS, mobile) are included in the response.
+        Inverted filter: exclude only definitively closed statuses (Filled, Cancelled,
+        Expired) so unknown or asset-class-specific status strings are never silently
+        dropped. force=true bypasses IBKR's server-side cache so orders placed via TWS
+        or mobile are included.
         """
         data = self._get("/iserver/account/orders?force=true")
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):
             return []
-        return [o for o in orders if o.get("status") in self._WORKING_STATUSES]
+        return [o for o in orders if o.get("status") not in self._TERMINAL_STATUSES]
 
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         return self._get(f"/iserver/account/order/status/{order_id}")
