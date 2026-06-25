@@ -66,7 +66,7 @@ ibkr_core_mcp/
 ├── backtest.py        # RestrictedPython sandbox executor
 ├── indicators.py      # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py       # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
-├── claude_tools.py    # Claude tool definitions + handlers (33 tools, portable)
+├── claude_tools.py    # Claude tool definitions + handlers (38 tools, portable)
 ├── pinescript.py      # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py    # Token-bucket rate limiter + exponential backoff on 429
 ├── config.py          # Config dataclass loaded from environment variables
@@ -367,6 +367,18 @@ print(f"Sharpe: {report['sharpe']:.2f}  |  Calmar: {report['calmar']:.2f}  |  Ma
 
 Available metrics: `sharpe`, `sortino`, `calmar`, `cagr`, `max_drawdown`, `max_drawdown_duration`, `win_rate`, `profit_factor`, `avg_win_loss_ratio`, `trade_summary`
 
+**Market calendar context** (static method on `SQLiteStore`):
+
+```python
+# Trading calendar for the current + next year — holidays, half-days, session hours
+ctx = SQLiteStore.get_market_calendar_context()          # NYSE + CME (default)
+ctx = SQLiteStore.get_market_calendar_context(["XLON"])  # add LSE
+
+# Returns: { "generated_at": "...", "exchanges": { "XNYS": { "holidays": [...], ... }, ... } }
+```
+
+Used internally by `ClaudeToolkit.get_analytics()` to give the LLM context-aware trading-day awareness.
+
 ---
 
 ### Claude AI Tool Layer
@@ -407,17 +419,17 @@ script = pinescript.strategy_from_backtest(result, df)
 print(script)   # paste directly into TradingView Pine Editor
 
 # From signals DataFrame
-script = pinescript.strategy_from_signals(df, strategy_name="RSI Reversal")
+script = pinescript.strategy_from_signals("RSI Reversal", df["signal"], symbol="AAPL", timeframe="1D")
 
 # Indicator-only script
-script = pinescript.indicator_script(df, indicators=["rsi", "macd", "bollinger_bands"])
+script = pinescript.indicator_script("AAPL Indicators", ["rsi", "macd", "bollinger_bands"], params={})
 ```
 
 ---
 
 ## MCP Server
 
-`ibkr_core_mcp` ships a built-in MCP server exposing 35 tools and 3 resources.
+`ibkr_core_mcp` ships a built-in MCP server exposing 40 tools and 3 resources.
 Any MCP-compatible client — Claude Desktop, a custom chatbot, a dashboard, or an
 ML pipeline — connects without requiring the `anthropic` SDK.
 
@@ -466,7 +478,7 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 The server binds to `127.0.0.1` only — never exposed to external networks.
 Connect MCP clients to `http://localhost:5174/sse`.
 
-### Tools (24)
+### Tools (40)
 
 All 22 `ClaudeToolkit` tools plus:
 - `add_price_alert` — register a threshold alert (persisted to SQLite)

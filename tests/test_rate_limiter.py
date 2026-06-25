@@ -58,3 +58,35 @@ def test_other_http_error_raises_api_error():
     with pytest.raises(IBKRAPIError) as exc_info:
         with_retry(mock_fn)
     assert exc_info.value.status_code == 500
+
+
+def test_503_retries_then_raises():
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
+    mock_fn = MagicMock(return_value=_make_response(503))
+    with patch("time.sleep"):
+        with pytest.raises(IBKRRateLimitError):
+            with_retry(mock_fn, max_retries=2)
+    assert mock_fn.call_count == 3  # initial + 2 retries
+
+
+def test_503_succeeds_on_retry():
+    from ibkr_core_mcp.rate_limiter import with_retry
+    responses = [_make_response(503), _make_response(200, {"ok": True})]
+    mock_fn = MagicMock(side_effect=responses)
+    with patch("time.sleep"):
+        result = with_retry(mock_fn, max_retries=2)
+    assert result.status_code == 200
+
+
+def test_backoff_delays_increase_exponentially():
+    from ibkr_core_mcp.rate_limiter import with_retry
+    mock_fn = MagicMock(return_value=_make_response(429))
+    sleep_calls = []
+    with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+        with pytest.raises(Exception):
+            with_retry(mock_fn, max_retries=3)
+    # Each delay should be strictly greater than the previous
+    assert len(sleep_calls) == 3
+    assert sleep_calls[1] > sleep_calls[0]
+    assert sleep_calls[2] > sleep_calls[1]

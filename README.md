@@ -12,7 +12,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 |---|---|
 | `GatewayManager` | Builds and runs the official IBKR Client Portal Gateway as a Docker container, guides browser login + 2FA |
 | `IBKRClient` | Full REST client for the Client Portal API — market data, positions, orders, scanners |
-| `ClaudeToolkit` | 33 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
+| `ClaudeToolkit` | 38 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
 | `SQLiteStore` | Local SQLite store — trade history, price alerts, session log |
 | `GDriveCache` | Google Drive Parquet cache for OHLCV data |
 | `streaming` | IBKR WebSocket live quotes + price alert engine |
@@ -20,7 +20,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 33 tools to any MCP client |
+| `mcp_server` | MCP server (stdio + SSE) exposing all 38 tools to any MCP client |
 
 ---
 
@@ -187,8 +187,12 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `get_allocation` | Portfolio breakdown by asset class |
 | `get_trades` | Trade history (live: last 6 days; store: unlimited) |
 | `sync_flex_trades` | Sync full history via IBKR Flex Web Service |
+| `sync_flex_archive` | Re-sync full Flex archive from GDrive parquet |
+| `check_flex_coverage` | Show date coverage of trade data in SQLite store |
+| `import_flex_file` | Import a locally downloaded Flex XML file into SQLite |
 | `get_live_orders` | Working orders (Submitted, PreSubmitted, Inactive, …) |
 | `get_order_status` | Status of a specific order by ID |
+| `diagnose_orders` | Diagnose order issues — checks session, permissions, account |
 | `preview_order` | Whatif order preview — no order placed |
 | `get_pa_performance` | Portfolio Analyst NAV performance |
 | `get_pa_transactions` | Portfolio Analyst transactions |
@@ -202,6 +206,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `get_notifications` | IBKR FYI account notifications |
 | `get_alerts` | List IBKR native price alerts |
 | `create_price_alert` | Create a server-side IBKR price alert |
+| `modify_price_alert` | Update threshold or direction on an existing IBKR alert |
 | `delete_alert` | Delete an IBKR price alert |
 | `activate_alert` | Enable or disable an IBKR price alert |
 | `get_watchlists` | List IBKR watchlists and their contents |
@@ -214,7 +219,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 
 ## MCP server
 
-Expose all 33 tools to any MCP-compatible client (Claude Desktop, Cursor, etc.):
+Expose all 38 tools (+ 2 MCP-only alert tools = 40 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
 # stdio transport (Claude Desktop / Cursor)
@@ -232,8 +237,8 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 8765 --stream
 import asyncio
 from ibkr_core_mcp.streaming import IBKRWebSocket
 
-# IBKRWebSocket takes the gateway URL and a session cookie string
-ws = IBKRWebSocket(gateway_url="wss://localhost:5055", session_cookie="")
+# IBKRWebSocket takes the HTTPS gateway URL — it converts to wss:// internally
+ws = IBKRWebSocket(gateway_url="https://localhost:5055", session_cookie="")
 
 async def main():
     await ws.connect()

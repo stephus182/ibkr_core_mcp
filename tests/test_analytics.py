@@ -168,3 +168,24 @@ def test_avg_win_loss_ratio_all_zero_returns_zero():
     from ibkr_core_mcp.analytics import avg_win_loss_ratio
     trades = [{"pnl": 0.0}, {"pnl": 0.0}]
     assert avg_win_loss_ratio(trades) == 0.0
+
+
+def test_full_report_empty_returns_gracefully():
+    """Empty return series must not raise ZeroDivisionError."""
+    import pandas as pd
+    from ibkr_core_mcp.analytics import full_report
+    empty = pd.Series([], dtype=float)
+    result = full_report(empty)
+    assert result["sharpe"] == 0.0
+    assert result["max_drawdown"] == 0.0
+    assert result["num_bars"] == 0
+
+
+def test_sharpe_periods_parameter_affects_result():
+    """Different periods values must produce different Sharpe ratios for the same returns."""
+    import pandas as pd
+    from ibkr_core_mcp.analytics import sharpe
+    rng = pd.Series([0.001, -0.002, 0.003, -0.001, 0.002] * 10)
+    daily_sharpe = sharpe(rng, periods=252)
+    intraday_sharpe = sharpe(rng, periods=252 * 390)
+    assert daily_sharpe != intraday_sharpe

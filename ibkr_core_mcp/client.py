@@ -74,9 +74,6 @@ class IBKRClient:
         resp = with_retry(lambda: self._session.post(url, json=body or {}, timeout=30))
         return resp.json()
 
-    def _refresh_auth(self, auth: AuthStrategy) -> None:
-        auth.apply(self._session)
-
     # ------------------------------------------------------------------
     # Session
     # ------------------------------------------------------------------
@@ -893,14 +890,6 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         return self._post("/iserver/account", {"acctId": account_id})
-
-    def get_brokerage_accounts(self) -> dict[str, Any]:
-        """All brokerage accounts. Alias for get_accounts() — same endpoint, same data.
-
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
-        Endpoint: GET /portfolio/accounts
-        """
-        return self._get("/portfolio/accounts")
 
     def get_pnl(self) -> dict[str, Any]:
         """Real-time partitioned P&L — daily, unrealized, realized — across all positions.

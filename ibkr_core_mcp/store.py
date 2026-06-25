@@ -482,6 +482,11 @@ class SQLiteStore:
         start: str | None = None,
         end: str | None = None,
     ) -> pd.DataFrame:
+        """Return logged signals as DataFrame, optionally filtered by symbol and date range.
+
+        Returns an empty DataFrame with the correct schema if no rows match.
+        Sorted ascending by logged_at.
+        """
         self.initialize()
         query, params = self._apply_filters(
             "SELECT * FROM signals WHERE 1=1", [], symbol, start, end, "logged_at"
@@ -525,6 +530,10 @@ class SQLiteStore:
     def get_backtests(
         self, symbol: str | None = None, strategy: str | None = None
     ) -> list[dict[str, Any]]:
+        """Return backtest results, optionally filtered by symbol and strategy name.
+
+        Results are sorted by run_at descending (most recent first).
+        """
         self.initialize()
         query = "SELECT * FROM backtest_results WHERE 1=1"
         params: list[Any] = []

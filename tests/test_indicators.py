@@ -45,14 +45,14 @@ def test_macd_columns(ohlcv):
     from ibkr_core_mcp.indicators import macd
     result = macd(ohlcv)
     assert isinstance(result, pd.DataFrame)
-    assert set(result.columns) == {"macd", "signal", "histogram"}
+    assert set(result.columns) == {"macd", "macd_signal", "histogram"}
     assert len(result) == len(ohlcv)
 
 
 def test_macd_histogram_is_diff(ohlcv):
     from ibkr_core_mcp.indicators import macd
     result = macd(ohlcv)
-    diff = (result["macd"] - result["signal"]).round(10)
+    diff = (result["macd"] - result["macd_signal"]).round(10)
     assert (diff.dropna() == result["histogram"].dropna().round(10)).all()
 
 

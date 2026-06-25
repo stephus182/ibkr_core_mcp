@@ -107,3 +107,20 @@ def test_missing_signal_column_raises(ohlcv):
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
     with pytest.raises(BacktestRuntimeError, match="signal"):
         run_backtest("# no signal set", ohlcv)
+
+
+def test_sandbox_cannot_mutate_shared_pd_namespace(ohlcv):
+    """Strategy code must not be able to poison the shared pd/np SimpleNamespace."""
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    # Attempt to overwrite pd.DataFrame — _write_guard should block this
+    code = "pd.DataFrame = None\ndf['signal'] = 0"
+    with pytest.raises((BacktestRuntimeError, TypeError)):
+        run_backtest(code, ohlcv)
+
+
+def test_sandbox_cannot_import_os(ohlcv):
+    """import os is transformed by RestrictedPython but __import__ is not in sandbox namespace."""
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    code = "import os\ndf['signal'] = 0"
+    with pytest.raises(BacktestRuntimeError, match="__import__"):
+        run_backtest(code, ohlcv)

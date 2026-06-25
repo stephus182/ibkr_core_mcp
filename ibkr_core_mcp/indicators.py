@@ -26,7 +26,7 @@ def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> p
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return pd.DataFrame(
-        {"macd": macd_line, "signal": signal_line, "histogram": macd_line - signal_line},
+        {"macd": macd_line, "macd_signal": signal_line, "histogram": macd_line - signal_line},
         index=df.index,
     )
 
@@ -101,7 +101,7 @@ def add_all(df: pd.DataFrame) -> pd.DataFrame:
     out["rsi"] = rsi(df, 14)
     _macd = macd(df)
     out["macd"] = _macd["macd"]
-    out["macd_signal"] = _macd["signal"]
+    out["macd_signal"] = _macd["macd_signal"]
     out["macd_hist"] = _macd["histogram"]
     out["vwap"] = vwap(df)
     _bb = bollinger_bands(df)

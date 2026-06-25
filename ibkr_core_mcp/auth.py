@@ -41,7 +41,7 @@ class TokenAuth:
     """Inject a pre-obtained cookie string directly into the session header."""
 
     def __init__(self, cookie_string: str) -> None:
-        self._cookie_string = cookie_string.strip()
+        self._cookie_string = _sanitize_cookie_token(cookie_string.strip())
 
     def apply(self, session: requests.Session) -> None:
         session.headers.update({"Cookie": self._cookie_string})

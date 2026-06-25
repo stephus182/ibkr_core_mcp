@@ -76,7 +76,10 @@ class GatewayManager:
                 "Docker is not running. Start Docker Desktop and retry."
             )
         log.info("Docker not running — launching Docker Desktop")
-        subprocess.run(["open", "-a", "Docker"], check=True)
+        try:
+            subprocess.run(["open", "-a", "Docker"], check=True)
+        except subprocess.CalledProcessError as exc:
+            raise GatewayError("Failed to launch Docker Desktop.") from exc
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.is_docker_available():
@@ -103,10 +106,16 @@ class GatewayManager:
         Subsequent builds use the Docker layer cache and are instant.
         """
         log.info("Building IBKR gateway image '%s' ...", self.IMAGE_NAME)
-        subprocess.run(
-            ["docker", "build", "-t", self.IMAGE_NAME, str(_DOCKER_DIR)],
-            check=True,
-        )
+        try:
+            subprocess.run(
+                ["docker", "build", "-t", self.IMAGE_NAME, str(_DOCKER_DIR)],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise GatewayError(
+                f"Failed to build Docker image '{self.IMAGE_NAME}'. "
+                "Check that Docker is running and the Dockerfile is intact."
+            ) from exc
         log.info("Image built: %s", self.IMAGE_NAME)
 
     # ── Container lifecycle ──────────────────────────────────────────────────
@@ -143,20 +152,26 @@ class GatewayManager:
         if not self.image_exists():
             self.build_image()
         log.info("Starting IBKR gateway on port %d ...", self._port)
-        subprocess.run(
-            [
-                "docker", "run", "-d",
-                "--name", self.CONTAINER_NAME,
-                "-p", f"{self._port}:{self._port}",
-                # Pass env vars used by tickler.sh inside the container
-                "-e", f"GATEWAY_PORT={self._port}",
-                "-e", "TICKLE_INTERVAL=60",
-                "-e", f"TICKLE_BASE_URL=https://host.docker.internal:{self._port}/v1/api",
-                "-e", "TICKLE_ENDPOINT=/tickle",
-                self.IMAGE_NAME,
-            ],
-            check=True,
-        )
+        try:
+            subprocess.run(
+                [
+                    "docker", "run", "-d",
+                    "--name", self.CONTAINER_NAME,
+                    "-p", f"{self._port}:{self._port}",
+                    # Pass env vars used by tickler.sh inside the container
+                    "-e", f"GATEWAY_PORT={self._port}",
+                    "-e", "TICKLE_INTERVAL=60",
+                    "-e", f"TICKLE_BASE_URL=https://host.docker.internal:{self._port}/v1/api",
+                    "-e", "TICKLE_ENDPOINT=/tickle",
+                    self.IMAGE_NAME,
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise GatewayError(
+                f"Failed to start gateway container on port {self._port}. "
+                "Port may be in use or the Docker image may be missing."
+            ) from exc
         log.info("Gateway container started: %s", self.CONTAINER_NAME)
 
     def stop(self) -> None:

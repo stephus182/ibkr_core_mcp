@@ -229,13 +229,13 @@ def test_get_order_preview_has_no_gate(client):
 ])
 def test_validate_account_id_accepts_valid_ids(client, account_id):
     from unittest.mock import MagicMock
+    from ibkr_core_mcp.exceptions import ConfigError
     client._session.get = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {}))
-    # Should not raise ConfigError for valid alphanumeric IDs
+    # Valid IDs must not raise ConfigError — any other exception (e.g. from mock shape) is ignored
     try:
         client.get_account_summary(account_id)
-    except Exception as exc:
-        assert "account_id" not in str(type(exc).__name__).lower() or \
-               type(exc).__name__ != "ConfigError"
+    except ConfigError:
+        pytest.fail(f"ConfigError raised for valid account_id {account_id!r}")
 
 
 @pytest.mark.parametrize("bad_id", [

@@ -7,6 +7,18 @@ import pandas as pd
 
 
 def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
+    """Annualised Sharpe ratio.
+
+    Args:
+        returns: Per-bar return series (e.g. daily close-to-close pct change).
+        risk_free: Annualised risk-free rate (e.g. 0.05 for 5 %). Default 0.
+        periods: Trading periods per year used for annualisation.
+            252 = daily bars (default). Use 252*390 for 1-minute bars,
+            52 for weekly bars, 12 for monthly bars.
+
+    Returns:
+        Annualised Sharpe ratio; 0.0 if std is zero or NaN.
+    """
     excess = returns - risk_free / periods
     std = excess.std()
     if not std or pd.isna(std):
@@ -15,6 +27,16 @@ def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> fl
 
 
 def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
+    """Annualised Sortino ratio (penalises only downside volatility).
+
+    Args:
+        returns: Per-bar return series.
+        risk_free: Annualised risk-free rate. Default 0.
+        periods: Trading periods per year. See ``sharpe`` for values.
+
+    Returns:
+        Annualised Sortino ratio; 0.0 if downside std is zero or NaN.
+    """
     excess = returns - risk_free / periods
     downside = excess[excess < 0].std()
     if not downside or pd.isna(downside):
@@ -23,6 +45,10 @@ def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> f
 
 
 def max_drawdown(returns: pd.Series) -> float:
+    """Maximum peak-to-trough drawdown as a negative fraction (e.g. -0.25 = -25 %).
+
+    Returns 0.0 for an empty series.
+    """
     equity = (1 + returns).cumprod()
     peak = equity.cummax().replace(0, float("nan"))
     dd = (equity - peak) / peak
@@ -30,6 +56,7 @@ def max_drawdown(returns: pd.Series) -> float:
 
 
 def max_drawdown_duration(returns: pd.Series) -> int:
+    """Longest consecutive streak of bars spent below a prior equity peak, in bars."""
     equity = (1 + returns).cumprod()
     peak = equity.cummax()
     in_dd = (equity < peak).astype(int)
@@ -42,6 +69,12 @@ def max_drawdown_duration(returns: pd.Series) -> int:
 
 
 def cagr(returns: pd.Series, periods: int = 252) -> float:
+    """Compound Annual Growth Rate.
+
+    Args:
+        returns: Per-bar return series.
+        periods: Trading periods per year. See ``sharpe`` for values.
+    """
     total = float((1 + returns).prod())
     n = len(returns) / periods
     if n <= 0 or total <= 0:
@@ -50,6 +83,7 @@ def cagr(returns: pd.Series, periods: int = 252) -> float:
 
 
 def calmar(returns: pd.Series, periods: int = 252) -> float:
+    """Calmar ratio: CAGR divided by absolute max drawdown. 0.0 if drawdown is zero."""
     mdd = max_drawdown(returns)
     if mdd == 0:
         return 0.0
@@ -57,6 +91,7 @@ def calmar(returns: pd.Series, periods: int = 252) -> float:
 
 
 def win_rate(trades: list[dict[str, Any]]) -> float:
+    """Fraction of trades with positive P&L. Reads 'pnl' or 'realizedPnl' field."""
     if not trades:
         return 0.0
     wins = sum(1 for t in trades if _pnl(t) > 0)
@@ -64,6 +99,7 @@ def win_rate(trades: list[dict[str, Any]]) -> float:
 
 
 def profit_factor(trades: list[dict[str, Any]]) -> float:
+    """Gross profit divided by gross loss. Returns inf if no losing trades, 0.0 if no trades."""
     gains = sum(_pnl(t) for t in trades if _pnl(t) > 0)
     losses = sum(abs(_pnl(t)) for t in trades if _pnl(t) < 0)
     if losses == 0:
@@ -72,6 +108,7 @@ def profit_factor(trades: list[dict[str, Any]]) -> float:
 
 
 def avg_win_loss_ratio(trades: list[dict[str, Any]]) -> float:
+    """Average winning trade size divided by average losing trade size."""
     wins = [_pnl(t) for t in trades if _pnl(t) > 0]
     losses = [abs(_pnl(t)) for t in trades if _pnl(t) < 0]
     avg_w = sum(wins) / len(wins) if wins else 0.0
@@ -82,6 +119,7 @@ def avg_win_loss_ratio(trades: list[dict[str, Any]]) -> float:
 
 
 def trade_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Win rate, profit factor, and avg win/loss ratio rolled into one dict."""
     return {
         "total_trades": len(trades),
         "win_rate": win_rate(trades),
@@ -91,6 +129,18 @@ def trade_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def full_report(returns: pd.Series, trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Complete performance report combining return-series and trade-level metrics.
+
+    Args:
+        returns: Per-bar return series (daily by default — affects CAGR/Sharpe/Sortino/Calmar).
+            Pass ``periods`` to the underlying functions if using intraday bars.
+        trades: Optional list of trade dicts with 'pnl' or 'realizedPnl' fields.
+            If provided, adds win_rate, profit_factor, avg_win_loss_ratio, total_trades.
+
+    Returns:
+        Dict with keys: total_return, cagr, sharpe, sortino, calmar, max_drawdown,
+        max_drawdown_duration, num_bars, and optionally trade-level metrics.
+    """
     report: dict[str, Any] = {
         "total_return": float((1 + returns).prod() - 1),
         "cagr": cagr(returns),

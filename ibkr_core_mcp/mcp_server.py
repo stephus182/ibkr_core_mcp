@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.types import Resource, TextContent, Tool
 from pydantic import AnyUrl
 
@@ -115,22 +116,22 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
         ]
 
     @server.read_resource()
-    async def handle_read_resource(uri: AnyUrl) -> str:
+    async def handle_read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
         path = str(uri)
+        text = "[]"
         try:
             if path == "ibkr://accounts":
-                return json.dumps(toolkit._client.get_accounts(), indent=2)
-            if path == "ibkr://positions/current":
+                text = json.dumps(toolkit._client.get_accounts(), indent=2)
+            elif path == "ibkr://positions/current":
                 accounts = toolkit._client.get_accounts()
                 account_id = accounts[0].get("accountId", "") if accounts else ""
-                if not account_id:
-                    return "[]"
-                return json.dumps(toolkit._client.get_positions(account_id), indent=2)
-            if path == "ibkr://trades/recent":
-                return json.dumps(store.get_trades()[:100], indent=2)
+                if account_id:
+                    text = json.dumps(toolkit._client.get_positions(account_id), indent=2)
+            elif path == "ibkr://trades/recent":
+                text = json.dumps(store.get_trades()[:100], indent=2)
         except Exception as exc:
             logger.warning("read_resource %s failed: %s", path, type(exc).__name__)
-        return "[]"
+        return [ReadResourceContents(content=text, mime_type="application/json")]
 
     return server
 

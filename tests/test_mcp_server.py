@@ -20,7 +20,7 @@ def test_mcp_server_importable():
     assert callable(build_server)
 
 
-async def test_server_has_22_tools(toolkit, store):
+async def test_server_has_40_tools(toolkit, store):
     from mcp.types import ListToolsRequest
 
     from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
@@ -29,7 +29,7 @@ async def test_server_has_22_tools(toolkit, store):
     req = ListToolsRequest(method="tools/list")
     result = await server.request_handlers[type(req)](req)
     tool_names = [t.name for t in result.root.tools]
-    assert len(tool_names) >= 22
+    assert len(tool_names) == len(TOOL_DEFINITIONS) + 2  # +2 for add_price_alert, get_price_alerts
     assert "add_price_alert" in tool_names
     assert "get_price_alerts" in tool_names
     for td in TOOL_DEFINITIONS:

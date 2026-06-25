@@ -110,6 +110,25 @@ class TestBuildImage:
         assert "-t" in args
         assert GatewayManager.IMAGE_NAME in args
 
+    def test_build_image_wraps_called_process_error_as_gateway_error(self) -> None:
+        import subprocess
+        gm = GatewayManager()
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")):
+            with pytest.raises(GatewayError, match="build"):
+                gm.build_image()
+
+    def test_start_wraps_called_process_error_as_gateway_error(self) -> None:
+        import subprocess
+        gm = GatewayManager()
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "container_exists", return_value=False),
+            patch.object(gm, "image_exists", return_value=True),
+            patch("subprocess.run", side_effect=subprocess.CalledProcessError(125, "docker")),
+        ):
+            with pytest.raises(GatewayError, match="port"):
+                gm.start()
+
 
 # ---------------------------------------------------------------------------
 # start / stop / restart

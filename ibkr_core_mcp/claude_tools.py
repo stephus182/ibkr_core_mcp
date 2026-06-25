@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import date
 from typing import Any
 
@@ -14,7 +13,7 @@ from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
-from ibkr_core_mcp.client import IBKRClient
+from ibkr_core_mcp.client import IBKRClient, _ACCOUNT_ID_RE
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.store import SQLiteStore
 
@@ -610,9 +609,6 @@ TOOL_DEFINITIONS = [
 ]
 
 
-_ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
-
-
 def _safe_error(tool: str, exc: Exception) -> str:
     """Return a controlled error string that doesn't leak internal details to the LLM."""
     from ibkr_core_mcp.exceptions import (
@@ -952,7 +948,8 @@ class ClaudeToolkit:
             try:
                 self._store.upsert_trades(parsed)
             except Exception as exc:
-                upsert_note = f"\n⚠ Store upsert failed: {exc}"
+                log.warning("_get_trades: store upsert failed: %s", exc)
+                upsert_note = "\n⚠ Trade history could not be saved to local store."
         skip_note = f" ({skipped} record(s) skipped — missing required fields)" if skipped else ""
 
         if not trades:
