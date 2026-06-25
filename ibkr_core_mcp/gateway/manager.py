@@ -255,9 +255,13 @@ class GatewayManager:
     def startup(self) -> bool:
         """Full interactive startup sequence for CLI use.
 
-        Steps:
+        Fast path (normal ClaudIA restart):
+          If the container is already running and authenticated, returns immediately.
+          The IBKR session is preserved — no login required.
+
+        Full path (first start or after session loss):
           1. Ensure Docker is running (launches Docker Desktop on macOS if needed)
-          2. Start gateway container (builds image on first run)
+          2. Remove any existing container and start a fresh one
           3. Wait for Java process to become reachable
           4. Open login page in browser
           5. Wait for user to complete login + 2FA
