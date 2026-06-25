@@ -530,6 +530,42 @@ See: https://github.com/tradesdontlie/tradingview-mcp
 
 ---
 
+## IBKR API Reference — Docs First
+
+**Never assume IBKR endpoint behavior, error codes, field names, or URL paths from memory or training data. Always verify against official documentation before writing any code, error message, or diagnosis.**
+
+This rule exists because assumption-based development caused two confirmed incidents in this codebase:
+
+| Incident | Assumed | Actual | Cost |
+|---|---|---|---|
+| Flex error 1001 | "rate limit — wait 5 min" | Transient generation failure — retry | Multiple failed sync attempts, misdiagnosed |
+| Flex endpoint URL | `gdcdyn.interactivebrokers.com/Universal/servlet/...` | `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` | Flex API never worked from day one |
+
+**Protocol:** Use `WebFetch` to load the relevant doc page before writing any fix, error message, or new endpoint. Cite the source URL in the commit message.
+
+### Official IBKR Documentation URLs
+
+| Topic | URL |
+|---|---|
+| **Flex Web Service setup** (endpoints, params, headers) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
+| **Flex Web Service error codes** (all 21 codes) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
+| **Client Portal API reference** (all CP endpoints) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
+| **Web API reference** | https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-ref/ |
+| **Orders / modify** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
+| **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
+
+### Known IBKR API Behaviors (Documented, Not Assumed)
+
+These are verified against official sources — not guesses:
+
+- **`/iserver/account/orders`** — two-call pattern: first call instantiates the subscription, second call retrieves data. Source: [IBKR Campus — Orders](https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/)
+- **`/hmds/history`** — warmup behavior: first call per symbol returns 404/500 while IBKR initializes the subscription. Auto-retried in `claude_tools.py` (3 attempts, 2s delay).
+- **`/iserver/account/trades`** — session-scoped: only returns trades from the current CP API session. Use `?days=7` for maximum lookback. Mobile/TWS trades are not visible here — use Flex for those.
+- **Flex Web Service** — T+1 delay, back-office data. Captures all trades from all interfaces (mobile, TWS, API). Requires separate token + query ID, not CP API credentials.
+- **Flex endpoint** — `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` (not `gdcdyn`). Requires `User-Agent` header for programmatic access.
+
+---
+
 ## Adding a New IBKR Endpoint
 
 1. **`client.py`** — add method, return typed model
