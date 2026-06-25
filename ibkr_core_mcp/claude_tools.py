@@ -170,15 +170,22 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_live_orders",
         "description": (
-            "Get all non-terminal orders from IBKR via the Client Portal Gateway API. "
-            "Excludes only Filled, Cancelled, ApiCancelled, and Expired — any other status is returned. "
-            "IMPORTANT IBKR LIMITATION: orders placed via TWS desktop or IBKR mobile app may NOT appear here "
-            "even with force=true cache bypass — they live in a separate session context from the Client Portal. "
-            "If this returns empty and the user believes they have live orders: "
-            "(1) check if the orders were placed via TWS/mobile — those must be verified directly in that app; "
-            "(2) cross-reference get_trades source='live' for recent fills — an order not filled and not cancelled "
-            "was either placed via TWS/mobile (not visible here) or is genuinely working. "
-            "Always state this limitation explicitly when the result is empty."
+            "Get all non-terminal orders from IBKR (equities, futures, FX, options). "
+            "Excludes only Filled, Cancelled, ApiCancelled, and Expired. "
+            "Uses force=true to bypass the gateway cache and sync from the IBKR server — "
+            "this should include orders placed via TWS, mobile, or any other interface. "
+            "If this returns empty and the user believes they have live orders, "
+            "call diagnose_orders to see the raw API response and identify any filtering issues."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "diagnose_orders",
+        "description": (
+            "Return the raw unfiltered IBKR orders API response for debugging. "
+            "Use when get_live_orders returns empty but the user believes they have open orders. "
+            "Shows ALL orders regardless of status, plus the raw response shape, "
+            "so you can identify whether orders are present but filtered, or genuinely absent."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -733,6 +740,7 @@ class ClaudeToolkit:
             "check_flex_coverage": self._check_flex_coverage,
             "sync_flex_trades": self._sync_flex_trades,
             "get_live_orders": self._get_live_orders,
+            "diagnose_orders": self._diagnose_orders,
             "get_ledger": self._get_ledger,
             "get_allocation": self._get_allocation,
             "get_pa_performance": self._get_pa_performance,
@@ -984,6 +992,40 @@ class ClaudeToolkit:
             for o in orders
         ]
         return f"Live orders ({len(orders)}):\n" + "\n".join(lines), None
+
+    def _diagnose_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return the raw unfiltered orders response to diagnose empty results."""
+        raw = self._client._get("/iserver/account/orders?force=true")
+        if isinstance(raw, dict):
+            orders = raw.get("orders", raw)
+        else:
+            orders = raw
+        if not isinstance(orders, list):
+            return (
+                f"Unexpected response shape — not a list.\n"
+                f"Response type: {type(raw).__name__}\n"
+                f"Raw response:\n{json.dumps(raw, indent=2)}"
+            ), None
+        if not orders:
+            return (
+                "Orders list is genuinely empty in the raw IBKR response.\n"
+                "No orders exist at the server level — not a filtering issue.\n"
+                f"Full raw response:\n{json.dumps(raw, indent=2)}"
+            ), None
+        # Show every order with all fields + note which would be filtered
+        terminal = {"Filled", "Cancelled", "ApiCancelled", "Expired"}
+        lines = []
+        for o in orders:
+            status = o.get("status", "MISSING")
+            filtered = " [FILTERED by get_live_orders]" if status in terminal or not status else ""
+            lines.append(
+                f"orderId={o.get('orderId')} ticker={o.get('ticker', o.get('symbol'))} "
+                f"side={o.get('side')} qty={o.get('totalSize')} price={o.get('price')} "
+                f"status={status}{filtered}"
+            )
+        return (
+            f"Raw IBKR orders ({len(orders)} total):\n" + "\n".join(lines)
+        ), None
 
     def _get_ledger(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
