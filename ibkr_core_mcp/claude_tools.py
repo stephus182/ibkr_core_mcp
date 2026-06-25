@@ -483,6 +483,15 @@ TOOL_DEFINITIONS = [
                     "description": "'>=' triggers when price reaches or exceeds threshold; '<=' when it falls to or below",
                 },
                 "price": {"type": "number", "description": "Price threshold"},
+                "tif": {
+                    "type": "string",
+                    "enum": ["GTC", "DAY"],
+                    "description": "Time in force: 'GTC' (good till cancelled, default) or 'DAY' (expires at market close)",
+                },
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "If true, alert also monitors extended hours (pre-market and after-hours). Default false (regular hours only). Useful for earnings.",
+                },
                 "name": {
                     "type": "string",
                     "description": "Human-readable alert name (default: auto-generated from symbol and price)",
@@ -1223,6 +1232,8 @@ class ClaudeToolkit:
         sec_type = inputs.get("sec_type", "STK")
         operator = inputs["operator"]
         price = inputs["price"]
+        tif = inputs.get("tif", "GTC")
+        outside_rth = inputs.get("outside_rth", False)
         repeat = inputs.get("repeat", False)
         contracts = self._client.search_contract(symbol, sec_type)
         if not contracts:
@@ -1242,8 +1253,8 @@ class ClaudeToolkit:
             "alertMessage": "",
             "alertRepeatable": int(repeat),
             "expireTime": "",
-            "tif": "GTC",
-            "outsideRth": False,
+            "tif": tif,
+            "outsideRth": outside_rth,
             "isSizeCondition": False,
             "conditions": [
                 {
