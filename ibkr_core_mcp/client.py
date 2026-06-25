@@ -263,13 +263,13 @@ class IBKRClient:
     def get_live_orders(self) -> list[dict[str, Any]]:
         """Return all non-terminal orders across all asset classes (equities, futures, FX).
 
-        Uses GET /iserver/account/orders — the standard Client Portal orders endpoint.
-        Note: /iserver/account/{accountId}/orders is POST-only (order placement).
-        Inverted filter: exclude only definitively closed statuses so unknown status
-        strings from any asset class are never silently dropped.
+        IBKR Client Portal orders endpoint requires a two-call pattern (documented):
+        the first call instantiates the subscription and returns empty/snapshot data;
+        the second call returns the actual live order list. Same pattern as HMDS warmup.
         """
-        path = "/iserver/account/orders?force=true"
-        data = self._get(path)
+        self._get("/iserver/account/orders?force=true")  # instantiate subscription
+        time.sleep(1)
+        data = self._get("/iserver/account/orders")  # retrieve actual data
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):
             return []

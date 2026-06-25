@@ -1046,8 +1046,10 @@ class ClaudeToolkit:
 
     def _diagnose_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return the raw unfiltered orders response to diagnose empty results."""
-        path = "/iserver/account/orders?force=true"
-        raw = self._client._get(path)
+        import time
+        self._client._get("/iserver/account/orders?force=true")  # instantiate
+        time.sleep(1)
+        raw = self._client._get("/iserver/account/orders")  # retrieve
         if isinstance(raw, dict):
             orders = raw.get("orders", raw)
         else:
