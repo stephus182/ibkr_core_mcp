@@ -876,7 +876,7 @@ class ClaudeToolkit:
             amt = item.get("amount")
             cur = item.get("currency") or "USD"
             val = item.get("value")
-            if amt is not None and amt != 0.0:
+            if amt is not None:
                 return f"${amt:,.2f} {cur}"
             return str(val) if val else "—"
 
@@ -1080,7 +1080,7 @@ class ClaudeToolkit:
                 f"status={status} clientId={client_id} ref={order_ref or 'none'}{filtered}"
             )
         return (
-            f"Endpoint used: {path}\nRaw IBKR orders ({len(orders)} total):\n" + "\n".join(lines)
+            f"Endpoint used: /iserver/account/orders\nRaw IBKR orders ({len(orders)} total):\n" + "\n".join(lines)
         ), None
 
     def _get_ledger(self, inputs: dict[str, Any]) -> tuple[str, Any]:
