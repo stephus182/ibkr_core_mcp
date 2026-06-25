@@ -203,6 +203,9 @@ class FlexQueryClient:
                 skipped.append(str(exc))
                 continue
 
+            # tradePnl is IBKR's realized P&L for this execution (account currency).
+            # assetCategory: STK, FUT, OPT, BOND, CASH, etc.
+            raw_pnl = trade_el.get("tradePnl") or trade_el.get("fifoPnlRealized")
             trades.append({
                 "execution_id": execution_id,
                 "symbol": symbol,
@@ -212,6 +215,8 @@ class FlexQueryClient:
                 "time": time_iso,
                 "commission": abs(_safe_float(trade_el.get("ibCommission"))),
                 "account": trade_el.get("accountId", ""),
+                "asset_class": (trade_el.get("assetCategory") or "").strip().upper(),
+                "realized_pnl": _safe_float(raw_pnl) if raw_pnl else None,
             })
 
         total = len(trades) + len(skipped)

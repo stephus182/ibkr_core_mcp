@@ -99,7 +99,9 @@ class SQLiteStore:
                     price        REAL NOT NULL,
                     time         TEXT NOT NULL,
                     commission   REAL DEFAULT 0.0,
-                    account      TEXT DEFAULT ''
+                    account      TEXT DEFAULT '',
+                    asset_class  TEXT DEFAULT '',
+                    realized_pnl REAL DEFAULT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS position_snapshots (
@@ -122,6 +124,18 @@ class SQLiteStore:
                     metadata    TEXT
                 );
 
+                -- Migrations: add columns introduced in later versions
+                -- These are no-ops when the column already exists (OperationalError is caught below)
+            """)
+            for col, defn in [
+                ("asset_class", "TEXT DEFAULT ''"),
+                ("realized_pnl", "REAL DEFAULT NULL"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS backtest_results (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     run_at        TEXT NOT NULL,
@@ -157,18 +171,31 @@ class SQLiteStore:
     def upsert_trades(self, trades: list[dict[str, Any]]) -> None:
         """Insert or update trades by execution_id."""
         self.initialize()
+        # Ensure new optional columns exist in every row — older callers omit them
+        rows = [
+            {
+                "asset_class": "",
+                "realized_pnl": None,
+                **t,
+            }
+            for t in trades
+        ]
         with self._connect() as conn:
             conn.executemany(
                 """
                 INSERT INTO trades
-                    (execution_id, symbol, side, size, price, time, commission, account)
+                    (execution_id, symbol, side, size, price, time, commission, account,
+                     asset_class, realized_pnl)
                 VALUES
-                    (:execution_id, :symbol, :side, :size, :price, :time, :commission, :account)
+                    (:execution_id, :symbol, :side, :size, :price, :time, :commission, :account,
+                     :asset_class, :realized_pnl)
                 ON CONFLICT(execution_id) DO UPDATE SET
                     price=excluded.price,
-                    commission=excluded.commission
+                    commission=excluded.commission,
+                    asset_class=COALESCE(NULLIF(excluded.asset_class,''), asset_class),
+                    realized_pnl=COALESCE(excluded.realized_pnl, realized_pnl)
                 """,
-                trades,
+                rows,
             )
 
     def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:

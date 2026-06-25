@@ -700,6 +700,8 @@ def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
             "time": time_val,
             "commission": commission,
             "account": str(t.get("account") or t.get("acctID") or ""),
+            "asset_class": (t.get("assetClass") or t.get("secType") or "").strip().upper(),
+            "realized_pnl": None,  # CP API trades endpoint does not include realized P&L
         })
     return parsed, skipped
 
@@ -917,11 +919,29 @@ class ClaudeToolkit:
                 end=inputs.get("end"),
             )
             if not trades:
-                return "No trades found in local store.", None
-            lines = [f"- {t['time'][:10]} {t['symbol']} {t['side']} {t['size']} @ {t['price']}" for t in trades[:20]]
-            suffix = f"  (showing first 20 of {len(trades)})" if len(trades) > 20 else ""
-            return f"Trade history (SQLite, {len(trades)} total){suffix}:\n" + "\n".join(lines), None
+                return (
+                    "No trades found in Flex store for the requested period. "
+                    "Run sync_flex_trades to pull the latest data from IBKR (T+1 — yesterday's trades available today)."
+                ), None
+            total_pnl = sum(t.get("realized_pnl") or 0.0 for t in trades)
+            has_pnl = any(t.get("realized_pnl") is not None for t in trades)
+            lines = [
+                f"- {t['time'][:10]} {t['symbol']} [{t.get('asset_class') or '?'}] "
+                f"{t['side']} {t['size']} @ {t['price']} "
+                f"comm={t.get('commission', 0):.2f}"
+                + (f" pnl={t['realized_pnl']:+.2f}" if t.get("realized_pnl") is not None else "")
+                for t in trades[:50]
+            ]
+            suffix = f"  (showing first 50 of {len(trades)})" if len(trades) > 50 else ""
+            pnl_line = f"\nTotal realized P&L: {total_pnl:+.2f}" if has_pnl else ""
+            return (
+                f"Trade history — Flex store ({len(trades)} total, all origins incl. mobile/TWS){suffix}:\n"
+                + "\n".join(lines) + pnl_line
+            ), None
         # source == 'live'
+        # Note: CP API /iserver/account/trades is session-scoped — mobile/TWS-placed
+        # trades from the same account may NOT appear. Use source='store' (Flex) for
+        # authoritative multi-day P&L including all origins.
         trades = self._client.get_trades()
         if symbol:
             trades = [t for t in trades if t.get("symbol", "").upper() == symbol.upper()]
@@ -936,14 +956,18 @@ class ClaudeToolkit:
         skip_note = f" ({skipped} record(s) skipped — missing required fields)" if skipped else ""
 
         if not trades:
-            return "No trades in last 6 days.", None
+            return (
+                "No trades visible in CP API session (last 7 days). "
+                "Mobile/TWS-placed trades are not session-scoped — use source='store' (Flex) "
+                "for the authoritative execution list."
+            ), None
         lines = [
-            f"- {t['time'][:19]} {t['symbol']} {t['side']} {t['size']} @ {t['price']}"
+            f"- {t['time'][:19]} {t['symbol']} {t['asset_class'] or '?'} {t['side']} {t['size']} @ {t['price']}"
             for t in parsed[:20]
         ]
         suffix = f"  (showing first 20 of {len(parsed)})" if len(parsed) > 20 else ""
         return (
-            f"Recent trades (last 6 days, {len(parsed)} total){skip_note}{suffix}:\n"
+            f"Recent trades — CP API session (last 7 days, {len(parsed)} total){skip_note}{suffix}:\n"
             + "\n".join(lines) + upsert_note
         ), None
 
@@ -1105,11 +1129,38 @@ class ClaudeToolkit:
         return json.dumps(perf, indent=2), None
 
     def _get_pa_transactions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """PA transactions use IBKR's Portfolio Analyst back-office data — includes ALL origins
+        (mobile, TWS, API). Not session-scoped. Authoritative for realized P&L."""
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
         txns = self._client.get_pa_transactions(account_ids, inputs["period"])
-        return json.dumps(txns, indent=2), None
+        if not txns:
+            return f"No transactions found for period '{inputs['period']}'.", None
+
+        lines = []
+        total_amount = 0.0
+        for t in txns:
+            if not isinstance(t, dict):
+                continue
+            date = str(t.get("date") or t.get("settleDate") or "?")[:10]
+            desc = t.get("desc") or t.get("description") or t.get("type") or "?"
+            symbol = t.get("symbol") or t.get("conid") or ""
+            amount = t.get("amount") or t.get("netCash") or 0
+            try:
+                amount = float(amount)
+            except (ValueError, TypeError):
+                amount = 0.0
+            total_amount += amount
+            symbol_part = f" [{symbol}]" if symbol else ""
+            lines.append(f"- {date}{symbol_part} {desc}: {amount:+.2f}")
+
+        return (
+            f"PA Transactions — {inputs['period']} ({len(lines)} records, all origins):\n"
+            + "\n".join(lines[:50])
+            + (f"\n  (showing first 50 of {len(lines)})" if len(lines) > 50 else "")
+            + f"\nNet total: {total_amount:+.2f}"
+        ), None
 
     def _get_contract_info(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         symbol = inputs["symbol"].upper()
