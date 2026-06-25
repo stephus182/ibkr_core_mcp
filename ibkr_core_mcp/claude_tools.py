@@ -825,8 +825,20 @@ class ClaudeToolkit:
         if err:
             return f"{err} Is IBKR connected?", None
 
-        raw = self._client.get_hmds_history(conid, period=period, bar=bar)
-        if not raw.get("data"):
+        # HMDS first-call behavior: IBKR initializes a data subscription on the first
+        # request for a symbol, which typically returns 404 or 500 while warming up.
+        # Retry up to 3 times with a short delay before giving up.
+        import time
+        from ibkr_core_mcp.exceptions import IBKRAPIError
+        raw = None
+        for attempt in range(3):
+            try:
+                raw = self._client.get_hmds_history(conid, period=period, bar=bar)
+                break
+            except IBKRAPIError:
+                if attempt < 2:
+                    time.sleep(2)
+        if raw is None or not raw.get("data"):
             return f"IBKR returned no data for {symbol} (period={period}, bar={bar})", None
 
         df = _bars_to_dataframe(raw)
