@@ -279,7 +279,8 @@ class IBKRClient:
         return self._get(f"/iserver/account/order/status/{order_id}")
 
     def get_trades(self) -> list[dict[str, Any]]:
-        data = self._get("/iserver/account/trades")
+        # days=7 requests maximum lookback; without it IBKR returns today's session only
+        data = self._get("/iserver/account/trades?days=7")
         return data if isinstance(data, list) else []
 
     # Portfolio Analyst
