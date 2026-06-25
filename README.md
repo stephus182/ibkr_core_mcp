@@ -48,6 +48,23 @@ Touch ID is available on: MacBook Pro (late 2016+), MacBook Air (2018+), Mac min
 
 ---
 
+## API Documentation
+
+This library is built on official documented APIs. Any contribution touching API behavior, error codes, endpoint paths, or field names **must reference the official source** — never assume from memory or training data.
+
+| API | Official reference |
+|---|---|
+| IBKR Client Portal API | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
+| IBKR Flex Web Service | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
+| Flex error codes | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
+| IBKR WebSocket streaming | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
+| Google Drive API v3 | https://developers.google.com/drive/api/reference/rest/v3 |
+| macOS LocalAuthentication | https://developer.apple.com/documentation/localauthentication |
+
+Full details and per-file API ownership are in [`CLAUDE.md`](CLAUDE.md#ibkr-api-reference--docs-first).
+
+---
+
 ## Installation
 
 ```bash
