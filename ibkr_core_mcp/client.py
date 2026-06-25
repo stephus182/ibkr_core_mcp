@@ -263,18 +263,12 @@ class IBKRClient:
     def get_live_orders(self) -> list[dict[str, Any]]:
         """Return all non-terminal orders across all asset classes (equities, futures, FX).
 
-        Uses the account-scoped endpoint (/iserver/account/{accountId}/orders) which
-        returns orders from ALL interfaces — mobile app, TWS, desktop, and API.
-        Falls back to the generic endpoint if no account ID is available.
+        Uses GET /iserver/account/orders — the standard Client Portal orders endpoint.
+        Note: /iserver/account/{accountId}/orders is POST-only (order placement).
         Inverted filter: exclude only definitively closed statuses so unknown status
         strings from any asset class are never silently dropped.
         """
-        accounts = self.get_accounts()
-        account_id = accounts[0].get("id") or accounts[0].get("accountId") if accounts else None
-        if account_id:
-            path = f"/iserver/account/{account_id}/orders?force=true"
-        else:
-            path = "/iserver/account/orders?force=true"
+        path = "/iserver/account/orders?force=true"
         data = self._get(path)
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):

@@ -1027,12 +1027,7 @@ class ClaudeToolkit:
 
     def _diagnose_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return the raw unfiltered orders response to diagnose empty results."""
-        accounts = self._client.get_accounts()
-        account_id = accounts[0].get("id") or accounts[0].get("accountId") if accounts else None
-        if account_id:
-            path = f"/iserver/account/{account_id}/orders?force=true"
-        else:
-            path = "/iserver/account/orders?force=true"
+        path = "/iserver/account/orders?force=true"
         raw = self._client._get(path)
         if isinstance(raw, dict):
             orders = raw.get("orders", raw)
