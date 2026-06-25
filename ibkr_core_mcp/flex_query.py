@@ -19,6 +19,91 @@ _ALLOWED_URL_PREFIX = "https://gdcdyn.interactivebrokers.com/"
 _MAX_POLL_RETRIES = 5
 _POLL_SLEEP = 3
 
+# Official IBKR Flex Web Service Version 3 error codes.
+# Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm
+# Format: code → (short_description, action)
+_FLEX_ERROR_CODES: dict[str, tuple[str, str]] = {
+    "1001": (
+        "Statement could not be generated at this time.",
+        "Transient — retry in a few minutes. If consistently failing, verify the Flex query "
+        "is saved and enabled in IBKR (Reports → Flex Queries).",
+    ),
+    "1003": (
+        "Statement is not available.",
+        "The report for this date range does not exist or has not been generated.",
+    ),
+    "1004": (
+        "Statement is incomplete at this time.",
+        "Transient — data is still being assembled, retry shortly.",
+    ),
+    "1005": ("Settlement data is not ready.", "Transient — retry shortly."),
+    "1006": ("FIFO P/L data is not ready.", "Transient — retry shortly."),
+    "1007": ("MTM P/L data is not ready.", "Transient — retry shortly."),
+    "1008": ("MTM and FIFO P/L data are not ready.", "Transient — retry shortly."),
+    "1009": (
+        "Server overload preventing statement generation.",
+        "Transient — IBKR servers busy, retry later.",
+    ),
+    "1010": (
+        "Legacy Flex Queries are no longer supported.",
+        "Action required: convert your query to Activity Flex in IBKR Account Management.",
+    ),
+    "1011": (
+        "Service account is inactive.",
+        "Contact IBKR — the account linked to this query is inactive.",
+    ),
+    "1012": (
+        "Token has expired.",
+        "Regenerate token: IBKR → Reports → Flex Web Service → regenerate token, "
+        "update IBKR_FLEX_TOKEN in .env.",
+    ),
+    "1013": (
+        "IP restriction.",
+        "Your IP address is not whitelisted for this token. Check the token's IP filter settings in IBKR.",
+    ),
+    "1014": (
+        "Query is invalid.",
+        "IBKR_FLEX_QUERY_ID in .env does not match a saved Flex query. "
+        "Check: IBKR → Reports → Flex Queries → note the Query ID.",
+    ),
+    "1015": (
+        "Token is invalid.",
+        "IBKR_FLEX_TOKEN in .env is wrong or has been regenerated. "
+        "Get the current token: IBKR → Reports → Flex Web Service.",
+    ),
+    "1016": (
+        "Account is invalid.",
+        "The account associated with this Flex query is invalid or inaccessible.",
+    ),
+    "1017": (
+        "Reference code is invalid.",
+        "Internal polling error — retry the sync. If persistent, the statement URL may have expired.",
+    ),
+    "1018": (
+        "Too many requests from this token.",
+        "Rate limit: max 1 request/second, 10 requests/minute per token. Wait 1 minute and retry.",
+    ),
+    "1019": (
+        "Statement generation in progress.",
+        "Transient — IBKR is generating the report, retry in 30 seconds.",
+    ),
+    "1020": (
+        "Invalid request or unable to validate request.",
+        "Check that IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID are correctly formatted in .env.",
+    ),
+    "1021": (
+        "Statement could not be retrieved at this time.",
+        "Transient — retry shortly.",
+    ),
+    # 1025 is not in the official table but has been observed in practice.
+    # IBKR returns it as a Warn when a token has been locked after repeated failures.
+    "1025": (
+        "Query locked due to too many failed attempts.",
+        "Regenerate your Flex token: IBKR → Reports → Flex Web Service → regenerate token, "
+        "update IBKR_FLEX_TOKEN in .env, then restart ClaudIA.",
+    ),
+}
+
 
 class FlexQueryClient:
     """Fetches historical account data from IBKR Flex Web Service."""
@@ -108,28 +193,14 @@ class FlexQueryClient:
         ref_code = root.findtext("ReferenceCode") or ""
         url = root.findtext("Url") or ""
 
-        if status == "Fail":
-            error_code = root.findtext("ErrorCode") or "?"
-            error_msg = root.findtext("ErrorMessage") or "unknown"
-            if error_code == "1001":
-                raise FlexQueryError(
-                    "Flex error 1001: Token and Query ID combination is not valid. "
-                    "This is an authentication failure, not a rate limit. "
-                    "Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in .env: "
-                    "IBKR → Reports → Flex Web Service → verify token and confirm the query ID matches. "
-                    "Also ensure 'Enable Flex Web Service' is checked on the token."
-                )
-            raise FlexQueryError(f"Flex error {error_code}: {error_msg}")
-        if status == "Warn":
-            error_code = root.findtext("ErrorCode") or "?"
-            error_msg = root.findtext("ErrorMessage") or "unknown"
-            if error_code == "1025":
-                raise FlexQueryError(
-                    "IBKR locked this query (error 1025 — too many failed attempts). "
-                    "Regenerate your Flex token: IBKR → Reports → Flex Web Service → regenerate token, "
-                    "update IBKR_FLEX_TOKEN in .env, then restart ClaudIA."
-                )
-            raise FlexQueryError(f"Flex Warn {error_code}: {error_msg}")
+        if status in ("Fail", "Warn"):
+            error_code = (root.findtext("ErrorCode") or "?").strip()
+            error_msg = (root.findtext("ErrorMessage") or "").strip()
+            desc, action = _FLEX_ERROR_CODES.get(error_code, ("Unknown error.", "Check IBKR Flex configuration."))
+            raise FlexQueryError(
+                f"Flex error {error_code}: {desc} {action}"
+                + (f" (IBKR message: {error_msg})" if error_msg else "")
+            )
         if status not in ("Success", "WhenAvailable") or not ref_code:
             raise FlexQueryError(f"Flex SendRequest unexpected response: status={status!r}")
         if not url:

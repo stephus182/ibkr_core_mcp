@@ -273,10 +273,10 @@ def test_send_request_error_1001_auth_failure(flex_client):
             flex_client._send_request()
 
 
-def test_send_request_error_1001_message_mentions_token(flex_client):
-    """The 1001 message must direct the user to check token/query ID, not wait."""
+def test_send_request_error_1001_message_mentions_retry(flex_client):
+    """The 1001 message must say it is transient and suggest a retry."""
     with _mock_get(_FAIL_1001):
-        with pytest.raises(FlexQueryError, match="Token"):
+        with pytest.raises(FlexQueryError, match="Transient"):
             flex_client._send_request()
 
 
