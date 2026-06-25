@@ -543,16 +543,45 @@ This rule exists because assumption-based development caused two confirmed incid
 
 **Protocol:** Use `WebFetch` to load the relevant doc page before writing any fix, error message, or new endpoint. Cite the source URL in the commit message.
 
-### Official IBKR Documentation URLs
+### Official Documentation URLs — All External APIs
+
+**IBKR Client Portal API** (`client.py`, `rate_limiter.py`, `claude_tools.py`)
+
+| Topic | URL |
+|---|---|
+| **Client Portal API reference** (all CP endpoints) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
+| **Web API reference** | https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-ref/ |
+| **Orders / modify** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
+| **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
+
+**IBKR Flex Web Service** (`flex_query.py`)
 
 | Topic | URL |
 |---|---|
 | **Flex Web Service setup** (endpoints, params, headers) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
 | **Flex Web Service error codes** (all 21 codes) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
-| **Client Portal API reference** (all CP endpoints) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
-| **Web API reference** | https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-ref/ |
-| **Orders / modify** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
-| **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
+
+**IBKR WebSocket Streaming** (`streaming.py`)
+
+| Topic | URL |
+|---|---|
+| **WebSocket API reference** (subscriptions, message format) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
+| **Market data subscriptions** (fields, tick types) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#market-data |
+
+**Google Drive API v3** (`cache.py`)
+
+| Topic | URL |
+|---|---|
+| **Drive API v3 reference** (files, upload, download) | https://developers.google.com/drive/api/reference/rest/v3 |
+| **Python client library** (MediaIoBaseUpload, MediaIoBaseDownload) | https://googleapis.github.io/google-api-python-client/docs/dyn/drive_v3.html |
+| **OAuth2 credentials** (token refresh, scopes) | https://google-auth.readthedocs.io/en/master/reference/google.oauth2.credentials.html |
+
+**macOS LocalAuthentication** (`human_auth.py`)
+
+| Topic | URL |
+|---|---|
+| **LAPolicy reference** (biometric policy constants) | https://developer.apple.com/documentation/localauthentication/lapolicy |
+| **evaluatePolicy** (method, error codes) | https://developer.apple.com/documentation/localauthentication/lacontext/evaluatepolicy(_:localizedreason:reply:) |
 
 ### Known IBKR API Behaviors (Documented, Not Assumed)
 
