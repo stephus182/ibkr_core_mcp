@@ -295,7 +295,12 @@ Full order details for a specific order ID.
 **Endpoint:** `GET /iserver/account/order/status/{orderId}`
 
 ### `get_trades() -> list[dict]`
-Recent trade executions (last 6 days).
+Recent trade executions (last ~6 days).
+
+**Note:** `?days=7` is appended to extend the lookback window. Without it, IBKR returns today's
+session only. The `days` parameter is not documented in the public IBKR CP API reference (requires
+authentication to access) — this behavior was verified by testing, not official documentation.
+
 **Endpoint:** `GET /iserver/account/trades`
 
 ---

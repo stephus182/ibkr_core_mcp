@@ -17,8 +17,21 @@ def with_retry(
 ) -> requests.Response:
     """Call fn(), retrying on 429/503 with exponential backoff.
 
+    Retry strategy: base 1s, 2× factor, 3 retries (delays: 1s, 2s, 4s).
+    No Retry-After header parsing — IBKR Client Portal API does not document
+    a Retry-After header in its public reference. Fixed exponential backoff
+    is used as a safe default.
+
+    IBKR Client Portal does not publish per-endpoint rate limits. The official
+    API reference requires authentication to access:
+    https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+
+    Note: Flex Web Service has documented rate limits (error 1018: max 1 req/s,
+    10 req/min per token). Those are enforced separately in flex_query.py.
+    Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm
+
     Raises:
-        IBKRAuthError: on 401 (no retry)
+        IBKRAuthError: on 401 (no retry — session must be re-established)
         IBKRRateLimitError: on 429 after retries exhausted
         IBKRAPIError: on other 4xx/5xx
     """

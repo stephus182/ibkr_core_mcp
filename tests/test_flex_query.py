@@ -315,6 +315,41 @@ def test_send_request_rejects_non_ibkr_url(flex_client):
             flex_client._send_request()
 
 
+def test_send_request_includes_fd_td_when_provided(flex_client):
+    """fd and td params are passed to IBKR when start_date / end_date are set.
+
+    Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
+    """
+    with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = SEND_REQUEST_XML_SUCCESS
+        mock_get.return_value = mock_resp
+        flex_client._send_request(start_date="20260101", end_date="20260625")
+    call_params = mock_get.call_args.kwargs["params"]
+    assert call_params["fd"] == "20260101"
+    assert call_params["td"] == "20260625"
+
+
+def test_send_request_omits_fd_td_when_none(flex_client):
+    """fd and td params must NOT be sent when start_date / end_date are None."""
+    with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = SEND_REQUEST_XML_SUCCESS
+        mock_get.return_value = mock_resp
+        flex_client._send_request()
+    call_params = mock_get.call_args.kwargs["params"]
+    assert "fd" not in call_params
+    assert "td" not in call_params
+
+
+def test_invalid_date_format_raises(flex_client):
+    """fetch_trades must raise ValueError for non-YYYYMMDD date strings."""
+    with pytest.raises(ValueError, match="YYYYMMDD"):
+        flex_client.fetch_trades("U1234567", start_date="2026-01-01")  # dashes not allowed
+
+
 # ---------------------------------------------------------------------------
 # _parse_trades — 20% integrity guard boundary
 # ---------------------------------------------------------------------------
@@ -351,3 +386,24 @@ def test_parse_trades_integrity_guard_above_threshold_raises(flex_client):
     xml = _flex_xml(valid_count=7, invalid_count=3)
     with pytest.raises(FlexQueryError, match="Data integrity"):
         flex_client._parse_trades(xml)
+
+
+# ---------------------------------------------------------------------------
+# _parse_flex_datetime — date-only path
+# ---------------------------------------------------------------------------
+
+def test_parse_flex_datetime_date_only():
+    """YYYYMMDD format (no time) must produce T00:00:00 timestamp."""
+    from ibkr_core_mcp.flex_query import _parse_flex_datetime
+    result = _parse_flex_datetime("20260625")
+    assert result == "2026-06-25T00:00:00"
+
+
+# ---------------------------------------------------------------------------
+# _validate_flex_date — end_date path
+# ---------------------------------------------------------------------------
+
+def test_invalid_end_date_format_raises(flex_client):
+    """fetch_trades must raise ValueError for non-YYYYMMDD end_date strings."""
+    with pytest.raises(ValueError, match="YYYYMMDD"):
+        flex_client.fetch_trades("U1234567", end_date="2026/06/25")

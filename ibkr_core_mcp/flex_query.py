@@ -164,9 +164,24 @@ class FlexQueryClient:
         coverage = self._store.get_trade_date_coverage()
         return {"files": len(processed), "trades": total_trades, "processed": processed, "coverage": coverage}
 
-    def fetch_trades(self, account_id: str) -> list[dict[str, Any]]:
-        """Full workflow: fetch → parse → upsert SQLite → save GDrive parquet."""
-        ref_code, url = self._send_request()
+    def fetch_trades(
+        self,
+        account_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Full workflow: fetch → parse → upsert SQLite → save GDrive parquet.
+
+        start_date / end_date override the date range configured in the Flex query.
+        Format: YYYYMMDD (e.g. "20260101"). Max range: 365 days.
+        Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
+        (fd / td optional URL parameters)
+        """
+        if start_date is not None:
+            _validate_flex_date(start_date, "start_date (fd)")
+        if end_date is not None:
+            _validate_flex_date(end_date, "end_date (td)")
+        ref_code, url = self._send_request(start_date=start_date, end_date=end_date)
         xml_text = self._get_statement(url, ref_code)
         trades = self._parse_trades(xml_text)
         self._store.upsert_trades(trades)
@@ -183,11 +198,29 @@ class FlexQueryClient:
         df = pd.DataFrame(trades)
         self._cache.save(df, cache_key, "ALL", account_id, date.today().isoformat())
 
-    def _send_request(self) -> tuple[str, str]:
-        """Step 1: Send flex query request, return (reference_code, statement_url)."""
+    def _send_request(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> tuple[str, str]:
+        """Step 1: Send flex query request, return (reference_code, statement_url).
+
+        start_date maps to the fd (from date) parameter; end_date maps to td (to date).
+        Both are YYYYMMDD strings, pre-validated by fetch_trades().
+        Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
+        """
+        params: dict[str, str] = {
+            "t": self._config.flex_token,
+            "q": self._config.flex_query_id,
+            "v": "3",
+        }
+        if start_date is not None:
+            params["fd"] = start_date
+        if end_date is not None:
+            params["td"] = end_date
         resp = requests.get(
             _BASE_URL,
-            params={"t": self._config.flex_token, "q": self._config.flex_query_id, "v": "3"},
+            params=params,
             headers=_REQUEST_HEADERS,
             timeout=30,
         )
@@ -309,6 +342,15 @@ class FlexQueryClient:
                 f"First errors: {skipped[:3]}"
             )
         return trades
+
+
+def _validate_flex_date(value: str, name: str) -> None:
+    """Raise ValueError if value is not a valid YYYYMMDD date string."""
+    if not (len(value) == 8 and value.isdigit()):
+        raise ValueError(
+            f"Flex {name} must be in YYYYMMDD format (8 digits), got {value!r}. "
+            f"Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm"
+        )
 
 
 def _parse_flex_datetime(raw: str) -> str:

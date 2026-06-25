@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**358 tests · 74% line coverage (non-integration)**
+**363 tests · 72% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Full suite: `pytest`
 
 ---

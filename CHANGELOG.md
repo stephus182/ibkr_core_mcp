@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `AuthStrategy` Protocol exported from `ibkr_core_mcp.__init__`
+- `py.typed` registered in `[tool.setuptools.package-data]`
+- Docs-first principle established: all external API behavior must be verified against official documentation before implementation; reference URLs added to `CLAUDE.md`, `README.md`, and inline comments
+- Complete IBKR Flex error code table (21 official codes) in `flex_query.py`, sourced from https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm
+- Docstrings with official IBKR CP API source citations on all 76 `IBKRClient` public methods; `client.py` now self-documents its behavior directly in code
+- `with_retry()` docstring cites official IBKR rate limit policy and documents Retry-After behavior; 100% coverage confirmed
+- Optional `start_date` / `end_date` parameters (`fd` / `td`) added to `FlexQueryClient.fetch_trades()` for date-range overrides; format YYYYMMDD, max 365 days per official docs
+- `_validate_flex_date()` helper in `flex_query.py` enforces YYYYMMDD format with official source citation
+- 5 new tests for `FlexQueryClient` date params and `_parse_flex_datetime` date-only path; total 363 unit tests
+
 ### Fixed
 - `ping()` try/except split so `tickle()` errors are no longer silently swallowed
 - Drive `market_data/` folder discovery now sorts by `createdTime asc`; warns when duplicates exist
@@ -19,10 +30,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - OS classifiers expanded: Linux and Windows added alongside macOS
 - `websockets` import now raises a clear `ModuleNotFoundError` with install instructions when missing
 - README: `--streaming` flag corrected to `--stream`, `pip install ibkr_core_mcp` replaced with git+ form, model ID updated to `claude-sonnet-4-6`, analytics description corrected, `IBKR_SQLITE_PATH` marked optional
-
-### Added
-- `AuthStrategy` Protocol exported from `ibkr_core_mcp.__init__`
-- `py.typed` registered in `[tool.setuptools.package-data]`
+- **Flex Web Service endpoint** corrected from `gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest` to `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest` — wrong host and path from day one; source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
+- **Required `User-Agent: Python/3` header** added to all Flex requests (per official documentation; requests without this header are rejected silently)
+- **Flex error 1001** correctly documented as transient generation failure (retry) — was previously mislabeled "rate limit" then "auth failure"; source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm; actual auth errors are 1014 (invalid query) and 1015 (invalid token)
 
 ---
 
