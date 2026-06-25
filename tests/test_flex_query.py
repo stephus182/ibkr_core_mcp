@@ -266,17 +266,17 @@ _BAD_URL = b"""<?xml version="1.0" ?>
 </FlexStatementResponse>"""
 
 
-def test_send_request_error_1001_rate_limit(flex_client):
-    """Error 1001 must raise with a human-readable wait instruction, not a raw IBKR error."""
+def test_send_request_error_1001_auth_failure(flex_client):
+    """Error 1001 must raise with auth-failure diagnosis, not a raw IBKR error."""
     with _mock_get(_FAIL_1001):
-        with pytest.raises(FlexQueryError, match="rate limit"):
+        with pytest.raises(FlexQueryError, match="1001"):
             flex_client._send_request()
 
 
-def test_send_request_error_1001_message_mentions_wait(flex_client):
-    """The 1001 message must tell the user to wait ~5 minutes — not just raise."""
+def test_send_request_error_1001_message_mentions_token(flex_client):
+    """The 1001 message must direct the user to check token/query ID, not wait."""
     with _mock_get(_FAIL_1001):
-        with pytest.raises(FlexQueryError, match="5 minutes"):
+        with pytest.raises(FlexQueryError, match="Token"):
             flex_client._send_request()
 
 
