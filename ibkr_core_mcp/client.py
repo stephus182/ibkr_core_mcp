@@ -257,7 +257,7 @@ class IBKRClient:
     # Statuses that indicate an order is still active in the market.
     # Filled/Cancelled orders are executions, not live orders.
     _TERMINAL_STATUSES = frozenset({
-        "Filled", "Cancelled", "Expired",
+        "Filled", "Cancelled", "ApiCancelled", "Expired",
     })
 
     def get_live_orders(self) -> list[dict[str, Any]]:
@@ -272,7 +272,7 @@ class IBKRClient:
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):
             return []
-        return [o for o in orders if o.get("status") not in self._TERMINAL_STATUSES]
+        return [o for o in orders if o.get("status") and o.get("status") not in self._TERMINAL_STATUSES]
 
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         return self._get(f"/iserver/account/order/status/{order_id}")
