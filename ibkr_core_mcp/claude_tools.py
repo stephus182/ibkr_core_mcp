@@ -170,11 +170,15 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_live_orders",
         "description": (
-            "Get all non-terminal orders from IBKR across all asset classes (equities, futures, FX, options). "
-            "Excludes only Filled, Cancelled, and Expired — any other status is returned. "
-            "If this returns empty and the user believes they have open orders, cross-reference "
-            "with get_trades source='live' to check for recent fills: "
-            "an order not filled and not cancelled must still be working."
+            "Get all non-terminal orders from IBKR via the Client Portal Gateway API. "
+            "Excludes only Filled, Cancelled, ApiCancelled, and Expired — any other status is returned. "
+            "IMPORTANT IBKR LIMITATION: orders placed via TWS desktop or IBKR mobile app may NOT appear here "
+            "even with force=true cache bypass — they live in a separate session context from the Client Portal. "
+            "If this returns empty and the user believes they have live orders: "
+            "(1) check if the orders were placed via TWS/mobile — those must be verified directly in that app; "
+            "(2) cross-reference get_trades source='live' for recent fills — an order not filled and not cancelled "
+            "was either placed via TWS/mobile (not visible here) or is genuinely working. "
+            "Always state this limitation explicitly when the result is empty."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
