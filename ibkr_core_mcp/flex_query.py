@@ -113,8 +113,11 @@ class FlexQueryClient:
             error_msg = root.findtext("ErrorMessage") or "unknown"
             if error_code == "1001":
                 raise FlexQueryError(
-                    "IBKR rate limit (error 1001) — wait ~5 minutes and retry. "
-                    "This happens when the same query is called too frequently."
+                    "Flex error 1001: Token and Query ID combination is not valid. "
+                    "This is an authentication failure, not a rate limit. "
+                    "Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in .env: "
+                    "IBKR → Reports → Flex Web Service → verify token and confirm the query ID matches. "
+                    "Also ensure 'Enable Flex Web Service' is checked on the token."
                 )
             raise FlexQueryError(f"Flex error {error_code}: {error_msg}")
         if status == "Warn":
