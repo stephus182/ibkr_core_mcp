@@ -268,6 +268,12 @@ class GatewayManager:
         print("▶ Ensuring Docker is running...")
         self.ensure_docker_running()
 
+        # If the gateway is already up and authenticated, nothing to do.
+        # This is the normal case when restarting ClaudIA without touching IB.
+        if self.is_running() and self.is_authenticated():
+            print("  ✔ IBKR gateway already running and authenticated — skipping startup.")
+            return True
+
         print("▶ Starting IBKR gateway container...")
         self.start()
 
