@@ -263,12 +263,19 @@ class IBKRClient:
     def get_live_orders(self) -> list[dict[str, Any]]:
         """Return all non-terminal orders across all asset classes (equities, futures, FX).
 
-        Inverted filter: exclude only definitively closed statuses (Filled, Cancelled,
-        Expired) so unknown or asset-class-specific status strings are never silently
-        dropped. force=true bypasses IBKR's server-side cache so orders placed via TWS
-        or mobile are included.
+        Uses the account-scoped endpoint (/iserver/account/{accountId}/orders) which
+        returns orders from ALL interfaces — mobile app, TWS, desktop, and API.
+        Falls back to the generic endpoint if no account ID is available.
+        Inverted filter: exclude only definitively closed statuses so unknown status
+        strings from any asset class are never silently dropped.
         """
-        data = self._get("/iserver/account/orders?force=true")
+        accounts = self.get_accounts()
+        account_id = accounts[0].get("id") or accounts[0].get("accountId") if accounts else None
+        if account_id:
+            path = f"/iserver/account/{account_id}/orders?force=true"
+        else:
+            path = "/iserver/account/orders?force=true"
+        data = self._get(path)
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):
             return []
