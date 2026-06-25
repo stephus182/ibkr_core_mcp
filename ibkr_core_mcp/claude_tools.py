@@ -170,12 +170,13 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_live_orders",
         "description": (
-            "Get all non-terminal orders from IBKR (equities, futures, FX, options). "
-            "Excludes only Filled, Cancelled, ApiCancelled, and Expired. "
-            "Uses force=true to bypass the gateway cache and sync from the IBKR server — "
-            "this should include orders placed via TWS, mobile, or any other interface. "
-            "If this returns empty and the user believes they have live orders, "
-            "call diagnose_orders to see the raw API response and identify any filtering issues."
+            "Get ALL non-terminal orders for the account regardless of origin — "
+            "includes orders placed via IBKR mobile, TWS, web portal, or ClaudIA staging. "
+            "Uses the account-scoped endpoint which returns every working order on the account. "
+            "IMPORTANT: orders placed via mobile or TWS CANNOT be modified or cancelled by the API. "
+            "When reporting such orders, explicitly state: 'I can see this order but cannot modify "
+            "or cancel it — use IBKR mobile or TWS to manage it.' Never skip or silently omit "
+            "externally-placed orders. Always flag their origin when it differs from ClaudIA staging."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -985,12 +986,28 @@ class ClaudeToolkit:
         orders = self._client.get_live_orders()
         if not orders:
             return "No open orders.", None
-        lines = [
-            f"- {o.get('orderId', '?')} {o.get('ticker', o.get('symbol', '?'))} "
-            f"{o.get('side', '?')} {o.get('totalSize', '?')} @ {o.get('price', 'MKT')} "
-            f"[{o.get('status', '?')}]"
-            for o in orders
-        ]
+        lines = []
+        for o in orders:
+            ticker = o.get("ticker") or o.get("symbol") or "?"
+            side = o.get("side", "?")
+            qty = o.get("totalSize", "?")
+            price = o.get("price", "MKT")
+            status = o.get("status", "?")
+            tif = o.get("timeInForce") or o.get("tif") or ""
+            order_ref = o.get("orderRef") or o.get("clientOrderId") or ""
+            # clientId=0 or absent typically means mobile/TWS/external origin
+            client_id = o.get("clientId")
+            if client_id is None or client_id == 0:
+                origin = "EXTERNAL (mobile/TWS) — read-only via API"
+            else:
+                origin = f"API (clientId={client_id})"
+            line = (
+                f"- orderId={o.get('orderId', '?')} {ticker} {side} {qty} @ {price} "
+                f"[{status}] TIF={tif} origin={origin}"
+            )
+            if order_ref:
+                line += f" ref={order_ref}"
+            lines.append(line)
         return f"Live orders ({len(orders)}):\n" + "\n".join(lines), None
 
     def _diagnose_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
