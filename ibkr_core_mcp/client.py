@@ -262,8 +262,12 @@ class IBKRClient:
     })
 
     def get_live_orders(self) -> list[dict[str, Any]]:
-        """Return only working orders (not Filled or Cancelled)."""
-        data = self._get("/iserver/account/orders")
+        """Return only working orders (not Filled or Cancelled), across all asset classes.
+
+        force=true bypasses IBKR's server-side cache so futures and orders placed
+        outside this session (TWS, mobile) are included in the response.
+        """
+        data = self._get("/iserver/account/orders?force=true")
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):
             return []
