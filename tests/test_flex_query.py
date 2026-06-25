@@ -8,14 +8,14 @@ SEND_REQUEST_XML_SUCCESS = b"""<?xml version="1.0" ?>
 <FlexStatementResponse timestamp="20230415;091500">
   <Status>Success</Status>
   <ReferenceCode>9876543210</ReferenceCode>
-  <Url>https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement</Url>
+  <Url>https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement</Url>
 </FlexStatementResponse>"""
 
 SEND_REQUEST_XML_WHEN_AVAILABLE = b"""<?xml version="1.0" ?>
 <FlexStatementResponse>
   <Status>WhenAvailable</Status>
   <ReferenceCode>9876543210</ReferenceCode>
-  <Url>https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement</Url>
+  <Url>https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement</Url>
 </FlexStatementResponse>"""
 
 SEND_REQUEST_XML_NO_URL = b"""<?xml version="1.0" ?>
@@ -309,7 +309,7 @@ def test_send_request_warn_unknown_error_code(flex_client):
 
 
 def test_send_request_rejects_non_ibkr_url(flex_client):
-    """URL allowlist must reject any URL not under gdcdyn.interactivebrokers.com."""
+    """URL allowlist must reject any URL not under ndcdyn.interactivebrokers.com."""
     with _mock_get(_BAD_URL):
         with pytest.raises(FlexQueryError, match="unexpected URL"):
             flex_client._send_request()

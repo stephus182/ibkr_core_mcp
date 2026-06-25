@@ -14,8 +14,13 @@ if TYPE_CHECKING:
     from ibkr_core_mcp.cache import GDriveCache
     from ibkr_core_mcp.store import SQLiteStore
 
-_BASE_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
-_ALLOWED_URL_PREFIX = "https://gdcdyn.interactivebrokers.com/"
+# Official IBKR Flex Web Service endpoints.
+# Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
+_BASE_URL = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest"
+_ALLOWED_URL_PREFIX = "https://ndcdyn.interactivebrokers.com/"
+
+# Required by IBKR for programmatic access (documented requirement).
+_REQUEST_HEADERS = {"User-Agent": "Python/3"}
 _MAX_POLL_RETRIES = 5
 _POLL_SLEEP = 3
 
@@ -183,6 +188,7 @@ class FlexQueryClient:
         resp = requests.get(
             _BASE_URL,
             params={"t": self._config.flex_token, "q": self._config.flex_query_id, "v": "3"},
+            headers=_REQUEST_HEADERS,
             timeout=30,
         )
         if resp.status_code != 200:
@@ -223,6 +229,7 @@ class FlexQueryClient:
             resp = requests.get(
                 url,
                 params={"t": self._config.flex_token, "q": reference_code, "v": "3"},
+                headers=_REQUEST_HEADERS,
                 timeout=60,
             )
             if resp.status_code != 200:
