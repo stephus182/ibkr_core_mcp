@@ -894,8 +894,7 @@ class ClaudeToolkit:
         if err:
             return err, None
         positions = self._client.get_positions(account_id)
-        # IBKR returns closed same-day positions with position=0 until settlement clears.
-        # Filter them out — a position with 0 size is not an open position.
+        # position=0 means flat — not an open position regardless of instrument type.
         positions = [p for p in positions if p.get("position", 0) != 0]
         if not positions:
             return "No open positions.", None

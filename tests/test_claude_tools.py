@@ -530,23 +530,28 @@ def test_get_positions_empty(toolkit):
 
 
 def test_get_positions_filters_zero_size(toolkit):
-    """IBKR returns closed same-day positions with position=0 — must be excluded."""
+    """position=0 means flat — excluded regardless of instrument type."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_positions.return_value = [
         {"contractDesc": "AAPL", "position": 100, "mktValue": 18000.0, "unrealizedPnl": 500.0},
-        {"contractDesc": "ES SEP2026", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+        {"contractDesc": "CLOSED_STOCK", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+        {"contractDesc": "CLOSED_FUTURE", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+        {"contractDesc": "CLOSED_OPTION", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
     ]
     text, fig = toolkit.execute("get_positions", {})
     assert "AAPL" in text
-    assert "ES SEP2026" not in text
+    assert "CLOSED_STOCK" not in text
+    assert "CLOSED_FUTURE" not in text
+    assert "CLOSED_OPTION" not in text
     assert "Open positions (1)" in text
 
 
 def test_get_positions_all_zero_returns_empty(toolkit):
-    """If every position is 0-size, return 'No open positions'."""
+    """All-zero portfolio returns 'No open positions'."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_positions.return_value = [
-        {"contractDesc": "ES SEP2026", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+        {"contractDesc": "FLAT_A", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+        {"contractDesc": "FLAT_B", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
     ]
     text, fig = toolkit.execute("get_positions", {})
     assert "No open positions" in text
