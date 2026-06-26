@@ -850,6 +850,7 @@ class ClaudeToolkit:
         )
 
     def _check_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return HIT/MISS for a specific symbol/timeframe/period/end combination."""
         hit = self._cache.check(
             inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"]
         )
@@ -857,6 +858,7 @@ class ClaudeToolkit:
         return f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']}", None
 
     def _list_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """List all datasets currently in the Drive market-data cache."""
         entries = self._cache.list_cached()
         if not entries:
             return "Drive cache is empty.", None
@@ -864,6 +866,7 @@ class ClaudeToolkit:
         return f"Cached datasets ({len(entries)}):\n" + "\n".join(lines), None
 
     def _get_account_summary(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return high-level account balances: NLV, cash, gross position value, P&L, buying power."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -890,6 +893,13 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_positions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return all open positions across all instrument types (equities, futures, options, etc.).
+
+        IBKR includes flat entries (position=0) in the positions list. These are filtered
+        out unconditionally — position=0 means flat regardless of instrument type.
+        The quantity label is 'qty' (not 'shares') because the field is generic across
+        all IBKR instrument classes.
+        """
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -904,10 +914,16 @@ class ClaudeToolkit:
             pos = p.get("position", 0)
             mkt_val = p.get("mktValue", 0)
             pnl = p.get("unrealizedPnl", 0)
-            lines.append(f"- {symbol}: {pos} shares, mktVal={mkt_val:.2f}, unrealPnL={pnl:.2f}")
+            lines.append(f"- {symbol}: {pos} qty, mktVal={mkt_val:.2f}, unrealPnL={pnl:.2f}")
         return f"Open positions ({len(positions)}):\n" + "\n".join(lines), None
 
     def _get_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Query trade history from the Flex store (full history) or the CP API (last 7 days).
+
+        source='store': reads from local SQLite populated by sync_flex_trades — all origins,
+        no date limit, T+1 delay. source='live': calls CP API session — today's intraday
+        trades only; may not include mobile/TWS-placed trades from the same account.
+        """
         source = inputs.get("source", "store")
         symbol = inputs.get("symbol")
         if source == "store":
@@ -971,6 +987,7 @@ class ClaudeToolkit:
         ), None
 
     def _sync_flex_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Pull the latest trades from IBKR Flex Web Service and upsert into local SQLite store."""
         from ibkr_core_mcp.flex_query import FlexQueryClient
         if not self._config.flex_token or not self._config.flex_query_id:
             return (
@@ -999,6 +1016,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _sync_flex_archive(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Import all Flex XML files from Drive account_data/ into the local store."""
         from ibkr_core_mcp.flex_query import FlexQueryClient
         flex = FlexQueryClient(self._config, self._store, self._cache)
         try:
@@ -1014,6 +1032,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _import_flex_file(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Import trades from a local Flex XML file into the store."""
         from ibkr_core_mcp.flex_query import FlexQueryClient
         from pathlib import Path
         path = inputs["path"]
@@ -1031,12 +1050,18 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _check_flex_coverage(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Report date range and total count of trades held in the local Flex store."""
         cov = self._store.get_trade_date_coverage()
         if not cov["oldest"]:
             return "No trade history in store. Run sync_flex_archive or sync_flex_trades first.", None
         return "\n".join(_format_coverage(cov)), None
 
     def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return working orders (all statuses except Filled/Cancelled/Expired) across all instrument types.
+
+        Origin is determined from orderRef prefix ('CLAUDIA-' = ClaudIA-staged) rather than
+        clientId, which is unreliable — both CP API and mobile orders can show clientId=0.
+        """
         orders = self._client.get_live_orders()
         if not orders:
             return "No open orders.", None
@@ -1107,6 +1132,12 @@ class ClaudeToolkit:
         ), None
 
     def _get_ledger(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return per-currency cash ledger: NLV, cash, market values, P&L, interest, dividends.
+
+        IBKR returns the ledger keyed by currency code plus a synthetic 'BASE' aggregate.
+        BASE is excluded — per-currency keys are the authoritative values.
+        Futures and interest rows are suppressed when zero to keep output clean.
+        """
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1157,6 +1188,7 @@ class ClaudeToolkit:
         return "\n".join(lines) if lines else json.dumps(ledger, indent=2), None
 
     def _get_allocation(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return portfolio allocation breakdown by asset class, sector, and industry."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1164,6 +1196,7 @@ class ClaudeToolkit:
         return json.dumps(allocation, indent=2), None
 
     def _get_pa_performance(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return Portfolio Analyst performance metrics for the requested period."""
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
@@ -1205,6 +1238,7 @@ class ClaudeToolkit:
         ), None
 
     def _get_contract_info(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return full contract details and trading rules for any instrument type."""
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
         conid, err = self._resolve_conid(symbol, sec_type)
@@ -1214,17 +1248,20 @@ class ClaudeToolkit:
         return json.dumps(info, indent=2), None
 
     def _get_option_chain(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return the option chain (strikes, expirations) for the given underlying symbol."""
         symbol = inputs["symbol"].upper()
         exchange = inputs.get("exchange", "SMART")
         chain = self._client.get_option_chain(symbol, exchange=exchange)
         return json.dumps(chain, indent=2), None
 
     def _run_scanner(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Run an IBKR market scanner for any instrument type (STK, FUT, ETF, etc.)."""
+        instrument = inputs.get("instrument", "STK")
         params = {
-            "instrument": inputs.get("instrument", "STK"),
+            "instrument": instrument,
             "location": inputs.get("location_code", "STK.US.MAJOR"),
             "scanCode": inputs["scan_code"],
-            "secType": "STK",
+            "secType": instrument,  # pass through — not hardcoded to STK
             "filter": [],
         }
         results = self._client.run_iserver_scanner(params)
@@ -1239,6 +1276,7 @@ class ClaudeToolkit:
         return f"Scanner: {inputs['scan_code']} — {len(results)} results:\n" + "\n".join(lines), None
 
     def _get_notifications(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return FYI notifications and unread count from the IBKR notification centre."""
         max_r = inputs.get("max_results", 10)
         notifications = self._client.get_notifications(max_r)
         unread = self._client.get_unread_count()
@@ -1251,6 +1289,7 @@ class ClaudeToolkit:
         return f"FYI Notifications ({unread} unread):\n" + "\n".join(lines), None
 
     def _add_indicators(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Compute RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, and Williams %R from cached bars."""
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -1274,6 +1313,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _run_backtest(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Execute a vectorised backtest strategy on cached OHLCV bars and return performance metrics."""
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -1300,6 +1340,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _generate_pinescript(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Generate a PineScript v5 indicator script for the requested symbol and indicators."""
         symbol = inputs["symbol"].upper()
         indicators_list = inputs.get("indicators", ["rsi", "macd"])
         strategy_name = inputs.get("strategy_name", f"{symbol} Indicators")
@@ -1307,13 +1348,19 @@ class ClaudeToolkit:
         return script, None
 
     def _preview_order(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return a whatif order preview (commission, margin impact) without submitting.
+
+        sec_type is passed through to contract resolution — defaults to STK but must
+        be set to 'FUT', 'OPT', etc. for non-equity instruments.
+        """
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
         quantity = int(inputs["quantity"])
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
+        sec_type = inputs.get("sec_type", "STK")
 
-        conid, err = self._resolve_conid(symbol)
+        conid, err = self._resolve_conid(symbol, sec_type)
         if err:
             return err, None
 
@@ -1343,6 +1390,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return real-time unrealized and daily P&L broken down by position across all instrument types."""
         pnl = self._client.get_pnl()
         if not pnl:
             return "No P&L data returned. Ensure IBKR gateway is connected.", None
@@ -1370,6 +1418,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_analytics(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return return, CAGR, Sharpe, Sortino, Calmar, and drawdown stats from cached bars."""
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -1393,6 +1442,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _search_contract(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Search for contracts by symbol and security type; returns conid and exchange info."""
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
         contracts = self._client.search_contract(symbol, sec_type)
@@ -1401,6 +1451,7 @@ class ClaudeToolkit:
         return json.dumps(contracts, indent=2), None
 
     def _get_futures(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return available futures contracts and expiration dates for the given root symbols."""
         symbols = [s.upper() for s in inputs["symbols"]]
         futures = self._client.get_futures(symbols)
         if not futures:
@@ -1408,6 +1459,11 @@ class ClaudeToolkit:
         return json.dumps(futures, indent=2), None
 
     def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return live market data snapshot (bid, ask, last, volume) for one or more symbols.
+
+        sec_type defaults to STK but must be passed as 'FUT', 'OPT', etc. for
+        non-equity instruments to resolve the correct conid.
+        """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
         conids = []
@@ -1437,6 +1493,7 @@ class ClaudeToolkit:
         return result, None
 
     def _get_trading_schedule(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return the trading schedule (hours, holidays) for a symbol on its exchange."""
         symbol = inputs["symbol"].upper()
         asset_class = inputs.get("asset_class", "STK")
         exchange = inputs.get("exchange", "SMART")
@@ -1444,6 +1501,7 @@ class ClaudeToolkit:
         return json.dumps(schedule, indent=2), None
 
     def _get_alerts(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """List all price alerts configured on the IBKR server for this account."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1453,6 +1511,7 @@ class ClaudeToolkit:
         return json.dumps(alerts, indent=2), None
 
     def _create_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Create an IBKR server-side price alert that fires via the mobile app regardless of session state."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1499,6 +1558,7 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _modify_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Update price, operator, name, or TIF on an existing alert (patch — unset fields unchanged)."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1524,6 +1584,7 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _delete_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Permanently delete a price alert by ID."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1531,6 +1592,7 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _activate_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Toggle an alert on or off without deleting it."""
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -1539,17 +1601,20 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _get_watchlists(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return all watchlists and their constituent symbols from the IBKR account."""
         watchlists = self._client.get_watchlists()
         if not watchlists:
             return "No watchlists found.", None
         return json.dumps(watchlists, indent=2), None
 
     def _get_order_status(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return current status and fill details for a specific order ID."""
         order_id = inputs["order_id"]
         status = self._client.get_order_status(order_id)
         return json.dumps(status, indent=2), None
 
     def _delete_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Remove a specific dataset from the Drive market-data cache."""
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
