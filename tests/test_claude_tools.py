@@ -506,9 +506,11 @@ def test_fetch_market_data_no_contract(toolkit):
 
 
 def test_fetch_market_data_empty_data(toolkit):
+    """Both HMDS and iserver fallback returning empty → error message with 'no data'."""
     toolkit._cache.check.return_value = False
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_hmds_history.return_value = {"data": []}
+    toolkit._client.get_market_history.return_value = {"data": []}  # fallback also empty
     text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "no data" in text.lower()
 

@@ -848,10 +848,29 @@ class ClaudeToolkit:
             if attempt < 2:
                 time.sleep(2)
         if not raw or not raw.get("data"):
+            # HMDS is unavailable (null body after 3 attempts). Try the iserver history
+            # endpoint as a fallback — it uses a different service path and works when
+            # HMDS hasn't been initialized for the session. Hard cap: ~84 daily bars.
+            fallback = None
+            try:
+                fallback = self._client.get_market_history(conid, period=period, bar=bar)
+            except IBKRAPIError:
+                pass
+            if fallback and fallback.get("data"):
+                df = _bars_to_dataframe(fallback)
+                self._cache.save(df, symbol, timeframe, period, end)
+                return (
+                    f"⚠ HMDS unavailable — fetched {symbol} {timeframe} ({period}) via iserver fallback: "
+                    f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}. "
+                    f"Saved to Drive cache. Note: iserver endpoint caps at ~84 daily bars; "
+                    f"retry fetch_market_data once HMDS initializes for full history.",
+                    None,
+                )
             raw_repr = json.dumps(raw, indent=2) if raw else "None (IBKR returned null/empty body)"
             return (
                 f"IBKR returned no data for {symbol} (period={period}, bar={bar}). "
-                f"Raw IBKR response: {raw_repr}"
+                f"Both HMDS and iserver fallback returned no data. "
+                f"HMDS raw response: {raw_repr}"
             ), None
 
         df = _bars_to_dataframe(raw)
