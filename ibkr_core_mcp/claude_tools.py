@@ -1203,14 +1203,25 @@ class ClaudeToolkit:
         return json.dumps(allocation, indent=2), None
 
     def _get_pa_periods(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return the valid period strings for Portfolio Analyst queries from IBKR's /pa/allperiods endpoint."""
+        """Return the valid period strings for Portfolio Analyst queries from IBKR's /pa/allperiods endpoint.
+
+        Returns the raw response when the structure is unrecognised so the caller can
+        inspect it and update get_pa_periods() with the correct key.
+        """
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
+        # Call the raw endpoint directly so we can show what IBKR actually returned
+        # if get_pa_periods() fails to extract the list.
+        raw = self._client._post("/pa/allperiods", {"acctIds": account_ids})
         periods = self._client.get_pa_periods(account_ids)
-        if not periods:
-            return "No periods returned by IBKR — PA may not be available for this account.", None
-        return "Valid PA periods:\n" + "\n".join(f"  - {p}" for p in periods), None
+        if periods:
+            return "Valid PA periods:\n" + "\n".join(f"  - {p}" for p in periods), None
+        return (
+            f"get_pa_periods returned no periods. "
+            f"Raw IBKR response (use this to identify the correct response key):\n"
+            f"{json.dumps(raw, indent=2)}"
+        ), None
 
     def _get_pa_performance(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return Portfolio Analyst performance metrics for the requested period."""

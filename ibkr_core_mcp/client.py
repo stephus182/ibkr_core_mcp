@@ -569,13 +569,27 @@ class IBKRClient:
     # ------------------------------------------------------------------
 
     def get_pa_periods(self, account_ids: list[str]) -> list[str]:
-        """Available period strings for Portfolio Analyst queries. Returns [] if not a list.
+        """Available period strings for Portfolio Analyst queries.
+
+        Response shape is not officially documented — observed structures:
+        - list of strings: returned directly
+        - dict with 'Period' key: extract the list
+        - dict with 'allPeriods' key: extract the list
+        Raw response is returned as-is in the 'raw' key when the shape is unknown,
+        so the caller can surface it for inspection.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: POST /pa/allperiods
         """
         data = self._post("/pa/allperiods", {"acctIds": account_ids})
-        return data if isinstance(data, list) else []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ("Period", "allPeriods", "periods", "period"):
+                val = data.get(key)
+                if isinstance(val, list):
+                    return val
+        return []
 
     def get_pa_performance(self, account_ids: list[str], period: str) -> dict[str, Any]:
         """NAV performance for the given period.
