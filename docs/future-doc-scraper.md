@@ -16,7 +16,8 @@ and its dependents — not limited to IBKR. Intended targets include:
 | IBKR CP API reference (`cpapi-v1`) | Yes — IBKR Campus login | High |
 | IBKR Web API reference (`webapi-ref`) | Yes — IBKR Campus login | High |
 | IBKR TWS API docs (`interactivebrokers.github.io/tws-api/`) | No — public | Medium (historical data limits, duration strings, bar sizes) |
-| IBKR Flex Web Service guide | No — public | Low (already fetchable) |
+| IBKR Flex Web Service (campus) `/ibkr-api-page/flex-web-service/` | Yes — IBKR Campus login | High — ibkrguides.com public version is outdated (shows ndcdyn for GetStatement); campus version likely reflects current gdcdyn live behavior |
+| IBKR Flex Web Service guide (ibkrguides.com) | No — public | Low (accessible but outdated re: GetStatement subdomain) |
 | Anthropic API docs | No — public | Medium |
 | Any other 403-gated dependency docs | Varies | As needed |
 
