@@ -201,13 +201,16 @@ def test_parse_trades_tolerates_non_numeric_quantity(flex_client):
 # fetch_trades
 # ---------------------------------------------------------------------------
 
-def test_fetch_trades_calls_upsert_and_cache(flex_client):
+def test_fetch_trades_calls_upsert_and_archives_xml(flex_client):
+    """fetch_trades must upsert to SQLite and archive raw XML to Drive account_data/."""
     with patch.object(flex_client, "_send_request", return_value=("REF123", "https://example.com/Get")), \
          patch.object(flex_client, "_get_statement", return_value=GET_STATEMENT_XML.decode()), \
          patch.object(flex_client, "_parse_trades", return_value=[{"execution_id": "1"}]):
         result = flex_client.fetch_trades("U1234567")
     flex_client._store.upsert_trades.assert_called_once_with([{"execution_id": "1"}])
-    flex_client._cache.save.assert_called_once()
+    # XML archived to account_data/, not parquet to market_data/
+    flex_client._cache.upload_account_file_bytes.assert_called_once()
+    flex_client._cache.save.assert_not_called()
     assert result == [{"execution_id": "1"}]
 
 

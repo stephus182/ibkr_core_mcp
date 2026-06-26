@@ -201,7 +201,7 @@ class FlexQueryClient:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Full workflow: fetch → parse → upsert SQLite → save GDrive parquet.
+        """Full workflow: fetch → parse → upsert SQLite → archive XML to Drive account_data/.
 
         start_date / end_date override the date range configured in the Flex query.
         Format: YYYYMMDD (e.g. "20260101"). Max range: 365 days.
@@ -217,22 +217,24 @@ class FlexQueryClient:
         trades = self._parse_trades(xml_text)
         self._store.upsert_trades(trades)
         try:
-            self._save_trades_to_cache(trades, "FLEX_TRADES")
+            self._archive_xml_to_drive(xml_text, account_id, ref_code)
         except Exception:
-            # Drive cache write is supplementary — trades are already in SQLite.
+            # Drive archive is supplementary — trades are already in SQLite.
             # A Drive auth failure must not abort a successful sync.
             pass
         return trades
 
-    def _save_trades_to_cache(self, trades: list[dict[str, Any]], cache_key: str) -> None:
-        """Persist a trade list to the GDrive parquet cache."""
-        if not trades:
-            return
-        import pandas as pd
+    def _archive_xml_to_drive(self, xml_text: str, account_id: str, ref_code: str) -> None:
+        """Archive the raw Flex XML to Drive account_data/ for future re-import.
 
-        account_id = trades[0].get("account", "UNKNOWN")
-        df = pd.DataFrame(trades)
-        self._cache.save(df, cache_key, "ALL", account_id, date.today().isoformat())
+        Filename: flex_{account_id}_{date}_{ref_code}.xml
+        Lives in account_data/ (historical account data), not market_data/ (OHLCV cache).
+        Can be re-imported any time via sync_flex_archive.
+        """
+        filename = f"flex_{account_id}_{date.today().isoformat()}_{ref_code}.xml"
+        self._cache.upload_account_file_bytes(
+            xml_text.encode("utf-8"), filename, mimetype="application/xml"
+        )
 
     def _send_request(
         self,

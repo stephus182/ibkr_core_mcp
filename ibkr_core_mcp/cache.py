@@ -347,7 +347,12 @@ class GDriveCache:
     def upload_account_file(self, local_path: "str | Path", filename: str) -> None:
         """Upload a local file to account_data/ on Drive, replacing any existing file of the same name."""
         from pathlib import Path as _Path
-        data = _Path(local_path).read_bytes()
+        self.upload_account_file_bytes(_Path(local_path).read_bytes(), filename)
+
+    def upload_account_file_bytes(
+        self, data: bytes, filename: str, mimetype: str = "application/octet-stream"
+    ) -> None:
+        """Upload raw bytes to account_data/ on Drive, replacing any existing file of the same name."""
         svc = self._get_service()
         folder_id = self._resolve_account_folder()
         existing = (
@@ -360,7 +365,7 @@ class GDriveCache:
             .get("files", [])
         )
         buf = io.BytesIO(data)
-        media = MediaIoBaseUpload(buf, mimetype="application/octet-stream")
+        media = MediaIoBaseUpload(buf, mimetype=mimetype)
         if existing:
             svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
         else:
