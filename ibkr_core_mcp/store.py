@@ -233,9 +233,10 @@ class SQLiteStore:
     ) -> None:
         """Insert or replace a Flex XML import record in the manifest.
 
-        Uses INSERT OR REPLACE so re-importing the same filename updates the row
-        (e.g. if a rolling sync produces a new XML with the same date but different
-        ref_code is stored under a new filename — each filename is unique).
+        ON CONFLICT(filename) updates all fields except filename itself. The conflict
+        case arises when fetch_trades is retried for the same account+date (producing
+        the same filename), e.g. after a transient error or the double-start bug seen
+        in session_log. Hash and counts are updated to reflect the latest fetch.
 
         source must be 'manual' (user-downloaded historical archive, pre-validated)
         or 'auto' (ClaudIA Flex Web Service sync).

@@ -201,7 +201,13 @@ class FlexQueryClient:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Full workflow: fetch → parse → upsert SQLite → archive XML to Drive account_data/.
+        """Full workflow: fetch → parse → upsert SQLite → archive XML to Drive + log manifest.
+
+        After a successful upsert, _archive_and_log uploads the raw XML to Drive
+        account_data/ and writes a row to flex_import_log with SHA-256, trade_id_count,
+        raw_trade_count, and verified_at set to now (import is complete by definition).
+        The archive and manifest steps are non-fatal — a Drive failure does not abort
+        a successful sync; trades are already in SQLite before the upload is attempted.
 
         start_date / end_date override the date range configured in the Flex query.
         Format: YYYYMMDD (e.g. "20260101"). Max range: 365 days.
@@ -233,8 +239,8 @@ class FlexQueryClient:
         - Extracts unique tradeID count and raw <Trade> element count for the manifest.
         - raw_trade_count != trade_id_count would indicate within-file duplicate tradeIDs
           (should never occur from IBKR, flagged transparently if it does).
-        - Sets verified_at = today because the tradeIDs were just upserted to SQLite;
-          the import is complete at this point by definition.
+        - Sets verified_at = import timestamp because the tradeIDs were just upserted
+          to SQLite; the import is complete at this point by definition.
         """
         import hashlib
         from datetime import UTC, datetime

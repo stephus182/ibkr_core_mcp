@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**363 tests · 72% line coverage (non-integration)**
+**386 tests · 72% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Full suite: `pytest`
 
 ---
@@ -45,7 +45,7 @@ These modules are fully functional but cannot be meaningfully unit-tested withou
 | `streaming.py` | 82% | WebSocket I/O methods (`connect`, `subscribe`, `listen`, `disconnect`) require a live IBKR WebSocket. `_parse_message` (the pure parsing logic) is 100% tested; only network I/O is untested. |
 | `gateway/manager.py` | 73% | Docker container lifecycle (`ensure_docker_running`, `image_exists`) and interactive startup flow (268–304) require Docker Desktop and a terminal for user input. All pure logic is tested. |
 | `claude_tools.py` | 68% | The tested 32% covers all pure functions: `_parse_live_trades` (10 tests), `_format_coverage` (3 tests), tool definitions and routing. The untested 32% is live tool handlers that call `IBKRClient` methods — all require a running IBKR gateway. |
-| `flex_query.py` | 77% | `import_from_file` (reads a real file) and `sync_archive_from_drive` (requires GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. |
+| `flex_query.py` | 77% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
 
 ---
 
@@ -64,6 +64,9 @@ These are the load-bearing paths with regression tests. Editing any of them will
 | `get_trade_date_coverage` — `request_from/to` excludes trade dates themselves | `test_coverage_gap_request_range_excludes_trade_dates` |
 | `get_trade_date_coverage` — NYSE calendar staleness vs fallback | `test_trade_coverage_*` (4 tests) |
 | `_format_coverage` — gap instructions rendered, stale note rendered | `test_format_coverage_*` (3 tests) |
+| `extract_execution_ids` — returns (unique_ids, raw_count); blank tradeID counted in raw but not unique; within-file duplicate detected | `test_extract_execution_ids_*` (3 tests) |
+| `verify_flex_import` — all present (hash match), missing records, no Drive, no files, manual pre-validated | `test_verify_flex_import_*` (4 tests) |
+| `log_flex_import` / `get_flex_import_entry` / `mark_flex_import_verified` — manifest CRUD | tested via `test_verify_flex_import_*` (mock store) |
 
 ### IBKR error handling (regression guard for real incidents)
 
@@ -111,6 +114,19 @@ These are the load-bearing paths with regression tests. Editing any of them will
 |---|---|
 | Code exceeds `_MAX_CODE_LEN` → `BacktestSyntaxError` | `test_code_length_limit_raises` |
 | Strategy omits `df['signal']` → `BacktestRuntimeError` | `test_missing_signal_column_raises` |
+
+---
+
+## Live integration tests (verified against real IBKR + GDrive)
+
+These paths cannot be exercised in unit tests. Verified manually against a live account.
+
+| Path | Date | Result |
+|---|---|---|
+| `fetch_trades` → `_archive_and_log` → Drive upload → `log_flex_import` | 2026-06-26 | `flex_U1675699_2026-06-26_4997140278.xml`: trade_id_count=161, raw_trade_count=161, source=auto, verified_at set at import time |
+| `verify_flex_import` — hash match path (auto file, hash unchanged) | pending | — |
+| `verify_flex_import` — manual file pre-validated path | pending | — |
+| `sync_archive_from_drive` — full Drive XML re-import | pending | — |
 
 ---
 
