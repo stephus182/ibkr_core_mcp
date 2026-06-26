@@ -309,10 +309,28 @@ def test_send_request_warn_unknown_error_code(flex_client):
 
 
 def test_send_request_rejects_non_ibkr_url(flex_client):
-    """URL allowlist must reject any URL not under ndcdyn.interactivebrokers.com."""
+    """URL allowlist must reject any URL not on the known IBKR Flex subdomains."""
     with _mock_get(_BAD_URL):
         with pytest.raises(FlexQueryError, match="unexpected URL"):
             flex_client._send_request()
+
+
+_GDCDYN_URL = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Success</Status>
+  <ReferenceCode>1234567890</ReferenceCode>
+  <Url>https://gdcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement</Url>
+</FlexStatementResponse>"""
+
+
+def test_send_request_accepts_gdcdyn_url(flex_client):
+    """gdcdyn.interactivebrokers.com must be accepted — IBKR live API returns this subdomain
+    for GetStatement even though official docs show ndcdyn.
+    Observed 2026-06-26: SendRequest response contained gdcdyn URL, rejected by old allowlist.
+    """
+    with _mock_get(_GDCDYN_URL):
+        ref, url = flex_client._send_request()
+    assert "gdcdyn.interactivebrokers.com" in url
 
 
 def test_send_request_includes_fd_td_when_provided(flex_client):

@@ -17,7 +17,15 @@ if TYPE_CHECKING:
 # Official IBKR Flex Web Service endpoints.
 # Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
 _BASE_URL = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest"
-_ALLOWED_URL_PREFIX = "https://ndcdyn.interactivebrokers.com/"
+
+# IBKR Flex GetStatement URL allowlist (SSRF guard).
+# Official docs show ndcdyn for both steps, but live API returns gdcdyn for GetStatement.
+# Both are legitimate IBKR Flex subdomains — allowlist covers both.
+# Observed 2026-06-26: SendRequest → ndcdyn; GetStatement URL returned by IBKR → gdcdyn.
+_ALLOWED_URL_PREFIXES = (
+    "https://ndcdyn.interactivebrokers.com/",
+    "https://gdcdyn.interactivebrokers.com/",
+)
 
 # Required by IBKR for programmatic access (documented requirement).
 _REQUEST_HEADERS = {"User-Agent": "Python/3"}
@@ -267,7 +275,7 @@ class FlexQueryClient:
             raise FlexQueryError(f"Flex SendRequest unexpected response: status={status!r}")
         if not url:
             raise FlexQueryError("Flex SendRequest did not return a statement URL")
-        if not url.startswith(_ALLOWED_URL_PREFIX):
+        if not any(url.startswith(p) for p in _ALLOWED_URL_PREFIXES):
             raise FlexQueryError(f"Flex SendRequest returned unexpected URL: {url!r}")
 
         return ref_code, url
