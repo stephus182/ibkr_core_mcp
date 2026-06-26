@@ -216,7 +216,12 @@ class FlexQueryClient:
         xml_text = self._get_statement(url, ref_code)
         trades = self._parse_trades(xml_text)
         self._store.upsert_trades(trades)
-        self._save_trades_to_cache(trades, "FLEX_TRADES")
+        try:
+            self._save_trades_to_cache(trades, "FLEX_TRADES")
+        except Exception:
+            # Drive cache write is supplementary — trades are already in SQLite.
+            # A Drive auth failure must not abort a successful sync.
+            pass
         return trades
 
     def _save_trades_to_cache(self, trades: list[dict[str, Any]], cache_key: str) -> None:
