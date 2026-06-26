@@ -1743,11 +1743,30 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _get_watchlists(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return all watchlists and their constituent symbols from the IBKR account."""
+        """Return all watchlists and their constituent symbols from the IBKR account.
+
+        IMPORTANT: Watchlists in TradingView are NOT the same as IBKR watchlists.
+        This endpoint returns only watchlists created inside IBKR (TWS, mobile app,
+        or Client Portal). TradingView has its own separate watchlist storage.
+        """
         watchlists = self._client.get_watchlists()
         if not watchlists:
-            return "No watchlists found.", None
-        return json.dumps(watchlists, indent=2), None
+            return "No watchlists found in IBKR account.", None
+        # Emit raw IBKR response first so the structure is transparent, then a
+        # plain-text summary. This prevents misreading ambiguous field names.
+        lines = [f"IBKR watchlists ({len(watchlists)} found) — raw response below:\n"]
+        for wl in watchlists:
+            wl_id = wl.get("id") or wl.get("watchlistId") or "?"
+            wl_name = wl.get("name") or wl.get("watchlistName") or "?"
+            rows = wl.get("rows") or wl.get("instruments") or wl.get("symbols") or []
+            symbols = [
+                r.get("ST") or r.get("symbol") or r.get("conid") or str(r)
+                for r in rows if isinstance(r, dict)
+            ] if rows else []
+            lines.append(f"  [{wl_id}] {wl_name}: {', '.join(str(s) for s in symbols) or '(no symbols)'}")
+        lines.append("\nRaw IBKR response:")
+        lines.append(json.dumps(watchlists, indent=2))
+        return "\n".join(lines), None
 
     def _get_order_status(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return current status and fill details for a specific order ID."""
