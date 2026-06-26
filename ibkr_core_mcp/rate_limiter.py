@@ -22,9 +22,17 @@ def with_retry(
     a Retry-After header in its public reference. Fixed exponential backoff
     is used as a safe default.
 
-    IBKR Client Portal does not publish per-endpoint rate limits. The official
-    API reference requires authentication to access:
+    IBKR Client Portal does not publish per-endpoint rate limits in public docs.
+    The CP API reference requires authentication:
     https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+
+    Historical data rate limits (from TWS API docs — likely shared infrastructure):
+    - No identical requests within 15 seconds
+    - No 6+ requests for the same contract within 2 seconds
+    - No 60+ requests in any 10-minute window
+    - Max 50 concurrent open historical data requests
+    Source: https://interactivebrokers.github.io/tws-api/historical_limitations.html
+    Note: TWS API pacing rules — not confirmed to apply to CP API REST endpoints.
 
     Note: Flex Web Service has documented rate limits (error 1018: max 1 req/s,
     10 req/min per token). Those are enforced separately in flex_query.py.
