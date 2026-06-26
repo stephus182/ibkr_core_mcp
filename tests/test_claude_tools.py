@@ -529,6 +529,29 @@ def test_get_positions_empty(toolkit):
     assert "No open positions" in text
 
 
+def test_get_positions_filters_zero_size(toolkit):
+    """IBKR returns closed same-day positions with position=0 — must be excluded."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_positions.return_value = [
+        {"contractDesc": "AAPL", "position": 100, "mktValue": 18000.0, "unrealizedPnl": 500.0},
+        {"contractDesc": "ES SEP2026", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+    ]
+    text, fig = toolkit.execute("get_positions", {})
+    assert "AAPL" in text
+    assert "ES SEP2026" not in text
+    assert "Open positions (1)" in text
+
+
+def test_get_positions_all_zero_returns_empty(toolkit):
+    """If every position is 0-size, return 'No open positions'."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_positions.return_value = [
+        {"contractDesc": "ES SEP2026", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
+    ]
+    text, fig = toolkit.execute("get_positions", {})
+    assert "No open positions" in text
+
+
 def test_get_positions_field_fallback(toolkit):
     """Position summary should use contractDesc → ticker → symbol in that order."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
