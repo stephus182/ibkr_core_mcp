@@ -1593,7 +1593,17 @@ class ClaudeToolkit:
                 failed.append(sym)
         if not conids:
             return f"Could not resolve conids for: {', '.join(symbols)}.", None
+
+        import time
         snapshot = self._client.get_market_snapshot(conids)
+        # First call initializes the iServer subscription but returns no price fields.
+        # If no price data came back, wait 1s and retry once — same warmup pattern as
+        # /iserver/account/orders (two-call). Fields 31=last, 84=bid, 86=ask.
+        _has_prices = lambda s: any(item.get("31") or item.get("84") or item.get("86") for item in s)
+        if snapshot and not _has_prices(snapshot):
+            time.sleep(1)
+            snapshot = self._client.get_market_snapshot(conids)
+
         if not snapshot:
             return "No market snapshot data returned.", None
         result = json.dumps(snapshot, indent=2)
