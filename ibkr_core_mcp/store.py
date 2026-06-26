@@ -268,9 +268,9 @@ class SQLiteStore:
         Covers the full current year (past + future) plus the next calendar year,
         giving complete holiday visibility with minimal data (~10-15 holidays/exchange/year).
 
-        Default exchanges: NYSE (XNYS) and CME (XCME) — covers US equities and futures.
-        Pass additional exchange codes for international coverage
-        (XLON=LSE, XTOK=Tokyo, XASX=Sydney, XETR=Frankfurt, XHKG=Hong Kong, XTSE=Toronto…).
+        Default: 20 exchanges covering full G20 + Eurex (XNYS, CME, XLON, XETR, XEUR,
+        XPAR, XMIL, XTKS, XHKG, XSHG, XBOM, XKRX, XASX, XTSE, BVMF, XMEX, XJSE,
+        XSAU, XIDX, XIST). Pass a custom list to restrict to a subset.
         """
         if exchanges is None:
             # Full G20 coverage + Eurex futures. Excludes Russia (XMOS — IBKR

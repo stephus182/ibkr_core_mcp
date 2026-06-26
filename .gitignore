@@ -33,6 +33,7 @@ credentials.json
 # Coverage
 .coverage
 .coverage.*
+coverage.json
 htmlcov/
 
 # IDE

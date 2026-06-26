@@ -20,7 +20,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 38 tools to any MCP client |
+| `mcp_server` | MCP server (stdio + SSE) exposing all 40 tools to any MCP client |
 
 ---
 
@@ -226,7 +226,7 @@ Expose all 38 tools (+ 2 MCP-only alert tools = 40 total) to any MCP-compatible 
 python -m ibkr_core_mcp.mcp_server
 
 # SSE transport with live streaming
-python -m ibkr_core_mcp.mcp_server --transport sse --port 8765 --stream
+python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 ```
 
 ---
@@ -334,7 +334,7 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 ```python
 from ibkr_core_mcp.store import SQLiteStore
 
-# Default: 8 major global exchanges — no Config needed for this call
+# Default: 20 exchanges (full G20 + Eurex) — no Config needed for this call
 cal = SQLiteStore.get_market_calendar_context()
 
 # {
@@ -361,13 +361,13 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 
 **Coverage:** full current year + next year (past and future holidays) — ~10–28 per exchange, negligible payload.
 
-**Default 8 exchanges:** NYSE (XNYS), CME Futures (CME), LSE London (XLON), Xetra Frankfurt (XETR), TSE Tokyo (XTKS), HKEX Hong Kong (XHKG), ASX Sydney (XASX), TSX Toronto (XTSE). This covers the major US, European, and Asia-Pacific markets, enabling ClaudIA to reason about cross-regional volume patterns and macro events.
+**Default 20 exchanges (full G20 + Eurex):** NYSE (XNYS), CME Futures (CME), LSE London (XLON), Xetra Frankfurt (XETR), Eurex (XEUR), Euronext Paris (XPAR), Borsa Italiana (XMIL), TSE Tokyo (XTKS), HKEX Hong Kong (XHKG), SSE Shanghai (XSHG), BSE Mumbai (XBOM), KRX Seoul (XKRX), ASX Sydney (XASX), TSX Toronto (XTSE), B3 São Paulo (BVMF), BMV Mexico City (XMEX), JSE Johannesburg (XJSE), Tadawul Saudi Arabia (XSAU), IDX Jakarta (XIDX), Borsa Istanbul (XIST). Excludes Russia (XMOS — IBKR suspended most Russian securities since 2022) and Argentina (XBUE — capital controls, very limited IBKR access).
 
 **100+ supported markets** including XNAS (NASDAQ), XPAR (Euronext Paris), XKRX (Korea), XBOM (Bombay), SSE (Shanghai), BVMF (Brazil), and more — [full list](https://github.com/rsheftel/exchange_calendars#calendars).
 
 **Used for:**
 - **Staleness check** — `get_trade_date_coverage()` uses the NYSE calendar to determine if Flex data is current. `newest == last_trading_day` means fully up to date, regardless of whether today is a weekend or holiday.
-- **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and full-year holidays for all 8 exchanges at session start. This lets it reason about order timing, settlement windows, cross-regional volume effects, and upcoming closures proactively — without any API calls or gateway dependency.
+- **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and full-year holidays for all 20 exchanges at session start. This lets it reason about order timing, settlement windows, cross-regional volume effects, and upcoming closures proactively — without any API calls or gateway dependency.
 
 **Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works offline.
 
@@ -375,7 +375,7 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 
 | Call | Time |
 |---|---|
-| First call per process (cold) | ~875ms — `exchange_calendars` loads numpy arrays once |
+| First call per process (cold) | ~3.4s — `exchange_calendars` loads numpy arrays for 20 exchanges once |
 | Subsequent calls same day | 0.01ms — process-level date-keyed cache hit |
 | Next day / process restart | Recomputes fresh automatically |
 

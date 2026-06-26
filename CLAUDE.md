@@ -395,7 +395,7 @@ toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg
 client   = anthropic.Anthropic()
 response = client.messages.create(
     model="claude-sonnet-4-6",
-    tools=toolkit.tools,          # 33 IBKR tools, ready to use
+    tools=toolkit.tools,          # 38 tools, ready to use
     messages=[{"role": "user", "content": "Show my open positions and run a backtest on AAPL"}],
 )
 for block in response.content:
@@ -480,7 +480,7 @@ Connect MCP clients to `http://localhost:5174/sse`.
 
 ### Tools (40)
 
-All 22 `ClaudeToolkit` tools plus:
+All 38 `ClaudeToolkit` tools plus:
 - `add_price_alert` — register a threshold alert (persisted to SQLite)
 - `get_price_alerts` — list active or all alerts
 
