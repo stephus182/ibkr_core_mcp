@@ -862,8 +862,9 @@ class ClaudeToolkit:
                 return (
                     f"⚠ HMDS unavailable — fetched {symbol} {timeframe} ({period}) via iserver fallback: "
                     f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}. "
-                    f"Saved to Drive cache. Note: iserver endpoint caps at ~84 daily bars; "
-                    f"retry fetch_market_data once HMDS initializes for full history.",
+                    f"Saved to Drive cache. Note: iserver/marketdata/history may return fewer bars than "
+                    f"requested (observed limit, not officially documented). "
+                    f"Retry fetch_market_data once HMDS initializes for confirmed full history.",
                     None,
                 )
             raw_repr = json.dumps(raw, indent=2) if raw else "None (IBKR returned null/empty body)"

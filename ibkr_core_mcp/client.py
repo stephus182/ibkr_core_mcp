@@ -156,10 +156,17 @@ class IBKRClient:
     # ------------------------------------------------------------------
 
     def get_market_history(self, conid: int, period: str = "1Y", bar: str = "1d", outside_rth: bool = False) -> dict[str, Any]:
-        """OHLCV bars via iserver/marketdata/history. Hard cap: ~84 daily bars regardless of period.
+        """OHLCV bars via iserver/marketdata/history.
 
-        For requests beyond ~4 months of daily data, use get_hmds_history() instead.
         Returns {"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}.
+
+        ## Bar count limit (observed, not officially documented)
+        Testing observed a cap of approximately 84 daily bars regardless of the period
+        parameter — a 1Y request returned ~84 bars, not 252. The exact limit is not
+        in the publicly accessible IBKR docs (https://www.interactivebrokers.com/campus/
+        ibkr-api-page/cpapi-v1/ requires login). Use get_hmds_history() for longer history;
+        /hmds/history supports up to 7Y of daily data for equities.
+        Verification pending: see docs/project-status.md §Pending Doc Verification item 9.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: GET /iserver/marketdata/history
