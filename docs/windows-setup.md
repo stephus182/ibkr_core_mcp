@@ -94,9 +94,36 @@ Open `https://localhost:5055` in Chrome, log in with IBKR credentials + 2FA. The
 
 ---
 
-## Google Drive Cache
+## Google Drive — Portability Architecture
 
-OAuth2 flow is browser-based — works identically on Windows. On first use, a browser window opens for Google sign-in. The token is saved to `GDRIVE_TOKEN_FILE`.
+ClaudIA is designed to restore itself automatically on any machine. All persistent state lives under one Drive root folder (`GOOGLE_DRIVE_FOLDER_ID`):
+
+```
+<GOOGLE_DRIVE_FOLDER_ID>/
+  context.md                 ← ClaudIA persona (cloud-authoritative)
+  principles.md              ← trading rules (cloud-authoritative)
+  db/
+    claudia.db               ← conversation history (download at start, upload at end)
+  market_data/
+    *.parquet                ← OHLCV cache (shared across machines)
+  account_data/
+    flex_U*_*.xml            ← Flex XML archives (re-importable to SQLite)
+    store.db                 ← trade store backup
+```
+
+**Minimum credentials for a new machine** (nothing else needed):
+
+| Env var | What it unlocks |
+|---|---|
+| `GOOGLE_DRIVE_FOLDER_ID` | Root folder — all subfolders auto-created on first use |
+| `GDRIVE_TOKEN_FILE` | OAuth2 token |
+| `GDRIVE_CREDENTIALS_FILE` | OAuth2 credentials |
+| `ANTHROPIC_API_KEY` | Claude API |
+| `IBKR_FLEX_TOKEN` + `IBKR_FLEX_QUERY_ID` | Re-sync full trade history from IBKR |
+
+`claudia.db` (conversation history) is downloaded automatically at session start. `store.db` rebuilds from the Flex XML archives in `account_data/` via `sync_flex_archive`.
+
+**OAuth2 flow** is browser-based — works identically on Windows. On first use, a browser window opens for Google sign-in. The token is saved to `GDRIVE_TOKEN_FILE`.
 
 ---
 
