@@ -566,6 +566,59 @@ def test_get_positions_field_fallback(toolkit):
     assert "GOOG" in text
 
 
+# ── _get_ledger ───────────────────────────────────────────────────────────────
+
+def test_get_ledger_formats_usd(toolkit):
+    """Ledger formats key fields from the USD currency block."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_account_ledger.return_value = {
+        "USD": {
+            "netliquidationvalue": 67516.82,
+            "cashbalance": 22637.43,
+            "stockmarketvalue": 44879.61,
+            "futuresonlymv": 1150.0,
+            "unrealizedpnl": -10359.37,
+            "realizedpnl": 1145.50,
+            "futuresonlypnl": 1150.0,
+            "accruals": -44.22,
+            "dividends": 44.0,
+        }
+    }
+    text, fig = toolkit.execute("get_ledger", {})
+    assert "67,516.82" in text
+    assert "22,637.43" in text
+    assert "USD" in text
+    assert "Futures Market Value" in text
+    assert "1,150.00" in text
+    assert fig is None
+
+
+def test_get_ledger_omits_zero_futures(toolkit):
+    """Futures rows are suppressed when futures market value and P&L are zero."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_account_ledger.return_value = {
+        "USD": {
+            "netliquidationvalue": 50000.0,
+            "cashbalance": 10000.0,
+            "stockmarketvalue": 40000.0,
+            "futuresonlymv": 0,
+            "unrealizedpnl": -500.0,
+            "realizedpnl": 0,
+            "futuresonlypnl": 0,
+        }
+    }
+    text, fig = toolkit.execute("get_ledger", {})
+    assert "Futures Market Value" not in text
+    assert "Futures P&L" not in text
+
+
+def test_get_ledger_empty(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_account_ledger.return_value = {}
+    text, fig = toolkit.execute("get_ledger", {})
+    assert "No ledger data" in text
+
+
 # ── _get_pnl — empty and non-numeric guards ──────────────────────────────────
 
 def test_get_pnl_empty(toolkit):

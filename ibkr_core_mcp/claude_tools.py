@@ -1112,7 +1112,50 @@ class ClaudeToolkit:
         if err:
             return err, None
         ledger = self._client.get_account_ledger(account_id)
-        return json.dumps(ledger, indent=2), None
+        if not ledger:
+            return "No ledger data returned.", None
+
+        # IBKR ledger is keyed by currency (e.g. {"USD": {...}, "BASE": {...}}).
+        # BASE is a synthetic aggregate; prefer currency-specific keys first.
+        currencies = [k for k in ledger if k != "BASE"] or list(ledger.keys())
+        lines: list[str] = []
+        for currency in currencies:
+            data = ledger.get(currency, {})
+            if not isinstance(data, dict):
+                continue
+
+            def _f(key: str) -> float:
+                try:
+                    return float(data.get(key) or 0)
+                except (ValueError, TypeError):
+                    return 0.0
+
+            nlv = _f("netliquidationvalue")
+            cash = _f("cashbalance")
+            stock = _f("stockmarketvalue")
+            fut_mv = _f("futuresonlymv")
+            unrealized = _f("unrealizedpnl")
+            realized = _f("realizedpnl")
+            fut_pnl = _f("futuresonlypnl")
+            interest = _f("accruals")
+            dividends = _f("dividends")
+
+            lines.append(f"Account Ledger ({currency}):")
+            lines.append(f"  Net Liquidation Value : {nlv:>14,.2f}")
+            lines.append(f"  Cash Balance          : {cash:>14,.2f}")
+            lines.append(f"  Stock Market Value    : {stock:>14,.2f}")
+            if fut_mv:
+                lines.append(f"  Futures Market Value  : {fut_mv:>14,.2f}")
+            lines.append(f"  Unrealized P&L        : {unrealized:>+14,.2f}")
+            lines.append(f"  Realized P&L          : {realized:>+14,.2f}")
+            if fut_pnl:
+                lines.append(f"  Futures P&L           : {fut_pnl:>+14,.2f}")
+            if interest:
+                lines.append(f"  Interest Accrued      : {interest:>+14,.2f}")
+            if dividends:
+                lines.append(f"  Dividends             : {dividends:>+14,.2f}")
+
+        return "\n".join(lines) if lines else json.dumps(ledger, indent=2), None
 
     def _get_allocation(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         account_id, err = self._first_account_id()
