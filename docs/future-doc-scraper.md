@@ -15,6 +15,7 @@ and its dependents — not limited to IBKR. Intended targets include:
 |---|---|---|
 | IBKR CP API reference (`cpapi-v1`) | Yes — IBKR Campus login | High |
 | IBKR Web API reference (`webapi-ref`) | Yes — IBKR Campus login | High |
+| IBKR TWS API docs (`interactivebrokers.github.io/tws-api/`) | No — public | Medium (historical data limits, duration strings, bar sizes) |
 | IBKR Flex Web Service guide | No — public | Low (already fetchable) |
 | Anthropic API docs | No — public | Medium |
 | Any other 403-gated dependency docs | Varies | As needed |
