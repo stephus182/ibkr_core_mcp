@@ -188,8 +188,9 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `get_trades` | Trade history (live: last 6 days; store: unlimited) |
 | `sync_flex_trades` | Sync full history via IBKR Flex Web Service |
 | `sync_flex_archive` | Re-sync full Flex archive from GDrive parquet |
-| `check_flex_coverage` | Show date coverage of trade data in SQLite store |
+| `check_flex_coverage` | Activity distribution report — trade-date coverage across stored history (not an integrity check) |
 | `import_flex_file` | Import a locally downloaded Flex XML file into SQLite |
+| `verify_flex_import` | Import integrity check — cross-checks XML tradeIDs on Drive against SQLite; uses manifest to skip re-verifying unchanged files |
 | `get_live_orders` | Working orders (Submitted, PreSubmitted, Inactive, …) |
 | `get_order_status` | Status of a specific order by ID |
 | `diagnose_orders` | Diagnose order issues — checks session, permissions, account |
@@ -380,6 +381,49 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 | Next day / process restart | Recomputes fresh automatically |
 
 The cache key is `(date_str, tuple(exchange_codes))` — stored in a module-level dict (`_market_calendar_cache`). It auto-invalidates when the date changes; no manual expiry, no TTL logic needed. Correct by construction.
+
+---
+
+## Flex Import Integrity
+
+`verify_flex_import` is a manifest-based integrity check that proves every tradeID in the source XML archives is present in SQLite. It does **not** analyse activity patterns — use `check_flex_coverage` for that.
+
+### How it works
+
+```
+Drive account_data/
+  ClaudIA_Full_Activity_2024.xml  ← manual (pre-validated by user)
+  flex_U123_2024-06-15_REF.xml   ← auto (archived by sync_flex_trades)
+  flex_U123_2024-06-20_REF2.xml  ← auto
+```
+
+1. **Manual archives** (`ClaudIA_Full_Activity_*.xml`) — registered in the manifest on first encounter with `source='manual'` and `verified_at` already set. Never re-verified — user confirmed integrity at import time.
+2. **Auto-synced archives** (`flex_U*.xml`) — manifest row written at sync time with SHA-256 and `verified_at=now` (tradeIDs were just upserted, import is verified by definition). On re-check: SHA-256 compared to manifest. If hash matches, the full tradeID scan is skipped — file unchanged since sync. Hash mismatch (or first encounter) triggers a full cross-check.
+
+### Import manifest — `flex_import_log` table
+
+| Column | Description |
+|---|---|
+| `filename` | Drive filename (unique per file) |
+| `sha256` | SHA-256 of XML bytes at log time |
+| `trade_id_count` | Unique tradeIDs in the XML |
+| `raw_trade_count` | Total `<Trade>` elements — if `raw != unique`, within-file duplicate tradeIDs detected |
+| `source` | `'manual'` or `'auto'` |
+| `imported_at` | UTC timestamp of first log |
+| `verified_at` | UTC timestamp of last successful integrity check (`NULL` until first check) |
+
+### What it catches
+
+| Condition | Result |
+|---|---|
+| tradeID in XML but missing from SQLite | `✗ N missing` — re-import required |
+| `raw_count != unique_count` | `⚠ within-file duplicate tradeIDs` — flagged transparently (should never occur from IBKR) |
+| Drive file modified after sync | Hash mismatch → full cross-check triggered automatically |
+
+### What it does NOT do
+
+- Never modifies trade data — IBKR XML is the authority; SQLite is never "corrected" against anything other than a fresh pull
+- Gaps in trade-date coverage are not flagged — inactivity (holding a position) appears as a gap; that is correct data, not a coverage hole
 
 ---
 
