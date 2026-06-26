@@ -200,23 +200,28 @@ TOOL_DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_pa_periods",
+        "description": "Get the list of valid period strings for Portfolio Analyst queries (performance and transactions). Call this first if unsure which period to use.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_pa_performance",
-        "description": "Get portfolio NAV performance from IBKR Portfolio Analyst.",
+        "description": "Get portfolio NAV performance from IBKR Portfolio Analyst. Use get_pa_periods first to discover valid period strings.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "e.g. 'last7days', 'last30days', 'ytd', 'last365days'"},
+                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. 'last7days', 'last30days', 'ytd', 'last365days'"},
             },
             "required": ["period"],
         },
     },
     {
         "name": "get_pa_transactions",
-        "description": "Get transaction history from IBKR Portfolio Analyst.",
+        "description": "Get transaction history from IBKR Portfolio Analyst (all origins: mobile, TWS, API). Use get_pa_periods first to discover valid period strings.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "e.g. 'last7days', 'ytd'"},
+                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. 'last7days', 'ytd'"},
             },
             "required": ["period"],
         },
@@ -742,6 +747,7 @@ class ClaudeToolkit:
             "diagnose_orders": self._diagnose_orders,
             "get_ledger": self._get_ledger,
             "get_allocation": self._get_allocation,
+            "get_pa_periods": self._get_pa_periods,
             "get_pa_performance": self._get_pa_performance,
             "get_pa_transactions": self._get_pa_transactions,
             "get_contract_info": self._get_contract_info,
@@ -1196,6 +1202,16 @@ class ClaudeToolkit:
         allocation = self._client.get_account_allocation(account_id)
         return json.dumps(allocation, indent=2), None
 
+    def _get_pa_periods(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Return the valid period strings for Portfolio Analyst queries from IBKR's /pa/allperiods endpoint."""
+        account_ids, err = self._all_account_ids()
+        if err:
+            return err, None
+        periods = self._client.get_pa_periods(account_ids)
+        if not periods:
+            return "No periods returned by IBKR — PA may not be available for this account.", None
+        return "Valid PA periods:\n" + "\n".join(f"  - {p}" for p in periods), None
+
     def _get_pa_performance(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return Portfolio Analyst performance metrics for the requested period."""
         account_ids, err = self._all_account_ids()
@@ -1206,13 +1222,32 @@ class ClaudeToolkit:
 
     def _get_pa_transactions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """PA transactions use IBKR's Portfolio Analyst back-office data — includes ALL origins
-        (mobile, TWS, API). Not session-scoped. Authoritative for realized P&L."""
+        (mobile, TWS, API). Not session-scoped. Authoritative for realized P&L.
+
+        On HTTP 400 (invalid period): fetches valid period strings from /pa/allperiods and
+        returns them in the error message so the caller can retry with a valid value.
+        """
+        from ibkr_core_mcp.exceptions import IBKRAPIError
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
-        txns = self._client.get_pa_transactions(account_ids, inputs["period"])
+        period = inputs["period"]
+        try:
+            txns = self._client.get_pa_transactions(account_ids, period)
+        except IBKRAPIError as exc:
+            if exc.status_code == 400:
+                valid = self._client.get_pa_periods(account_ids)
+                hint = (
+                    f"Valid periods from IBKR: {', '.join(valid)}"
+                    if valid else "Could not retrieve valid periods from IBKR."
+                )
+                return (
+                    f"get_pa_transactions failed: IBKR rejected period '{period}' (HTTP 400). "
+                    f"{hint}"
+                ), None
+            raise
         if not txns:
-            return f"No transactions found for period '{inputs['period']}'.", None
+            return f"No transactions found for period '{period}'.", None
 
         lines = []
         total_amount = 0.0
