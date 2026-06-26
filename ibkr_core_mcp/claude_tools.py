@@ -973,8 +973,9 @@ class ClaudeToolkit:
         if not trades:
             return (
                 "No trades visible in CP API session (last 7 days). "
-                "Mobile/TWS-placed trades are not session-scoped — use source='store' (Flex) "
-                "for the authoritative execution list."
+                "Mobile/TWS-placed trades are not included in the session scope. "
+                "For today's mobile/TWS fills use get_pa_transactions (all origins, not session-scoped). "
+                "For multi-day history use source='store' after syncing with sync_flex_trades (T+1)."
             ), None
         lines = [
             f"- {t['time'][:19]} {t['symbol']} {t['asset_class'] or '?'} {t['side']} {t['size']} @ {t['price']}"
