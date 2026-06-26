@@ -830,22 +830,25 @@ class ClaudeToolkit:
             return f"{err} Is IBKR connected?", None
 
         # HMDS first-call behavior: IBKR initializes a data subscription on the first
-        # request for a symbol. The warmup can manifest as either a 404/500 error OR a
-        # 200 response with an empty "data" field. Both cases are retried.
+        # request for a symbol. The warmup can manifest as:
+        #   - IBKRAPIError (404 or 500) — retried
+        #   - 200 with null body (raw is None) — retried
+        #   - 200 with {"data": []} empty list — retried
+        # All three are treated as warmup and retried up to 3 times with 2s delays.
         import time
         from ibkr_core_mcp.exceptions import IBKRAPIError
         raw = None
         for attempt in range(3):
             try:
                 raw = self._client.get_hmds_history(conid, period=period, bar=bar)
-                if raw.get("data"):
+                if raw and raw.get("data"):  # raw could be None if IBKR returns null body
                     break
             except IBKRAPIError:
                 pass
             if attempt < 2:
                 time.sleep(2)
-        if raw is None or not raw.get("data"):
-            raw_repr = json.dumps(raw, indent=2) if raw else "None"
+        if not raw or not raw.get("data"):
+            raw_repr = json.dumps(raw, indent=2) if raw else "None (IBKR returned null/empty body)"
             return (
                 f"IBKR returned no data for {symbol} (period={period}, bar={bar}). "
                 f"Raw IBKR response: {raw_repr}"
