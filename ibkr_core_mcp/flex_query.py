@@ -217,23 +217,44 @@ class FlexQueryClient:
         trades = self._parse_trades(xml_text)
         self._store.upsert_trades(trades)
         try:
-            self._archive_xml_to_drive(xml_text, account_id, ref_code)
+            self._archive_and_log(xml_text, account_id, ref_code)
         except Exception:
-            # Drive archive is supplementary — trades are already in SQLite.
+            # Drive archive and manifest log are supplementary — trades already in SQLite.
             # A Drive auth failure must not abort a successful sync.
             pass
         return trades
 
-    def _archive_xml_to_drive(self, xml_text: str, account_id: str, ref_code: str) -> None:
-        """Archive the raw Flex XML to Drive account_data/ for future re-import.
+    def _archive_and_log(self, xml_text: str, account_id: str, ref_code: str) -> None:
+        """Archive raw Flex XML to Drive account_data/ and record it in the import manifest.
 
-        Filename: flex_{account_id}_{date}_{ref_code}.xml
-        Lives in account_data/ (historical account data), not market_data/ (OHLCV cache).
-        Can be re-imported any time via sync_flex_archive.
+        Filename: flex_{account_id}_{date}_{ref_code}.xml  (auto-synced naming convention)
+        - Uploads to account_data/ on Drive (not market_data/ — this is account data).
+        - Computes SHA-256 of the XML bytes for future hash-based integrity checks.
+        - Extracts unique tradeID count and raw <Trade> element count for the manifest.
+        - raw_trade_count != trade_id_count would indicate within-file duplicate tradeIDs
+          (should never occur from IBKR, flagged transparently if it does).
+        - Sets verified_at = today because the tradeIDs were just upserted to SQLite;
+          the import is complete at this point by definition.
         """
+        import hashlib
+        from datetime import UTC, datetime
+
         filename = f"flex_{account_id}_{date.today().isoformat()}_{ref_code}.xml"
-        self._cache.upload_account_file_bytes(
-            xml_text.encode("utf-8"), filename, mimetype="application/xml"
+        xml_bytes = xml_text.encode("utf-8")
+
+        self._cache.upload_account_file_bytes(xml_bytes, filename, mimetype="application/xml")
+
+        sha256 = hashlib.sha256(xml_bytes).hexdigest()
+        unique_ids, raw_count = FlexQueryClient.extract_execution_ids(xml_text)
+        now = datetime.now(UTC).isoformat()
+        self._store.log_flex_import(
+            filename=filename,
+            sha256=sha256,
+            trade_id_count=len(unique_ids),
+            raw_trade_count=raw_count,
+            source="auto",
+            imported_at=now,
+            verified_at=now,  # tradeIDs were just upserted — import is verified at this moment
         )
 
     def _send_request(
@@ -321,21 +342,29 @@ class FlexQueryClient:
         raise FlexQueryError(f"Flex statement not ready after {_MAX_POLL_RETRIES} attempts")
 
     @staticmethod
-    def extract_execution_ids(xml_text: str) -> set[str]:
-        """Extract all tradeID values from a Flex XML document.
+    def extract_execution_ids(xml_text: str) -> tuple[set[str], int]:
+        """Extract tradeID values from a Flex XML document.
 
         Lightweight — reads only the tradeID attribute, does not parse full records.
         Used by verify_flex_import to cross-check source XMLs against SQLite without
         re-importing or modifying any data.
 
-        Returns the set of non-empty tradeID strings found in all <Trade> elements.
+        Returns:
+            unique_ids  — set of non-empty tradeID strings (deduplicated).
+            raw_count   — total number of <Trade> elements in the XML, including any
+                          with missing or duplicate tradeIDs. If raw_count != len(unique_ids),
+                          the XML contains within-file duplicate or blank tradeIDs, which
+                          should never occur from IBKR but is flagged for transparency.
         """
         root = ET.fromstring(xml_text)
-        return {
-            eid
-            for trade_el in root.iter("Trade")
-            if (eid := (trade_el.get("tradeID") or "").strip())
-        }
+        unique_ids: set[str] = set()
+        raw_count = 0
+        for trade_el in root.iter("Trade"):
+            raw_count += 1
+            eid = (trade_el.get("tradeID") or "").strip()
+            if eid:
+                unique_ids.add(eid)
+        return unique_ids, raw_count
 
     def _parse_trades(self, xml_text: str) -> list[dict[str, Any]]:
         """Parse <Trade> elements from Flex XML into dicts matching trades table schema.

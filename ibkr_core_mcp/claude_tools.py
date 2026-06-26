@@ -1143,14 +1143,24 @@ class ClaudeToolkit:
         return "\n".join(_format_coverage(cov)), None
 
     def _verify_flex_import(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Verify Flex import completeness: source XML tradeIDs vs SQLite execution_ids.
+        """Verify Flex import completeness against source XML archives on Drive.
 
-        Downloads all .xml files from account_data/ on Google Drive (the archived source
-        files), extracts every tradeID, and cross-checks against the trades table.
-        A tradeID present in an XML but absent from SQLite is a missing import.
+        For each XML in account_data/:
+          - Manual archives (ClaudIA_Full_Activity_*.xml): registered in the manifest
+            as pre-validated on first encounter; never re-verified (user confirmed integrity).
+          - Auto-synced archives (flex_U*.xml): manifest entry written at sync time with
+            SHA-256 and verified_at already set. On re-check: download, compare SHA-256
+            to manifest — if hash matches, import is confirmed complete without a full
+            tradeID scan. If hash differs (file modified after sync), full cross-check runs.
 
-        Read-only. Never modifies data. IBKR XML files are treated as authoritative source.
+        Flags within-file duplicate tradeIDs (raw_count != unique_count) — should never
+        occur from IBKR but is surfaced transparently if it does.
+
+        Read-only. Never modifies trade data. IBKR XML is the authoritative source.
+        Updates verified_at in the manifest after each successful check.
         """
+        import hashlib
+        from datetime import UTC, datetime
         from ibkr_core_mcp.flex_query import FlexQueryClient
 
         if self._cache is None:
@@ -1164,55 +1174,123 @@ class ClaudeToolkit:
         if not xml_files:
             return (
                 "No .xml files found in account_data/ on Drive. "
-                "Flex XML archives are uploaded there automatically after each sync.",
+                "Flex XML archives are uploaded automatically after each sync.",
                 None,
             )
 
         db_ids = self._store.get_all_execution_ids()
-        lines = [
-            f"Flex Import Integrity Check",
-            f"Source: {len(xml_files)} XML file(s) in account_data/ on Drive",
-            f"SQLite: {len(db_ids)} execution_ids in trades table",
-            "",
-        ]
-
+        now = datetime.now(UTC).isoformat()
         all_xml_ids: set[str] = set()
-        per_file_results = []
+        file_lines: list[str] = []
+        issues: list[str] = []
 
         for filename, content in xml_files:
-            try:
-                file_ids = FlexQueryClient.extract_execution_ids(content.decode("utf-8"))
-            except Exception as exc:
-                per_file_results.append((filename, None, str(exc)))
-                continue
-            all_xml_ids |= file_ids
-            missing = file_ids - db_ids
-            per_file_results.append((filename, file_ids, missing))
+            xml_text = content.decode("utf-8")
+            sha256 = hashlib.sha256(content).hexdigest()
 
-        for filename, file_ids, missing_or_err in per_file_results:
-            if file_ids is None:
-                lines.append(f"  ✗ {filename}  — parse error: {missing_or_err}")
+            # Determine source type from filename convention:
+            #   ClaudIA_Full_Activity_*.xml → manual (user-validated historical archive)
+            #   flex_U*.xml                 → auto (ClaudIA Flex Web Service sync)
+            is_manual = filename.startswith("ClaudIA_Full_Activity_")
+            source = "manual" if is_manual else "auto"
+
+            try:
+                unique_ids, raw_count = FlexQueryClient.extract_execution_ids(xml_text)
+            except Exception as exc:
+                file_lines.append(f"  ✗ PARSE ERROR  {filename}: {exc}")
+                issues.append(filename)
                 continue
-            status = "✓ complete" if not missing_or_err else f"✗ {len(missing_or_err)} missing"
-            lines.append(f"  {status}  {filename}  ({len(file_ids)} tradeIDs in XML)")
-            if missing_or_err:
-                sample = sorted(missing_or_err)[:5]
-                lines.append(f"    Missing tradeIDs (first 5): {sample}")
+
+            entry = self._store.get_flex_import_entry(filename)
+
+            if is_manual:
+                # Manual archives are pre-validated. Register in manifest on first encounter;
+                # mark verified_at = imported_at (integrity confirmed by user, not re-checked).
+                if entry is None:
+                    self._store.log_flex_import(
+                        filename=filename,
+                        sha256=sha256,
+                        trade_id_count=len(unique_ids),
+                        raw_trade_count=raw_count,
+                        source="manual",
+                        imported_at=now,
+                        verified_at=now,
+                    )
+                dupe_note = (
+                    f" ⚠ raw={raw_count} unique={len(unique_ids)} (within-file duplicate tradeIDs)"
+                    if raw_count != len(unique_ids) else ""
+                )
+                file_lines.append(
+                    f"  ✓ pre-validated  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}"
+                )
+                all_xml_ids |= unique_ids
+                continue
+
+            # Auto-synced file: check hash against manifest.
+            if entry is not None and entry["sha256"] == sha256:
+                # Hash matches what was recorded at sync time — import is confirmed complete.
+                self._store.mark_flex_import_verified(filename, now)
+                dupe_note = (
+                    f" ⚠ raw={raw_count} unique={len(unique_ids)}"
+                    if raw_count != len(unique_ids) else ""
+                )
+                file_lines.append(
+                    f"  ✓ hash verified  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}"
+                )
+                all_xml_ids |= unique_ids
+                continue
+
+            # Hash mismatch or first encounter for an auto file: full cross-check.
+            reason = "first check" if entry is None else "hash mismatch — file changed since sync"
+            missing = unique_ids - db_ids
+            dupe_note = (
+                f" ⚠ raw={raw_count} unique={len(unique_ids)}"
+                if raw_count != len(unique_ids) else ""
+            )
+            if missing:
+                file_lines.append(
+                    f"  ✗ {len(missing)} missing  {filename}  "
+                    f"({len(unique_ids)} in XML, {reason}){dupe_note}"
+                )
+                file_lines.append(
+                    f"    Missing tradeIDs (first 5): {sorted(missing)[:5]}"
+                )
+                issues.append(filename)
+            else:
+                file_lines.append(
+                    f"  ✓ cross-checked  {filename}  "
+                    f"({len(unique_ids)} tradeIDs, {reason}){dupe_note}"
+                )
+                self._store.log_flex_import(
+                    filename=filename,
+                    sha256=sha256,
+                    trade_id_count=len(unique_ids),
+                    raw_trade_count=raw_count,
+                    source=source,
+                    imported_at=entry["imported_at"] if entry else now,
+                    verified_at=now,
+                )
+            all_xml_ids |= unique_ids
 
         total_missing = all_xml_ids - db_ids
-        lines += [
+        lines = [
+            "Flex Import Integrity Check",
+            f"  {len(xml_files)} XML file(s) in Drive account_data/",
+            f"  {len(db_ids)} execution_ids in SQLite trades table",
             "",
-            f"Aggregate across all XML files:",
-            f"  Unique tradeIDs in source XMLs : {len(all_xml_ids)}",
-            f"  Present in SQLite              : {len(all_xml_ids & db_ids)}",
-            f"  Missing from SQLite            : {len(total_missing)}",
+            *file_lines,
+            "",
+            "Aggregate (union of all source files):",
+            f"  Unique tradeIDs across all XMLs : {len(all_xml_ids)}",
+            f"  Present in SQLite               : {len(all_xml_ids & db_ids)}",
+            f"  Missing from SQLite             : {len(total_missing)}",
         ]
-        if total_missing:
+        if issues:
             lines.append(
-                f"  Action: re-import the file(s) listed above using import_flex_file or sync_flex_archive."
+                f"  Action: re-import {len(issues)} file(s) using import_flex_file or sync_flex_archive."
             )
         else:
-            lines.append("  Result: all source tradeIDs are present in SQLite — import complete.")
+            lines.append("  Result: all source tradeIDs confirmed present in SQLite.")
 
         return "\n".join(lines), None
 

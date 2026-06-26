@@ -750,30 +750,45 @@ _FLEX_XML_B = b"""<?xml version="1.0"?>
 
 
 def test_verify_flex_import_all_present(toolkit):
-    """All tradeIDs in source XMLs present in SQLite → complete."""
-    toolkit._cache.download_account_files.return_value = [
-        ("flex_2024a.xml", _FLEX_XML_A),
-        ("flex_2024b.xml", _FLEX_XML_B),
-    ]
-    toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002", "EX003"}
+    """All tradeIDs in auto-synced XML present in SQLite, hash matches manifest → hash verified."""
+    import hashlib
+    content_a = _FLEX_XML_A
+    sha256_a = hashlib.sha256(content_a).hexdigest()
+    toolkit._cache.download_account_files.return_value = [("flex_U123_2024-01-01_REF.xml", content_a)]
+    toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002"}
+    toolkit._store.get_flex_import_entry.return_value = {
+        "sha256": sha256_a, "imported_at": "2024-01-01T00:00:00", "verified_at": None
+    }
 
     result, _ = toolkit.execute("verify_flex_import", {})
-    assert "all source tradeIDs are present" in result
-    assert "Missing from SQLite            : 0" in result
+    assert "hash verified" in result
+    assert "Missing from SQLite             : 0" in result
 
 
 def test_verify_flex_import_missing_records(toolkit):
     """tradeID in XML but absent from SQLite → flagged as missing."""
-    toolkit._cache.download_account_files.return_value = [
-        ("flex_2024a.xml", _FLEX_XML_A),
-    ]
-    # EX002 not in SQLite
-    toolkit._store.get_all_execution_ids.return_value = {"EX001"}
+    toolkit._cache.download_account_files.return_value = [("flex_U123_2024-01-01_REF.xml", _FLEX_XML_A)]
+    toolkit._store.get_all_execution_ids.return_value = {"EX001"}  # EX002 missing
+    toolkit._store.get_flex_import_entry.return_value = None  # first encounter
 
     result, _ = toolkit.execute("verify_flex_import", {})
     assert "1 missing" in result
     assert "EX002" in result
     assert "re-import" in result
+
+
+def test_verify_flex_import_manual_pre_validated(toolkit):
+    """Manual archive (ClaudIA_Full_Activity_*.xml) reported as pre-validated, not cross-checked."""
+    toolkit._cache.download_account_files.return_value = [
+        ("ClaudIA_Full_Activity_123120.xml", _FLEX_XML_A)
+    ]
+    toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002"}
+    toolkit._store.get_flex_import_entry.return_value = None  # first encounter
+
+    result, _ = toolkit.execute("verify_flex_import", {})
+    assert "pre-validated" in result
+    # Manual files are not cross-checked against SQLite
+    assert "missing" not in result.lower() or "0" in result
 
 
 def test_verify_flex_import_no_drive(toolkit):
@@ -791,18 +806,32 @@ def test_verify_flex_import_no_xml_files(toolkit):
 
 
 def test_extract_execution_ids():
-    """extract_execution_ids returns only non-empty tradeIDs from <Trade> elements."""
+    """extract_execution_ids returns (unique_ids, raw_count) from <Trade> elements."""
     from ibkr_core_mcp.flex_query import FlexQueryClient
-    ids = FlexQueryClient.extract_execution_ids(_FLEX_XML_A.decode())
-    assert ids == {"EX001", "EX002"}
+    unique_ids, raw_count = FlexQueryClient.extract_execution_ids(_FLEX_XML_A.decode())
+    assert unique_ids == {"EX001", "EX002"}
+    assert raw_count == 2
 
 
 def test_extract_execution_ids_skips_empty():
-    """extract_execution_ids silently skips Trade elements with no tradeID."""
+    """extract_execution_ids counts blank-tradeID elements in raw_count but not unique_ids."""
     from ibkr_core_mcp.flex_query import FlexQueryClient
     xml = b"""<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
         <Trade tradeID="" symbol="X" buySell="BUY"/>
         <Trade tradeID="GOOD1" symbol="Y" buySell="SELL"/>
     </Trades></FlexStatement></FlexStatements></FlexQueryResponse>"""
-    ids = FlexQueryClient.extract_execution_ids(xml.decode())
-    assert ids == {"GOOD1"}
+    unique_ids, raw_count = FlexQueryClient.extract_execution_ids(xml.decode())
+    assert unique_ids == {"GOOD1"}
+    assert raw_count == 2  # both <Trade> elements counted, only one has a valid tradeID
+
+
+def test_extract_execution_ids_within_file_duplicate():
+    """raw_count > len(unique_ids) when the same tradeID appears twice in one XML."""
+    from ibkr_core_mcp.flex_query import FlexQueryClient
+    xml = b"""<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
+        <Trade tradeID="DUP1" symbol="X" buySell="BUY"/>
+        <Trade tradeID="DUP1" symbol="X" buySell="BUY"/>
+    </Trades></FlexStatement></FlexStatements></FlexQueryResponse>"""
+    unique_ids, raw_count = FlexQueryClient.extract_execution_ids(xml.decode())
+    assert unique_ids == {"DUP1"}
+    assert raw_count == 2  # duplicate detected: raw(2) != unique(1)

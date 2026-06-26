@@ -166,6 +166,27 @@ class SQLiteStore:
                     event    TEXT NOT NULL,
                     data     TEXT
                 );
+
+                -- Import manifest: one row per Flex XML file archived to Drive.
+                -- source='manual'  → user-downloaded historical archive, pre-validated.
+                -- source='auto'    → ClaudIA auto-sync via Flex Web Service.
+                -- sha256           → SHA-256 of XML bytes at log time; used to detect
+                --                    if the Drive file was modified after import.
+                -- raw_trade_count  → raw <Trade> element count in the XML.
+                -- trade_id_count   → unique tradeID count (== raw unless IBKR emitted
+                --                    a within-file duplicate, which should never occur).
+                -- verified_at      → NULL until the first successful integrity check
+                --                    (all tradeIDs present in SQLite); updated on re-check.
+                CREATE TABLE IF NOT EXISTS flex_import_log (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename         TEXT NOT NULL UNIQUE,
+                    sha256           TEXT NOT NULL,
+                    trade_id_count   INTEGER NOT NULL,
+                    raw_trade_count  INTEGER NOT NULL,
+                    source           TEXT NOT NULL CHECK (source IN ('manual', 'auto')),
+                    imported_at      TEXT NOT NULL,
+                    verified_at      TEXT
+                );
             """)
 
     def upsert_trades(self, trades: list[dict[str, Any]]) -> None:
@@ -196,6 +217,82 @@ class SQLiteStore:
                     realized_pnl=COALESCE(excluded.realized_pnl, realized_pnl)
                 """,
                 rows,
+            )
+
+    # ── Flex import manifest ───────────────────────────────────────────────────
+
+    def log_flex_import(
+        self,
+        filename: str,
+        sha256: str,
+        trade_id_count: int,
+        raw_trade_count: int,
+        source: str,
+        imported_at: str,
+        verified_at: str | None = None,
+    ) -> None:
+        """Insert or replace a Flex XML import record in the manifest.
+
+        Uses INSERT OR REPLACE so re-importing the same filename updates the row
+        (e.g. if a rolling sync produces a new XML with the same date but different
+        ref_code is stored under a new filename — each filename is unique).
+
+        source must be 'manual' (user-downloaded historical archive, pre-validated)
+        or 'auto' (ClaudIA Flex Web Service sync).
+        """
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO flex_import_log
+                    (filename, sha256, trade_id_count, raw_trade_count, source,
+                     imported_at, verified_at)
+                VALUES
+                    (:filename, :sha256, :trade_id_count, :raw_trade_count, :source,
+                     :imported_at, :verified_at)
+                ON CONFLICT(filename) DO UPDATE SET
+                    sha256          = excluded.sha256,
+                    trade_id_count  = excluded.trade_id_count,
+                    raw_trade_count = excluded.raw_trade_count,
+                    imported_at     = excluded.imported_at,
+                    verified_at     = excluded.verified_at
+                """,
+                {
+                    "filename": filename,
+                    "sha256": sha256,
+                    "trade_id_count": trade_id_count,
+                    "raw_trade_count": raw_trade_count,
+                    "source": source,
+                    "imported_at": imported_at,
+                    "verified_at": verified_at,
+                },
+            )
+
+    def get_flex_import_entry(self, filename: str) -> dict[str, Any] | None:
+        """Return the manifest entry for a filename, or None if not yet logged."""
+        self.initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM flex_import_log WHERE filename = ?", (filename,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_flex_import_log(self) -> list[dict[str, Any]]:
+        """Return all manifest entries ordered by imported_at ascending."""
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM flex_import_log ORDER BY imported_at ASC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_flex_import_verified(self, filename: str, verified_at: str) -> None:
+        """Set verified_at for a manifest entry after a successful integrity check."""
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE flex_import_log SET verified_at = ? WHERE filename = ?",
+                (verified_at, filename),
             )
 
     def get_all_execution_ids(self) -> set[str]:
