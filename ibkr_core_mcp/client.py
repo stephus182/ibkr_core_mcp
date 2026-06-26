@@ -550,12 +550,26 @@ class IBKRClient:
         return self._get(f"/iserver/account/order/status/{order_id}")
 
     def get_trades(self) -> list[dict[str, Any]]:
-        """Recent trade executions (last ~6 days). Returns [] if response is not a list.
+        """Recent trade executions visible in the current CP API session (~6 days lookback).
 
-        Observed behavior: ?days=7 extends to ~6-day history; omitting it returns today's
-        session only. The `days` parameter is not documented in the public IBKR CP API
-        reference (requires authentication to access). This behavior was determined by
-        testing, not from official documentation.
+        ## Coverage limitation — session scope
+        This endpoint is session-scoped: it returns only trades visible to the current
+        Client Portal API session. Trades placed via mobile app, TWS, or the web portal
+        may not appear even if they executed on the same account. This is observed behavior;
+        the session-scope restriction is not explicitly documented in the IBKR CP API reference
+        (https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ requires login).
+
+        ## Use cases
+        - Real-time: today's intraday fills placed via the CP API in the current session
+        - Recent history: up to ~6 days with ?days=7
+
+        ## When this is NOT the right tool
+        - Mobile/TWS-placed trades today → use get_pa_transactions (all origins, not session-scoped)
+        - Multi-day or full history → use FlexQueryClient.fetch_trades (T+1, all origins)
+
+        ## ?days=7 parameter
+        Observed behavior: extends lookback to ~6 days. Without it, only today's session
+        is returned. The `days` parameter is not in the accessible public API docs.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: GET /iserver/account/trades
@@ -602,7 +616,22 @@ class IBKRClient:
         return self._post("/pa/performance", {"acctIds": account_ids, "period": period})
 
     def get_pa_transactions(self, account_ids: list[str], period: str) -> list[dict[str, Any]]:
-        """Transaction history from Portfolio Analyst. Returns [] if not a list.
+        """Transaction history from IBKR Portfolio Analyst — all origins, not session-scoped.
+
+        ## Coverage
+        Portfolio Analyst uses IBKR's back-office data. Unlike /iserver/account/trades,
+        it includes transactions from all origins: CP API, mobile app, TWS, and web portal.
+        It is not scoped to the current session.
+
+        ## Availability
+        Timing relative to execution is not officially documented (IBKR Campus requires
+        login). Observed: PA data appears to reflect same-day fills, but this has not
+        been fully verified across all trade origins and time zones.
+
+        ## Period values
+        Valid period strings come from /pa/allperiods (get_pa_periods). Do not assume
+        values — they vary by account and have not been confirmed from accessible docs.
+        Use get_pa_periods first to retrieve the exact strings IBKR accepts.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: POST /pa/transactions
