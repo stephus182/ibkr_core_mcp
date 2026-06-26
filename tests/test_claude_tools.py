@@ -685,7 +685,7 @@ def test_format_coverage_no_gaps():
     cov = {"oldest": "2024-01-01", "newest": "2024-12-31",
            "total_trades": 500, "stale": False, "gaps": []}
     text = "\n".join(_format_coverage(cov))
-    assert "OK" in text
+    assert "no periods" in text
     assert "gap(s)" not in text
 
 
@@ -701,8 +701,9 @@ def test_format_coverage_with_gaps():
         }],
     }
     text = "\n".join(_format_coverage(cov))
-    assert "1 gap" in text
-    assert "2024-03-02" in text
+    assert "1 period" in text
+    assert "inactivity or missing data" in text
+    assert "2024-03-01" in text
 
 
 def test_format_coverage_stale_flag():

@@ -25,7 +25,7 @@ def _TODAY() -> str:
 
 
 def _format_coverage(cov: dict[str, Any]) -> list[str]:
-    """Format trade date coverage into human-readable lines, with staleness and gap instructions."""
+    """Format trade date coverage into human-readable lines with staleness and gap notes."""
     days_old = cov.get("days_since_newest", 0)
     stale_note = f" ⚠ DATA STALE ({days_old}d old) — run sync_flex_trades to refresh" if cov.get("stale") else ""
     lines = [
@@ -33,14 +33,15 @@ def _format_coverage(cov: dict[str, Any]) -> list[str]:
     ]
     gaps = cov.get("gaps", [])
     if not gaps:
-        lines.append("Coverage integrity: OK — no significant gaps detected.")
+        lines.append("Coverage: no periods longer than 45 days without a recorded trade.")
     else:
-        lines.append(f"Coverage integrity: {len(gaps)} gap(s) require attention:")
+        lines.append(
+            f"Coverage: {len(gaps)} period(s) of 45+ days with no recorded trades "
+            f"(may be inactivity or missing data — only you can tell):"
+        )
         for g in gaps:
             lines.append(
-                f"  Gap {g['gap_start']} → {g['gap_end']} ({g['calendar_days']} days). "
-                f"To fill: download Flex XML for {g['request_from']} to {g['request_to']} "
-                f"from IBKR website → upload to account_data/ on Drive → run sync_flex_archive."
+                f"  {g['gap_start']} → {g['gap_end']} ({g['calendar_days']} calendar days with no trades)"
             )
     return lines
 

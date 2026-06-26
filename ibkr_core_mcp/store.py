@@ -199,11 +199,13 @@ class SQLiteStore:
             )
 
     def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
-        """Return coverage stats and actionable gaps in the trades table.
+        """Return coverage stats and gaps in the trades table.
 
-        A gap is a period longer than gap_threshold_days with no trades. Gaps this
-        large almost certainly represent missing imports rather than inactivity.
-        Each gap entry includes the exact date range to request from IBKR.
+        A gap is a period longer than gap_threshold_days calendar days with no
+        recorded trade executions. This does NOT distinguish between missing data
+        and legitimate inactivity (holding positions without new trades). Only the
+        account holder can determine which case applies.
+
         Returns: oldest, newest, total_trades, gaps.
         """
         self.initialize()
