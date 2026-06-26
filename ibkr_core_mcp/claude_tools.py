@@ -145,9 +145,22 @@ TOOL_DEFINITIONS = [
     {
         "name": "check_flex_coverage",
         "description": (
-            "Check the date coverage of historical trade data in the local SQLite store. "
-            "Reports oldest and newest trade dates, total trade count, and any gaps larger "
-            "than 5 calendar days that may indicate missing historical imports."
+            "Report the trade activity date range from the local SQLite store: "
+            "oldest trade, newest trade, total record count, and periods of 45+ calendar days "
+            "with no recorded executions (which may reflect genuine inactivity or missing imports — "
+            "use verify_flex_import to distinguish). Does not verify completeness against source."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "verify_flex_import",
+        "description": (
+            "Verify Flex import completeness by comparing source XML archives in Google Drive "
+            "account_data/ against the local SQLite trades table. For each XML file, extracts "
+            "all tradeIDs and checks whether they are present in SQLite. Reports per-file "
+            "counts (XML records vs SQLite matches) and an aggregate summary. "
+            "A missing tradeID means that execution was not imported. "
+            "Does not modify any data — read-only integrity check against the source files."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -743,6 +756,7 @@ class ClaudeToolkit:
             "sync_flex_archive": self._sync_flex_archive,
             "import_flex_file": self._import_flex_file,
             "check_flex_coverage": self._check_flex_coverage,
+            "verify_flex_import": self._verify_flex_import,
             "sync_flex_trades": self._sync_flex_trades,
             "get_live_orders": self._get_live_orders,
             "diagnose_orders": self._diagnose_orders,
@@ -1118,11 +1132,89 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _check_flex_coverage(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Report date range and total count of trades held in the local Flex store."""
+        """Report trade activity date range and total count from the local Flex store.
+
+        Activity report only — does not verify completeness against source XMLs.
+        Use verify_flex_import for a true source-vs-SQLite integrity check.
+        """
         cov = self._store.get_trade_date_coverage()
         if not cov["oldest"]:
             return "No trade history in store. Run sync_flex_archive or sync_flex_trades first.", None
         return "\n".join(_format_coverage(cov)), None
+
+    def _verify_flex_import(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Verify Flex import completeness: source XML tradeIDs vs SQLite execution_ids.
+
+        Downloads all .xml files from account_data/ on Google Drive (the archived source
+        files), extracts every tradeID, and cross-checks against the trades table.
+        A tradeID present in an XML but absent from SQLite is a missing import.
+
+        Read-only. Never modifies data. IBKR XML files are treated as authoritative source.
+        """
+        from ibkr_core_mcp.flex_query import FlexQueryClient
+
+        if self._cache is None:
+            return (
+                "verify_flex_import requires Google Drive (GOOGLE_DRIVE_FOLDER_ID not set). "
+                "Source XML archives are stored in account_data/ on Drive.",
+                None,
+            )
+
+        xml_files = self._cache.download_account_files(extension=".xml")
+        if not xml_files:
+            return (
+                "No .xml files found in account_data/ on Drive. "
+                "Flex XML archives are uploaded there automatically after each sync.",
+                None,
+            )
+
+        db_ids = self._store.get_all_execution_ids()
+        lines = [
+            f"Flex Import Integrity Check",
+            f"Source: {len(xml_files)} XML file(s) in account_data/ on Drive",
+            f"SQLite: {len(db_ids)} execution_ids in trades table",
+            "",
+        ]
+
+        all_xml_ids: set[str] = set()
+        per_file_results = []
+
+        for filename, content in xml_files:
+            try:
+                file_ids = FlexQueryClient.extract_execution_ids(content.decode("utf-8"))
+            except Exception as exc:
+                per_file_results.append((filename, None, str(exc)))
+                continue
+            all_xml_ids |= file_ids
+            missing = file_ids - db_ids
+            per_file_results.append((filename, file_ids, missing))
+
+        for filename, file_ids, missing_or_err in per_file_results:
+            if file_ids is None:
+                lines.append(f"  ✗ {filename}  — parse error: {missing_or_err}")
+                continue
+            status = "✓ complete" if not missing_or_err else f"✗ {len(missing_or_err)} missing"
+            lines.append(f"  {status}  {filename}  ({len(file_ids)} tradeIDs in XML)")
+            if missing_or_err:
+                sample = sorted(missing_or_err)[:5]
+                lines.append(f"    Missing tradeIDs (first 5): {sample}")
+
+        total_missing = all_xml_ids - db_ids
+        lines += [
+            "",
+            f"Aggregate across all XML files:",
+            f"  Unique tradeIDs in source XMLs : {len(all_xml_ids)}",
+            f"  Present in SQLite              : {len(all_xml_ids & db_ids)}",
+            f"  Missing from SQLite            : {len(total_missing)}",
+        ]
+        if total_missing:
+            lines.append(
+                f"  Action: re-import the file(s) listed above using import_flex_file or sync_flex_archive."
+            )
+        else:
+            lines.append("  Result: all source tradeIDs are present in SQLite — import complete.")
+
+        return "\n".join(lines), None
 
     def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return working orders (all statuses except Filled/Cancelled/Expired) across all instrument types.

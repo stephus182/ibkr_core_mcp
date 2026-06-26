@@ -198,13 +198,26 @@ class SQLiteStore:
                 rows,
             )
 
-    def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
-        """Return coverage stats and gaps in the trades table.
+    def get_all_execution_ids(self) -> set[str]:
+        """Return the set of all execution_ids currently stored in the trades table.
 
-        A gap is a period longer than gap_threshold_days calendar days with no
-        recorded trade executions. This does NOT distinguish between missing data
-        and legitimate inactivity (holding positions without new trades). Only the
-        account holder can determine which case applies.
+        Used by verify_flex_import to cross-check against source XML files.
+        Does not modify data.
+        """
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT execution_id FROM trades").fetchall()
+        return {r["execution_id"] for r in rows}
+
+    def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
+        """Return trade activity distribution from the trades table.
+
+        Reports the date range and periods with no recorded executions.
+        This is an ACTIVITY REPORT, not an import integrity check:
+        - Periods with no trades may reflect genuine inactivity (e.g. a 30-day hold)
+          or missing imports — only the account holder can distinguish the two.
+        - Data values are never validated or modified: IBKR is the authoritative source.
+        - To verify import completeness against source XMLs, use verify_flex_import.
 
         Returns: oldest, newest, total_trades, gaps.
         """

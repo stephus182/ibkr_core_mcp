@@ -713,3 +713,96 @@ def test_format_coverage_stale_flag():
     text = "\n".join(_format_coverage(cov))
     assert "STALE" in text
     assert "15" in text
+
+
+# ---------------------------------------------------------------------------
+# verify_flex_import
+# ---------------------------------------------------------------------------
+
+_FLEX_XML_A = b"""<?xml version="1.0"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement>
+      <Trades>
+        <Trade tradeID="EX001" symbol="GLD" buySell="BUY" quantity="10"
+               tradePrice="180.0" dateTime="20240101;120000" ibCommission="-1.0"
+               accountId="U123" assetCategory="STK"/>
+        <Trade tradeID="EX002" symbol="GLD" buySell="SELL" quantity="-10"
+               tradePrice="185.0" dateTime="20240201;120000" ibCommission="-1.0"
+               accountId="U123" assetCategory="STK"/>
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>"""
+
+_FLEX_XML_B = b"""<?xml version="1.0"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement>
+      <Trades>
+        <Trade tradeID="EX003" symbol="QQQ" buySell="BUY" quantity="5"
+               tradePrice="400.0" dateTime="20240301;120000" ibCommission="-1.0"
+               accountId="U123" assetCategory="STK"/>
+      </Trades>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>"""
+
+
+def test_verify_flex_import_all_present(toolkit):
+    """All tradeIDs in source XMLs present in SQLite → complete."""
+    toolkit._cache.download_account_files.return_value = [
+        ("flex_2024a.xml", _FLEX_XML_A),
+        ("flex_2024b.xml", _FLEX_XML_B),
+    ]
+    toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002", "EX003"}
+
+    result, _ = toolkit.execute("verify_flex_import", {})
+    assert "all source tradeIDs are present" in result
+    assert "Missing from SQLite            : 0" in result
+
+
+def test_verify_flex_import_missing_records(toolkit):
+    """tradeID in XML but absent from SQLite → flagged as missing."""
+    toolkit._cache.download_account_files.return_value = [
+        ("flex_2024a.xml", _FLEX_XML_A),
+    ]
+    # EX002 not in SQLite
+    toolkit._store.get_all_execution_ids.return_value = {"EX001"}
+
+    result, _ = toolkit.execute("verify_flex_import", {})
+    assert "1 missing" in result
+    assert "EX002" in result
+    assert "re-import" in result
+
+
+def test_verify_flex_import_no_drive(toolkit):
+    """No Drive configured → clear error message."""
+    toolkit._cache = None
+    result, _ = toolkit.execute("verify_flex_import", {})
+    assert "GOOGLE_DRIVE_FOLDER_ID" in result
+
+
+def test_verify_flex_import_no_xml_files(toolkit):
+    """No XML files in account_data/ → actionable message."""
+    toolkit._cache.download_account_files.return_value = []
+    result, _ = toolkit.execute("verify_flex_import", {})
+    assert "No .xml files found" in result
+
+
+def test_extract_execution_ids():
+    """extract_execution_ids returns only non-empty tradeIDs from <Trade> elements."""
+    from ibkr_core_mcp.flex_query import FlexQueryClient
+    ids = FlexQueryClient.extract_execution_ids(_FLEX_XML_A.decode())
+    assert ids == {"EX001", "EX002"}
+
+
+def test_extract_execution_ids_skips_empty():
+    """extract_execution_ids silently skips Trade elements with no tradeID."""
+    from ibkr_core_mcp.flex_query import FlexQueryClient
+    xml = b"""<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
+        <Trade tradeID="" symbol="X" buySell="BUY"/>
+        <Trade tradeID="GOOD1" symbol="Y" buySell="SELL"/>
+    </Trades></FlexStatement></FlexStatements></FlexQueryResponse>"""
+    ids = FlexQueryClient.extract_execution_ids(xml.decode())
+    assert ids == {"GOOD1"}

@@ -320,6 +320,23 @@ class FlexQueryClient:
 
         raise FlexQueryError(f"Flex statement not ready after {_MAX_POLL_RETRIES} attempts")
 
+    @staticmethod
+    def extract_execution_ids(xml_text: str) -> set[str]:
+        """Extract all tradeID values from a Flex XML document.
+
+        Lightweight — reads only the tradeID attribute, does not parse full records.
+        Used by verify_flex_import to cross-check source XMLs against SQLite without
+        re-importing or modifying any data.
+
+        Returns the set of non-empty tradeID strings found in all <Trade> elements.
+        """
+        root = ET.fromstring(xml_text)
+        return {
+            eid
+            for trade_el in root.iter("Trade")
+            if (eid := (trade_el.get("tradeID") or "").strip())
+        }
+
     def _parse_trades(self, xml_text: str) -> list[dict[str, Any]]:
         """Parse <Trade> elements from Flex XML into dicts matching trades table schema.
 
