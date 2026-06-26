@@ -845,7 +845,11 @@ class ClaudeToolkit:
             if attempt < 2:
                 time.sleep(2)
         if raw is None or not raw.get("data"):
-            return f"IBKR returned no data for {symbol} (period={period}, bar={bar})", None
+            raw_repr = json.dumps(raw, indent=2) if raw else "None"
+            return (
+                f"IBKR returned no data for {symbol} (period={period}, bar={bar}). "
+                f"Raw IBKR response: {raw_repr}"
+            ), None
 
         df = _bars_to_dataframe(raw)
 
