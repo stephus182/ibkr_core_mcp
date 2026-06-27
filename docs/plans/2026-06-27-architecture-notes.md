@@ -58,11 +58,38 @@ class ClaudeToolkit:
 
 ---
 
+## Unresolved design question — decide BEFORE starting the refactor
+
+**Cross-domain handler calls.**
+
+Some handlers call other handlers on `self` today. Example: `_run_backtest` may call `_fetch_market_data` internally. After the split, `AnalyticsHandlers` calling into `MarketDataHandlers` requires an explicit pattern — two options:
+
+**Option A — Composition (pass dependent handler at construction):**
+```python
+class AnalyticsHandlers:
+    def __init__(self, cache, store, config, market: MarketDataHandlers):
+        self._market = market
+```
+Clean dependency graph. Each handler's dependencies are explicit and testable.
+
+**Option B — Route through ClaudeToolkit aggregator:**
+`AnalyticsHandlers` holds a reference back to the parent `ClaudeToolkit` and calls `self._toolkit.execute(...)` for cross-domain operations. Simpler to wire but creates circular references and makes testing harder.
+
+**Decision: Option A is recommended.** But this must be decided and documented before touching a line of code. If the pattern is not chosen upfront, you end up with a dependency graph that is harder to read than the original god class. This is the primary reason to defer the refactor until there is time to design it properly.
+
+---
+
 ## When to do it
 
 **Do NOT do this before v1.0.** The refactor is ~1 day, touches every test that patches ClaudeToolkit internals, and introduces regression risk without adding user-visible value.
 
 **Right moment:** First time a new tool domain is added (options analytics, news tools, etc.) — refactor in the same PR as the new feature so the split pays for itself immediately.
+
+**Pre-conditions before starting:**
+1. Audit all cross-domain handler calls in current `claude_tools.py` (grep for `self._` calls inside handlers that invoke other handlers)
+2. Document the dependency graph
+3. Confirm Option A (composition) or choose Option B with justification
+4. Only then begin moving files
 
 ---
 
