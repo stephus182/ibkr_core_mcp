@@ -28,6 +28,12 @@ class Config:
     # Optional dedicated folder for account-level data (flex XMLs, etc.).
     # If empty, GDriveCache auto-creates an 'account_data/' subfolder inside gdrive_folder_id.
     gdrive_account_folder_id: str = ""
+    # Firecrawl REST API key (fc-...). If empty, firecrawl_search and firecrawl_crawl
+    # return a "not available" error string to the LLM rather than raising.
+    firecrawl_api_key: str = field(default="", repr=False)
+    # Drive folder ID to use as the web_docs/ root. Auto-creates 'web_docs/' under
+    # gdrive_folder_id if empty.
+    gdrive_web_docs_folder_id: str = ""
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
@@ -60,4 +66,6 @@ class Config:
             gdrive_cache_folder_id=os.environ.get("GDRIVE_CACHE_FOLDER_ID", ""),
             gdrive_db_folder_id=os.environ.get("GDRIVE_DB_FOLDER_ID", ""),
             gdrive_account_folder_id=os.environ.get("GDRIVE_ACCOUNT_FOLDER_ID", ""),
+            firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
+            gdrive_web_docs_folder_id=os.environ.get("GDRIVE_WEB_DOCS_FOLDER_ID", ""),
         )
