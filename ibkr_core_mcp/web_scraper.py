@@ -21,6 +21,7 @@ from typing import Any
 import requests
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -297,14 +298,36 @@ class WebDocsStore:
         self._svc: Any = None
 
     def _get_service(self) -> Any:
-        """Return a cached Google Drive API v3 service, refreshing credentials if needed."""
+        """Return a cached Google Drive API v3 service, running the OAuth flow if needed.
+
+        Mirrors GDriveCache._get_service(): checks for an existing token file, refreshes
+        expired credentials, or falls back to InstalledAppFlow (opens local browser on port 0).
+        Token is written with mode 0o600 (user-only read/write).
+
+        Source: https://developers.google.com/drive/api/quickstart/python
+        """
         if self._svc is not None:
             return self._svc
-        creds = Credentials.from_authorized_user_file(
-            str(self._cfg.gdrive_token_file), self._SCOPES
-        )
-        if not creds.valid and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+        creds = None
+        if self._cfg.gdrive_token_file.exists():
+            creds = Credentials.from_authorized_user_file(
+                str(self._cfg.gdrive_token_file), self._SCOPES
+            )
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(self._cfg.gdrive_credentials_file), self._SCOPES
+                )
+                creds = flow.run_local_server(port=0)
+            import os
+            self._cfg.gdrive_token_file.parent.mkdir(parents=True, exist_ok=True)
+            token_path = str(self._cfg.gdrive_token_file)
+            fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(creds.to_json())
+            os.chmod(token_path, 0o600)
         self._svc = build("drive", "v3", credentials=creds)
         return self._svc
 

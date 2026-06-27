@@ -1,3 +1,4 @@
+"""PineScript v5 generator — strategy and indicator scripts from backtest results and signals."""
 from __future__ import annotations
 
 import re

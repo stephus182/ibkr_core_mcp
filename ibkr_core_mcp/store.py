@@ -509,6 +509,8 @@ class SQLiteStore:
         except Exception:
             return {}
 
+    _ALLOWED_TIME_COLS = frozenset({"time", "snapshot_at", "logged_at"})
+
     @staticmethod
     def _apply_filters(
         query: str,
@@ -518,6 +520,8 @@ class SQLiteStore:
         end: str | None,
         time_col: str,
     ) -> tuple[str, list[Any]]:
+        if time_col not in SQLiteStore._ALLOWED_TIME_COLS:
+            raise ValueError(f"Invalid time_col {time_col!r}. Allowed: {sorted(SQLiteStore._ALLOWED_TIME_COLS)}")
         if symbol:
             query += " AND symbol = ?"
             params.append(symbol.upper())

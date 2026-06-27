@@ -224,10 +224,10 @@ class FlexQueryClient:
         self._store.upsert_trades(trades)
         try:
             self._archive_and_log(xml_text, account_id, ref_code)
-        except Exception:
+        except Exception as exc:
             # Drive archive and manifest log are supplementary — trades already in SQLite.
             # A Drive auth failure must not abort a successful sync.
-            pass
+            log.warning("flex_query: archive/manifest step failed: %s", exc, exc_info=True)
         return trades
 
     def _archive_and_log(self, xml_text: str, account_id: str, ref_code: str) -> None:

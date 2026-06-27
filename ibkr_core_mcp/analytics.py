@@ -1,3 +1,4 @@
+"""Portfolio analytics — Sharpe, Sortino, Calmar, CAGR, drawdown, and win-rate metrics."""
 from __future__ import annotations
 
 from typing import Any

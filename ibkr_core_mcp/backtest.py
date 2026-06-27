@@ -1,3 +1,4 @@
+"""RestrictedPython sandbox executor for backtesting strategy code on OHLCV DataFrames."""
 from __future__ import annotations
 
 import concurrent.futures

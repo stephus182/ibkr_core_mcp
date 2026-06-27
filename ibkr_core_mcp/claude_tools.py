@@ -696,9 +696,11 @@ def _safe_error(tool: str, exc: Exception) -> str:
         CacheError,
         ConfigError,
         FlexQueryError,
+        HumanAuthError,
         IBKRAPIError,
         IBKRAuthError,
         IBKRRateLimitError,
+        StoreError,
     )
     if isinstance(exc, IBKRAuthError):
         return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
@@ -718,6 +720,10 @@ def _safe_error(tool: str, exc: Exception) -> str:
         return f"Tool '{tool}' failed: {exc}"
     if isinstance(exc, ConfigError):
         return f"Tool '{tool}' failed: configuration error. Check .env settings."
+    if isinstance(exc, StoreError):
+        return f"Tool '{tool}' failed: local store error. Check SQLite path and permissions."
+    if isinstance(exc, HumanAuthError):
+        return f"Tool '{tool}' failed: human authentication required (Touch ID or dialog cancelled)."
     if isinstance(exc, KeyError):
         return f"Tool '{tool}' failed: missing required input field."
     return f"Tool '{tool}' encountered an unexpected error."
@@ -1502,12 +1508,11 @@ class ClaudeToolkit:
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
-        # Call the raw endpoint directly so we can show what IBKR actually returned
-        # if get_pa_periods() fails to extract the list.
-        raw = self._client._post("/pa/allperiods", {"acctIds": account_ids})
         periods = self._client.get_pa_periods(account_ids)
         if periods:
             return "Valid PA periods:\n" + "\n".join(f"  - {p}" for p in periods), None
+        # Extraction failed — fetch raw response to help diagnose the unknown shape.
+        raw = self._client._post("/pa/allperiods", {"acctIds": account_ids})
         return (
             f"get_pa_periods returned no periods. "
             f"Raw IBKR response (use this to identify the correct response key):\n"
@@ -1682,8 +1687,8 @@ class ClaudeToolkit:
         result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol)
         try:
             self._store.save_backtest(result.to_dict())
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("_run_backtest: failed to persist result to store: %s", exc)
         lines = [
             f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period})",
             f"  Total Return:  {result.total_return:.1%}",

@@ -137,8 +137,7 @@ class GDriveCache:
             )
             .execute()
         )
-        files = results.get("files", [])
-        if files:
+        if files := results.get("files", []):
             if len(files) > 1:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -181,8 +180,7 @@ class GDriveCache:
             )
             .execute()
         )
-        files = results.get("files", [])
-        if files:
+        if files := results.get("files", []):
             self._resolved_account_folder = files[0]["id"]
         else:
             meta = {
@@ -256,8 +254,7 @@ class GDriveCache:
             )
             .execute()
         )
-        files = results.get("files", [])
-        if files:
+        if files := results.get("files", []):
             svc.files().update(fileId=files[0]["id"], media_body=media).execute()
         else:
             metadata = {"name": _MANIFEST_NAME, "parents": [folder_id]}
@@ -273,12 +270,15 @@ class GDriveCache:
             return False
         cached_end = datetime.strptime(entry["end"], "%Y-%m-%d").date()
         today = date.today()
-        if end == str(today):
-            return cached_end >= today - timedelta(days=1)
-        return True
+        return cached_end >= today - timedelta(days=1) if end == str(today) else True
 
     def load(self, symbol: str, timeframe: str, period: str, end: str) -> pd.DataFrame:
-        """Download and return cached parquet as DataFrame."""
+        """Download and return cached parquet as DataFrame.
+
+        Raises:
+            CacheMissError: if the file is not in the manifest or Drive folder is unavailable.
+            CacheError: on invalid input values (via _validate_cache_inputs).
+        """
         _validate_cache_inputs(symbol, timeframe, period, end)
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
@@ -311,7 +311,12 @@ class GDriveCache:
     def save(
         self, df: pd.DataFrame, symbol: str, timeframe: str, period: str, end: str
     ) -> None:
-        """Upload DataFrame as parquet to Drive and update manifest."""
+        """Upload DataFrame as parquet to Drive and update manifest.
+
+        Raises:
+            CacheWriteError: if the Drive upload fails.
+            CacheError: on invalid input values (via _validate_cache_inputs).
+        """
         _validate_cache_inputs(symbol, timeframe, period, end)
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)
@@ -464,7 +469,11 @@ class GDriveCache:
         return [{"key": k, **v} for k, v in manifest.items()]
 
     def delete(self, symbol: str, timeframe: str, period: str, end: str) -> None:
-        """Remove a cached file and its manifest entry."""
+        """Remove a cached file and its manifest entry.
+
+        Raises:
+            CacheError: on invalid input values (via _validate_cache_inputs).
+        """
         _validate_cache_inputs(symbol, timeframe, period, end)
         key = self._cache_key(symbol, timeframe, period, end)
         fname = self._filename(key)

@@ -1,3 +1,4 @@
+"""Pydantic v2 response models for IBKR Client Portal API endpoints."""
 from __future__ import annotations
 
 from typing import Any

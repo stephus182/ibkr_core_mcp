@@ -1,3 +1,4 @@
+"""Token-bucket rate limiter and exponential backoff for IBKR Client Portal API requests."""
 from __future__ import annotations
 
 import time

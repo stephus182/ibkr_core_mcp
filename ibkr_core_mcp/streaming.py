@@ -17,6 +17,8 @@ _DEFAULT_FIELDS = ["31", "55", "84", "86", "87"]
 
 @dataclass
 class LiveQuote:
+    """A single parsed IBKR WebSocket market data tick for one contract."""
+
     conid: int
     symbol: str = ""
     last: float | None = None

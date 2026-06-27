@@ -1,3 +1,4 @@
+"""Technical indicator functions for OHLCV DataFrames (pure functions, no side effects)."""
 from __future__ import annotations
 
 import numpy as np
@@ -5,14 +6,17 @@ import pandas as pd
 
 
 def sma(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Simple moving average of close price. Returns a Series named 'sma_{period}'."""
     return df["close"].rolling(period).mean()
 
 
 def ema(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Exponential moving average of close price. Returns a Series."""
     return df["close"].ewm(span=period, adjust=False).mean()
 
 
 def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Relative Strength Index (0–100). Returns a Series. Values >70 overbought, <30 oversold."""
     delta = df["close"].diff()
     gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
@@ -21,6 +25,7 @@ def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 
 def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    """MACD indicator. Returns DataFrame with columns: 'macd', 'macd_signal', 'histogram'."""
     ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
     ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
@@ -32,11 +37,13 @@ def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> p
 
 
 def vwap(df: pd.DataFrame) -> pd.Series:
+    """Volume-Weighted Average Price (cumulative from first bar). Returns a Series."""
     typical = (df["high"] + df["low"] + df["close"]) / 3
     return (typical * df["volume"]).cumsum() / df["volume"].cumsum()
 
 
 def bollinger_bands(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.DataFrame:
+    """Bollinger Bands. Returns DataFrame with columns: 'bb_upper', 'bb_mid', 'bb_lower'."""
     mid = df["close"].rolling(period).mean()
     dev = df["close"].rolling(period).std()
     return pd.DataFrame(
@@ -46,6 +53,7 @@ def bollinger_bands(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average True Range using Wilder's smoothing (EWM alpha=1/period). Returns a Series."""
     tr = pd.concat(
         [
             df["high"] - df["low"],
@@ -58,6 +66,7 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 
 def stochastic(df: pd.DataFrame, k: int = 14, d: int = 3) -> pd.DataFrame:
+    """Stochastic oscillator. Returns DataFrame with columns: 'stoch_k', 'stoch_d'."""
     lo = df["low"].rolling(k).min()
     hi = df["high"].rolling(k).max()
     pct_k = 100 * (df["close"] - lo) / (hi - lo).replace(0, float("nan"))
@@ -65,12 +74,14 @@ def stochastic(df: pd.DataFrame, k: int = 14, d: int = 3) -> pd.DataFrame:
 
 
 def williams_r(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Williams %R oscillator (-100 to 0). Returns a Series. Values > -20 overbought, < -80 oversold."""
     hi = df["high"].rolling(period).max()
     lo = df["low"].rolling(period).min()
     return -100 * (hi - df["close"]) / (hi - lo).replace(0, float("nan"))
 
 
 def keltner_channels(df: pd.DataFrame, period: int = 20, atr_mult: float = 2.0) -> pd.DataFrame:
+    """Keltner Channels (EMA ± ATR multiple). Returns DataFrame with columns: 'kc_upper', 'kc_mid', 'kc_lower'."""
     mid = ema(df, period)
     band = atr_mult * atr(df, period)
     return pd.DataFrame(
@@ -80,15 +91,18 @@ def keltner_channels(df: pd.DataFrame, period: int = 20, atr_mult: float = 2.0) 
 
 
 def obv(df: pd.DataFrame) -> pd.Series:
+    """On-Balance Volume (cumulative). Returns a Series. Rising OBV confirms uptrend."""
     direction = np.sign(df["close"].diff()).fillna(0)
     return (direction * df["volume"]).cumsum()
 
 
 def volume_sma(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Simple moving average of volume. Returns a Series."""
     return df["volume"].rolling(period).mean()
 
 
 def volume_ratio(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Current volume divided by its SMA. Returns a Series. Values >1 indicate above-average volume."""
     avg = volume_sma(df, period)
     return df["volume"] / avg.replace(0, float("nan"))
 
