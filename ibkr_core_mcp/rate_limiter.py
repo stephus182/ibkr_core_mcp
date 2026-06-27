@@ -53,8 +53,8 @@ def with_retry(
     - Bars >30 seconds: historical data limitations have been lifted (per official docs)
     Source: https://interactivebrokers.github.io/tws-api/historical_limitations.html
     Note: these are TWS API pacing rules — not confirmed to apply identically to
-    CP API REST (/hmds/history, /iserver/marketdata/history) endpoints. Applied here
-    as a conservative default given the shared IBKR infrastructure.
+    CP API REST (/iserver/marketdata/history) endpoints. Applied here as a
+    conservative default given the shared IBKR infrastructure.
 
     Flex Web Service rate limits (error 1018, verified against official error code table):
     max 1 request/second, 10 requests/minute per token. Enforced separately in flex_query.py.

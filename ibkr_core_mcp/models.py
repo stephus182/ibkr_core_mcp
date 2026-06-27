@@ -154,7 +154,7 @@ class Notification(BaseModel):
 def bars_to_dataframe(raw: dict[str, Any]) -> pd.DataFrame:
     """Convert IBKR market history API response to a standard OHLCV DataFrame.
 
-    Input format (from /hmds/history or /iserver/marketdata/history):
+    Input format (from /iserver/marketdata/history):
       {"startTime": "...", "data": [{"o": float, "h": float, "l": float,
                                       "c": float, "v": float, "t": int}, ...]}
     where "t" is a UNIX timestamp in milliseconds (UTC).

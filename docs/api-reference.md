@@ -69,16 +69,13 @@ For requests that may exceed this, use `get_market_history_paginated()`.
 
 Same parameters and return shape as `get_market_history()`, but automatically paginates
 requests that would exceed the 1000-point limit. Uses `startTime` to walk backwards from
-today in chunks, then merges and deduplicates. Replaces the deprecated `/hmds/history`.
+today in chunks, then merges and deduplicates.
 
 | Bar size | Chunk size | Bars per chunk (approx) |
 |----------|------------|-------------------------|
 | `1d` | 1000 calendar days | ~690 trading days |
 | `1w` | 1000 calendar days | ~143 weeks |
 | `1h` | 197 calendar days | ~128 days × 6.5h |
-
-**Deprecation note:** `/hmds/history` was removed from IBKR docs November 18, 2025.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
 
 **Endpoint:** `GET /iserver/marketdata/history` (chunked via startTime)
 
@@ -99,14 +96,6 @@ Live quotes for one or more contracts. Returns `[]` if the response is not a lis
 are normal — retry after ≈1s.
 
 **Endpoint:** `GET /iserver/marketdata/snapshot`
-
----
-
-### `get_hmds_history(conid, period, bar, outside_rth) -> dict`
-**Deprecated November 18, 2025.** IBKR removed this endpoint from their documentation.
-Use `get_market_history_paginated()` instead.
-
-**Endpoint:** `GET /hmds/history` (deprecated)
 
 ---
 
@@ -352,16 +341,12 @@ Available scanner types and filter parameters.
 Run a scanner with full parameter control.
 **Endpoint:** `POST /iserver/scanner/run`
 
-### `run_hmds_scanner(params) -> list[dict]`
-Run an HMDS-based historical scanner.
-**Endpoint:** `POST /hmds/scanner`
-
 ---
 
 ## FYI / Notifications
 
 ### `get_notifications(max_results) -> list[dict]`
-Account notifications — order fills, margin calls, system messages. Max 100.
+Account notifications — order fills, margin calls, system messages. Max 10 per request (official API limit).
 **Endpoint:** `GET /fyi/notifications`
 
 ### `get_unread_count() -> int`

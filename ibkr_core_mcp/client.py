@@ -238,8 +238,7 @@ class IBKRClient:
         walking backwards from today in calendar-day windows sized to stay safely under
         the 1000-point limit. Results are merged, sorted by timestamp, and deduplicated.
 
-        This is the primary entry point for ClaudeToolkit.fetch_market_data(). It replaces
-        the deprecated /hmds/history endpoint (removed from IBKR docs November 18, 2025).
+        This is the primary entry point for ClaudeToolkit.fetch_market_data().
 
         Chunk sizes by bar (targeting 80% of the 1000-point limit):
           1d  → 1000-calendar-day chunks  (~690 trading days each)
@@ -332,24 +331,6 @@ class IBKRClient:
         Endpoint: GET /iserver/marketdata/bars
         """
         return self._get("/iserver/marketdata/bars")
-
-    def get_hmds_history(self, conid: int, period: str = "1Y", bar: str = "1d", outside_rth: bool = False) -> dict[str, Any]:
-        """Historical Market Data Service bars — same response shape as get_market_history().
-
-        *** DEPRECATED (November 18, 2025) ***
-        IBKR removed /hmds/history from their documentation as deprecated. The official
-        replacement is /iserver/marketdata/history (get_market_history). Migration note:
-        iserver/marketdata/history has a 1000 data point max per request, so multi-year
-        daily bar requests would require pagination. This endpoint still works but is no
-        longer officially supported.
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
-
-        ClaudeToolkit._fetch_market_data() uses this endpoint with a 3-attempt retry on
-        404/500 for the HMDS warmup window (first request per symbol).
-
-        Endpoint: GET /hmds/history
-        """
-        return self._get("/hmds/history", {"conid": conid, "period": period, "bar": bar, "outsideRth": str(outside_rth).lower()})
 
     def unsubscribe_market_data(self, conid: int) -> dict[str, Any]:
         """Unsubscribe a specific contract from streaming market data.
@@ -795,14 +776,6 @@ class IBKRClient:
         contracts = data.get("contracts", data) if isinstance(data, dict) else data
         return contracts if isinstance(contracts, list) else []
 
-    def run_hmds_scanner(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Run an HMDS-based historical scanner. Returns [] if not a list.
-
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
-        Endpoint: POST /hmds/scanner
-        """
-        data = self._post("/hmds/scanner", params)
-        return data if isinstance(data, list) else []
 
     # ------------------------------------------------------------------
     # FYI / Notifications
