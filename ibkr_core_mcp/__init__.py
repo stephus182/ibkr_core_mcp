@@ -1,5 +1,6 @@
 """ibkr_core_mcp — IBKR Client Portal API package."""
 import logging
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from ibkr_core_mcp import analytics, indicators, pinescript
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth, NoAuth, TokenAuth
@@ -44,7 +45,10 @@ from ibkr_core_mcp.web_scraper import FirecrawlError, WebDocsStoreError
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__version__ = "0.4.0"
+try:
+    __version__ = _pkg_version("ibkr_core_mcp")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
 __all__ = [
     # Core
     "Config",

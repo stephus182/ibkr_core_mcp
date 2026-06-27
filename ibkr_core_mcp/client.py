@@ -257,8 +257,8 @@ class IBKRClient:
         if total_days is None or total_days <= chunk_days:
             return self.get_market_history(conid, period, bar, outside_rth)
 
-        all_bars: list[dict] = []
-        envelope: dict = {}
+        all_bars: list[dict[str, Any]] = []
+        envelope: dict[str, Any] = {}
         now = datetime.utcnow()
         total = int(total_days)
         offset = 0
@@ -283,7 +283,7 @@ class IBKRClient:
             return {}
 
         seen: set[int] = set()
-        unique: list[dict] = []
+        unique: list[dict[str, Any]] = []
         for b in sorted(all_bars, key=lambda x: x.get("t", 0)):
             t = b.get("t")
             if t is not None and t not in seen:

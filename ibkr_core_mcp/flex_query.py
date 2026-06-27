@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import date
 from typing import TYPE_CHECKING, Any
+
+log = logging.getLogger(__name__)
 
 import defusedxml.ElementTree as ET
 import requests

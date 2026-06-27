@@ -823,8 +823,12 @@ class ClaudeToolkit:
     def tools(self) -> list[dict[str, Any]]:
         return TOOL_DEFINITIONS
 
-    def execute(self, name: str, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Execute a tool call. Returns (text_result, optional_plotly_fig)."""
+    def execute(self, name: str, inputs: dict[str, Any]) -> tuple[str, None]:
+        """Execute a tool call by name. Returns (text_result, None).
+
+        The second element is reserved for future plotly figure output and is
+        always None in this version.
+        """
         handlers = {
             "fetch_market_data": self._fetch_market_data,
             "check_cache": self._check_cache,
@@ -879,7 +883,7 @@ class ClaudeToolkit:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _get_accounts(self) -> tuple[list[dict], str | None]:
+    def _get_accounts(self) -> tuple[list[dict[str, Any]], str | None]:
         accounts = self._client.get_accounts()
         if not accounts:
             return [], "No accounts found."
@@ -933,7 +937,7 @@ class ClaudeToolkit:
         raw = None
         for attempt in range(3):
             try:
-                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar)
+                raw = self._client.get_market_history_paginated(int(conid), period=period, bar=bar)
                 if raw and raw.get("data"):
                     break
             except IBKRAPIError:
@@ -1605,7 +1609,7 @@ class ClaudeToolkit:
         conid, err = self._resolve_conid(symbol, sec_type)
         if err:
             return err, None
-        info = self._client.get_contract_info_and_rules(conid)
+        info = self._client.get_contract_info_and_rules(int(conid))
         return json.dumps(info, indent=2), None
 
     def _get_option_chain(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -1851,7 +1855,8 @@ class ClaudeToolkit:
         # First call initializes the iServer subscription but returns no price fields.
         # If no price data came back, wait 1s and retry once — same warmup pattern as
         # /iserver/account/orders (two-call). Fields 31=last, 84=bid, 86=ask.
-        _has_prices = lambda s: any(item.get("31") or item.get("84") or item.get("86") for item in s)
+        def _has_prices(s: list[dict[str, Any]]) -> bool:
+            return any(item.get("31") or item.get("84") or item.get("86") for item in s)
         if snapshot and not _has_prices(snapshot):
             time.sleep(1)
             snapshot = self._client.get_market_snapshot(conids)

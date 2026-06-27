@@ -78,17 +78,13 @@ def cagr(returns: pd.Series, periods: int = 252) -> float:
     """
     total = float((1 + returns).prod())
     n = len(returns) / periods
-    if n <= 0 or total <= 0:
-        return 0.0
-    return float(total ** (1.0 / n) - 1)
+    return 0.0 if n <= 0 or total <= 0 else float(total ** (1.0 / n) - 1)
 
 
 def calmar(returns: pd.Series, periods: int = 252) -> float:
     """Calmar ratio: CAGR divided by absolute max drawdown. 0.0 if drawdown is zero."""
     mdd = max_drawdown(returns)
-    if mdd == 0:
-        return 0.0
-    return float(cagr(returns, periods) / abs(mdd))
+    return 0.0 if mdd == 0 else float(cagr(returns, periods) / abs(mdd))
 
 
 def win_rate(trades: list[dict[str, Any]]) -> float:
@@ -129,14 +125,19 @@ def trade_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def full_report(returns: pd.Series, trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def full_report(
+    returns: pd.Series,
+    trades: list[dict[str, Any]] | None = None,
+    periods: int = 252,
+) -> dict[str, Any]:
     """Complete performance report combining return-series and trade-level metrics.
 
     Args:
-        returns: Per-bar return series (daily by default — affects CAGR/Sharpe/Sortino/Calmar).
-            Pass ``periods`` to the underlying functions if using intraday bars.
+        returns: Per-bar return series.
         trades: Optional list of trade dicts with 'pnl' or 'realizedPnl' fields.
             If provided, adds win_rate, profit_factor, avg_win_loss_ratio, total_trades.
+        periods: Trading periods per year for annualisation — 252 for daily (default),
+            1440 for 1-min bars, 78 for 5-min bars (6.5 h × 12 bars/h × 252 days).
 
     Returns:
         Dict with keys: total_return, cagr, sharpe, sortino, calmar, max_drawdown,
@@ -144,17 +145,15 @@ def full_report(returns: pd.Series, trades: list[dict[str, Any]] | None = None) 
     """
     report: dict[str, Any] = {
         "total_return": float((1 + returns).prod() - 1),
-        "cagr": cagr(returns),
-        "sharpe": sharpe(returns),
-        "sortino": sortino(returns),
-        "calmar": calmar(returns),
+        "cagr": cagr(returns, periods),
+        "sharpe": sharpe(returns, periods=periods),
+        "sortino": sortino(returns, periods=periods),
+        "calmar": calmar(returns, periods),
         "max_drawdown": max_drawdown(returns),
         "max_drawdown_duration": max_drawdown_duration(returns),
         "num_bars": len(returns),
     }
-    if trades:
-        report.update(trade_summary(trades))
-    return report
+    return report | trade_summary(trades) if trades else report
 
 
 def _pnl(trade: dict[str, Any]) -> float:

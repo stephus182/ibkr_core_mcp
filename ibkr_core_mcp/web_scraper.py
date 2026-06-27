@@ -310,7 +310,7 @@ class WebDocsStore:
             return self._svc
         creds = None
         if self._cfg.gdrive_token_file.exists():
-            creds = Credentials.from_authorized_user_file(
+            creds = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
                 str(self._cfg.gdrive_token_file), self._SCOPES
             )
         if not creds or not creds.valid:
@@ -341,14 +341,14 @@ class WebDocsStore:
         result = svc.files().list(q=q, fields="files(id)").execute()
         files = result.get("files", [])
         if files:
-            return files[0]["id"]
+            return str(files[0]["id"])
         meta = {
             "name": name,
             "mimeType": "application/vnd.google-apps.folder",
             "parents": [parent_id],
         }
         created = svc.files().create(body=meta, fields="id").execute()
-        return created["id"]
+        return str(created["id"])
 
     def _get_web_docs_folder_id(self) -> str:
         """Return the web_docs/ root folder ID, using config override or auto-creating it."""
@@ -356,7 +356,7 @@ class WebDocsStore:
             return self._cfg.gdrive_web_docs_folder_id
         return self._find_or_create_folder("web_docs", self._cfg.gdrive_folder_id)
 
-    def save_crawl(self, url: str, pages: list[dict[str, str]]) -> dict:
+    def save_crawl(self, url: str, pages: list[dict[str, str]]) -> dict[str, Any]:
         """
         Save crawl results to Drive under web_docs/{url-slug}/.
 
@@ -501,4 +501,4 @@ class WebDocsStore:
             result = svc.files().create(body=meta, media_body=media, fields="id").execute()
         except Exception as exc:
             raise WebDocsStoreError(f"Failed to save search snapshot {filename}") from exc
-        return result["id"]
+        return str(result["id"])

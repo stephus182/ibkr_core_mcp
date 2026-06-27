@@ -7,32 +7,67 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.0.0] — unreleased
+
+### Fixed
+- `analytics.full_report()` hardcoded `periods=252` — now accepts `periods: int = 252` kwarg; intraday callers now get correct annualised Sharpe/Sortino/Calmar/CAGR
+- `ClaudeToolkit.execute()` return type corrected to `tuple[str, None]` — was documented as returning an optional plotly figure but always returned `None`; second element reserved for future figure support
+- mypy: 14 type errors resolved across 5 files (see below)
+  - Missing `Path` import in `cache.py`
+  - Missing `log` logger in `flex_query.py`
+  - Bare `dict` / `list[dict]` annotations upgraded to fully typed equivalents
+  - `conid` passed as `str` where `int` expected in two `ClaudeToolkit` handlers
+  - Untyped lambda replaced with typed `def _has_prices(...)` in market snapshot handler
+  - `Credentials.from_authorized_user_file` suppressed with `# type: ignore[no-untyped-call]` (third-party stub gap)
+  - `save_crawl` return type narrowed; Drive file IDs wrapped in `str()`
+- `__version__` now derived from `importlib.metadata` — single source of truth is `pyproject.toml`; eliminates drift between `__init__.py` and `pyproject.toml`
 
 ### Added
+- Firecrawl web scraper integration: `firecrawl_search` and `firecrawl_crawl` Claude tools, `FirecrawlClient`, `WebDocsStore` with Drive persistence
+- `SQLiteStore.get_market_calendar_context()` — NYSE + CME trading calendar for LLM context-aware scheduling
+- `get_market_calendar_context`, `FirecrawlError`, `WebDocsStoreError` exported from `__init__.py`
+- SSRF guard on `firecrawl_crawl` — only `https://` URLs with public hostnames accepted
+- 484 unit tests (46 new ClaudeToolkit handler tests, 13 GDriveCache Drive path tests)
+- Source: URLs on all IBKR Client Portal API docstrings
+- `Field(description=...)` on all aliased Pydantic model fields — IDE autocomplete and `model.model_fields` expose IBKR wire-format field names
 - `AuthStrategy` Protocol exported from `ibkr_core_mcp.__init__`
+- `py.typed` registered in `[tool.setuptools.package-data]`
+- Complete IBKR Flex error code table (21 official codes) in `flex_query.py`
+- Docstrings with official IBKR CP API source citations on all 76 `IBKRClient` public methods
+- Optional `start_date` / `end_date` parameters added to `FlexQueryClient.fetch_trades()`
+
+### Changed
+- `plotly` removed from package dependencies — was never used
+- Dead HMDS code removed from `client.py`
+- `_BROWSER_LOADERS` dict removed from `auth.py` — was mapping each name to itself
+
+### Security
+- `store._apply_filters` `time_col` parameter validated against allowlist before SQL interpolation
+- Silent exception swallowing replaced with `log.warning(...)` in `flex_query.py` and `claude_tools._run_backtest`
+- `WebDocsStore._get_service()` token file written with `0o600` permissions
+
+---
+
+## [Unreleased — earlier]
+
+### Added
 - `py.typed` registered in `[tool.setuptools.package-data]`
 - Docs-first principle established: all external API behavior must be verified against official documentation before implementation; reference URLs added to `CLAUDE.md`, `README.md`, and inline comments
 - Complete IBKR Flex error code table (21 official codes) in `flex_query.py`, sourced from https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm
-- Docstrings with official IBKR CP API source citations on all 76 `IBKRClient` public methods; `client.py` now self-documents its behavior directly in code
-- `with_retry()` docstring cites official IBKR rate limit policy and documents Retry-After behavior; 100% coverage confirmed
-- Optional `start_date` / `end_date` parameters (`fd` / `td`) added to `FlexQueryClient.fetch_trades()` for date-range overrides; format YYYYMMDD, max 365 days per official docs
-- `_validate_flex_date()` helper in `flex_query.py` enforces YYYYMMDD format with official source citation
-- 5 new tests for `FlexQueryClient` date params and `_parse_flex_datetime` date-only path; total 363 unit tests
+- `with_retry()` docstring cites official IBKR rate limit policy and documents Retry-After behavior
+- Optional `start_date` / `end_date` parameters (`fd` / `td`) added to `FlexQueryClient.fetch_trades()` for date-range overrides
+- `_validate_flex_date()` helper in `flex_query.py` enforces YYYYMMDD format
 
 ### Fixed
 - `ping()` try/except split so `tickle()` errors are no longer silently swallowed
 - Drive `market_data/` folder discovery now sorts by `createdTime asc`; warns when duplicates exist
-- Stale Drive folder handle cleared on any Drive exception in `load()` and `save()`
-- `_fetch_market_data()` in `ClaudeToolkit` uses canonical `bars_to_dataframe()` to prevent HMDS schema drift in cached parquet
 - Account ID regex unified: both `client.py` and `claude_tools.py` now enforce `^[A-Z0-9]{4,12}$`
 - `py.typed` moved into `ibkr_core_mcp/` package directory (was at repo root — invisible to pip consumers)
 - OS classifiers expanded: Linux and Windows added alongside macOS
-- `websockets` import now raises a clear `ModuleNotFoundError` with install instructions when missing
-- README: `--streaming` flag corrected to `--stream`, `pip install ibkr_core_mcp` replaced with git+ form, model ID updated to `claude-sonnet-4-6`, analytics description corrected, `IBKR_SQLITE_PATH` marked optional
-- **Flex Web Service endpoint** corrected from `gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest` to `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest` — wrong host and path from day one; source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
-- **Required `User-Agent: Python/3` header** added to all Flex requests (per official documentation; requests without this header are rejected silently)
-- **Flex error 1001** correctly documented as transient generation failure (retry) — was previously mislabeled "rate limit" then "auth failure"; source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm; actual auth errors are 1014 (invalid query) and 1015 (invalid token)
+- README: `--streaming` flag corrected to `--stream`, git+ install form, model ID updated
+- **Flex Web Service endpoint** corrected from `gdcdyn.interactivebrokers.com` to `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` — wrong from day one
+- **Required `User-Agent: Python/3` header** added to all Flex requests
+- **Flex error 1001** correctly documented as transient generation failure (not rate limit)
 
 ---
 
