@@ -625,6 +625,65 @@ TOOL_DEFINITIONS = [
             "required": ["symbol", "timeframe", "period", "end"],
         },
     },
+    {
+        "name": "firecrawl_search",
+        "description": (
+            "Search the web using Firecrawl and return full page content as markdown. "
+            "Use for research, news, or fetching technical documentation. "
+            "Optionally saves a Drive snapshot under web_docs/searches/ for later reference. "
+            "Requires FIRECRAWL_API_KEY to be set."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (1-10, default 5)",
+                    "default": 5,
+                },
+                "save_to_drive": {
+                    "type": "boolean",
+                    "description": "If true, save a markdown snapshot to Drive (default false)",
+                    "default": False,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "firecrawl_crawl",
+        "description": (
+            "Crawl an entire website starting from a URL and save all pages to Drive "
+            "under web_docs/{url-slug}/. Returns a summary of pages saved. "
+            "Crawls are asynchronous — Firecrawl polls until done or timeout. "
+            "Use for archiving IBKR documentation or other reference sites. "
+            "Requires FIRECRAWL_API_KEY to be set."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Root URL to crawl from (public http/https only)",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "description": "Maximum pages to crawl (1-100, default 50)",
+                    "default": 50,
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for crawl to complete (default 120)",
+                    "default": 120,
+                },
+            },
+            "required": ["url"],
+        },
+    },
 ]
 
 
@@ -747,6 +806,8 @@ class ClaudeToolkit:
         self._cache = cache
         self._store = store
         self._config = config
+        self._firecrawl: Any = None
+        self._web_docs: Any = None
 
     @property
     def client(self) -> IBKRClient:
@@ -799,6 +860,8 @@ class ClaudeToolkit:
             "get_watchlists": self._get_watchlists,
             "get_order_status": self._get_order_status,
             "delete_cache": self._delete_cache,
+            "firecrawl_search": self._handle_firecrawl_search,
+            "firecrawl_crawl": self._handle_firecrawl_crawl,
         }
         handler = handlers.get(name)
         if not handler:
@@ -1945,3 +2008,127 @@ class ClaudeToolkit:
             return f"No cached entry for {symbol} {timeframe} ({period}, end={end}).", None
         self._cache.delete(symbol, timeframe, period, end)
         return f"Deleted cache entry for {symbol} {timeframe} ({period}, end={end}).", None
+
+    def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """
+        Handle the firecrawl_search tool.
+
+        Lazily initializes FirecrawlClient on first call. Returns a no-key message
+        if FIRECRAWL_API_KEY is not configured. Optionally saves a Drive snapshot.
+        """
+        from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, FirecrawlError
+
+        if not self._config.firecrawl_api_key:
+            return (
+                "firecrawl_search is not available: FIRECRAWL_API_KEY is not configured. "
+                "Set it in .env to enable web search.",
+                None,
+            )
+        if self._firecrawl is None:
+            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key)
+
+        query = inputs.get("query", "").strip()
+        limit = int(inputs.get("limit", 5))
+        save_to_drive = bool(inputs.get("save_to_drive", False))
+
+        if not query:
+            return "query must be non-empty.", None
+
+        try:
+            results = self._firecrawl.search(query, limit=limit)
+        except FirecrawlError as exc:
+            return f"Firecrawl search failed (HTTP {exc.status_code}): {exc}", None
+
+        if not results:
+            return f"No results found for: {query}", None
+
+        lines = [f"## Search results for: {query}\n"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"### {i}. {r.get('title', '(no title)')}")
+            lines.append(f"**URL:** {r.get('url', '')}\n")
+            md = r.get("markdown", "")
+            if md:
+                lines.append(md[:2000])  # truncate very long pages
+            lines.append("")
+
+        drive_note = ""
+        if save_to_drive:
+            if self._web_docs is None:
+                self._web_docs = WebDocsStore(self._config)
+            try:
+                file_id = self._web_docs.save_search(query, results)
+                drive_note = f"\n\n*Snapshot saved to Drive (file ID: {file_id})*"
+            except Exception as exc:
+                log.warning("firecrawl_search: Drive save failed: %s", exc)
+                drive_note = "\n\n*Note: Drive snapshot failed — results shown above.*"
+
+        return "\n".join(lines) + drive_note, None
+
+    def _handle_firecrawl_crawl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """
+        Handle the firecrawl_crawl tool.
+
+        Validates the URL with an SSRF guard before passing to Firecrawl. Lazily
+        initializes FirecrawlClient and WebDocsStore on first call. Always saves
+        results to Drive (crawl is a bulk operation — Drive storage is the point).
+        """
+        import ipaddress
+        import urllib.parse
+        from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, FirecrawlError
+
+        if not self._config.firecrawl_api_key:
+            return (
+                "firecrawl_crawl is not available: FIRECRAWL_API_KEY is not configured. "
+                "Set it in .env to enable web crawling.",
+                None,
+            )
+
+        url = inputs.get("url", "").strip()
+        if not url:
+            return "url must be non-empty.", None
+
+        # SSRF guard
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return f"Blocked: only http/https URLs are supported (got {parsed.scheme!r}).", None
+            host = (parsed.hostname or "").lower()
+            if not host:
+                return "Blocked: URL has no hostname.", None
+            if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):
+                return "Blocked: cannot fetch from localhost or link-local addresses.", None
+            try:
+                addr = ipaddress.ip_address(host)
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return "Blocked: cannot fetch from private or reserved IP addresses.", None
+            except ValueError:
+                pass  # hostname — allow DNS resolution
+        except Exception as exc:
+            return f"Invalid URL: {exc}", None
+
+        max_pages = int(inputs.get("max_pages", 50))
+        timeout_s = int(inputs.get("timeout_s", 120))
+
+        if self._firecrawl is None:
+            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key)
+        if self._web_docs is None:
+            self._web_docs = WebDocsStore(self._config)
+
+        try:
+            pages = self._firecrawl.crawl(url, max_pages=max_pages, timeout_s=timeout_s)
+        except FirecrawlError as exc:
+            return f"Firecrawl crawl failed (HTTP {exc.status_code}): {exc}", None
+
+        try:
+            manifest = self._web_docs.save_crawl(url, pages)
+        except Exception as exc:
+            return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
+
+        saved = len(manifest["pages"])
+        return (
+            f"Crawl complete: saved {saved} page(s) from {url} to Drive.\n"
+            f"Crawled at: {manifest['crawled_at']}\n"
+            f"Pages: " + ", ".join(p['url'] for p in manifest['pages'][:10])
+            + ("..." if saved > 10 else ""),
+            None,
+        )

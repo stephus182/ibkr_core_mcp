@@ -34,3 +34,23 @@ def test_sqlite_path_expands_home(monkeypatch):
     from ibkr_core_mcp.config import Config
     cfg = Config.from_env()
     assert not str(cfg.sqlite_path).startswith("~")
+
+
+def test_firecrawl_api_key_reads_from_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-abc123")
+    monkeypatch.setenv("GDRIVE_WEB_DOCS_FOLDER_ID", "webdocs-folder-id")
+    from ibkr_core_mcp.config import Config
+    cfg = Config.from_env()
+    assert cfg.firecrawl_api_key == "fc-abc123"
+    assert cfg.gdrive_web_docs_folder_id == "webdocs-folder-id"
+
+
+def test_firecrawl_config_defaults_to_empty(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.delenv("GDRIVE_WEB_DOCS_FOLDER_ID", raising=False)
+    from ibkr_core_mcp.config import Config
+    cfg = Config.from_env()
+    assert cfg.firecrawl_api_key == ""
+    assert cfg.gdrive_web_docs_folder_id == ""
