@@ -18,6 +18,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 import requests
 from google.auth.transport.requests import Request
@@ -267,3 +268,69 @@ class FirecrawlClient:
             len(pages),
         )
         return pages
+
+
+class WebDocsStore:
+    """
+    Persist Firecrawl crawl and search results to Google Drive under a 'web_docs/'
+    subfolder, using the same Drive credentials already in use by GDriveCache.
+
+    Drive folder layout (auto-created on first use):
+      <gdrive_folder_id>/
+        web_docs/               ← created by _get_web_docs_folder_id if not overridden
+          <url-slug>/           ← one subfolder per crawled domain
+            index.json          ← manifest: {url, crawled_at, pages: [{url, file_id}]}
+            <page-slug>.md      ← one file per crawled page
+          searches/             ← flat folder for search snapshots
+            <YYYYMMDDTHHMMSSz>-<query-slug>.md
+
+    Override the web_docs/ root by setting gdrive_web_docs_folder_id in Config.
+
+    Args:
+        config: ibkr_core_mcp Config instance. Uses gdrive_token_file,
+                gdrive_credentials_file, gdrive_folder_id, and
+                gdrive_web_docs_folder_id.
+    """
+
+    _SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+    def __init__(self, config: Config) -> None:
+        self._cfg = config
+        self._svc: Any = None
+
+    def _get_service(self) -> Any:
+        """Return a cached Google Drive API v3 service, refreshing credentials if needed."""
+        if self._svc is not None:
+            return self._svc
+        creds = Credentials.from_authorized_user_file(
+            str(self._cfg.gdrive_token_file), self._SCOPES
+        )
+        if not creds.valid and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        self._svc = build("drive", "v3", credentials=creds)
+        return self._svc
+
+    def _find_or_create_folder(self, name: str, parent_id: str) -> str:
+        """Return the Drive ID of a folder by name under parent_id, creating it if absent."""
+        svc = self._get_service()
+        q = (
+            f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+            f" and '{parent_id}' in parents and trashed=false"
+        )
+        result = svc.files().list(q=q, fields="files(id)").execute()
+        files = result.get("files", [])
+        if files:
+            return files[0]["id"]
+        meta = {
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_id],
+        }
+        created = svc.files().create(body=meta, fields="id").execute()
+        return created["id"]
+
+    def _get_web_docs_folder_id(self) -> str:
+        """Return the web_docs/ root folder ID, using config override or auto-creating it."""
+        if self._cfg.gdrive_web_docs_folder_id:
+            return self._cfg.gdrive_web_docs_folder_id
+        return self._find_or_create_folder("web_docs", self._cfg.gdrive_folder_id)

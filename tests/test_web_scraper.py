@@ -289,3 +289,126 @@ def test_crawl_max_pages_clamped(mock_requests, mock_time):
     client.crawl("https://example.com", max_pages=9999)
     payload = mock_requests.post.call_args[1]["json"]
     assert payload["limit"] == 100
+
+
+# ── WebDocsStore — Drive service and folder helpers ───────────────────────────
+
+def _make_cfg_with_drive(tmp_path):
+    """Helper: Config with dummy Drive creds pointing to tmp files."""
+    from ibkr_core_mcp.config import Config
+    token = tmp_path / "token.json"
+    creds_file = tmp_path / "credentials.json"
+    token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
+    creds_file.write_text('{}')
+    return Config(
+        gateway_url="http://localhost",
+        anthropic_api_key="sk-test",
+        gdrive_folder_id="root-folder-id",
+        sqlite_path=tmp_path / "store.db",
+        gdrive_token_file=token,
+        gdrive_credentials_file=creds_file,
+        gdrive_web_docs_folder_id="",
+    )
+
+
+@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.web_scraper.build")
+def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path):
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+    cfg = _make_cfg_with_drive(tmp_path)
+    mock_creds = MagicMock()
+    mock_creds.valid = True
+    mock_creds_cls.from_authorized_user_file.return_value = mock_creds
+    mock_svc = MagicMock()
+    mock_build.return_value = mock_svc
+
+    store = WebDocsStore(cfg)
+    svc = store._get_service()
+    assert svc is mock_svc
+    mock_build.assert_called_once_with("drive", "v3", credentials=mock_creds)
+
+
+@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.web_scraper.build")
+def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+    cfg = _make_cfg_with_drive(tmp_path)
+    mock_creds = MagicMock()
+    mock_creds.valid = True
+    mock_creds_cls.from_authorized_user_file.return_value = mock_creds
+    mock_build.return_value = MagicMock()
+
+    store = WebDocsStore(cfg)
+    svc1 = store._get_service()
+    svc2 = store._get_service()
+    assert svc1 is svc2
+    mock_build.assert_called_once()  # cached after first call
+
+
+@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.web_scraper.build")
+def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_path):
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+    cfg = _make_cfg_with_drive(tmp_path)
+    mock_creds = MagicMock()
+    mock_creds.valid = True
+    mock_creds_cls.from_authorized_user_file.return_value = mock_creds
+
+    mock_svc = MagicMock()
+    mock_build.return_value = mock_svc
+    mock_svc.files().list().execute.return_value = {
+        "files": [{"id": "existing-folder-id"}]
+    }
+
+    store = WebDocsStore(cfg)
+    fid = store._find_or_create_folder("web_docs", "root-folder-id")
+    assert fid == "existing-folder-id"
+    mock_svc.files().create.assert_not_called()
+
+
+@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.web_scraper.build")
+def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, tmp_path):
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+    cfg = _make_cfg_with_drive(tmp_path)
+    mock_creds = MagicMock()
+    mock_creds.valid = True
+    mock_creds_cls.from_authorized_user_file.return_value = mock_creds
+
+    mock_svc = MagicMock()
+    mock_build.return_value = mock_svc
+    mock_svc.files().list().execute.return_value = {"files": []}
+    mock_svc.files().create().execute.return_value = {"id": "new-folder-id"}
+
+    store = WebDocsStore(cfg)
+    fid = store._find_or_create_folder("web_docs", "root-folder-id")
+    assert fid == "new-folder-id"
+    mock_svc.files().create.assert_called()
+
+
+@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.web_scraper.build")
+def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tmp_path):
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+    from ibkr_core_mcp.config import Config
+    token = tmp_path / "token.json"
+    creds_file = tmp_path / "credentials.json"
+    token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
+    creds_file.write_text('{}')
+    cfg = Config(
+        gateway_url="http://localhost",
+        anthropic_api_key="sk-test",
+        gdrive_folder_id="root-folder-id",
+        sqlite_path=tmp_path / "store.db",
+        gdrive_token_file=token,
+        gdrive_credentials_file=creds_file,
+        gdrive_web_docs_folder_id="override-folder-id",
+    )
+    mock_creds = MagicMock()
+    mock_creds.valid = True
+    mock_creds_cls.from_authorized_user_file.return_value = mock_creds
+    mock_build.return_value = MagicMock()
+
+    store = WebDocsStore(cfg)
+    fid = store._get_web_docs_folder_id()
+    assert fid == "override-folder-id"
