@@ -288,8 +288,7 @@ Automatically paginates requests exceeding the 1000 data-point limit using `star
 **Output:** Summary with row count, date range, and last close.
 
 **Note:** Max 1000 data points per request — handled automatically by pagination.
-`/hmds/history` was deprecated November 18, 2025; this tool uses `/iserver/marketdata/history`.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
 
 **Rate limit:** 5 concurrent requests (official).
 
