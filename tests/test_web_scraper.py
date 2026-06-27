@@ -151,3 +151,141 @@ def test_search_limit_clamped_to_10(mock_requests):
     client.search("query", limit=999)
     payload = mock_requests.post.call_args[1]["json"]
     assert payload["limit"] == 10
+
+
+# ── FirecrawlClient.crawl ─────────────────────────────────────────────────────
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_polls_until_completed(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    # monotonic: deadline=0+120=120; first while check=1 (enter); after poll status=completed → exit
+    mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-123"}
+
+    poll1 = MagicMock()
+    poll1.status_code = 200
+    poll1.json.return_value = {"status": "scraping", "data": []}
+
+    poll2 = MagicMock()
+    poll2.status_code = 200
+    poll2.json.return_value = {
+        "status": "completed",
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/page"}, "markdown": "# Page"}
+        ],
+    }
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.side_effect = [poll1, poll2]
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+    assert len(pages) == 1
+    assert pages[0]["url"] == "https://example.com/page"
+    assert pages[0]["markdown"] == "# Page"
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_failed_status_raises(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+    mock_time.monotonic.side_effect = [0.0, 1.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-fail"}
+
+    fail_poll = MagicMock()
+    fail_poll.status_code = 200
+    fail_poll.json.return_value = {"status": "failed", "error": "blocked by robots.txt"}
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.return_value = fail_poll
+
+    client = FirecrawlClient("fc-test")
+    with pytest.raises(FirecrawlError, match="Crawl job failed"):
+        client.crawl("https://example.com")
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_timeout_returns_partial_results(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    # deadline = 0.0 + 10 = 10; first while check = 5.0 (enter loop); second = 200.0 (exit)
+    mock_time.monotonic.side_effect = [0.0, 5.0, 200.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-slow"}
+
+    partial_poll = MagicMock()
+    partial_poll.status_code = 200
+    partial_poll.json.return_value = {
+        "status": "scraping",
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "partial content"}
+        ],
+    }
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.return_value = partial_poll
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=10)
+    # Returns partial — does not raise
+    assert len(pages) == 1
+    assert pages[0]["markdown"] == "partial content"
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_skips_pages_with_empty_markdown(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_time.monotonic.side_effect = [0.0, 1.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-empty"}
+
+    poll = MagicMock()
+    poll.status_code = 200
+    poll.json.return_value = {
+        "status": "completed",
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/a"}, "markdown": "# Real"},
+            {"metadata": {"sourceURL": "https://example.com/b"}, "markdown": ""},
+            {"metadata": {"sourceURL": "https://example.com/c"}, "markdown": None},
+        ],
+    }
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.return_value = poll
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com")
+    assert len(pages) == 1
+    assert pages[0]["url"] == "https://example.com/a"
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_max_pages_clamped(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_time.monotonic.side_effect = [0.0, 1.0]
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-clamp"}
+    poll = MagicMock()
+    poll.status_code = 200
+    poll.json.return_value = {"status": "completed", "data": []}
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.return_value = poll
+
+    client = FirecrawlClient("fc-test")
+    client.crawl("https://example.com", max_pages=9999)
+    payload = mock_requests.post.call_args[1]["json"]
+    assert payload["limit"] == 100

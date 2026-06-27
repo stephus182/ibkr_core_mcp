@@ -175,3 +175,95 @@ class FirecrawlClient:
             }
             for r in raw
         ]
+
+    def crawl(
+        self,
+        url: str,
+        max_pages: int = 50,
+        timeout_s: int = 120,
+    ) -> list[dict[str, str]]:
+        """
+        Crawl a site starting from url and return all pages as markdown.
+
+        Firecrawl crawls are asynchronous. This method:
+          1. Starts the job with POST /v1/crawl
+          2. Polls GET /v1/crawl/{id} every 5 seconds until status == "completed"
+             or timeout_s seconds have elapsed
+          3. Returns all pages collected so far (partial results on timeout)
+
+        On timeout, a warning is logged and whatever pages were collected are
+        returned. The return value is never raised on timeout — callers receive
+        whatever Firecrawl had completed.
+
+        Args:
+            url: Root URL to crawl from. Must be a public http/https URL. The
+                 caller (ClaudeToolkit handler) is responsible for SSRF validation
+                 before calling this method.
+            max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
+            timeout_s: Maximum wall-clock seconds to wait for the crawl to complete.
+                       Minimum 10s. If the job is still running at timeout, partial
+                       results are returned rather than raising an error.
+
+        Returns:
+            List of page dicts, each containing:
+              - "url": str      — source URL for the page
+              - "markdown": str — full markdown content of the page
+
+            Pages with empty or None markdown are excluded from the result.
+
+        Raises:
+            FirecrawlError: If the crawl job transitions to status "failed", or if
+                            the API returns a non-200 response on job start or poll.
+            requests.exceptions.Timeout: If a single API call exceeds 30 seconds
+                                         (distinct from the overall timeout_s limit).
+        """
+        max_pages = max(1, min(100, max_pages))
+        timeout_s = max(10, timeout_s)
+
+        # Start crawl job
+        resp = requests.post(
+            f"{self.BASE_URL}/crawl",
+            headers=self._headers,
+            json={"url": url, "limit": max_pages, "scrapeOptions": {"formats": ["markdown"]}},
+            timeout=30,
+        )
+        self._raise_for_status(resp)
+        job_id = resp.json()["id"]
+
+        # Poll for completion
+        deadline = time.monotonic() + timeout_s
+        pages: list[dict[str, str]] = []
+
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            poll = requests.get(
+                f"{self.BASE_URL}/crawl/{job_id}",
+                headers=self._headers,
+                timeout=30,
+            )
+            poll.raise_for_status()
+            data = poll.json()
+            status = data.get("status", "")
+
+            pages = [
+                {
+                    "url": p.get("metadata", {}).get("sourceURL", p.get("url", "")),
+                    "markdown": p.get("markdown", ""),
+                }
+                for p in (data.get("data") or [])
+                if p.get("markdown")
+            ]
+
+            if status == "completed":
+                return pages
+            if status == "failed":
+                raise FirecrawlError(
+                    f"Crawl job failed: {data.get('error', 'unknown error')}"
+                )
+
+        log.warning(
+            "firecrawl crawl timed out after %ds — returning %d partial pages",
+            timeout_s,
+            len(pages),
+        )
+        return pages
