@@ -359,7 +359,8 @@ summary   = client.get_account_summary(account_id)
 
 # Full performance report from equity returns + trade history
 trades = store.get_trades()
-report = analytics.full_report(equity_returns, trades)
+report = analytics.full_report(equity_returns, trades)           # daily bars (default)
+report = analytics.full_report(equity_returns, trades, periods=1440)  # 1-min bars
 # → { sharpe, sortino, calmar, max_drawdown, cagr, win_rate, profit_factor, avg_win_loss_ratio, ... }
 
 print(f"Sharpe: {report['sharpe']:.2f}  |  Calmar: {report['calmar']:.2f}  |  Max DD: {report['max_drawdown']:.1f}%")

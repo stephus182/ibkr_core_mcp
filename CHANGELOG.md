@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.0.0] — unreleased
+## [1.0.0] — 2026-06-27
 
 ### Fixed
 - `analytics.full_report()` hardcoded `periods=252` — now accepts `periods: int = 252` kwarg; intraday callers now get correct annualised Sharpe/Sortino/Calmar/CAGR

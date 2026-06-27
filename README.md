@@ -74,7 +74,7 @@ pip install git+https://github.com/stephus182/ibkr_core_mcp.git
 Or pin to a specific version:
 
 ```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v0.4.0
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.0.0
 ```
 
 Or for local development:
@@ -165,7 +165,7 @@ response = ai.messages.create(
 # Route tool calls back through the toolkit
 for block in response.content:
     if block.type == "tool_use":
-        text, fig = toolkit.execute(block.name, block.input)
+        text, _fig = toolkit.execute(block.name, block.input)  # _fig is always None in v1.0
 ```
 
 ---
