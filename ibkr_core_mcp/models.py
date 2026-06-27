@@ -8,14 +8,17 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class Contract(BaseModel):
-    """IBKR contract descriptor from /iserver/secdef/search or /trsrv/secdef."""
+    """IBKR contract descriptor from /iserver/secdef/search or /trsrv/secdef.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    """
 
     conid: int
     symbol: str
-    sec_type: str = Field(default="", alias="secType")
+    sec_type: str = Field(default="", alias="secType", description="Security type (IBKR field: secType) — e.g. STK, OPT, FUT, CASH")
     exchange: str = ""
     currency: str = "USD"
-    description: str = Field(default="", alias="companyName")
+    description: str = Field(default="", alias="companyName", description="Company or instrument name (IBKR field: companyName)")
 
     model_config = {"populate_by_name": True}
 
@@ -33,15 +36,18 @@ class Contract(BaseModel):
 
 
 class Position(BaseModel):
-    """Open position from /portfolio/{accountId}/positions/{page}."""
+    """Open position from /portfolio/{accountId}/positions/{page}.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    """
 
     conid: int = 0
-    symbol: str = Field(default="", alias="contractDesc")
+    symbol: str = Field(default="", alias="contractDesc", description="Ticker symbol (IBKR field: contractDesc)")
     position: float
-    mkt_price: float = Field(default=0.0, alias="mktPrice")
-    mkt_value: float = Field(default=0.0, alias="mktValue")
-    unrealized_pnl: float = Field(default=0.0, alias="unrealizedPnl")
-    realized_pnl: float = Field(default=0.0, alias="realizedPnl")
+    mkt_price: float = Field(default=0.0, alias="mktPrice", description="Current market price (IBKR field: mktPrice)")
+    mkt_value: float = Field(default=0.0, alias="mktValue", description="Current market value in account currency (IBKR field: mktValue)")
+    unrealized_pnl: float = Field(default=0.0, alias="unrealizedPnl", description="Unrealized P&L (IBKR field: unrealizedPnl)")
+    realized_pnl: float = Field(default=0.0, alias="realizedPnl", description="Realized P&L (IBKR field: realizedPnl)")
 
     model_config = {"populate_by_name": True}
 
@@ -62,7 +68,11 @@ class Position(BaseModel):
 
 
 class Trade(BaseModel):
-    """Trade execution record — matches the trades table schema in SQLiteStore."""
+    """Trade execution record — matches the trades table schema in SQLiteStore.
+
+    Populated from /iserver/account/trades or IBKR Flex XML (all origins: CP API, TWS, mobile).
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    """
 
     execution_id: str = ""
     symbol: str
@@ -75,15 +85,18 @@ class Trade(BaseModel):
 
 
 class Order(BaseModel):
-    """Working order from /iserver/account/orders."""
+    """Working order from /iserver/account/orders.
 
-    order_id: str = Field(default="", alias="orderId")
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    """
+
+    order_id: str = Field(default="", alias="orderId", description="IBKR order ID (IBKR field: orderId)")
     status: str = ""
-    symbol: str = Field(default="", alias="ticker")
+    symbol: str = Field(default="", alias="ticker", description="Ticker symbol (IBKR field: ticker)")
     side: str = ""
-    qty: float = Field(default=0.0, alias="totalSize")
+    qty: float = Field(default=0.0, alias="totalSize", description="Total order quantity in shares/contracts (IBKR field: totalSize)")
     price: float = 0.0
-    order_type: str = Field(default="", alias="orderType")
+    order_type: str = Field(default="", alias="orderType", description="Order type — LMT, MKT, STP, etc. (IBKR field: orderType)")
 
     model_config = {"populate_by_name": True}
 
@@ -107,6 +120,8 @@ class AccountSummary(BaseModel):
 
     IBKR returns nested {"amount": value, "currency": "USD"} objects per field;
     _normalize extracts the amount for each key.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
     """
 
     net_liquidation: float = 0.0
@@ -133,13 +148,16 @@ class AccountSummary(BaseModel):
 
 
 class Notification(BaseModel):
-    """FYI notification from /fyi/notifications."""
+    """FYI notification from /fyi/notifications.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#fyi-notifications
+    """
 
     id: str = ""
     date: str = ""
     headline: str = ""
     body: str = ""
-    is_read: bool = Field(default=False, alias="isRead")
+    is_read: bool = Field(default=False, alias="isRead", description="True if the notification has been marked read (IBKR field: isRead)")
 
     model_config = {"populate_by_name": True}
 
