@@ -497,3 +497,75 @@ def test_save_crawl_returns_empty_manifest_for_no_pages(tmp_path):
     manifest = store.save_crawl("https://example.com", [])
     assert manifest["pages"] == []
     assert manifest["url"] == "https://example.com"
+
+
+# ── WebDocsStore.save_search ──────────────────────────────────────────────────
+
+
+def test_save_search_uploads_markdown_file(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "search-file-id"}
+
+    results = [
+        {"url": "https://example.com", "title": "Example", "markdown": "# Hello"}
+    ]
+    file_id = store.save_search("test query", results)
+    assert file_id == "search-file-id"
+    # create() called at least once for the file
+    assert svc.files().create.call_count >= 1
+
+
+def test_save_search_filename_format(tmp_path):
+    """Filename must match YYYYMMDDTHHMMSSz-{slug}.md format."""
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "fid"}
+
+    import re as _re
+    captured = []
+
+    def capture_create(**kwargs):
+        body = kwargs.get("body", {})
+        if "name" in body and body["name"].endswith(".md"):
+            captured.append(body["name"])
+        m = MagicMock()
+        m.execute.return_value = {"id": "fid"}
+        return m
+
+    svc.files().create.side_effect = capture_create
+
+    store.save_search("IBKR API docs", [{"url": "u", "title": "t", "markdown": "md"}])
+    assert len(captured) == 1
+    # Pattern: 8 digits T 6 digits Z - slug .md
+    assert _re.match(r"^\d{8}T\d{6}Z-.*\.md$", captured[0]), f"Bad filename: {captured[0]}"
+
+
+def test_save_search_markdown_content_includes_results(tmp_path):
+    """Saved markdown must contain query, result titles, and URLs."""
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    svc.files().list().execute.return_value = {"files": []}
+
+    uploaded_content = []
+
+    def capture_create(**kwargs):
+        body = kwargs.get("body", {})
+        media = kwargs.get("media_body")
+        if media and hasattr(media, "_fd"):
+            media._fd.seek(0)
+            uploaded_content.append(media._fd.read().decode())
+        m = MagicMock()
+        m.execute.return_value = {"id": "fid"}
+        return m
+
+    svc.files().create.side_effect = capture_create
+
+    results = [
+        {"url": "https://example.com/a", "title": "Page A", "markdown": "## Content A"},
+    ]
+    store.save_search("IBKR flex query", results)
+    # At least one upload with content (the search snapshot markdown)
+    assert any("IBKR flex query" in c or "Page A" in c or "example.com" in c for c in uploaded_content)

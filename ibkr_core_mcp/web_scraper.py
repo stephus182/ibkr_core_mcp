@@ -428,3 +428,56 @@ class WebDocsStore:
             raise WebDocsStoreError("Failed to write index.json to Drive") from exc
 
         return manifest
+
+    def save_search(self, query: str, results: list[dict[str, str]]) -> str:
+        """
+        Save a search result snapshot to Drive under web_docs/searches/.
+
+        Produces a single markdown file named {YYYYMMDDTHHMMSSz}-{query-slug}.md,
+        containing the query and all result titles, URLs, and markdown bodies.
+
+        The file is always created fresh (no overwrite check — each search is a
+        new timestamped snapshot). Duplicate queries result in multiple files.
+
+        Drive layout:
+          web_docs/
+            searches/
+              {YYYYMMDDTHHMMSSz}-{query-slug}.md
+
+        Args:
+            query: The search query string, used in the filename and document header.
+            results: List of result dicts from FirecrawlClient.search(), each with
+                     "url", "title", and "markdown" keys.
+
+        Returns:
+            Drive file ID of the created snapshot file.
+
+        Raises:
+            WebDocsStoreError: If the Drive upload fails. Original exception chained.
+        """
+        svc = self._get_service()
+        web_docs_id = self._get_web_docs_folder_id()
+        searches_id = self._find_or_create_folder("searches", web_docs_id)
+
+        now = datetime.now(UTC)
+        ts = now.strftime("%Y%m%dT%H%M%SZ")
+        filename = f"{ts}-{_slugify(query)}.md"
+
+        lines = [f"# Search: {query}", f"*Saved: {now.isoformat()}*", ""]
+        for i, r in enumerate(results, 1):
+            lines.append(f"## {i}. {r.get('title', '(no title)')}")
+            lines.append(f"**URL:** {r.get('url', '')}")
+            lines.append("")
+            lines.append(r.get("markdown", ""))
+            lines.append("")
+        content = "\n".join(lines).encode("utf-8")
+
+        media = MediaIoBaseUpload(
+            io.BytesIO(content), mimetype="text/markdown", resumable=False
+        )
+        meta = {"name": filename, "parents": [searches_id]}
+        try:
+            result = svc.files().create(body=meta, media_body=media, fields="id").execute()
+        except Exception as exc:
+            raise WebDocsStoreError(f"Failed to save search snapshot {filename}") from exc
+        return result["id"]
