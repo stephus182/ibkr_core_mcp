@@ -12,7 +12,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 |---|---|
 | `GatewayManager` | Builds and runs the official IBKR Client Portal Gateway as a Docker container, guides browser login + 2FA |
 | `IBKRClient` | Full REST client for the Client Portal API — market data, positions, orders, scanners |
-| `ClaudeToolkit` | 38 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
+| `ClaudeToolkit` | 42 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
 | `SQLiteStore` | Local SQLite store — trade history, price alerts, session log |
 | `GDriveCache` | Google Drive Parquet cache for OHLCV data |
 | `streaming` | IBKR WebSocket live quotes + price alert engine |
@@ -20,7 +20,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 40 tools to any MCP client |
+| `mcp_server` | MCP server (stdio + SSE) exposing all 44 tools to any MCP client |
 
 ---
 
@@ -220,7 +220,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 
 ## MCP server
 
-Expose all 38 tools (+ 2 MCP-only alert tools = 40 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
+Expose all 42 tools (+ 2 MCP-only alert tools = 44 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
 # stdio transport (Claude Desktop / Cursor)

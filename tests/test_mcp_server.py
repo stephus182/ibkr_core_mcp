@@ -20,7 +20,7 @@ def test_mcp_server_importable():
     assert callable(build_server)
 
 
-async def test_server_has_40_tools(toolkit, store):
+async def test_server_has_44_tools(toolkit, store):
     from mcp.types import ListToolsRequest
 
     from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS

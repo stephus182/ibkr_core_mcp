@@ -66,7 +66,7 @@ ibkr_core_mcp/
 ├── backtest.py        # RestrictedPython sandbox executor
 ├── indicators.py      # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py       # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
-├── claude_tools.py    # Claude tool definitions + handlers (38 tools, portable)
+├── claude_tools.py    # Claude tool definitions + handlers (42 tools, portable)
 ├── pinescript.py      # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py    # Token-bucket rate limiter + exponential backoff on 429
 ├── config.py          # Config dataclass loaded from environment variables
@@ -395,7 +395,7 @@ toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg
 client   = anthropic.Anthropic()
 response = client.messages.create(
     model="claude-sonnet-4-6",
-    tools=toolkit.tools,          # 38 tools, ready to use
+    tools=toolkit.tools,          # 42 tools, ready to use
     messages=[{"role": "user", "content": "Show my open positions and run a backtest on AAPL"}],
 )
 for block in response.content:
@@ -429,7 +429,7 @@ script = pinescript.indicator_script("AAPL Indicators", ["rsi", "macd", "bolling
 
 ## MCP Server
 
-`ibkr_core_mcp` ships a built-in MCP server exposing 40 tools and 3 resources.
+`ibkr_core_mcp` ships a built-in MCP server exposing 44 tools and 3 resources.
 Any MCP-compatible client — Claude Desktop, a custom chatbot, a dashboard, or an
 ML pipeline — connects without requiring the `anthropic` SDK.
 

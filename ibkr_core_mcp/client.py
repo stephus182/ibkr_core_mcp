@@ -639,7 +639,7 @@ class IBKRClient:
         """Working orders only (PreSubmitted, Submitted, ApiPending, PendingSubmit, PendingCancel, Inactive).
 
         Two-call pattern required: first call with ?force=true instantiates the subscription;
-        second call returns the actual live order list. Same documented behavior as HMDS warmup.
+        second call returns the actual live order list.
         Inactive = order exists on IBKR but is stalled (e.g. failed risk check).
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
@@ -782,12 +782,13 @@ class IBKRClient:
     # ------------------------------------------------------------------
 
     def get_notifications(self, max_results: int = 10) -> list[dict[str, Any]]:
-        """Account notifications — order fills, margin calls, system messages. Max 100.
+        """Account notifications — order fills, margin calls, system messages.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        IBKR enforces a hard cap of 10 notifications per request.
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#fyi-notifications
         Endpoint: GET /fyi/notifications
         """
-        max_results = min(max(1, max_results), 100)
+        max_results = min(max(1, max_results), 10)
         data = self._get("/fyi/notifications", {"max": max_results})
         return data if isinstance(data, list) else []
 
