@@ -962,3 +962,624 @@ def test_firecrawl_crawl_saves_pages_to_drive(mock_wds_cls, mock_fc_cls):
     assert "1" in result  # 1 page saved
     assert fig is None
     mock_wds.save_crawl.assert_called_once()
+
+
+# ============================================================================
+# _diagnose_orders
+# ============================================================================
+
+
+def test_diagnose_orders_happy_path(toolkit):
+    """Returns formatted order lines when orders list is non-empty."""
+    toolkit._client._get.side_effect = [
+        None,  # first call: instantiate (return value not used)
+        {"orders": [
+            {"orderId": 99, "ticker": "AAPL", "side": "BUY",
+             "totalSize": 10, "price": 182.5, "status": "Submitted",
+             "clientId": "42", "orderRef": "ref1"}
+        ]},
+    ]
+    text, fig = toolkit.execute("diagnose_orders", {})
+    assert fig is None
+    assert "orderId=99" in text
+    assert "AAPL" in text
+    assert "/iserver/account/orders" in text
+
+
+def test_diagnose_orders_empty_list(toolkit):
+    """Returns 'genuinely empty' message when orders list is []."""
+    toolkit._client._get.side_effect = [None, {"orders": []}]
+    text, fig = toolkit.execute("diagnose_orders", {})
+    assert fig is None
+    assert "genuinely empty" in text.lower()
+
+
+def test_diagnose_orders_unexpected_shape(toolkit):
+    """Returns shape-error message when IBKR returns a non-list response."""
+    toolkit._client._get.side_effect = [None, "bad_string"]
+    text, fig = toolkit.execute("diagnose_orders", {})
+    assert fig is None
+    assert "Unexpected response shape" in text
+
+
+def test_diagnose_orders_shows_filtered_status(toolkit):
+    """Filled orders are labelled [FILTERED by get_live_orders]."""
+    toolkit._client._get.side_effect = [
+        None,
+        {"orders": [
+            {"orderId": 1, "ticker": "TSLA", "side": "SELL",
+             "totalSize": 5, "price": 200.0, "status": "Filled",
+             "clientId": "1"}
+        ]},
+    ]
+    text, fig = toolkit.execute("diagnose_orders", {})
+    assert "FILTERED" in text
+
+
+# ============================================================================
+# _get_pa_performance
+# ============================================================================
+
+
+def test_get_pa_performance_happy_path(toolkit):
+    """Returns JSON performance blob for the requested period."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_performance.return_value = {
+        "nav": [{"date": "2026-06-01", "navReturns": 0.05}]
+    }
+    text, fig = toolkit.execute("get_pa_performance", {"period": "1M"})
+    assert fig is None
+    assert len(text) > 0
+    assert "nav" in text
+
+
+def test_get_pa_performance_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_performance.side_effect = RuntimeError("PA down")
+    text, fig = toolkit.execute("get_pa_performance", {"period": "1M"})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_pa_transactions
+# ============================================================================
+
+
+def test_get_pa_transactions_happy_path(toolkit):
+    """Returns formatted transaction list for a valid period."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_transactions.return_value = [
+        {"date": "2026-06-01", "desc": "BUY AAPL", "symbol": "AAPL", "amount": -18250.0},
+        {"date": "2026-06-02", "desc": "SELL AAPL", "symbol": "AAPL", "amount": 18500.0},
+    ]
+    text, fig = toolkit.execute("get_pa_transactions", {"period": "1M"})
+    assert fig is None
+    assert "AAPL" in text
+    assert "2 records" in text
+
+
+def test_get_pa_transactions_empty(toolkit):
+    """Returns 'No transactions' when IBKR returns empty list."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_transactions.return_value = []
+    text, fig = toolkit.execute("get_pa_transactions", {"period": "1D"})
+    assert "No transactions" in text
+    assert fig is None
+
+
+def test_get_pa_transactions_http_400_fallback(toolkit):
+    """On HTTP 400, handler fetches valid periods and returns them in the error."""
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_transactions.side_effect = IBKRAPIError("bad period", status_code=400)
+    toolkit._client.get_pa_periods.return_value = ["1D", "7D", "1M"]
+    text, fig = toolkit.execute("get_pa_transactions", {"period": "BAD"})
+    assert fig is None
+    assert "HTTP 400" in text
+    assert "1D" in text or "7D" in text
+
+
+def test_get_pa_transactions_non_400_error_propagates(toolkit):
+    """Non-400 IBKRAPIError re-raises through _safe_error."""
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_transactions.side_effect = IBKRAPIError("server error", status_code=500)
+    text, fig = toolkit.execute("get_pa_transactions", {"period": "1M"})
+    assert fig is None
+    assert "500" in text
+
+
+# ============================================================================
+# _get_contract_info
+# ============================================================================
+
+
+def test_get_contract_info_happy_path(toolkit):
+    """Returns JSON contract details when conid resolves."""
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_contract_info_and_rules.return_value = {
+        "symbol": "AAPL", "secType": "STK", "currency": "USD"
+    }
+    text, fig = toolkit.execute("get_contract_info", {"symbol": "AAPL"})
+    assert fig is None
+    assert "AAPL" in text
+    assert "STK" in text
+
+
+def test_get_contract_info_no_contract(toolkit):
+    """Returns error when search_contract finds nothing."""
+    toolkit._client.search_contract.return_value = []
+    text, fig = toolkit.execute("get_contract_info", {"symbol": "FAKESYM"})
+    assert fig is None
+    assert "No contract" in text
+
+
+def test_get_contract_info_error(toolkit):
+    """Propagates client exception through _safe_error."""
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_contract_info_and_rules.side_effect = RuntimeError("timeout")
+    text, fig = toolkit.execute("get_contract_info", {"symbol": "AAPL"})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_option_chain
+# ============================================================================
+
+
+def test_get_option_chain_happy_path(toolkit):
+    """Returns JSON option chain data."""
+    toolkit._client.get_option_chain.return_value = {
+        "expirations": ["2026-07-18", "2026-08-15"],
+        "strikes": [180, 185, 190],
+    }
+    text, fig = toolkit.execute("get_option_chain", {"symbol": "AAPL"})
+    assert fig is None
+    assert "expirations" in text
+    assert "180" in text
+    toolkit._client.get_option_chain.assert_called_once_with("AAPL", exchange="SMART")
+
+
+def test_get_option_chain_custom_exchange(toolkit):
+    """Passes custom exchange to the client."""
+    toolkit._client.get_option_chain.return_value = {}
+    toolkit.execute("get_option_chain", {"symbol": "SPX", "exchange": "CBOE"})
+    toolkit._client.get_option_chain.assert_called_once_with("SPX", exchange="CBOE")
+
+
+def test_get_option_chain_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_option_chain.side_effect = RuntimeError("chain unavailable")
+    text, fig = toolkit.execute("get_option_chain", {"symbol": "AAPL"})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _run_scanner
+# ============================================================================
+
+
+def test_run_scanner_happy_path(toolkit):
+    """Returns formatted scanner results."""
+    toolkit._client.run_iserver_scanner.return_value = [
+        {"symbol": "AAPL", "contractDescription": {"exchange": "NASDAQ"}},
+        {"symbol": "MSFT", "contractDescription": {"exchange": "NASDAQ"}},
+    ]
+    text, fig = toolkit.execute("run_scanner", {
+        "scan_code": "TOP_VOLUME_RATE", "instrument": "STK"
+    })
+    assert fig is None
+    assert "AAPL" in text
+    assert "MSFT" in text
+    assert "2 results" in text
+
+
+def test_run_scanner_no_results(toolkit):
+    """Returns 'no results' message when scanner is empty."""
+    toolkit._client.run_iserver_scanner.return_value = []
+    text, fig = toolkit.execute("run_scanner", {"scan_code": "TOP_VOLUME_RATE"})
+    assert fig is None
+    assert "no results" in text.lower()
+
+
+def test_run_scanner_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.run_iserver_scanner.side_effect = RuntimeError("scanner down")
+    text, fig = toolkit.execute("run_scanner", {"scan_code": "TOP_VOLUME_RATE"})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_watchlists
+# ============================================================================
+
+
+def test_get_watchlists_happy_path(toolkit):
+    """Returns watchlist summary and raw JSON."""
+    toolkit._client.get_watchlists.return_value = [
+        {
+            "id": "wl1",
+            "name": "My Watchlist",
+            "rows": [{"ST": "AAPL"}, {"ST": "TSLA"}],
+        }
+    ]
+    text, fig = toolkit.execute("get_watchlists", {})
+    assert fig is None
+    assert "My Watchlist" in text
+    assert "AAPL" in text
+    assert "TSLA" in text
+
+
+def test_get_watchlists_empty(toolkit):
+    """Returns 'No watchlists' when IBKR returns empty list."""
+    toolkit._client.get_watchlists.return_value = []
+    text, fig = toolkit.execute("get_watchlists", {})
+    assert fig is None
+    assert "No watchlists" in text
+
+
+def test_get_watchlists_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_watchlists.side_effect = RuntimeError("watchlist timeout")
+    text, fig = toolkit.execute("get_watchlists", {})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_trading_schedule
+# ============================================================================
+
+
+def test_get_trading_schedule_happy_path(toolkit):
+    """Returns JSON trading schedule."""
+    toolkit._client.get_trading_schedule.return_value = {
+        "tradingScheduleDate": [
+            {"prop": [{"name": "TRADING_HOURS", "value": "0930-1600"}]}
+        ]
+    }
+    text, fig = toolkit.execute("get_trading_schedule", {"symbol": "AAPL"})
+    assert fig is None
+    assert "TRADING_HOURS" in text
+    toolkit._client.get_trading_schedule.assert_called_once_with("STK", "AAPL", "SMART")
+
+
+def test_get_trading_schedule_custom_params(toolkit):
+    """Passes custom asset_class and exchange to client."""
+    toolkit._client.get_trading_schedule.return_value = {}
+    toolkit.execute("get_trading_schedule", {
+        "symbol": "CL", "asset_class": "FUT", "exchange": "NYMEX"
+    })
+    toolkit._client.get_trading_schedule.assert_called_once_with("FUT", "CL", "NYMEX")
+
+
+def test_get_trading_schedule_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_trading_schedule.side_effect = RuntimeError("schedule unavailable")
+    text, fig = toolkit.execute("get_trading_schedule", {"symbol": "AAPL"})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_allocation
+# ============================================================================
+
+
+def test_get_allocation_happy_path(toolkit):
+    """Returns JSON allocation data."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_account_allocation.return_value = {
+        "assetClass": {"long": {"STK": 0.85, "CASH": 0.15}}
+    }
+    text, fig = toolkit.execute("get_allocation", {})
+    assert fig is None
+    assert "assetClass" in text
+    assert "STK" in text
+
+
+def test_get_allocation_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_account_allocation.side_effect = RuntimeError("allocation unavailable")
+    text, fig = toolkit.execute("get_allocation", {})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_order_status
+# ============================================================================
+
+
+def test_get_order_status_happy_path(toolkit):
+    """Returns JSON order status for the given order ID."""
+    toolkit._client.get_order_status.return_value = {
+        "orderId": 42, "status": "Submitted", "filledQuantity": 0
+    }
+    text, fig = toolkit.execute("get_order_status", {"order_id": "42"})
+    assert fig is None
+    assert "Submitted" in text
+    assert "42" in text
+    toolkit._client.get_order_status.assert_called_once_with("42")
+
+
+def test_get_order_status_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_order_status.side_effect = RuntimeError("order not found")
+    text, fig = toolkit.execute("get_order_status", {"order_id": "99"})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _delete_cache
+# ============================================================================
+
+
+def test_delete_cache_happy_path(toolkit):
+    """Deletes cache entry and returns confirmation."""
+    toolkit._cache.check.return_value = True
+    text, fig = toolkit.execute("delete_cache", {
+        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
+    })
+    assert fig is None
+    assert "Deleted" in text
+    assert "AAPL" in text
+    toolkit._cache.delete.assert_called_once_with("AAPL", "1D", "1Y", "2026-05-22")
+
+
+def test_delete_cache_miss(toolkit):
+    """Returns 'No cached entry' when the entry does not exist."""
+    toolkit._cache.check.return_value = False
+    text, fig = toolkit.execute("delete_cache", {
+        "symbol": "FAKE", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
+    })
+    assert fig is None
+    assert "No cached entry" in text
+    toolkit._cache.delete.assert_not_called()
+
+
+# ============================================================================
+# _modify_price_alert
+# ============================================================================
+
+
+def test_modify_price_alert_happy_path(toolkit):
+    """Modifies price and operator on an existing alert and returns result."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.return_value = {
+        "alertName": "AAPL >= 200",
+        "tif": "GTC",
+        "conditions": [{"value": "200.0", "operator": ">="}],
+    }
+    toolkit._client.create_alert.return_value = {"orderId": 7, "alertName": "AAPL >= 210"}
+    text, fig = toolkit.execute("modify_price_alert", {
+        "alert_id": "7", "price": 210.0, "operator": ">="
+    })
+    assert fig is None
+    assert len(text) > 0
+    # Confirm the patched value was sent
+    sent = toolkit._client.create_alert.call_args[0][1]
+    assert sent["conditions"][0]["value"] == "210.0"
+
+
+def test_modify_price_alert_not_found(toolkit):
+    """Returns 'not found' when get_alert returns empty."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.return_value = {}
+    text, fig = toolkit.execute("modify_price_alert", {
+        "alert_id": "999", "price": 200.0
+    })
+    assert fig is None
+    assert "not found" in text.lower()
+    toolkit._client.create_alert.assert_not_called()
+
+
+def test_modify_price_alert_name_update(toolkit):
+    """Updates alertName field when 'name' is provided."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.return_value = {
+        "alertName": "old name", "tif": "GTC", "conditions": []
+    }
+    toolkit._client.create_alert.return_value = {"orderId": 3}
+    toolkit.execute("modify_price_alert", {"alert_id": "3", "name": "new name"})
+    sent = toolkit._client.create_alert.call_args[0][1]
+    assert sent["alertName"] == "new name"
+
+
+def test_modify_price_alert_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.side_effect = RuntimeError("alert service down")
+    text, fig = toolkit.execute("modify_price_alert", {"alert_id": "1", "price": 200.0})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _sync_flex_archive
+# ============================================================================
+
+
+def test_sync_flex_archive_happy_path(toolkit):
+    """Returns import summary when files are found and trades imported."""
+    from unittest.mock import patch, MagicMock
+
+    store_cov = {
+        "oldest": "2024-01-01", "newest": "2026-05-22",
+        "total_trades": 150, "stale": False, "gaps": []
+    }
+    toolkit._store.get_trade_date_coverage.return_value = store_cov
+
+    mock_flex_instance = MagicMock()
+    mock_flex_instance.sync_archive_from_drive.return_value = {
+        "files": 2,
+        "trades": 150,
+        "processed": [
+            {"file": "flex_U123_2024.xml", "trades": 80, "range": "2024-01-01 → 2024-12-31"},
+            {"file": "flex_U123_2025.xml", "trades": 70, "range": "2025-01-01 → 2025-12-31"},
+        ],
+    }
+
+    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+        text, fig = toolkit.execute("sync_flex_archive", {})
+
+    assert fig is None
+    assert "150 trades" in text
+    assert "flex_U123_2024.xml" in text
+
+
+def test_sync_flex_archive_no_files(toolkit):
+    """Returns 'No XML files' message when archive is empty."""
+    from unittest.mock import patch, MagicMock
+
+    mock_flex_instance = MagicMock()
+    mock_flex_instance.sync_archive_from_drive.return_value = {"files": 0, "trades": 0, "processed": []}
+
+    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+        text, fig = toolkit.execute("sync_flex_archive", {})
+
+    assert fig is None
+    assert "No XML files" in text
+
+
+def test_sync_flex_archive_file_not_found(toolkit):
+    """Returns FileNotFoundError message when Drive folder is missing."""
+    from unittest.mock import patch, MagicMock
+
+    mock_flex_instance = MagicMock()
+    mock_flex_instance.sync_archive_from_drive.side_effect = FileNotFoundError("account_data/ not found")
+
+    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+        text, fig = toolkit.execute("sync_flex_archive", {})
+
+    assert fig is None
+    assert "account_data/" in text or "not found" in text.lower()
+
+
+# ============================================================================
+# _import_flex_file
+# ============================================================================
+
+
+def test_import_flex_file_happy_path(toolkit, tmp_path):
+    """Imports trades from a real temp file path."""
+    from unittest.mock import patch, MagicMock
+
+    # Create a dummy XML file so Path.exists() passes
+    xml_file = tmp_path / "flex_test.xml"
+    xml_file.write_text("<FlexQueryResponse/>")
+
+    store_cov = {
+        "oldest": "2024-01-01", "newest": "2024-06-30",
+        "total_trades": 5, "stale": False, "gaps": []
+    }
+    toolkit._store.get_trade_date_coverage.return_value = store_cov
+
+    mock_flex_instance = MagicMock()
+    mock_flex_instance.import_from_file.return_value = [
+        {"time": "2024-03-01T10:00:00", "symbol": "AAPL"},
+        {"time": "2024-06-30T15:00:00", "symbol": "MSFT"},
+    ]
+
+    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+        text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
+
+    assert fig is None
+    assert "2 trades" in text
+    assert "flex_test.xml" in text
+
+
+def test_import_flex_file_not_found(toolkit):
+    """Returns 'File not found' when path does not exist."""
+    text, fig = toolkit.execute("import_flex_file", {"path": "/nonexistent/path/file.xml"})
+    assert fig is None
+    assert "File not found" in text
+
+
+def test_import_flex_file_no_trades(toolkit, tmp_path):
+    """Returns 'No trades found' when the XML has no trade records."""
+    from unittest.mock import patch, MagicMock
+
+    xml_file = tmp_path / "empty.xml"
+    xml_file.write_text("<FlexQueryResponse/>")
+
+    mock_flex_instance = MagicMock()
+    mock_flex_instance.import_from_file.return_value = []
+
+    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+        text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
+
+    assert fig is None
+    assert "No trades" in text
+
+
+# ============================================================================
+# _check_flex_coverage
+# ============================================================================
+
+
+def test_check_flex_coverage_happy_path(toolkit):
+    """Returns coverage report when trade history exists."""
+    toolkit._store.get_trade_date_coverage.return_value = {
+        "oldest": "2024-01-01",
+        "newest": "2026-05-22",
+        "total_trades": 300,
+        "stale": False,
+        "gaps": [],
+    }
+    text, fig = toolkit.execute("check_flex_coverage", {})
+    assert fig is None
+    assert len(text) > 0
+    # _format_coverage output should mention the date range
+    assert "2024-01-01" in text
+
+
+def test_check_flex_coverage_empty_store(toolkit):
+    """Returns 'No trade history' when store is empty."""
+    toolkit._store.get_trade_date_coverage.return_value = {
+        "oldest": None, "newest": None, "total_trades": 0, "stale": False, "gaps": []
+    }
+    text, fig = toolkit.execute("check_flex_coverage", {})
+    assert fig is None
+    assert "No trade history" in text
+
+
+def test_check_flex_coverage_error(toolkit):
+    """Propagates exception through _safe_error."""
+    toolkit._store.get_trade_date_coverage.side_effect = RuntimeError("db error")
+    text, fig = toolkit.execute("check_flex_coverage", {})
+    assert fig is None
+    assert "unexpected" in text.lower()
+
+
+# ============================================================================
+# _get_pa_periods — empty fallback path
+# ============================================================================
+
+
+def test_get_pa_periods_empty_falls_back_to_raw(toolkit):
+    """When get_pa_periods returns [], raw _post response is returned."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_periods.return_value = []
+    toolkit._client._post.return_value = {"periods": ["1D", "7D", "1M"]}
+    text, fig = toolkit.execute("get_pa_periods", {})
+    assert fig is None
+    # Raw response must appear in output
+    assert "1D" in text or "periods" in text
+
+
+def test_get_pa_periods_returns_valid_periods(toolkit):
+    """When get_pa_periods returns periods, they are listed."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_pa_periods.return_value = ["1D", "7D", "MTD", "1M", "YTD", "1Y"]
+    text, fig = toolkit.execute("get_pa_periods", {})
+    assert fig is None
+    assert "1D" in text
+    assert "1Y" in text
