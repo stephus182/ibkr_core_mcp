@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -835,3 +835,131 @@ def test_extract_execution_ids_within_file_duplicate():
     unique_ids, raw_count = FlexQueryClient.extract_execution_ids(xml.decode())
     assert unique_ids == {"DUP1"}
     assert raw_count == 2  # duplicate detected: raw(2) != unique(1)
+
+
+# ============================================================================
+# Firecrawl handler tests
+# ============================================================================
+
+
+def _make_toolkit():
+    """Return a ClaudeToolkit with all dependencies mocked."""
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+    from ibkr_core_mcp.config import Config
+    from pathlib import Path
+    cfg = Config(
+        gateway_url="http://localhost",
+        anthropic_api_key="sk-test",
+        gdrive_folder_id="root-id",
+        sqlite_path=Path("/tmp/store.db"),
+        gdrive_token_file=Path("/tmp/token.json"),
+        gdrive_credentials_file=Path("/tmp/creds.json"),
+        firecrawl_api_key="fc-test",
+    )
+    toolkit = ClaudeToolkit(
+        client=MagicMock(),
+        cache=MagicMock(),
+        store=MagicMock(),
+        config=cfg,
+    )
+    return toolkit
+
+
+def test_firecrawl_search_returns_no_key_message_when_key_missing():
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+    from ibkr_core_mcp.config import Config
+    from pathlib import Path
+    cfg = Config(
+        gateway_url="http://localhost",
+        anthropic_api_key="sk-test",
+        gdrive_folder_id="root-id",
+        sqlite_path=Path("/tmp/store.db"),
+        gdrive_token_file=Path("/tmp/token.json"),
+        gdrive_credentials_file=Path("/tmp/creds.json"),
+        firecrawl_api_key="",
+    )
+    toolkit = ClaudeToolkit(client=MagicMock(), cache=MagicMock(), store=MagicMock(), config=cfg)
+    result, fig = toolkit.execute("firecrawl_search", {"query": "test"})
+    assert "FIRECRAWL_API_KEY" in result
+    assert fig is None
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+def test_firecrawl_search_returns_formatted_results(mock_fc_cls):
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {"url": "https://example.com", "title": "Example", "markdown": "# Hello"}
+    ]
+    mock_fc_cls.return_value = mock_fc
+
+    result, fig = toolkit.execute("firecrawl_search", {"query": "IBKR API", "limit": 3})
+    assert "example.com" in result
+    assert fig is None
+    mock_fc.search.assert_called_once_with("IBKR API", limit=3)
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+def test_firecrawl_search_saves_to_drive_when_requested(mock_wds_cls, mock_fc_cls):
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [{"url": "u", "title": "t", "markdown": "m"}]
+    mock_fc_cls.return_value = mock_fc
+    mock_wds = MagicMock()
+    mock_wds.save_search.return_value = "file-id-123"
+    mock_wds_cls.return_value = mock_wds
+
+    result, _ = toolkit.execute("firecrawl_search", {"query": "test", "save_to_drive": True})
+    mock_wds.save_search.assert_called_once()
+    assert "file-id-123" in result or "Drive" in result
+
+
+def test_firecrawl_crawl_blocks_private_url():
+    toolkit = _make_toolkit()
+    result, fig = toolkit.execute("firecrawl_crawl", {"url": "http://localhost:5055/api"})
+    assert "Blocked" in result
+    assert fig is None
+
+
+def test_firecrawl_crawl_returns_no_key_message_when_key_missing():
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+    from ibkr_core_mcp.config import Config
+    from pathlib import Path
+    cfg = Config(
+        gateway_url="http://localhost",
+        anthropic_api_key="sk-test",
+        gdrive_folder_id="root-id",
+        sqlite_path=Path("/tmp/store.db"),
+        gdrive_token_file=Path("/tmp/token.json"),
+        gdrive_credentials_file=Path("/tmp/creds.json"),
+        firecrawl_api_key="",
+    )
+    toolkit = ClaudeToolkit(client=MagicMock(), cache=MagicMock(), store=MagicMock(), config=cfg)
+    result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+    assert "FIRECRAWL_API_KEY" in result
+    assert fig is None
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+def test_firecrawl_crawl_saves_pages_to_drive(mock_wds_cls, mock_fc_cls):
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.crawl.return_value = [
+        {"url": "https://example.com/page", "markdown": "# Page"}
+    ]
+    mock_fc_cls.return_value = mock_fc
+    mock_wds = MagicMock()
+    mock_wds.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-01-01T00:00:00+00:00",
+        "pages": [{"url": "https://example.com/page", "file_id": "fid"}],
+    }
+    mock_wds_cls.return_value = mock_wds
+
+    result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+    assert "example.com" in result
+    assert "1" in result  # 1 page saved
+    assert fig is None
+    mock_wds.save_crawl.assert_called_once()
