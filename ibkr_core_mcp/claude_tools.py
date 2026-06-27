@@ -625,6 +625,65 @@ TOOL_DEFINITIONS = [
             "required": ["symbol", "timeframe", "period", "end"],
         },
     },
+    {
+        "name": "firecrawl_search",
+        "description": (
+            "Search the web using Firecrawl and return full page content as markdown. "
+            "Use for research, news, or fetching technical documentation. "
+            "Optionally saves a Drive snapshot under web_docs/searches/ for later reference. "
+            "Requires FIRECRAWL_API_KEY to be set."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (1-10, default 5)",
+                    "default": 5,
+                },
+                "save_to_drive": {
+                    "type": "boolean",
+                    "description": "If true, save a markdown snapshot to Drive (default false)",
+                    "default": False,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "firecrawl_crawl",
+        "description": (
+            "Crawl an entire website starting from a URL and save all pages to Drive "
+            "under web_docs/{url-slug}/. Returns a summary of pages saved. "
+            "Crawls are asynchronous — Firecrawl polls until done or timeout. "
+            "Use for archiving IBKR documentation or other reference sites. "
+            "Requires FIRECRAWL_API_KEY to be set."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Root URL to crawl from (public http/https only)",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "description": "Maximum pages to crawl (1-100, default 50)",
+                    "default": 50,
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for crawl to complete (default 120)",
+                    "default": 120,
+                },
+            },
+            "required": ["url"],
+        },
+    },
 ]
 
 
@@ -735,6 +794,8 @@ class ClaudeToolkit:
         self._cache = cache
         self._store = store
         self._config = config
+        self._firecrawl: Any = None
+        self._web_docs: Any = None
 
     @property
     def client(self) -> IBKRClient:
@@ -787,6 +848,8 @@ class ClaudeToolkit:
             "get_watchlists": self._get_watchlists,
             "get_order_status": self._get_order_status,
             "delete_cache": self._delete_cache,
+            "firecrawl_search": self._handle_firecrawl_search,
+            "firecrawl_crawl": self._handle_firecrawl_crawl,
         }
         handler = handlers.get(name)
         if not handler:
