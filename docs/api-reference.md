@@ -347,6 +347,7 @@ Run a scanner with full parameter control.
 
 ### `get_notifications(max_results) -> list[dict]`
 Account notifications — order fills, margin calls, system messages. Max 10 per request (official API limit).
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
 **Endpoint:** `GET /fyi/notifications`
 
 ### `get_unread_count() -> int`

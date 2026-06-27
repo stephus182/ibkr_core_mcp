@@ -607,13 +607,15 @@ IBKR FYI notifications — account alerts, order fills, margin calls, news.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `max_results` | integer | — | Maximum to return (default 10, **max 10** — official API limit) |
+| `max_results` | integer | — | Maximum to return (default 10, max 10 per request) |
 
 **Output:** JSON array of notifications. Each entry has `id`, `date`, `headline`, `body`, `isRead`.
 Also includes total unread count.
 
-**IBKR endpoint:** `GET /fyi/notifications`
+**Note:** IBKR enforces a hard cap of 10 notifications per request.
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+
+**IBKR endpoint:** `GET /fyi/notifications`
 
 ---
 
