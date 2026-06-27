@@ -202,7 +202,9 @@ This prevents reading arbitrary files via `pd.read_parquet`, writing files via `
 
 ### Residual risk
 
-Strategy code can call `df.to_csv()` on its own DataFrame copy — this can write OHLCV data to a file but cannot access credentials or read arbitrary paths. Full elimination requires a subprocess with OS-level restrictions (`seccomp`, macOS sandbox, or Docker). The current implementation is appropriate for protecting against accidental or naive misuse by the LLM.
+**DataFrame write methods** — Strategy code can call `df.to_csv()`, `df.to_json()`, or `df.to_parquet()` on its own DataFrame copy. This can write the OHLCV market data passed to the sandbox to a local file, but cannot access credentials, read arbitrary paths, or make network calls. The `_SAFE_PD` namespace excludes all `pd.read_*` methods, so only write-only access to non-sensitive content is possible. Full elimination requires a subprocess with OS-level restrictions (`seccomp`, macOS sandbox, or Docker).
+
+**Thread timeout non-termination** — The sandbox runs in a `ThreadPoolExecutor` thread. `Future.cancel()` cannot stop a thread that is already executing. Strategy code containing `while True: pass` will survive the 10-second timeout and continue consuming CPU in a background thread until the process exits. This does not allow filesystem writes beyond the DataFrame methods above, and the 4,096-character code limit constrains what can be submitted, but it does create unbounded CPU consumption. Full mitigation requires running the sandbox in a subprocess. Tracked for v2.0 scope.
 
 ---
 
@@ -476,5 +478,6 @@ The following rules are enforced at PR review. Any PR that violates them will be
 | 2026-06-10 | `bc8032b` | `gateway/` module — `GatewayManager`, `Dockerfile`, `tickler.sh`, `healthcheck.sh`, `conf.yaml` | 5 Low/Informational findings (GW-01 – GW-05) accepted. No code changes required. All subprocess calls use list form; no user input reaches shell. Docker container exposed on localhost only, no privileged mode. |
 | 2026-06-10 | `015e379` | All 14 production modules — full codebase audit (security + code quality) | 3 High, 7 Medium, 9 Low resolved. 5 Informational (dead code, style) cleaned up. 4 code-quality refactors (duplicate patterns extracted). |
 | 2026-06-10 | `6d246ab` | Publish readiness pass | 3 new Medium findings resolved (stream-loop logger leak S-1, `max_results` unbound S-2, `urllib3` CVE floor S-3). Backtest sandbox docstring corrected (S-4). PyPI metadata complete; LICENSE added; CI workflow added; GatewayManager tests added; account_id and PineScript injection tests added. |
+| 2026-06-27 | `pending` | v1.0 pre-release full audit — all 22 source files across 12 attack categories | 6 findings: 4 Medium, 2 Low. 4 fixed in code (path traversal in `import_flex_file`, SSRF decimal/hex IP bypass, `FlexQueryError` message leakage, `preview_order` input validation). 1 documented residual (backtest thread non-termination — architectural, tracked for v2.0). 1 confirmed mitigated (DataFrame I/O in sandbox — write-only OHLCV, already in residual risk section). No Critical or High findings. All SQL injection, command injection, shell=True, pickle, credential logging, and MCP order gate bypass checks passed. |
 
 Full audit reports: [`docs/security-audit-2026-05-25.md`](docs/security-audit-2026-05-25.md) · [`docs/security-audit-2026-06-10.md`](docs/security-audit-2026-06-10.md)

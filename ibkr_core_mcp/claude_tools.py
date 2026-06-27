@@ -717,7 +717,7 @@ def _safe_error(tool: str, exc: Exception) -> str:
     if isinstance(exc, BacktestError):
         return f"Tool '{tool}' failed: backtest error."
     if isinstance(exc, FlexQueryError):
-        return f"Tool '{tool}' failed: {exc}"
+        return f"Tool '{tool}' failed: Flex Web Service error. Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID, or retry — transient generation failures resolve automatically."
     if isinstance(exc, ConfigError):
         return f"Tool '{tool}' failed: configuration error. Check .env settings."
     if isinstance(exc, StoreError):
@@ -1180,7 +1180,13 @@ class ClaudeToolkit:
         from ibkr_core_mcp.flex_query import FlexQueryClient
         from pathlib import Path
         path = inputs["path"]
-        if not Path(path).exists():
+        # Path allowlist: only files under ~/.ibkr_core are permitted.
+        # Prevents LLM prompt-injection from reading arbitrary local files.
+        allowed_root = Path.home() / ".ibkr_core"
+        resolved = Path(path).expanduser().resolve()
+        if not str(resolved).startswith(str(allowed_root)):
+            return f"Blocked: import path must be under {allowed_root}.", None
+        if not resolved.exists():
             return f"File not found: {path}", None
         flex = FlexQueryClient(self._config, self._store, self._cache)
         trades = flex.import_from_file(path)
@@ -1718,12 +1724,21 @@ class ClaudeToolkit:
         sec_type is passed through to contract resolution — defaults to STK but must
         be set to 'FUT', 'OPT', etc. for non-equity instruments.
         """
+        _VALID_ACTIONS = frozenset({"BUY", "SELL"})
+        _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STP LMT", "MOC", "LOC"})
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
         quantity = int(inputs["quantity"])
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
         sec_type = inputs.get("sec_type", "STK")
+
+        if action not in _VALID_ACTIONS:
+            return f"Invalid action {action!r}. Must be BUY or SELL.", None
+        if order_type not in _VALID_ORDER_TYPES:
+            return f"Invalid order_type {order_type!r}. Must be one of: {', '.join(sorted(_VALID_ORDER_TYPES))}.", None
+        if quantity <= 0:
+            return f"Invalid quantity {quantity}. Must be a positive integer.", None
 
         conid, err = self._resolve_conid(symbol, sec_type)
         if err:
@@ -2097,7 +2112,9 @@ class ClaudeToolkit:
         if not url:
             return "url must be non-empty.", None
 
-        # SSRF guard
+        # SSRF guard — blocks private, loopback, and link-local destinations.
+        # Handles standard hostnames, IPv4/IPv6 literals, and decimal/hex-encoded
+        # IPs (e.g. http://2130706433/ = 127.0.0.1) by resolving before checking.
         try:
             parsed = urllib.parse.urlparse(url)
             if parsed.scheme not in ("http", "https"):
@@ -2112,7 +2129,16 @@ class ClaudeToolkit:
                 if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
                     return "Blocked: cannot fetch from private or reserved IP addresses.", None
             except ValueError:
-                pass  # hostname — allow DNS resolution
+                # Not a literal IP — resolve via DNS and re-check.
+                # This catches decimal (2130706433) and hex (0x7f000001) encoded IPs.
+                import socket
+                try:
+                    resolved_ip = socket.gethostbyname(host)
+                    addr = ipaddress.ip_address(resolved_ip)
+                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                        return "Blocked: URL resolves to a private or reserved IP address.", None
+                except socket.gaierror:
+                    pass  # unresolvable hostname — let Firecrawl handle the error
         except Exception as exc:
             return f"Invalid URL: {exc}", None
 

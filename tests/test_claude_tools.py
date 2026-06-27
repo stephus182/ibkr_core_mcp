@@ -1469,11 +1469,12 @@ def test_sync_flex_archive_file_not_found(toolkit):
 
 
 def test_import_flex_file_happy_path(toolkit, tmp_path):
-    """Imports trades from a real temp file path."""
+    """Imports trades from a file under the allowed root (~/.ibkr_core)."""
     from unittest.mock import patch, MagicMock
 
-    # Create a dummy XML file so Path.exists() passes
-    xml_file = tmp_path / "flex_test.xml"
+    allowed_root = tmp_path / ".ibkr_core"
+    allowed_root.mkdir()
+    xml_file = allowed_root / "flex_test.xml"
     xml_file.write_text("<FlexQueryResponse/>")
 
     store_cov = {
@@ -1488,7 +1489,8 @@ def test_import_flex_file_happy_path(toolkit, tmp_path):
         {"time": "2024-06-30T15:00:00", "symbol": "MSFT"},
     ]
 
-    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+    with patch("pathlib.Path.home", return_value=tmp_path), \
+         patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
         text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
 
     assert fig is None
@@ -1496,9 +1498,19 @@ def test_import_flex_file_happy_path(toolkit, tmp_path):
     assert "flex_test.xml" in text
 
 
-def test_import_flex_file_not_found(toolkit):
-    """Returns 'File not found' when path does not exist."""
-    text, fig = toolkit.execute("import_flex_file", {"path": "/nonexistent/path/file.xml"})
+def test_import_flex_file_blocked_path(toolkit, tmp_path):
+    """Path outside ~/.ibkr_core is rejected — prevents LLM from reading arbitrary files."""
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        text, fig = toolkit.execute("import_flex_file", {"path": "/etc/passwd"})
+    assert fig is None
+    assert "Blocked" in text
+
+
+def test_import_flex_file_not_found(toolkit, tmp_path):
+    """Returns 'File not found' for a valid-root path that does not exist."""
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        nonexistent = tmp_path / ".ibkr_core" / "missing.xml"
+        text, fig = toolkit.execute("import_flex_file", {"path": str(nonexistent)})
     assert fig is None
     assert "File not found" in text
 
@@ -1507,13 +1519,16 @@ def test_import_flex_file_no_trades(toolkit, tmp_path):
     """Returns 'No trades found' when the XML has no trade records."""
     from unittest.mock import patch, MagicMock
 
-    xml_file = tmp_path / "empty.xml"
+    allowed_root = tmp_path / ".ibkr_core"
+    allowed_root.mkdir()
+    xml_file = allowed_root / "empty.xml"
     xml_file.write_text("<FlexQueryResponse/>")
 
     mock_flex_instance = MagicMock()
     mock_flex_instance.import_from_file.return_value = []
 
-    with patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+    with patch("pathlib.Path.home", return_value=tmp_path), \
+         patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
         text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
 
     assert fig is None
