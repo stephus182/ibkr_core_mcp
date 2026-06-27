@@ -188,7 +188,11 @@ class GatewayManager:
     # ── Gateway health ────────────────────────────────────────────────────────
 
     def is_gateway_reachable(self) -> bool:
-        """True if the Java process is accepting HTTP (not necessarily authenticated)."""
+        """True if the Java process is accepting HTTP (not necessarily authenticated).
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        Endpoint: POST /tickle
+        """
         try:
             resp = requests.post(
                 f"{self._api_url}/tickle",
@@ -200,7 +204,11 @@ class GatewayManager:
             return False
 
     def is_authenticated(self) -> bool:
-        """True if the gateway holds an active authenticated IBKR session."""
+        """True if the gateway holds an active authenticated IBKR session.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        Endpoint: GET /iserver/auth/status
+        """
         with contextlib.suppress(Exception):
             resp = requests.get(
                 f"{self._api_url}/iserver/auth/status",

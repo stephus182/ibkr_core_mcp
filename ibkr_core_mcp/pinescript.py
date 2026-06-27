@@ -82,7 +82,10 @@ def strategy_from_signals(
     symbol: str,
     timeframe: str,
 ) -> str:
-    """Generate a PineScript v5 strategy from a signal series (1=long, 0=flat, -1=short)."""
+    """Generate a PineScript v5 strategy from a signal series (1=long, 0=flat, -1=short).
+
+    Source: https://www.tradingview.com/pine-script-docs/language/script-structure/
+    """
     safe_name = _sanitize(name)
     safe_symbol = _sanitize(symbol)
     safe_timeframe = _sanitize(timeframe)
@@ -123,7 +126,10 @@ def indicator_script(
     indicators: list[str],
     params: dict[str, Any],
 ) -> str:
-    """Generate a PineScript v5 indicator study with the requested indicators."""
+    """Generate a PineScript v5 indicator study with the requested indicators.
+
+    Source: https://www.tradingview.com/pine-script-docs/language/script-structure/
+    """
     safe_name = _sanitize(name)
     merged = {**_PARAM_DEFAULTS, **params}
     snippets = []
@@ -148,7 +154,10 @@ def strategy_from_backtest(
     backtest_result: object,
     df: pd.DataFrame,
 ) -> str:
-    """Generate a PineScript v5 strategy from a BacktestResult + OHLCV DataFrame."""
+    """Generate a PineScript v5 strategy from a BacktestResult + OHLCV DataFrame.
+
+    Source: https://www.tradingview.com/pine-script-docs/language/script-structure/
+    """
     name = _sanitize(getattr(backtest_result, "strategy_name", "Exported Strategy"))
     symbol = _sanitize(getattr(backtest_result, "symbol", ""))
     total_return = getattr(backtest_result, "total_return", 0.0)

@@ -32,6 +32,9 @@ class LiveQuote:
 class IBKRWebSocket:
     """Async WebSocket client for IBKR real-time market data.
 
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets
+    Endpoint: wss://localhost:{port}/v1/api/ws
+
     Usage::
         ws = IBKRWebSocket("https://localhost:5055", session_cookie)
         await ws.connect()
@@ -76,11 +79,21 @@ class IBKRWebSocket:
         )
 
     async def subscribe(self, conid: int, fields: list[str] | None = None) -> None:
+        """Subscribe to real-time market data for a contract.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets
+        Message format: smd+{conid}+{"fields": [...]}
+        """
         if self._ws is None:
             raise RuntimeError("Call connect() first")
         await self._ws.send(f'smd+{conid}+{json.dumps({"fields": fields or _DEFAULT_FIELDS})}')
 
     async def unsubscribe(self, conid: int) -> None:
+        """Unsubscribe from real-time market data for a contract.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets
+        Message format: umd+{conid}+{}
+        """
         if self._ws is not None:
             await self._ws.send(f"umd+{conid}+{{}}")
 
