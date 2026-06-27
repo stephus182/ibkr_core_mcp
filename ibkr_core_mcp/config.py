@@ -37,6 +37,25 @@ class Config:
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
+        """Load configuration from environment variables (with optional .env file).
+
+        Environment variable → field mapping:
+          ANTHROPIC_API_KEY          → anthropic_api_key   (required)
+          IBKR_GATEWAY_URL           → gateway_url         (default: https://localhost:5055/v1/api)
+          GOOGLE_DRIVE_FOLDER_ID     → gdrive_folder_id    (required for Drive features)
+          IBKR_SQLITE_PATH           → sqlite_path         (default: ~/.ibkr_core/store.db)
+          GDRIVE_TOKEN_FILE          → gdrive_token_file   (default: ~/.ibkr_core/token.json)
+          GDRIVE_CREDENTIALS_FILE    → gdrive_credentials_file (default: ~/.ibkr_core/credentials.json)
+          IBKR_FLEX_TOKEN            → flex_token          (required for Flex sync)
+          IBKR_FLEX_QUERY_ID         → flex_query_id       (required for Flex sync)
+          GDRIVE_CACHE_FOLDER_ID     → gdrive_cache_folder_id  (optional; auto-created as market_data/)
+          GDRIVE_DB_FOLDER_ID        → gdrive_db_folder_id     (optional; auto-created as db/)
+          GDRIVE_ACCOUNT_FOLDER_ID   → gdrive_account_folder_id (optional; auto-created as account_data/)
+          FIRECRAWL_API_KEY          → firecrawl_api_key       (optional; enables web scraper)
+          GDRIVE_WEB_DOCS_FOLDER_ID  → gdrive_web_docs_folder_id (optional; auto-created as web_docs/)
+
+        Raises ConfigError if ANTHROPIC_API_KEY is not set.
+        """
         load_dotenv(dotenv_path, override=False)
 
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
