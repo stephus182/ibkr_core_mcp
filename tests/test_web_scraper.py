@@ -568,4 +568,4 @@ def test_save_search_markdown_content_includes_results(tmp_path):
     ]
     store.save_search("IBKR flex query", results)
     # At least one upload with content (the search snapshot markdown)
-    assert any("IBKR flex query" in c or "Page A" in c or "example.com" in c for c in uploaded_content)  # lgtm[py/incomplete-url-substring-sanitization] — content assertion, not a URL guard
+    assert any("IBKR flex query" in c or "Page A" in c for c in uploaded_content)

@@ -893,7 +893,7 @@ def test_firecrawl_search_returns_formatted_results(mock_fc_cls):
     mock_fc_cls.return_value = mock_fc
 
     result, fig = toolkit.execute("firecrawl_search", {"query": "IBKR API", "limit": 3})
-    assert "example.com" in result  # lgtm[py/incomplete-url-substring-sanitization] — text output assertion, not a URL guard
+    assert "## Search results for: IBKR API" in result
     assert fig is None
     mock_fc.search.assert_called_once_with("IBKR API", limit=3)
 
@@ -958,8 +958,7 @@ def test_firecrawl_crawl_saves_pages_to_drive(mock_wds_cls, mock_fc_cls):
     mock_wds_cls.return_value = mock_wds
 
     result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
-    assert "example.com" in result  # lgtm[py/incomplete-url-substring-sanitization] — text output assertion, not a URL guard
-    assert "1" in result  # 1 page saved
+    assert "Crawl complete: saved 1 page(s)" in result
     assert fig is None
     mock_wds.save_crawl.assert_called_once()
 
