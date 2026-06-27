@@ -1,12 +1,14 @@
 """
 Web scraping tools for ClaudIA, backed by the Firecrawl REST API v1.
 
-Provides:
-  FirecrawlClient   — search and crawl via https://api.firecrawl.dev/v1
-  WebDocsStore      — persist crawl/search results to Google Drive under web_docs/
+Currently provides:
   _slugify          — convert a URL to a safe Drive filename stem
   FirecrawlError    — raised on Firecrawl API errors
   WebDocsStoreError — raised on Drive persistence errors
+
+Added by subsequent tasks in this module:
+  FirecrawlClient   — search and crawl via https://api.firecrawl.dev/v1
+  WebDocsStore      — persist crawl/search results to Google Drive under web_docs/
 """
 from __future__ import annotations
 
