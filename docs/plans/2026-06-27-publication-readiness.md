@@ -100,7 +100,7 @@ Only add `description=` where the alias diverges meaningfully from the field nam
 
 ## Claudia compatibility notes — MUST READ before any change to ibkr_core_mcp
 
-**claudia_ui** (`/Users/steph/Claude_Projects/claudia_ui`) imports from ibkr_core_mcp:
+**claudia_ui** imports from ibkr_core_mcp:
 - `app.py`: `IBKRClient`, `BrowserCookieAuth`, `Config`, `ClaudeToolkit`, `GDriveCache`, `SQLiteStore`
 - `app.py`: `GatewayManager` from `ibkr_core_mcp.gateway`
 - `order_flow.py`: `IBKRClient`, `BrowserCookieAuth`, `Config`

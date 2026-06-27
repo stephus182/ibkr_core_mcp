@@ -16,7 +16,7 @@ pip install git+https://github.com/stephus182/ibkr_core_mcp.git
 pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v0.1.0
 
 # Local editable dev
-pip install -e /Users/steph/Claude_Projects/ibkr_core_mcp
+pip install -e /path/to/ibkr_core_mcp
 ```
 
 ---
@@ -24,7 +24,7 @@ pip install -e /Users/steph/Claude_Projects/ibkr_core_mcp
 ## Dev Setup
 
 ```bash
-cd /Users/steph/Claude_Projects/ibkr_core_mcp
+cd /path/to/ibkr_core_mcp
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

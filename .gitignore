@@ -40,11 +40,13 @@ htmlcov/
 .idea/
 .vscode/
 
-# Claude Code
+# Claude Code — settings.json contains session bash history with local paths
+.claude/settings.json
 .claude/settings.local.json
 
 # Git worktrees
 .worktrees/
 
-# Superpowers brainstorming sessions
+# Superpowers brainstorming sessions and internal agent plans
 .superpowers/
+docs/superpowers/
