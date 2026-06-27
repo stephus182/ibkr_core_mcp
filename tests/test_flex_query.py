@@ -333,7 +333,8 @@ def test_send_request_accepts_gdcdyn_url(flex_client):
     """
     with _mock_get(_GDCDYN_URL):
         ref, url = flex_client._send_request()
-    assert "gdcdyn.interactivebrokers.com" in url
+    from urllib.parse import urlparse
+    assert urlparse(url).hostname == "gdcdyn.interactivebrokers.com"
 
 
 def test_send_request_includes_fd_td_when_provided(flex_client):
