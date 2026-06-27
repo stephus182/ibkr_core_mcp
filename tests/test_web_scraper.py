@@ -412,3 +412,88 @@ def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tm
     store = WebDocsStore(cfg)
     fid = store._get_web_docs_folder_id()
     assert fid == "override-folder-id"
+
+
+# ── WebDocsStore.save_crawl ───────────────────────────────────────────────────
+
+def _make_store_with_mock_service(tmp_path):
+    """Return a WebDocsStore with _svc mocked out (bypasses Drive auth)."""
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+    from ibkr_core_mcp.config import Config
+    token = tmp_path / "token.json"
+    creds_file = tmp_path / "credentials.json"
+    token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
+    creds_file.write_text('{}')
+    cfg = Config(
+        gateway_url="http://localhost",
+        anthropic_api_key="sk-test",
+        gdrive_folder_id="root-id",
+        sqlite_path=tmp_path / "store.db",
+        gdrive_token_file=token,
+        gdrive_credentials_file=creds_file,
+        gdrive_web_docs_folder_id="webdocs-id",
+    )
+    store = WebDocsStore(cfg)
+    store._svc = MagicMock()
+    return store
+
+
+def test_save_crawl_uploads_pages_and_manifest(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    # Mock: no existing page file (search returns empty), create returns id
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "file-id-1"}
+
+    pages = [{"url": "https://example.com/page", "markdown": "# Hello"}]
+    manifest = store.save_crawl("https://example.com", pages)
+
+    assert manifest["url"] == "https://example.com"
+    assert len(manifest["pages"]) == 1
+    assert manifest["pages"][0]["url"] == "https://example.com/page"
+    assert "crawled_at" in manifest
+    # create() called at least twice: once for the page, once for index.json
+    assert svc.files().create.call_count >= 2
+
+
+def test_save_crawl_skips_empty_markdown(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "file-x"}
+
+    pages = [
+        {"url": "https://example.com/a", "markdown": "# Real"},
+        {"url": "https://example.com/b", "markdown": ""},
+        {"url": "https://example.com/c", "markdown": None},
+    ]
+    manifest = store.save_crawl("https://example.com", pages)
+    assert len(manifest["pages"]) == 1
+    assert manifest["pages"][0]["url"] == "https://example.com/a"
+
+
+def test_save_crawl_overwrites_existing_file(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    # Simulate existing file
+    svc.files().list().execute.return_value = {"files": [{"id": "old-file-id"}]}
+    svc.files().update().execute.return_value = {"id": "old-file-id"}
+    svc.files().create().execute.return_value = {"id": "index-id"}
+
+    pages = [{"url": "https://example.com/page", "markdown": "# Updated"}]
+    manifest = store.save_crawl("https://example.com", pages)
+
+    # update() called for the existing page, create() called for index.json
+    svc.files().update.assert_called()
+    assert len(manifest["pages"]) == 1
+
+
+def test_save_crawl_returns_empty_manifest_for_no_pages(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "index-id"}
+
+    manifest = store.save_crawl("https://example.com", [])
+    assert manifest["pages"] == []
+    assert manifest["url"] == "https://example.com"

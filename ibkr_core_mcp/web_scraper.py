@@ -334,3 +334,97 @@ class WebDocsStore:
         if self._cfg.gdrive_web_docs_folder_id:
             return self._cfg.gdrive_web_docs_folder_id
         return self._find_or_create_folder("web_docs", self._cfg.gdrive_folder_id)
+
+    def save_crawl(self, url: str, pages: list[dict[str, str]]) -> dict:
+        """
+        Save crawl results to Drive under web_docs/{url-slug}/.
+
+        Each page is uploaded as a .md file. If a file with the same name already
+        exists, it is overwritten via Drive's Files.update method. Pages with empty
+        or None markdown are skipped. An index.json manifest is always written (even
+        for an empty crawl) so callers can detect previously-crawled URLs.
+
+        Drive layout created by this method:
+          web_docs/
+            {slug}/
+              {page-slug}.md    ← one per page
+              index.json        ← {url, crawled_at, pages: [{url, file_id}]}
+
+        Args:
+            url: Root URL that was crawled (used to derive the subfolder slug).
+            pages: List of page dicts from FirecrawlClient.crawl(), each with
+                   "url" and "markdown" keys.
+
+        Returns:
+            Manifest dict: {url, crawled_at (ISO-8601 UTC), pages: [{url, file_id}]}
+
+        Raises:
+            WebDocsStoreError: If a Drive API call fails. Original exception is
+                               chained via `raise ... from exc`.
+        """
+        svc = self._get_service()
+        web_docs_id = self._get_web_docs_folder_id()
+        slug = _slugify(url)
+        folder_id = self._find_or_create_folder(slug, web_docs_id)
+
+        manifest_pages: list[dict[str, str]] = []
+
+        for page in pages:
+            md = page.get("markdown") or ""
+            if not md:
+                continue
+            page_url = page.get("url", "")
+            filename = f"{_slugify(page_url)}.md"
+            content_bytes = md.encode("utf-8")
+            media = MediaIoBaseUpload(
+                io.BytesIO(content_bytes), mimetype="text/markdown", resumable=False
+            )
+            # Check if file already exists
+            q = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
+            existing = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
+            try:
+                if existing:
+                    file_id = existing[0]["id"]
+                    svc.files().update(
+                        fileId=file_id, media_body=media
+                    ).execute()
+                else:
+                    meta = {"name": filename, "parents": [folder_id]}
+                    result = svc.files().create(
+                        body=meta, media_body=media, fields="id"
+                    ).execute()
+                    file_id = result["id"]
+            except Exception as exc:
+                raise WebDocsStoreError(
+                    f"Failed to upload {filename} to Drive"
+                ) from exc
+            manifest_pages.append({"url": page_url, "file_id": file_id})
+
+        manifest = {
+            "url": url,
+            "crawled_at": datetime.now(UTC).isoformat(),
+            "pages": manifest_pages,
+        }
+        manifest_content = json.dumps(manifest, indent=2).encode("utf-8")
+        manifest_media = MediaIoBaseUpload(
+            io.BytesIO(manifest_content), mimetype="application/json", resumable=False
+        )
+        index_q = f"name='index.json' and '{folder_id}' in parents and trashed=false"
+        existing_index = (
+            svc.files().list(q=index_q, fields="files(id)").execute().get("files", [])
+        )
+        try:
+            if existing_index:
+                svc.files().update(
+                    fileId=existing_index[0]["id"], media_body=manifest_media
+                ).execute()
+            else:
+                svc.files().create(
+                    body={"name": "index.json", "parents": [folder_id]},
+                    media_body=manifest_media,
+                    fields="id",
+                ).execute()
+        except Exception as exc:
+            raise WebDocsStoreError("Failed to write index.json to Drive") from exc
+
+        return manifest
