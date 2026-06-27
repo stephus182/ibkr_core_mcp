@@ -85,3 +85,93 @@ def _slugify(url: str) -> str:
     url = url.lower()
     slug = _SLUG_RE.sub("-", url).strip("-")
     return slug[:100]
+
+
+class FirecrawlClient:
+    """
+    Thin wrapper around the Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
+
+    Authentication is via Bearer token in the Authorization header. All requests
+    use a 30-second timeout via the `requests` library (already a dependency of
+    ibkr_core_mcp). No retries are performed internally — callers handle retry
+    logic at the ClaudeToolkit layer.
+
+    Only the two endpoints required by ClaudIA are implemented:
+      - POST /v1/search  (firecrawl_search tool)
+      - POST /v1/crawl + GET /v1/crawl/{id}  (firecrawl_crawl tool)
+
+    Args:
+        api_key: Firecrawl API key (fc-...). Must be non-empty; validated at
+                 construction time with a ValueError if blank.
+    """
+
+    BASE_URL = "https://api.firecrawl.dev/v1"
+
+    def __init__(self, api_key: str) -> None:
+        if not api_key:
+            raise ValueError("api_key must be non-empty")
+        self._api_key = api_key
+        self._headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _raise_for_status(self, resp: requests.Response) -> None:
+        """Translate Firecrawl HTTP errors into FirecrawlError with a status code."""
+        if resp.status_code == 401:
+            raise FirecrawlError("Invalid FIRECRAWL_API_KEY", 401)
+        if resp.status_code == 429:
+            raise FirecrawlError("Rate limit exceeded — wait before retrying", 429)
+        if resp.status_code >= 500:
+            raise FirecrawlError(
+                f"Firecrawl service error: {resp.status_code}", resp.status_code
+            )
+        resp.raise_for_status()
+
+    def search(self, query: str, limit: int = 5) -> list[dict[str, str]]:
+        """
+        Search the web and return full page content as markdown for each result.
+
+        Calls POST /v1/search with scrapeOptions.formats=["markdown"] so that
+        each result includes extracted markdown rather than raw HTML.
+
+        Args:
+            query: Free-text search query. Must be non-empty.
+            limit: Maximum number of results to return. Clamped to [1, 10].
+
+        Returns:
+            List of result dicts, each containing:
+              - "url": str   — source URL
+              - "title": str — page title (empty string if not present)
+              - "markdown": str — extracted markdown content (empty string if not present)
+
+        Raises:
+            FirecrawlError: On HTTP 401 (bad key), 429 (rate limit), 5xx (service error),
+                            or any non-200 response. status_code is set on the exception.
+            ValueError: If query is empty or limit is outside [1, 10] before the call.
+            requests.exceptions.Timeout: If the API does not respond within 30 seconds.
+        """
+        if not query:
+            raise ValueError("query must be non-empty")
+        limit = max(1, min(10, limit))
+        resp = requests.post(
+            f"{self.BASE_URL}/search",
+            headers=self._headers,
+            json={
+                "query": query,
+                "limit": limit,
+                "scrapeOptions": {"formats": ["markdown"]},
+            },
+            timeout=30,
+        )
+        self._raise_for_status(resp)
+        data = resp.json()
+        raw = data.get("data") or data.get("results") or []
+        return [
+            {
+                "url": r.get("url", ""),
+                "title": r.get("title", ""),
+                "markdown": r.get("markdown", "") or r.get("content", ""),
+            }
+            for r in raw
+        ]
