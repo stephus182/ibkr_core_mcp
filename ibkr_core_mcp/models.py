@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class Contract(BaseModel):
+    """IBKR contract descriptor from /iserver/secdef/search or /trsrv/secdef."""
+
     conid: int
     symbol: str
     sec_type: str = Field(default="", alias="secType")
@@ -30,6 +32,8 @@ class Contract(BaseModel):
 
 
 class Position(BaseModel):
+    """Open position from /portfolio/{accountId}/positions/{page}."""
+
     conid: int = 0
     symbol: str = Field(default="", alias="contractDesc")
     position: float
@@ -57,6 +61,8 @@ class Position(BaseModel):
 
 
 class Trade(BaseModel):
+    """Trade execution record — matches the trades table schema in SQLiteStore."""
+
     execution_id: str = ""
     symbol: str
     side: str = ""
@@ -68,6 +74,8 @@ class Trade(BaseModel):
 
 
 class Order(BaseModel):
+    """Working order from /iserver/account/orders."""
+
     order_id: str = Field(default="", alias="orderId")
     status: str = ""
     symbol: str = Field(default="", alias="ticker")
@@ -94,6 +102,12 @@ class Order(BaseModel):
 
 
 class AccountSummary(BaseModel):
+    """Parsed account summary from /portfolio/{accountId}/summary.
+
+    IBKR returns nested {"amount": value, "currency": "USD"} objects per field;
+    _normalize extracts the amount for each key.
+    """
+
     net_liquidation: float = 0.0
     total_cash: float = 0.0
     unrealized_pnl: float = 0.0
@@ -118,6 +132,8 @@ class AccountSummary(BaseModel):
 
 
 class Notification(BaseModel):
+    """FYI notification from /fyi/notifications."""
+
     id: str = ""
     date: str = ""
     headline: str = ""
@@ -136,7 +152,19 @@ class Notification(BaseModel):
 
 
 def bars_to_dataframe(raw: dict[str, Any]) -> pd.DataFrame:
-    """Convert IBKR market history API response to standard OHLCV DataFrame."""
+    """Convert IBKR market history API response to a standard OHLCV DataFrame.
+
+    Input format (from /hmds/history or /iserver/marketdata/history):
+      {"startTime": "...", "data": [{"o": float, "h": float, "l": float,
+                                      "c": float, "v": float, "t": int}, ...]}
+    where "t" is a UNIX timestamp in milliseconds (UTC).
+
+    Returns a DataFrame indexed by a UTC DatetimeIndex named "date", with columns:
+      open, high, low, close, volume (sorted ascending by date).
+    Returns an empty DataFrame with those columns if "data" is missing or empty.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    """
     bars = raw.get("data", [])
     if not bars:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])

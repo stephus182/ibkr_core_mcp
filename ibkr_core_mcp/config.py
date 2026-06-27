@@ -9,7 +9,15 @@ from dotenv import load_dotenv
 
 @dataclass
 class Config:
-    """Configuration for all ibkr_core_mcp services. Use Config.from_env() to load from environment variables."""
+    """Configuration for all ibkr_core_mcp services.
+
+    Load from environment variables with Config.from_env(). All fields map
+    directly to environment variables (see from_env docstring for the mapping).
+
+    Required env vars: ANTHROPIC_API_KEY.
+    Optional with defaults: IBKR_GATEWAY_URL, IBKR_SQLITE_PATH, GDRIVE_TOKEN_FILE,
+    GDRIVE_CREDENTIALS_FILE. All others default to empty string (feature disabled).
+    """
 
     gateway_url: str
     anthropic_api_key: str = field(repr=False)
@@ -31,6 +39,23 @@ class Config:
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
+        """Load configuration from environment variables (with optional .env file).
+
+        Environment variable → field mapping:
+          ANTHROPIC_API_KEY          → anthropic_api_key   (required)
+          IBKR_GATEWAY_URL           → gateway_url         (default: https://localhost:5055/v1/api)
+          GOOGLE_DRIVE_FOLDER_ID     → gdrive_folder_id    (required for Drive features)
+          IBKR_SQLITE_PATH           → sqlite_path         (default: ~/.ibkr_core/store.db)
+          GDRIVE_TOKEN_FILE          → gdrive_token_file   (default: ~/.ibkr_core/token.json)
+          GDRIVE_CREDENTIALS_FILE    → gdrive_credentials_file (default: ~/.ibkr_core/credentials.json)
+          IBKR_FLEX_TOKEN            → flex_token          (required for Flex sync)
+          IBKR_FLEX_QUERY_ID         → flex_query_id       (required for Flex sync)
+          GDRIVE_CACHE_FOLDER_ID     → gdrive_cache_folder_id  (optional; auto-created as market_data/)
+          GDRIVE_DB_FOLDER_ID        → gdrive_db_folder_id     (optional; auto-created as db/)
+          GDRIVE_ACCOUNT_FOLDER_ID   → gdrive_account_folder_id (optional; auto-created as account_data/)
+
+        Raises ConfigError if ANTHROPIC_API_KEY is not set.
+        """
         load_dotenv(dotenv_path, override=False)
 
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")

@@ -46,20 +46,41 @@ Validate the SSO token. Used after initial login to confirm the session is activ
 ## Market Data
 
 ### `get_market_history(conid, period, bar, outside_rth) -> dict`
-OHLCV bars for a contract.
+Single-page OHLCV bars. **Maximum 1000 data points per request** (verified from official docs).
+For requests that may exceed this, use `get_market_history_paginated()`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `conid` | int | — | Contract ID (use `search_contract()` to find) |
-| `period` | str | `"1Y"` | `"1D"`, `"1W"`, `"1M"`, `"3M"`, `"6M"`, `"1Y"`, `"2Y"`, `"5Y"` |
-| `bar` | str | `"1d"` | `"1min"`, `"2min"`, `"5min"`, `"15min"`, `"30min"`, `"1h"`, `"2h"`, `"4h"`, `"1d"`, `"1w"`, `"1m"` |
+| `period` | str | `"1Y"` | Full range: `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
+| `bar` | str | `"1d"` | `"1min"`, `"2min"`, `"5min"`, `"15min"`, `"30min"`, `"1h"`, `"2h"`, `"4h"`, `"8h"`, `"1d"`, `"1w"`, `"1m"` |
 | `outside_rth` | bool | `False` | Include pre/post-market bars |
 
-**Returns:** `{"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}`
+**Returns:** `{"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}` — `t` is UNIX milliseconds UTC.
+
+**Rate limit:** 5 concurrent requests. Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
 
 **Endpoint:** `GET /iserver/marketdata/history`
 
-**⚠ Hard cap:** This endpoint caps at ~84 daily bars regardless of the `period` parameter. Use `get_hmds_history()` for any request longer than ~4 months.
+---
+
+### `get_market_history_paginated(conid, period, bar, outside_rth) -> dict`
+**This is the endpoint `ClaudeToolkit.fetch_market_data` uses.**
+
+Same parameters and return shape as `get_market_history()`, but automatically paginates
+requests that would exceed the 1000-point limit. Uses `startTime` to walk backwards from
+today in chunks, then merges and deduplicates. Replaces the deprecated `/hmds/history`.
+
+| Bar size | Chunk size | Bars per chunk (approx) |
+|----------|------------|-------------------------|
+| `1d` | 1000 calendar days | ~690 trading days |
+| `1w` | 1000 calendar days | ~143 weeks |
+| `1h` | 197 calendar days | ~128 days × 6.5h |
+
+**Deprecation note:** `/hmds/history` was removed from IBKR docs November 18, 2025.
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+
+**Endpoint:** `GET /iserver/marketdata/history` (chunked via startTime)
 
 ---
 
@@ -82,11 +103,10 @@ are normal — retry after ≈1s.
 ---
 
 ### `get_hmds_history(conid, period, bar, outside_rth) -> dict`
-Historical Market Data Service — same parameters and return shape as `get_market_history()`.
-Use this for all requests beyond ~4 months; supports up to 7Y of daily data for equities.
-**This is the endpoint `ClaudeToolkit.fetch_market_data` uses.**
+**Deprecated November 18, 2025.** IBKR removed this endpoint from their documentation.
+Use `get_market_history_paginated()` instead.
 
-**Endpoint:** `GET /hmds/history`
+**Endpoint:** `GET /hmds/history` (deprecated)
 
 ---
 

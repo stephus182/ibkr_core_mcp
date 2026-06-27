@@ -270,8 +270,12 @@ class FlexQueryClient:
     ) -> tuple[str, str]:
         """Step 1: Send flex query request, return (reference_code, statement_url).
 
-        start_date maps to the fd (from date) parameter; end_date maps to td (to date).
+        start_date maps to fd (from date); end_date maps to td (to date).
         Both are YYYYMMDD strings, pre-validated by fetch_trades().
+        The v=3 parameter selects Flex Web Service Version 3; the official docs note
+        v is optional and defaults to 2, but v=3 is required for the current error-code
+        set and XML schema.
+
         Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
         """
         params: dict[str, str] = {

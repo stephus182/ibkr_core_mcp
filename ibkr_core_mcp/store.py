@@ -75,7 +75,23 @@ _FUTURES_SCHEDULE: dict[str, Any] = {
 
 
 class SQLiteStore:
-    """Persistent SQLite store for trades, position snapshots, and signals."""
+    """Persistent SQLite store for ibkr_core_mcp local data.
+
+    Default path: ~/.ibkr_core/store.db (IBKR_SQLITE_PATH env var).
+    WAL journal mode is enabled on every connection for safe concurrent reads.
+
+    Tables:
+      trades             — all Flex-synced and live-API trade executions
+      flex_import_log    — SHA-256 integrity manifest for imported Flex XML files
+      position_snapshots — timestamped position snapshots
+      backtest_results   — vectorised backtest run history
+      price_alerts       — local price alert records (separate from IBKR server alerts)
+      signals            — ML/indicator signal log
+      session_log        — operational event log (flex_sync, startup, errors)
+
+    This store is NOT the claudia.db conversation store (see ConversationStore in
+    claudia_ui). It holds IBKR market and trade data only.
+    """
 
     def __init__(self, config: Config) -> None:
         self._db_path = str(config.sqlite_path)
@@ -384,6 +400,18 @@ class SQLiteStore:
         Default: 20 exchanges covering full G20 + Eurex (XNYS, CME, XLON, XETR, XEUR,
         XPAR, XMIL, XTKS, XHKG, XSHG, XBOM, XKRX, XASX, XTSE, BVMF, XMEX, XJSE,
         XSAU, XIDX, XIST). Pass a custom list to restrict to a subset.
+
+        Uses the exchange_calendars library (MIC codes, not IBKR venue codes).
+        Process-level cache keyed by (today's date, tuple of exchange codes): first
+        call per day is ~3.4s (numpy array loading for 20 exchanges); subsequent calls
+        are ~0.01ms. Cache auto-invalidates at midnight (new date = new cache key).
+
+        CME futures schedule injected from _FUTURES_SCHEDULE (static, CT hours).
+        cme_open_nyse_closed: computed dynamically — CME sessions where NYSE is closed
+        (MLK Day, Presidents Day, Memorial Day, Juneteenth, Labor Day, etc.).
+
+        Source (exchange_calendars library): https://github.com/gerrymanoim/exchange_calendars
+        Source (CME product hours): https://www.cmegroup.com/trading-hours.html
         """
         if exchanges is None:
             # Full G20 coverage + Eurex futures. Excludes Russia (XMOS — IBKR

@@ -488,7 +488,7 @@ def test_fetch_market_data_live_path(toolkit):
          "l": r["low"], "c": r["close"], "v": r["volume"]}
         for ts, r in df.iterrows()
     ]
-    toolkit._client.get_hmds_history.return_value = {"data": data_rows}
+    toolkit._client.get_market_history_paginated.return_value = {"data": data_rows}
 
     text, fig = toolkit.execute("fetch_market_data", {
         "symbol": "AAPL", "period": "1Y", "bar": "1d"
@@ -506,11 +506,10 @@ def test_fetch_market_data_no_contract(toolkit):
 
 
 def test_fetch_market_data_empty_data(toolkit):
-    """Both HMDS and iserver fallback returning empty → error message with 'no data'."""
+    """Paginated endpoint returning empty → error message with 'no data'."""
     toolkit._cache.check.return_value = False
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit._client.get_hmds_history.return_value = {"data": []}
-    toolkit._client.get_market_history.return_value = {"data": []}  # fallback also empty
+    toolkit._client.get_market_history_paginated.return_value = {"data": []}
     text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "no data" in text.lower()
 

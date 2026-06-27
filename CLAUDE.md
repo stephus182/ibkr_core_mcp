@@ -600,8 +600,8 @@ This rule exists because assumption-based development caused two confirmed incid
 These are verified against official sources — not guesses:
 
 - **`/iserver/account/orders`** — two-call pattern: first call instantiates the subscription, second call retrieves data. Source: [IBKR Campus — Orders](https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/)
-- **`/hmds/history`** — warmup behavior: first call per symbol returns 404/500 while IBKR initializes the subscription. Auto-retried in `claude_tools.py` (3 attempts, 2s delay).
-- **`/iserver/account/trades`** — session-scoped: only returns trades from the current CP API session. Use `?days=7` for maximum lookback. Mobile/TWS trades are not visible here — use Flex for those.
+- **`/iserver/marketdata/history`** — primary fetch endpoint, max 1000 data points per request. First-call warmup (404/500) auto-retried 3× with 2s delay in `claude_tools.py`. Pagination for large requests handled by `get_market_history_paginated()` using `startTime` chunks. Note: `/hmds/history` was deprecated November 18, 2025 — this endpoint is the official replacement. Source: [IBKR Web API Changelog](https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/)
+- **`/iserver/account/trades`** — returns all trades on the account (all origins: CP API, mobile, TWS) for the current day and up to 6 previous days. Use `?days=7` for maximum lookback. "Currently selected account" in IBKR docs refers to multi-account users only — single-account users receive all trades.
 - **Flex Web Service** — T+1 delay, back-office data. Captures all trades from all interfaces (mobile, TWS, API). Requires separate token + query ID, not CP API credentials.
 - **Flex endpoint** — `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` (not `gdcdyn`). Requires `User-Agent` header for programmatic access.
 

@@ -40,7 +40,25 @@ def _validate_cache_inputs(symbol: str, timeframe: str, period: str, end: str) -
 
 
 class GDriveCache:
-    """Google Drive parquet cache for OHLCV market data."""
+    """Google Drive Parquet cache for OHLCV market data and account-level files.
+
+    Uses Google Drive API v3 via google-api-python-client.
+    OAuth2 scope: https://www.googleapis.com/auth/drive (full read/write access).
+    Token stored at GDRIVE_TOKEN_FILE (default: ~/.ibkr_core/token.json, mode 0o600).
+
+    Two logical storage areas within the Drive folder hierarchy:
+      market_data/  — OHLCV Parquet files + manifest.json (GDRIVE_CACHE_FOLDER_ID)
+      account_data/ — Flex XML archives, store.db backup (GDRIVE_ACCOUNT_FOLDER_ID)
+    Both subfolders are auto-created on first use if not explicitly configured.
+
+    Manifest: in-memory cache with a 60-second TTL (_MANIFEST_TTL). Freshness check
+    at access time; reloaded from Drive on expiry.
+
+    Source: https://developers.google.com/drive/api/reference/rest/v3
+    SDK: google-api-python-client (googleapiclient.discovery.build("drive", "v3", ...))
+    Auth: google-auth-oauthlib.flow.InstalledAppFlow for initial authorization,
+          google.oauth2.credentials.Credentials for token refresh.
+    """
 
     def __init__(self, config: Config) -> None:
         self._config = config
@@ -53,6 +71,16 @@ class GDriveCache:
         self._resolved_account_folder: str = ""
 
     def _get_service(self) -> Any:
+        """Return an authenticated Drive API v3 service object.
+
+        Token refresh: if the stored credentials are expired and have a refresh_token,
+        they are silently refreshed via google.auth.transport.requests.Request.
+        First-time auth: InstalledAppFlow opens a local browser flow on port 0
+        (OS-assigned). The resulting token is written to GDRIVE_TOKEN_FILE with
+        mode 0o600 (user-only read/write).
+
+        Source: https://developers.google.com/drive/api/quickstart/python
+        """
         if self._service:
             return self._service
         creds = None
@@ -180,6 +208,13 @@ class GDriveCache:
         return f"{key}.parquet"
 
     def _load_manifest(self) -> dict[str, Any]:
+        """Load manifest.json from Drive, with a 60-second in-memory TTL.
+
+        The manifest maps cache_key → {symbol, timeframe, period, end, rows, cached_at}.
+        On cache miss (no manifest.json in market_data/ folder), returns {}.
+        Uses files.list then files.get_media for download.
+        Source: https://developers.google.com/drive/api/reference/rest/v3/files/list
+        """
         now = time.monotonic()
         if self._manifest_loaded_at > 0 and (now - self._manifest_loaded_at) < _MANIFEST_TTL:
             return self._manifest

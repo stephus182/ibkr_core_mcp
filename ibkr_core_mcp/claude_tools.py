@@ -722,7 +722,19 @@ def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
 
 
 class ClaudeToolkit:
-    """Ready-made Claude tool layer for IBKR research. Portable across any Claude-powered app."""
+    """Ready-made Anthropic tool-use layer for IBKR research. Portable across any Claude-powered app.
+
+    Exposes TOOL_DEFINITIONS (list of Anthropic tool dicts) and execute() to handle tool calls.
+    Wire it into any Anthropic SDK messages call:
+        response = client.messages.create(model=..., tools=toolkit.tools, ...)
+        result, fig = toolkit.execute(tool_name, tool_input)
+
+    Tool routing: IBKR tools → IBKRClient; local tools (search_past_conversations, fetch_web_page)
+    → handled in claudia_ui/agent.py; TradingView tools → TradingViewBridge sidecar.
+
+    Source (Anthropic tool use): https://docs.anthropic.com/en/docs/build-with-claude/tool-use
+    Source (Anthropic Messages API): https://docs.anthropic.com/en/api/messages
+    """
 
     def __init__(
         self,
@@ -844,49 +856,26 @@ class ClaudeToolkit:
         if err:
             return f"{err} Is IBKR connected?", None
 
-        # HMDS first-call behavior: IBKR initializes a data subscription on the first
-        # request for a symbol. The warmup can manifest as:
-        #   - IBKRAPIError (404 or 500) — retried
-        #   - 200 with null body (raw is None) — retried
-        #   - 200 with {"data": []} empty list — retried
-        # All three are treated as warmup and retried up to 3 times with 2s delays.
+        # iserver/marketdata/history first-call behavior: IBKR may return 404 or 500
+        # on the first request for a symbol while initializing the data subscription,
+        # or return a null/empty body. Retry up to 3 times with 2s delays.
         import time
         from ibkr_core_mcp.exceptions import IBKRAPIError
         raw = None
         for attempt in range(3):
             try:
-                raw = self._client.get_hmds_history(conid, period=period, bar=bar)
-                if raw and raw.get("data"):  # raw could be None if IBKR returns null body
+                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar)
+                if raw and raw.get("data"):
                     break
             except IBKRAPIError:
                 pass
             if attempt < 2:
                 time.sleep(2)
         if not raw or not raw.get("data"):
-            # HMDS is unavailable (null body after 3 attempts). Try the iserver history
-            # endpoint as a fallback — it uses a different service path and works when
-            # HMDS hasn't been initialized for the session. Hard cap: ~84 daily bars.
-            fallback = None
-            try:
-                fallback = self._client.get_market_history(conid, period=period, bar=bar)
-            except IBKRAPIError:
-                pass
-            if fallback and fallback.get("data"):
-                df = _bars_to_dataframe(fallback)
-                self._cache.save(df, symbol, timeframe, period, end)
-                return (
-                    f"⚠ HMDS unavailable — fetched {symbol} {timeframe} ({period}) via iserver fallback: "
-                    f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}. "
-                    f"Saved to Drive cache. Note: iserver/marketdata/history may return fewer bars than "
-                    f"requested (observed limit, not officially documented). "
-                    f"Retry fetch_market_data once HMDS initializes for confirmed full history.",
-                    None,
-                )
-            raw_repr = json.dumps(raw, indent=2) if raw else "None (IBKR returned null/empty body)"
             return (
-                f"IBKR returned no data for {symbol} (period={period}, bar={bar}). "
-                f"Both HMDS and iserver fallback returned no data. "
-                f"HMDS raw response: {raw_repr}"
+                f"IBKR returned no data for {symbol} (period={period}, bar={bar}) "
+                f"after 3 attempts. Check that the IBKR gateway is authenticated and "
+                f"that the period/bar combination is valid for this instrument."
             ), None
 
         df = _bars_to_dataframe(raw)
@@ -977,16 +966,16 @@ class ClaudeToolkit:
         trades become available after IBKR's overnight processing).
         Source: https://www.ibkrguides.com/orgportal/performanceandstatements/flex.htm
 
-        ## source='live' — CP API /iserver/account/trades (last ~6 days, session-scoped)
-        Calls the CP API endpoint with ?days=7 for up to ~6 days of recent history. This
-        endpoint is session-scoped: trades placed via mobile app or TWS may NOT appear,
-        even for the same account. Use for today's intraday CP-API-placed fills only.
-        Observed behavior — the session scope restriction is not in accessible public docs.
+        ## source='live' — CP API /iserver/account/trades (last 7 days max)
+        Calls the CP API endpoint with ?days=7 for up to 7 days of recent history (official
+        max per IBKR docs). Returns all trades on the account regardless of origin (CP API,
+        mobile, TWS). "Currently selected account" in IBKR docs is a multi-account concept
+        only — single-account users receive all trades.
 
         ## Choosing the right source
-        - Today's fill from any origin → get_pa_transactions (all origins, not session-scoped)
-        - Yesterday and earlier, all origins → source='store' after sync_flex_trades
-        - Today's CP-API fills only → source='live'
+        - Today's fills (any origin) → source='live' (?days=7 covers current day)
+        - Yesterday and earlier, full history → source='store' after sync_flex_trades
+        - All origins same-day with P&L breakdown → get_pa_transactions
         """
         source = inputs.get("source", "store")
         symbol = inputs.get("symbol")
@@ -1438,9 +1427,9 @@ class ClaudeToolkit:
 
         ## Purpose
         Call this before get_pa_transactions when unsure which period values IBKR accepts.
-        The valid period strings are account-specific and are not documented in accessible
-        IBKR CP API docs (requires login). Never assume period values — always fetch from
-        this endpoint.
+        Documented period values (verified 2026-06-26): "1D", "7D", "MTD", "1M", "YTD", "1Y".
+        Always fetch from this endpoint rather than hardcoding — IBKR may return a subset
+        based on account age/type.
 
         ## Raw response fallback
         When the extraction logic cannot recognize IBKR's response shape, the raw IBKR
@@ -1480,13 +1469,14 @@ class ClaudeToolkit:
         Use this when: a trade was placed via mobile or TWS and does not appear in get_trades.
 
         ## Availability timing
-        PA data availability relative to execution is not officially documented (IBKR Campus
-        requires login). Observed behavior suggests same-day fills are accessible, but this
-        has not been fully verified across all trade origins and time zones.
+        PA uses IBKR back-office data. Timing relative to same-day execution is not
+        stated in the official docs. Observed: same-day fills appear accessible, but this
+        has not been confirmed across all trade origins and time zones.
 
         ## Period values
-        Must come from get_pa_periods — never assume period format. IBKR returns HTTP 400 for
-        invalid period strings, and the valid values are account-specific and undocumented.
+        Documented values: "1D", "7D", "MTD", "1M", "YTD", "1Y". Must come from
+        get_pa_periods — IBKR returns HTTP 400 for invalid period strings, and the
+        exact set returned may vary by account age/type.
         On HTTP 400: this handler automatically fetches valid periods and returns them in the
         error so the caller can retry with the correct value.
 

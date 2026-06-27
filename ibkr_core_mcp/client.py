@@ -26,6 +26,42 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # This prevents path traversal in URLs and matches the claude_tools validator.
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 
+# ---------------------------------------------------------------------------
+# Market history pagination helpers
+# /iserver/marketdata/history is capped at 1000 data points per request.
+# Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+# ---------------------------------------------------------------------------
+
+_PERIOD_RE = re.compile(r"^(\d+)(min|h|d|w|m|y)$", re.IGNORECASE)
+_UNIT_TO_DAYS: dict[str, float] = {
+    "min": 1 / 1440, "h": 1 / 24, "d": 1, "w": 7, "m": 30, "y": 365,
+}
+# Conservative bars-per-calendar-day estimates (US equity trading hours).
+# Used only for pagination chunk sizing — not exposed to callers.
+_BARS_PER_CALENDAR_DAY: dict[str, float] = {
+    "1min": 135.0, "2min": 67.5, "3min": 45.0, "5min": 27.0,
+    "10min": 13.5, "15min": 9.0, "30min": 4.5,
+    "1h": 3.25, "2h": 1.6, "3h": 1.1, "4h": 0.8, "8h": 0.4,
+    "1d": 0.69, "1w": 0.143, "1m": 0.033,
+}
+_MAX_POINTS = 1000
+_CHUNK_SAFETY = 0.80  # target 80% of limit per chunk
+
+
+def _parse_period_days(period: str) -> float | None:
+    """Return approximate calendar days for a period string, or None if unparseable."""
+    m = _PERIOD_RE.match(period)
+    if not m:
+        return None
+    return float(m.group(1)) * _UNIT_TO_DAYS[m.group(2).lower()]
+
+
+def _chunk_days_for_bar(bar: str) -> int:
+    """Max calendar days per request chunk that stays safely under 1000 data points."""
+    bpd = _BARS_PER_CALENDAR_DAY.get(bar.lower(), 0.69)
+    days = int(_MAX_POINTS * _CHUNK_SAFETY / bpd)
+    return max(7, min(1000, days))
+
 
 def _validate_account_id(account_id: str) -> None:
     """Raise ConfigError if account_id is not a valid IBKR account ID."""
@@ -160,18 +196,102 @@ class IBKRClient:
 
         Returns {"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}.
 
-        ## Bar count limit (observed, not officially documented)
-        Testing observed a cap of approximately 84 daily bars regardless of the period
-        parameter — a 1Y request returned ~84 bars, not 252. The exact limit is not
-        in the publicly accessible IBKR docs (https://www.interactivebrokers.com/campus/
-        ibkr-api-page/cpapi-v1/ requires login). Use get_hmds_history() for longer history;
-        /hmds/history supports up to 7Y of daily data for equities.
-        Verification pending: see docs/project-status.md §Pending Doc Verification item 9.
+        ## Data point limit (officially documented)
+        Maximum 1000 data points per request. Concurrent request limit: 5.
+        Exceeding either limit returns HTTP 429.
+
+        ## Valid period and bar values (from official docs, verified 2026-06-26)
+        period: {1-30}min, {1-8}h, {1-1000}d, {1-792}w, {1-182}m, {1-15}y. Default: 1w.
+        bar: 1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m
+
+        Step size — valid bar range and default for each period:
+          period 1min → bar 1min       default 1min
+          period 1h   → bar 1min-8h    default 1min
+          period 1d   → bar 1min-8h    default 1min
+          period 1w   → bar 10min-1w   default 15min
+          period 1m   → bar 1h-1m      default 30min
+          period 3m   → bar 2h-1m      default 1d
+          period 6m   → bar 4h-1m      default 1d
+          period 1y   → bar 8h-1m      default 1d
+          period 2y   → bar 1d-1m      default 1d
+          period 3y   → bar 1d-1m      default 1w
+          period 15y  → bar 1w-1m      default 1w
+
+        For requests that may exceed 1000 data points, use get_market_history_paginated()
+        which chunks the request automatically using the startTime parameter.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: GET /iserver/marketdata/history
         """
         return self._get("/iserver/marketdata/history", {"conid": conid, "period": period, "bar": bar, "outsideRth": str(outside_rth).lower()})
+
+    def get_market_history_paginated(
+        self,
+        conid: int,
+        period: str = "1Y",
+        bar: str = "1d",
+        outside_rth: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch OHLCV bars with automatic pagination for requests exceeding 1000 data points.
+
+        Wraps get_market_history() and chunks large requests using the startTime parameter,
+        walking backwards from today in calendar-day windows sized to stay safely under
+        the 1000-point limit. Results are merged, sorted by timestamp, and deduplicated.
+
+        This is the primary entry point for ClaudeToolkit.fetch_market_data(). It replaces
+        the deprecated /hmds/history endpoint (removed from IBKR docs November 18, 2025).
+
+        Chunk sizes by bar (targeting 80% of the 1000-point limit):
+          1d  → 1000-calendar-day chunks  (~690 trading days each)
+          1w  → 1000-calendar-day chunks  (~142 trading weeks each)
+          1h  → 197-calendar-day chunks   (~128 trading days × 6.5h each)
+          1m  → 1000-calendar-day chunks  (~33 months each)
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        Endpoint: GET /iserver/marketdata/history
+        """
+        from datetime import datetime, timedelta
+
+        total_days = _parse_period_days(period)
+        chunk_days = _chunk_days_for_bar(bar)
+
+        if total_days is None or total_days <= chunk_days:
+            return self.get_market_history(conid, period, bar, outside_rth)
+
+        all_bars: list[dict] = []
+        envelope: dict = {}
+        now = datetime.utcnow()
+        total = int(total_days)
+        offset = 0
+
+        while offset < total:
+            n = min(chunk_days, total - offset)
+            chunk_start = now - timedelta(days=offset + n)
+            result = self._get("/iserver/marketdata/history", {
+                "conid": conid,
+                "period": f"{n}d",
+                "bar": bar,
+                "outsideRth": str(outside_rth).lower(),
+                "startTime": chunk_start.strftime("%Y%m%d-00:00:00"),
+            })
+            if result:
+                if not envelope:
+                    envelope = {k: v for k, v in result.items() if k != "data"}
+                all_bars.extend(result.get("data") or [])
+            offset += n
+
+        if not all_bars:
+            return {}
+
+        seen: set[int] = set()
+        unique: list[dict] = []
+        for b in sorted(all_bars, key=lambda x: x.get("t", 0)):
+            t = b.get("t")
+            if t is not None and t not in seen:
+                seen.add(t)
+                unique.append(b)
+
+        return {**envelope, "data": unique}
 
     def get_market_snapshot(self, conids: list[int], fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Live quote snapshot for one or more contracts. Returns [] if response is not a list.
@@ -180,7 +300,9 @@ class IBKRClient:
         IBKR snapshot subscriptions require a warm-up period — empty results on the first
         call are normal; retry after ~1s.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        Limits (verified from changelog, December 10, 2025): max 100 conids per request,
+        max 50 fields per request.
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
         Endpoint: GET /iserver/marketdata/snapshot
         """
         field_str = ",".join(fields or ["31", "55", "70", "71", "84", "86"])
@@ -212,16 +334,19 @@ class IBKRClient:
         return self._get("/iserver/marketdata/bars")
 
     def get_hmds_history(self, conid: int, period: str = "1Y", bar: str = "1d", outside_rth: bool = False) -> dict[str, Any]:
-        """Historical Market Data Service bars — same params and response shape as get_market_history().
+        """Historical Market Data Service bars — same response shape as get_market_history().
 
-        Use for all requests beyond ~4 months; supports up to 7Y of daily data for equities.
-        ClaudeToolkit._fetch_market_data() uses this endpoint.
+        *** DEPRECATED (November 18, 2025) ***
+        IBKR removed /hmds/history from their documentation as deprecated. The official
+        replacement is /iserver/marketdata/history (get_market_history). Migration note:
+        iserver/marketdata/history has a 1000 data point max per request, so multi-year
+        daily bar requests would require pagination. This endpoint still works but is no
+        longer officially supported.
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
 
-        HMDS warmup: first request for a new symbol may return 404/500 while IBKR initializes
-        the subscription. ClaudeToolkit._fetch_market_data() handles this with a 3-attempt retry
-        loop (2s delay) — transparent to callers.
+        ClaudeToolkit._fetch_market_data() uses this endpoint with a 3-attempt retry on
+        404/500 for the HMDS warmup window (first request per symbol).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: GET /hmds/history
         """
         return self._get("/hmds/history", {"conid": conid, "period": period, "bar": bar, "outsideRth": str(outside_rth).lower()})
@@ -559,24 +684,20 @@ class IBKRClient:
     def get_trades(self) -> list[dict[str, Any]]:
         """Recent trade executions visible in the current CP API session (~6 days lookback).
 
-        ## Coverage limitation — session scope
-        This endpoint is session-scoped: it returns only trades visible to the current
-        Client Portal API session. Trades placed via mobile app, TWS, or the web portal
-        may not appear even if they executed on the same account. This is observed behavior;
-        the session-scope restriction is not explicitly documented in the IBKR CP API reference
-        (https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ requires login).
+        Returns trades for the account for current day and up to six previous days.
+        It is advised to call this endpoint once per session (per official docs).
 
-        ## Use cases
-        - Real-time: today's intraday fills placed via the CP API in the current session
-        - Recent history: up to ~6 days with ?days=7
+        ## ?days parameter (officially documented, verified 2026-06-26)
+        Specify the number of days to receive executions for, up to a maximum of 7 days.
+        If unspecified, only the current day is returned. We always pass days=7 for
+        maximum lookback.
+
+        "Currently selected account" in the IBKR docs refers to multi-account users
+        who need to explicitly select an account. Single-account users: all trades on
+        the account appear regardless of where they were placed (CP API, mobile, TWS).
 
         ## When this is NOT the right tool
-        - Mobile/TWS-placed trades today → use get_pa_transactions (all origins, not session-scoped)
-        - Multi-day or full history → use FlexQueryClient.fetch_trades (T+1, all origins)
-
-        ## ?days=7 parameter
-        Observed behavior: extends lookback to ~6 days. Without it, only today's session
-        is returned. The `days` parameter is not in the accessible public API docs.
+        - Full history beyond 7 days → use FlexQueryClient.fetch_trades (T+1, all origins)
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: GET /iserver/account/trades
@@ -592,12 +713,14 @@ class IBKRClient:
     def get_pa_periods(self, account_ids: list[str]) -> list[str]:
         """Available period strings for Portfolio Analyst queries.
 
-        Response shape is not officially documented — observed structures:
+        Documented period values (verified 2026-06-26): "1D", "7D", "MTD", "1M", "YTD", "1Y".
+        The response object includes a `{Period Value}` key per period, each containing
+        nav (NAV data), cps (cumulative performance), freq, dates, and startNav.
+
+        Response extraction handles multiple observed shapes:
         - list of strings: returned directly
         - dict with 'Period' key: extract the list
         - dict with 'allPeriods' key: extract the list
-        Raw response is returned as-is in the 'raw' key when the shape is unknown,
-        so the caller can surface it for inspection.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: POST /pa/allperiods
@@ -630,15 +753,19 @@ class IBKRClient:
         it includes transactions from all origins: CP API, mobile app, TWS, and web portal.
         It is not scoped to the current session.
 
+        ## days parameter (officially documented, verified 2026-06-26)
+        Specify the number of days to receive transaction data for. Defaults to 90 days
+        of transaction history if unspecified.
+
         ## Availability
-        Timing relative to execution is not officially documented (IBKR Campus requires
-        login). Observed: PA data appears to reflect same-day fills, but this has not
-        been fully verified across all trade origins and time zones.
+        PA uses IBKR back-office data. Timing relative to same-day execution is not
+        stated in the official docs. Observed: same-day fills appear to be accessible,
+        but this has not been confirmed across all trade origins and time zones.
 
         ## Period values
-        Valid period strings come from /pa/allperiods (get_pa_periods). Do not assume
-        values — they vary by account and have not been confirmed from accessible docs.
-        Use get_pa_periods first to retrieve the exact strings IBKR accepts.
+        Valid period strings come from /pa/allperiods (get_pa_periods).
+        Documented values: "1D", "7D", "MTD", "1M", "YTD", "1Y".
+        Use get_pa_periods first to confirm what IBKR returns for your account.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: POST /pa/transactions
@@ -778,6 +905,11 @@ class IBKRClient:
         Both security gates fire before any network call. HumanAuthError is raised if either
         gate fails or times out. ClaudIA constraint: ClaudeToolkit exposes no tool calling
         this method — order execution is UI-layer only, triggered by physical button click.
+
+        US Futures (secType=FUT): caller must include manualIndicator=true in the order dict.
+        Required since May 1, 2025 for CME Group Rule 536-B compliance. IBKR returns an
+        error without it for futures orders.
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/

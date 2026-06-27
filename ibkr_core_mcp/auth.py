@@ -27,6 +27,8 @@ def _sanitize_cookie_token(value: str) -> str:
 
 
 class AuthStrategy(Protocol):
+    """Protocol for IBKR Client Portal authentication strategies."""
+
     def apply(self, session: requests.Session) -> None: ...
 
 
@@ -38,7 +40,13 @@ class NoAuth:
 
 
 class TokenAuth:
-    """Inject a pre-obtained cookie string directly into the session header."""
+    """Inject a pre-obtained cookie string directly as the Cookie request header.
+
+    CRLF characters are stripped from the cookie value to prevent HTTP header
+    injection. RFC 6265 §4.1.1 defines the cookie-octet character set and
+    prohibits CR and LF in cookie values.
+    Source: https://www.rfc-editor.org/rfc/rfc6265#section-4.1.1
+    """
 
     def __init__(self, cookie_string: str) -> None:
         self._cookie_string = _sanitize_cookie_token(cookie_string.strip())
@@ -55,8 +63,18 @@ class TokenAuth:
 class BrowserCookieAuth:
     """Read browser localhost cookies and inject them as a raw Cookie header.
 
-    requests silently drops cookies for 'localhost' via the cookie jar,
-    so we build the Cookie header manually.
+    The requests library silently drops cookies for 'localhost' via the cookie
+    jar (cookiejar domain matching requires a dot-prefixed domain, which
+    'localhost' never satisfies). We bypass the jar entirely and build the
+    Cookie header manually from browser_cookie3.
+
+    CRLF stripping on both cookie name and value prevents HTTP header injection.
+    RFC 6265 §4.1.1: cookie-octet excludes control characters including CR/LF.
+    Source: https://www.rfc-editor.org/rfc/rfc6265#section-4.1.1
+
+    Supported browsers: chrome, chromium, firefox, safari, edge.
+    Uses browser_cookie3 for cross-platform cookie extraction.
+    Source: https://github.com/borisbabic/browser_cookie3
     """
 
     def __init__(self, browser: str = "chrome") -> None:
