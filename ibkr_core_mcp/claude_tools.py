@@ -1951,12 +1951,11 @@ class ClaudeToolkit:
         if no_data:
             notes.append(
                 f"IBKR returned 'Not Subscribed' (6509=N) for: {', '.join(no_data)}. "
-                "Per IBKR docs this means no data — neither real-time nor delayed — for these contracts. "
-                "Possible causes: (1) exchange-specific subscription missing — NYSE and NYSE Arca are "
-                "separate subscriptions from NASDAQ even within a US equities bundle; "
-                "(2) wrong conid resolved — verify the conid shown above matches the expected contract; "
-                "(3) the Market Data API Agreement may need renewal. "
+                "No data — neither real-time nor delayed. "
+                "NYSE and NYSE Arca require separate market data subscriptions from NASDAQ "
+                "even within a US equities bundle. "
                 "Check: Account Management → Settings → Market Data Subscriptions. "
+                "If the ticker is incorrect, please provide the right one. "
                 "Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability"
             )
         if notes:
