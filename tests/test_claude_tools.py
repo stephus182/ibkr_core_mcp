@@ -270,6 +270,92 @@ def test_execute_get_market_snapshot_invalid_conid_skipped(toolkit):
     toolkit._client.get_market_snapshot.assert_not_called()
 
 
+def test_execute_get_market_snapshot_fut_uses_futures_endpoint_not_search(toolkit):
+    """FUT must resolve via /trsrv/futures, not /iserver/secdef/search.
+
+    /iserver/secdef/search only documents STK, IND, BOND support.
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+    """
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 111, "expirationDate": 20260918},
+        {"symbol": "ES", "conid": 222, "expirationDate": 20260619},
+    ]
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 222, "31": "5800.0", "6509": "R"}]
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
+    toolkit._client.search_contract.assert_not_called()
+    toolkit._client.get_market_snapshot.assert_called_once_with([222])
+    assert "5800.0" in text
+
+
+def test_execute_get_market_snapshot_fut_no_contracts_found(toolkit):
+    toolkit._client.get_futures.return_value = []
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ZZFUT"], "sec_type": "FUT"})
+    assert "Could not resolve" in text
+    toolkit._client.get_market_snapshot.assert_not_called()
+
+
+def test_execute_get_market_snapshot_exchange_filter_selects_listing(toolkit):
+    """International equities: search_contract may return multiple listings.
+
+    exchange param filters to the requested venue instead of always taking [0].
+    """
+    toolkit._client.search_contract.return_value = [
+        {"conid": 1, "exchange": "NYSE"},
+        {"conid": 2, "exchange": "AMS"},
+    ]
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 2, "31": "700.0", "6509": "D"}]
+    text, fig = toolkit.execute(
+        "get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"}
+    )
+    toolkit._client.get_market_snapshot.assert_called_once_with([2])
+    assert "700.0" in text
+
+
+def test_execute_get_market_snapshot_exchange_filter_no_match_falls_back(toolkit):
+    """If no listing matches the requested exchange, fall back to first result
+    rather than failing outright — better to return something resolvable."""
+    toolkit._client.search_contract.return_value = [{"conid": 1, "exchange": "NYSE"}]
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 1, "31": "100.0", "6509": "R"}]
+    text, fig = toolkit.execute(
+        "get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"}
+    )
+    toolkit._client.get_market_snapshot.assert_called_once_with([1])
+
+
+def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit):
+    """CASH must resolve via /iserver/currency/pairs, not /iserver/secdef/search.
+
+    secType=CASH is not in the documented STK/IND/BOND list for secdef/search.
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+    """
+    toolkit._client.get_currency_pairs.return_value = [
+        {"symbol": "EUR.USD", "conid": 12087792, "ccyPair": "USD"},
+        {"symbol": "EUR.JPY", "conid": 28201823, "ccyPair": "JPY"},
+    ]
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 12087792, "31": "1.0850", "6509": "R"}]
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["EUR.USD"], "sec_type": "CASH"})
+    toolkit._client.get_currency_pairs.assert_called_once_with("EUR")
+    toolkit._client.search_contract.assert_not_called()
+    toolkit._client.get_market_snapshot.assert_called_once_with([12087792])
+    assert "1.0850" in text
+
+
+def test_execute_get_market_snapshot_cash_invalid_format_rejected(toolkit):
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["EURUSD"], "sec_type": "CASH"})
+    assert "Could not resolve" in text
+    toolkit._client.get_currency_pairs.assert_not_called()
+    toolkit._client.get_market_snapshot.assert_not_called()
+
+
+def test_execute_get_market_snapshot_cash_pair_not_found(toolkit):
+    toolkit._client.get_currency_pairs.return_value = [
+        {"symbol": "EUR.JPY", "conid": 28201823, "ccyPair": "JPY"},
+    ]
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["EUR.USD"], "sec_type": "CASH"})
+    assert "Could not resolve" in text
+    toolkit._client.get_market_snapshot.assert_not_called()
+
+
 def test_execute_get_live_orders_filters_filled(toolkit):
     # The client-layer filtering is already tested in test_client.py;
     # this confirms the tool correctly labels an empty working set.

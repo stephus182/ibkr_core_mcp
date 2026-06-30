@@ -470,9 +470,22 @@ TOOL_DEFINITIONS = [
             "Get market data snapshot for one or more symbols: last price, bid, ask, "
             "high, low, change, change%, and volume. Each quote includes _data_status "
             "('Live (Real-Time)' when subscribed, 'Delayed (15–20 min)' when not) and "
-            "_quote_time (timestamp in ET). Always report both to the user — never present "
-            "a price without stating whether it is live or delayed and its timestamp. "
-            "Use sec_type='FUT' for futures, 'OPT' for options (default: STK)."
+            "_quote_time (timestamp in ET). Always report both to the user.\n\n"
+            "Resolution by sec_type:\n"
+            "- STK (default): equities and ETFs. For international listings, pass exchange "
+            "  to select the right venue (e.g. exchange='AMS' for ASML on Euronext Amsterdam, "
+            "  exchange='ETR' for SAP on Xetra, exchange='TSE' for Toyota on Tokyo SE, "
+            "  exchange='HKEX' for HSBC on HK). Without exchange, the first result is used.\n"
+            "- IND: indices (SPX, NDX, DAX, FTSE, N225). Use exchange for non-US indices.\n"
+            "- FUT: futures by root symbol. Front-month contract is selected automatically "
+            "  from /trsrv/futures (e.g. ES, NQ, CL, GC, ZC, ZN, 6E). Do NOT pass expiry "
+            "  in the symbol — use root symbol only.\n"
+            "- CASH: FX spot pairs. Pass the pair as 'EUR.USD', 'USD.JPY', 'GBP.USD', etc. "
+            "  (base.quote format). IBKR routes FX via IDEALPRO.\n"
+            "- BOND: bonds via IBKR bond search. Specify CUSIP or issuer symbol.\n"
+            "- OPT: options require a prior search_contract + secdef/info flow to resolve "
+            "  the option conid. Call search_contract first, then get_market_snapshot with "
+            "  the resolved conid directly (not ticker)."
         ),
         "input_schema": {
             "type": "object",
@@ -480,11 +493,25 @@ TOOL_DEFINITIONS = [
                 "symbols": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Ticker symbols, e.g. ['AAPL', 'GE', 'EEM', 'ES']",
+                    "description": (
+                        "Ticker symbols. For FX: 'EUR.USD' format. "
+                        "For FUT: root symbol only ('ES', not 'ESH25'). "
+                        "For international STK: ticker as listed on the exchange."
+                    ),
                 },
                 "sec_type": {
                     "type": "string",
-                    "description": "Security type: STK (default), FUT, OPT, FX, BOND",
+                    "description": "Security type: STK (default), IND, FUT, CASH, BOND",
+                },
+                "exchange": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Filter to a specific exchange listing for STK/IND. "
+                        "IBKR exchange codes: AMS (Euronext Amsterdam), ETR (Xetra), "
+                        "LSE (London), TSE (Tokyo), HKEX (Hong Kong), ASX (Sydney), "
+                        "TSX (Toronto), BVSP (Brazil), NSE (India). "
+                        "Omit for US equities (SMART routing used)."
+                    ),
                 },
             },
             "required": ["symbols"],
@@ -1863,43 +1890,119 @@ class ClaudeToolkit:
             return f"No futures found for {', '.join(symbols)}.", None
         return json.dumps(futures, indent=2), None
 
+    def _resolve_snapshot_conid(
+        self, sym: str, sec_type: str, exchange: str | None
+    ) -> tuple[int, str | None]:
+        """Resolve one symbol to a conid using the correct endpoint for its sec_type.
+
+        /iserver/secdef/search (used by search_contract) only documents support for
+        STK, IND, BOND — NOT FUT or CASH. Using it for those types silently returns
+        wrong or empty results. This dispatches to the documented endpoint per type:
+
+        - STK/IND/BOND: /iserver/secdef/search (search_contract). If exchange is given,
+          filters results to that listing; otherwise takes the first match.
+        - FUT: /trsrv/futures (get_futures) — returns all non-expired contracts for the
+          root symbol; picks the lowest expirationDate (front month).
+        - CASH: /iserver/currency/pairs (get_currency_pairs) — symbol must be 'BASE.QUOTE'
+          (e.g. 'EUR.USD'). Queries pairs for the base currency, then matches the
+          'BASE.QUOTE' symbol exactly. NOT resolved via /iserver/secdef/search — CASH
+          is not in that endpoint's documented secType list.
+
+        Returns (conid, None) on success or (0, error_message) on failure.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ (trsrv/futures)
+                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+        """
+        if sec_type == "FUT":
+            futures = self._client.get_futures([sym])
+            if not futures:
+                return 0, f"No futures contracts found for root symbol {sym}."
+            try:
+                front = min(futures, key=lambda f: int(f.get("expirationDate") or 0))
+            except (ValueError, TypeError):
+                front = futures[0]
+            conid = front.get("conid")
+            try:
+                conid_int = int(conid) if conid else 0
+            except (ValueError, TypeError):
+                conid_int = 0
+            if conid_int <= 0:
+                return 0, f"Futures contract for {sym} found but conid missing."
+            return conid_int, None
+
+        if sec_type == "CASH":
+            if "." not in sym:
+                return 0, f"FX pair {sym} must be in 'BASE.QUOTE' format (e.g. 'EUR.USD')."
+            base, _, quote = sym.partition(".")
+            pairs = self._client.get_currency_pairs(base)
+            if not pairs:
+                return 0, f"No FX pairs found for base currency {base}."
+            match = next((p for p in pairs if str(p.get("symbol", "")).upper() == sym), None)
+            if not match:
+                return 0, f"FX pair {sym} not found among {base} pairs."
+            conid = match.get("conid")
+            try:
+                conid_int = int(conid) if conid else 0
+            except (ValueError, TypeError):
+                conid_int = 0
+            if conid_int <= 0:
+                return 0, f"FX pair {sym} found but conid missing."
+            return conid_int, None
+
+        contracts = self._client.search_contract(sym, sec_type)
+        if not contracts:
+            return 0, f"Could not resolve conid for {sym} (as {sec_type})."
+
+        if exchange:
+            matches = [
+                c for c in contracts
+                if str(c.get("exchange", "")).upper() == exchange.upper()
+            ]
+            contracts = matches or contracts
+
+        conid = contracts[0].get("conid")
+        try:
+            conid_int = int(conid) if conid else 0
+        except (ValueError, TypeError):
+            conid_int = 0
+        if conid_int <= 0:
+            return 0, f"Contract found for {sym} but conid missing."
+        return conid_int, None
+
     def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return live market data snapshot for one or more symbols.
 
         Each quote is enriched with:
           _symbol       — ticker resolved from conid
           _data_status  — 'Live (Real-Time)' when subscribed; 'Delayed (15–20 min)' or
-                          'Delayed (no real-time subscription)' when not subscribed.
+                          'Not Subscribed (no data — neither live nor delayed)' otherwise.
                           Derived from field 6509 (Market Data Availability, first char).
           _quote_time   — timestamp of the quote in ET (from field _updated, ms epoch).
                           Always report this to the user alongside price data.
 
         Price fields: 31=last, 84=bid, 86=ask, 70=high, 71=low, 82=change, 83=change%, 87=volume.
-        sec_type must be 'FUT', 'OPT', 'FX', etc. for non-equity instruments; defaults to STK.
+
+        Contract resolution is dispatched per sec_type by _resolve_snapshot_conid() —
+        STK/IND/BOND via /iserver/secdef/search, FUT via /trsrv/futures (front month),
+        CASH via /iserver/currency/pairs with 'BASE.QUOTE' symbol format.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
                 https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
+        exchange = inputs.get("exchange")
         conids: list[int] = []
         conid_to_sym: dict[int, str] = {}
         failed: list[str] = []
         for sym in symbols:
-            contracts = self._client.search_contract(sym, sec_type)
-            if contracts:
-                conid = contracts[0].get("conid")
-                try:
-                    conid_int = int(conid) if conid else 0
-                except (ValueError, TypeError):
-                    conid_int = 0
-                if conid_int > 0:
-                    conids.append(conid_int)
-                    conid_to_sym[conid_int] = sym
-                else:
-                    failed.append(sym)
-            else:
+            conid_int, err = self._resolve_snapshot_conid(sym, sec_type, exchange)
+            if err:
                 failed.append(sym)
+            else:
+                conids.append(conid_int)
+                conid_to_sym[conid_int] = sym
         if not conids:
             return f"Could not resolve conids for: {', '.join(symbols)}.", None
 

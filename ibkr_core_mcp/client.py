@@ -395,9 +395,13 @@ class IBKRClient:
         """Resolve a symbol to one or more contracts. Returns [] if no match.
 
         Returns [{"conid": ..., "symbol": ..., "companyName": ..., "exchange": ..., "currency": ...}].
-        sec_type: "STK", "FUT", "OPT", "FX", "IND", "CFD", "BOND".
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        sec_type: officially documented valid values are "STK", "IND", "BOND" only.
+        FUT and CASH (FX) are NOT supported here — use get_futures() (/trsrv/futures)
+        and get_currency_pairs() (/iserver/currency/pairs) respectively. OPT requires
+        the separate secdef/search -> secdef/info flow (see get_secdef_info()).
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
         Endpoint: GET /iserver/secdef/search
         """
         data = self._get("/iserver/secdef/search", {"symbol": symbol, "secType": sec_type})
@@ -510,13 +514,27 @@ class IBKRClient:
         return data if isinstance(data, list) else []
 
     def get_currency_pairs(self, currency: str) -> list[dict[str, Any]]:
-        """Available FX pairs for a base currency. Returns [] if response is not a list.
+        """Available FX pairs for a target currency: [{symbol, conid, ccyPair}, ...].
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
-        Endpoint: GET /iserver/secdef/currency
+        Response is keyed by the requested currency, e.g. {"USD": [{"symbol": "USD.SGD",
+        "conid": 37928772, "ccyPair": "SGD"}, ...]} — flattened to a list here, same
+        dict-flattening behaviour as get_futures()/get_stocks().
+
+        Corrected 2026-06-30: previously called the undocumented /iserver/secdef/currency
+        (always returned [] — response is a dict, not a list, so the old isinstance(list)
+        check silently discarded every result). /iserver/secdef/search also does not
+        document CASH as a valid secType (only STK, IND, BOND) — this is the only
+        documented FX resolution path.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+        Endpoint: GET /iserver/currency/pairs
         """
-        data = self._get("/iserver/secdef/currency", {"currency": currency})
-        return data if isinstance(data, list) else []
+        data = self._get("/iserver/currency/pairs", {"currency": currency})
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [c for contracts in data.values() for c in (contracts or [])]
+        return []
 
     def get_contract_rules(self, conid: int, is_buy: bool = True) -> dict[str, Any]:
         """Order rules for a contract: min tick, valid order types, size constraints.

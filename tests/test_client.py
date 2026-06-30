@@ -312,6 +312,36 @@ def test_get_futures_handles_dict_response(client):
     assert result[0]["conid"] == 495512557
 
 
+def test_get_currency_pairs_handles_dict_response(client):
+    """IBKR /iserver/currency/pairs returns {"USD": [{symbol, conid, ccyPair}]}.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+    """
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "USD": [
+            {"symbol": "USD.SGD", "conid": 37928772, "ccyPair": "SGD"},
+            {"symbol": "USD.JPY", "conid": 15016062, "ccyPair": "JPY"},
+        ],
+    }
+    with patch.object(client._session, "get", return_value=mock_resp) as mock_get:
+        result = client.get_currency_pairs("USD")
+    assert len(result) == 2
+    assert {c["symbol"] for c in result} == {"USD.SGD", "USD.JPY"}
+    called_url = mock_get.call_args[0][0]
+    assert "/iserver/currency/pairs" in called_url
+
+
+def test_get_currency_pairs_returns_empty_on_unexpected_type(client):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = "unexpected"
+    with patch.object(client._session, "get", return_value=mock_resp):
+        result = client.get_currency_pairs("USD")
+    assert result == []
+
+
 # ── get_live_orders filtering ─────────────────────────────────────────────────
 
 def _mock_orders_response(client, orders):
