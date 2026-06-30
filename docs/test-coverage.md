@@ -1,7 +1,9 @@
 # Test Coverage — ibkr_core_mcp
 
-**386 tests · 72% line coverage (non-integration)**
-Run: `pytest -m "not integration"` · Full suite: `pytest`
+**500 unit tests · 61 integration tests · 72% line coverage (non-integration)**
+Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
+
+Live integration test log: [`docs/live-test-log.md`](live-test-log.md)
 
 ---
 

@@ -2136,7 +2136,7 @@ class ClaudeToolkit:
         if err:
             return err, None
         alert_id = inputs["alert_id"]
-        existing = self._client.get_alert(account_id, alert_id)
+        existing = self._client.get_alert(alert_id)
         if not existing:
             return f"Alert {alert_id} not found.", None
         # Apply only the fields provided — leave everything else unchanged

@@ -8,7 +8,12 @@ import pytest
 def client(mock_config):
     from ibkr_core_mcp.auth import NoAuth
     from ibkr_core_mcp.client import IBKRClient
-    return IBKRClient(mock_config, auth=NoAuth())
+    c = IBKRClient(mock_config, auth=NoAuth())
+    # Pre-mark accounts as initialized so existing order/auth tests below don't need
+    # to also mock the /iserver/accounts prerequisite call. Tests for
+    # _ensure_accounts_initialized() itself reset this flag explicitly.
+    c._accounts_initialized = True
+    return c
 
 
 def test_ping_returns_false_on_401(client):
@@ -50,6 +55,82 @@ def test_get_market_history_passes_params(client):
         client.get_market_history(265598, period="1Y", bar="1d")
     call_kwargs = mock_get.call_args
     assert "conid=265598" in str(call_kwargs) or "265598" in str(call_kwargs)
+
+
+def test_get_alert_calls_correct_endpoint(client):
+    """Per official docs (cpapi-v1#get-alert), the endpoint is not account-scoped
+    in the URL and requires type=Q — unlike the other alert endpoints, which are
+    all /iserver/account/{accountId}/alert...
+    """
+    with patch.object(client._session, "get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"orderId": 9876543210, "alertName": "AAPL >= 200"}
+        mock_get.return_value = mock_resp
+        result = client.get_alert("9876543210")
+    url = mock_get.call_args[0][0]
+    params = mock_get.call_args.kwargs.get("params")
+    assert url == f"{client._base}/iserver/account/alert/9876543210"
+    assert params == {"type": "Q"}
+    assert result["alertName"] == "AAPL >= 200"
+
+
+# ── /iserver/accounts prerequisite (get_brokerage_accounts / _ensure_accounts_initialized) ──
+
+def test_get_brokerage_accounts_calls_correct_endpoint(client):
+    with patch.object(client._session, "get") as mock_get:
+        mock_get.return_value = _make_ok_response({"accounts": ["U1234567"], "selectedAccount": "U1234567"})
+        result = client.get_brokerage_accounts()
+    url = mock_get.call_args[0][0]
+    assert url == f"{client._base}/iserver/accounts"
+    assert result["selectedAccount"] == "U1234567"
+
+
+def test_ensure_accounts_initialized_calls_once(client):
+    client._accounts_initialized = False
+    with patch.object(client._session, "get") as mock_get:
+        mock_get.return_value = _make_ok_response({"accounts": ["U1234567"]})
+        client._ensure_accounts_initialized()
+        client._ensure_accounts_initialized()
+    mock_get.assert_called_once()
+    assert client._accounts_initialized is True
+
+
+def test_get_live_orders_initializes_accounts_first(client):
+    client._accounts_initialized = False
+    with patch.object(client._session, "get") as mock_get:
+        mock_get.return_value = _make_ok_response({"orders": []})
+        client.get_live_orders()
+    first_call_url = mock_get.call_args_list[0][0][0]
+    assert first_call_url == f"{client._base}/iserver/accounts"
+    assert client._accounts_initialized is True
+
+
+def test_place_order_initializes_accounts_before_touch_id(client):
+    client._accounts_initialized = False
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
+         patch.object(client._session, "get") as mock_get, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_get.return_value = _make_ok_response({"accounts": ["U1234567"]})
+        mock_post.return_value = _make_ok_response([{"orderId": "1"}])
+        client.place_order("U1234567", order)
+    mock_get.assert_called_once_with(f"{client._base}/iserver/accounts", params=None, timeout=30)
+    mock_tid.assert_called_once()
+    assert client._accounts_initialized is True
+
+
+def test_get_order_preview_initializes_accounts(client):
+    client._accounts_initialized = False
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
+    with patch.object(client._session, "get") as mock_get, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_get.return_value = _make_ok_response({"accounts": ["U1234567"]})
+        mock_post.return_value = _make_ok_response({"equity": 5000})
+        client.get_order_preview("U1234567", order)
+    mock_get.assert_called_once()
+    assert client._accounts_initialized is True
 
 
 # Integration tests — require live gateway

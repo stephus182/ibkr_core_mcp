@@ -22,24 +22,38 @@ Any other `IBKR_GATEWAY_URL` raises `ConfigError` at construction time.
 
 ### `ping() -> bool`
 Quick connectivity check. Returns `True` if the gateway is reachable and authenticated.
-Uses a 5-second timeout; never raises — returns `False` on any error.
+Uses a 5-second timeout; never raises — returns `False` on any error. This is the method
+`ConnectivityChecker` polls every 60s in production.
+**Endpoint:** `GET /iserver/auth/status` — official docs list this endpoint as `POST`
+(see Note below); GET is production-verified, not changed without a live test.
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-status
 
 ### `get_auth_status() -> dict`
 Full authentication status including `authenticated`, `competing`, `connected` fields.
-**Endpoint:** `GET /iserver/auth/status`
+No callers elsewhere in the codebase as of 2026-06-30.
+**Endpoint:** `GET /iserver/auth/status` — same documented-vs-implemented HTTP method
+discrepancy as `ping()` (docs say `POST`); see ping()'s entry above.
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-status
 
 ### `tickle() -> bool`
 Keep the session alive. Call every few minutes during idle periods.
 Returns `True` on HTTP 200. Never raises.
 **Endpoint:** `POST /tickle`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#tickle
 
 ### `reauthenticate() -> dict`
 Request a new authentication session. Use when `get_auth_status()` shows `authenticated=false`.
-**Endpoint:** `POST /iserver/reauthenticate`
+**Officially deprecated** — docs direct all reauthentication to `POST /iserver/auth/ssodh/init`
+instead, which is not implemented here (it's invoked by the browser-based Gateway login flow,
+not application code). Never call proactively — it terminates any active authenticated session, including fresh logins.
+**Endpoint:** `POST /iserver/reauthenticate` (Deprecated)
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#reauthenticate
 
 ### `validate_sso() -> dict`
-Validate the SSO token. Used after initial login to confirm the session is active.
-**Endpoint:** `POST /sso/validate`
+Validate the SSO token. Used after initial login to confirm the session is active. No callers
+elsewhere in the codebase as of 2026-06-30.
+**Endpoint:** `GET /sso/validate`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sso-validate
 
 ---
 
@@ -58,9 +72,9 @@ For requests that may exceed this, use `get_market_history_paginated()`.
 
 **Returns:** `{"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}` — `t` is UNIX milliseconds UTC.
 
-**Rate limit:** 5 concurrent requests. Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
-
+**Rate limit:** 5 concurrent requests.
 **Endpoint:** `GET /iserver/marketdata/history`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
 
 ---
 
@@ -78,6 +92,7 @@ today in chunks, then merges and deduplicates.
 | `1h` | 197 calendar days | ~128 days × 6.5h |
 
 **Endpoint:** `GET /iserver/marketdata/history` (chunked via startTime)
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
 
 ---
 
@@ -96,40 +111,32 @@ Live quotes for one or more contracts. Returns `[]` if the response is not a lis
 are normal — retry after ≈1s.
 
 **Endpoint:** `GET /iserver/marketdata/snapshot`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
 
 ---
 
-### `get_md_snapshot(conids, fields) -> list[dict]`
-Alternative snapshot endpoint (`/md/snapshot`). Same semantics as `get_market_snapshot()`.
-Use when `/iserver/marketdata/snapshot` returns empty.
+### `get_regulatory_snapshot(conid) -> dict`
+Regulatory (NBBO-grade) market snapshot for a **single** contract. Responds synchronously
+(no subscription warm-up needed).
 
-**Endpoint:** `GET /md/snapshot`
+**WARNING: incurs a fee of $0.01 USD per call** unless the account already holds a
+direct exchange market data subscription. Applies to live and paper accounts.
+**Do NOT use as a fallback for `get_market_snapshot()`** — that endpoint is free.
+Use this only when compliance-grade NBBO data is specifically required.
+**Endpoint:** `GET /md/regsnapshot` — query param: `conid` (single int, as string)
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#regulatory-snapshot
 
 ---
-
-### `get_market_data_fields() -> dict`
-Available field codes and their human-readable names.
-**Endpoint:** `GET /iserver/marketdata/fields`
-
-### `get_market_data_periods() -> dict`
-Valid period strings for history requests.
-**Endpoint:** `GET /iserver/marketdata/periods`
-
-### `get_market_data_bars() -> dict`
-Valid bar size strings for history requests.
-**Endpoint:** `GET /iserver/marketdata/bars`
-
-### `get_market_data_availability() -> dict`
-Market data subscription availability for the account.
-**Endpoint:** `GET /iserver/marketdata/availability`
 
 ### `unsubscribe_market_data(conid) -> dict`
-Unsubscribe a specific contract from streaming market data.
+Cancel streaming market data for a single contract.
 **Endpoint:** `POST /iserver/marketdata/unsubscribe`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-unsubscribe-single
 
 ### `unsubscribe_all_market_data() -> dict`
-Unsubscribe all active streaming market data subscriptions.
-**Endpoint:** `POST /iserver/marketdata/unsubscribeall`
+Cancel all active streaming market data subscriptions. No parameters.
+**Endpoint:** `GET /iserver/marketdata/unsubscribeall`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-unsubscribe-all
 
 ---
 
@@ -159,22 +166,27 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-se
 ### `get_contract_info(conid) -> dict`
 Full contract metadata: exchange, currency, primary exchange, trading class, multiplier, etc.
 **Endpoint:** `GET /iserver/contract/{conid}/info`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#info-conid-contract
 
 ### `get_contract_info_and_rules(conid) -> dict`
 Contract info plus trading rules (min tick, order types, etc.).
 **Endpoint:** `GET /iserver/contract/{conid}/info-and-rules`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#info-rules-contract
 
 ### `get_contract_algos(conid) -> list[dict]`
 Available algorithmic order types for a contract.
 **Endpoint:** `GET /iserver/contract/{conid}/algos`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#algo-conid-contract
 
 ### `get_secdef_info(conid) -> dict`
 Security definition info (type, symbol, currency, exchange, listing exchange).
 **Endpoint:** `GET /iserver/secdef/info`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#secdef-info-contract
 
 ### `get_secdef(conids) -> list[dict]`
 Batch security definitions for multiple conids.
 **Endpoint:** `GET /trsrv/secdef`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-conid-contract
 
 ---
 
@@ -193,8 +205,16 @@ Available strike prices for an option chain.
 ---
 
 ### `get_option_chain(symbol, exchange, currency) -> dict`
-Full options chain — all expirations, strikes, conids.
-**Endpoint:** `GET /trsrv/secdef/chains`
+**WARNING: `/trsrv/secdef/chains` does not exist in official IBKR docs (verified 2026-06-30).
+This method currently raises `IBKRAPIError` (404) on every call.**
+
+The documented multi-step flow for option chains:
+1. `search_contract(symbol, "STK")` → get underlying conid (required before step 2)
+2. `get_option_strikes(conid, "OPT", month, exchange)` → strikes per expiry month
+Available expiry months are returned in the secdef/search response.
+
+**Endpoint:** `GET /trsrv/secdef/chains` (DOES NOT EXIST)
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search-symbol-contract
 
 ### `get_bond_filters(symbol, issue_id) -> dict`
 Available filter criteria for bond search.
@@ -218,8 +238,9 @@ Stock contracts for symbols. Same dict-flattening behaviour as `get_futures()`.
 
 ---
 
-### `get_trading_schedule(asset_class, symbol, exchange, exchange_filter) -> dict`
+### `get_trading_schedule(asset_class, symbol, exchange, exchange_filter) -> list[dict]`
 Trading hours, sessions, and timezone for a symbol/exchange.
+Returns a list of schedule objects (verified live 2026-06-30 — returns `list`, not `dict`).
 **Endpoint:** `GET /trsrv/secdef/schedule`
 
 ### `get_currency_pairs(currency) -> list[dict]`
@@ -394,6 +415,14 @@ Enable/disable a notification delivery channel.
 ### `get_alerts(account_id) -> list[dict]`
 All price alerts configured on the account. The `orderId` field is the alert ID.
 **Endpoint:** `GET /iserver/account/{accountId}/alerts`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
+
+### `get_alert(alert_id) -> dict`
+Full details for a specific alert by ID. **Not** account-scoped in the URL — unlike
+every other alert endpoint below, this one takes only the alert ID and a required
+`type=Q` query parameter; IBKR resolves the alert from the session's logged-in account.
+**Endpoint:** `GET /iserver/account/alert/{order_id}?type=Q`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert
 
 ### `create_alert(account_id, alert) -> dict`
 Create a price alert. The `alert` dict must match the IBKR alert payload schema:
@@ -423,16 +452,19 @@ Use `ClaudeToolkit.execute("create_price_alert", ...)` instead — it resolves c
 exchange automatically.
 
 **Endpoint:** `POST /iserver/account/{accountId}/alert`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
 
 ---
 
 ### `delete_alert(account_id, alert_id) -> dict`
-Delete an alert permanently.
+Delete an alert permanently. If `alert_id` is `0`, deletes all alerts.
 **Endpoint:** `DELETE /iserver/account/{accountId}/alert/{alertId}`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#delete-alert
 
 ### `activate_alert(account_id, alert_id, activate) -> dict`
 Toggle alert on/off. `activate=True` enables; `activate=False` disables.
 **Endpoint:** `POST /iserver/account/{accountId}/alert/activate`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#activate-alert
 
 ---
 
@@ -440,19 +472,23 @@ Toggle alert on/off. `activate=True` enables; `activate=False` disables.
 
 ### `get_watchlists() -> list[dict]`
 All watchlists for the account.
-**Endpoint:** `GET /iserver/account/watchlists`
+**Endpoint:** `GET /iserver/watchlists` — query param `SC=USER_WATCHLIST`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#all-watchlists
 
 ### `get_watchlist(watchlist_id) -> dict`
-Contents of a specific watchlist.
-**Endpoint:** `GET /iserver/account/watchlist/{watchlistId}`
+Contents of a specific watchlist. `watchlist_id` is passed as query param `id`.
+**Endpoint:** `GET /iserver/watchlist`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#watchlist-info
 
 ### `create_watchlist(name, rows) -> dict`
 Create a new watchlist. `rows` is a list of `{"C": conid}` objects.
-**Endpoint:** `POST /iserver/account/watchlist`
+**Endpoint:** `POST /iserver/watchlist`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-watchlist
 
 ### `delete_watchlist(watchlist_id) -> dict`
-Delete a watchlist.
-**Endpoint:** `DELETE /iserver/account/watchlist/{watchlistId}`
+Delete a watchlist. `watchlist_id` passed as query param `id`.
+**Endpoint:** `DELETE /iserver/watchlist`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#delete-watchlist
 
 ---
 
@@ -508,18 +544,32 @@ Whatif preview — cost, commission, margin impact. No order placed, no security
 ### `get_pnl() -> dict`
 Real-time partitioned P&L — daily, unrealized, realized — across all positions.
 **Endpoint:** `GET /iserver/account/pnl/partitioned`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
 
 ### `get_brokerage_accounts() -> dict`
-All brokerage accounts (alias for `GET /portfolio/accounts` — same data as `get_accounts()`).
-**Endpoint:** `GET /portfolio/accounts`
+List of accounts the user has trading access to, their aliases, the currently selected
+account, and per-account capability flags (`supportsCashQty`, `supportsFractions`,
+`allowCustomerTime`, etc). **Officially documented as required before modifying an order
+or querying open orders.** `IBKRClient._ensure_accounts_initialized()` calls this once per
+client instance (cached) and runs automatically at the top of every order read/write
+method (`get_live_orders`, `get_order_status`, `place_order`, `modify_order`,
+`cancel_order`, `reply_order`, `get_order_preview`) — callers do not need to call this
+directly under normal use.
+
+**Returns:** `dict` with keys: `accounts` (list of account ID strings), `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles`, `selectedAccount`. Verified live 2026-06-30 — NOT a bare list.
+
+**Endpoint:** `GET /iserver/accounts`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-brokerage-accounts
 
 ### `switch_account(account_id) -> dict`
 Switch the active account (for advisors / family accounts).
 **Endpoint:** `POST /iserver/account`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#switch-account
 
 ### `logout() -> dict`
 End the current session.
 **Endpoint:** `POST /logout`
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#logout
 
 ---
 
