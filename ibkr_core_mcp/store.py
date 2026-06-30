@@ -372,11 +372,16 @@ class SQLiteStore:
             from pandas import Timestamp
             _cal = ec.get_calendar("XNYS")
             last_trading_day = _cal.previous_close(Timestamp.now(tz="UTC")).date()
-            stale = newest < last_trading_day
+            # Flex publishes yesterday's trades today — newest == yesterday is always normal.
+            # Only flag stale when data is 2+ trading days behind (genuine gap, not Flex lag).
+            penultimate_trading_day = _cal.previous_close(
+                Timestamp(last_trading_day.isoformat(), tz="UTC")
+            ).date()
+            stale = newest < penultimate_trading_day
         except Exception:
-            # Fallback: stale if missing more than 1 calendar day
+            # Fallback: stale if missing more than 2 calendar days (covers weekends)
             last_trading_day = None
-            stale = days_since_newest > 1
+            stale = days_since_newest > 2
 
         return {
             "oldest": dates[0].isoformat(),
