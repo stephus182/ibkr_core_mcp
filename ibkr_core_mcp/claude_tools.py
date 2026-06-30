@@ -23,15 +23,22 @@ log = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
-# Subscribed (R) = live real-time; all others = delayed or unavailable.
 # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
 _MD_AVAILABILITY: dict[str, str] = {
     "R": "Live (Real-Time)",
     "D": "Delayed (15–20 min)",
-    "Z": "Frozen (last close)",
-    "Y": "Frozen Delayed",
-    "N": "Delayed (no real-time subscription)",
-    "O": "Unavailable (Market Data API Agreement not completed)",
+    "Z": "Frozen (last close, real-time)",
+    "Y": "Frozen Delayed (last close, delayed)",
+    # N = no data at all — neither real-time nor delayed. Per IBKR docs:
+    # "User does not have the required market data subscription(s) to relay back
+    #  either real time or delayed data."
+    # Possible causes: exchange-specific subscription missing (NYSE and NYSE Arca
+    # are separate from NASDAQ even within a US equities bundle), wrong conid resolved,
+    # or the conid's primary exchange differs from the subscribed venue.
+    "N": "Not Subscribed (no data — neither live nor delayed)",
+    # O = Market Data API Agreement not completed (annual IBKR requirement).
+    # Would affect all symbols, not just specific ones.
+    "O": "Not Available (Market Data API Agreement not completed — see Account Management)",
 }
 
 
@@ -1911,8 +1918,8 @@ class ClaudeToolkit:
             return "No market snapshot data returned.", None
 
         # Enrich each item with _symbol, _data_status, and _quote_time.
-        # These must be surfaced to the user for every quote — live vs delayed is critical.
-        not_subscribed: list[str] = []
+        # Always surface all three to the user — live vs delayed and timestamp are mandatory.
+        no_data: list[str] = []
         enriched: list[dict[str, Any]] = []
         for item in snapshot:
             cid = item.get("conid")
@@ -1931,9 +1938,9 @@ class ClaudeToolkit:
             else:
                 quote_time = "unavailable"
 
-            # N = no real-time subscription (falls back to delayed) or truly no data
+            # N = no data (neither live nor delayed). Track for diagnostic note.
             if first_char == "N" or (not avail and not (item.get("31") or item.get("84") or item.get("86"))):
-                not_subscribed.append(sym)
+                no_data.append(f"{sym} (conid={cid})")
 
             enriched.append({"_symbol": sym, "_data_status": data_status, "_quote_time": quote_time, **item})
 
@@ -1941,10 +1948,15 @@ class ClaudeToolkit:
         notes = []
         if failed:
             notes.append(f"Could not resolve conid for: {', '.join(failed)} (as {sec_type}).")
-        if not_subscribed:
+        if no_data:
             notes.append(
-                f"No real-time subscription for: {', '.join(not_subscribed)} — showing delayed data. "
-                "To enable real-time: Account Management → Settings → Market Data Subscriptions. "
+                f"IBKR returned 'Not Subscribed' (6509=N) for: {', '.join(no_data)}. "
+                "Per IBKR docs this means no data — neither real-time nor delayed — for these contracts. "
+                "Possible causes: (1) exchange-specific subscription missing — NYSE and NYSE Arca are "
+                "separate subscriptions from NASDAQ even within a US equities bundle; "
+                "(2) wrong conid resolved — verify the conid shown above matches the expected contract; "
+                "(3) the Market Data API Agreement may need renewal. "
+                "Check: Account Management → Settings → Market Data Subscriptions. "
                 "Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability"
             )
         if notes:
