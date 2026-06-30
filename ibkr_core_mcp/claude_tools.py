@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import pandas as pd
@@ -18,6 +19,20 @@ from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.store import SQLiteStore
 
 log = logging.getLogger(__name__)
+
+_ET = ZoneInfo("America/New_York")
+
+# Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
+# Subscribed (R) = live real-time; all others = delayed or unavailable.
+# Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
+_MD_AVAILABILITY: dict[str, str] = {
+    "R": "Live (Real-Time)",
+    "D": "Delayed (15–20 min)",
+    "Z": "Frozen (last close)",
+    "Y": "Frozen Delayed",
+    "N": "Delayed (no real-time subscription)",
+    "O": "Unavailable (Market Data API Agreement not completed)",
+}
 
 
 def _TODAY() -> str:
@@ -445,12 +460,12 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_market_snapshot",
         "description": (
-            "Get live market data snapshot for one or more symbols: last price, bid, ask, "
-            "high, low, change, change%, and volume. Also returns field 6509 (Market Data "
-            "Availability): R=RealTime, D=Delayed (15–20 min), N=NotSubscribed. "
-            "When 6509 starts with 'N', the account has no market data subscription for that "
-            "exchange — each exchange (NYSE, NASDAQ, NYSE Arca, CME, etc.) requires a separate "
-            "IBKR subscription. Use sec_type='FUT' for futures, 'OPT' for options (default: STK)."
+            "Get market data snapshot for one or more symbols: last price, bid, ask, "
+            "high, low, change, change%, and volume. Each quote includes _data_status "
+            "('Live (Real-Time)' when subscribed, 'Delayed (15–20 min)' when not) and "
+            "_quote_time (timestamp in ET). Always report both to the user — never present "
+            "a price without stating whether it is live or delayed and its timestamp. "
+            "Use sec_type='FUT' for futures, 'OPT' for options (default: STK)."
         ),
         "input_schema": {
             "type": "object",
@@ -1844,14 +1859,19 @@ class ClaudeToolkit:
     def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return live market data snapshot for one or more symbols.
 
-        Returns: last, bid, ask, high, low, change, change%, volume, and field 6509
-        (Market Data Availability). Field 6509 first char: R=RealTime, D=Delayed,
-        N=NotSubscribed, Z=Frozen. 'N' means the account has no market data subscription
-        for that exchange — price fields will be absent regardless of retries.
+        Each quote is enriched with:
+          _symbol       — ticker resolved from conid
+          _data_status  — 'Live (Real-Time)' when subscribed; 'Delayed (15–20 min)' or
+                          'Delayed (no real-time subscription)' when not subscribed.
+                          Derived from field 6509 (Market Data Availability, first char).
+          _quote_time   — timestamp of the quote in ET (from field _updated, ms epoch).
+                          Always report this to the user alongside price data.
 
+        Price fields: 31=last, 84=bid, 86=ask, 70=high, 71=low, 82=change, 83=change%, 87=volume.
         sec_type must be 'FUT', 'OPT', 'FX', etc. for non-equity instruments; defaults to STK.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
+                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
@@ -1879,8 +1899,7 @@ class ClaudeToolkit:
         import time
         snapshot = self._client.get_market_snapshot(conids)
         # First call initializes the iServer subscription but returns no price fields.
-        # If no price data came back, wait 1s and retry once — same warmup pattern as
-        # /iserver/account/orders (two-call). Fields 31=last, 84=bid, 86=ask.
+        # Retry once after 1s — same two-call warmup pattern as /iserver/account/orders.
         # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
         def _has_prices(s: list[dict[str, Any]]) -> bool:
             return any(item.get("31") or item.get("84") or item.get("86") for item in s)
@@ -1891,37 +1910,42 @@ class ClaudeToolkit:
         if not snapshot:
             return "No market snapshot data returned.", None
 
-        # Classify each returned item using field 6509 (Market Data Availability) when present.
-        # 6509 first char: R=RealTime, D=Delayed, N=NotSubscribed, Z=Frozen, Y=FrozenDelayed.
-        # 'N' is authoritative: no market data subscription for that exchange.
-        # Fallback: if 6509 absent and no price fields, also flag as no-data.
-        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
-        not_subscribed = []
-        delayed = []
+        # Enrich each item with _symbol, _data_status, and _quote_time.
+        # These must be surfaced to the user for every quote — live vs delayed is critical.
+        not_subscribed: list[str] = []
+        enriched: list[dict[str, Any]] = []
         for item in snapshot:
-            sym = conid_to_sym.get(item.get("conid"), str(item.get("conid")))
+            cid = item.get("conid")
+            sym = conid_to_sym.get(cid, str(cid))
             avail = str(item.get("6509", ""))
-            has_prices = item.get("31") or item.get("84") or item.get("86")
-            if avail.startswith("N") or (not avail and not has_prices):
-                not_subscribed.append(sym)
-            elif avail.startswith("D"):
-                delayed.append(sym)
+            first_char = avail[0] if avail else ""
+            data_status = _MD_AVAILABILITY.get(first_char, f"Unknown ({avail})")
 
-        result = json.dumps(snapshot, indent=2)
+            updated_ms = item.get("_updated")
+            if updated_ms:
+                try:
+                    dt = datetime.fromtimestamp(int(updated_ms) / 1000, tz=_ET)
+                    quote_time = dt.strftime("%H:%M:%S ET")
+                except Exception:
+                    quote_time = str(updated_ms)
+            else:
+                quote_time = "unavailable"
+
+            # N = no real-time subscription (falls back to delayed) or truly no data
+            if first_char == "N" or (not avail and not (item.get("31") or item.get("84") or item.get("86"))):
+                not_subscribed.append(sym)
+
+            enriched.append({"_symbol": sym, "_data_status": data_status, "_quote_time": quote_time, **item})
+
+        result = json.dumps(enriched, indent=2)
         notes = []
         if failed:
             notes.append(f"Could not resolve conid for: {', '.join(failed)} (as {sec_type}).")
         if not_subscribed:
             notes.append(
-                f"No market data subscription for: {', '.join(not_subscribed)}. "
-                "Each exchange (NYSE, NASDAQ, NYSE Arca, CME, etc.) requires a separate IBKR "
-                "subscription. Check Account Management → Settings → Market Data Subscriptions. "
+                f"No real-time subscription for: {', '.join(not_subscribed)} — showing delayed data. "
+                "To enable real-time: Account Management → Settings → Market Data Subscriptions. "
                 "Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability"
-            )
-        if delayed:
-            notes.append(
-                f"Delayed data (15–20 min) for: {', '.join(delayed)}. "
-                "Real-time subscription not active for that exchange."
             )
         if notes:
             result = "\n".join(notes) + "\n\n" + result
