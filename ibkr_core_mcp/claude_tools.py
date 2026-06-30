@@ -1846,8 +1846,9 @@ class ClaudeToolkit:
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
-        conids = []
-        failed = []
+        conids: list[int] = []
+        conid_to_sym: dict[int, str] = {}
+        failed: list[str] = []
         for sym in symbols:
             contracts = self._client.search_contract(sym, sec_type)
             if contracts:
@@ -1858,6 +1859,7 @@ class ClaudeToolkit:
                     conid_int = 0
                 if conid_int > 0:
                     conids.append(conid_int)
+                    conid_to_sym[conid_int] = sym
                 else:
                     failed.append(sym)
             else:
@@ -1870,6 +1872,7 @@ class ClaudeToolkit:
         # First call initializes the iServer subscription but returns no price fields.
         # If no price data came back, wait 1s and retry once — same warmup pattern as
         # /iserver/account/orders (two-call). Fields 31=last, 84=bid, 86=ask.
+        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
         def _has_prices(s: list[dict[str, Any]]) -> bool:
             return any(item.get("31") or item.get("84") or item.get("86") for item in s)
         if snapshot and not _has_prices(snapshot):
@@ -1878,9 +1881,28 @@ class ClaudeToolkit:
 
         if not snapshot:
             return "No market snapshot data returned.", None
+
+        # Symbols whose conid resolved but still have no price fields after the retry.
+        # Persistent empty prices = no real-time market data subscription for that exchange —
+        # not a warmup issue (warmup resolves on the 2nd call within 1s).
+        no_data = [
+            conid_to_sym.get(item.get("conid"), str(item.get("conid")))
+            for item in snapshot
+            if not (item.get("31") or item.get("84") or item.get("86"))
+        ]
+
         result = json.dumps(snapshot, indent=2)
+        notes = []
         if failed:
-            result = f"Note: could not resolve {', '.join(failed)} as {sec_type} — omitted.\n\n" + result
+            notes.append(f"Could not resolve conid for: {', '.join(failed)} (as {sec_type}).")
+        if no_data:
+            notes.append(
+                f"No price data returned for: {', '.join(no_data)}. "
+                "This usually means no real-time market data subscription for that exchange. "
+                "Check IBKR Account Management → Settings → Market Data Subscriptions."
+            )
+        if notes:
+            result = "\n".join(notes) + "\n\n" + result
         return result, None
 
     def _get_trading_schedule(self, inputs: dict[str, Any]) -> tuple[str, Any]:
