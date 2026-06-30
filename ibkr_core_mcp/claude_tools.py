@@ -445,9 +445,12 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_market_snapshot",
         "description": (
-            "Get live real-time market data snapshot for one or more symbols: "
-            "last price, bid, ask, volume, high, low, and change%. "
-            "Resolves symbols to conids automatically."
+            "Get live market data snapshot for one or more symbols: last price, bid, ask, "
+            "high, low, change, change%, and volume. Also returns field 6509 (Market Data "
+            "Availability): R=RealTime, D=Delayed (15–20 min), N=NotSubscribed. "
+            "When 6509 starts with 'N', the account has no market data subscription for that "
+            "exchange — each exchange (NYSE, NASDAQ, NYSE Arca, CME, etc.) requires a separate "
+            "IBKR subscription. Use sec_type='FUT' for futures, 'OPT' for options (default: STK)."
         ),
         "input_schema": {
             "type": "object",
@@ -455,11 +458,11 @@ TOOL_DEFINITIONS = [
                 "symbols": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of symbols, e.g. ['CL', 'GLD', 'SPY']",
+                    "description": "Ticker symbols, e.g. ['AAPL', 'GE', 'EEM', 'ES']",
                 },
                 "sec_type": {
                     "type": "string",
-                    "description": "Security type for contract lookup: STK, FUT, etc. (default: STK)",
+                    "description": "Security type: STK (default), FUT, OPT, FX, BOND",
                 },
             },
             "required": ["symbols"],
@@ -1839,10 +1842,16 @@ class ClaudeToolkit:
         return json.dumps(futures, indent=2), None
 
     def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return live market data snapshot (bid, ask, last, volume) for one or more symbols.
+        """Return live market data snapshot for one or more symbols.
 
-        sec_type defaults to STK but must be passed as 'FUT', 'OPT', etc. for
-        non-equity instruments to resolve the correct conid.
+        Returns: last, bid, ask, high, low, change, change%, volume, and field 6509
+        (Market Data Availability). Field 6509 first char: R=RealTime, D=Delayed,
+        N=NotSubscribed, Z=Frozen. 'N' means the account has no market data subscription
+        for that exchange — price fields will be absent regardless of retries.
+
+        sec_type must be 'FUT', 'OPT', 'FX', etc. for non-equity instruments; defaults to STK.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
@@ -1882,24 +1891,37 @@ class ClaudeToolkit:
         if not snapshot:
             return "No market snapshot data returned.", None
 
-        # Symbols whose conid resolved but still have no price fields after the retry.
-        # Persistent empty prices = no real-time market data subscription for that exchange —
-        # not a warmup issue (warmup resolves on the 2nd call within 1s).
-        no_data = [
-            conid_to_sym.get(item.get("conid"), str(item.get("conid")))
-            for item in snapshot
-            if not (item.get("31") or item.get("84") or item.get("86"))
-        ]
+        # Classify each returned item using field 6509 (Market Data Availability) when present.
+        # 6509 first char: R=RealTime, D=Delayed, N=NotSubscribed, Z=Frozen, Y=FrozenDelayed.
+        # 'N' is authoritative: no market data subscription for that exchange.
+        # Fallback: if 6509 absent and no price fields, also flag as no-data.
+        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
+        not_subscribed = []
+        delayed = []
+        for item in snapshot:
+            sym = conid_to_sym.get(item.get("conid"), str(item.get("conid")))
+            avail = str(item.get("6509", ""))
+            has_prices = item.get("31") or item.get("84") or item.get("86")
+            if avail.startswith("N") or (not avail and not has_prices):
+                not_subscribed.append(sym)
+            elif avail.startswith("D"):
+                delayed.append(sym)
 
         result = json.dumps(snapshot, indent=2)
         notes = []
         if failed:
             notes.append(f"Could not resolve conid for: {', '.join(failed)} (as {sec_type}).")
-        if no_data:
+        if not_subscribed:
             notes.append(
-                f"No price data returned for: {', '.join(no_data)}. "
-                "This usually means no real-time market data subscription for that exchange. "
-                "Check IBKR Account Management → Settings → Market Data Subscriptions."
+                f"No market data subscription for: {', '.join(not_subscribed)}. "
+                "Each exchange (NYSE, NASDAQ, NYSE Arca, CME, etc.) requires a separate IBKR "
+                "subscription. Check Account Management → Settings → Market Data Subscriptions. "
+                "Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability"
+            )
+        if delayed:
+            notes.append(
+                f"Delayed data (15–20 min) for: {', '.join(delayed)}. "
+                "Real-time subscription not active for that exchange."
             )
         if notes:
             result = "\n".join(notes) + "\n\n" + result

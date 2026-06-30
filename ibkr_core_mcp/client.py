@@ -295,16 +295,35 @@ class IBKRClient:
     def get_market_snapshot(self, conids: list[int], fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Live quote snapshot for one or more contracts. Returns [] if response is not a list.
 
-        Default fields: 31 (last), 55 (symbol), 70 (high), 71 (low), 84 (bid), 86 (ask).
-        IBKR snapshot subscriptions require a warm-up period — empty results on the first
-        call are normal; retry after ~1s.
+        Default fields:
+          31  Last Price    — may be prefixed C (prev close) or H (halted)
+          55  Symbol
+          70  High          — current day high
+          71  Low           — current day low
+          82  Change        — price change vs prior close
+          83  Change %      — change as percentage
+          84  Bid Price     — highest bid
+          86  Ask Price     — lowest ask
+          87  Volume        — day volume (K/M suffix for thousands/millions)
+          6509 Availability — first char: R=RealTime, D=Delayed, N=NotSubscribed,
+                              Z=Frozen, Y=FrozenDelayed, O=API agreement incomplete
 
-        Limits (verified from changelog, December 10, 2025): max 100 conids per request,
-        max 50 fields per request.
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+        Subscription note: field 6509 starting with 'N' = no market data subscription for
+        that exchange. Different exchanges require separate IBKR subscriptions — NYSE, NASDAQ,
+        NYSE Arca (ETFs) are each distinct. Without a subscription, price fields are absent
+        and 6509 returns 'N'. Check Account Management → Settings → Market Data Subscriptions.
+
+        Two-call pattern: /iserver/accounts must be called before the first snapshot request
+        (handled at session init). First snapshot call for a new conid initialises the
+        subscription but returns no price fields — caller should retry after ~1s.
+
+        Limits: max 100 conids per request, max 50 fields per request.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
+        Changelog: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
         Endpoint: GET /iserver/marketdata/snapshot
         """
-        field_str = ",".join(fields or ["31", "55", "70", "71", "84", "86"])
+        field_str = ",".join(fields or ["31", "55", "70", "71", "82", "83", "84", "86", "87", "6509"])
         data = self._get("/iserver/marketdata/snapshot", {"conids": ",".join(str(c) for c in conids), "fields": field_str})
         return data if isinstance(data, list) else []
 
