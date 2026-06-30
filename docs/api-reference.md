@@ -140,12 +140,19 @@ Resolve a symbol to one or more contracts.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `symbol` | str | — | Ticker, e.g. `"AAPL"`, `"CL"` |
-| `sec_type` | str | `"STK"` | `"STK"`, `"FUT"`, `"OPT"`, `"FX"`, `"IND"`, `"CFD"`, `"BOND"` |
+| `symbol` | str | — | Ticker, e.g. `"AAPL"` |
+| `sec_type` | str | `"STK"` | Officially documented valid values: `"STK"`, `"IND"`, `"BOND"` only |
 
 **Returns:** List of `{"conid": ..., "symbol": ..., "companyName": ..., "exchange": ..., "currency": ...}`
 
 **Endpoint:** `GET /iserver/secdef/search`
+
+**Not supported here** — use the documented endpoint for these asset classes instead:
+- FUT → `get_futures()` (`GET /trsrv/futures`)
+- CASH (FX) → `get_currency_pairs()` (`GET /iserver/currency/pairs`)
+- OPT → `search_contract()` for the underlying, then `get_secdef_info()` (`GET /iserver/secdef/info`) for the option conid
+
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
 
 ---
 
@@ -216,8 +223,18 @@ Trading hours, sessions, and timezone for a symbol/exchange.
 **Endpoint:** `GET /trsrv/secdef/schedule`
 
 ### `get_currency_pairs(currency) -> list[dict]`
-Available FX pairs for a base currency.
-**Endpoint:** `GET /iserver/secdef/currency`
+Available FX pairs for a target currency.
+
+**Note:** IBKR returns `{"USD": [{"symbol": "USD.SGD", "conid": ..., "ccyPair": "SGD"}, ...]}` —
+this method flattens to a list. Same dict-flattening behaviour as `get_futures()`/`get_stocks()`.
+
+Corrected 2026-06-30: previously called the undocumented `/iserver/secdef/currency`, which
+always returned `[]`. `/iserver/secdef/search` does not document `CASH`/FX as a valid `secType`
+either — this is the only documented FX resolution path.
+
+**Endpoint:** `GET /iserver/currency/pairs`
+
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
 
 ### `get_contract_rules(conid, is_buy) -> dict`
 Order rules for a contract (min tick, valid order types, etc.).
