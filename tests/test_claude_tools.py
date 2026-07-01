@@ -54,6 +54,32 @@ def test_execute_check_cache_miss(toolkit):
     assert "MISS" in text
 
 
+# ============================================================================
+# _list_cache
+# ============================================================================
+
+def test_list_cache_empty(toolkit):
+    """Returns 'cache is empty' when Drive has no entries."""
+    toolkit._cache.list_cached.return_value = []
+    text, fig = toolkit.execute("list_cache", {})
+    assert "empty" in text.lower()
+    assert fig is None
+
+
+def test_list_cache_happy_path(toolkit):
+    """Returns one line per cached dataset with key, row count, and date."""
+    toolkit._cache.list_cached.return_value = [
+        {"key": "AAPL_1D_1Y_2026-06-30", "rows": 252, "cached_at": "2026-06-30T12:00:00"},
+        {"key": "MSFT_1D_6M_2026-06-30", "rows": 126, "cached_at": "2026-06-29T08:00:00"},
+    ]
+    text, fig = toolkit.execute("list_cache", {})
+    assert fig is None
+    assert "Cached datasets (2)" in text
+    assert "AAPL_1D_1Y_2026-06-30" in text
+    assert "252 bars" in text
+    assert "2026-06-30" in text
+
+
 def test_execute_get_account_summary(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.get_account_summary.return_value = {
@@ -598,6 +624,69 @@ def test_fetch_market_data_empty_data(toolkit):
     toolkit._client.get_market_history_paginated.return_value = {"data": []}
     text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "no data" in text.lower()
+
+
+# ============================================================================
+# _search_contract
+# ============================================================================
+
+def test_search_contract_happy_path(toolkit):
+    """Returns JSON-formatted contract list."""
+    toolkit._client.search_contract.return_value = [
+        {"conid": 265598, "symbol": "AAPL", "secType": "STK", "exchange": "NASDAQ"},
+    ]
+    text, fig = toolkit.execute("search_contract", {"symbol": "aapl"})
+    assert fig is None
+    assert "265598" in text
+    assert "AAPL" in text
+
+
+def test_search_contract_default_sec_type(toolkit):
+    """sec_type defaults to STK when omitted."""
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit.execute("search_contract", {"symbol": "AAPL"})
+    toolkit._client.search_contract.assert_called_once_with("AAPL", "STK")
+
+
+def test_search_contract_no_results(toolkit):
+    """Returns 'no contracts found' message when IBKR returns empty list."""
+    toolkit._client.search_contract.return_value = []
+    text, fig = toolkit.execute("search_contract", {"symbol": "XYZ99"})
+    assert fig is None
+    assert "No contracts found" in text
+    assert "XYZ99" in text
+
+
+# ============================================================================
+# _get_futures
+# ============================================================================
+
+def test_get_futures_happy_path(toolkit):
+    """Returns JSON-formatted futures contracts."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ESZ6", "conid": 551601958, "expirationDate": 20261218},
+        {"symbol": "ESH7", "conid": 551601959, "expirationDate": 20270319},
+    ]
+    text, fig = toolkit.execute("get_futures", {"symbols": ["ES"]})
+    assert fig is None
+    assert "ESZ6" in text
+    assert "551601958" in text
+
+
+def test_get_futures_symbols_uppercased(toolkit):
+    """Symbols are uppercased before passing to the client."""
+    toolkit._client.get_futures.return_value = [{"symbol": "ESZ6", "conid": 12345}]
+    toolkit.execute("get_futures", {"symbols": ["es", "nq"]})
+    toolkit._client.get_futures.assert_called_once_with(["ES", "NQ"])
+
+
+def test_get_futures_no_results(toolkit):
+    """Returns 'no futures found' message when IBKR returns empty list."""
+    toolkit._client.get_futures.return_value = []
+    text, fig = toolkit.execute("get_futures", {"symbols": ["ZZZ"]})
+    assert fig is None
+    assert "No futures found" in text
+    assert "ZZZ" in text
 
 
 # ── _sync_flex_trades — missing token ────────────────────────────────────────
