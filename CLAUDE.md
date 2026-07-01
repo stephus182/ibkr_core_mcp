@@ -406,6 +406,14 @@ for block in response.content:
 
 Note: `ClaudeToolkit` exposes no order-write tools. Order placement must go through `IBKRClient` directly, which enforces the fingerprint gates.
 
+**Layering exception:** `scrape_fallback.judge_completeness_llm()` (used by the
+`firecrawl_search`/`firecrawl_crawl` handlers) is the one place `ibkr_core_mcp` calls
+the Anthropic API directly with `config.anthropic_api_key`, rather than only handing
+`ClaudeToolkit.tools` to a host app's own client. This was a deliberate, scoped
+choice (a single cheap Haiku completeness check) — don't treat it as precedent for
+adding more direct API calls elsewhere without the same scrutiny; a host app's own
+token-usage tracking won't see this call's cost.
+
 ---
 
 ### PineScript Generation
@@ -597,6 +605,22 @@ This rule exists because assumption-based development caused two confirmed incid
 |---|---|
 | **LAPolicy reference** (biometric policy constants) | https://developer.apple.com/documentation/localauthentication/lapolicy |
 | **evaluatePolicy** (method, error codes) | https://developer.apple.com/documentation/localauthentication/lacontext/evaluatepolicy(_:localizedreason:reply:) |
+
+**Web Scraping — Firecrawl + Crawl4AI fallback** (`web_scraper.py`, `scrape_fallback.py`)
+
+| Topic | URL |
+|---|---|
+| **Firecrawl API reference** (scrape/search/crawl endpoints) | https://docs.firecrawl.dev/api-reference/endpoint/scrape , https://docs.firecrawl.dev/api-reference/endpoint/crawl-get |
+| **Crawl4AI docs** (optional fallback; no built-in confidence score on Firecrawl side — confirmed 2026-06-30) | https://docs.crawl4ai.com/ |
+| **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
+| **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
+
+`crawl4ai>=0.5.0` is a hard floor, verified against the published wheels on PyPI
+(2026-06-30): `BrowserProfiler` does not exist in the 0.4.x series (checked 0.4.248,
+the newest 0.4.x release) — it was introduced in 0.5.0. `crawl4ai<0.5.0` will import
+successfully but raise `Crawl4AIUnavailableError` with a misleading "not installed"
+message when `create_profile()` is actually called, since that message is only
+generated from an `ImportError` on `BrowserProfiler`.
 
 ### Known IBKR API Behaviors (Documented, Not Assumed)
 

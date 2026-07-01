@@ -141,6 +141,43 @@ def test_search_empty_query_raises():
 
 
 @patch("ibkr_core_mcp.web_scraper.requests")
+def test_search_includes_result_metadata(mock_requests):
+    """Each search result retains Firecrawl's per-result metadata (statusCode/error)
+    so callers can assess extraction quality without a second round trip."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "data": [
+            {
+                "url": "https://example.com",
+                "title": "Example",
+                "markdown": "# Hello",
+                "metadata": {"statusCode": 200},
+            }
+        ]
+    }
+    mock_requests.post.return_value = mock_resp
+    client = FirecrawlClient("fc-test")
+    results = client.search("test query", limit=1)
+    assert results[0]["metadata"] == {"statusCode": 200}
+
+
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_search_metadata_defaults_to_empty_dict(mock_requests):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "data": [{"url": "https://example.com", "title": "Example", "markdown": "# Hello"}]
+    }
+    mock_requests.post.return_value = mock_resp
+    client = FirecrawlClient("fc-test")
+    results = client.search("test query", limit=1)
+    assert results[0]["metadata"] == {}
+
+
+@patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_limit_clamped_to_10(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
     mock_resp = MagicMock()
@@ -243,7 +280,10 @@ def test_crawl_timeout_returns_partial_results(mock_requests, mock_time):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_skips_pages_with_empty_markdown(mock_requests, mock_time):
+def test_crawl_keeps_pages_with_empty_markdown_and_metadata(mock_requests, mock_time):
+    """Pages are no longer dropped for empty/None markdown — callers (quality
+    assessment + fallback) need to see blocked/empty pages, not lose them silently.
+    Each page also retains its raw Firecrawl metadata dict."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
     mock_time.monotonic.side_effect = [0.0, 1.0]
 
@@ -257,7 +297,10 @@ def test_crawl_skips_pages_with_empty_markdown(mock_requests, mock_time):
         "status": "completed",
         "data": [
             {"metadata": {"sourceURL": "https://example.com/a"}, "markdown": "# Real"},
-            {"metadata": {"sourceURL": "https://example.com/b"}, "markdown": ""},
+            {
+                "metadata": {"sourceURL": "https://example.com/b", "statusCode": 403},
+                "markdown": "",
+            },
             {"metadata": {"sourceURL": "https://example.com/c"}, "markdown": None},
         ],
     }
@@ -267,8 +310,14 @@ def test_crawl_skips_pages_with_empty_markdown(mock_requests, mock_time):
 
     client = FirecrawlClient("fc-test")
     pages = client.crawl("https://example.com")
-    assert len(pages) == 1
+    assert len(pages) == 3
     assert pages[0]["url"] == "https://example.com/a"
+    assert pages[0]["markdown"] == "# Real"
+    assert pages[1]["url"] == "https://example.com/b"
+    assert pages[1]["markdown"] == ""
+    assert pages[1]["metadata"]["statusCode"] == 403
+    assert pages[2]["url"] == "https://example.com/c"
+    assert pages[2]["markdown"] == ""
 
 
 @patch("ibkr_core_mcp.web_scraper.time")

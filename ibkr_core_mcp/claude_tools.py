@@ -866,6 +866,11 @@ class ClaudeToolkit:
         self._config = config
         self._firecrawl: Any = None
         self._web_docs: Any = None
+        # Lazy singletons, unguarded by a lock — safe under mcp_server.py's
+        # single-event-loop stdio/SSE dispatch (calls are processed one at a time),
+        # but not safe if ClaudeToolkit is ever driven by a genuinely multi-threaded
+        # host app. Add a lock if that becomes a real usage pattern.
+        self._crawl4ai: Any = None
 
     @property
     def client(self) -> IBKRClient:
@@ -2216,6 +2221,150 @@ class ClaudeToolkit:
         self._cache.delete(symbol, timeframe, period, end)
         return f"Deleted cache entry for {symbol} {timeframe} ({period}, end={end}).", None
 
+    def _validate_public_url(self, url: str) -> str | None:
+        """
+        SSRF guard: return None if `url` is safe to fetch directly (http/https,
+        resolves to a public address), or a "Blocked: ..." message if not.
+
+        Shared by every code path that can trigger a *local* fetch of an
+        externally-sourced URL: the firecrawl_crawl root URL, and — critically —
+        every per-page/per-result URL passed to _scrape_with_fallback, since those
+        can originate from Firecrawl's own crawl (redirects/internal links) or from
+        search results (which are external, attacker-influenceable content) rather
+        than from a URL the caller explicitly typed in.
+
+        Handles standard hostnames, IPv4/IPv6 literals, and decimal/hex-encoded IPs
+        (e.g. http://2130706433/ = 127.0.0.1) by resolving before checking.
+
+        Args:
+            url: Candidate URL to validate before any local fetch.
+
+        Returns:
+            None if safe to fetch. Otherwise a human-readable "Blocked: ..." or
+            "Invalid URL: ..." string suitable for returning directly to the LLM.
+        """
+        import ipaddress
+        import socket
+        import urllib.parse
+
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return f"Blocked: only http/https URLs are supported (got {parsed.scheme!r})."
+            host = (parsed.hostname or "").lower()
+            if not host:
+                return "Blocked: URL has no hostname."
+            if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):
+                return "Blocked: cannot fetch from localhost or link-local addresses."
+            try:
+                addr = ipaddress.ip_address(host)
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return "Blocked: cannot fetch from private or reserved IP addresses."
+            except ValueError:
+                # Not a literal IP — resolve via DNS and re-check.
+                # This catches decimal (2130706433) and hex (0x7f000001) encoded IPs.
+                try:
+                    resolved_ip = socket.gethostbyname(host)
+                    addr = ipaddress.ip_address(resolved_ip)
+                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                        return "Blocked: URL resolves to a private or reserved IP address."
+                except socket.gaierror:
+                    pass  # unresolvable hostname — let the caller's own request fail naturally
+        except Exception as exc:
+            return f"Invalid URL: {exc}"
+        return None
+
+    def _scrape_with_fallback(
+        self, url: str, markdown: str, metadata: dict[str, Any] | None
+    ) -> tuple[str, str]:
+        """
+        Return (final_markdown, note) for a single Firecrawl result/page, falling
+        back to Crawl4AI when Firecrawl's content looks incomplete (blocked, empty,
+        or paywalled).
+
+        assess_quality decides "ok" / "ambiguous" / "fallback" from Firecrawl's own
+        signals plus cheap heuristics. "ambiguous" results get one extra Claude call
+        (judge_completeness_llm) before deciding whether to fall back — this keeps
+        the common case (clean results) free of any extra API call. Crawl4AI failures
+        (not installed, scrape error) degrade gracefully: Firecrawl's original
+        content is kept and `note` explains what happened.
+
+        Args:
+            url: Source URL for this result/page. Re-validated against
+                 _validate_public_url before any Crawl4AI fetch — see that
+                 method's docstring for why this can't be skipped even though
+                 firecrawl_crawl already validates its own root URL.
+            markdown: Firecrawl's markdown for this result/page (may be empty).
+            metadata: Firecrawl's per-result/per-page "metadata" dict, or None.
+
+        Returns:
+            (final_markdown, note) — final_markdown is either Firecrawl's
+            original content (quality was "ok", the LLM judge confirmed it
+            complete, or the fallback was blocked/unavailable/failed) or
+            Crawl4AI's recovered content. `note` is "" when nothing noteworthy
+            happened, otherwise a short human-readable annotation to surface
+            to the LLM (e.g. which path was taken, or why fallback was skipped).
+        """
+        import urllib.parse
+
+        from ibkr_core_mcp.scrape_fallback import (
+            Crawl4AIScraper,
+            Crawl4AIUnavailableError,
+            assess_quality,
+            judge_completeness_llm,
+        )
+
+        quality = assess_quality(markdown, metadata, url)
+        if quality == "ok":
+            return markdown, ""
+
+        if quality == "ambiguous":
+            try:
+                if judge_completeness_llm(self._config, url, markdown):
+                    return markdown, ""
+            except Exception as exc:
+                # Fail safe, not fail expensive: a transient Anthropic API hiccup on
+                # an "ambiguous" (not already-known-bad) result shouldn't silently
+                # trigger the slower, heavier Crawl4AI path. Keep Firecrawl's content.
+                log.warning("judge_completeness_llm failed for %s: %s", url, exc)
+                return markdown, "(Note: completeness check failed — showing Firecrawl's result as-is)"
+
+        # SSRF guard: this URL may not be the one the caller explicitly validated —
+        # it can be a Firecrawl-discovered sub-page (redirect/internal link) or a
+        # search result (external, attacker-influenceable content). Crawl4AI would
+        # launch a *local* browser fetch, so re-validate every URL here rather than
+        # trusting upstream scoping.
+        blocked = self._validate_public_url(url)
+        if blocked:
+            return markdown, f"(Crawl4AI fallback skipped: {blocked})"
+
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+
+        try:
+            result = self._crawl4ai.scrape(url)
+        except Crawl4AIUnavailableError as exc:
+            return markdown, f"(Crawl4AI fallback unavailable: {exc})"
+        except Exception as exc:
+            log.warning("Crawl4AI fallback failed for %s: %s", url, exc)
+            return markdown, "(Crawl4AI fallback failed — showing Firecrawl's partial result)"
+
+        fallback_markdown = result.get("markdown", "")
+        if not fallback_markdown:
+            return markdown, "(Crawl4AI fallback returned no content — showing Firecrawl's partial result)"
+
+        domain = urllib.parse.urlparse(url).hostname or ""
+        profile_dir = self._config.crawl4ai_profiles_dir / domain
+        if profile_dir.is_dir():
+            note = "(fetched via Crawl4AI fallback using a saved login profile)"
+        else:
+            note = (
+                f"(fetched via Crawl4AI fallback — no saved login profile for {domain}; "
+                f"if this is a paywalled site you subscribe to, run "
+                f"`python -m ibkr_core_mcp.scrape_fallback create-profile {domain}` once)"
+            )
+        return fallback_markdown, note
+
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """
         Handle the firecrawl_search tool.
@@ -2251,11 +2400,16 @@ class ClaudeToolkit:
 
         lines = [f"## Search results for: {query}\n"]
         for i, r in enumerate(results, 1):
+            md, note = self._scrape_with_fallback(
+                r.get("url", ""), r.get("markdown", ""), r.get("metadata")
+            )
+            r["markdown"] = md
             lines.append(f"### {i}. {r.get('title', '(no title)')}")
             lines.append(f"**URL:** {r.get('url', '')}\n")
-            md = r.get("markdown", "")
             if md:
                 lines.append(md[:2000])  # truncate very long pages
+            if note:
+                lines.append(note)
             lines.append("")
 
         drive_note = ""
@@ -2279,8 +2433,6 @@ class ClaudeToolkit:
         initializes FirecrawlClient and WebDocsStore on first call. Always saves
         results to Drive (crawl is a bulk operation — Drive storage is the point).
         """
-        import ipaddress
-        import urllib.parse
         from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, FirecrawlError
 
         if not self._config.firecrawl_api_key:
@@ -2294,35 +2446,9 @@ class ClaudeToolkit:
         if not url:
             return "url must be non-empty.", None
 
-        # SSRF guard — blocks private, loopback, and link-local destinations.
-        # Handles standard hostnames, IPv4/IPv6 literals, and decimal/hex-encoded
-        # IPs (e.g. http://2130706433/ = 127.0.0.1) by resolving before checking.
-        try:
-            parsed = urllib.parse.urlparse(url)
-            if parsed.scheme not in ("http", "https"):
-                return f"Blocked: only http/https URLs are supported (got {parsed.scheme!r}).", None
-            host = (parsed.hostname or "").lower()
-            if not host:
-                return "Blocked: URL has no hostname.", None
-            if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):
-                return "Blocked: cannot fetch from localhost or link-local addresses.", None
-            try:
-                addr = ipaddress.ip_address(host)
-                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                    return "Blocked: cannot fetch from private or reserved IP addresses.", None
-            except ValueError:
-                # Not a literal IP — resolve via DNS and re-check.
-                # This catches decimal (2130706433) and hex (0x7f000001) encoded IPs.
-                import socket
-                try:
-                    resolved_ip = socket.gethostbyname(host)
-                    addr = ipaddress.ip_address(resolved_ip)
-                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                        return "Blocked: URL resolves to a private or reserved IP address.", None
-                except socket.gaierror:
-                    pass  # unresolvable hostname — let Firecrawl handle the error
-        except Exception as exc:
-            return f"Invalid URL: {exc}", None
+        blocked = self._validate_public_url(url)
+        if blocked:
+            return blocked, None
 
         max_pages = int(inputs.get("max_pages", 50))
         timeout_s = int(inputs.get("timeout_s", 120))
@@ -2337,16 +2463,38 @@ class ClaudeToolkit:
         except FirecrawlError as exc:
             return f"Firecrawl crawl failed (HTTP {exc.status_code}): {exc}", None
 
+        # NOTE: each fallback call here launches its own Crawl4AI browser process
+        # (Crawl4AIScraper.scrape has no connection/browser reuse across calls) and
+        # runs sequentially. A crawl with many blocked/paywalled pages will pay
+        # Chromium startup cost per page and can push total tool latency well past
+        # Firecrawl's own timeout_s budget. Acceptable for now (fallback only fires
+        # on already-incomplete pages, typically a minority) — worth revisiting with
+        # a shared crawler instance or a fallback page cap if that stops holding.
+        fallback_count = 0
+        for page in pages:
+            md, note = self._scrape_with_fallback(
+                page.get("url", ""), page.get("markdown", ""), page.get("metadata")
+            )
+            page["markdown"] = md
+            if note:
+                fallback_count += 1
+
         try:
             manifest = self._web_docs.save_crawl(url, pages)
         except Exception as exc:
             return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
 
         saved = len(manifest["pages"])
+        fallback_line = (
+            f"\nCrawl4AI fallback used for {fallback_count} page(s) Firecrawl couldn't fully extract."
+            if fallback_count
+            else ""
+        )
         return (
             f"Crawl complete: saved {saved} page(s) from {url} to Drive.\n"
             f"Crawled at: {manifest['crawled_at']}\n"
             f"Pages: " + ", ".join(p['url'] for p in manifest['pages'][:10])
-            + ("..." if saved > 10 else ""),
+            + ("..." if saved > 10 else "")
+            + fallback_line,
             None,
         )

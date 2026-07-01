@@ -54,3 +54,19 @@ def test_firecrawl_config_defaults_to_empty(monkeypatch):
     cfg = Config.from_env()
     assert cfg.firecrawl_api_key == ""
     assert cfg.gdrive_web_docs_folder_id == ""
+
+
+def test_crawl4ai_profiles_dir_reads_from_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("CRAWL4AI_PROFILES_DIR", "/tmp/my-profiles")
+    from ibkr_core_mcp.config import Config
+    cfg = Config.from_env()
+    assert cfg.crawl4ai_profiles_dir == Path("/tmp/my-profiles")
+
+
+def test_crawl4ai_profiles_dir_defaults_and_expands_home(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("CRAWL4AI_PROFILES_DIR", raising=False)
+    from ibkr_core_mcp.config import Config
+    cfg = Config.from_env()
+    assert cfg.crawl4ai_profiles_dir == Path("~/.ibkr_core/crawl4ai_profiles").expanduser()

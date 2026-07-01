@@ -42,6 +42,12 @@ class Config:
     # Drive folder ID to use as the web_docs/ root. Auto-creates 'web_docs/' under
     # gdrive_folder_id if empty.
     gdrive_web_docs_folder_id: str = ""
+    # Local directory holding Crawl4AI browser profiles (saved logins for paywalled
+    # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.scrape_fallback
+    # create-profile <url>`.
+    crawl4ai_profiles_dir: Path = field(
+        default_factory=lambda: Path("~/.ibkr_core/crawl4ai_profiles").expanduser()
+    )
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
@@ -61,6 +67,7 @@ class Config:
           GDRIVE_ACCOUNT_FOLDER_ID   → gdrive_account_folder_id (optional; auto-created as account_data/)
           FIRECRAWL_API_KEY          → firecrawl_api_key       (optional; enables web scraper)
           GDRIVE_WEB_DOCS_FOLDER_ID  → gdrive_web_docs_folder_id (optional; auto-created as web_docs/)
+          CRAWL4AI_PROFILES_DIR      → crawl4ai_profiles_dir   (default: ~/.ibkr_core/crawl4ai_profiles)
 
         Raises ConfigError if ANTHROPIC_API_KEY is not set.
         """
@@ -95,4 +102,9 @@ class Config:
             gdrive_account_folder_id=os.environ.get("GDRIVE_ACCOUNT_FOLDER_ID", ""),
             firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
             gdrive_web_docs_folder_id=os.environ.get("GDRIVE_WEB_DOCS_FOLDER_ID", ""),
+            crawl4ai_profiles_dir=Path(
+                os.environ.get(
+                    "CRAWL4AI_PROFILES_DIR", "~/.ibkr_core/crawl4ai_profiles"
+                )
+            ).expanduser(),
         )

@@ -144,6 +144,9 @@ class FirecrawlClient:
               - "url": str   — source URL
               - "title": str — page title (empty string if not present)
               - "markdown": str — extracted markdown content (empty string if not present)
+              - "metadata": dict — Firecrawl's raw per-result metadata (statusCode,
+                error, etc., empty dict if not present), used by ClaudeToolkit's
+                Crawl4AI fallback (assess_quality) to judge extraction quality
 
         Raises:
             FirecrawlError: On HTTP 401 (bad key), 429 (rate limit), 5xx (service error),
@@ -172,6 +175,7 @@ class FirecrawlClient:
                 "url": r.get("url", ""),
                 "title": r.get("title", ""),
                 "markdown": r.get("markdown", "") or r.get("content", ""),
+                "metadata": r.get("metadata", {}),
             }
             for r in raw
         ]
@@ -198,7 +202,12 @@ class FirecrawlClient:
         Args:
             url: Root URL to crawl from. Must be a public http/https URL. The
                  caller (ClaudeToolkit handler) is responsible for SSRF validation
-                 before calling this method.
+                 before calling this method. Note this only validates the root —
+                 the individual page URLs in the returned list (which Firecrawl
+                 itself discovered via internal links/redirects) are NOT
+                 pre-validated here and are re-checked independently by
+                 ClaudeToolkit._validate_public_url before any local fetch of
+                 them (e.g. the Crawl4AI fallback).
             max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
             timeout_s: Maximum wall-clock seconds to wait for the crawl to complete.
                        Minimum 10s. If the job is still running at timeout, partial
@@ -207,9 +216,13 @@ class FirecrawlClient:
         Returns:
             List of page dicts, each containing:
               - "url": str      — source URL for the page
-              - "markdown": str — full markdown content of the page
+              - "markdown": str — full markdown content of the page, or "" if empty/None
+              - "metadata": dict — Firecrawl's raw per-page metadata (statusCode,
+                error, etc.), used by callers to assess extraction quality
 
-            Pages with empty or None markdown are excluded from the result.
+            No pages are filtered out — empty-markdown and error pages are included
+            so callers (e.g. the Crawl4AI fallback) can see and recover from them
+            instead of having them silently dropped.
 
         Raises:
             FirecrawlError: If the crawl job transitions to status "failed", or if
@@ -248,10 +261,10 @@ class FirecrawlClient:
             pages = [
                 {
                     "url": p.get("metadata", {}).get("sourceURL", p.get("url", "")),
-                    "markdown": p.get("markdown", ""),
+                    "markdown": p.get("markdown") or "",
+                    "metadata": p.get("metadata", {}),
                 }
                 for p in (data.get("data") or [])
-                if p.get("markdown")
             ]
 
             if status == "completed":
