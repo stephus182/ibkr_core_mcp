@@ -20,6 +20,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
+| `web_scraper` / `scrape_fallback` | Firecrawl web search/crawl, with an optional Crawl4AI fallback for incomplete/paywalled results |
 | `mcp_server` | MCP server (stdio + SSE) exposing all 44 tools to any MCP client |
 
 ---
@@ -60,6 +61,8 @@ This library is built on official documented APIs. Any contribution touching API
 | IBKR WebSocket streaming | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
 | Google Drive API v3 | https://developers.google.com/drive/api/reference/rest/v3 |
 | macOS LocalAuthentication | https://developer.apple.com/documentation/localauthentication |
+| Firecrawl API | https://docs.firecrawl.dev/api-reference/endpoint/scrape |
+| Crawl4AI (optional fallback) | https://docs.crawl4ai.com/ |
 
 Full details and per-file API ownership are in [`CLAUDE.md`](CLAUDE.md#ibkr-api-reference--docs-first).
 
@@ -215,6 +218,8 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `run_backtest` | Sandboxed RestrictedPython strategy backtester |
 | `generate_pinescript` | Generate PineScript v5 strategy/indicator |
 | `get_analytics` | Sharpe, Sortino, Calmar, CAGR, max drawdown |
+| `firecrawl_search` | Web search with full markdown content per result; optional Drive snapshot |
+| `firecrawl_crawl` | Bulk documentation/site crawl, saved to Google Drive |
 
 ---
 
@@ -278,6 +283,29 @@ Strategy code runs in a `RestrictedPython` sandbox — no file system or network
 
 ---
 
+## Web Scraping
+
+`firecrawl_search` and `firecrawl_crawl` use [Firecrawl](https://firecrawl.dev) as the default scraper — full markdown extraction, JS-rendered pages, no local browser. Results are optionally saved to Google Drive under `web_docs/`.
+
+When Firecrawl's result looks incomplete — blocked, empty, or paywalled (WSJ, Bloomberg, FT, and similar metered news sites) — the tools automatically fall back to [Crawl4AI](https://docs.crawl4ai.com/), an open-source, Playwright-based scraper with no API key. Detection uses Firecrawl's own error signals plus word-count/paywall-keyword heuristics; ambiguous cases get one cheap Claude Haiku completeness check before falling back, so clean results never pay for the extra call.
+
+```bash
+# Enable the fallback (optional — base install works fine without it)
+pip install "ibkr_core_mcp[scraper]"
+crawl4ai-setup   # installs Playwright/Chromium, one-time
+```
+
+For paywalled sites you already subscribe to, Crawl4AI can reuse a saved browser login — no credentials are ever stored by `ibkr_core_mcp`:
+
+```bash
+# One-time interactive login; opens a real browser window
+python -m ibkr_core_mcp.scrape_fallback create-profile https://www.wsj.com
+```
+
+The saved session lives under `CRAWL4AI_PROFILES_DIR` (default `~/.ibkr_core/crawl4ai_profiles/<domain>/`) and is reused automatically on future scrapes of that domain. Every URL that can reach a local Crawl4AI fetch — including Firecrawl-discovered sub-pages and search-result URLs — is validated against an SSRF guard first; see [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback) for the full mitigation.
+
+---
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and fill in:
@@ -294,6 +322,9 @@ Copy `.env.example` to `.env` and fill in:
 | `GDRIVE_CREDENTIALS_FILE` | for GDrive | OAuth2 credentials path |
 | `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token |
 | `IBKR_FLEX_QUERY_ID` | for Flex sync | Flex query ID |
+| `FIRECRAWL_API_KEY` | for web scraping | Firecrawl API key. If unset, `firecrawl_search`/`firecrawl_crawl` return a "not available" message rather than raising |
+| `GDRIVE_WEB_DOCS_FOLDER_ID` | optional | Explicit Drive folder for scraped docs/search snapshots. If unset, auto-created as `web_docs/` inside `GOOGLE_DRIVE_FOLDER_ID` |
+| `CRAWL4AI_PROFILES_DIR` | optional | Saved Crawl4AI login profiles for paywalled sites (default: `~/.ibkr_core/crawl4ai_profiles`) |
 
 ---
 
@@ -324,7 +355,11 @@ Implemented in `order_confirm.py`.
 
 Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a Chainlit "Stage this order" button click) before `place_order` is ever invoked.
 
-`GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts. See [SECURITY.md](SECURITY.md) for the full security model.
+`GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts.
+
+**Web scraping (`firecrawl_search`/`firecrawl_crawl`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback).
+
+See [SECURITY.md](SECURITY.md) for the full security model.
 
 ---
 
