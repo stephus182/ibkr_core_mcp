@@ -11,15 +11,19 @@ creates stale citations in docstrings whenever IBKR (or any other dependency) sh
 A general-purpose web scraper that fetches **all** documentation needed by `ibkr_core_mcp`
 and its dependents — not limited to IBKR. Intended targets include:
 
-| Source | Auth required | Priority |
-|---|---|---|
-| IBKR CP API reference (`cpapi-v1`) | Yes — IBKR Campus login | High |
-| IBKR Web API reference (`webapi-ref`) | Yes — IBKR Campus login | High |
-| IBKR TWS API docs (`interactivebrokers.github.io/tws-api/`) | No — public | Medium (historical data limits, duration strings, bar sizes) |
-| IBKR Flex Web Service (campus) `/ibkr-api-page/flex-web-service/` | Yes — IBKR Campus login | High — ibkrguides.com public version is outdated (shows ndcdyn for GetStatement); campus version likely reflects current gdcdyn live behavior |
-| IBKR Flex Web Service guide (ibkrguides.com) | No — public | Low (accessible but outdated re: GetStatement subdomain) |
-| Anthropic API docs | No — public | Medium |
-| Any other 403-gated dependency docs | Varies | As needed |
+Firecrawl scrape results (2026-06-30) — what is reachable without auth:
+
+| Source | URL | Firecrawl result | Auth required | Priority |
+|---|---|---|---|---|
+| IBKR CP API reference | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ | **Blocked** (Cloudflare 403) | Yes — IBKR Campus login | High |
+| IBKR Web API reference | https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-ref/ | **Blocked** (Cloudflare 403) | Yes — IBKR Campus login | High |
+| IBKR Flex Web Service error codes | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm | **Scraped** — all 21 codes, last updated 2025-10-03 | No | Done |
+| IBKR Flex Web Service setup | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm | Nav only (main content auth-gated) | Partial | High |
+| Enable Flex Web Service | https://www.ibkrguides.com/clientportal/performanceandstatements/flex-web-service.htm | Nav only (main content auth-gated) | Partial | Medium |
+| Configure Flex with AI | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm | **Scraped** — full content, last updated 2026-05-07 | No | Low |
+| IBKR Campus reporting lessons | https://ibkrcampus.com/trading-lessons/client-portal-reporting/ | Login gate only | Yes | Low |
+| IBKR TWS API docs | https://interactivebrokers.github.io/tws-api/ | Not tested | No — public | Medium |
+| Anthropic API docs | https://docs.anthropic.com/ | Not tested | No — public | Medium |
 
 ## Proposed Architecture
 
