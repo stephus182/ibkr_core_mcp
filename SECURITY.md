@@ -358,6 +358,41 @@ if not url.startswith(_ALLOWED_URL_PREFIX):
 
 This directly addresses the [SSRF attack class](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#server-side-request-forgery-ssrf) described in the MCP security guide, where attacker-controlled metadata is used to redirect HTTP requests to internal or credential-harvesting endpoints.
 
+### SSRF Prevention (Web Scraping — Crawl4AI Fallback)
+
+`firecrawl_search` and `firecrawl_crawl` can fall back from Firecrawl (a remote scraping API — never a local network risk, since Firecrawl's own servers do the fetching) to Crawl4AI, an optional dependency that launches a **local** headless Chromium browser via Playwright to fetch a URL directly from the host machine. This is a materially different risk profile: the URL being fetched can originate from Firecrawl-discovered crawl sub-pages (redirects, internal links) or from search results — both attacker-influenceable, external content — rather than only from a URL the operator explicitly typed in.
+
+Mitigation — `ClaudeToolkit._validate_public_url` (`claude_tools.py`) is called before **every** URL that can reach a local Crawl4AI fetch, not only the top-level `firecrawl_crawl` root:
+
+```python
+def _validate_public_url(self, url: str) -> str | None:
+    # Blocks non-http/https schemes, missing hostnames, localhost/link-local
+    # hostnames, and literal or DNS-resolved private/loopback/reserved IPs
+    # (including decimal/hex-encoded IP literals, e.g. http://2130706433/).
+```
+
+This guard runs inside `ClaudeToolkit._scrape_with_fallback` immediately before any `Crawl4AIScraper.scrape()` call — covering per-page URLs from `firecrawl_crawl`'s crawl results and per-result URLs from `firecrawl_search`, in addition to the crawl root URL validated up front by `_handle_firecrawl_crawl`.
+
+**Defense in depth — two independent SSRF layers, not one.** A single validate-then-fetch check has a structural gap: it resolves DNS once, in one process, and the actual browser fetch happens moments later, in a different process, with its own independent DNS resolution — vulnerable to DNS rebinding (attacker serves a public IP at validation time, a private IP at fetch time via TTL=0) and to redirect-based bypass (a URL that passes validation responds with a redirect to a private address, which is never re-checked). This was identified during the 2026-07-01 audit and closed with a second, independent layer rather than left as an accepted gap:
+
+1. **Pre-fetch check** — `ClaudeToolkit._validate_public_url`, above. Cheap, runs before a browser is even launched, blocks the common case.
+2. **Per-request browser-level check** — `scrape_fallback._reject_private_requests`, a Playwright request-interception handler installed via Crawl4AI's `on_page_context_created` hook on every scrape:
+
+```python
+async def _reject_private_requests(route, request):
+    host = (urllib.parse.urlparse(request.url).hostname or "").lower()
+    if host and is_private_host(host):
+        await route.abort()
+    else:
+        await route.continue_()
+```
+
+This handler intercepts **every** request Chromium makes during the page load — the initial navigation, every HTTP redirect hop, and every subresource — and re-resolves + re-checks each one at the moment it's actually about to be sent, inside the same browser process. This closes both gaps: DNS rebinding no longer helps an attacker, because the check that matters is the one immediately before Chromium connects, not an earlier check in a different process; and redirects to a private address are aborted regardless of what the original URL looked like. Both layers share one implementation (`scrape_fallback.is_private_host`) so they cannot silently drift apart. Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack, which routes redirects and subresources through the same request-interception path as the initial navigation.
+
+**Path-traversal hardening (defense in depth):** the domain extracted from a URL is used to build a filesystem path (`profiles_dir / domain`, for locating and writing saved login profiles). `scrape_fallback._safe_domain` explicitly rejects any domain containing `..`, `/`, or `\`, or that is empty, before it reaches a path join — independent of upstream URL validation, so it can't be silently reopened by a future change elsewhere.
+
+**Own-subscriptions-only design:** paywall access via Crawl4AI never stores credentials. `python -m ibkr_core_mcp.scrape_fallback create-profile <site>` opens a real (human-driven) browser for a one-time interactive login; only the resulting cookie/session profile is saved locally under `Config.crawl4ai_profiles_dir`, one subdirectory per domain. This is a manual, operator-only CLI path — not reachable from any LLM tool input.
+
 ### TLS Policy
 
 | Connection | TLS verification |
@@ -442,6 +477,8 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Sandbox escape via file I/O | Safe `SimpleNamespace` wrappers for `pd`/`np` | Custom `_write_guard` blocks namespace mutation |
 | Sandbox DoS (infinite loop / large allocation) | 10-second execution timeout | 4,096-character code length cap |
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
+| SSRF via web scraping fallback (Crawl4AI local browser fetch) | `_validate_public_url` blocks private/loopback/link-local/reserved hosts before a browser is launched, applied to every URL reaching `Crawl4AIScraper.scrape()` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level, closing the DNS-rebinding and redirect-bypass gaps a pre-fetch check alone can't. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
+| Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
 | Credential exposure in logs | `repr=False` on `anthropic_api_key`, `flex_token` | Credentials loaded from env vars only, never hardcoded |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |
 | XML bomb DoS | `defusedxml` blocks entity expansion | Flex polling bounded to 5 retries |
@@ -479,5 +516,6 @@ The following rules are enforced at PR review. Any PR that violates them will be
 | 2026-06-10 | `015e379` | All 14 production modules — full codebase audit (security + code quality) | 3 High, 7 Medium, 9 Low resolved. 5 Informational (dead code, style) cleaned up. 4 code-quality refactors (duplicate patterns extracted). |
 | 2026-06-10 | `6d246ab` | Publish readiness pass | 3 new Medium findings resolved (stream-loop logger leak S-1, `max_results` unbound S-2, `urllib3` CVE floor S-3). Backtest sandbox docstring corrected (S-4). PyPI metadata complete; LICENSE added; CI workflow added; GatewayManager tests added; account_id and PineScript injection tests added. |
 | 2026-06-27 | `pending` | v1.0 pre-release full audit — all 22 source files across 12 attack categories | 6 findings: 4 Medium, 2 Low. 4 fixed in code (path traversal in `import_flex_file`, SSRF decimal/hex IP bypass, `FlexQueryError` message leakage, `preview_order` input validation). 1 documented residual (backtest thread non-termination — architectural, tracked for v2.0). 1 confirmed mitigated (DataFrame I/O in sandbox — write-only OHLCV, already in residual risk section). No Critical or High findings. All SQL injection, command injection, shell=True, pickle, credential logging, and MCP order gate bypass checks passed. |
+| 2026-07-01 | `eece77b` | New Crawl4AI fallback surface — `scrape_fallback.py` (new), `claude_tools.py` (`_validate_public_url`, `_scrape_with_fallback`) | 2 candidate SSRF findings identified, each independently re-verified against the actual code by a separate filtering pass: DNS-rebinding TOCTOU between `_validate_public_url`'s validation-time DNS resolution and Crawl4AI/Chromium's independent fetch-time resolution (confidence 7/10); unvalidated-redirect-based bypass (confidence 3/10, downgraded per open-redirect precedent but confirmed as a real code gap on read-through). Both fixed in code rather than accepted as residual risk — see `_reject_private_requests` in the SSRF Prevention section above (Playwright-level per-request guard via Crawl4AI's `on_page_context_created` hook, closing both gaps at the actual fetch layer). Path-traversal via a crafted hostname (`profiles_dir / domain`) also hardened: `_safe_domain` now explicitly rejects `..`/`/`/`\`, replacing what had been an incidental block via `_validate_public_url`'s IDNA-encoding failure. No credential exposure or command injection issues found. |
 
 Full audit reports: [`docs/security-audit-2026-05-25.md`](docs/security-audit-2026-05-25.md) · [`docs/security-audit-2026-06-10.md`](docs/security-audit-2026-06-10.md)

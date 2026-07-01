@@ -6,6 +6,55 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# ── is_private_host ──────────────────────────────────────────────────────────
+
+def test_is_private_host_blocks_localhost():
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    assert is_private_host("localhost") is True
+
+
+def test_is_private_host_blocks_loopback_ip():
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    assert is_private_host("127.0.0.1") is True
+
+
+def test_is_private_host_blocks_link_local():
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    assert is_private_host("169.254.169.254") is True
+
+
+def test_is_private_host_blocks_private_ip_literal():
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    assert is_private_host("192.168.1.1") is True
+
+
+def test_is_private_host_allows_public_hostname(monkeypatch):
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    monkeypatch.setattr(socket, "gethostbyname", lambda h: "93.184.216.34")
+    assert is_private_host("example.com") is False
+
+
+def test_is_private_host_blocks_hostname_resolving_to_private_ip(monkeypatch):
+    """The DNS-rebinding-relevant case: hostname resolves to a private IP."""
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    monkeypatch.setattr(socket, "gethostbyname", lambda h: "127.0.0.1")
+    assert is_private_host("evil-rebinding.example") is True
+
+
+def test_is_private_host_unresolvable_hostname_not_blocked(monkeypatch):
+    """Unresolvable hostnames aren't a private-IP bypass — let the fetch fail naturally."""
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+    def _raise(_h):
+        raise socket.gaierror("unresolvable")
+    monkeypatch.setattr(socket, "gethostbyname", _raise)
+    assert is_private_host("nonexistent.invalid") is False
+
 
 def _make_config(**overrides):
     from ibkr_core_mcp.config import Config
@@ -162,6 +211,95 @@ def test_assess_quality_handles_none_metadata():
     assert assess_quality(markdown, None, "https://example.com") == "ok"
 
 
+# ── _reject_private_requests (Playwright per-request SSRF guard) ─────────────
+
+class _FakeRoute:
+    def __init__(self):
+        self.aborted = False
+        self.continued = False
+
+    async def abort(self):
+        self.aborted = True
+
+    async def continue_(self):
+        self.continued = True
+
+
+class _FakeRequest:
+    def __init__(self, url):
+        self.url = url
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_aborts_private_host():
+    from ibkr_core_mcp.scrape_fallback import _reject_private_requests
+    route = _FakeRoute()
+    await _reject_private_requests(route, _FakeRequest("http://127.0.0.1:5055/v1/api/x"))
+    assert route.aborted is True
+    assert route.continued is False
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_aborts_dns_rebound_host(monkeypatch):
+    """The exact DNS-rebinding case: a hostname (not a literal private IP) that
+    resolves to a private address at request-interception time — i.e. Chromium's
+    own resolution, not the earlier Python-level pre-check's resolution."""
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import _reject_private_requests
+    monkeypatch.setattr(socket, "gethostbyname", lambda h: "127.0.0.1")
+    route = _FakeRoute()
+    await _reject_private_requests(route, _FakeRequest("http://evil-rebinding.example/x"))
+    assert route.aborted is True
+    assert route.continued is False
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_continues_public_host(monkeypatch):
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import _reject_private_requests
+    monkeypatch.setattr(socket, "gethostbyname", lambda h: "93.184.216.34")
+    route = _FakeRoute()
+    await _reject_private_requests(route, _FakeRequest("https://example.com/article"))
+    assert route.continued is True
+    assert route.aborted is False
+
+
+# ── _safe_domain (path-traversal hardening for profiles_dir / domain) ────────
+
+def test_safe_domain_extracts_hostname_from_url():
+    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    assert _safe_domain("https://www.wsj.com/login") == "www.wsj.com"
+
+
+def test_safe_domain_accepts_bare_domain():
+    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    assert _safe_domain("www.wsj.com") == "www.wsj.com"
+
+
+def test_safe_domain_rejects_dotdot_traversal():
+    """A deliberate check, not incidental: profiles_dir / '..' would resolve to
+    profiles_dir's parent directory (e.g. ~/.ibkr_core), so a hostname of '..'
+    must never reach the path-join, regardless of whether upstream URL
+    validation happens to also reject it as an invalid hostname today."""
+    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    with pytest.raises(ValueError, match="Invalid domain"):
+        _safe_domain("https://../evil/")
+
+
+def test_safe_domain_rejects_path_separator():
+    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    with pytest.raises(ValueError, match="Invalid domain"):
+        _safe_domain("evil/../../etc")
+
+
+def test_safe_domain_rejects_empty():
+    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    with pytest.raises(ValueError, match="Invalid domain"):
+        _safe_domain("")
+
+
 # ── Crawl4AIScraper ──────────────────────────────────────────────────────────
 
 class _FakeCrawlResult:
@@ -170,18 +308,25 @@ class _FakeCrawlResult:
 
 
 def _install_fake_crawl4ai(monkeypatch, raw_markdown: str = "fetched via crawl4ai"):
-    """Inject a fake `crawl4ai` module into sys.modules and return the list that
-    captures every BrowserConfig(**kwargs) call, so tests can assert on it."""
+    """Inject a fake `crawl4ai` module into sys.modules and return
+    (captured_configs, installed_hooks) so tests can assert on both the
+    BrowserConfig(**kwargs) calls and the crawler_strategy.set_hook(...) calls."""
     captured_configs: list[dict] = []
+    installed_hooks: dict[str, object] = {}
 
     class FakeBrowserConfig:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             captured_configs.append(kwargs)
 
+    class FakeCrawlerStrategy:
+        def set_hook(self, hook_type, hook):
+            installed_hooks[hook_type] = hook
+
     class FakeAsyncWebCrawler:
         def __init__(self, config=None):
             self.config = config
+            self.crawler_strategy = FakeCrawlerStrategy()
 
         async def __aenter__(self):
             return self
@@ -196,7 +341,7 @@ def _install_fake_crawl4ai(monkeypatch, raw_markdown: str = "fetched via crawl4a
     fake_module.AsyncWebCrawler = FakeAsyncWebCrawler
     fake_module.BrowserConfig = FakeBrowserConfig
     monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
-    return captured_configs
+    return captured_configs, installed_hooks
 
 
 def test_crawl4ai_scraper_raises_when_not_installed(monkeypatch, tmp_path):
@@ -219,7 +364,7 @@ def test_crawl4ai_scraper_returns_markdown_and_url(monkeypatch, tmp_path):
 
 def test_crawl4ai_scraper_uses_saved_profile_when_present(monkeypatch, tmp_path):
     from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-    captured = _install_fake_crawl4ai(monkeypatch)
+    captured, _hooks = _install_fake_crawl4ai(monkeypatch)
 
     profile_dir = tmp_path / "example.com"
     profile_dir.mkdir()
@@ -233,13 +378,53 @@ def test_crawl4ai_scraper_uses_saved_profile_when_present(monkeypatch, tmp_path)
 
 def test_crawl4ai_scraper_no_profile_when_absent(monkeypatch, tmp_path):
     from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-    captured = _install_fake_crawl4ai(monkeypatch)
+    captured, _hooks = _install_fake_crawl4ai(monkeypatch)
 
     scraper = Crawl4AIScraper(tmp_path)  # tmp_path/example.com does not exist
     scraper.scrape("https://example.com/anonymous")
 
     assert not captured[0].get("use_managed_browser")
     assert "user_data_dir" not in captured[0]
+
+
+def test_crawl4ai_scraper_installs_ssrf_request_guard_hook(monkeypatch, tmp_path):
+    """Regression guard for the DNS-rebinding / redirect SSRF gaps: every scrape
+    must install a per-request guard on the Playwright page, not just rely on
+    the earlier Python-level URL pre-check."""
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+    _captured, hooks = _install_fake_crawl4ai(monkeypatch)
+
+    scraper = Crawl4AIScraper(tmp_path)
+    scraper.scrape("https://example.com/article")
+
+    assert "on_page_context_created" in hooks
+
+
+@pytest.mark.asyncio
+async def test_installed_ssrf_hook_registers_reject_private_requests_route(monkeypatch, tmp_path):
+    """The installed hook must, when given a page, register
+    _reject_private_requests (or equivalent) as the route handler for every
+    request the page makes, not just the initial navigation URL."""
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper, _reject_private_requests
+    _captured, hooks = _install_fake_crawl4ai(monkeypatch)
+
+    scraper = Crawl4AIScraper(tmp_path)
+    scraper.scrape("https://example.com/article")
+    installed_hook = hooks["on_page_context_created"]
+
+    class _FakePage:
+        def __init__(self):
+            self.routed = []
+
+        async def route(self, pattern, handler):
+            self.routed.append((pattern, handler))
+
+    page = _FakePage()
+    await installed_hook(page)
+    assert len(page.routed) == 1
+    pattern, handler = page.routed[0]
+    assert pattern == "**/*"
+    assert handler is _reject_private_requests
 
 
 # ── create_profile (interactive login → saved profile) ────────────────────────

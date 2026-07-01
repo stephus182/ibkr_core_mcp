@@ -62,6 +62,52 @@ _PAYWALL_MARKERS = (
 )
 
 
+def is_private_host(host: str) -> bool:
+    """
+    True if `host` (a hostname or IP literal, already lowercased by the caller)
+    is localhost, link-local, or resolves — as a literal or via DNS — to a
+    private/loopback/reserved IP address.
+
+    Shared by two independent SSRF layers so they can't silently drift apart:
+      1. ClaudeToolkit._validate_public_url — the Python-level pre-check run
+         before any URL reaches Crawl4AI at all.
+      2. The Playwright-level per-request guard installed in
+         Crawl4AIScraper.scrape() (see _reject_private_requests below), which
+         re-checks every request Chromium actually makes (initial navigation,
+         redirects, and subresources) at the moment it's about to be sent —
+         closing the DNS-rebinding and redirect-based gaps that layer 1 alone
+         cannot close, since layer 1's DNS resolution happens in a different
+         process, moments before Chromium performs its own independent lookup.
+
+    Args:
+        host: Hostname or IP literal to check. Callers are responsible for
+              extracting this from a URL (e.g. via urlparse(url).hostname).
+
+    Returns:
+        True if the host should be blocked. False if it resolves to a public
+        address, or if it's unresolvable (an unresolvable hostname isn't a
+        private-IP bypass — the fetch will simply fail on its own).
+    """
+    import ipaddress
+    import socket
+
+    if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+    except ValueError:
+        # Not a literal IP — resolve via DNS and re-check. Catches decimal
+        # (2130706433) and hex (0x7f000001) encoded IPs as well as ordinary
+        # hostnames that happen to resolve to a private address.
+        try:
+            resolved = socket.gethostbyname(host)
+            addr = ipaddress.ip_address(resolved)
+            return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+        except socket.gaierror:
+            return False
+
+
 class Crawl4AIUnavailableError(Exception):
     """
     Raised when the optional `crawl4ai` dependency is not installed.
@@ -196,6 +242,74 @@ def judge_completeness_llm(config: Config, url: str, markdown: str) -> bool:
     return "INCOMPLETE" not in reply
 
 
+def _safe_domain(url_or_domain: str) -> str:
+    """
+    Extract a filesystem-safe domain string from a URL or bare domain, for use
+    as a `profiles_dir` subdirectory name (`profiles_dir / domain`).
+
+    Deliberate defense-in-depth, not incidental: a hostname of ".." would make
+    `profiles_dir / domain` resolve to profiles_dir's *parent* directory (e.g.
+    `~/.ibkr_core`), which `Crawl4AIScraper.scrape()` would then read from
+    (picking up an unrelated file as if it were a browser profile) and
+    `create_profile()` would `shutil.rmtree()`/write into. Today this is also
+    incidentally blocked upstream by ClaudeToolkit._validate_public_url, whose
+    DNS resolution raises on malformed hostnames like "..", but that's a side
+    effect of IDNA encoding rules, not an intentional path-traversal check — a
+    future change to that validation could silently reopen it. This function
+    makes the check explicit and independent of any caller's URL validation.
+
+    Args:
+        url_or_domain: A URL (its hostname is used) or a bare domain string.
+
+    Returns:
+        The lowercased domain.
+
+    Raises:
+        ValueError: If the resulting domain is empty, or contains "..", "/",
+            or "\\" — anything that could escape `profiles_dir` via the
+            `profiles_dir / domain` join.
+    """
+    domain = (urlparse(url_or_domain).hostname or url_or_domain or "").lower()
+    if not domain or ".." in domain or "/" in domain or "\\" in domain:
+        raise ValueError(f"Invalid domain for profile storage: {url_or_domain!r}")
+    return domain
+
+
+async def _reject_private_requests(route: Any, request: Any) -> None:
+    """
+    Playwright route handler: abort any request whose host is private/loopback/
+    link-local/reserved; otherwise let it continue.
+
+    Installed (via _install_ssrf_guard below) on every request Chromium makes
+    during a Crawl4AI page load — the initial navigation, every HTTP redirect
+    hop, and every subresource — not just the URL Crawl4AIScraper.scrape() was
+    originally called with. This is the second of two SSRF layers (see
+    is_private_host's docstring): it closes what a single pre-fetch URL check
+    at the Python level cannot, because it re-checks at the moment each request
+    is actually about to be sent, inside the same browser navigation, rather
+    than relying on a DNS resolution done earlier in a different process.
+
+    Args:
+        route: Playwright `Route` object for the intercepted request.
+        request: Playwright `Request` object; `request.url` is the URL about
+                 to be fetched (which may differ from the original scrape URL
+                 if this is a redirect or subresource).
+    """
+    import urllib.parse
+
+    host = (urllib.parse.urlparse(request.url).hostname or "").lower()
+    if host and is_private_host(host):
+        await route.abort()
+    else:
+        await route.continue_()
+
+
+async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
+    """Crawl4AI `on_page_context_created` hook: register _reject_private_requests
+    as the route handler for every request the page makes."""
+    await page.route("**/*", _reject_private_requests)
+
+
 class Crawl4AIScraper:
     """
     Fallback scraper using Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
@@ -211,8 +325,13 @@ class Crawl4AIScraper:
     `crawl4ai` is imported lazily inside scrape() so the base ibkr_core_mcp
     package never requires it.
 
-    Source (BrowserConfig / managed-browser profile reuse):
+    Source (BrowserConfig / managed-browser profile reuse, and the
+    on_page_context_created hook used for the SSRF request guard):
       https://docs.crawl4ai.com/advanced/identity-based-crawling/
+      (hook signature verified against the installed crawl4ai==0.9.0 source,
+      crawl4ai/async_crawler_strategy.py, on 2026-07-01 — AsyncCrawlerStrategy
+      exposes hooks including "on_page_context_created", called with the
+      Playwright `page` as its first argument.)
 
     Args:
         profiles_dir: Root directory for saved login profiles — one subfolder
@@ -234,11 +353,16 @@ class Crawl4AIScraper:
         ClaudeToolkit._handle_firecrawl_crawl's per-page fallback loop for the
         latency/resource tradeoff this implies for bulk crawls).
 
+        Installs a Playwright-level SSRF guard (_reject_private_requests) on
+        every scrape, in addition to trusting the caller's own pre-fetch check
+        (ClaudeToolkit._validate_public_url). Callers should still validate the
+        URL before calling — this method's guard is defense-in-depth against
+        DNS rebinding and redirect-based bypasses of that earlier check, not a
+        replacement for it (the earlier check is cheaper and blocks the common
+        case before a browser is ever launched).
+
         Args:
-            url: The URL to fetch. Callers MUST validate this is not a private/
-                 loopback/link-local address before calling — this method has
-                 no SSRF guard of its own; it trusts the caller (see
-                 ClaudeToolkit._validate_public_url / _scrape_with_fallback).
+            url: The URL to fetch.
 
         Returns:
             {"url": url, "markdown": <raw_markdown or "" if the page had none>}
@@ -258,7 +382,7 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        domain = urlparse(url).hostname or ""
+        domain = _safe_domain(url)
         profile_dir = self._profiles_dir / domain
         if profile_dir.is_dir():
             browser_config = BrowserConfig(
@@ -271,6 +395,7 @@ class Crawl4AIScraper:
 
         async def _scrape() -> dict[str, str]:
             async with AsyncWebCrawler(config=browser_config) as crawler:
+                crawler.crawler_strategy.set_hook("on_page_context_created", _install_ssrf_guard)
                 result = await crawler.arun(url=url)
                 markdown = result.markdown.raw_markdown if result.markdown else ""
                 return {"url": url, "markdown": markdown}
@@ -315,7 +440,7 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
             "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
         ) from exc
 
-    domain = urlparse(url_or_domain).hostname or url_or_domain
+    domain = _safe_domain(url_or_domain)
     profiler = BrowserProfiler()
     created_path = Path(_run_async(profiler.create_profile(profile_name=domain)))
 

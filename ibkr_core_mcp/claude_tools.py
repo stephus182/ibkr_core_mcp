@@ -2236,6 +2236,12 @@ class ClaudeToolkit:
         Handles standard hostnames, IPv4/IPv6 literals, and decimal/hex-encoded IPs
         (e.g. http://2130706433/ = 127.0.0.1) by resolving before checking.
 
+        This is one of two independent SSRF layers — see is_private_host's
+        docstring in scrape_fallback.py for why a Python-level pre-check alone
+        (this method) cannot fully close a DNS-rebinding or redirect-based
+        bypass, and how the second layer (a Playwright-level per-request guard
+        installed in Crawl4AIScraper.scrape) closes it.
+
         Args:
             url: Candidate URL to validate before any local fetch.
 
@@ -2243,9 +2249,9 @@ class ClaudeToolkit:
             None if safe to fetch. Otherwise a human-readable "Blocked: ..." or
             "Invalid URL: ..." string suitable for returning directly to the LLM.
         """
-        import ipaddress
-        import socket
         import urllib.parse
+
+        from ibkr_core_mcp.scrape_fallback import is_private_host
 
         try:
             parsed = urllib.parse.urlparse(url)
@@ -2254,22 +2260,8 @@ class ClaudeToolkit:
             host = (parsed.hostname or "").lower()
             if not host:
                 return "Blocked: URL has no hostname."
-            if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):
-                return "Blocked: cannot fetch from localhost or link-local addresses."
-            try:
-                addr = ipaddress.ip_address(host)
-                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                    return "Blocked: cannot fetch from private or reserved IP addresses."
-            except ValueError:
-                # Not a literal IP — resolve via DNS and re-check.
-                # This catches decimal (2130706433) and hex (0x7f000001) encoded IPs.
-                try:
-                    resolved_ip = socket.gethostbyname(host)
-                    addr = ipaddress.ip_address(resolved_ip)
-                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                        return "Blocked: URL resolves to a private or reserved IP address."
-                except socket.gaierror:
-                    pass  # unresolvable hostname — let the caller's own request fail naturally
+            if is_private_host(host):
+                return "Blocked: cannot fetch from localhost, link-local, or private/reserved addresses."
         except Exception as exc:
             return f"Invalid URL: {exc}"
         return None
