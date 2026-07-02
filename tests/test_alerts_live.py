@@ -56,6 +56,13 @@ def live_toolkit(live_config):
     client = IBKRClient(live_config, auth=BrowserCookieAuth())
     if not client.ping():
         pytest.skip("IBKR gateway not reachable or not authenticated")
+    # Warm up the brokerage session — some write endpoints (alerts, orders) return
+    # HTTP 403 without this initialisation call.
+    # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#accounts
+    try:
+        client.get_accounts()
+    except Exception:
+        pass
     return ClaudeToolkit(client, MagicMock(), MagicMock(), live_config)
 
 
@@ -79,19 +86,17 @@ def _create_alert(toolkit, symbol: str = "AAPL", operator: str = ">=",
 
     Skips with a descriptive message on 403 (no trading session) or rate limit.
     """
-    from ibkr_core_mcp.exceptions import IBKRAPIError, IBKRRateLimitError
+    # ClaudeToolkit.execute() catches all exceptions internally and returns them
+    # as text via _safe_error() — IBKRAPIError is never re-raised to the caller.
     inputs = {"symbol": symbol, "operator": operator, "price": price, **kwargs}
-    try:
-        text, _ = toolkit.execute("create_price_alert", inputs)
-    except IBKRRateLimitError:
+    text, _ = toolkit.execute("create_price_alert", inputs)
+    if "429" in text or "rate limit" in text.lower():
         pytest.skip("Rate limited on create_price_alert — try again in a few seconds")
-    except IBKRAPIError as e:
-        if "403" in str(e):
-            pytest.skip(
-                "create_price_alert HTTP 403 — requires an active trading session "
-                "(log in to the Client Portal gateway before running alert tests)"
-            )
-        raise
+    if "403" in text:
+        pytest.skip(
+            "create_price_alert HTTP 403 — alert writes require an active brokerage "
+            "session (complete IBKR 2FA login before running these tests)"
+        )
     alert_id = _parse_alert_id(text)
     return text, alert_id
 

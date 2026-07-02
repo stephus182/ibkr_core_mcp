@@ -13,6 +13,36 @@ When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30
 
 ---
 
+<a id="run-2026-07-01-1"></a>
+## Run: 2026-07-01 — alert batch first run
+
+| Field | Value |
+|---|---|
+| Date | 2026-07-01 |
+| Purpose | First run of `test_alerts_live.py` — 11 alert tests via ClaudeToolkit |
+| Gateway build | live (authenticated session) |
+| Auth method | `BrowserCookieAuth` |
+| Python | `3.14.6` · pytest `9.0.3` |
+| Result | **1 pass · 10 skip · 0 fail** |
+| Test file | `tests/test_alerts_live.py` |
+
+### Findings
+
+| Test | Result | Notes |
+|---|---|---|
+| `test_toolkit_get_alerts` | PASS | Read-only list works fine |
+| All 10 write tests | SKIP (403) | `create_alert` returns HTTP 403 — same restriction as `test_alert_crud_roundtrip` in `test_client_live.py` |
+
+### Root cause: HTTP 403 on all alert writes
+
+`BrowserCookieAuth` provides a valid authenticated session (reads work), but IBKR requires an active **brokerage session** for write operations. Adding a `get_accounts()` warm-up call before the fixture did not resolve it.
+
+This is a known CP API restriction — not a code bug. The same skip exists in `test_alert_crud_roundtrip`. Alert writes may require SSO-based session initialization (`/iserver/auth/ssodh/init`) that is only available through a full interactive login flow, not cookie-based auth alone.
+
+**Next step:** Test alert creation interactively through ClaudIA UI (which maintains the full brokerage session via 60s `/tickle` keepalive) to confirm the tool works end-to-end outside of the test harness.
+
+---
+
 <a id="run-2026-06-30-4"></a>
 ## Run: 2026-06-30 (fourth run — regulatory snapshot added)
 
