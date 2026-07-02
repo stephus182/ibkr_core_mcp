@@ -3,8 +3,10 @@
 Accumulated record of machine-executed live tests against a real IBKR Client Portal Gateway.
 Every entry was produced by an automated test run — no manual curl, no simulated responses.
 
-**Test file:** `tests/test_client_live.py`  
-**Run command:** `pytest tests/test_client_live.py -v -m integration`  
+**Test files:**
+- `tests/test_client_live.py` — IBKRClient endpoint coverage (61 tests, `pytest tests/test_client_live.py -v -m integration`)
+- `tests/test_alerts_live.py` — Price alert tools via ClaudeToolkit (11 tests, `pytest tests/test_alerts_live.py -v -m integration`)
+
 **Skip guard:** All tests auto-skip when `ping()` returns False (gateway offline or unauthenticated).
 
 When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30 run 4](#run-2026-06-30-4)`.
