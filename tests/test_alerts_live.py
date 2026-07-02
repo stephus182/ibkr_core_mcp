@@ -10,8 +10,25 @@ Covers §4b of the live test plan:
 Run with a live, authenticated IBKR gateway:
     pytest tests/test_alerts_live.py -v -m integration
 
-All test alerts use prices that will never fire (AAPL >= $99999 or <= $0.01).
+All test alerts use prices that will never fire (prices far outside realistic
+market context for the instrument under test).
 Every test cleans up after itself — alerts are always deleted in finally blocks.
+
+## Machine test boundary
+
+get_alerts (read) is fully machine-testable and passes.
+
+Alert write operations (create, modify, delete, activate) skip with HTTP 403
+in the test harness. This is an IBKR CP API architectural restriction: write
+operations require an active brokerage session that BrowserCookieAuth alone
+cannot replicate. ClaudIA maintains this session via continuous /tickle keepalive;
+the test harness creates a fresh client with cookie auth only.
+
+These write operations are validated manually through the ClaudIA UI:
+ask ClaudIA to create an alert and verify it appears on the IBKR mobile app.
+This is the correct validation path — not a gap in test coverage.
+
+See docs/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
 
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
 """

@@ -4,8 +4,26 @@ Run with a live, authenticated IBKR gateway:
     pytest tests/test_client_live.py -v -m integration
 
 All tests are skipped automatically when the gateway is unreachable.
-No order-write (place/modify/cancel) or regulatory snapshot ($0.01/call)
-tests are included.
+
+## Machine test boundary
+
+All read operations (positions, market data, P&L, trade history, accounts,
+alerts list, etc.) are covered here via BrowserCookieAuth — these work with
+a standard authenticated gateway session.
+
+Write operations (place_order, modify_order, cancel_order, create_alert, etc.)
+are NOT machine-testable: the IBKR CP API requires an active brokerage session
+that BrowserCookieAuth alone cannot replicate. These are validated manually
+through the ClaudIA UI, which maintains the full brokerage session via
+continuous /tickle keepalive every 60s.
+
+This is an IBKR CP API architectural restriction, not a test harness limitation.
+See docs/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
+
+Explicit exclusions:
+- Order writes (place/modify/cancel/reply) — brokerage session required + hard safety rule
+- Alert writes (create/modify/delete/activate) — brokerage session required
+- Regulatory snapshot ($0.01/call) — tested once manually, not run routinely
 """
 from __future__ import annotations
 
