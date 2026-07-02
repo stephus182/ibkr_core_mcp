@@ -20,15 +20,17 @@ import ast
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import anthropic
+from anthropic.types import MessageParam
 from dotenv import load_dotenv
 
 CLAUDIA = Path("/Users/steph/Claude_Projects/claudia_ui")
-MSG = [{"role": "user", "content": "hello"}]
+MSG: list[MessageParam] = [{"role": "user", "content": "hello"}]
 
 
-def literal_assign(py_file: Path, name: str):
+def literal_assign(py_file: Path, name: str) -> Any:
     """Extract a module-level literal assignment (handles both x = ... and x: T = ...)."""
     tree = ast.parse(py_file.read_text())
     for node in ast.walk(tree):
@@ -45,12 +47,13 @@ def literal_assign(py_file: Path, name: str):
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--env-file", default=str(CLAUDIA / ".env"))
-    p.add_argument("--model", default=os.environ.get("CLAUDIA_MODEL", "claude-opus-4-8"))
+    p.add_argument("--model", default=None)
     p.add_argument("--out", required=True)
     p.add_argument("--extra-tools", help="JSON file with additional tool dicts to include")
     args = p.parse_args()
 
     load_dotenv(args.env_file)
+    model = args.model or os.environ.get("CLAUDIA_MODEL", "claude-opus-4-8")
     client = anthropic.Anthropic()
 
     repo = Path(__file__).resolve().parents[2]
@@ -59,8 +62,8 @@ def main() -> None:
     extra = json.loads(Path(args.extra_tools).read_text()) if args.extra_tools else []
     all_tools = toolkit_tools + local_tools + extra
 
-    def count(**kw) -> int:
-        return client.messages.count_tokens(model=args.model, messages=MSG, **kw).input_tokens
+    def count(**kw: Any) -> int:
+        return client.messages.count_tokens(model=model, messages=MSG, **kw).input_tokens
 
     baseline = count()
     full = count(tools=all_tools)
@@ -70,15 +73,18 @@ def main() -> None:
         without = all_tools[:i] + all_tools[i + 1:]
         marginals[tool["name"]] = full - count(tools=without)
 
+    if len(marginals) != len(all_tools):
+        raise SystemExit("duplicate tool names in payload — marginals table would be incomplete")
+
     # System prompt = context.md + principles.md (Drive overrides may differ slightly;
     # this measures the committed baseline, which is what rides on most calls).
-    sys_text = (CLAUDIA / "docs" / "context.md").read_text() + (
-        CLAUDIA / "docs" / "principles.md"
-    ).read_text()
+    sys_text = "\n".join(
+        (CLAUDIA / "docs" / f).read_text() for f in ("context.md", "principles.md")
+    )
     system_tokens = count(system=sys_text) - baseline
 
-    result = {
-        "model": args.model,
+    result: dict[str, Any] = {
+        "model": model,
         "baseline_no_tools": baseline,
         "full_payload_with_tools": full,
         "tool_surface_total": full - baseline,
@@ -87,9 +93,11 @@ def main() -> None:
         "tool_count": len(all_tools),
         "per_tool_marginal": dict(sorted(marginals.items(), key=lambda kv: -kv[1])),
     }
-    Path(args.out).write_text(json.dumps(result, indent=2))
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2))
 
-    print(f"model={args.model}  tools={len(all_tools)}")
+    print(f"model={model}  tools={len(all_tools)}")
     print(f"tool surface: {result['tool_surface_total']:,} tok   "
           f"system prompt: {system_tokens:,} tok   "
           f"static prefix/call: {result['static_prefix_total']:,} tok")
