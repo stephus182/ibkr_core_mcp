@@ -312,7 +312,41 @@ D3 rejects Candidate 3 on its own evidence: with caching (decided, will exist) t
 **When to execute Candidate 2:** at the first genuinely new tool domain — the arch note's trigger (lines 84–86: "refactor in the same PR as the new feature so the split pays for itself immediately"), where the ~1-day cost is amortized against a feature rather than spent standalone. **The pending layer-2 web-docs tools do not qualify as that trigger:** list/read/delete over Drive `web_docs/` is an *extension of the existing web domain* (shared `WebDocsStore`/Drive-scraping concern), not a new domain like the options-analytics or news tools the arch note names as examples. Sequencing therefore: (1) land Candidate 1's cleanup now — a pure internal refactor with zero public-API risk; (2) add the three layer-2 tools as three handlers in the single `claude_tools.py` under Candidate 1's structure; (3) when the first real new domain arrives, execute Candidate 2 in that PR, at which point the layer-2 web-docs handlers migrate into `tools/web.py` beside firecrawl as part of the split. This keeps the split trigger honest and avoids paying a day of refactor-and-retest cost to accommodate three cohesive tools that already fit the existing web bucket.
 
 ## Appendix F — Tool → authoritative-source map (WS3a)
-_pending — Task 10_
+
+**Purpose:** for each of the 42 `ClaudeToolkit` tools, name the one external (or internal) authoritative source that Task 11 (WS3b/3c, Appendix G) will check documentation claims against, per the repo's docs-first rule. Grouping is by the underlying API surface, not by module — several groups span more than one proposed module from Appendix E.
+
+**Method:** every tool in `TOOL_DEFINITIONS` (`ibkr_core_mcp/claude_tools.py:68`) enumerated once via `grep -n '"name":' claude_tools.py` restricted to top-level tool entries (excluding two nested schema-property `"name"` fields inside `create_price_alert`/`modify_price_alert`'s input schemas, lines 576 and 640). Count: 42, matching the design spec. Firecrawl's exact endpoints were confirmed by reading the handlers (`_handle_firecrawl_search` ~2384, `_handle_firecrawl_crawl` ~2444, `_scrape_with_fallback` ~2293) and the HTTP layer they call into (`ibkr_core_mcp/web_scraper.py`, `FirecrawlClient` class, lines 101–270), not assumed from the tool name.
+
+| Tool group | Tools | Authoritative source |
+|---|---|---|
+| Market data | `fetch_market_data`, `get_market_snapshot`, `get_futures`, `get_trading_schedule` | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ (`iserver/marketdata/history`, `iserver/marketdata/snapshot`, `trsrv/futures`, `trsrv/secdef/schedule`) |
+| Contracts | `search_contract`, `get_contract_info`, `get_option_chain` | same CPAPI reference (`iserver/secdef/search`, `iserver/secdef/info`, `iserver/secdef/strikes`) |
+| Portfolio/PA | `get_account_summary`, `get_positions`, `get_ledger`, `get_allocation`, `get_pnl`, `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` | same CPAPI reference (`portfolio/*`, `iserver/account/pnl/partitioned`, `pa/*`) |
+| Orders (read) | `get_live_orders`, `get_order_status`, `diagnose_orders`, `preview_order` | CPAPI reference (`iserver/account/orders`, `iserver/account/order/status`, `iserver/account/{accountId}/orders/whatif`) + https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ (two-call subscription pattern) |
+| Alerts | `get_alerts`, `create_price_alert`, `delete_alert`, `activate_alert`, `modify_price_alert` | CPAPI reference (`iserver/account/alert*`) |
+| Scanner/watchlists/notifications | `run_scanner`, `get_watchlists`, `get_notifications` | CPAPI reference (`iserver/scanner/params` + `iserver/scanner/run`, `iserver/watchlist*`, `fyi/notifications`) |
+| Trades/Flex | `get_trades`, `sync_flex_trades`, `sync_flex_archive`, `import_flex_file`, `check_flex_coverage`, `verify_flex_import` | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm + https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm (`get_trades` also touches CPAPI `iserver/account/trades`, already covered by the Market data/Contracts group's CPAPI reference — not double-listed) |
+| Web scraping | `firecrawl_search`, `firecrawl_crawl` | Firecrawl API docs — see "Firecrawl endpoint correction" below. `firecrawl_search` → https://docs.firecrawl.dev/api-reference/endpoint/search ; `firecrawl_crawl` → https://docs.firecrawl.dev/api-reference/endpoint/crawl-post + https://docs.firecrawl.dev/api-reference/endpoint/crawl-get |
+| Cache (GDrive) | `check_cache`, `list_cache`, `delete_cache` | https://developers.google.com/drive/api/reference/rest/v3 |
+| Internal-only | `add_indicators`, `run_backtest`, `generate_pinescript`, `get_analytics` | No external API — verify against the package's own modules (`indicators.py`, `backtest.py`, `pinescript.py`, `analytics.py`); no scrape needed |
+
+42 tools, each listed exactly once (4 + 3 + 8 + 4 + 5 + 3 + 6 + 2 + 3 + 4 = 42).
+
+### Firecrawl endpoint correction (vs. starting map)
+
+The task brief's starting map listed four candidate Firecrawl doc pages, including `/api-reference/endpoint/scrape`. Reading `FirecrawlClient` (`ibkr_core_mcp/web_scraper.py:101-270`) shows `/v1/scrape` is **never called directly** by this codebase:
+
+- `firecrawl_search` → `FirecrawlClient.search()` → **one call**, `POST {BASE_URL}/search`, with `scrapeOptions.formats: ["markdown"]` inline in the search request (`web_scraper.py:171-179`). There is no separate scrape call — the search endpoint returns page markdown itself.
+- `firecrawl_crawl` → `FirecrawlClient.crawl()` → `POST {BASE_URL}/crawl` to start the async job (`web_scraper.py:248-255`), then polls `GET {BASE_URL}/crawl/{job_id}` every 5s until `status == "completed"` or `timeout_s` elapses (`web_scraper.py:263-267`). Again, no standalone `/scrape` call — per-page scraping is a parameter of the crawl job, not a separate request.
+
+So the correct doc pages are `/endpoint/search`, `/endpoint/crawl-post` (job start), and `/endpoint/crawl-get` (job poll) — not `/endpoint/scrape`, which documents an endpoint this code path never touches.
+
+**API version flag (raw finding for Task 11, not resolved here):** `FirecrawlClient.BASE_URL = "https://api.firecrawl.dev/v1"` (`web_scraper.py:119`) — the code targets Firecrawl's **v1** REST API. Live recon against `docs.firecrawl.dev` during this task (2026-07-02) found the three endpoint-reference pages above now document the **v2** API (base URL `https://api.firecrawl.dev/v2`; page headers explicitly say "v2"), and a `https://docs.firecrawl.dev/migrate-to-v2` guide exists describing method/field changes between the two. The migration page's fetched content did not state whether v1 is still operational or has a sunset date. This is a genuine v1-vs-v2 documentation-version mismatch between the code and the only currently-published endpoint docs — flagged here as raw evidence; Task 11 (Appendix G) is where it should be turned into a verdict (e.g., whether `web_scraper.py` needs a v2 migration, and whether v1 responses still match what's documented).
+
+_Scrape record: pending (Step 2 in progress)_
+
+## Appendix G — Docs verdict table (WS3b/3c)
+_pending — Task 11_
 
 ## Appendix G — Docs verdict table (WS3b/3c)
 _pending — Task 11_
