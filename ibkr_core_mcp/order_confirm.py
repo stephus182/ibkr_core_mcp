@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import contextlib
+import subprocess
+import sys
 from typing import Any
 
 try:
     import tkinter as tk
-except (ModuleNotFoundError, ImportError):  # Python without Tk support (CI, headless)
+except ImportError:  # Python without Tk support (CI, headless, Python 3.14 Homebrew)
     tk = None  # type: ignore[assignment]
 from ibkr_core_mcp.exceptions import HumanAuthError
 
-_DIALOG_TIMEOUT_MS = 60_000  # 60 s — matches Touch ID timeout; auto-cancels if unattended
+_DIALOG_TIMEOUT_S = 60  # auto-cancels if unattended
 
 
 def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
-    """Gate 2 for place_order. Raises HumanAuthError if user does not confirm."""
+    """Gate 2 for place_order. Raises HumanAuthError if user does not confirm.
+
+    Shows a native macOS dialog (osascript) with full order details, a CANCEL
+    button, and a SEND TO IBKR button. Auto-cancels after 60 seconds.
+    Falls back to tkinter if osascript is unavailable.
+
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+    """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     side = order.get("side", "?")
     qty = order.get("quantity", "?")
@@ -76,64 +86,126 @@ def confirm_reply_dialog(reply_id: str) -> None:
 def _show_confirm_dialog(
     title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
 ) -> None:
-    """Render modal dialog. Raises HumanAuthError if user cancels or closes."""
-    if tk is None:
+    """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
+
+    Primary path: native macOS dialog via osascript — works with any Python installation,
+    no tkinter required. Falls back to tkinter if not on macOS.
+
+    The osascript dialog auto-cancels after _DIALOG_TIMEOUT_S seconds via
+    AppleScript's 'giving up after' clause.
+    """
+    if sys.platform == "darwin":
+        _show_osascript_dialog(title, details, disclaimer, confirm_label)
+    elif tk is not None:
+        _show_tkinter_dialog(title, details, disclaimer, confirm_label)
+    else:
         raise HumanAuthError(
-            "tkinter is not available in this Python installation. "
-            "Install a Tk-enabled Python to use the GUI confirmation dialog."
+            "No GUI dialog available: not on macOS and tkinter is not installed."
         )
+
+
+def _show_osascript_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
+) -> None:
+    """Native macOS confirmation dialog via osascript.
+
+    Uses AppleScript 'display dialog' with caution icon, two buttons (CANCEL / confirm),
+    and a hard timeout. The default button is CANCEL so accidental Enter does nothing.
+
+    Source: https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_cmds.html#//apple_ref/doc/uid/TP40000983-CH216-SW12
+    """
+    detail_lines = "\n".join(f"{k}: {v}" for k, v in details.items())
+    message = f"{detail_lines}\n\n{disclaimer}"
+
+    script = (
+        f'set dlg to display dialog {_as_str(message)} '
+        f'with title {_as_str(title)} '
+        f'buttons {{"CANCEL", {_as_str(confirm_label)}}} '
+        f'default button "CANCEL" '
+        f'giving up after {_DIALOG_TIMEOUT_S} '
+        f'with icon caution\n'
+        f'if gave up of dlg then\n'
+        f'    return "timeout"\n'
+        f'else\n'
+        f'    return button returned of dlg\n'
+        f'end if'
+    )
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=_DIALOG_TIMEOUT_S + 5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise HumanAuthError(f"Confirmation dialog failed: {exc}") from exc
+
+    output = proc.stdout.strip()
+    if proc.returncode != 0 or output in ("", "timeout", "CANCEL"):
+        raise HumanAuthError("Order cancelled by user")
+    if output != confirm_label:
+        raise HumanAuthError(f"Unexpected dialog response: {output!r}")
+
+
+def _as_str(text: str) -> str:
+    """Escape a Python string for AppleScript: wrap in quotes, escape backslashes and quotes."""
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _show_tkinter_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
+) -> None:
+    """tkinter fallback dialog for non-macOS environments.
+
+    Must be called from the main thread. Auto-cancels after _DIALOG_TIMEOUT_S seconds.
+
+    Security note: on_confirm runs inside the same process as all pip dependencies.
+    A compromised dependency with access to tk._default_root could call root.after(0, on_confirm)
+    to synthetically confirm without user interaction. Touch ID (Gate 1) already ran before
+    this dialog, providing defense-in-depth.
+    """
     confirmed: dict[str, Any] = {"value": False}
 
-    root = tk.Tk()
+    root = tk.Tk()  # type: ignore[union-attr]
     root.withdraw()
 
-    dialog = tk.Toplevel(root)
+    dialog = tk.Toplevel(root)  # type: ignore[union-attr]
     dialog.title(title)
     dialog.attributes("-topmost", True)
     dialog.resizable(False, False)
     dialog.grab_set()
 
-    # --- Title bar ---
-    title_frame = tk.Frame(dialog, bg="#c0392b", pady=8)
+    title_frame = tk.Frame(dialog, bg="#c0392b", pady=8)  # type: ignore[union-attr]
     title_frame.pack(fill="x")
-    tk.Label(
+    tk.Label(  # type: ignore[union-attr]
         title_frame, text=title, bg="#c0392b", fg="white",
         font=("Helvetica", 13, "bold"),
     ).pack()
 
-    # --- Order details ---
-    detail_frame = tk.Frame(dialog, padx=20, pady=10)
+    detail_frame = tk.Frame(dialog, padx=20, pady=10)  # type: ignore[union-attr]
     detail_frame.pack(fill="x")
     for i, (key, val) in enumerate(details.items()):
-        tk.Label(detail_frame, text=f"{key}:", font=("Helvetica", 11, "bold"),
+        tk.Label(detail_frame, text=f"{key}:", font=("Helvetica", 11, "bold"),  # type: ignore[union-attr]
                  anchor="w").grid(row=i, column=0, sticky="w", pady=2)
-        tk.Label(detail_frame, text=str(val), font=("Helvetica", 11),
+        tk.Label(detail_frame, text=str(val), font=("Helvetica", 11),  # type: ignore[union-attr]
                  anchor="w").grid(row=i, column=1, sticky="w", padx=(10, 0), pady=2)
 
-    # --- Disclaimer ---
-    disc_frame = tk.Frame(dialog, bg="#ffeaa7", padx=15, pady=10)
+    disc_frame = tk.Frame(dialog, bg="#ffeaa7", padx=15, pady=10)  # type: ignore[union-attr]
     disc_frame.pack(fill="x", padx=10, pady=5)
-    tk.Label(
+    tk.Label(  # type: ignore[union-attr]
         disc_frame, text=disclaimer, bg="#ffeaa7", wraplength=340,
         font=("Helvetica", 10), justify="left",
     ).pack()
 
-    # --- Buttons ---
-    btn_frame = tk.Frame(dialog, pady=10)
+    btn_frame = tk.Frame(dialog, pady=10)  # type: ignore[union-attr]
     btn_frame.pack()
 
-    remaining: dict[str, Any] = {"secs": _DIALOG_TIMEOUT_MS // 1000}
-    # Store the pending after-callback ID so we can cancel it before destroying
-    # widgets; without this, the next _tick fires on a destroyed widget and raises
-    # TclError (after-callbacks are NOT auto-cancelled when a widget is destroyed).
+    remaining: dict[str, Any] = {"secs": _DIALOG_TIMEOUT_S}
     _after_id: dict[str, Any] = {"id": None}
 
     def _cancel_tick() -> None:
         if _after_id["id"] is not None:
-            try:
+            with contextlib.suppress(Exception):
                 dialog.after_cancel(_after_id["id"])
-            except Exception:
-                pass
             _after_id["id"] = None
 
     def on_cancel() -> None:
@@ -142,24 +214,19 @@ def _show_confirm_dialog(
         dialog.destroy()
         root.destroy()
 
-    # Security note: on_confirm runs inside the same process as all pip dependencies.
-    # A compromised dependency with access to tk._default_root could call root.after(0, on_confirm)
-    # to synthetically confirm without user interaction. Touch ID (Gate 1) already ran before
-    # this dialog was created, providing defense-in-depth. Full isolation requires running the
-    # dialog in a subprocess so the tkinter event loop is unreachable from the parent process.
     def on_confirm() -> None:
         _cancel_tick()
         confirmed["value"] = True
         dialog.destroy()
         root.destroy()
 
-    tk.Button(btn_frame, text="CANCEL", command=on_cancel, width=12,
+    tk.Button(btn_frame, text="CANCEL", command=on_cancel, width=12,  # type: ignore[union-attr]
               bg="#bdc3c7", font=("Helvetica", 11)).pack(side="left", padx=10)
-    tk.Button(btn_frame, text=confirm_label, command=on_confirm, width=18,
+    tk.Button(btn_frame, text=confirm_label, command=on_confirm, width=18,  # type: ignore[union-attr]
               bg="#e74c3c", fg="white", font=("Helvetica", 11, "bold")).pack(side="left", padx=10)
 
-    countdown_var = tk.StringVar(value=f"Auto-cancels in {remaining['secs']}s")
-    tk.Label(dialog, textvariable=countdown_var, fg="#888888",
+    countdown_var = tk.StringVar(value=f"Auto-cancels in {remaining['secs']}s")  # type: ignore[union-attr]
+    tk.Label(dialog, textvariable=countdown_var, fg="#888888",  # type: ignore[union-attr]
              font=("Helvetica", 9)).pack(pady=(0, 6))
 
     def _tick() -> None:
@@ -172,14 +239,11 @@ def _show_confirm_dialog(
 
     _after_id["id"] = dialog.after(1000, _tick)
     dialog.protocol("WM_DELETE_WINDOW", on_cancel)
-
     dialog.update_idletasks()
-    w = dialog.winfo_width()
-    h = dialog.winfo_height()
+    w, h = dialog.winfo_width(), dialog.winfo_height()
     x = (dialog.winfo_screenwidth() - w) // 2
     y = (dialog.winfo_screenheight() - h) // 2
     dialog.geometry(f"+{x}+{y}")
-
     root.mainloop()
 
     if not confirmed["value"]:
