@@ -903,10 +903,12 @@ git commit -m "audit: synthesis — decisions D1-D5 with evidence"
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
 .venv/bin/python -m pytest -m "not integration" -q
 .venv/bin/python -m ruff check .
-.venv/bin/python -m mypy .
+.venv/bin/python -m mypy ibkr_core_mcp scripts
 ```
 
-Expected: all tests pass, ruff and mypy clean (they were green at commit e4f1973). If a test asserts an old description string, updating that assertion is in scope — it is part of the same doc change.
+Expected: all tests pass, ruff clean, mypy clean on the package + audit scripts (CI's mypy
+scope is `ibkr_core_mcp`; repo-wide `mypy .` has ~863 pre-existing errors in `tests/` and is
+not a usable gate — confirmed during Task 2 review). If a test asserts an old description string, updating that assertion is in scope — it is part of the same doc change.
 
 - [ ] **Step 3: Re-measure the token surface**
 
