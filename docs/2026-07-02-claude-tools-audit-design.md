@@ -1,6 +1,6 @@
 # claude_tools.py Full Audit — Design
 
-**Status:** Design approved 2026-07-02. Audit to be planned and executed next; implementation of findings is deliberately deferred.
+**Status:** Design approved 2026-07-02; amended same day — prompt caching excluded from the audit (tracked in claudia_ui docs), D5 documentation adjustments included in scope. Structural findings remain deferred recommendations.
 **Scope repos:** `ibkr_core_mcp` (audited in depth) + `claudia_ui` (measured as the consumer).
 
 ## Problem
@@ -14,11 +14,13 @@ call, and already feels slow. The approved scraping-RAG pipeline (claudia_ui spe
 Before any architectural change, we audit: is the toolkit actually the cause of the slowness,
 does the god class need splitting (and how), and are the 42 tool descriptions accurate against
 official documentation. The audit produces **evidence-backed recommendations for future work,
-not immediate changes** — reflection over speed, per the project owner's direction.
+not immediate structural changes** — reflection over speed, per the project owner's direction.
+The one exception is D5: documentation adjustments are applied as part of this effort.
 
-**Confirmed fact motivating urgency (found during design):** claudia_ui uses **no prompt
+**Fact found during design (handled outside this audit):** claudia_ui uses **no prompt
 caching** — no `cache_control` anywhere in `claudia/agent.py`. The full static prefix (system
 prompt + 42+ tool schemas) is re-processed uncached on every message *and* every tool-loop turn.
+The upgrade is tracked in claudia_ui docs (see "Excluded from the audit" below).
 
 ## Prior art this audit builds on
 
@@ -37,19 +39,18 @@ Criteria are fixed here, before data collection, so conclusions cannot be retro-
 
 | # | Decision | Criteria |
 |---|---|---|
-| D1 | Where ClaudIA slowness comes from | Attribute ≥80% of measured wall-clock per turn to named components (API prompt processing, streaming, handler/IBKR time, Chainlit); state what prompt caching fixed and what remains. |
+| D1 | Where ClaudIA slowness comes from | Attribute ≥80% of measured wall-clock per turn to named components (API prompt processing, streaming, handler/IBKR time, Chainlit). |
 | D2 | Split go/no-go + final architecture | **Go** if the cross-domain dependency graph is cleanly cuttable (few/acyclic edges) AND the findings table shows the monolith actively causing defects or inconsistency. **No-go (defer again)** if evidence shows the problem is cosmetic. |
-| D3 | Runtime tool-exposure strategy for claudia_ui | Compare "all tools + prompt caching" vs. "per-context tool profiles" on measured token cost and observed wrong-tool selections. Profiles recommended only if caching alone leaves a material problem. |
+| D3 | Runtime tool-exposure strategy for claudia_ui | Compare "all tools (with the separately planned prompt-caching upgrade)" vs. "per-context tool profiles" on measured token cost and observed wrong-tool selections. Profiles recommended only if caching would still leave a material problem. |
 | D4 | Sequencing: split vs. scraping-RAG layer 2 | Decided by D2's outcome plus the measured token delta of adding the 3 layer-2 tools. |
 | D5 | Per-tool documentation verdicts | 42-row verdict table (accurate / fix / enrich / trim) with citations and proposed replacement text + token delta for every non-accurate verdict. |
 
-## Parallel track (not part of the audit): P0 prompt caching
+## Excluded from the audit: prompt caching
 
-The owner has already decided to implement prompt caching in claudia_ui (`cache_control` on the
-tools block and system prompt) as an immediate quick win. It is a small, self-contained change
-in the claudia_ui repo, executed **separately from and before** the audit's measurement rerun,
-and it feeds Workstream 1c's before/after comparison. It is not a recommendation of this audit —
-it is already decided — and it must not bias the architectural reflection.
+Prompt caching in claudia_ui (`cache_control` on the tools block and system prompt) is a
+separately decided upgrade, **fully excluded from this audit** — no before/after measurement,
+no sequencing dependency, no audit recommendation. It is tracked as an implementation note at
+`claudia_ui/docs/prompt-caching-upgrade.md`, which will drive that work independently.
 
 ## Workstream 1 — Quantify (numbers before opinions)
 
@@ -74,11 +75,7 @@ plain chat). Per turn, decompose wall-clock into:
 4. tool-loop turn count per user message (each turn = one more full-prefix API call),
 5. Chainlit render/overhead (residual).
 
-**1c. Baseline vs. cached comparison** — run the same scripted session before and after the P0
-prompt-caching change lands. Converts D1 from inference to measurement.
-
-**Output:** measurements appendix — ranked token table, latency decomposition, before/after
-caching comparison.
+**Output:** measurements appendix — ranked token table and latency decomposition.
 
 ## Workstream 2 — Code audit (the architecture evidence)
 
@@ -146,25 +143,35 @@ criteria above.
 summary (D1–D5) up top, then appendices:
 
 - A. Ranked token table + payload totals + layer-2 projection (WS1a)
-- B. Latency decomposition + before/after caching (WS1b/1c)
+- B. Latency decomposition (WS1b)
 - C. Code findings table, 42 rows (WS2a)
 - D. Cross-domain dependency graph, mermaid (WS2b)
 - E. Structural assessment + recommendation (WS2c/2d)
 - F. Tool → source map (WS3a)
 - G. Docs verdict table, 42 rows, with citations (WS3b/3c)
 
+Unlike the structural decisions (D2–D4), which remain recommendations, **D5 is applied in this
+effort**: the fix/enrich/trim verdicts are implemented as documentation-only edits to
+`claude_tools.py` (schema descriptions, `input_schema` texts, docstrings) after the report is
+written, with the full test suite green.
+
 ## Execution order
 
 1. WS1a token math (fast, no dependencies) → 2. WS3 docs verification (scrape-heavy, can run
-alongside code reading) → 3. WS2 code audit → 4. WS1b baseline latency run → 5. P0 caching lands
-in claudia_ui (parallel track) → 6. WS1c cached rerun → 7. Synthesis + report.
+alongside code reading) → 3. WS2 code audit → 4. WS1b latency measurement → 5. Synthesis +
+report → 6. Apply D5 doc verdicts (fix/enrich/trim) to `claude_tools.py`, tests green.
 
-Steps 1–3 have no ordering constraints between them; 4 must precede 6; 6 requires 5.
+Steps 1–4 have no hard ordering constraints between them; 5 requires all four; 6 applies the
+report's D5 outcomes and is the only code-touching step of this effort (documentation text
+only — no structural changes).
 
 ## Out of scope (YAGNI)
 
-- Implementing the split, exposure profiles, doc-text changes, or layer 2 — all are *outputs*
-  of the audit, planned separately after the owner reviews the report.
+- Implementing the split, exposure profiles, or layer 2 — structural outputs of the audit,
+  planned separately after the owner reviews the report. (D5 doc-text adjustments *are* in
+  scope — see Execution order.)
+- Prompt caching in claudia_ui — excluded entirely; tracked at
+  `claudia_ui/docs/prompt-caching-upgrade.md`.
 - `mcp_server.py` internals and the MCP-only alert tools (`add_price_alert`,
   `get_price_alerts`).
 - TradingView bridge tools — counted in the token math (they ride in the same payload), not
@@ -178,14 +185,13 @@ Steps 1–3 have no ordering constraints between them; 4 must precede 6; 6 requi
    3× per condition and reports medians.
 2. **Docs behind login/paywall** — some IBKR pages may not scrape cleanly; fallback to
    Crawl4AI, else mark **unverified** rather than assert.
-3. **Live-session variability** — IBKR gateway latency varies by market hours; baseline and
-   cached runs happen under comparable conditions and record timestamps.
+3. **Live-session variability** — IBKR gateway latency varies by market hours; measurement
+   runs happen under comparable conditions and record timestamps.
 4. **Token-count drift** — `count_tokens` results are model-specific; record the model ID used
    (must match ClaudIA's configured model).
 
 ## References
 
-- Anthropic — prompt caching: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 - Anthropic — token counting: https://docs.anthropic.com/en/docs/build-with-claude/token-counting
 - IBKR Client Portal API: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
 - Full per-domain doc URL table: CLAUDE.md § "IBKR API Reference — Docs First"
