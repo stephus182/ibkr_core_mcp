@@ -106,7 +106,23 @@ cd /Users/steph/Claude_Projects/ibkr_core_mcp && .venv/bin/python scripts/audit/
     --extra-tools docs/superpowers/audit-evidence/tv_tools.json
 ```
 
-_Layer-2 projection: pending — Task 3_
+### Layer-2 projection (D4 input)
+
+Projected cost of adding the 3 planned "layer-2 web-docs" tools (`list_web_docs`, `read_web_doc`, `delete_web_docs`) from the approved scraping-RAG design, measured the same way as the baseline above (leave-one-out marginal cost, `claude-opus-4-8`, 2026-07-02). Fixture: `docs/superpowers/audit-evidence/layer2_tools.json`. Result: `docs/superpowers/audit-evidence/token_counts_with_layer2.json` (49 tools total: 46 baseline + 3 new).
+
+| Tool | Marginal tokens |
+|---|---|
+| `list_web_docs` | 203 |
+| `read_web_doc` | 135 |
+| `delete_web_docs` | 205 |
+| **Total delta** | **543** |
+
+- Delta = new `tool_surface_total` (10,016) − baseline `tool_surface_total` (9,473) = **543 tokens**.
+- As % of current tool surface (9,473 tokens): **5.73%**.
+- As % of current static prefix per call (20,586 tokens): **2.64%**.
+- Sanity check: sum of the three per-tool marginals (203 + 135 + 205 = 543) equals the total delta exactly — **PASS**.
+
+These three schemas are projections transcribed from the scraping-RAG spec (`claudia_ui` `docs/superpowers/specs/2026-07-01-scraping-rag-pipeline-design.md`) for measurement purposes only, measured 2026-07-02 with the same model; final schemas will be decided when layer 2 is built.
 
 ## Appendix B — Latency decomposition (WS1b)
 _pending — Tasks 4–6_
