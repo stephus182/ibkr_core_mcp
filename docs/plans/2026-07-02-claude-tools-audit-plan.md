@@ -315,7 +315,9 @@ cd /Users/steph/Claude_Projects/ibkr_core_mcp
     --out docs/superpowers/audit-evidence/token_counts_with_layer2.json
 ```
 
-Expected: tool count 48; new `tool_surface_total`. The layer-2 delta = this total minus Task 2's total.
+Expected: tool count 49 (claudia has 4 local tools, not the 3 assumed when this plan was
+drafted — confirmed in Task 2); new `tool_surface_total`. The layer-2 delta = this total minus
+Task 2's total.
 
 - [ ] **Step 3: Complete Appendix A**
 
