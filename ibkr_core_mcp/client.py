@@ -957,10 +957,12 @@ class IBKRClient:
         gate fails or times out. ClaudIA constraint: ClaudeToolkit exposes no tool calling
         this method — order execution is UI-layer only, triggered by physical button click.
 
-        US Futures (secType=FUT): caller must include manualIndicator=true in the order dict.
-        Required since May 1, 2025 for CME Group Rule 536-B compliance. IBKR returns an
-        error without it for futures orders.
+        US Futures and Futures Options (FUT/FOP): caller must include both manualIndicator=True
+        and extOperator="<user>" in the order dict. Required since May 1, 2025 for CME Group
+        Rule 536-B compliance. IBKR returns HTTP 400 without them for FUT/FOP orders.
+        order_flow.py adds these automatically when sec_type is "FUT" or "FOP".
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -973,7 +975,14 @@ class IBKRClient:
         qty = order.get("quantity", "?")
         require_touch_id(f"IBKR: Place order — {side} {qty} {symbol}")
         confirm_order_dialog(order, account_id)
-        data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [order]})
+        # Strip display-only fields (underscore-prefixed, e.g. _companyName).
+        # These carry Gate-2 dialog metadata and are not valid IBKR request fields.
+        # Note: ticker IS a valid IBKR field (optional) and is NOT stripped.
+        # manualIndicator / extOperator are FUT/FOP only (CME Rule 536-B) — caller adds them
+        # for futures; omit here to avoid type-rejection on equity orders.
+        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+        api_order = {k: v for k, v in order.items() if not k.startswith("_")}
+        data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [api_order]})
         return data if isinstance(data, list) else []
 
     def modify_order(self, account_id: str, order_id: str, order: dict[str, Any]) -> dict[str, Any]:
@@ -1027,7 +1036,10 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
-        return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": [order]})
+        # Strip display-only fields (underscore-prefixed) — same convention as place_order.
+        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+        api_order = {k: v for k, v in order.items() if not k.startswith("_")}
+        return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": [api_order]})
 
     # ------------------------------------------------------------------
     # Alerts (write)

@@ -84,7 +84,11 @@ def with_retry(
             time.sleep(backoff)
             attempt += 1
             continue
-        # Any other error status
+        # Any other error status — include response body so callers can see IBKR's rejection reason
+        try:
+            body_preview = resp.text[:400]
+        except Exception:
+            body_preview = ""
         raise IBKRAPIError(
-            f"IBKR gateway returned HTTP {status}", status_code=status
+            f"IBKR gateway returned HTTP {status}: {body_preview}", status_code=status
         )

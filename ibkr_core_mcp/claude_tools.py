@@ -959,6 +959,22 @@ class ClaudeToolkit:
         return [a.get("accountId", a.get("id", "")) for a in accounts], None
 
     def _resolve_conid(self, symbol: str, sec_type: str = "STK") -> tuple[str, str | None]:
+        # FUT: /trsrv/futures (front month by expirationDate).
+        # STK/IND/BOND: /iserver/secdef/search.
+        # /iserver/secdef/search does NOT support FUT or CASH — see _resolve_snapshot_conid docstring.
+        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+        if sec_type == "FUT":
+            futures = self._client.get_futures([symbol])
+            if not futures:
+                return "", f"No futures contracts found for {symbol}."
+            try:
+                front = min(futures, key=lambda f: int(f.get("expirationDate") or 0))
+            except (ValueError, TypeError):
+                front = futures[0]
+            conid = front.get("conid")
+            if not conid:
+                return "", f"Futures contracts found for {symbol} but conid missing."
+            return str(int(conid)), None
         contracts = self._client.search_contract(symbol, sec_type)
         if not contracts:
             return "", f"No contract found for {symbol}."
@@ -1781,14 +1797,16 @@ class ClaudeToolkit:
         sec_type is passed through to contract resolution — defaults to STK but must
         be set to 'FUT', 'OPT', etc. for non-equity instruments.
         """
+        # Order type names match IBKR CP API place-order field spec.
+        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
-        _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STP LMT", "MOC", "LOC"})
+        _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE", "TRAIL", "TRAILLMT", "MOC", "LOC"})
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
         quantity = int(inputs["quantity"])
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
-        sec_type = inputs.get("sec_type", "STK")
+        sec_type = inputs.get("sec_type", "STK").upper()
 
         if action not in _VALID_ACTIONS:
             return f"Invalid action {action!r}. Must be BUY or SELL.", None
@@ -1806,14 +1824,19 @@ class ClaudeToolkit:
             return err, None
 
         order: dict[str, Any] = {
-            "conid": conid,
+            "conid": int(conid),             # IBKR requires int
             "orderType": order_type,
             "side": action,
-            "quantity": quantity,
+            "quantity": int(quantity),       # int matches place_order convention
             "tif": "DAY",
         }
+        if sec_type in ("FUT", "FOP"):
+            # Required for US Futures and Futures Options — CME Group Rule 536-B
+            # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+            order["manualIndicator"] = True
+            order["extOperator"] = "ClaudIA"
         if order_type == "LMT" and limit_price is not None:
-            order["price"] = limit_price
+            order["price"] = float(limit_price)  # IBKR requires float
 
         result = self._client.get_order_preview(account_id, order)
         lines = [

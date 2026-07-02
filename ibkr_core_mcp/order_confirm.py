@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import json as _json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 try:
@@ -24,22 +26,37 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
     """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
+    company_name = order.get("_companyName", order.get("companyName", ""))
+    symbol_str = f"{symbol} — {company_name}" if company_name else symbol
     side = order.get("side", "?")
     qty = order.get("quantity", "?")
     order_type = order.get("orderType", order.get("order_type", "MARKET"))
     price = order.get("price")
     tif = order.get("tif", order.get("timeInForce", "DAY"))
+    multiplier = order.get("_multiplier")
     price_str = f"${price}" if price is not None else "MARKET"
+    try:
+        if price is not None and multiplier is not None:
+            # Futures: notional = price × qty × multiplier
+            notional = float(price) * float(qty) * float(multiplier)
+            total_str = f"${notional:,.2f} USD (×{multiplier:g} multiplier)"
+        elif price is not None:
+            total_str = f"${float(price) * float(qty):,.2f} USD"
+        else:
+            total_str = "Market"
+    except (TypeError, ValueError):
+        total_str = "—"
     _show_confirm_dialog(
         title="⚠  LIVE ORDER CONFIRMATION",
         details={
             "Account": account_id,
             "Action": side,
-            "Symbol": symbol,
+            "Symbol": symbol_str,
             "Quantity": str(qty),
             "Order Type": order_type,
             "Price": price_str,
             "TIF": tif,
+            "Total (est.)": total_str,
         },
         disclaimer=(
             "This is a LIVE order. It will be sent to Interactive Brokers "
@@ -88,13 +105,19 @@ def _show_confirm_dialog(
 ) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
 
-    Primary path: native macOS dialog via osascript — works with any Python installation,
-    no tkinter required. Falls back to tkinter if not on macOS.
-
-    The osascript dialog auto-cancels after _DIALOG_TIMEOUT_S seconds via
-    AppleScript's 'giving up after' clause.
+    macOS primary path: AppKit colored dialog (green for BUY, red for SELL) via subprocess.
+    macOS fallback: osascript plain dialog if AppKit subprocess fails.
+    Non-macOS: tkinter fallback.
     """
     if sys.platform == "darwin":
+        side = str(details.get("Action", "")).upper()
+        try:
+            _show_appkit_dialog(title, details, disclaimer, confirm_label, side)
+            return
+        except HumanAuthError:
+            raise  # user decision — do not fall back
+        except Exception:
+            pass  # AppKit subprocess failed — fall back to plain osascript
         _show_osascript_dialog(title, details, disclaimer, confirm_label)
     elif tk is not None:
         _show_tkinter_dialog(title, details, disclaimer, confirm_label)
@@ -102,6 +125,46 @@ def _show_confirm_dialog(
         raise HumanAuthError(
             "No GUI dialog available: not on macOS and tkinter is not installed."
         )
+
+
+def _show_appkit_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, side: str
+) -> None:
+    """Colored macOS confirmation dialog via AppKit, run as a subprocess.
+
+    The subprocess gets its own main thread so NSApplication can run without
+    conflicting with the Chainlit asyncio event loop.
+    Green banner for BUY, red banner for SELL.
+
+    Raises HumanAuthError if user cancels/times out.
+    Raises RuntimeError if the subprocess itself fails (caller falls back to osascript).
+    """
+    payload = _json.dumps({
+        "title": title,
+        "details": details,
+        "disclaimer": disclaimer,
+        "confirm_label": confirm_label,
+        "side": side,
+        "timeout_s": _DIALOG_TIMEOUT_S,
+    })
+    dialog_script = Path(__file__).parent / "_order_dialog.py"
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(dialog_script)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=_DIALOG_TIMEOUT_S + 10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HumanAuthError("Confirmation dialog timed out") from exc
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"AppKit dialog failed: {proc.stderr.strip() or 'unknown error'}")
+
+    output = proc.stdout.strip()
+    if output != "CONFIRMED":
+        raise HumanAuthError("Order cancelled by user")
 
 
 def _show_osascript_dialog(
