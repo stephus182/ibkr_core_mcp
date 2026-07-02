@@ -343,10 +343,23 @@ So the correct doc pages are `/endpoint/search`, `/endpoint/crawl-post` (job sta
 
 **API version flag (raw finding for Task 11, not resolved here):** `FirecrawlClient.BASE_URL = "https://api.firecrawl.dev/v1"` (`web_scraper.py:119`) — the code targets Firecrawl's **v1** REST API. Live recon against `docs.firecrawl.dev` during this task (2026-07-02) found the three endpoint-reference pages above now document the **v2** API (base URL `https://api.firecrawl.dev/v2`; page headers explicitly say "v2"), and a `https://docs.firecrawl.dev/migrate-to-v2` guide exists describing method/field changes between the two. The migration page's fetched content did not state whether v1 is still operational or has a sunset date. This is a genuine v1-vs-v2 documentation-version mismatch between the code and the only currently-published endpoint docs — flagged here as raw evidence; Task 11 (Appendix G) is where it should be turned into a verdict (e.g., whether `web_scraper.py` needs a v2 migration, and whether v1 responses still match what's documented).
 
-_Scrape record: pending (Step 2 in progress)_
+### Scrape record
 
-## Appendix G — Docs verdict table (WS3b/3c)
-_pending — Task 11_
+All 9 unique external URLs from the map above were retrieved 2026-07-02. Raw markdown archived under `docs/superpowers/audit-evidence/scrapes/` (gitignored, not committed); full manifest at `docs/superpowers/audit-evidence/scrapes/manifest.json`. No `FIRECRAWL_API_KEY` was found in `claudia_ui/.env` or the shell environment, so scraping used the Firecrawl CLI's keyless free tier (`npx firecrawl-cli@latest scrape <url>`, no `Authorization` header, per the firecrawl skill's Path F) rather than an authenticated key. Each file was spot-checked for real page text (grepped for expected domain terms/endpoint paths) — see per-URL notes below.
+
+| URL | Retrieved | Method | Status | Bytes | Notes |
+|---|---|---|---|---|---|
+| `interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/` | 2026-07-02 | firecrawl (`--wait-for 5000 --proxy auto`) | ok | 810,435 | SPA reference page; default keyless scrape was not tried first (wait/proxy applied proactively per the task's SPA guidance) — succeeded on this one attempt. Spot-check: 127 hits for known endpoint paths (`iserver/marketdata/history`, `trsrv/futures`, `fyi/notifications`, etc.). |
+| `interactivebrokers.com/campus/trading-lessons/request-modify-orders/` | 2026-07-02 | firecrawl (retry, `--wait-for 3000 --proxy auto`) | ok | 91,918 | First attempt (firecrawl, default options) returned a 152-byte Akamai edge-block error page — recorded as a **failed** manifest entry, not discarded. WebFetch fallback then returned HTTP 403 — also recorded failed. Retry with `--proxy auto` succeeded; spot-check confirms real article body (two-call GET/POST pattern for `iserver/account/orders`, `iserver/account/{accountId}/order/{orderId}`, live reader comments included). |
+| `ibkrguides.com/clientportal/performanceandstatements/flex3.htm` | 2026-07-02 | firecrawl | ok | 20,898 | Spot-check: 71 hits for flex/token/query terms. |
+| `ibkrguides.com/clientportal/performanceandstatements/flex3error.htm` | 2026-07-02 | firecrawl | ok | 16,891 | Spot-check: contains the full error-code table, including row `1001 \| Statement could not be generated at this time. Please try again shortly.` — matches the CLAUDE.md incident note verbatim. |
+| `docs.firecrawl.dev/api-reference/endpoint/search` | 2026-07-02 | firecrawl | ok | 23,216 | Spot-check: `POST /search`, `scrapeOptions` present. Page documents Firecrawl **v2** (base URL `api.firecrawl.dev/v2`) — see version-flag note above; code uses v1. |
+| `docs.firecrawl.dev/api-reference/endpoint/crawl-post` | 2026-07-02 | firecrawl | ok | 17,850 | Spot-check: `POST /crawl`, `limit`, `scrapeOptions` present. Also v2-labeled. |
+| `docs.firecrawl.dev/api-reference/endpoint/crawl-get` | 2026-07-02 | firecrawl | ok | 12,933 | Spot-check: `GET /crawl/{id}`, `status`, `completed` present. Also v2-labeled. |
+| `docs.firecrawl.dev/migrate-to-v2` | 2026-07-02 | firecrawl | ok | 13,034 | Retrieved specifically to check v1 support/sunset status (see version-flag note above); page describes the method/field diffs but does not state whether v1 is deprecated or has an end-of-life date. |
+| `developers.google.com/drive/api/reference/rest/v3` | 2026-07-02 | firecrawl | ok | 86,068 | Spot-check: `files.list`, `files.get`, "Drive API" all present. |
+
+**Totals:** 9/9 unique URLs archived `ok`. `manifest.json` has 11 entries total — 8 URLs with one `ok` entry each, plus `request-modify-orders` with 3 entries (2 recorded failures, then a successful retry). 0 URLs left UNSCRAPED.
 
 ## Appendix G — Docs verdict table (WS3b/3c)
 _pending — Task 11_
