@@ -1,6 +1,6 @@
 import io
 from datetime import date, timedelta
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -179,7 +179,6 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
 
 def test_load_happy_path_returns_dataframe(drive_cache):
     """load() downloads parquet bytes via MediaIoBaseDownload and returns a DataFrame."""
-    from ibkr_core_mcp.exceptions import CacheMissError
 
     expected_df = pd.DataFrame({"close": [100.0, 101.0, 102.0]})
     parquet_bytes = _make_parquet_bytes(expected_df)

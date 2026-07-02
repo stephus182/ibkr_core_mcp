@@ -40,7 +40,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -69,8 +68,8 @@ def live_toolkit(live_config):
     Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ping
     """
     from ibkr_core_mcp.auth import BrowserCookieAuth
-    from ibkr_core_mcp.client import IBKRClient
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
+    from ibkr_core_mcp.client import IBKRClient
     client = IBKRClient(live_config, auth=BrowserCookieAuth())
     if not client.ping():
         pytest.skip("IBKR gateway not reachable or not authenticated")

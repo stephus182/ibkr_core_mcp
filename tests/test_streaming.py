@@ -192,8 +192,9 @@ async def test_listen_before_connect_raises():
 async def test_connect_rejects_non_localhost():
     """IBKRWebSocket must raise StreamingError for non-localhost URLs."""
     from unittest.mock import MagicMock, patch
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+
     from ibkr_core_mcp.exceptions import StreamingError
+    from ibkr_core_mcp.streaming import IBKRWebSocket
     ws = IBKRWebSocket("https://external.broker.com:5055/v1/api", "cookie=abc")
     # Patch websockets so the import succeeds; the localhost guard fires before connect()
     with patch.dict("sys.modules", {"websockets": MagicMock()}):
@@ -206,6 +207,7 @@ async def test_connect_missing_websockets_raises_import_error():
     """websockets absent → ModuleNotFoundError with install instructions."""
     import sys
     from unittest.mock import patch
+
     from ibkr_core_mcp.streaming import IBKRWebSocket
     ws = IBKRWebSocket("https://localhost:5055/v1/api", "cookie=abc")
     with patch.dict(sys.modules, {"websockets": None}):

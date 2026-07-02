@@ -310,6 +310,7 @@ def test_get_order_preview_has_no_gate(client):
 ])
 def test_validate_account_id_accepts_valid_ids(client, account_id):
     from unittest.mock import MagicMock
+
     from ibkr_core_mcp.exceptions import ConfigError
     client._session.get = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {}))
     # Valid IDs must not raise ConfigError — any other exception (e.g. from mock shape) is ignored

@@ -2,6 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ibkr_core_mcp.claude_tools import _parse_live_trades
+
 
 @pytest.fixture
 def toolkit(mock_config):
@@ -103,8 +105,6 @@ def test_execute_get_trades(toolkit):
 
 
 # --- _parse_live_trades unit tests ---
-
-from ibkr_core_mcp.claude_tools import _parse_live_trades
 
 
 def _raw(overrides: dict) -> dict:
@@ -582,8 +582,8 @@ def test_safe_error_unexpected():
 # ── _fetch_market_data — live (cache-miss) path ──────────────────────────────
 
 def test_fetch_market_data_live_path(toolkit):
-    import pandas as pd
     import numpy as np
+    import pandas as pd
 
     n = 50
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
@@ -1018,9 +1018,10 @@ def test_extract_execution_ids_within_file_duplicate():
 
 def _make_toolkit():
     """Return a ClaudeToolkit with all dependencies mocked."""
+    from pathlib import Path
+
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.config import Config
-    from pathlib import Path
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -1040,9 +1041,10 @@ def _make_toolkit():
 
 
 def test_firecrawl_search_returns_no_key_message_when_key_missing():
+    from pathlib import Path
+
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.config import Config
-    from pathlib import Path
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -1097,9 +1099,10 @@ def test_firecrawl_crawl_blocks_private_url():
 
 
 def test_firecrawl_crawl_returns_no_key_message_when_key_missing():
+    from pathlib import Path
+
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.config import Config
-    from pathlib import Path
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -1854,7 +1857,7 @@ def test_modify_price_alert_error(toolkit):
 
 def test_sync_flex_archive_happy_path(toolkit):
     """Returns import summary when files are found and trades imported."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     store_cov = {
         "oldest": "2024-01-01", "newest": "2026-05-22",
@@ -1882,7 +1885,7 @@ def test_sync_flex_archive_happy_path(toolkit):
 
 def test_sync_flex_archive_no_files(toolkit):
     """Returns 'No XML files' message when archive is empty."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     mock_flex_instance = MagicMock()
     mock_flex_instance.sync_archive_from_drive.return_value = {"files": 0, "trades": 0, "processed": []}
@@ -1896,7 +1899,7 @@ def test_sync_flex_archive_no_files(toolkit):
 
 def test_sync_flex_archive_file_not_found(toolkit):
     """Returns FileNotFoundError message when Drive folder is missing."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     mock_flex_instance = MagicMock()
     mock_flex_instance.sync_archive_from_drive.side_effect = FileNotFoundError("account_data/ not found")
@@ -1915,7 +1918,7 @@ def test_sync_flex_archive_file_not_found(toolkit):
 
 def test_import_flex_file_happy_path(toolkit, tmp_path):
     """Imports trades from a file under the allowed root (~/.ibkr_core)."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     allowed_root = tmp_path / ".ibkr_core"
     allowed_root.mkdir()
@@ -1962,7 +1965,7 @@ def test_import_flex_file_not_found(toolkit, tmp_path):
 
 def test_import_flex_file_no_trades(toolkit, tmp_path):
     """Returns 'No trades found' when the XML has no trade records."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     allowed_root = tmp_path / ".ibkr_core"
     allowed_root.mkdir()

@@ -385,7 +385,7 @@ class GDriveCache:
             results.append((f["name"], buf.getvalue()))
         return results
 
-    def upload_account_file(self, local_path: "str | Path", filename: str) -> None:
+    def upload_account_file(self, local_path: str | Path, filename: str) -> None:
         """Upload a local file to account_data/ on Drive, replacing any existing file of the same name."""
         from pathlib import Path as _Path
         self.upload_account_file_bytes(_Path(local_path).read_bytes(), filename)

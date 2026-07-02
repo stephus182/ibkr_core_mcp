@@ -128,23 +128,26 @@ def test_full_report_with_trades(positive_returns):
 
 def test_sortino_no_negative_returns_is_zero():
     """All-positive returns → downside std is NaN → sortino returns 0.0, not ZeroDivisionError."""
-    from ibkr_core_mcp.analytics import sortino
     import pandas as pd
+
+    from ibkr_core_mcp.analytics import sortino
     all_positive = pd.Series([0.01, 0.02, 0.005, 0.015])
     assert sortino(all_positive) == 0.0
 
 
 def test_cagr_empty_series_returns_zero():
     """n = 0/252 = 0 → cagr returns 0.0 instead of raising."""
-    from ibkr_core_mcp.analytics import cagr
     import pandas as pd
+
+    from ibkr_core_mcp.analytics import cagr
     assert cagr(pd.Series([], dtype=float)) == 0.0
 
 
 def test_calmar_zero_drawdown_returns_zero():
     """Flat equity (mdd == 0) → calmar returns 0.0, not ZeroDivisionError."""
-    from ibkr_core_mcp.analytics import calmar
     import pandas as pd
+
+    from ibkr_core_mcp.analytics import calmar
     flat = pd.Series([0.0, 0.0, 0.0, 0.0])
     assert calmar(flat) == 0.0
 
@@ -173,6 +176,7 @@ def test_avg_win_loss_ratio_all_zero_returns_zero():
 def test_full_report_empty_returns_gracefully():
     """Empty return series must not raise ZeroDivisionError."""
     import pandas as pd
+
     from ibkr_core_mcp.analytics import full_report
     empty = pd.Series([], dtype=float)
     result = full_report(empty)
@@ -184,6 +188,7 @@ def test_full_report_empty_returns_gracefully():
 def test_sharpe_periods_parameter_affects_result():
     """Different periods values must produce different Sharpe ratios for the same returns."""
     import pandas as pd
+
     from ibkr_core_mcp.analytics import sharpe
     rng = pd.Series([0.001, -0.002, 0.003, -0.001, 0.002] * 10)
     daily_sharpe = sharpe(rng, periods=252)

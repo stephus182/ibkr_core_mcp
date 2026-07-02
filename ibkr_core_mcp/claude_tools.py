@@ -3,19 +3,17 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 from typing import Any
-
-import pandas as pd
+from zoneinfo import ZoneInfo
 
 from ibkr_core_mcp import analytics as _analytics
 from ibkr_core_mcp import indicators as _indicators
 from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
-from ibkr_core_mcp.client import IBKRClient, _ACCOUNT_ID_RE
+from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.store import SQLiteStore
 
 log = logging.getLogger(__name__)
@@ -1006,6 +1004,7 @@ class ClaudeToolkit:
         # on the first request for a symbol while initializing the data subscription,
         # or return a null/empty body. Retry up to 3 times with 2s delays.
         import time
+
         from ibkr_core_mcp.exceptions import IBKRAPIError
         raw = None
         for attempt in range(3):
@@ -1250,8 +1249,9 @@ class ClaudeToolkit:
 
     def _import_flex_file(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Import trades from a local Flex XML file into the store."""
-        from ibkr_core_mcp.flex_query import FlexQueryClient
         from pathlib import Path
+
+        from ibkr_core_mcp.flex_query import FlexQueryClient
         path = inputs["path"]
         # Path allowlist: only files under ~/.ibkr_core are permitted.
         # Prevents LLM prompt-injection from reading arbitrary local files.
@@ -1302,6 +1302,7 @@ class ClaudeToolkit:
         """
         import hashlib
         from datetime import UTC, datetime
+
         from ibkr_core_mcp.flex_query import FlexQueryClient
 
         if self._cache is None:
@@ -1533,9 +1534,9 @@ class ClaudeToolkit:
             if not isinstance(data, dict):
                 continue
 
-            def _f(key: str) -> float:
+            def _f(key: str, _data: dict[str, Any] = data) -> float:
                 try:
-                    return float(data.get(key) or 0)
+                    return float(_data.get(key) or 0)
                 except (ValueError, TypeError):
                     return 0.0
 
@@ -2054,7 +2055,7 @@ class ClaudeToolkit:
         enriched: list[dict[str, Any]] = []
         for item in snapshot:
             cid = item.get("conid")
-            sym = conid_to_sym.get(cid, str(cid))
+            sym = conid_to_sym.get(cid, str(cid)) if isinstance(cid, int) else str(cid)
             avail = str(item.get("6509", ""))
             first_char = avail[0] if avail else ""
             data_status = _MD_AVAILABILITY.get(first_char, f"Unknown ({avail})")
@@ -2387,7 +2388,7 @@ class ClaudeToolkit:
         Lazily initializes FirecrawlClient on first call. Returns a no-key message
         if FIRECRAWL_API_KEY is not configured. Optionally saves a Drive snapshot.
         """
-        from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, FirecrawlError
+        from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
 
         if not self._config.firecrawl_api_key:
             return (
@@ -2448,7 +2449,7 @@ class ClaudeToolkit:
         initializes FirecrawlClient and WebDocsStore on first call. Always saves
         results to Drive (crawl is a bulk operation — Drive storage is the point).
         """
-        from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, FirecrawlError
+        from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
 
         if not self._config.firecrawl_api_key:
             return (

@@ -5,13 +5,13 @@ import time
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-log = logging.getLogger(__name__)
-
 import defusedxml.ElementTree as ET
 import requests
 
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import FlexQueryError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ibkr_core_mcp.cache import GDriveCache

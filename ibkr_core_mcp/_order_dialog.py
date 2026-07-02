@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+from typing import Any
 
 
 def main() -> None:
@@ -34,8 +35,8 @@ def main() -> None:
         sys.exit(1)
 
 
-def _run_alert(data: dict) -> None:
-    from AppKit import (  # type: ignore[import]
+def _run_alert(data: dict[str, Any]) -> None:
+    from AppKit import (
         NSAlert,
         NSApplication,
         NSBox,
@@ -106,7 +107,7 @@ def _run_alert(data: dict) -> None:
     # Auto-dismiss after timeout — NSApp.abortModal() returns NSModalResponseAbort (-1000)
     def _abort() -> None:
         try:
-            from AppKit import NSApp  # type: ignore[import]
+            from AppKit import NSApp
             NSApp.abortModal()
         except Exception:
             pass

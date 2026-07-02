@@ -80,11 +80,12 @@ def test_503_succeeds_on_retry():
 
 
 def test_backoff_delays_increase_exponentially():
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
     from ibkr_core_mcp.rate_limiter import with_retry
     mock_fn = MagicMock(return_value=_make_response(429))
     sleep_calls = []
     with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
-        with pytest.raises(Exception):
+        with pytest.raises(IBKRRateLimitError):
             with_retry(mock_fn, max_retries=3)
     # Each delay should be strictly greater than the previous
     assert len(sleep_calls) == 3

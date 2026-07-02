@@ -92,8 +92,10 @@ def test_dispatch_get_price_alerts_all_includes_triggered(toolkit, store):
 @pytest.mark.asyncio
 async def test_resource_ibkr_accounts(toolkit, store):
     import json
+
     from mcp.types import ReadResourceRequest
     from pydantic import AnyUrl
+
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
@@ -109,8 +111,10 @@ async def test_resource_ibkr_accounts(toolkit, store):
 @pytest.mark.asyncio
 async def test_resource_positions_current(toolkit, store):
     import json
+
     from mcp.types import ReadResourceRequest
     from pydantic import AnyUrl
+
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
@@ -128,8 +132,10 @@ async def test_resource_positions_current(toolkit, store):
 @pytest.mark.asyncio
 async def test_resource_trades_recent(toolkit, store):
     import json
+
     from mcp.types import ReadResourceRequest
     from pydantic import AnyUrl
+
     from ibkr_core_mcp.mcp_server import build_server
 
     store.upsert_trades([{
@@ -149,6 +155,7 @@ async def test_resource_trades_recent(toolkit, store):
 async def test_resource_unknown_uri_returns_empty(toolkit, store):
     from mcp.types import ReadResourceRequest
     from pydantic import AnyUrl
+
     from ibkr_core_mcp.mcp_server import build_server
 
     server = build_server(toolkit, store)
@@ -165,6 +172,7 @@ async def test_stream_loop_retry_on_error():
     """A transient error in _stream_loop should trigger a retry, not propagate."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from ibkr_core_mcp.mcp_server import _stream_loop_with_retry
 
     call_count = 0
@@ -189,7 +197,8 @@ async def test_stream_loop_retry_on_error():
 async def test_stream_loop_cancelled_propagates():
     """CancelledError from _stream_loop must propagate immediately (no retry)."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
+
     from ibkr_core_mcp.mcp_server import _stream_loop_with_retry
 
     async def always_cancel(toolkit, store):

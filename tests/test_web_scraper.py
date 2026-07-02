@@ -1,5 +1,6 @@
-import pytest
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ── _slugify ──────────────────────────────────────────────────────────────────
 
@@ -63,8 +64,6 @@ def test_web_docs_store_error_chains_cause():
 
 
 # ── FirecrawlClient.search ────────────────────────────────────────────────────
-
-from unittest.mock import MagicMock, patch
 
 
 def test_firecrawl_client_rejects_empty_api_key():
@@ -438,8 +437,8 @@ def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, 
 @patch("ibkr_core_mcp.web_scraper.Credentials")
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tmp_path):
-    from ibkr_core_mcp.web_scraper import WebDocsStore
     from ibkr_core_mcp.config import Config
+    from ibkr_core_mcp.web_scraper import WebDocsStore
     token = tmp_path / "token.json"
     creds_file = tmp_path / "credentials.json"
     token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
@@ -467,8 +466,8 @@ def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tm
 
 def _make_store_with_mock_service(tmp_path):
     """Return a WebDocsStore with _svc mocked out (bypasses Drive auth)."""
-    from ibkr_core_mcp.web_scraper import WebDocsStore
     from ibkr_core_mcp.config import Config
+    from ibkr_core_mcp.web_scraper import WebDocsStore
     token = tmp_path / "token.json"
     creds_file = tmp_path / "credentials.json"
     token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
@@ -601,7 +600,6 @@ def test_save_search_markdown_content_includes_results(tmp_path):
     uploaded_content = []
 
     def capture_create(**kwargs):
-        body = kwargs.get("body", {})
         media = kwargs.get("media_body")
         if media and hasattr(media, "_fd"):
             media._fd.seek(0)

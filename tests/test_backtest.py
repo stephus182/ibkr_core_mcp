@@ -96,7 +96,7 @@ def test_result_to_dict(ohlcv):
 # ---------------------------------------------------------------------------
 
 def test_code_length_limit_raises(ohlcv):
-    from ibkr_core_mcp.backtest import BacktestSyntaxError, _MAX_CODE_LEN, run_backtest
+    from ibkr_core_mcp.backtest import _MAX_CODE_LEN, BacktestSyntaxError, run_backtest
     too_long = "x = 1\n" * (_MAX_CODE_LEN // 6 + 1)
     with pytest.raises(BacktestSyntaxError, match="character limit"):
         run_backtest(too_long, ohlcv)

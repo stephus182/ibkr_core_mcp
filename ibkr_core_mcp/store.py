@@ -444,9 +444,10 @@ class SQLiteStore:
             if _cache_key in _market_calendar_cache:
                 return _market_calendar_cache[_cache_key]
 
+            from datetime import date, timedelta
+
             import exchange_calendars as ec
             from pandas import Timestamp
-            from datetime import date, timedelta
 
             now = Timestamp.now(tz="UTC")
             today = date.today()

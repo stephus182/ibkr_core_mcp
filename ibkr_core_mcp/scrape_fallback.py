@@ -91,7 +91,9 @@ def is_private_host(host: str) -> bool:
     import ipaddress
     import socket
 
-    if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):
+    # S104 false positive: "0.0.0.0" here is a *blocklist entry* in the SSRF
+    # guard (rejecting requests to the all-interfaces address), not a bind.
+    if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):  # noqa: S104
         return True
     try:
         addr = ipaddress.ip_address(host)

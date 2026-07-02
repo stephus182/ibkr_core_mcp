@@ -1,6 +1,7 @@
 """ibkr_core_mcp — IBKR Client Portal API package."""
 import logging
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 from ibkr_core_mcp import analytics, indicators, pinescript
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth, NoAuth, TokenAuth
