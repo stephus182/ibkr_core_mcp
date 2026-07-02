@@ -1,5 +1,16 @@
 """
-Web scraping tools for ClaudIA, backed by the Firecrawl REST API v1.
+Web scraping tools for ClaudIA — Firecrawl primary + Crawl4AI fallback.
+
+Primary layer: Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
+Fallback layer: Crawl4AI (Playwright-based, open-source) — defined in
+  `scrape_fallback.py`. Activated by ClaudeToolkit._scrape_with_fallback()
+  when assess_quality() classifies a Firecrawl result as "fallback" (empty,
+  HTTP error, or <40 words) or "ambiguous" (paywall markers, 40–200 words)
+  and judge_completeness_llm() confirms incompleteness.
+
+This module provides the Firecrawl client and Drive persistence only.
+The fallback decision logic, Crawl4AI scraper, and SSRF Playwright guard
+live in scrape_fallback.py. Orchestration lives in claude_tools.py.
 
 Provides:
   _slugify          — convert a URL to a safe Drive filename stem
