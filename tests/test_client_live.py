@@ -18,6 +18,7 @@ through the ClaudIA UI, which maintains the full brokerage session via
 continuous /tickle keepalive every 60s.
 
 This is an IBKR CP API architectural restriction, not a test harness limitation.
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-sessions-brokerage
 See docs/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
 
 Explicit exclusions:

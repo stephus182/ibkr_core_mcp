@@ -28,6 +28,7 @@ These write operations are validated manually through the ClaudIA UI:
 ask ClaudIA to create an alert and verify it appears on the IBKR mobile app.
 This is the correct validation path — not a gap in test coverage.
 
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-sessions-brokerage
 See docs/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
 
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
