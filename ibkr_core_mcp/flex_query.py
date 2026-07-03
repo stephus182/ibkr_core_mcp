@@ -138,13 +138,24 @@ class FlexQueryClient:
 
     ## Date range
     Via the Flex Web Service API, the `fd` (from date) and `td` (to date) parameters
-    accept YYYYMMDD format with a maximum range of 365 days per request.
-    The portal UI covers up to the 4 previous calendar years plus the current year.
+    accept YYYYMMDD format with a maximum range of 365 days per request. A `p=`
+    period-override parameter (also capped at 365 days) exists as an alternative to
+    fd/td; this client does not use it. The portal UI covers up to the 4 previous
+    calendar years plus the current year.
     Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
+    (re-verified against the official page, scraped 2026-07-02)
 
     ## What Flex does NOT cover
-    - Today's intraday trades (use the CP API `/iserver/account/trades` for same-day fills,
-      but note that endpoint is session-scoped and may miss mobile/TWS-placed orders)
+    - Today's intraday trades. For same-day fills the CP API `/iserver/account/trades`
+      is the only source, and its coverage is narrower than commonly assumed: the
+      official reference documents ONLY "a list of trades for the currently selected
+      account for current day and six previous days" (`?days=`, max 7) and advises
+      calling the endpoint once per session. It does NOT document which trade origins
+      (CP API / mobile / TWS) are included. Observed 2026-07-02 (live session):
+      mobile-placed ES fills within the 7-day window were absent from the response.
+      Treat live same-day data as best-effort and this Flex store as the authoritative
+      all-origin record. Sources: CP API reference "Trades" section (scraped
+      2026-07-02); docs/claude-tools-audit-2026-07.md Appendix B finding 2.
     - Real-time prices or positions
     """
 
@@ -330,6 +341,15 @@ class FlexQueryClient:
         fetch_trades() is the only public entry point and always calls
         _send_request first, so the invariant is maintained at the call-graph
         level rather than repeated here.
+
+        KNOWN ISSUE (observed 2026-07-02): IBKR can answer this GetStatement stage
+        with a `FlexStatementResponse` carrying `Status=Warn` / `ErrorCode=1019`
+        ("Statement generation in progress") instead of `Status=WhenAvailable`.
+        This loop currently retries only on WhenAvailable, so a 1019 error document
+        is returned as if it were the statement — it parses to zero trades and gets
+        logged as a successful import. Fix tracked in the audit follow-up register
+        (docs/claude-tools-audit-2026-07.md, item 2): parse Status/ErrorCode here;
+        retry on 1019/WhenAvailable, raise on other Warn/Fail via _FLEX_ERROR_CODES.
         """
         for attempt in range(_MAX_POLL_RETRIES):
             resp = requests.get(
