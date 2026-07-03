@@ -1103,8 +1103,10 @@ class ClaudeToolkit:
         for p in positions:
             symbol = p.get("contractDesc", p.get("ticker", p.get("symbol", "?")))
             pos = p.get("position", 0)
-            mkt_val = p.get("mktValue", 0)
-            pnl = p.get("unrealizedPnl", 0)
+            # IBKR can send these keys present but null — float(x or 0) matches
+            # the _get_pnl/_get_ledger convention for the same fields.
+            mkt_val = float(p.get("mktValue") or 0)
+            pnl = float(p.get("unrealizedPnl") or 0)
             lines.append(f"- {symbol}: {pos} qty, mktVal={mkt_val:.2f}, unrealPnL={pnl:.2f}")
         return f"Open positions ({len(positions)}):\n" + "\n".join(lines), None
 

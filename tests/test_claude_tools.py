@@ -2094,3 +2094,16 @@ def test_execute_get_analytics_unknown_timeframe_falls_back_with_caveat(toolkit)
     })
     assert "not recognized" in text.lower() or "unrecognized" in text.lower()
     assert "252" in text
+
+
+def test_get_positions_tolerates_null_value_fields(toolkit):
+    """IBKR can send present-but-null mktValue/unrealizedPnl — must render as 0.00,
+    not crash into _safe_error (audit Appendix C minor, lines 1099-1101)."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_positions.return_value = [
+        {"contractDesc": "GLD", "position": 100, "mktValue": None, "unrealizedPnl": None},
+    ]
+    text, fig = toolkit.execute("get_positions", {})
+    assert "GLD" in text
+    assert "0.00" in text
+    assert "error" not in text.lower()
