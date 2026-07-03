@@ -116,9 +116,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_trades",
         "description": (
-            "Get trade history. source='live' queries IBKR directly (last 6 days only). "
-            "source='store' queries the local SQLite store — unlimited history, includes all data "
-            "synced via sync_flex_trades. Use source='store' for any analysis beyond 6 days."
+            "Get trade history. source='live' queries IBKR directly (last 7 days max — current day "
+            "plus 6 previous). source='store' queries the local SQLite store — unlimited history, "
+            "includes all data synced via sync_flex_trades. Use source='store' for any analysis beyond 7 days."
         ),
         "input_schema": {
             "type": "object",
@@ -126,7 +126,7 @@ TOOL_DEFINITIONS = [
                 "symbol": {"type": "string", "description": "Filter by symbol (optional)"},
                 "source": {
                     "type": "string",
-                    "description": "'live' (IBKR API, last 6 days) or 'store' (SQLite, unlimited history including Flex syncs)",
+                    "description": "'live' (IBKR API, last 7 days max) or 'store' (SQLite, unlimited history including Flex syncs)",
                     "default": "store",
                 },
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD (store source only, optional)"},
@@ -244,7 +244,7 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. 'last7days', 'last30days', 'ytd', 'last365days'"},
+                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. '1D', '7D', 'MTD', '1M', 'YTD', '1Y'"},
             },
             "required": ["period"],
         },
@@ -255,7 +255,7 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. 'last7days', 'ytd'"},
+                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. '7D', 'MTD', 'YTD'"},
             },
             "required": ["period"],
         },
@@ -274,7 +274,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_option_chain",
-        "description": "Get the options chain for a symbol — expirations, strikes, and contract IDs.",
+        "description": (
+            "Get the options chain for a symbol — expirations, strikes, and contract IDs. "
+            "KNOWN ISSUE: the underlying endpoint (/trsrv/secdef/chains) is not part of IBKR's "
+            "documented Client Portal API (verified against the official reference, scraped 2026-07-02) "
+            "and is expected to fail — this tool should be treated as non-functional pending "
+            "reimplementation via the documented secdef/search → secdef/strikes flow."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -355,8 +361,7 @@ TOOL_DEFINITIONS = [
     {
         "name": "generate_pinescript",
         "description": (
-            "Generate a PineScript v5 script for TradingView from a list of indicators "
-            "or from a previously run backtest strategy. "
+            "Generate a PineScript v5 indicator script for TradingView from a list of indicators. "
             "Output can be pasted directly into the TradingView Pine Editor."
         ),
         "input_schema": {
@@ -377,7 +382,10 @@ TOOL_DEFINITIONS = [
         "name": "get_analytics",
         "description": (
             "Compute full portfolio/strategy analytics on cached OHLCV data: "
-            "Sharpe ratio, Sortino ratio, Calmar ratio, CAGR, max drawdown, and drawdown duration."
+            "Sharpe ratio, Sortino ratio, Calmar ratio, CAGR, max drawdown, and drawdown duration. "
+            "NOTE: the annualized metrics (Sharpe, Sortino, Calmar, CAGR) are computed assuming daily "
+            "bars (252 periods/year) regardless of the timeframe requested — treat them as reliable only "
+            "for daily data; annualized figures for intraday timeframes are not yet scaled correctly."
         ),
         "input_schema": {
             "type": "object",
@@ -405,7 +413,7 @@ TOOL_DEFINITIONS = [
                 "quantity": {"type": "integer", "description": "Number of shares"},
                 "order_type": {
                     "type": "string",
-                    "description": "'MKT', 'LMT', or 'STP'",
+                    "description": "'MKT' or 'LMT'. Stop orders (STP) aren't supported — the tool has no stop-price field, so IBKR's whatif can't evaluate them.",
                     "default": "MKT",
                 },
                 "limit_price": {
@@ -420,7 +428,7 @@ TOOL_DEFINITIONS = [
         "name": "get_pnl",
         "description": (
             "Get real-time partitioned P&L for the IBKR account: "
-            "daily P&L, unrealized P&L, and realized P&L broken down by position."
+            "daily P&L and unrealized P&L broken down by position."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -437,7 +445,7 @@ TOOL_DEFINITIONS = [
                 "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, AAPL, SPY"},
                 "sec_type": {
                     "type": "string",
-                    "description": "Security type: STK, FUT, OPT, FX, IND, CFD, BOND (default: STK)",
+                    "description": "Security type: STK, IND, or BOND (default: STK) — the only values /iserver/secdef/search supports. For futures use get_futures; for FX or options use get_market_snapshot (use get_option_chain only once it's reimplemented).",
                 },
             },
             "required": ["symbol"],

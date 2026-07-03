@@ -126,6 +126,10 @@ Projected cost of adding the 3 planned "layer-2 web-docs" tools (`list_web_docs`
 
 These three schemas are projections transcribed from the scraping-RAG spec (`claudia_ui` `docs/superpowers/specs/2026-07-01-scraping-rag-pipeline-design.md`) for measurement purposes only, measured 2026-07-02 with the same model; final schemas will be decided when layer 2 is built.
 
+### Addendum — post-D5 re-measurement (Task 13)
+
+After applying the D5 doc-text verdicts (Appendix G) to `claude_tools.py`, the tool surface was re-measured with the same leave-one-out method (`scripts/audit/count_tool_tokens.py`, `claude-opus-4-8`, 2026-07-02): **tool-surface total 9,473 → 9,778 tokens, net +305** (raw: `docs/superpowers/audit-evidence/token_counts_after_d5.json`). The increase is dominated by the two non-functional/mis-scaling warnings added — `get_option_chain` +117 and `get_analytics` +101 — partly offset by the removals on `generate_pinescript` (−9, dropped the unwired backtest-strategy path) and `get_pnl` (−7, dropped the unbacked realized-P&L claim); `search_contract` +44, `preview_order` +39, `get_trades` +11, and the two PA-period fixes +5/+4 make up the rest (per-tool deltas sum to +305, matching the surface delta exactly). This is above the +80–100 the D5 pre-estimate projected, because that estimate under-weighted the two warning paragraphs (`get_option_chain` estimated ≈ +30, measured +117; `get_analytics` estimated ≈ +45, measured +101).
+
 ## Appendix B — Latency decomposition (WS1b)
 
 **Method:** temporary JSONL timestamp instrumentation in `claudia_ui/claudia/agent.py`
