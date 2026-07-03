@@ -342,14 +342,15 @@ class FlexQueryClient:
         _send_request first, so the invariant is maintained at the call-graph
         level rather than repeated here.
 
-        KNOWN ISSUE (observed 2026-07-02): IBKR can answer this GetStatement stage
-        with a `FlexStatementResponse` carrying `Status=Warn` / `ErrorCode=1019`
-        ("Statement generation in progress") instead of `Status=WhenAvailable`.
-        This loop currently retries only on WhenAvailable, so a 1019 error document
-        is returned as if it were the statement — it parses to zero trades and gets
-        logged as a successful import. Fix tracked in the audit follow-up register
-        (docs/claude-tools-audit-2026-07.md, item 2): parse Status/ErrorCode here;
-        retry on 1019/WhenAvailable, raise on other Warn/Fail via _FLEX_ERROR_CODES.
+        IBKR can answer this stage either with `Status=WhenAvailable` or with a
+        `FlexStatementResponse` carrying `Status=Warn` / `ErrorCode=1019`
+        ("Statement generation in progress" — observed live 2026-07-02); both mean
+        "not ready yet" and are retried. Any other Warn/Fail is a real error and
+        raises via _FLEX_ERROR_CODES. A final guard rejects any 200 response with
+        no FlexStatement element, so an unexpected non-statement document can never
+        again be parsed as a legitimate 0-trade import (root cause of the
+        2026-07-02 silent empty sync; docs/claude-tools-audit-2026-07.md,
+        Appendix B finding 1).
         """
         for attempt in range(_MAX_POLL_RETRIES):
             resp = requests.get(
@@ -363,12 +364,34 @@ class FlexQueryClient:
 
             root = ET.fromstring(resp.content)
             status = root.findtext("Status")
-            if status == "WhenAvailable":
+            error_code = (root.findtext("ErrorCode") or "").strip()
+
+            still_generating = status == "WhenAvailable" or (
+                status == "Warn" and error_code == "1019"
+            )
+            if still_generating:
                 if attempt < _MAX_POLL_RETRIES - 1:
                     time.sleep(_POLL_SLEEP)
                     continue
                 raise FlexQueryError(
                     f"Flex statement not ready after {_MAX_POLL_RETRIES} attempts"
+                    + (f" (last response: Warn {error_code})" if error_code else "")
+                )
+
+            if status in ("Fail", "Warn"):
+                error_msg = (root.findtext("ErrorMessage") or "").strip()
+                desc, action = _FLEX_ERROR_CODES.get(
+                    error_code or "?", ("Unknown error.", "Check IBKR Flex configuration.")
+                )
+                raise FlexQueryError(
+                    f"Flex GetStatement error {error_code or '?'}: {desc} {action}"
+                    + (f" (IBKR message: {error_msg})" if error_msg else "")
+                )
+
+            if root.tag != "FlexStatement" and root.find(".//FlexStatement") is None:
+                raise FlexQueryError(
+                    "Flex GetStatement returned a document with no FlexStatement "
+                    "element — not a statement; refusing to import it as 0 trades"
                 )
 
             return resp.content.decode("utf-8", errors="replace")

@@ -154,6 +154,92 @@ def test_get_statement_raises_after_max_retries(flex_client):
             flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
 
+# Byte-exact copy of the error document IBKR returned live on 2026-07-02, which
+# _get_statement passed through as a "statement" (0 trades, logged as verified —
+# see docs/claude-tools-audit-2026-07.md, Appendix B finding 1).
+GET_STATEMENT_XML_WARN_1019 = (
+    b"<FlexStatementResponse timestamp='02 July, 2026 08:05 PM EDT'>\n"
+    b"<Status>Warn</Status>\n"
+    b"<ErrorCode>1019</ErrorCode>\n"
+    b"<ErrorMessage>Statement generation in progress. Please try again shortly.</ErrorMessage>\n"
+    b"</FlexStatementResponse>"
+)
+
+GET_STATEMENT_XML_WARN_1020 = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Warn</Status>
+  <ErrorCode>1020</ErrorCode>
+  <ErrorMessage>Invalid request or unable to validate request.</ErrorMessage>
+</FlexStatementResponse>"""
+
+GET_STATEMENT_XML_FAIL = b"""<?xml version="1.0" ?>
+<FlexStatementResponse>
+  <Status>Fail</Status>
+  <ErrorCode>1012</ErrorCode>
+  <ErrorMessage>Token has expired.</ErrorMessage>
+</FlexStatementResponse>"""
+
+GET_STATEMENT_XML_NO_STATEMENT = b"""<?xml version="1.0" ?>
+<FlexQueryResponse queryName="Trades" type="AF">
+  <FlexStatements count="0"/>
+</FlexQueryResponse>"""
+
+
+def test_get_statement_retries_on_warn_1019_then_succeeds(flex_client):
+    """Error 1019 = 'generation in progress' — transient, must retry (not return it)."""
+    responses = [
+        MagicMock(status_code=200, content=GET_STATEMENT_XML_WARN_1019),
+        MagicMock(status_code=200, content=GET_STATEMENT_XML_WARN_1019),
+        MagicMock(status_code=200, content=GET_STATEMENT_XML),
+    ]
+    with patch("ibkr_core_mcp.flex_query.requests.get", side_effect=responses), \
+         patch("ibkr_core_mcp.flex_query.time.sleep"):
+        xml_text = flex_client._get_statement(
+            "https://example.com/GetStatement", "9876543210"
+        )
+    assert "<Trade" in xml_text
+
+
+def test_get_statement_raises_when_1019_persists(flex_client):
+    """1019 on every poll attempt → raise, never return the error document."""
+    always_1019 = MagicMock(status_code=200, content=GET_STATEMENT_XML_WARN_1019)
+    with patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_1019), \
+         patch("ibkr_core_mcp.flex_query.time.sleep"):
+        with pytest.raises(FlexQueryError, match="not ready"):
+            flex_client._get_statement("https://example.com/GetStatement", "9876543210")
+
+
+def test_get_statement_raises_immediately_on_other_warn(flex_client):
+    """Non-transient Warn (e.g. 1020) → raise on first attempt with the mapped message."""
+    with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, content=GET_STATEMENT_XML_WARN_1020
+        )
+        with pytest.raises(FlexQueryError, match="1020"):
+            flex_client._get_statement("https://example.com/GetStatement", "9876543210")
+    assert mock_get.call_count == 1
+
+
+def test_get_statement_raises_on_fail_status(flex_client):
+    with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, content=GET_STATEMENT_XML_FAIL
+        )
+        with pytest.raises(FlexQueryError, match="1012"):
+            flex_client._get_statement("https://example.com/GetStatement", "9876543210")
+
+
+def test_get_statement_rejects_document_without_flex_statement(flex_client):
+    """Final guard: a 200 response that is not an error but contains no FlexStatement
+    element is not a statement — raise instead of returning it to be parsed as 0 trades."""
+    with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, content=GET_STATEMENT_XML_NO_STATEMENT
+        )
+        with pytest.raises(FlexQueryError, match="FlexStatement"):
+            flex_client._get_statement("https://example.com/GetStatement", "9876543210")
+
+
 # ---------------------------------------------------------------------------
 # _parse_trades
 # ---------------------------------------------------------------------------
