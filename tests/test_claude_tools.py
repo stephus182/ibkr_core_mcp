@@ -2107,3 +2107,52 @@ def test_get_positions_tolerates_null_value_fields(toolkit):
     assert "GLD" in text
     assert "0.00" in text
     assert "error" not in text.lower()
+
+
+def _ohlcv_df(n=60):
+    import numpy as np
+    import pandas as pd
+    np.random.seed(3)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    return pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2026-01-01", periods=n, freq="B"))
+
+
+def test_run_backtest_runtime_error_detail_reaches_llm(toolkit):
+    """The live 2026-07-02 failure: strategy referenced df['rsi'] on raw OHLCV and
+    the LLM only saw 'strategy raised a runtime error' — no key, no columns.
+    The failing key, exception type, and available columns must reach the LLM."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _ohlcv_df()
+    text, _ = toolkit.execute("run_backtest", {
+        "symbol": "AAPL", "timeframe": "1D", "period": "6M", "end": "2026-07-01",
+        "code": "df['signal'] = 0\ndf.loc[df['rsi'] < 30, 'signal'] = 1",
+    })
+    assert "rsi" in text
+    assert "KeyError" in text
+    assert "close" in text  # available columns listed
+    assert "unexpected error" not in text.lower()
+
+
+def test_run_backtest_syntax_error_detail_reaches_llm(toolkit):
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _ohlcv_df()
+    text, _ = toolkit.execute("run_backtest", {
+        "symbol": "AAPL", "timeframe": "1D", "period": "6M", "end": "2026-07-01",
+        "code": "df['signal] = 0",
+    })
+    assert "syntax" in text.lower()
+    assert "line" in text.lower()  # position detail present
+
+
+def test_run_backtest_missing_signal_shows_contract(toolkit):
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _ohlcv_df()
+    text, _ = toolkit.execute("run_backtest", {
+        "symbol": "AAPL", "timeframe": "1D", "period": "6M", "end": "2026-07-01",
+        "code": "x = 1",
+    })
+    assert "df['signal']" in text
+    assert "1=long" in text or "1 = long" in text

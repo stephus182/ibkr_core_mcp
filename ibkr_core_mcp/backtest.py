@@ -166,7 +166,11 @@ def run_backtest(
                 f"Strategy timed out after {_EXEC_TIMEOUT}s"
             ) from None
         except Exception as e:
-            raise BacktestRuntimeError(f"Strategy runtime error: {e}") from e
+            # Include the exception type: str(KeyError('rsi')) is just "'rsi'",
+            # which is not actionable on its own for the LLM that wrote the code.
+            raise BacktestRuntimeError(
+                f"Strategy runtime error: {type(e).__name__}: {e}"
+            ) from e
     finally:
         pool.shutdown(wait=False)
 

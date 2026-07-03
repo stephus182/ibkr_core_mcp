@@ -13,6 +13,7 @@ from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.exceptions import BacktestError
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.store import SQLiteStore
 
@@ -1777,7 +1778,22 @@ class ClaudeToolkit:
         if not self._cache.check(symbol, timeframe, period, end):
             return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
         df = self._cache.load(symbol, timeframe, period, end)
-        result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol)
+        try:
+            result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol)
+        except BacktestError as exc:
+            # Sandbox errors are errors in code the LLM itself wrote — the detail
+            # is required for self-correction and contains nothing internal, so it
+            # is returned here rather than redacted by _safe_error (which stays as
+            # the conservative fallback for anything else).
+            cols = ", ".join(str(c) for c in df.columns)
+            return (
+                f"Backtest failed: {exc}\n"
+                f"  Available df columns: {cols}\n"
+                "  Contract: strategy code receives df (raw OHLCV — indicators are "
+                "NOT pre-computed; derive them in the code) and must set "
+                "df['signal'] with 1=long, 0=flat, -1=short. Allowed: pd/np safe "
+                "subsets, DataFrame methods; no imports or I/O."
+            ), None
         try:
             self._store.save_backtest(result.to_dict())
         except Exception as exc:
