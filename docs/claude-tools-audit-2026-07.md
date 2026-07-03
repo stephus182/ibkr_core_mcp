@@ -1,6 +1,6 @@
 # claude_tools.py Audit — 2026-07
 
-**Status:** IN PROGRESS — sections below are filled as workstreams complete.
+**Status:** SYNTHESIS COMPLETE (2026-07-02) — D1–D4 are recommendations for future work; D5 is applied in a companion commit. Open evidence gaps, tracked honestly: latency runs 2–3 + scripted message 8 (gateway died mid-protocol; instrumentation patch preserved), TradingView tool payload unmeasured (bridge offline).
 **Spec:** docs/2026-07-02-claude-tools-audit-design.md
 **Model used for all token counts:** claude-opus-4-8 (ClaudIA default)
 
@@ -8,11 +8,13 @@
 
 | # | Decision | Outcome | Evidence |
 |---|---|---|---|
-| D1 | Where ClaudIA slowness comes from | _pending — Task 12_ | Appendix B |
-| D2 | Split go/no-go + architecture | _pending — Task 12_ | Appendices C, D, E |
-| D3 | Tool-exposure strategy | _pending — Task 12_ | Appendices A, B, E |
-| D4 | Sequencing vs. scraping-RAG layer 2 | _pending — Task 12_ | Appendices A, E |
-| D5 | Documentation verdicts | _pending — Task 12_ | Appendix G |
+| D1 | Where ClaudIA slowness comes from | **The Anthropic API stream, not the toolkit.** 91.4% of wall-clock is API stream time; tool handlers 8.5%; Chainlit/persistence 0.1%. Within stream time: every call reprocesses the 20,586-token static prefix uncached (measured `cache_read=0` on all 19 calls; the prefix was 77% of all session input tokens) at 1.2–2.3 s time-to-first-token, ×2.1 calls per message — and the remainder is generation of long coaching-style responses. Leverage order: prompt caching (already decided, out of audit scope) → response-length policy → nothing needed on tools/Chainlit. *(Single-run evidence; runs 2–3 pending.)* | Appendix B |
+| D2 | Split go/no-go + architecture | **No-go — defer the 7-module split; do helper extraction now (Candidate 1).** The graph is cleanly cuttable (DAG, 3 cross-domain edges, all via conid resolution) but the second criterion fails: the monolith is not actively causing defects — the one defect (`get_analytics` annualization) is a local missing-kwarg, and the consistency deviations are cured by unifying conid resolution + hoisting the dispatch dict without moving a file. Hold Candidate 2 for the first genuinely new tool domain; Candidate 3 rejected. | Appendices C, D, E |
+| D3 | Tool-exposure strategy | **Keep sending all tools; no per-context profiles.** The tool surface (9,473 tok) is the *smaller* half of the static prefix (system prompt: 11,113 tok), so profiles attack the wrong half; the decided caching upgrade neutralizes the repeated-prefix cost entirely; and the live session showed zero wrong-tool selections across 19 calls. Revisit only if post-caching evidence shows wrong-tool picks or material cost. | Appendices A, B, E |
+| D4 | Sequencing vs. scraping-RAG layer 2 | **Build layer 2 now, into the current single file.** Its 3 tools add +543 tokens (2.6% of the static prefix) — immaterial. They extend the existing web domain and are therefore *not* the arch-note's "first new domain" split trigger. Helper extraction (D2) can land before or alongside; neither blocks the other. | Appendices A, E |
+| D5 | Documentation verdicts | **33 accurate / 8 fix / 1 enrich / 0 trim / 0 unverified** — applied to `claude_tools.py` in the companion commit (doc-text only). Reconciliation: Appendix C's `get_option_chain` "none" rated code *structure* only; Appendix G's non-functional-endpoint verdict governs the tool's real status. Live-session addendum (Appendix B): two findings exceed doc-text scope and become follow-up work items — `sync_flex_trades` silently verifying empty daily statements (data-integrity defect observed live), and `run_backtest`'s opaque error surface. | Appendices G, B |
+
+**Follow-up register (out of this audit's scope, in priority order):** 1. prompt caching in claudia_ui (decided; `claudia_ui/docs/prompt-caching-upgrade.md`); 2. Flex empty-statement guard in `sync_flex_trades`/`FlexQueryClient`; 3. live re-verification of `/iserver/account/trades` empty result; 4. `get_analytics` periods fix + `run_backtest` error-surface improvement; 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. latency runs 2–3 to convert single-run numbers to medians; 8. response-length policy experiment (D1 lever 2); 9. "6 months → 84 bars" period-mapping check.
 
 ## Appendix A — Token weight (WS1a)
 
