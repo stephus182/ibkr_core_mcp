@@ -249,7 +249,7 @@ print(f"Sharpe: {result.sharpe:.2f}  |  Max DD: {result.max_drawdown:.1f}%  |  W
 
 ### Historical Trade Data (Flex Queries)
 
-The Client Portal API (`/iserver/account/trades`) returns only the **last 6 days** of trade history. For full historical data, configure a Flex Query on the IBKR website and use `FlexQueryClient`:
+The Client Portal API (`/iserver/account/trades`) returns only the **last 7 days** of trade history (current day + 6 previous). For full historical data, configure a Flex Query on the IBKR website and use `FlexQueryClient`:
 
 **One-time setup on IBKR website:**
 1. Log in → Reports → Flex Queries → Create
@@ -343,7 +343,7 @@ except HumanAuthError as e:
 ```
 
 **IBKR order constraints:**
-- Trade history via API limited to last 6 days — `SQLiteStore` persists indefinitely
+- Trade history via API limited to last 7 days (current + 6 previous) — `SQLiteStore` persists indefinitely
 - Orders require `conid` — resolve via `client.search_contract(symbol)`
 
 ---
