@@ -2046,3 +2046,51 @@ def test_get_pa_periods_returns_valid_periods(toolkit):
     assert fig is None
     assert "1D" in text
     assert "1Y" in text
+
+
+def test_execute_get_analytics_annualizes_by_timeframe(toolkit):
+    """Intraday timeframe must use intraday periods/yr, not daily 252 (audit defect)."""
+    import numpy as np
+    import pandas as pd
+
+    from ibkr_core_mcp import analytics
+    n = 100
+    np.random.seed(1)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2026-06-01 09:30", periods=n, freq="h"))
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = df
+
+    text, _ = toolkit.execute("get_analytics", {
+        "symbol": "AAPL", "timeframe": "1h", "period": "1M", "end": "2026-07-01"
+    })
+
+    returns = df["close"].pct_change().dropna()
+    expected = analytics.sharpe(returns, periods=1638)
+    wrong_daily = analytics.sharpe(returns, periods=252)
+    assert f"{expected:.2f}" in text
+    assert f"{wrong_daily:.2f}" not in text
+
+
+def test_execute_get_analytics_unknown_timeframe_falls_back_with_caveat(toolkit):
+    """Unrecognized timeframe → daily annualisation plus an explicit caveat in output."""
+    import numpy as np
+    import pandas as pd
+    n = 50
+    np.random.seed(2)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": np.ones(n) * 1e6,
+    }, index=pd.date_range("2026-01-01", periods=n, freq="B"))
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = df
+
+    text, _ = toolkit.execute("get_analytics", {
+        "symbol": "AAPL", "timeframe": "weird", "period": "1Y", "end": "2026-07-01"
+    })
+    assert "not recognized" in text.lower() or "unrecognized" in text.lower()
+    assert "252" in text

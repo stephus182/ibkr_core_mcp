@@ -383,9 +383,8 @@ TOOL_DEFINITIONS = [
         "description": (
             "Compute full portfolio/strategy analytics on cached OHLCV data: "
             "Sharpe ratio, Sortino ratio, Calmar ratio, CAGR, max drawdown, and drawdown duration. "
-            "NOTE: the annualized metrics (Sharpe, Sortino, Calmar, CAGR) are computed assuming daily "
-            "bars (252 periods/year) regardless of the timeframe requested — treat them as reliable only "
-            "for daily data; annualized figures for intraday timeframes are not yet scaled correctly."
+            "Annualized metrics scale automatically with the bar timeframe (IBKR bar notation, "
+            "e.g. '5min'/'1h'/'1d'; intraday assumes the US equity 6.5h session)."
         ),
         "input_schema": {
             "type": "object",
@@ -1887,7 +1886,12 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_analytics(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return return, CAGR, Sharpe, Sortino, Calmar, and drawdown stats from cached bars."""
+        """Return return, CAGR, Sharpe, Sortino, Calmar, and drawdown stats from cached bars.
+
+        Annualised metrics scale with the bar timeframe via
+        analytics.periods_for_timeframe(); an unrecognized timeframe falls back to
+        daily (252 periods/yr) with an explicit caveat appended to the output.
+        """
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
@@ -1896,9 +1900,17 @@ class ClaudeToolkit:
             return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
         df = self._cache.load(symbol, timeframe, period, end)
         returns = df["close"].pct_change().dropna()
-        report = _analytics.full_report(returns)
+        periods = _analytics.periods_for_timeframe(timeframe)
+        caveat = None
+        if periods is None:
+            periods = 252
+            caveat = (
+                f"  NOTE: timeframe '{timeframe}' not recognized — annualised metrics "
+                "computed with the daily default (252 periods/yr)."
+            )
+        report = _analytics.full_report(returns, periods=periods)
         lines = [
-            f"Analytics for {symbol} {timeframe} ({period}–{end}):",
+            f"Analytics for {symbol} {timeframe} ({period}–{end}, {periods} periods/yr):",
             f"  Total Return:       {report['total_return']:.1%}",
             f"  CAGR:               {report['cagr']:.1%}",
             f"  Sharpe Ratio:       {report['sharpe']:.2f}",
@@ -1908,6 +1920,8 @@ class ClaudeToolkit:
             f"  Max DD Duration:    {report['max_drawdown_duration']} bars",
             f"  Bars analyzed:      {report['num_bars']}",
         ]
+        if caveat:
+            lines.append(caveat)
         return "\n".join(lines), None
 
     def _search_contract(self, inputs: dict[str, Any]) -> tuple[str, Any]:

@@ -1,10 +1,42 @@
 """Portfolio analytics — Sharpe, Sortino, Calmar, CAGR, drawdown, and win-rate metrics."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+_TRADING_DAYS_PER_YEAR = 252
+# Bars per year at n=1, per bar-size unit (IBKR bar notation; 'm' = month).
+# Intraday assumes the US equity regular session: 6.5 h = 390 min per day.
+_BARS_PER_YEAR_BY_UNIT = {
+    "min": 390 * _TRADING_DAYS_PER_YEAR,  # 98,280
+    "h": int(6.5 * _TRADING_DAYS_PER_YEAR),  # 1,638
+    "d": _TRADING_DAYS_PER_YEAR,
+    "w": 52,
+    "m": 12,
+}
+
+
+def periods_for_timeframe(timeframe: str) -> int | None:
+    """Bars per year for a bar-size string — the `periods` annualisation input.
+
+    Follows IBKR bar-size notation, case-insensitive: '5min', '1h', '1d', '1w',
+    '1m' (month — not minute, matching IBKR's bar values). Intraday counts assume
+    the US equity regular session (6.5 h/day, 252 days/yr); for near-24h products
+    (e.g. CME futures) this understates bars per year — pass an explicit
+    ``periods=`` to full_report()/sharpe() when that precision matters.
+
+    Returns None when the string is not a recognized bar size.
+    """
+    m = re.fullmatch(r"(\d+)\s*(min|h|d|w|m)", timeframe.strip().lower())
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    if n <= 0:
+        return None
+    return max(1, round(_BARS_PER_YEAR_BY_UNIT[unit] / n))
 
 
 def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
@@ -137,7 +169,10 @@ def full_report(
         trades: Optional list of trade dicts with 'pnl' or 'realizedPnl' fields.
             If provided, adds win_rate, profit_factor, avg_win_loss_ratio, total_trades.
         periods: Trading periods per year for annualisation — 252 for daily (default),
-            1440 for 1-min bars, 78 for 5-min bars (6.5 h × 12 bars/h × 252 days).
+            98,280 for 1-min bars (390 × 252), 19,656 for 5-min bars (78 × 252).
+            Derive from a bar-size string with ``periods_for_timeframe()``.
+            (Earlier versions of this docstring gave per-day counts here — wrong
+            unit for this parameter.)
 
     Returns:
         Dict with keys: total_return, cagr, sharpe, sortino, calmar, max_drawdown,

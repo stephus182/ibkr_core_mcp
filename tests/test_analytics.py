@@ -194,3 +194,32 @@ def test_sharpe_periods_parameter_affects_result():
     daily_sharpe = sharpe(rng, periods=252)
     intraday_sharpe = sharpe(rng, periods=252 * 390)
     assert daily_sharpe != intraday_sharpe
+
+
+# ---------------------------------------------------------------------------
+# periods_for_timeframe — timeframe string → bars per year (annualisation)
+# ---------------------------------------------------------------------------
+
+def test_periods_for_timeframe_daily_weekly_monthly():
+    from ibkr_core_mcp.analytics import periods_for_timeframe
+    assert periods_for_timeframe("1d") == 252
+    assert periods_for_timeframe("1D") == 252   # case-insensitive
+    assert periods_for_timeframe("1w") == 52
+    assert periods_for_timeframe("1m") == 12    # IBKR bar notation: m = month
+
+
+def test_periods_for_timeframe_intraday_equity_rth():
+    from ibkr_core_mcp.analytics import periods_for_timeframe
+    assert periods_for_timeframe("1min") == 98280   # 390 bars/day x 252
+    assert periods_for_timeframe("5min") == 19656   # 78 x 252
+    assert periods_for_timeframe("15min") == 6552
+    assert periods_for_timeframe("30min") == 3276
+    assert periods_for_timeframe("1h") == 1638      # 6.5 x 252
+    assert periods_for_timeframe("2h") == 819
+
+
+def test_periods_for_timeframe_unrecognized_returns_none():
+    from ibkr_core_mcp.analytics import periods_for_timeframe
+    assert periods_for_timeframe("banana") is None
+    assert periods_for_timeframe("") is None
+    assert periods_for_timeframe("0d") is None
