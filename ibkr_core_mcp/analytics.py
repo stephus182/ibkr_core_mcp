@@ -1,4 +1,13 @@
-"""Portfolio analytics — Sharpe, Sortino, Calmar, CAGR, drawdown, and win-rate metrics."""
+"""Portfolio analytics — Sharpe, Sortino, Calmar, CAGR, drawdown, and win-rate metrics.
+
+Conventions (verified against sources 2026-07-02; see each function's docstring):
+- Annualisation uses `periods` = bars per YEAR (derive via periods_for_timeframe()).
+- `sortino` implements the simplified discrete variant, not canonical target
+  downside deviation; `calmar` is whole-series (formally the MAR-ratio convention),
+  not Young's trailing-36-month Calmar. Both variants are widespread, but numbers
+  are not comparable across tools that use the canonical forms — read the
+  docstrings before quoting these figures against external references.
+"""
 from __future__ import annotations
 
 import re
@@ -51,6 +60,12 @@ def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> fl
 
     Returns:
         Annualised Sharpe ratio; 0.0 if std is zero or NaN.
+
+    Note: ex-post Sharpe annualised by sqrt(periods), which assumes IID per-bar
+    returns — autocorrelated (e.g. trending intraday) series overstate the
+    annualised figure. Source: Lo (2002), "The Statistics of Sharpe Ratios",
+    Financial Analysts Journal 58(4): https://doi.org/10.2469/faj.v58.n4.2453
+    (citation verified 2026-07-02).
     """
     excess = returns - risk_free / periods
     std = excess.std()
@@ -61,6 +76,19 @@ def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> fl
 
 def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
     """Annualised Sortino ratio (penalises only downside volatility).
+
+    VARIANT NOTE (verified 2026-07-02): this implements the *simplified discrete*
+    form — sample std of the below-target excess returns only. The canonical
+    definition (Sortino/van der Meer; Rollinger & Hoffman "Sortino: A Sharper
+    Ratio") uses target downside deviation computed over ALL observations,
+    sqrt(mean(min(r − T, 0)²)), without mean-centering — and its authors explicitly
+    prefer it over this discrete form. Numbers from the two variants differ;
+    do not compare this output against tools using the canonical form.
+    Source: https://en.wikipedia.org/wiki/Sortino_ratio (Definition section, incl.
+    the "simpler discrete version" caveat). Whether to migrate to the canonical
+    form is tracked in the audit follow-up register
+    (docs/claude-tools-audit-2026-07.md) — changing it shifts every existing
+    backtest/analytics figure, so it is a deliberate decision, not a doc fix.
 
     Args:
         returns: Per-bar return series.
@@ -114,7 +142,15 @@ def cagr(returns: pd.Series, periods: int = 252) -> float:
 
 
 def calmar(returns: pd.Series, periods: int = 252) -> float:
-    """Calmar ratio: CAGR divided by absolute max drawdown. 0.0 if drawdown is zero."""
+    """Calmar ratio: CAGR divided by absolute max drawdown. 0.0 if drawdown is zero.
+
+    VARIANT NOTE (verified 2026-07-02): computed over the WHOLE supplied series.
+    Young's original Calmar (Futures, 1991) uses the trailing 36 months on a
+    monthly basis; the from-inception form implemented here is formally the
+    MAR-ratio convention. Both are common; label accordingly when comparing.
+    Source: https://en.wikipedia.org/wiki/Calmar_ratio (Young 1991 definition and
+    the Calmar-vs-MAR distinction).
+    """
     mdd = max_drawdown(returns)
     return 0.0 if mdd == 0 else float(cagr(returns, periods) / abs(mdd))
 
