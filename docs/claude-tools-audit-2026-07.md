@@ -14,7 +14,7 @@
 | D4 | Sequencing vs. scraping-RAG layer 2 | **Build layer 2 now, into the current single file.** Its 3 tools add +543 tokens (2.6% of the static prefix) — immaterial. They extend the existing web domain and are therefore *not* the arch-note's "first new domain" split trigger. Helper extraction (D2) can land before or alongside; neither blocks the other. | Appendices A, E |
 | D5 | Documentation verdicts | **33 accurate / 8 fix / 1 enrich / 0 trim / 0 unverified** — applied to `claude_tools.py` in the companion commit (doc-text only). Reconciliation: Appendix C's `get_option_chain` "none" rated code *structure* only; Appendix G's non-functional-endpoint verdict governs the tool's real status. Live-session addendum (Appendix B): two findings exceed doc-text scope and become follow-up work items — `sync_flex_trades` silently verifying empty daily statements (data-integrity defect observed live), and `run_backtest`'s opaque error surface. | Appendices G, B |
 
-**Follow-up register (out of this audit's scope, in priority order):** 1. prompt caching in claudia_ui (decided; `claudia_ui/docs/prompt-caching-upgrade.md`); 2. Flex empty-statement guard in `sync_flex_trades`/`FlexQueryClient`; 3. live re-verification of `/iserver/account/trades` empty result; 4. `get_analytics` periods fix + `run_backtest` error-surface improvement; 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. latency runs 2–3 to convert single-run numbers to medians; 8. response-length policy experiment (D1 lever 2); 9. "6 months → 84 bars" period-mapping check; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field (Appendix G, deferred as beyond doc-text); 11. Appendix C minors not covered by helper extraction: `get_positions` None-formatting `TypeError` (1099–1101), private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`).
+**Follow-up register (out of this audit's scope, in priority order):** 1. prompt caching in claudia_ui (decided; `claudia_ui/docs/prompt-caching-upgrade.md`); 2. Flex `_get_statement` poller fix — treat `Warn`/1019 as retry, raise on other Warn/Fail (verified root cause of the 2026-07-02 empty import; see Appendix B finding 1); 3. live re-verification of `/iserver/account/trades` empty result; 4. `get_analytics` periods fix + `run_backtest` error-surface improvement; 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. latency runs 2–3 to convert single-run numbers to medians; 8. response-length policy experiment (D1 lever 2); 9. "6 months → 84 bars" period-mapping check; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field (Appendix G, deferred as beyond doc-text); 11. Appendix C minors not covered by helper extraction: `get_positions` None-formatting `TypeError` (1099–1101), private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`).
 
 ## Appendix A — Token weight (WS1a)
 
@@ -194,20 +194,37 @@ optimization on this evidence.
 
 ### Live-session findings (beyond timing)
 
-1. **Flex daily sync silently accepts an empty statement.** `flex_import_log` row 13:
-   `flex_U1675699_2026-07-02_*.xml`, `trade_id_count=0`, `raw_trade_count=0`, imported
-   **and verified** 2026-07-03T00:05Z as a success. Consequence observed live: the store's
-   latest trade is 2026-06-30; the owner's July 1–2 mobile ES fills are absent, and
-   ClaudIA's "this week" realized-P&L answer (−$2,621.50) was materially wrong for the
-   actual week while being faithful to the stale store. A zero-trade daily statement for
-   an active account should be flagged/retried, not verified as success —
-   **upgrade `sync_flex_trades`'s Appendix C severity from "none (shallow tests)" to
-   defect-adjacent: unhandled empty-statement path.**
-2. **Live `/iserver/account/trades` returned empty** during the same session although the
-   documented behavior (CLAUDE.md, verified against the CP API reference) is all trades,
+1. **Flex sync archived and verified an IBKR error response as a successful import**
+   (root cause verified 2026-07-02 after the owner correctly challenged the first framing).
+   `flex_import_log` row 13 (`flex_U1675699_2026-07-02_*.xml`, `trade_id_count=0`,
+   verified as success) is a **226-byte `FlexStatementResponse` with `Status=Warn`,
+   `ErrorCode=1019` — "Statement generation in progress. Please try again shortly."** —
+   not a statement. Mechanism: `FlexQueryClient._get_statement` (flex_query.py:326–357)
+   retries only on `Status == "WhenAvailable"`; any other body — including Warn/Fail
+   error documents — is returned as the final statement, then parsed (0 `<Trade>`
+   elements), upserted (no-op), archived to Drive, and logged `verified`. The module's
+   own `_FLEX_ERROR_CODES` table documents 1019 as "transient — retry in 30 seconds",
+   and `_send_request` (step 1) checks Warn/Fail properly; only the step-2 poller skips
+   the check. Two disambiguations established during verification: (a) Flex is T+1, so
+   the owner's July 2 fills were *legitimately* absent from any statement that day —
+   that part of the original framing was wrong; (b) the query runs `period=
+   Last30CalendarDays` (July 1 file: `fromDate=20260601 toDate=20260630`, 146 trades),
+   so a genuine July 2 statement would have re-contained the ~146 June trades — 0 trades
+   was never a plausible quiet-day result. Consequence observed live: the store's latest
+   trade stayed 2026-06-30 and ClaudIA's "this week" realized-P&L answer was built on a
+   silently failed sync. **Severity: confirmed defect in `flex_query.py` (not the
+   `sync_flex_trades` handler). Fix: in the `_get_statement` poll loop, parse
+   `Status`/`ErrorCode`; treat 1019 (and `WhenAvailable`) as retry, raise on other
+   Warn/Fail via the existing error table; optionally reject any XML lacking a
+   `FlexStatement` element as a final guard.**
+2. **Live `/iserver/account/trades` returned empty** during the same session although
+   CLAUDE.md's documented behavior (verified against the CP API reference) is all trades,
    all origins, current + 6 previous days — the June 29–30 fills should have appeared.
-   Needs live re-verification (session scoping / account selection / `days` param) before
-   filing as a client defect; recorded here as an anomaly with a reproduction context.
+   Note an **internal documentation conflict** discovered during verification:
+   `flex_query.py`'s own class docstring claims the opposite ("session-scoped and may
+   miss mobile/TWS-placed orders"), which matches this live observation for mobile-placed
+   fills. One of the two claims is wrong; needs live re-verification (session scoping /
+   account selection / `days` param) to establish which, then align both documents.
 3. **`run_backtest` failed twice with an error surface too opaque to act on** — ClaudIA
    reported "I'm not being shown the underlying error detail" and stopped (correct
    data-integrity behavior, wasted turns nonetheless). The sandbox's error text reaching
