@@ -710,22 +710,29 @@ class IBKRClient:
         return self._get(f"/iserver/account/order/status/{order_id}")
 
     def get_trades(self) -> list[dict[str, Any]]:
-        """Recent trade executions visible in the current CP API session (~6 days lookback).
+        """Trade executions for the current day + up to 6 previous days (7-day window).
 
-        Returns trades for the account for current day and up to six previous days.
-        It is advised to call this endpoint once per session (per official docs).
+        **This is the package's direct access point for TODAY's and recent fills** —
+        the only REST source that can contain same-day executions (Flex is T+1 and
+        never contains today). Exposed to the LLM as `get_trades(source='live')`.
 
-        ## ?days parameter (officially documented, verified 2026-06-26)
+        ## ?days parameter (officially documented, re-verified 2026-07-02)
         Specify the number of days to receive executions for, up to a maximum of 7 days.
         If unspecified, only the current day is returned. We always pass days=7 for
-        maximum lookback.
+        maximum lookback. The docs also advise calling this endpoint once per session.
 
-        "Currently selected account" in the IBKR docs refers to multi-account users
-        who need to explicitly select an account. Single-account users: all trades on
-        the account appear regardless of where they were placed (CP API, mobile, TWS).
+        ## Origin coverage — undocumented (corrected 2026-07-02)
+        The official reference says only "trades for the currently selected account";
+        it does NOT state whether mobile/TWS-placed fills are included. Observed
+        2026-07-02 (live): mobile-placed fills within the window were absent from one
+        session's response — pending live re-verification (audit follow-up #3,
+        docs/claude-tools-audit-2026-07.md Appendix B finding 2). An earlier version
+        of this docstring claimed "all origins" — that claim was not in the docs.
 
         ## When this is NOT the right tool
-        - Full history beyond 7 days → use FlexQueryClient.fetch_trades (T+1, all origins)
+        - Full history beyond 7 days → FlexQueryClient.fetch_trades (T+1, all origins)
+        - Real-time execution push → the WebSocket `str` (trades) topic is documented
+          (args: realtimeUpdatesOnly, days) but not implemented in streaming.py yet
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trades
         Endpoint: GET /iserver/account/trades
