@@ -125,7 +125,93 @@ Projected cost of adding the 3 planned "layer-2 web-docs" tools (`list_web_docs`
 These three schemas are projections transcribed from the scraping-RAG spec (`claudia_ui` `docs/superpowers/specs/2026-07-01-scraping-rag-pipeline-design.md`) for measurement purposes only, measured 2026-07-02 with the same model; final schemas will be decided when layer 2 is built.
 
 ## Appendix B — Latency decomposition (WS1b)
-_pending — Tasks 4–6_
+
+**Method:** temporary JSONL timestamp instrumentation in `claudia_ui/claudia/agent.py`
+(`emit()` around the stream loop, tool execution, and message lifecycle; analyzer:
+`scripts/audit/analyze_timing.py`). Live session against the authenticated gateway,
+2026-07-02 evening (after NYSE close; ES futures live on Globex). Model `claude-opus-4-8`.
+Instrumentation was reverted after collection; the patch is preserved at
+`docs/superpowers/audit-evidence/claudia_timing_instrumentation.patch` (+ `_timing.py.keep`)
+for rerun.
+
+**Protocol caveat — single run.** The plan called for 3 runs of an 8-message script with
+medians. The gateway session died before runs 2–3 (and before scripted message 8), so the
+table below is **one run, 9 user messages** (7 scripted + 2 ad-hoc user remarks that became
+messages). Numbers are single observations, not medians; treat magnitudes and *shares* as
+reliable, exact values as indicative. The remaining runs stay open as a follow-up.
+
+### Per-message decomposition (run 1)
+
+| msg # | ttft (s) | stream (s) | tools (s) | api turns | total (s) | residual (s) |
+|---|---|---|---|---|---|---|
+| 1 | 1.61 | 5.10 | 0.00 | 1 | 5.11 | 0.01 |
+| 2 | 1.74 | 11.02 | 0.20 | 2 | 11.24 | 0.02 |
+| 3 | 1.16 | 14.66 | 4.83 | 3 | 19.51 | 0.02 |
+| 4 | 1.60 | 23.90 | 1.39 | 3 | 25.32 | 0.03 |
+| 5 | 1.37 | 12.27 | 3.76 | 2 | 16.05 | 0.02 |
+| 6 | 1.59 | 20.80 | 0.58 | 3 | 21.41 | 0.03 |
+| 7 | 1.28 | 8.65 | 0.00 | 1 | 8.67 | 0.01 |
+| 8 | 2.32 | 8.94 | 0.00 | 1 | 8.95 | 0.01 |
+| 9 | 1.90 | 25.41 | 1.41 | 3 | 26.84 | 0.02 |
+
+(ttft = time to first stream event on the message's first API call; stream = total API
+stream duration summed over turns; tools = summed `toolkit.execute()` handler time;
+residual = everything else inside `handle_message` — history load, SQLite persistence,
+Chainlit step rendering.)
+
+**Session totals:** wall-clock 143.1 s across 9 messages; **stream 130.8 s (91.4%)**,
+**tools 12.2 s (8.5%)** (max single handler: 4.83 s for the market-data fetch chain),
+**residual 0.17 s (0.1%)**. Average 2.1 API calls per user message (19 total — the
+tool-loop multiplier).
+
+### Usage per API call (from `message_start` events)
+
+`input_tokens` grew 24,278 → 29,678 across the 19 calls (history accumulation);
+**`cache_read_input_tokens` = 0 on every one of the 19 calls** — measured confirmation
+that no prompt caching is active. Session total input: **507,444 tokens, all uncached**.
+The 20,586-token static prefix (Appendix A) accounts for 391,134 of those — **77% of all
+input tokens processed in the session was the same prefix re-read 19 times** (≈ $2.54 of
+input at $5/MTok, of which ≈ $1.76 would have been 0.1× cache reads with caching active).
+
+### D1 reading (single-run)
+
+The slowness lives almost entirely in the Anthropic API stream time (91%), not in tool
+handlers (8.5% — IBKR gateway latency is a non-issue in this session) and not in
+Chainlit/persistence overhead (0.1%). Within stream time: ttft is 1.2–2.3 s on *every*
+turn (uncached 24–30k prompt processed each time; ~28 s of the session), the tool-loop
+multiplier repeats that cost 2.1× per user message, and the remainder is generation —
+ClaudIA's long coaching-style responses stream for 5–25 s each. Implications, in order of
+leverage: (1) the already-decided prompt-caching upgrade attacks the per-turn prompt
+processing and 77%-repeated input directly; (2) response length/verbosity policy is the
+next lever (generation time dominates even ttft); (3) tool handlers and Chainlit need no
+optimization on this evidence.
+
+### Live-session findings (beyond timing)
+
+1. **Flex daily sync silently accepts an empty statement.** `flex_import_log` row 13:
+   `flex_U1675699_2026-07-02_*.xml`, `trade_id_count=0`, `raw_trade_count=0`, imported
+   **and verified** 2026-07-03T00:05Z as a success. Consequence observed live: the store's
+   latest trade is 2026-06-30; the owner's July 1–2 mobile ES fills are absent, and
+   ClaudIA's "this week" realized-P&L answer (−$2,621.50) was materially wrong for the
+   actual week while being faithful to the stale store. A zero-trade daily statement for
+   an active account should be flagged/retried, not verified as success —
+   **upgrade `sync_flex_trades`'s Appendix C severity from "none (shallow tests)" to
+   defect-adjacent: unhandled empty-statement path.**
+2. **Live `/iserver/account/trades` returned empty** during the same session although the
+   documented behavior (CLAUDE.md, verified against the CP API reference) is all trades,
+   all origins, current + 6 previous days — the June 29–30 fills should have appeared.
+   Needs live re-verification (session scoping / account selection / `days` param) before
+   filing as a client defect; recorded here as an anomaly with a reproduction context.
+3. **`run_backtest` failed twice with an error surface too opaque to act on** — ClaudIA
+   reported "I'm not being shown the underlying error detail" and stopped (correct
+   data-integrity behavior, wasted turns nonetheless). The sandbox's error text reaching
+   the LLM should carry the failure reason (column contract, NaN policy, signal dtype).
+4. **Period-mapping observation:** "6 months of daily AAPL" returned 84 bars
+   (2026-03-04 → 2026-07-02, ≈ 4 months). Out of this audit's scope; logged for follow-up.
+5. **Positives observed:** `get_market_snapshot` correctly labeled AAPL/MSFT quotes as
+   frozen after the close while ES streamed live (field-6509 semantics working);
+   ClaudIA refused to generate PineScript from the failed backtest (the data-integrity
+   system-prompt constraint held under pressure).
 
 ## Appendix C — Code findings table (WS2a)
 
