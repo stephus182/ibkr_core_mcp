@@ -16,6 +16,40 @@
 
 **Follow-up register (out of this audit's scope, in priority order):** 1. prompt caching in claudia_ui (decided; `claudia_ui/docs/prompt-caching-upgrade.md`); 2. ~~Flex `_get_statement` poller fix~~ **FIXED 2026-07-02, commit 252729f** (TDD, 5 new tests incl. the live error document as fixture; also added the no-FlexStatement final guard); 3. live re-verification of `/iserver/account/trades` empty result; 4. ~~`get_analytics` periods fix~~ **FIXED 2026-07-02, commit 3fb22f4**; ~~`run_backtest` error-surface improvement~~ **FIXED 2026-07-03, commit 7559ff2** (handler returns sandbox error detail + df columns + signal contract; exception type included in the wrap; TDD with the live KeyError scenario); 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. latency runs 2–3 to convert single-run numbers to medians; 8. response-length policy experiment (D1 lever 2); 9. "6 months → 84 bars" period-mapping check; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field (Appendix G, deferred as beyond doc-text); 11. Appendix C minors not covered by helper extraction: ~~`get_positions` None-formatting `TypeError`~~ **FIXED 2026-07-03, commit 9a4181d (TDD)**; still open: private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`); 12. **sortino/calmar variant decision** (found 2026-07-02 while verifying analytics docs): `analytics.sortino` implements the simplified discrete form (std of below-target returns only) that the canonical source explicitly disfavors — canonical is target downside deviation over ALL observations (https://en.wikipedia.org/wiki/Sortino_ratio); `analytics.calmar` is whole-series, formally the MAR-ratio convention vs Young 1991's trailing-36-month Calmar (https://en.wikipedia.org/wiki/Calmar_ratio). Both variants now documented in docstrings; migrating changes every existing backtest figure — deliberate decision required, not a doc fix.
 
+## Next live session — verification checklist (planned 2026-07-03)
+
+Owner-driven session with an authenticated gateway, preferably during US market hours
+(RTH needed for items 4–5). Each item updates the findings it names; the register and
+Appendix B get amended in place.
+
+1. **Latency runs 2–3 + scripted message 8** (completes WS1b, converts Appendix B to
+   3-run medians). Re-apply instrumentation:
+   `cd claudia_ui && git apply /Users/steph/Claude_Projects/ibkr_core_mcp/docs/superpowers/audit-evidence/claudia_timing_instrumentation.patch && cp .../audit-evidence/_timing.py.keep claudia/_timing.py`
+   — same 8 messages (Appendix B), `CLAUDIA_TIMING=...timing_run{2,3}.jsonl`, analyze with
+   `scripts/audit/analyze_timing.py run1 run2 run3`, revert instrumentation after.
+2. **`/iserver/account/trades` origin coverage** (closes Appendix B finding 2): with
+   recent fills present incl. mobile-placed ones, call `get_trades(source='live')` in a
+   fresh session; call it twice (the docs advise once-per-session — check whether the
+   first call warms up like the orders endpoint). Verdict updates CLAUDE.md,
+   `client.py` docstring, and finding 2.
+3. **Flex poller fix live confirmation + backfill**: run `sync_flex_trades`; confirm the
+   July fills now import (fix 252729f); backfill the gap window if needed via
+   `FlexQueryClient.fetch_trades(account_id, start_date='20260701', end_date=...)`.
+4. **Live market data refinement (RTH)**: `get_market_snapshot` during the open session
+   (live labeling, field completeness vs the after-hours run); `fetch_market_data`
+   intraday freshness; register #9 ("6 months → 84 bars" period mapping) — reproduce and
+   diagnose against the documented `/iserver/marketdata/history` period semantics.
+5. **Order-flow testing (owner at machine — Touch ID + dialog gates apply)**:
+   `preview_order` whatif responses live (incl. the stop-type gap and STK-only findings
+   from Appendix G — verify what whatif actually returns for STP before deciding the
+   register #10 schema fix); then owner-driven modify/cancel round-trips on a real
+   staged order to exercise the gated flow end-to-end.
+6. **If TradingView Desktop is running**: measure the TV tool payload (closes the
+   Appendix A gap) — rerun instruction is in Appendix A.
+7. **Re-measure the tool surface** after any description changes:
+   `scripts/audit/count_tool_tokens.py --out .../token_counts_current.json` (the
+   get_analytics description changed post-D5 in 3fb22f4; delta unmeasured).
+
 ## Appendix A — Token weight (WS1a)
 
 **Method:** leave-one-out marginal cost via `client.messages.count_tokens` (exact API counts, not estimates). `full − without_i` isolates each tool's true marginal cost, immune to the fixed tool-use system-prompt overhead the API adds. Baseline (no tools) isolates that overhead separately. Script: `scripts/audit/count_tool_tokens.py`. Raw data: `docs/superpowers/audit-evidence/token_counts.json` (gitignored, local-only — evidence reproduced here in full since the report must be self-contained).
