@@ -249,7 +249,7 @@ print(f"Sharpe: {result.sharpe:.2f}  |  Max DD: {result.max_drawdown:.1f}%  |  W
 
 ### Historical Trade Data (Flex Queries)
 
-The Client Portal API (`/iserver/account/trades`) returns only the **last 7 days** of trade history (current day + 6 previous). For full historical data, configure a Flex Query on the IBKR website and use `FlexQueryClient`:
+The Client Portal API (`/iserver/account/trades`) returns only the **last 7 days** of trade history (current day + 6 previous). For full historical data, the package ships a complete Flex Query suite — the only manual step is the one-time Flex Query configuration on the IBKR website below. After that, `FlexQueryClient` fetches/parses statements and maintains the historical database end-to-end (upsert into `SQLiteStore` for unlimited history + daily GDrive parquet snapshots), and the toolkit exposes the full lifecycle as tools: `sync_flex_trades` (daily fetch), `sync_flex_archive` / `import_flex_file` (bulk/manual XML import), `check_flex_coverage` (history completeness), and `verify_flex_import` (SHA-256 manifest verification).
 
 **One-time setup on IBKR website:**
 1. Log in → Reports → Flex Queries → Create
