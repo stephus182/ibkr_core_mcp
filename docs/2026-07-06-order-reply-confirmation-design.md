@@ -1,7 +1,11 @@
 # Order Reply-Confirmation Fix — Design
 
-**Status:** Design approved 2026-07-06 (brainstormed live, following a real order-flow test).
-Implementation not yet started — queued for a separate agent/session.
+**Status:** Design approved 2026-07-06; **implemented and verified 2026-07-06** —
+`ibkr_core_mcp` commits `62e7e8b` (auto-resolve chained replies, show real IBKR
+text) and `251ef54` (tighten HTML-strip regex, normalizer tests); `claudia_ui`
+switched its one call site. All design decisions matched exactly (see
+`docs/claude-tools-audit-2026-07.md` register item 14 for the verification
+detail). 613 `ibkr_core_mcp` unit tests + 31 `claudia_ui` order_flow tests green.
 **Scope repos:** `ibkr_core_mcp` (new orchestrating methods + dialog fix) and `claudia_ui`
 (one call-site update).
 
