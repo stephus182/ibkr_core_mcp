@@ -34,7 +34,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 
 ### macOS — required for order execution
 
-Order write methods (`place_order`, `modify_order`, `cancel_order`, `reply_order`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
+Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
 
 | Requirement | Minimum |
 |---|---|
@@ -330,7 +330,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `modify_order`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library:
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they re-run both gates automatically for every reply in the chain (see [CLAUDE.md — Order Management](CLAUDE.md#order-management)):
 
 ### Gate 1 — Touch ID (macOS LocalAuthentication)
 
@@ -353,7 +353,7 @@ Implemented in `order_confirm.py`.
 - **Enter key disabled** — confirmation requires a deliberate mouse click on the "Confirm" button
 - Runs on the main thread; the tkinter event loop is driven internally
 
-Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a Chainlit "Stage this order" button click) before `place_order` is ever invoked.
+Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a Chainlit "Stage this order" button click) before `place_order`/`place_order_and_confirm` is ever invoked.
 
 `GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts.
 

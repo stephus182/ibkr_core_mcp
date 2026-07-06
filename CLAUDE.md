@@ -100,7 +100,7 @@ store  = SQLiteStore(cfg)
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR:
+Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR. `place_order_and_confirm` / `modify_order_and_confirm` (see [Order Management](#order-management)) run the same two gates again for every chained reply IBKR asks for, not just once:
 
 | Gate | Mechanism | Behaviour |
 |---|---|---|
@@ -114,9 +114,13 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 | Method | Gates |
 |---|---|
 | `place_order` | Touch ID → confirm dialog |
+| `place_order_and_confirm` | `place_order`'s gates, then Touch ID → reply dialog (showing the real IBKR message) per chained reply, until a terminal response |
 | `modify_order` | Touch ID → modify dialog |
+| `modify_order_and_confirm` | `modify_order`'s gates, then Touch ID → reply dialog per chained reply, until a terminal response |
 | `cancel_order` | Touch ID → cancel dialog |
 | `reply_order` | Touch ID → reply dialog |
+
+`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state (see [Order Management](#order-management)), and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step.
 
 **Explicitly ungated (read-only, no execution risk):**
 
@@ -302,7 +306,7 @@ preview = client.get_order_preview(account_id, order)
 print(f"Estimated cost: {preview.get('equity', '?')}")
 ```
 
-**Place a live order — Gate 1 (Touch ID) + Gate 2 (confirmation dialog):**
+**Place a live order — Gate 1 (Touch ID) + Gate 2 (confirmation dialog), full reply chain resolved automatically:**
 ```python
 from ibkr_core_mcp import IBKRClient, Config, HumanAuthError
 
@@ -321,10 +325,24 @@ order = {
 }
 
 try:
-    responses = client.place_order(account_id, order)
-    # A reply can chain into ANOTHER reply requirement — loop until terminal.
+    # place_order_and_confirm() is the recommended entry point: it calls
+    # place_order(), then loops Touch ID + a dialog showing the real IBKR
+    # message through every chained reply, until a terminal response.
     # Verified live 2026-07-06: a single order needed 3 sequential replies
     # (price-band %, no-market-data, mandatory-cap-price) before Submitted.
+    # Declining any reply mid-chain POSTs {"confirmed": False} to IBKR before
+    # raising HumanAuthError — unlike bare reply_order() below, which raises
+    # without ever telling IBKR, leaving the order ambiguous on IBKR's side.
+    result = client.place_order_and_confirm(account_id, order)
+except HumanAuthError as e:
+    print(f"Order not sent: {e}")
+```
+
+**Manual control — call `place_order`/`reply_order` yourself instead of `place_order_and_confirm`:**
+```python
+try:
+    responses = client.place_order(account_id, order)
+    # A reply can chain into ANOTHER reply requirement — loop until terminal.
     # Must run immediately, back-to-back — IBKR invalidates (503) a reply left
     # pending while other requests are made. Show resp["message"] to the human
     # before confirming — it is the exact text they are agreeing to.
@@ -342,10 +360,10 @@ order placed in Q3 returned "will be automatically canceled at 20261231 16:00:00
 EST" (end of Q4), matching IBKR's documented convention exactly. Source:
 https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/
 
-**Modify or cancel — each triggers Touch ID + dialog:**
+**Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does (not yet live-verified to require chained replies, but shares `modify_order`'s response shape); cancel has no reply chain:**
 ```python
 try:
-    client.modify_order(account_id, order_id, {"price": 180.00, "tif": "DAY"})
+    client.modify_order_and_confirm(account_id, order_id, {"price": 180.00, "tif": "DAY"})
 except HumanAuthError as e:
     print(f"Modification not sent: {e}")
 
