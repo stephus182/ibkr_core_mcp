@@ -1,6 +1,6 @@
 # claude_tools.py Audit — 2026-07
 
-**Status:** SYNTHESIS COMPLETE (2026-07-02) — D1–D4 are recommendations for future work; D5 is applied in a companion commit. Open evidence gaps, tracked honestly: latency runs 2–3 + scripted message 8 (gateway died mid-protocol; instrumentation patch preserved), TradingView tool payload unmeasured (bridge offline).
+**Status:** SYNTHESIS COMPLETE (2026-07-02); D1 REFINED 2026-07-06 with a real before/after caching comparison — D2–D4 remain recommendations for future work; D5 applied 2026-07-02, extended with 3 more live-found fixes through 2026-07-06. Open evidence gaps: run 3 (optional, noise-reduction only), TradingView tool payload unmeasured (bridge offline), register items 5/6/10/12/13.
 **Spec:** docs/2026-07-02-claude-tools-audit-design.md
 **Model used for all token counts:** claude-opus-4-8 (ClaudIA default)
 
@@ -8,13 +8,13 @@
 
 | # | Decision | Outcome | Evidence |
 |---|---|---|---|
-| D1 | Where ClaudIA slowness comes from | **The Anthropic API stream, not the toolkit.** 91.4% of wall-clock is API stream time; tool handlers 8.5%; Chainlit/persistence 0.1%. Within stream time: every call reprocesses the 20,586-token static prefix uncached (measured `cache_read=0` on all 19 calls; the prefix was 77% of all session input tokens) at 1.2–2.3 s time-to-first-token, ×2.1 calls per message — and the remainder is generation of long coaching-style responses. Leverage order: prompt caching (already decided, out of audit scope) → response-length policy → nothing needed on tools/Chainlit. *(Single-run evidence; runs 2–3 pending.)* | Appendix B |
+| D1 | Where ClaudIA slowness comes from | **The Anthropic API stream, not the toolkit — confirmed by two runs, before and after prompt caching landed.** Stream share is ~91–93% of wall-clock in both conditions; tool handlers 7–8.5%; Chainlit/persistence 0.1% in both. **Caching (landed independently 2026-07-03) is a confirmed, large cost win — 82.4% reduction in effective input tokens for a comparable session — but not a confirmed latency win**: average ttft was higher with caching active (2.52s vs 1.62s), not lower, and stream share was unchanged. Root cause: generation time (long coaching responses, 4–25s/turn), not prompt processing, dominates wall-clock in both conditions — Claude's raw prompt-processing throughput was already sub-2s even on the full 20k+-token uncached prefix. **The only lever with a plausible path to reducing perceived slowness is response-length/verbosity policy.** | Appendix B |
 | D2 | Split go/no-go + architecture | **No-go — defer the 7-module split; do helper extraction now (Candidate 1).** The graph is cleanly cuttable (DAG, 3 cross-domain edges, all via conid resolution) but the second criterion fails: the monolith is not actively causing defects — the one defect (`get_analytics` annualization) is a local missing-kwarg, and the consistency deviations are cured by unifying conid resolution + hoisting the dispatch dict without moving a file. Hold Candidate 2 for the first genuinely new tool domain; Candidate 3 rejected. | Appendices C, D, E |
 | D3 | Tool-exposure strategy | **Keep sending all tools; no per-context profiles.** The tool surface (9,473 tok) is the *smaller* half of the static prefix (system prompt: 11,113 tok), so profiles attack the wrong half; the decided caching upgrade neutralizes the repeated-prefix cost entirely; and the live session showed zero wrong-tool selections across 19 calls. Revisit only if post-caching evidence shows wrong-tool picks or material cost. | Appendices A, B, E |
 | D4 | Sequencing vs. scraping-RAG layer 2 | **Build layer 2 now, into the current single file.** Its 3 tools add +543 tokens (2.6% of the static prefix) — immaterial. They extend the existing web domain and are therefore *not* the arch-note's "first new domain" split trigger. Helper extraction (D2) can land before or alongside; neither blocks the other. | Appendices A, E |
 | D5 | Documentation verdicts | **33 accurate / 8 fix / 1 enrich / 0 trim / 0 unverified** — applied to `claude_tools.py` in the companion commit (doc-text only). Reconciliation: Appendix C's `get_option_chain` "none" rated code *structure* only; Appendix G's non-functional-endpoint verdict governs the tool's real status. Live-session addendum (Appendix B): two findings exceed doc-text scope and become follow-up work items — `sync_flex_trades` silently verifying empty daily statements (data-integrity defect observed live), and `run_backtest`'s opaque error surface. | Appendices G, B |
 
-**Follow-up register (out of this audit's scope, in priority order):** 1. prompt caching in claudia_ui (decided; `claudia_ui/docs/prompt-caching-upgrade.md`); 2. ~~Flex `_get_statement` poller fix~~ **FIXED 2026-07-02, commit 252729f; live-confirmed 2026-07-06** — first real sync imported 122/122 trades incl. the missing July 1–2 fills (July 1: +$2,957.00, July 2: +$94.50 — the true week P&L was **+$430.00**, not the −$2,621.50 reported from the stale store on 2026-07-02); 3. ~~live re-verification of `/iserver/account/trades` empty result~~ **RESOLVED 2026-07-06** — two-call warmup, origin coverage complete once primed; auto-retry fixed in `client.get_trades()` (see Appendix B finding 2); 4. ~~`get_analytics` periods fix~~ **FIXED 2026-07-02, commit 3fb22f4**; ~~`run_backtest` error-surface improvement~~ **FIXED 2026-07-03, commit 7559ff2** (handler returns sandbox error detail + df columns + signal contract; exception type included in the wrap; TDD with the live KeyError scenario); 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. latency runs 2–3 to convert single-run numbers to medians; 8. response-length policy experiment (D1 lever 2); 9. ~~"6 months → 84 bars" period-mapping check~~ **RESOLVED + FIXED 2026-07-06, commit c397428** — IBKR period strings are case-sensitive; uppercase ('6M', '1Y') silently falls back to ~84 bars. Client now lowercases period/bar; schema examples corrected to lowercase; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field (Appendix G, deferred as beyond doc-text); 11. Appendix C minors not covered by helper extraction: ~~`get_positions` None-formatting `TypeError`~~ **FIXED 2026-07-03, commit 9a4181d (TDD)**; still open: private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`); 12. **sortino/calmar variant decision** (found 2026-07-02 while verifying analytics docs): `analytics.sortino` implements the simplified discrete form (std of below-target returns only) that the canonical source explicitly disfavors — canonical is target downside deviation over ALL observations (https://en.wikipedia.org/wiki/Sortino_ratio); `analytics.calmar` is whole-series, formally the MAR-ratio convention vs Young 1991's trailing-36-month Calmar (https://en.wikipedia.org/wiki/Calmar_ratio). Both variants now documented in docstrings; migrating changes every existing backtest figure — deliberate decision required, not a doc fix. 13. **`generate_pinescript` exposes only 1 of 3 pinescript.py capabilities** (found live 2026-07-06): `ibkr_core_mcp/pinescript.py` has `indicator_script()`, `strategy_from_signals()`, and `strategy_from_backtest()` — all three are part of the public Python API (documented in CLAUDE.md) — but `ClaudeToolkit._generate_pinescript` (claude_tools.py:1812) only ever calls `indicator_script()`. Live consequence: asked for a strategy script matching a just-run backtest, ClaudIA had no tool for it and hand-wrote PineScript v5 `strategy()` syntax from her own knowledge instead of calling the tested, deterministic generator — happened to be correct this time, but the tool gap creates a real syntax-hallucination surface. Fix: add a `strategy_name`/`from_backtest` path (or a second tool) wiring `strategy_from_backtest`/`strategy_from_signals` into the dispatch, matching the D5-corrected tool description's honesty about current scope.
+**Follow-up register (out of this audit's scope, in priority order):** 1. ~~prompt caching in claudia_ui~~ **LANDED 2026-07-03 independently of this audit** (`claudia/agent.py` commits `bb77111`..`f68c43d` — 3 breakpoints: tools, system prompt, conversation history); **live-confirmed 2026-07-06, Appendix B run 2** — 82.4% input-token cost reduction, no confirmed latency change (see D1); 2. ~~Flex `_get_statement` poller fix~~ **FIXED 2026-07-02, commit 252729f; live-confirmed 2026-07-06** — first real sync imported 122/122 trades incl. the missing July 1–2 fills (July 1: +$2,957.00, July 2: +$94.50 — the true week P&L was **+$430.00**, not the −$2,621.50 reported from the stale store on 2026-07-02); 3. ~~live re-verification of `/iserver/account/trades` empty result~~ **RESOLVED 2026-07-06** — two-call warmup, origin coverage complete once primed; auto-retry fixed in `client.get_trades()` (see Appendix B finding 2); 4. ~~`get_analytics` periods fix~~ **FIXED 2026-07-02, commit 3fb22f4**; ~~`run_backtest` error-surface improvement~~ **FIXED 2026-07-03, commit 7559ff2** (handler returns sandbox error detail + df columns + signal contract; exception type included in the wrap; TDD with the live KeyError scenario); 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. ~~latency runs 2–3~~ **run 2 DONE 2026-07-06** (cached-state comparison, Appendix B) — run 3 optional, would only further reduce single-run noise; 8. response-length policy experiment (D1 lever 2); 9. ~~"6 months → 84 bars" period-mapping check~~ **RESOLVED + FIXED 2026-07-06, commit c397428** — IBKR period strings are case-sensitive; uppercase ('6M', '1Y') silently falls back to ~84 bars. Client now lowercases period/bar; schema examples corrected to lowercase; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field (Appendix G, deferred as beyond doc-text); 11. Appendix C minors not covered by helper extraction: ~~`get_positions` None-formatting `TypeError`~~ **FIXED 2026-07-03, commit 9a4181d (TDD)**; still open: private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`); 12. **sortino/calmar variant decision** (found 2026-07-02 while verifying analytics docs): `analytics.sortino` implements the simplified discrete form (std of below-target returns only) that the canonical source explicitly disfavors — canonical is target downside deviation over ALL observations (https://en.wikipedia.org/wiki/Sortino_ratio); `analytics.calmar` is whole-series, formally the MAR-ratio convention vs Young 1991's trailing-36-month Calmar (https://en.wikipedia.org/wiki/Calmar_ratio). Both variants now documented in docstrings; migrating changes every existing backtest figure — deliberate decision required, not a doc fix. 13. **`generate_pinescript` exposes only 1 of 3 pinescript.py capabilities** (found live 2026-07-06): `ibkr_core_mcp/pinescript.py` has `indicator_script()`, `strategy_from_signals()`, and `strategy_from_backtest()` — all three are part of the public Python API (documented in CLAUDE.md) — but `ClaudeToolkit._generate_pinescript` (claude_tools.py:1812) only ever calls `indicator_script()`. Live consequence: asked for a strategy script matching a just-run backtest, ClaudIA had no tool for it and hand-wrote PineScript v5 `strategy()` syntax from her own knowledge instead of calling the tested, deterministic generator — happened to be correct this time, but the tool gap creates a real syntax-hallucination surface. Fix: add a `strategy_name`/`from_backtest` path (or a second tool) wiring `strategy_from_backtest`/`strategy_from_signals` into the dispatch, matching the D5-corrected tool description's honesty about current scope.
 
 ## Next live session — verification checklist (planned 2026-07-03)
 
@@ -291,6 +291,65 @@ optimization on this evidence.
    history + indicators → `fetch_market_data` + `add_indicators`; snapshot →
    `get_market_snapshot`; trades/P&L → `get_trades` + `get_pnl` + `get_pa_transactions`
    cross-check). Single-run observation; feeds D3.
+
+### Run 2 (2026-07-06) — cached-state comparison, D1 refined
+
+**Method:** same instrumentation, reapplied to `claudia_ui` after the 2026-07-03
+prompt-caching upgrade landed independently (3 breakpoints: tools array, system
+prompt, conversation history — `claudia/agent.py`, commits `bb77111`..`f68c43d`,
+not part of this audit's changes). Same 8-message script (7 from run 1 + one new
+message for account/allocation coverage), live gateway, `claude-opus-4-8`. Raw:
+`docs/superpowers/audit-evidence/timing_run2.jsonl`.
+
+**Caveat:** 10 `user_message`→`message_done` cycles were recorded for 8 messages
+actually typed. `handle_message` has exactly one call site in the codebase
+(`app.py:809`, via `on_message`), so no duplicate-invocation path was found — the
+cause is unconfirmed and not asserted. It does not affect the comparison below,
+which sums measured cycles rather than assuming a 1:1 message mapping.
+
+**Token cost — clear, large win.** Of 19 API calls, only the session's first paid
+full uncached price; the remaining 18 read a growing cache prefix:
+
+| | Run 1 (2026-07-02, no caching) | Run 2 (2026-07-06, caching active) |
+|---|---|---|
+| Calls with `cache_read=0` | 19 / 19 | **1 / 19** |
+| Total cache_read tokens | — | 471,104 (priced at 0.1×) |
+| Total cache_created tokens | — | 33,483 (priced at 1.25×) |
+| Total uncached input tokens | 507,444 | 38 |
+| **Effective input cost** (opus 4.8: \$5/\$6.25/\$0.50 per MTok normal/write/read) | **\$2.5231** | **\$0.4450** |
+
+**82.4% reduction in input-token cost** for a session of comparable total size
+(504,625 effective prompt tokens processed in run 2 vs 507,444 in run 1 — the
+sessions are genuinely comparable in scale). This is the clearest, most confident
+number in the entire audit.
+
+**Wall-clock share — essentially unchanged; refines D1.** Using summed per-message
+processing windows (not raw first/last timestamp, which would wrongly count the
+owner's reading/typing time between messages as software overhead):
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| In-message total | 143.1s | 153.2s |
+| Stream share | 91.4% | **93.0%** |
+| Tools share | 8.5% | 6.9% |
+| Residual share | 0.1% | 0.1% |
+| Avg time-to-first-token | 1.62s | **2.52s** (higher, not lower) |
+
+**Honest correction to the original D1 synthesis:** caching does not measurably
+reduce wall-clock latency in this comparison — stream time is still ~91–93% of
+total in both conditions, and average ttft is *higher* with caching active, not
+lower (single-run comparison; plausible cause is that nearly every call in an
+actively growing conversation both reads the existing cache *and* writes a fresh
+tail, so the write side still pays close to full latency, and Claude's raw
+prompt-processing throughput was already sub-2s even on the full uncached
+20k+-token prefix in run 1 — the bottleneck was never prompt processing). The
+part of D1 that was correct: response **generation** time, not prompt processing,
+dominates wall-clock in both conditions (~91–93% stream share, unchanged by
+caching). Caching is a confirmed, large **cost** win; it is not a confirmed
+**latency** win. D1's second lever (response-length/verbosity policy) is now the
+only lever with a plausible path to reducing perceived slowness — unchanged from
+the original synthesis, but no longer a fallback behind an unconfirmed caching
+speedup.
 
 ## Appendix C — Code findings table (WS2a)
 
