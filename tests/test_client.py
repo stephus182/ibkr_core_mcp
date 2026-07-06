@@ -571,3 +571,17 @@ def test_get_trades_empty_after_retry_returns_empty(client):
         result = client.get_trades()
     assert result == []
     assert mock_get.call_count == 2
+
+
+# ── get_market_history — period/bar case normalization (verified live 2026-07-06) ──
+
+def test_get_market_history_normalizes_period_and_bar_case(client):
+    """Live-verified 2026-07-06: IBKR treats period='6M' as unrecognized and silently
+    returns a ~84-bar default (4 months), while '6m' returns the true 6 months.
+    Uppercase inputs must be lowercased before the request (root cause of audit
+    register #9, '6 months → 84 bars')."""
+    with patch.object(client._session, "get", return_value=_make_ok_response({"data": []})) as mock_get:
+        client.get_market_history(265598, period="6M", bar="1D")
+    params = mock_get.call_args[1].get("params") or mock_get.call_args[0][1]
+    assert params["period"] == "6m"
+    assert params["bar"] == "1d"

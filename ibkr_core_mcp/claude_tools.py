@@ -78,7 +78,7 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker, e.g. AAPL"},
-                "period": {"type": "string", "description": "History period, e.g. '1Y', '6M'"},
+                "period": {"type": "string", "description": "History period, lowercase units, e.g. '6m', '1y', '30d'"},
                 "bar": {"type": "string", "description": "Bar size, e.g. '1d', '1h'", "default": "1d"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD, defaults to today"},
             },

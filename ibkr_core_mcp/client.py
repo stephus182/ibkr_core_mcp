@@ -211,8 +211,14 @@ class IBKRClient:
     # Market Data
     # ------------------------------------------------------------------
 
-    def get_market_history(self, conid: int, period: str = "1Y", bar: str = "1d", outside_rth: bool = False) -> dict[str, Any]:
+    def get_market_history(self, conid: int, period: str = "1y", bar: str = "1d", outside_rth: bool = False) -> dict[str, Any]:
         """OHLCV bars via iserver/marketdata/history.
+
+        ## Case sensitivity (verified live 2026-07-06)
+        IBKR period/bar units are lowercase. Uppercase inputs are NOT rejected —
+        the API silently substitutes a ~84-bar default (period='6M' returned 4
+        months of dailies; '6m' returned the true 6 months). Inputs are therefore
+        lowercased here before the request.
 
         Returns {"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}.
 
@@ -243,12 +249,15 @@ class IBKRClient:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
         Endpoint: GET /iserver/marketdata/history
         """
-        return self._get("/iserver/marketdata/history", {"conid": conid, "period": period, "bar": bar, "outsideRth": str(outside_rth).lower()})
+        return self._get(
+            "/iserver/marketdata/history",
+            {"conid": conid, "period": period.lower(), "bar": bar.lower(), "outsideRth": str(outside_rth).lower()},
+        )
 
     def get_market_history_paginated(
         self,
         conid: int,
-        period: str = "1Y",
+        period: str = "1y",
         bar: str = "1d",
         outside_rth: bool = False,
     ) -> dict[str, Any]:
