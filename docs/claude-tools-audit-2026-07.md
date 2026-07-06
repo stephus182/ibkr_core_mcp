@@ -1,6 +1,6 @@
 # claude_tools.py Audit — 2026-07
 
-**Status:** SYNTHESIS COMPLETE (2026-07-02); D1 REFINED 2026-07-06 with a real before/after caching comparison — D2–D4 remain recommendations for future work; D5 applied 2026-07-02, extended with 3 more live-found fixes through 2026-07-06. Open evidence gaps: run 3 (optional, noise-reduction only), TradingView tool payload unmeasured (bridge offline), register items 5/6/10/12/13.
+**Status:** SYNTHESIS COMPLETE (2026-07-02); D1 REFINED 2026-07-06 with a real before/after caching comparison and a measured TradingView tool payload — D2–D4 remain recommendations for future work; D5 applied 2026-07-02, extended with 4 more live-found fixes through 2026-07-06. Live order-flow tested end-to-end 2026-07-06 (place → 3 chained replies → Submitted); surfaced a reply-confirmation UX gap now in design. Open: run 3 (optional, noise-reduction only), register items 5/6/10/12/13, and the reply-confirmation fix (cross-repo, in design).
 **Spec:** docs/2026-07-02-claude-tools-audit-design.md
 **Model used for all token counts:** claude-opus-4-8 (ClaudIA default)
 
@@ -14,7 +14,7 @@
 | D4 | Sequencing vs. scraping-RAG layer 2 | **Build layer 2 now, into the current single file.** Its 3 tools add +543 tokens (2.6% of the static prefix) — immaterial. They extend the existing web domain and are therefore *not* the arch-note's "first new domain" split trigger. Helper extraction (D2) can land before or alongside; neither blocks the other. | Appendices A, E |
 | D5 | Documentation verdicts | **33 accurate / 8 fix / 1 enrich / 0 trim / 0 unverified** — applied to `claude_tools.py` in the companion commit (doc-text only). Reconciliation: Appendix C's `get_option_chain` "none" rated code *structure* only; Appendix G's non-functional-endpoint verdict governs the tool's real status. Live-session addendum (Appendix B): two findings exceed doc-text scope and become follow-up work items — `sync_flex_trades` silently verifying empty daily statements (data-integrity defect observed live), and `run_backtest`'s opaque error surface. | Appendices G, B |
 
-**Follow-up register (out of this audit's scope, in priority order):** 1. ~~prompt caching in claudia_ui~~ **LANDED 2026-07-03 independently of this audit** (`claudia/agent.py` commits `bb77111`..`f68c43d` — 3 breakpoints: tools, system prompt, conversation history); **live-confirmed 2026-07-06, Appendix B run 2** — 82.4% input-token cost reduction, no confirmed latency change (see D1); 2. ~~Flex `_get_statement` poller fix~~ **FIXED 2026-07-02, commit 252729f; live-confirmed 2026-07-06** — first real sync imported 122/122 trades incl. the missing July 1–2 fills (July 1: +$2,957.00, July 2: +$94.50 — the true week P&L was **+$430.00**, not the −$2,621.50 reported from the stale store on 2026-07-02); 3. ~~live re-verification of `/iserver/account/trades` empty result~~ **RESOLVED 2026-07-06** — two-call warmup, origin coverage complete once primed; auto-retry fixed in `client.get_trades()` (see Appendix B finding 2); 4. ~~`get_analytics` periods fix~~ **FIXED 2026-07-02, commit 3fb22f4**; ~~`run_backtest` error-surface improvement~~ **FIXED 2026-07-03, commit 7559ff2** (handler returns sandbox error detail + df columns + signal contract; exception type included in the wrap; TDD with the live KeyError scenario); 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. ~~latency runs 2–3~~ **run 2 DONE 2026-07-06** (cached-state comparison, Appendix B — Run 2 is now the reference session; Run 1 retained only as the pre-caching baseline, see Appendix B note) — a "run 3" is optional and would compare against Run 2, not Run 1; 8. response-length policy experiment (D1 lever 2); 9. ~~"6 months → 84 bars" period-mapping check~~ **RESOLVED + FIXED 2026-07-06, commit c397428** — IBKR period strings are case-sensitive; uppercase ('6M', '1Y') silently falls back to ~84 bars. Client now lowercases period/bar; schema examples corrected to lowercase; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field. **UPGRADED to confirmed functional defect, live-verified 2026-07-06**: called through the real handler (not a hand-rolled request), `order_type='STP'` and `'STOP_LIMIT'` both return **HTTP 500** (LMT and MKT succeed) — the handler's own whitelist admits these types but only populates `price` for `LMT`, so IBKR rejects the incomplete order and `_safe_error` reports a generic, unactionable message. No longer "beyond doc-text" — this needs a real code fix (add `stop_price`/schema field, map to `price`/`auxPrice` per type); 11. Appendix C minors not covered by helper extraction: ~~`get_positions` None-formatting `TypeError`~~ **FIXED 2026-07-03, commit 9a4181d (TDD)**; still open: private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`); 12. **sortino/calmar variant decision** (found 2026-07-02 while verifying analytics docs): `analytics.sortino` implements the simplified discrete form (std of below-target returns only) that the canonical source explicitly disfavors — canonical is target downside deviation over ALL observations (https://en.wikipedia.org/wiki/Sortino_ratio); `analytics.calmar` is whole-series, formally the MAR-ratio convention vs Young 1991's trailing-36-month Calmar (https://en.wikipedia.org/wiki/Calmar_ratio). Both variants now documented in docstrings; migrating changes every existing backtest figure — deliberate decision required, not a doc fix. 13. **`generate_pinescript` exposes only 1 of 3 pinescript.py capabilities** (found live 2026-07-06): `ibkr_core_mcp/pinescript.py` has `indicator_script()`, `strategy_from_signals()`, and `strategy_from_backtest()` — all three are part of the public Python API (documented in CLAUDE.md) — but `ClaudeToolkit._generate_pinescript` (claude_tools.py:1812) only ever calls `indicator_script()`. Live consequence: asked for a strategy script matching a just-run backtest, ClaudIA had no tool for it and hand-wrote PineScript v5 `strategy()` syntax from her own knowledge instead of calling the tested, deterministic generator — happened to be correct this time, but the tool gap creates a real syntax-hallucination surface. Fix: add a `strategy_name`/`from_backtest` path (or a second tool) wiring `strategy_from_backtest`/`strategy_from_signals` into the dispatch, matching the D5-corrected tool description's honesty about current scope.
+**Follow-up register (out of this audit's scope, in priority order):** 1. ~~prompt caching in claudia_ui~~ **LANDED 2026-07-03 independently of this audit** (`claudia/agent.py` commits `bb77111`..`f68c43d` — 3 breakpoints: tools, system prompt, conversation history); **live-confirmed 2026-07-06, Appendix B run 2** — 82.4% input-token cost reduction, no confirmed latency change (see D1); 2. ~~Flex `_get_statement` poller fix~~ **FIXED 2026-07-02, commit 252729f; live-confirmed 2026-07-06** — first real sync imported 122/122 trades incl. the missing July 1–2 fills (July 1: +$2,957.00, July 2: +$94.50 — the true week P&L was **+$430.00**, not the −$2,621.50 reported from the stale store on 2026-07-02); 3. ~~live re-verification of `/iserver/account/trades` empty result~~ **RESOLVED 2026-07-06** — two-call warmup, origin coverage complete once primed; auto-retry fixed in `client.get_trades()` (see Appendix B finding 2); 4. ~~`get_analytics` periods fix~~ **FIXED 2026-07-02, commit 3fb22f4**; ~~`run_backtest` error-surface improvement~~ **FIXED 2026-07-03, commit 7559ff2** (handler returns sandbox error detail + df columns + signal contract; exception type included in the wrap; TDD with the live KeyError scenario); 5. helper extraction (D2 Candidate 1); 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. ~~latency runs 2–3~~ **run 2 DONE 2026-07-06** (cached-state comparison, Appendix B — Run 2 is now the reference session; Run 1 retained only as the pre-caching baseline, see Appendix B note) — a "run 3" is optional and would compare against Run 2, not Run 1; 8. response-length policy experiment (D1 lever 2); 9. ~~"6 months → 84 bars" period-mapping check~~ **RESOLVED + FIXED 2026-07-06, commit c397428** — IBKR period strings are case-sensitive; uppercase ('6M', '1Y') silently falls back to ~84 bars. Client now lowercases period/bar; schema examples corrected to lowercase; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field. **UPGRADED to confirmed functional defect, live-verified 2026-07-06**: called through the real handler (not a hand-rolled request), `order_type='STP'` and `'STOP_LIMIT'` both return **HTTP 500** (LMT and MKT succeed) — the handler's own whitelist admits these types but only populates `price` for `LMT`, so IBKR rejects the incomplete order and `_safe_error` reports a generic, unactionable message. No longer "beyond doc-text" — this needs a real code fix (add `stop_price`/schema field, map to `price`/`auxPrice` per type); 11. Appendix C minors not covered by helper extraction: ~~`get_positions` None-formatting `TypeError`~~ **FIXED 2026-07-03, commit 9a4181d (TDD)**; still open: private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`); 12. **sortino/calmar variant decision** (found 2026-07-02 while verifying analytics docs): `analytics.sortino` implements the simplified discrete form (std of below-target returns only) that the canonical source explicitly disfavors — canonical is target downside deviation over ALL observations (https://en.wikipedia.org/wiki/Sortino_ratio); `analytics.calmar` is whole-series, formally the MAR-ratio convention vs Young 1991's trailing-36-month Calmar (https://en.wikipedia.org/wiki/Calmar_ratio). Both variants now documented in docstrings; migrating changes every existing backtest figure — deliberate decision required, not a doc fix. 13. **`generate_pinescript` exposes only 1 of 3 pinescript.py capabilities** (found live 2026-07-06): `ibkr_core_mcp/pinescript.py` has `indicator_script()`, `strategy_from_signals()`, and `strategy_from_backtest()` — all three are part of the public Python API (documented in CLAUDE.md) — but `ClaudeToolkit._generate_pinescript` (claude_tools.py:1812) only ever calls `indicator_script()`. Live consequence: asked for a strategy script matching a just-run backtest, ClaudIA had no tool for it and hand-wrote PineScript v5 `strategy()` syntax from her own knowledge instead of calling the tested, deterministic generator — happened to be correct this time, but the tool gap creates a real syntax-hallucination surface. Fix: add a `strategy_name`/`from_backtest` path (or a second tool) wiring `strategy_from_backtest`/`strategy_from_signals` into the dispatch, matching the D5-corrected tool description's honesty about current scope. 14. **Reply-confirmation flow is incomplete — cross-repo, in design as of 2026-07-06.** Live order-flow test (a real `BUY 1 AAPL @ $100 GTC`) found: (a) `claudia_ui/claudia/order_flow.py`'s `execute_staged_order` calls `place_order()` and declares "staged successfully" without ever calling `reply_order()` — an order tripping any IBKR confirmation message (price-band, no-market-data, etc.) is left `Inactive`/`Pending Submit` on IBKR's side while the UI falsely reports success; confirmed via live `get_live_orders`. (b) `reply_order()`'s own response can require ANOTHER reply — this order needed 3 sequential confirmations (price-band 3%, no-market-data `o354`, mandatory-cap-price `o10153`) before reaching `Submitted`; official docs warn a pending reply must be answered immediately or it invalidates (503). (c) `ibkr_core_mcp/order_confirm.py`'s `confirm_reply_dialog()` shows only a generic "Reply ID: xxx" — never the actual IBKR warning text — violating CLAUDE.md's own Gate-2 "full order details" principle; the owner explicitly required the real message be shown and validated by the human before confirming. Fix spans both repos: thread `message`/`messageOptions` into `confirm_reply_dialog()` (ibkr_core_mcp), and loop `reply_order()` in `execute_staged_order()` until a terminal response, surfacing each message (claudia_ui). High sensitivity — touches CLAUDE.md's protected security gates; design via brainstorming before implementation.
 
 ## Next live session — verification checklist (planned 2026-07-03)
 
@@ -22,13 +22,17 @@ Owner-driven session with an authenticated gateway, preferably during US market 
 (RTH needed for items 4–5). Each item updates the findings it names; the register and
 Appendix B get amended in place.
 
-**Session 2026-07-06 progress:** items **2, 3, 4, 7 complete** (finding 2 resolved —
-two-call warmup + get_trades auto-retry 1dbef6a; Flex fix live-confirmed, 122 trades,
-July backfilled, true week P&L +$430; RTH snapshot correct; period case-sensitivity
-found + fixed c397428; surface re-measured 9,752 tok). Gateway startup timed:
-2.7 s infrastructure + 77.6 s login/2FA = 80.5 s ready-to-load. **Still open: items
-1 (latency runs 2–3), 5 (order-flow tests), 6 (TV tokens)** — all need the owner
-driving (ClaudIA session / Touch ID / TradingView Desktop).
+**Session 2026-07-06 progress: ALL 7 ITEMS COMPLETE.** Finding 2 resolved (two-call
+warmup + `get_trades` auto-retry, `1dbef6a`); Flex fix live-confirmed (122 trades,
+July backfilled, true week P&L +$430); RTH snapshot correct; period case-sensitivity
+found + fixed (`c397428`); surface re-measured 9,752 tok; item 1 done as a full
+before/after caching comparison (Appendix B run 2 — now the reference session, see
+its note); item 6 done — TV bridge measured at +2,011 tok for the 16 curated tools
+(Appendix A). Gateway startup timed: 2.7 s infrastructure + 77.6 s login/2FA = 80.5 s
+ready-to-load. **Item 5 (order-flow) went further than planned**: a real order was
+placed and fully confirmed live (place → 3 chained IBKR replies → Submitted),
+surfacing register item 10 as a confirmed defect and a new cross-repo UX gap (below)
+now in design — see the reply-confirmation fix section.
 
 1. **Latency runs 2–3 + scripted message 8** (completes WS1b, converts Appendix B to
    3-run medians). Re-apply instrumentation:
@@ -134,21 +138,39 @@ Measured 2026-07-02; the claudia local tools (`_LOCAL_TOOLS`) and system prompt 
 | 45 | `list_cache` | 64 | 0.68% |
 | 46 | `get_positions` | 62 | 0.65% |
 
-### TradingView tools (unmeasured)
+### TradingView tools — measured 2026-07-06
 
-TradingView Desktop / the bridge was checked via `claudia.tradingview.TradingViewBridge().get_tools()` and returned an empty list (`[]`) — TradingView Desktop is not currently running/connected on this machine. Per the measurement protocol, no placeholder or estimated numbers were recorded. `tradingview-mcp` advertises **78 tools**; when the bridge is connected, these ride the *same* payload as every other tool (added to `all_tools` in the script) and would materially increase the static prefix per call — this is unmeasured and should be treated as a known gap in the token-weight picture, not zero cost.
+TradingView Desktop was live and connected (confirmed via the running ClaudIA session
+reading the actual chart state). The first check attempt was a **false negative**: a
+throwaway script called `TradingViewBridge().get_tools()` without first `await`ing
+`bridge.start()` — `get_tools()` only returns `self._curated_tools`, which `start()`
+populates by spawning the sidecar and connecting over CDP; skipping `start()` always
+returns `[]` regardless of connection state. Corrected script (`await bridge.start()`
+then `get_tools()`/`get_all_tools()`) confirms: **78 tools in the full sidecar catalog**
+(matching the number advertised in `tradingview-mcp`'s own docs), of which **16 are
+curated** — `_CURATED_TOOLS` in `claudia/tradingview.py` is the subset actually added
+to `agent.py`'s `_all_tools` and sent to Claude on every call. The other 62 exist in
+the sidecar but never reach the model.
 
-**Rerun instruction (once TradingView Desktop is running and connected):**
-```bash
-cd /Users/steph/Claude_Projects/claudia_ui && .venv/bin/python -c "
-import json
-from claudia.tradingview import TradingViewBridge
-print(json.dumps(TradingViewBridge().get_tools()))
-" > /Users/steph/Claude_Projects/ibkr_core_mcp/docs/superpowers/audit-evidence/tv_tools.json
-cd /Users/steph/Claude_Projects/ibkr_core_mcp && .venv/bin/python scripts/audit/count_tool_tokens.py \
-    --out docs/superpowers/audit-evidence/token_counts_with_tv.json \
-    --extra-tools docs/superpowers/audit-evidence/tv_tools.json
-```
+Marginal cost of the 16 curated tools, same leave-one-out method, `claude-opus-4-8`:
+
+| Metric | Without TV | With TV (16 curated) | Delta |
+|---|---|---|---|
+| Tool surface | 9,752 | 11,763 | **+2,011** |
+| Static prefix/call | 20,865 | 22,876 | **+2,011** |
+
+Sanity check: sum of the 16 individual marginals is 2,011 — matches the surface
+delta exactly (no tokenizer-boundary variance this time). Heaviest curated TV tools:
+`indicator_set_inputs` (215), `capture_screenshot` (214), `data_get_ohlcv` (198),
+`chart_set_symbol` (146), `chart_set_timeframe` (143). Raw: `token_counts_with_tv.json`.
+
+**Reading:** +2,011 tokens is 9.6% of the current static prefix (20,865) — non-trivial
+but not alarming, and it only applies to sessions where the TV bridge is actually
+connected (`_all_tools` only includes `_extra_tools` when `set_tv_bridge` has been
+called). No change to D2/D3's recommendations — the curated-tool design (16 of 78)
+is already the right shape: it's a pre-filtered exposure profile, which is exactly
+what D3 concluded wasn't needed for the IBKR toolset but turns out to already exist
+for TradingView.
 
 ### Layer-2 projection (D4 input)
 
