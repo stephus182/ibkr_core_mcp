@@ -984,6 +984,27 @@ class IBKRClient:
         gate fails or times out. ClaudIA constraint: ClaudeToolkit exposes no tool calling
         this method — order execution is UI-layer only, triggered by physical button click.
 
+        ## GTC orders are not indefinite (verified live 2026-07-06, IBKR convention)
+        A GTC order auto-cancels at the end of the calendar quarter *following* the
+        current one — not simply "year-end." Placed in Q3 -> cancels end of Q4;
+        placed in Q1 -> cancels end of Q2. Confirmed live: an order placed 2026-07-06
+        (Q3) returned a final reply message "will be automatically canceled at
+        20261231 16:00:00 EST" (end of Q4), matching the rule exactly. This is a
+        normal IBKR lifecycle behavior, not a bug — the reply chain (see below)
+        surfaces the exact cancellation timestamp for each GTC order placed.
+        Source: https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/
+
+        ## Order confirmation may require multiple chained replies (verified live 2026-07-06)
+        place_order's response can include an {"id", "message", "messageIds", ...} entry
+        requiring reply_order(id). CRITICALLY, reply_order's own response can ALSO
+        return another such entry — confirmed live: a single AAPL limit order required
+        THREE sequential replies (price-band %, no-market-data, mandatory-cap-price)
+        before returning a terminal {"order_status": "Submitted", ...}. Callers must
+        loop reply_order() until a response with no "id"/"message" is returned.
+        Official docs warn the reply must be answered immediately — other requests in
+        between risk invalidating it (503 on the next reply attempt). See CLAUDE.md's
+        Order Management section and the audit report for the live-verified pattern.
+
         US Futures and Futures Options (FUT/FOP): caller must include both manualIndicator=True
         and extOperator="<user>" in the order dict. Required since May 1, 2025 for CME Group
         Rule 536-B compliance. IBKR returns HTTP 400 without them for FUT/FOP orders.
@@ -1044,6 +1065,18 @@ class IBKRClient:
         """Confirm an order requiring an explicit IBKR reply (e.g. after a warning).
 
         Requires Touch ID (Gate 1) + tkinter dialog (Gate 2).
+
+        ## May need to be called in a loop (verified live 2026-07-06)
+        This reply's own response can contain ANOTHER {"id", "message", ...} entry
+        requiring a further reply_order() call — confirmed live, a single order
+        needed 3 sequential replies before a terminal response. Callers must loop
+        until the response has no "id"/"message" pair. Official docs: "Orders must
+        be replied to immediately after receiving the reply message. Submitting
+        other orders or other requests will cancel the order and attempts to
+        acknowledge the reply will result in a 503 error" — so this loop must run
+        back-to-back with no unrelated requests interleaved. `message` is the exact
+        text IBKR wants the human to read before confirming; the caller (Gate 2
+        dialog) must display it, not just the reply_id.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/

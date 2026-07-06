@@ -322,12 +322,25 @@ order = {
 
 try:
     responses = client.place_order(account_id, order)
-    for resp in responses:
-        if "id" in resp:
-            client.reply_order(resp["id"])   # IBKR confirmation step — also gated
+    # A reply can chain into ANOTHER reply requirement — loop until terminal.
+    # Verified live 2026-07-06: a single order needed 3 sequential replies
+    # (price-band %, no-market-data, mandatory-cap-price) before Submitted.
+    # Must run immediately, back-to-back — IBKR invalidates (503) a reply left
+    # pending while other requests are made. Show resp["message"] to the human
+    # before confirming — it is the exact text they are agreeing to.
+    while responses and "id" in responses[0]:
+        print(responses[0]["message"])  # show the human what they're confirming
+        responses = client.reply_order(responses[0]["id"])
 except HumanAuthError as e:
     print(f"Order not sent: {e}")
 ```
+
+**GTC orders are not indefinite:** they auto-cancel at the end of the calendar
+quarter *following* the current one (placed in Q3 → cancels end of Q4; placed in
+Q1 → cancels end of Q2) — not simply "year-end." Confirmed live 2026-07-06: an
+order placed in Q3 returned "will be automatically canceled at 20261231 16:00:00
+EST" (end of Q4), matching IBKR's documented convention exactly. Source:
+https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/
 
 **Modify or cancel — each triggers Touch ID + dialog:**
 ```python
