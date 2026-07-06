@@ -721,23 +721,34 @@ class IBKRClient:
         If unspecified, only the current day is returned. We always pass days=7 for
         maximum lookback. The docs also advise calling this endpoint once per session.
 
-        ## Origin coverage — undocumented (corrected 2026-07-02)
-        The official reference says only "trades for the currently selected account";
-        it does NOT state whether mobile/TWS-placed fills are included. Observed
-        2026-07-02 (live): mobile-placed fills within the window were absent from one
-        session's response — pending live re-verification (audit follow-up #3,
-        docs/claude-tools-audit-2026-07.md Appendix B finding 2). An earlier version
-        of this docstring claimed "all origins" — that claim was not in the docs.
+        ## Origin coverage — verified live 2026-07-06
+        The official reference documents only "trades for the currently selected
+        account"; origin scope is not stated. Verified live: once the subscription
+        is primed (warmup above), mobile-placed fills DO appear — origin coverage
+        is complete. The 2026-07-02 "mobile fills missing" observation was the
+        unprimed first call, not an origin filter (audit Appendix B finding 2).
 
         ## When this is NOT the right tool
         - Full history beyond 7 days → FlexQueryClient.fetch_trades (T+1, all origins)
         - Real-time execution push → the WebSocket `str` (trades) topic is documented
           (args: realtimeUpdatesOnly, days) but not implemented in streaming.py yet
 
+        ## Two-call warmup (verified live 2026-07-06)
+        A fresh brokerage session returns an EMPTY list on the first call and the
+        actual fills on a follow-up call — the same subscription-instantiation
+        behavior as /iserver/account/orders. An empty first response is therefore
+        retried once after a 1 s pause; two empty responses mean genuinely no
+        trades. (This warmup was the real cause of the 2026-07-02 'mobile fills
+        missing' observation — origin coverage is complete once primed.)
+
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trades
         Endpoint: GET /iserver/account/trades
         """
         # days=7 requests maximum lookback; without it IBKR returns today's session only
+        data = self._get("/iserver/account/trades?days=7")
+        if isinstance(data, list) and data:
+            return data
+        time.sleep(1)  # empty first response may be the unprimed subscription
         data = self._get("/iserver/account/trades?days=7")
         return data if isinstance(data, list) else []
 

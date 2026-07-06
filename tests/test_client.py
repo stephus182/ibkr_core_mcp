@@ -534,3 +534,40 @@ def test_ping_returns_false_immediately_on_401_without_retry(client):
     assert result is False
     assert mock_get.call_count == 1, "Must not retry on 401"
     mock_tickle.assert_not_called()
+
+
+# ── get_trades — two-call warmup (verified live 2026-07-06) ───────────────────
+
+def test_get_trades_retries_once_when_first_call_empty(client):
+    """Live-verified 2026-07-06: a fresh session returns [] on the first call and
+    the fills on the second — same subscription warmup as /iserver/account/orders.
+    A single empty call must not be reported as 'no trades'."""
+    trades = [{"execution_id": "e1", "symbol": "ES", "side": "S", "trade_time": "20260702-05:29:28"}]
+    responses = [_make_ok_response([]), _make_ok_response(trades)]
+    with patch.object(client._session, "get", side_effect=responses) as mock_get, \
+         patch("ibkr_core_mcp.client.time.sleep"):
+        client._accounts_initialized = True
+        result = client.get_trades()
+    assert result == trades
+    assert mock_get.call_count == 2
+
+
+def test_get_trades_single_call_when_data_returned(client):
+    """A primed session answers on the first call — no second request."""
+    trades = [{"execution_id": "e1", "symbol": "ES", "side": "B", "trade_time": "20260701-14:32:23"}]
+    with patch.object(client._session, "get", return_value=_make_ok_response(trades)) as mock_get:
+        client._accounts_initialized = True
+        result = client.get_trades()
+    assert result == trades
+    assert mock_get.call_count == 1
+
+
+def test_get_trades_empty_after_retry_returns_empty(client):
+    """Two empty responses = genuinely no trades in the window."""
+    responses = [_make_ok_response([]), _make_ok_response([])]
+    with patch.object(client._session, "get", side_effect=responses) as mock_get, \
+         patch("ibkr_core_mcp.client.time.sleep"):
+        client._accounts_initialized = True
+        result = client.get_trades()
+    assert result == []
+    assert mock_get.call_count == 2

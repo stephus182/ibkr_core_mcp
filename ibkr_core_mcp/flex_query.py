@@ -147,15 +147,13 @@ class FlexQueryClient:
 
     ## What Flex does NOT cover
     - Today's intraday trades. For same-day fills the CP API `/iserver/account/trades`
-      is the only source, and its coverage is narrower than commonly assumed: the
-      official reference documents ONLY "a list of trades for the currently selected
-      account for current day and six previous days" (`?days=`, max 7) and advises
-      calling the endpoint once per session. It does NOT document which trade origins
-      (CP API / mobile / TWS) are included. Observed 2026-07-02 (live session):
-      mobile-placed ES fills within the 7-day window were absent from the response.
-      Treat live same-day data as best-effort and this Flex store as the authoritative
-      all-origin record. Sources: CP API reference "Trades" section (scraped
-      2026-07-02); docs/claude-tools-audit-2026-07.md Appendix B finding 2.
+      is the only source (7-day window, `?days=` max 7). Origin coverage verified
+      live 2026-07-06: all origins appear, mobile included, once the endpoint's
+      two-call subscription warmup is handled — `IBKRClient.get_trades()` retries an
+      empty first response automatically. Flex remains the authoritative record for
+      anything beyond 7 days (T+1, unlimited history). Sources: CP API reference
+      "Trades" section (scraped 2026-07-02); docs/claude-tools-audit-2026-07.md
+      Appendix B finding 2.
     - Real-time prices or positions
     """
 
