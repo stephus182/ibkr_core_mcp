@@ -217,3 +217,40 @@ def test_confirm_reply_dialog_passes_reply_id():
     kwargs = mock_show.call_args.kwargs
     assert kwargs["details"]["Reply ID"] == "RPL789"
     assert "CONFIRM" in kwargs["confirm_label"]
+
+
+def test_confirm_reply_dialog_no_message_key_when_empty():
+    """Unchanged call site (bare reply_id, no message) must not show a blank Message line."""
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+        confirm_reply_dialog("RPL789")
+    kwargs = mock_show.call_args.kwargs
+    assert "Message" not in kwargs["details"]
+
+
+def test_confirm_reply_dialog_passes_message_through():
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+        confirm_reply_dialog("RPL789", "Price is outside band.")
+    kwargs = mock_show.call_args.kwargs
+    assert kwargs["details"]["Reply ID"] == "RPL789"
+    assert kwargs["details"]["Message"] == "Price is outside band."
+
+
+def test_confirm_reply_dialog_strips_html_from_message():
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+        confirm_reply_dialog("RPL789", "<h4>Warning</h4> price band exceeded")
+    kwargs = mock_show.call_args.kwargs
+    assert "<h4>" not in kwargs["details"]["Message"]
+    assert "Warning" in kwargs["details"]["Message"]
+    assert "price band exceeded" in kwargs["details"]["Message"]
+
+
+def test_confirm_reply_dialog_accepts_options_without_error():
+    """options is accepted for signature completeness; must not change dialog rendering."""
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+        confirm_reply_dialog("RPL789", "msg", ["Yes", "No"])
+    kwargs = mock_show.call_args.kwargs
+    assert kwargs["confirm_label"] == "CONFIRM REPLY"

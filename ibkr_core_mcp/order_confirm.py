@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json as _json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -91,14 +92,39 @@ def confirm_cancel_dialog(order_id: str, account_id: str) -> None:
     )
 
 
-def confirm_reply_dialog(reply_id: str) -> None:
-    """Gate 2 for reply_order."""
+def confirm_reply_dialog(
+    reply_id: str, message: str = "", options: list[str] | None = None
+) -> None:
+    """Gate 2 for reply_order. Shows the ACTUAL IBKR warning text, not just the reply_id.
+
+    `message` defaults to "" so the standalone reply_order() call site (which only ever
+    had a bare reply_id to work with) keeps showing a blank message exactly as before —
+    that call site is unchanged by this task. place_order_and_confirm() /
+    modify_order_and_confirm() are the callers that pass a real `message`.
+
+    `options` (IBKR's messageOptions, e.g. varying button wording like "Yes"/"No" vs.
+    "Decline"/"Accept and Continue") is accepted for signature completeness only — it is
+    NOT surfaced as actual dialog button labels. The dialog keeps this package's own
+    consistent confirm_label / cancel wording.
+
+    HTML is stripped from `message` before display since the AppKit/tkinter/osascript
+    dialogs are plain text and IBKR reply messages have been observed containing tags
+    (e.g. "<h4>...</h4>", verified live 2026-07-06).
+    """
+    details: dict[str, Any] = {"Reply ID": reply_id}
+    if message:
+        details["Message"] = _strip_html(message)
     _show_confirm_dialog(
         title="⚠  CONFIRM ORDER REPLY",
-        details={"Reply ID": reply_id},
+        details=details,
         disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
         confirm_label="CONFIRM REPLY",
     )
+
+
+def _strip_html(text: str) -> str:
+    """Strip HTML tags from IBKR reply message text for display in plain-text dialogs."""
+    return re.sub(r"<[^>]+>", "", text)
 
 
 def _show_confirm_dialog(

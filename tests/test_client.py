@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from unittest.mock import patch as _patch
 
 import pytest
@@ -296,6 +296,164 @@ def test_get_order_preview_has_no_gate(client):
         mock_post.return_value = _make_ok_response({"equity": 5000})
         client.get_order_preview("U1234567", order)
     mock_tid.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# place_order_and_confirm / modify_order_and_confirm — reply-chain orchestration
+# ---------------------------------------------------------------------------
+
+def test_place_order_and_confirm_zero_replies(client):
+    """place_order returns a terminal response straight through — no reply loop entered."""
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response([{"order_status": "Submitted", "orderId": "1"}])
+        result = client.place_order_and_confirm("U1234567", order)
+    assert result == [{"order_status": "Submitted", "orderId": "1"}]
+    mock_post.assert_called_once()
+    mock_reply_dlg.assert_not_called()
+    assert mock_tid.call_count == 1  # only place_order's own gate fires
+
+
+def test_place_order_and_confirm_one_reply(client):
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response([{"id": "RPL1", "message": ["Order price is outside of the Price Band."]}]),
+            _make_ok_response([{"order_status": "Submitted"}]),
+        ]
+        result = client.place_order_and_confirm("U1234567", order)
+    assert result == [{"order_status": "Submitted"}]
+    assert mock_post.call_count == 2
+    mock_reply_dlg.assert_called_once_with(
+        "RPL1", "Order price is outside of the Price Band.", None
+    )
+    confirm_call = mock_post.call_args_list[1]
+    assert confirm_call[0][0] == f"{client._base}/iserver/reply/RPL1"
+    assert confirm_call.kwargs.get("json") == {"confirmed": True}
+    assert mock_tid.call_count == 2  # place_order's gate + one reply gate
+
+
+def test_place_order_and_confirm_three_chained_replies(client):
+    """Matches the live-verified shape: reply -> reply -> reply -> terminal (2026-07-06)."""
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response([{"id": "RPL1", "message": ["Price is outside of the Price Band."]}]),
+            _make_ok_response([{"id": "RPL2", "message": ["No market data for this contract."]}]),
+            _make_ok_response([{"id": "RPL3", "message": ["This order requires a mandatory cap price."]}]),
+            _make_ok_response([{"order_status": "Submitted"}]),
+        ]
+        result = client.place_order_and_confirm("U1234567", order)
+    assert result == [{"order_status": "Submitted"}]
+    assert mock_post.call_count == 4
+    assert mock_reply_dlg.call_args_list == [
+        call("RPL1", "Price is outside of the Price Band.", None),
+        call("RPL2", "No market data for this contract.", None),
+        call("RPL3", "This order requires a mandatory cap price.", None),
+    ]
+    urls = [c[0][0] for c in mock_post.call_args_list]
+    assert urls[1:] == [
+        f"{client._base}/iserver/reply/RPL1",
+        f"{client._base}/iserver/reply/RPL2",
+        f"{client._base}/iserver/reply/RPL3",
+    ]
+
+
+def test_place_order_and_confirm_passes_message_options(client):
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response([{"id": "RPL1", "message": ["Confirm?"], "messageOptions": ["Yes", "No"]}]),
+            _make_ok_response([{"order_status": "Submitted"}]),
+        ]
+        client.place_order_and_confirm("U1234567", order)
+    mock_reply_dlg.assert_called_once_with("RPL1", "Confirm?", ["Yes", "No"])
+
+
+def test_place_order_and_confirm_decline_mid_chain(client):
+    """confirm_reply_dialog raises HumanAuthError -> POST confirmed:False sent first, then re-raised.
+
+    Deliberate behavior change vs. reply_order(), which raises without ever contacting
+    IBKR on cancel, leaving the order ambiguous on IBKR's side.
+    """
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response([{"id": "RPL1", "message": ["Price band warning."]}]),
+            _make_ok_response({"confirmed": False}),
+        ]
+        with pytest.raises(HumanAuthError):
+            client.place_order_and_confirm("U1234567", order)
+    assert mock_post.call_count == 2
+    decline_call = mock_post.call_args_list[1]
+    assert decline_call[0][0] == f"{client._base}/iserver/reply/RPL1"
+    assert decline_call.kwargs.get("json") == {"confirmed": False}
+
+
+def test_modify_order_and_confirm_zero_replies(client):
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response({"order_status": "Submitted"})
+        result = client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+    assert result == {"order_status": "Submitted"}
+    mock_post.assert_called_once()
+    mock_reply_dlg.assert_not_called()
+    assert mock_tid.call_count == 1
+
+
+def test_modify_order_and_confirm_chained_replies(client):
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
+            _make_ok_response({"id": "RPL2", "message": ["No market data."]}),
+            _make_ok_response({"order_status": "Submitted"}),
+        ]
+        result = client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+    assert result == {"order_status": "Submitted"}
+    assert mock_post.call_count == 3
+    assert mock_reply_dlg.call_args_list == [
+        call("RPL1", "Price band warning.", None),
+        call("RPL2", "No market data.", None),
+    ]
+
+
+def test_modify_order_and_confirm_decline_mid_chain(client):
+    from ibkr_core_mcp.exceptions import HumanAuthError
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
+            _make_ok_response({"confirmed": False}),
+        ]
+        with pytest.raises(HumanAuthError):
+            client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+    assert mock_post.call_count == 2
+    decline_call = mock_post.call_args_list[1]
+    assert decline_call[0][0] == f"{client._base}/iserver/reply/RPL1"
+    assert decline_call.kwargs.get("json") == {"confirmed": False}
 
 
 # ---------------------------------------------------------------------------

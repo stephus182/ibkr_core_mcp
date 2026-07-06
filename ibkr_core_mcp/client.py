@@ -10,7 +10,7 @@ import urllib3
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import ConfigError
+from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.order_confirm import (
     confirm_cancel_dialog,
@@ -69,6 +69,24 @@ def _validate_account_id(account_id: str) -> None:
         raise ConfigError(
             f"Invalid account_id {account_id!r}: must be 4–12 uppercase alphanumeric chars."
         )
+
+
+def _as_reply_list(data: Any) -> list[dict[str, Any]]:
+    """Normalize a /iserver/reply/{replyId} JSON body to list[dict] (place_order's shape)."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
+def _as_reply_dict(data: Any) -> dict[str, Any]:
+    """Normalize a /iserver/reply/{replyId} JSON body to dict (modify_order's shape)."""
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list) and data:
+        return data[0]
+    return {}
 
 
 class IBKRClient:
@@ -1087,6 +1105,96 @@ class IBKRClient:
         confirm_reply_dialog(reply_id)
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
         return data if isinstance(data, list) else []
+
+    def _resolve_one_reply(
+        self, reply_id: str, message: str, options: list[str] | None
+    ) -> Any:
+        """Run Gate 1 + Gate 2 for a single reply-chain entry, then tell IBKR the outcome.
+
+        Shared by place_order_and_confirm() and modify_order_and_confirm() — the two
+        gates and the confirm/decline POST are identical regardless of which endpoint
+        started the chain. Returns the raw parsed JSON from the confirmation POST
+        (caller normalizes list vs. dict per its own return-type contract).
+
+        On decline (HumanAuthError from confirm_reply_dialog), POSTs
+        {"confirmed": False} to IBKR *before* re-raising — unlike the standalone
+        reply_order(), which raises without ever contacting IBKR and leaves the
+        order ambiguous on IBKR's side. This is a deliberate behavior change, not
+        a bug: see docs/2026-07-06-order-reply-confirmation-design.md.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Endpoint: POST /iserver/reply/{replyId}
+        """
+        require_touch_id(f"IBKR: Confirm order reply {reply_id}")
+        try:
+            confirm_reply_dialog(reply_id, message, options)
+        except HumanAuthError:
+            self._post(f"/iserver/reply/{reply_id}", {"confirmed": False})
+            raise HumanAuthError("User declined IBKR order reply") from None
+        return self._post(f"/iserver/reply/{reply_id}", {"confirmed": True})
+
+    def place_order_and_confirm(
+        self, account_id: str, order: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Place an order and resolve its full reply chain, looping until a terminal response.
+
+        Calls the existing place_order() for the initial submission — Gate 1 + Gate 2
+        already run correctly there and are unchanged. If IBKR's response requires a
+        reply (an {"id", "message", ...} entry — verified live 2026-07-06, a single
+        AAPL limit order needed THREE sequential replies: price-band %, no-market-data,
+        mandatory-cap-price, before a terminal {"order_status": "Submitted", ...}), this
+        method automatically loops Gate 1 + Gate 2 + the confirm POST for each reply in
+        the chain, showing the human the *actual* IBKR warning text at every step
+        (see confirm_reply_dialog()'s `message` parameter) rather than just a reply_id.
+
+        Runs the loop body back-to-back with no unrelated requests interleaved — IBKR's
+        docs warn that a reply left pending while other requests are made will 503 on
+        the next reply attempt. If the human declines any reply in the chain,
+        HumanAuthError is raised (see _resolve_one_reply() for the decline-then-POST
+        semantics, a deliberate change from reply_order()'s behavior).
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Endpoint: POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
+        """
+        response = _as_reply_list(self.place_order(account_id, order))
+        while response and "id" in response[0]:
+            entry = response[0]
+            reply_id = entry["id"]
+            message = " ".join(entry.get("message", []))
+            options = entry.get("messageOptions")
+            response = _as_reply_list(self._resolve_one_reply(reply_id, message, options))
+        return response
+
+    def modify_order_and_confirm(
+        self, account_id: str, order_id: str, order: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Modify an order and resolve its full reply chain, looping until a terminal response.
+
+        Same loop/display/decline semantics as place_order_and_confirm() — see that
+        method's docstring — applied to modify_order() instead of place_order(). IBKR's
+        reply-chain shape for modify is documented as the same {"id", "message", ...}
+        pattern as place_order's chain (per the CP API reply docs cited on
+        reply_order()). Note: modify_order()'s own return type is a single dict (not a
+        list), so this method checks for "id"/"message" directly on that dict.
+
+        This method was added proactively — it has the identical never-loops-replies
+        gap that place_order() had before place_order_and_confirm() was added — but
+        that gap has NOT been verified live for modify_order specifically (no live
+        modify test has been run as of 2026-07-06; only the place_order 3-reply chain
+        is live-verified, see place_order_and_confirm()'s docstring).
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#modify-order
+                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Endpoint: POST /iserver/account/{accountId}/order/{orderId}, then POST /iserver/reply/{replyId}*
+        """
+        response = self.modify_order(account_id, order_id, order)
+        while "id" in response:
+            reply_id = response["id"]
+            message = " ".join(response.get("message", []))
+            options = response.get("messageOptions")
+            response = _as_reply_dict(self._resolve_one_reply(reply_id, message, options))
+        return response
 
     def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
         """Whatif order preview — cost, commission, margin impact. Read-only, no security gates.
