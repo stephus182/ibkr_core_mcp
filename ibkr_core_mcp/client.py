@@ -1106,15 +1106,17 @@ class IBKRClient:
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
         return data if isinstance(data, list) else []
 
-    def _resolve_one_reply(
-        self, reply_id: str, message: str, options: list[str] | None
-    ) -> Any:
-        """Run Gate 1 + Gate 2 for a single reply-chain entry, then tell IBKR the outcome.
+    def _resolve_one_reply(self, entry: dict[str, Any]) -> Any:
+        """Run Gate 1 + Gate 2 for one reply-chain entry, then tell IBKR the outcome.
 
-        Shared by place_order_and_confirm() and modify_order_and_confirm() — the two
-        gates and the confirm/decline POST are identical regardless of which endpoint
-        started the chain. Returns the raw parsed JSON from the confirmation POST
-        (caller normalizes list vs. dict per its own return-type contract).
+        `entry` is a single {"id", "message", "messageOptions"?, ...} dict — the first
+        (and only) element of a /iserver/reply/{replyId}-shaped response, or the bare
+        dict modify_order() returns. Extracts reply_id/message/options itself so
+        place_order_and_confirm() and modify_order_and_confirm() don't duplicate that
+        extraction — the two gates and the confirm/decline POST are identical
+        regardless of which endpoint started the chain. Returns the raw parsed JSON
+        from the confirmation POST (caller normalizes list vs. dict per its own
+        return-type contract via _as_reply_list()/_as_reply_dict()).
 
         On decline (HumanAuthError from confirm_reply_dialog), POSTs
         {"confirmed": False} to IBKR *before* re-raising — unlike the standalone
@@ -1125,6 +1127,9 @@ class IBKRClient:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
         Endpoint: POST /iserver/reply/{replyId}
         """
+        reply_id = entry["id"]
+        message = " ".join(entry.get("message", []))
+        options = entry.get("messageOptions")
         require_touch_id(f"IBKR: Confirm order reply {reply_id}")
         try:
             confirm_reply_dialog(reply_id, message, options)
@@ -1159,11 +1164,7 @@ class IBKRClient:
         """
         response = _as_reply_list(self.place_order(account_id, order))
         while response and "id" in response[0]:
-            entry = response[0]
-            reply_id = entry["id"]
-            message = " ".join(entry.get("message", []))
-            options = entry.get("messageOptions")
-            response = _as_reply_list(self._resolve_one_reply(reply_id, message, options))
+            response = _as_reply_list(self._resolve_one_reply(response[0]))
         return response
 
     def modify_order_and_confirm(
@@ -1190,10 +1191,7 @@ class IBKRClient:
         """
         response = self.modify_order(account_id, order_id, order)
         while "id" in response:
-            reply_id = response["id"]
-            message = " ".join(response.get("message", []))
-            options = response.get("messageOptions")
-            response = _as_reply_dict(self._resolve_one_reply(reply_id, message, options))
+            response = _as_reply_dict(self._resolve_one_reply(response))
         return response
 
     def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:

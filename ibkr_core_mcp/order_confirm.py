@@ -111,6 +111,9 @@ def confirm_reply_dialog(
     dialogs are plain text and IBKR reply messages have been observed containing tags
     (e.g. "<h4>...</h4>", verified live 2026-07-06).
     """
+    # `options` is intentionally unused below — reserved for a future caller that wants
+    # to log/inspect IBKR's messageOptions; never rendered as dialog button labels (see
+    # docstring above).
     details: dict[str, Any] = {"Reply ID": reply_id}
     if message:
         details["Message"] = _strip_html(message)
@@ -123,8 +126,14 @@ def confirm_reply_dialog(
 
 
 def _strip_html(text: str) -> str:
-    """Strip HTML tags from IBKR reply message text for display in plain-text dialogs."""
-    return re.sub(r"<[^>]+>", "", text)
+    """Strip HTML tags from IBKR reply message text for display in plain-text dialogs.
+
+    Only matches well-formed tags (e.g. "<h4>", "</h4>", "<br/>", '<span class="x">')
+    — NOT a bare "<" or ">" that isn't part of a tag. A naive r"<[^>]+>" would delete
+    everything between an unrelated "<" (e.g. a message reading "price must be < 100.50")
+    and the next unrelated ">" anywhere later in the string, corrupting real content.
+    """
+    return re.sub(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>", "", text)
 
 
 def _show_confirm_dialog(

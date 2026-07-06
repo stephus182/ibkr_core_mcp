@@ -247,6 +247,17 @@ def test_confirm_reply_dialog_strips_html_from_message():
     assert "price band exceeded" in kwargs["details"]["Message"]
 
 
+def test_confirm_reply_dialog_does_not_corrupt_lone_angle_brackets():
+    """A naive r"<[^>]+>" strip would delete "< 100.50 to qualify... >" style content
+    whenever the message contains a literal comparison operator, not just real HTML tags.
+    """
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+        confirm_reply_dialog("RPL789", "Price must be < 100.50 to qualify")
+    kwargs = mock_show.call_args.kwargs
+    assert kwargs["details"]["Message"] == "Price must be < 100.50 to qualify"
+
+
 def test_confirm_reply_dialog_accepts_options_without_error():
     """options is accepted for signature completeness; must not change dialog rendering."""
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:

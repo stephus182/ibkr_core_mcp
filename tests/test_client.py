@@ -457,6 +457,82 @@ def test_modify_order_and_confirm_decline_mid_chain(client):
 
 
 # ---------------------------------------------------------------------------
+# _as_reply_list / _as_reply_dict — shape normalizers for the reply chain
+#
+# IBKR's official docs (cpapi-v1#place-order-reply and #modify-order, fetched live
+# 2026-07-06) document /iserver/reply/{replyId} responses as JSON ARRAYS in every
+# example given, for both endpoints and both the reply-required and terminal shapes:
+#   [{"id": "...", "message": [...], "isSuppressed": false, "messageIds": [...]}]
+#   [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
+# modify_order()'s own EXISTING return type in this codebase is a bare dict though
+# (unchanged by this task — see modify_order_and_confirm()'s docstring), so the two
+# normalizers exist to reconcile that mismatch: _as_reply_list() is used by
+# place_order_and_confirm() (list-shaped contract) and _as_reply_dict() by
+# modify_order_and_confirm() (dict-shaped contract), regardless of which raw shape
+# the reply POST actually returns.
+# ---------------------------------------------------------------------------
+
+def test_as_reply_list_wraps_a_bare_dict():
+    from ibkr_core_mcp.client import _as_reply_list
+    data = {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
+    assert _as_reply_list(data) == [data]
+
+
+def test_as_reply_list_passes_through_a_list():
+    from ibkr_core_mcp.client import _as_reply_list
+    data = [{"id": "RPL1", "message": ["warn"]}]
+    assert _as_reply_list(data) == data
+
+
+def test_as_reply_list_returns_empty_for_unexpected_shape():
+    from ibkr_core_mcp.client import _as_reply_list
+    assert _as_reply_list(None) == []
+    assert _as_reply_list("not json") == []
+
+
+def test_as_reply_dict_unwraps_a_single_element_list():
+    """The reciprocal case: IBKR's documented reply response is list-wrapped
+    (per the official example above) even though modify_order_and_confirm() needs
+    a dict — a single-element list must be unwrapped, not treated as terminal-with-no-id.
+    """
+    from ibkr_core_mcp.client import _as_reply_dict
+    data = [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
+    assert _as_reply_dict(data) == data[0]
+
+
+def test_as_reply_dict_passes_through_a_bare_dict():
+    from ibkr_core_mcp.client import _as_reply_dict
+    data = {"id": "RPL1", "message": ["warn"]}
+    assert _as_reply_dict(data) == data
+
+
+def test_as_reply_dict_returns_empty_for_unexpected_shape():
+    from ibkr_core_mcp.client import _as_reply_dict
+    assert _as_reply_dict([]) == {}
+    assert _as_reply_dict(None) == {}
+
+
+def test_modify_order_and_confirm_handles_ibkr_documented_list_shaped_reply(client):
+    """End-to-end (not just the pure normalizer): the reply-confirm POST comes back
+    in IBKR's actual documented array shape (see module comment above) even though
+    modify_order()'s own initial response is a bare dict — exercises _as_reply_dict()'s
+    unwrap branch through the real modify_order_and_confirm() call path.
+    """
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog"), \
+         _patch.object(client._session, "post") as mock_post:
+        mock_post.side_effect = [
+            _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
+            _make_ok_response(
+                [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
+            ),
+        ]
+        result = client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+    assert result == {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
+
+
+# ---------------------------------------------------------------------------
 # account_id validation — path traversal and injection prevention
 # ---------------------------------------------------------------------------
 
