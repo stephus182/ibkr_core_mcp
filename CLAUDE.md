@@ -531,6 +531,7 @@ All 38 `ClaudeToolkit` tools plus:
 | `ibkr://accounts` | All IBKR accounts |
 | `ibkr://positions/current` | Current positions for primary account |
 | `ibkr://trades/recent` | Last 100 trades from SQLite |
+| `ibkr://pnl/live` | Latest account P&L snapshot (WebSocket `spl` topic, `--stream` only) |
 
 ### Price alerts (programmatic)
 
@@ -621,6 +622,8 @@ This rule exists because assumption-based development caused two confirmed incid
 |---|---|
 | **WebSocket API reference** (subscriptions, message format) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
 | **Market data subscriptions** (fields, tick types) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#market-data |
+| **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-trades-sub |
+| **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-pnl-sub |
 
 **Google Drive API v3** (`cache.py`)
 
@@ -659,7 +662,7 @@ These are verified against official sources — not guesses:
 
 - **`/iserver/account/orders`** — two-call pattern: first call instantiates the subscription, second call retrieves data. Source: [IBKR Campus — Orders](https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/)
 - **`/iserver/marketdata/history`** — primary fetch endpoint, max 1000 data points per request. First-call warmup (404/500) auto-retried 3× with 2s delay in `claude_tools.py`. Pagination for large requests handled by `get_market_history_paginated()` using `startTime` chunks. Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
-- **`/iserver/account/trades`** — **the direct access point for today's + recent fills**: `get_trades(source='live')` → `client.get_trades()` → `GET /iserver/account/trades?days=7`. It is the only REST source that can contain same-day executions (Flex is T+1). Official reference documents: "a list of trades for the currently selected account for current day and six previous days" (`?days=7` max), "advised to call this endpoint once per session." Origin coverage is not documented officially but **verified live 2026-07-06: all origins appear (mobile included) once the subscription is primed** — the endpoint has the same two-call warmup as `/iserver/account/orders` (fresh session's first call returns empty; `client.get_trades()` auto-retries once, 1 s apart). The 2026-07-02 empty observation was this warmup, not an origin filter. For real-time execution push, the WebSocket **`str` (trades) topic** is officially documented (args: `realtimeUpdatesOnly`, `days`) but not yet implemented in `streaming.py`. Beyond 7 days or for origin-complete history: the Flex store. Source: CP API reference "Trades" + WebSocket sections, scraped 2026-07-02.
+- **`/iserver/account/trades`** — **the direct access point for today's + recent fills**: `get_trades(source='live')` → `client.get_trades()` → `GET /iserver/account/trades?days=7`. It is the only REST source that can contain same-day executions (Flex is T+1). Official reference documents: "a list of trades for the currently selected account for current day and six previous days" (`?days=7` max), "advised to call this endpoint once per session." Origin coverage is not documented officially but **verified live 2026-07-06: all origins appear (mobile included) once the subscription is primed** — the endpoint has the same two-call warmup as `/iserver/account/orders` (fresh session's first call returns empty; `client.get_trades()` auto-retries once, 1 s apart). The 2026-07-02 empty observation was this warmup, not an origin filter. For real-time execution push, the WebSocket **`str` (trades) topic** is implemented in `streaming.py` (`IBKRWebSocket.subscribe_executions()`/`unsubscribe_executions()`, args: `realtimeUpdatesOnly`, `days`) and persists executions into the same `trades` table used by REST/Flex via `_parse_stream_execution()` — so `get_trades(source='store')` and `ibkr://trades/recent` pick them up automatically once a `--stream` server has captured them. Beyond 7 days or for origin-complete history: the Flex store. Source: CP API reference "Trades" + WebSocket sections, scraped 2026-07-02, `str`/`spl` topics re-confirmed 2026-07-06.
 - **Flex Web Service** — T+1 delay, back-office data. Captures all trades from all interfaces (mobile, TWS, API). Requires separate token + query ID, not CP API credentials.
 - **Flex endpoint** — `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` (not `gdcdyn`). Requires `User-Agent` header for programmatic access.
 

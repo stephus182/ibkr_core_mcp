@@ -499,3 +499,61 @@ def test_get_signals_empty_returns_dataframe_with_columns(store):
     df = store.get_signals(symbol="SYMBOL_THAT_DOES_NOT_EXIST_XYZ")
     assert list(df.columns) == ["id", "logged_at", "symbol", "signal_type", "value", "metadata"]
     assert len(df) == 0
+
+
+# ── pnl_snapshots ─────────────────────────────────────────────────────────────
+
+def test_initialize_creates_pnl_snapshots_table(store):
+    import sqlite3
+    conn = sqlite3.connect(store._db_path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    conn.close()
+    assert "pnl_snapshots" in tables
+
+
+def test_record_and_get_latest_pnl(store):
+    store.record_pnl_snapshot(
+        account="DU1234567.Core", row_type=1, dpl=12.5, nl=10000.0, upl=3.0, uel=9000.0, mv=5000.0,
+    )
+    latest = store.get_latest_pnl()
+    assert latest is not None
+    assert latest["account"] == "DU1234567.Core"
+    assert latest["dpl"] == 12.5
+    assert latest["mv"] == 5000.0
+
+
+def test_get_latest_pnl_returns_none_when_empty(store):
+    assert store.get_latest_pnl() is None
+
+
+def test_get_latest_pnl_returns_most_recent(store):
+    store.record_pnl_snapshot(account="DU1", row_type=1, dpl=1.0, nl=1.0, upl=1.0, uel=1.0, mv=1.0)
+    store.record_pnl_snapshot(account="DU1", row_type=1, dpl=2.0, nl=2.0, upl=2.0, uel=2.0, mv=2.0)
+    latest = store.get_latest_pnl()
+    assert latest is not None
+    assert latest["dpl"] == 2.0
+
+
+def test_get_latest_pnl_filters_by_account(store):
+    store.record_pnl_snapshot(account="DU1", row_type=1, dpl=1.0, nl=1.0, upl=1.0, uel=1.0, mv=1.0)
+    store.record_pnl_snapshot(account="DU2", row_type=1, dpl=9.0, nl=9.0, upl=9.0, uel=9.0, mv=9.0)
+    latest = store.get_latest_pnl(account="DU1")
+    assert latest is not None
+    assert latest["account"] == "DU1"
+    assert latest["dpl"] == 1.0
+
+
+def test_parse_stream_execution_output_matches_upsert_trades_shape(store):
+    """Catches shape drift: _parse_stream_execution's dict keys must match what
+    upsert_trades() expects, since the mcp_server WS path feeds one into the other."""
+    from ibkr_core_mcp.streaming import TradeExecution, _parse_stream_execution
+    ex = TradeExecution(
+        execution_id="E1", symbol="AAPL", side="B", size=10.0, price=180.0,
+        trade_time="20260706-14:30:00", account="U1234", sec_type="STK",
+    )
+    row = _parse_stream_execution(ex)
+    store.upsert_trades([row])
+    result = store.get_trades(symbol="AAPL")
+    assert len(result) == 1
+    assert result[0]["execution_id"] == "E1"
+    assert result[0]["side"] == "BUY"

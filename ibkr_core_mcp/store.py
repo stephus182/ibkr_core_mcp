@@ -88,6 +88,7 @@ class SQLiteStore:
       price_alerts       — local price alert records (separate from IBKR server alerts)
       signals            — ML/indicator signal log
       session_log        — operational event log (flex_sync, startup, errors)
+      pnl_snapshots      — append-only account P&L ticks (WebSocket spl topic)
 
     This store is NOT the claudia.db conversation store (see ConversationStore in
     claudia_ui). It holds IBKR market and trade data only.
@@ -202,6 +203,18 @@ class SQLiteStore:
                     source           TEXT NOT NULL CHECK (source IN ('manual', 'auto')),
                     imported_at      TEXT NOT NULL,
                     verified_at      TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS pnl_snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account      TEXT NOT NULL,
+                    row_type     INTEGER,
+                    dpl          REAL,
+                    nl           REAL,
+                    upl          REAL,
+                    uel          REAL,
+                    mv           REAL,
+                    recorded_at  TEXT NOT NULL
                 );
             """)
 
@@ -581,6 +594,33 @@ class SQLiteStore:
                 """,
                 rows,
             )
+
+    def record_pnl_snapshot(self, account: str, row_type: int | None, dpl: float | None,
+                            nl: float | None, upl: float | None, uel: float | None,
+                            mv: float | None) -> None:
+        """Insert one P&L snapshot row. Called once per WS spl tick — append-only, no dedup."""
+        self.initialize()
+        now = datetime.now(tz=UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO pnl_snapshots (account, row_type, dpl, nl, upl, uel, mv, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (account, row_type, dpl, nl, upl, uel, mv, now),
+            )
+
+    def get_latest_pnl(self, account: str | None = None) -> dict[str, Any] | None:
+        """Most recent P&L snapshot, optionally filtered by account. None if never recorded
+        (e.g. server never started with --stream)."""
+        self.initialize()
+        query = "SELECT * FROM pnl_snapshots"
+        params: list[Any] = []
+        if account:
+            query += " WHERE account = ?"
+            params.append(account)
+        query += " ORDER BY recorded_at DESC, id DESC LIMIT 1"
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
+        return dict(row) if row else None
 
     def get_position_history(
         self,

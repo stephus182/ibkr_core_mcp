@@ -113,6 +113,7 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
             Resource(uri=AnyUrl("ibkr://accounts"),          name="IBKR Accounts",          mimeType="application/json"),
             Resource(uri=AnyUrl("ibkr://positions/current"), name="Current Positions",       mimeType="application/json"),
             Resource(uri=AnyUrl("ibkr://trades/recent"),     name="Recent Trades (SQLite)",  mimeType="application/json"),
+            Resource(uri=AnyUrl("ibkr://pnl/live"),          name="Live P&L (WebSocket, --stream only)", mimeType="application/json"),
         ]
 
     @server.read_resource()
@@ -129,6 +130,11 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                     text = json.dumps(toolkit._client.get_positions(account_id), indent=2)
             elif path == "ibkr://trades/recent":
                 text = json.dumps(store.get_trades()[:100], indent=2)
+            elif path == "ibkr://pnl/live":
+                # Only populated if the server was started with --stream; otherwise
+                # pnl_snapshots stays empty and this always returns {}.
+                latest = store.get_latest_pnl()
+                text = json.dumps(latest if latest is not None else {}, indent=2)
         except Exception as exc:
             logger.warning("read_resource %s failed: %s", path, type(exc).__name__)
         return [ReadResourceContents(content=text, mime_type="application/json")]
@@ -231,11 +237,18 @@ async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: SQLiteStore) ->
 
 
 async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
-    """Single-attempt WebSocket loop: connect, stream quotes, fire alerts."""
+    """Single-attempt WebSocket loop: connect, stream quotes/executions/P&L, fire alerts."""
     import requests as _requests
 
     from ibkr_core_mcp.auth import BrowserCookieAuth
-    from ibkr_core_mcp.streaming import AlertManager, IBKRWebSocket
+    from ibkr_core_mcp.streaming import (
+        AlertManager,
+        IBKRWebSocket,
+        LiveQuote,
+        PnLUpdate,
+        TradeExecution,
+        _parse_stream_execution,
+    )
 
     session = _requests.Session()
     BrowserCookieAuth().apply(session)
@@ -247,24 +260,34 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
     try:
         await ws.connect()
         logger.info("ibkr-core-mcp: WebSocket connected")
+        await ws.subscribe_executions()
+        await ws.subscribe_pnl()
         subscribed: set[int] = set()
-        async for quote in ws.listen():
-            active_conids = {a["conid"] for a in store.get_alerts(active_only=True)}
-            # Subscribe to newly-added alert conids.
-            for cid in active_conids - subscribed:
-                await ws.subscribe(cid)
-                subscribed.add(cid)
-            # Unsubscribe from conids that no longer have active alerts to avoid
-            # accumulating stale subscriptions after alerts are triggered/removed.
-            for cid in subscribed - active_conids:
-                await ws.unsubscribe(cid)
-                subscribed.discard(cid)
-            triggered = manager.check_quote(quote)
-            for alert in triggered:
-                logger.warning(
-                    "PRICE ALERT #%d: %s %s %.4f (last=%.4f)",
-                    alert["id"], alert["symbol"], alert["direction"],
-                    alert["threshold"], quote.last or 0,
+        async for item in ws.listen():
+            if isinstance(item, LiveQuote):
+                active_conids = {a["conid"] for a in store.get_alerts(active_only=True)}
+                # Subscribe to newly-added alert conids.
+                for cid in active_conids - subscribed:
+                    await ws.subscribe(cid)
+                    subscribed.add(cid)
+                # Unsubscribe from conids that no longer have active alerts to avoid
+                # accumulating stale subscriptions after alerts are triggered/removed.
+                for cid in subscribed - active_conids:
+                    await ws.unsubscribe(cid)
+                    subscribed.discard(cid)
+                triggered = manager.check_quote(item)
+                for alert in triggered:
+                    logger.warning(
+                        "PRICE ALERT #%d: %s %s %.4f (last=%.4f)",
+                        alert["id"], alert["symbol"], alert["direction"],
+                        alert["threshold"], item.last or 0,
+                    )
+            elif isinstance(item, TradeExecution):
+                store.upsert_trades([_parse_stream_execution(item)])
+            elif isinstance(item, PnLUpdate):
+                store.record_pnl_snapshot(
+                    account=item.account, row_type=item.row_type, dpl=item.dpl,
+                    nl=item.nl, upl=item.upl, uel=item.uel, mv=item.mv,
                 )
     finally:
         await ws.disconnect()

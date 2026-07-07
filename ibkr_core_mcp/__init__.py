@@ -41,7 +41,13 @@ from ibkr_core_mcp.models import (
     bars_to_dataframe,
 )
 from ibkr_core_mcp.store import SQLiteStore
-from ibkr_core_mcp.streaming import AlertManager, IBKRWebSocket, LiveQuote
+from ibkr_core_mcp.streaming import (
+    AlertManager,
+    IBKRWebSocket,
+    LiveQuote,
+    PnLUpdate,
+    TradeExecution,
+)
 from ibkr_core_mcp.web_scraper import FirecrawlError, WebDocsStoreError
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
@@ -77,6 +83,8 @@ __all__ = [
     # Streaming
     "IBKRWebSocket",
     "LiveQuote",
+    "TradeExecution",
+    "PnLUpdate",
     "AlertManager",
     # Functional modules
     "indicators",

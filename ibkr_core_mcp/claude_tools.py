@@ -1118,7 +1118,9 @@ class ClaudeToolkit:
         Reads local SQLite populated by sync_flex_trades. Covers all trade origins: CP API,
         mobile app, TWS, and web portal. No date limit on queries — full account history from
         the first Flex sync. Availability: T+1 (today's trades are never present; yesterday's
-        trades become available after IBKR's overnight processing).
+        trades become available after IBKR's overnight processing). Also includes any
+        executions captured live via the WebSocket `str` topic (`mcp_server.py --stream`),
+        which land in the same `trades` table in real time.
         Source: https://www.ibkrguides.com/orgportal/performanceandstatements/flex.htm
 
         ## source='live' — CP API /iserver/account/trades (last 7 days max)

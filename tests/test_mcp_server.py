@@ -207,3 +207,85 @@ async def test_stream_loop_cancelled_propagates():
     with patch("ibkr_core_mcp.mcp_server._stream_loop", side_effect=always_cancel):
         with pytest.raises(asyncio.CancelledError):
             await _stream_loop_with_retry(MagicMock(), MagicMock())
+
+
+# ── _stream_loop — dispatch on tagged union (str/spl/smd) ────────────────────
+
+@pytest.mark.asyncio
+async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
+    """Feed one TradeExecution, one PnLUpdate, one LiveQuote through a fake listen();
+    assert each lands in the right place and subscribe_executions/subscribe_pnl are
+    each called exactly once (not per-message)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from ibkr_core_mcp.mcp_server import _stream_loop
+    from ibkr_core_mcp.streaming import LiveQuote, PnLUpdate, TradeExecution
+
+    execution = TradeExecution(
+        execution_id="E1", symbol="AAPL", side="B", size=10.0, price=180.0,
+        trade_time="20260706-14:30:00", account="U1234", sec_type="STK",
+    )
+    pnl = PnLUpdate(account="DU1234567.Core", row_type=1, dpl=12.5, nl=10000.0,
+                     upl=3.0, uel=9000.0, mv=5000.0)
+    quote = LiveQuote(conid=265598, symbol="AAPL", last=190.0)
+
+    async def fake_listen():
+        for item in (execution, pnl, quote):
+            yield item
+
+    fake_ws = MagicMock()
+    fake_ws.connect = AsyncMock()
+    fake_ws.disconnect = AsyncMock()
+    fake_ws.subscribe_executions = AsyncMock()
+    fake_ws.subscribe_pnl = AsyncMock()
+    fake_ws.listen = fake_listen
+
+    with patch("ibkr_core_mcp.auth.BrowserCookieAuth"), \
+         patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=fake_ws):
+        await _stream_loop(toolkit, store)
+
+    trades = store.get_trades(symbol="AAPL")
+    assert any(t["execution_id"] == "E1" for t in trades)
+
+    latest_pnl = store.get_latest_pnl()
+    assert latest_pnl is not None
+    assert latest_pnl["account"] == "DU1234567.Core"
+    assert latest_pnl["dpl"] == 12.5
+
+    fake_ws.subscribe_executions.assert_awaited_once()
+    fake_ws.subscribe_pnl.assert_awaited_once()
+
+
+# ── ibkr://pnl/live resource ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_resource_pnl_live_populated(toolkit, store):
+    from mcp.types import ReadResourceRequest
+    from pydantic import AnyUrl
+
+    from ibkr_core_mcp.mcp_server import build_server
+
+    store.record_pnl_snapshot(account="DU1234567.Core", row_type=1, dpl=12.5,
+                               nl=10000.0, upl=3.0, uel=9000.0, mv=5000.0)
+    server = build_server(toolkit, store)
+    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://pnl/live")})
+    result = await server.request_handlers[type(req)](req)
+    content = result.root.contents[0].text
+    import json
+    data = json.loads(content)
+    assert data["account"] == "DU1234567.Core"
+    assert data["dpl"] == 12.5
+
+
+@pytest.mark.asyncio
+async def test_resource_pnl_live_empty_when_never_recorded(toolkit, store):
+    from mcp.types import ReadResourceRequest
+    from pydantic import AnyUrl
+
+    from ibkr_core_mcp.mcp_server import build_server
+
+    server = build_server(toolkit, store)
+    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://pnl/live")})
+    result = await server.request_handlers[type(req)](req)
+    content = result.root.contents[0].text
+    assert content == "{}"
