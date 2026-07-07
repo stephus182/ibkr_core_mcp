@@ -45,6 +45,20 @@ def _TODAY() -> str:
     return str(date.today())
 
 
+def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
+    """Format the within-file duplicate-tradeID warning shared by _verify_flex_import's
+    three status branches (pre-validated / hash-verified / cross-checked).
+
+    Returns "" when raw_count == unique_count (no duplicates). `verbose` appends
+    "(within-file duplicate tradeIDs)" for the pre-validated branch, matching its
+    original wording; the other two branches use the terser form.
+    """
+    if raw_count == unique_count:
+        return ""
+    suffix = " (within-file duplicate tradeIDs)" if verbose else ""
+    return f" ⚠ raw={raw_count} unique={unique_count}{suffix}"
+
+
 def _format_coverage(cov: dict[str, Any]) -> list[str]:
     """Format trade date coverage into human-readable lines with staleness and gap notes."""
     days_old = cov.get("days_since_newest", 0)
@@ -87,7 +101,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "check_cache",
-        "description": "Check whether data for a symbol/timeframe is cached in Google Drive.",
+        "description": (
+            "Check whether data for a symbol/timeframe/period/end combination is "
+            "already cached in Google Drive. Diagnostic only — fetch_market_data "
+            "checks the cache automatically, so you don't need to call this first."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -106,12 +124,22 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_account_summary",
-        "description": "Retrieve account net liquidation value, cash balance, and P&L from IBKR.",
+        "description": (
+            "Retrieve account net liquidation value, cash balance, and P&L from "
+            "IBKR — a single aggregate snapshot for the account. For per-position "
+            "detail use get_positions; for a per-currency breakdown use get_ledger; "
+            "for daily/unrealized P&L by account partition use get_pnl."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_positions",
-        "description": "Get all open positions for the IBKR account.",
+        "description": (
+            "Get all open positions for the IBKR account — symbol, quantity, "
+            "market value, and unrealized P&L per position. For account-wide "
+            "daily/unrealized P&L (not per-position) use get_pnl; for account "
+            "totals (net liq, cash, buying power) use get_account_summary."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -226,12 +254,20 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_ledger",
-        "description": "Get cash balance and ledger information by currency for the IBKR account.",
+        "description": (
+            "Get cash balance and ledger information broken out per currency for "
+            "the IBKR account — differs from get_account_summary's single "
+            "aggregate figure."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_allocation",
-        "description": "Get portfolio allocation breakdown by asset class, industry, and category.",
+        "description": (
+            "Get portfolio allocation breakdown by asset class, industry, and "
+            "category (aggregated percentages, not per-position detail — for "
+            "individual holdings use get_positions)."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -241,7 +277,12 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pa_performance",
-        "description": "Get portfolio NAV performance from IBKR Portfolio Analyst. Use get_pa_periods first to discover valid period strings.",
+        "description": (
+            "Get portfolio NAV performance from IBKR Portfolio Analyst. Use "
+            "get_pa_periods first to discover valid period strings. Returns your "
+            "actual account's NAV performance — not a price-return backtest; for "
+            "those use get_analytics or run_backtest."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -263,12 +304,17 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_contract_info",
-        "description": "Get full contract details for a symbol (conid, exchange, currency, trading hours, etc.).",
+        "description": (
+            "Get full contract details for a symbol (conid, exchange, currency, "
+            "trading hours, etc.) — resolves the conid internally, so you don't "
+            "need search_contract first. Supports STK, IND, BOND, and FUT "
+            "(front-month); does not support CASH (FX) or OPT."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker symbol"},
-                "sec_type": {"type": "string", "description": "Security type, default STK", "default": "STK"},
+                "sec_type": {"type": "string", "description": "Security type: STK, IND, BOND, or FUT (default STK)", "default": "STK"},
             },
             "required": ["symbol"],
         },
@@ -294,7 +340,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "run_scanner",
         "description": (
-            "Run an IBKR market scanner to find stocks matching criteria. "
+            "Run an IBKR market scanner to find instruments matching criteria "
+            "(stocks by default; set instrument + location_code together for "
+            "other types, e.g. FUT). "
             "Common scan_code values: 'TOP_PERC_GAIN', 'TOP_PERC_LOSE', 'MOST_ACTIVE', "
             "'HIGH_VS_13W_HL', 'LOW_VS_13W_HL', 'NEAR_52W_HL'."
         ),
@@ -302,8 +350,16 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "scan_code": {"type": "string", "description": "Scanner type, e.g. 'TOP_PERC_GAIN'"},
-                "instrument": {"type": "string", "description": "e.g. 'STK'", "default": "STK"},
-                "location_code": {"type": "string", "description": "e.g. 'STK.US.MAJOR'", "default": "STK.US.MAJOR"},
+                "instrument": {"type": "string", "description": "e.g. 'STK', 'FUT'", "default": "STK"},
+                "location_code": {
+                    "type": "string",
+                    "description": (
+                        "Defaults to 'STK.US.MAJOR' — override this when instrument "
+                        "isn't STK, or it silently scans US equities regardless of "
+                        "the instrument setting (e.g. use 'FUT.US' for US futures)."
+                    ),
+                    "default": "STK.US.MAJOR",
+                },
                 "max_results": {"type": "integer", "default": 25},
             },
             "required": ["scan_code"],
@@ -311,7 +367,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_notifications",
-        "description": "Retrieve IBKR FYI notifications and unread alerts.",
+        "description": (
+            "Retrieve IBKR system notifications (FYI messages — e.g. dividend, "
+            "margin, or account notices) and their unread count. Not the same as "
+            "price alerts — use get_alerts for those."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -385,7 +445,11 @@ TOOL_DEFINITIONS = [
             "Compute full portfolio/strategy analytics on cached OHLCV data: "
             "Sharpe ratio, Sortino ratio, Calmar ratio, CAGR, max drawdown, and drawdown duration. "
             "Annualized metrics scale automatically with the bar timeframe (IBKR bar notation, "
-            "e.g. '5min'/'1h'/'1d'; intraday assumes the US equity 6.5h session)."
+            "e.g. '5min'/'1h'/'1d'; intraday assumes the US equity 6.5h session). "
+            "NOTE: computed from cached price history (close-to-close returns) for one "
+            "symbol — not your actual account trades or P&L. For real account "
+            "performance use get_pa_performance; for a rule-based trading strategy's "
+            "backtested metrics use run_backtest."
         ),
         "input_schema": {
             "type": "object",
@@ -427,8 +491,11 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_pnl",
         "description": (
-            "Get real-time partitioned P&L for the IBKR account: "
-            "daily P&L and unrealized P&L broken down by position."
+            "Get real-time daily and unrealized P&L for the IBKR account, one summary "
+            "row per account/model partition — NOT broken down by position or symbol "
+            "(IBKR's endpoint doesn't offer that). For per-position P&L use "
+            "get_positions; for account totals (net liq, cash, buying power) use "
+            "get_account_summary."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -561,10 +628,15 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol, e.g. AAPL, CL"},
+                "symbol": {"type": "string", "description": "Ticker symbol, e.g. AAPL, CL, or 'EUR.USD' for CASH"},
                 "sec_type": {
                     "type": "string",
-                    "description": "Security type: STK, FUT, OPT, FX (default: STK)",
+                    "description": (
+                        "Security type: STK, IND, or BOND (default: STK) — resolved via "
+                        "contract search; FUT — resolved to the front-month contract; "
+                        "CASH — FX pair, symbol must be 'BASE.QUOTE' e.g. 'EUR.USD'. "
+                        "OPT is not supported (options need a strike/expiry, not just a symbol)."
+                    ),
                 },
                 "operator": {
                     "type": "string",
@@ -947,49 +1019,49 @@ class ClaudeToolkit:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _get_accounts(self) -> tuple[list[dict[str, Any]], str | None]:
+        """Fetch all IBKR accounts. Returns (accounts, None) or ([], error_message).
+
+        Single source of truth for the accounts call — callers should use
+        _first_account_id / _all_account_ids rather than calling this directly,
+        so the empty-accounts error string stays consistent everywhere.
+        """
         accounts = self._client.get_accounts()
         if not accounts:
             return [], "No accounts found."
         return accounts, None
 
     def _first_account_id(self) -> tuple[str, str | None]:
+        """Return (account_id, None) for the primary account, or ("", error) if none exist.
+
+        Applies the "accountId" -> "id" key fallback IBKR varies between endpoints.
+        Use this instead of inlining get_accounts() when a handler needs one account.
+        """
         accounts, err = self._get_accounts()
         if err:
             return "", err
         return accounts[0].get("accountId", accounts[0].get("id", "")), None
 
     def _all_account_ids(self) -> tuple[list[str], str | None]:
+        """Return (account_ids, None) for every account, or ([], error) if none exist.
+
+        Applies the "accountId" -> "id" key fallback. Use for Portfolio Analyst
+        endpoints (/pa/*) which take a list of account IDs.
+        """
         accounts, err = self._get_accounts()
         if err:
             return [], err
         return [a.get("accountId", a.get("id", "")) for a in accounts], None
 
-    def _resolve_conid(self, symbol: str, sec_type: str = "STK") -> tuple[str, str | None]:
-        # FUT: /trsrv/futures (front month by expirationDate).
-        # STK/IND/BOND: /iserver/secdef/search.
-        # /iserver/secdef/search does NOT support FUT or CASH — see _resolve_snapshot_conid docstring.
-        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
-        if sec_type == "FUT":
-            futures = self._client.get_futures([symbol])
-            if not futures:
-                return "", f"No futures contracts found for {symbol}."
-            try:
-                front = min(futures, key=lambda f: int(f.get("expirationDate") or 0))
-            except (ValueError, TypeError):
-                front = futures[0]
-            conid = front.get("conid")
-            if not conid:
-                return "", f"Futures contracts found for {symbol} but conid missing."
-            return str(int(conid)), None
-        contracts = self._client.search_contract(symbol, sec_type)
-        if not contracts:
-            return "", f"No contract found for {symbol}."
-        conid = contracts[0].get("conid") or contracts[0].get("con_id")
-        if not conid:
-            return "", f"Contract found for {symbol} but conid missing: {contracts[0]}"
-        return str(conid), None
-
     def _fetch_market_data(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Fetch OHLCV bars for a symbol, Drive-cache first, IBKR on miss.
+
+        On a cache hit, loads and summarizes the parquet. On a miss, resolves the
+        conid (STK only — no sec_type parameter on this tool), then calls
+        get_market_history_paginated with up to 3 warmup retries (2s apart) because
+        /iserver/marketdata/history may return 404/500/empty on the first request
+        while IBKR initializes the subscription. Saves the result to the Drive
+        cache. Returns a human-readable summary, not the raw bars.
+        """
         symbol = inputs["symbol"].upper()
         period = inputs["period"]
         bar = inputs.get("bar", "1d")
@@ -1004,7 +1076,7 @@ class ClaudeToolkit:
                 None,
             )
 
-        conid, err = self._resolve_conid(symbol)
+        conid, err = self._resolve_snapshot_conid(symbol, "STK", None)
         if err:
             return f"{err} Is IBKR connected?", None
 
@@ -1017,7 +1089,7 @@ class ClaudeToolkit:
         raw = None
         for attempt in range(3):
             try:
-                raw = self._client.get_market_history_paginated(int(conid), period=period, bar=bar)
+                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar)
                 if raw and raw.get("data"):
                     break
             except IBKRAPIError:
@@ -1050,7 +1122,11 @@ class ClaudeToolkit:
         return f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']}", None
 
     def _list_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """List all datasets currently in the Drive market-data cache."""
+        """List every dataset in the Drive market-data cache with row count and cache date.
+
+        Returns "Drive cache is empty." when nothing is cached. Each line is
+        "<key>: <rows> bars, cached <YYYY-MM-DD>", tolerating missing rows/cached_at.
+        """
         entries = self._cache.list_cached()
         if not entries:
             return "Drive cache is empty.", None
@@ -1260,7 +1336,13 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _import_flex_file(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Import trades from a local Flex XML file into the store."""
+        """Import trades from a local Flex XML file into the SQLite store (idempotent).
+
+        SECURITY: the path must resolve to a location under ~/.ibkr_core; anything
+        else is blocked. This exists because the path arrives from the LLM and would
+        otherwise allow prompt-injected reads of arbitrary local files. Returns a
+        summary plus refreshed coverage, or a "Blocked:"/"File not found:" message.
+        """
         from pathlib import Path
 
         from ibkr_core_mcp.flex_query import FlexQueryClient
@@ -1370,10 +1452,7 @@ class ClaudeToolkit:
                         imported_at=now,
                         verified_at=now,
                     )
-                dupe_note = (
-                    f" ⚠ raw={raw_count} unique={len(unique_ids)} (within-file duplicate tradeIDs)"
-                    if raw_count != len(unique_ids) else ""
-                )
+                dupe_note = _dupe_note(raw_count, len(unique_ids), verbose=True)
                 file_lines.append(
                     f"  ✓ pre-validated  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}"
                 )
@@ -1384,10 +1463,7 @@ class ClaudeToolkit:
             if entry is not None and entry["sha256"] == sha256:
                 # Hash matches what was recorded at sync time — import is confirmed complete.
                 self._store.mark_flex_import_verified(filename, now)
-                dupe_note = (
-                    f" ⚠ raw={raw_count} unique={len(unique_ids)}"
-                    if raw_count != len(unique_ids) else ""
-                )
+                dupe_note = _dupe_note(raw_count, len(unique_ids))
                 file_lines.append(
                     f"  ✓ hash verified  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}"
                 )
@@ -1397,10 +1473,7 @@ class ClaudeToolkit:
             # Hash mismatch or first encounter for an auto file: full cross-check.
             reason = "first check" if entry is None else "hash mismatch — file changed since sync"
             missing = unique_ids - db_ids
-            dupe_note = (
-                f" ⚠ raw={raw_count} unique={len(unique_ids)}"
-                if raw_count != len(unique_ids) else ""
-            )
+            dupe_note = _dupe_note(raw_count, len(unique_ids))
             if missing:
                 file_lines.append(
                     f"  ✗ {len(missing)} missing  {filename}  "
@@ -1698,14 +1771,22 @@ class ClaudeToolkit:
         """Return full contract details and trading rules for any instrument type."""
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
-        conid, err = self._resolve_conid(symbol, sec_type)
+        conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
         if err:
             return err, None
-        info = self._client.get_contract_info_and_rules(int(conid))
+        info = self._client.get_contract_info_and_rules(conid)
         return json.dumps(info, indent=2), None
 
     def _get_option_chain(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return the option chain (strikes, expirations) for the given underlying symbol."""
+        """KNOWN NON-FUNCTIONAL as of the 2026-07 audit — kept for future repair.
+
+        client.get_option_chain() targets /trsrv/secdef/chains, which is absent
+        from IBKR's documented Client Portal API reference (verified 2026-07-02).
+        Calling this returns whatever error the client raises, not a real chain.
+        The tool schema's own description carries this warning for the LLM; this
+        docstring exists so a maintainer reading only the handler sees it too.
+        Register follow-up: reimplement via secdef/search -> strikes.
+        """
         symbol = inputs["symbol"].upper()
         exchange = inputs.get("exchange", "SMART")
         chain = self._client.get_option_chain(symbol, exchange=exchange)
@@ -1843,7 +1924,7 @@ class ClaudeToolkit:
         if quantity <= 0:
             return f"Invalid quantity {quantity}. Must be a positive integer.", None
 
-        conid, err = self._resolve_conid(symbol, sec_type)
+        conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
         if err:
             return err, None
 
@@ -1852,7 +1933,7 @@ class ClaudeToolkit:
             return err, None
 
         order: dict[str, Any] = {
-            "conid": int(conid),             # IBKR requires int
+            "conid": conid,                  # IBKR requires int
             "orderType": order_type,
             "side": action,
             "quantity": int(quantity),       # int matches place_order convention
@@ -1878,29 +1959,40 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return real-time unrealized and daily P&L broken down by position across all instrument types."""
+        """Return real-time account/model-partition P&L (daily + unrealized), not per-position.
+
+        GET /iserver/account/pnl/partitioned returns ONE summary row per account/model
+        partition (e.g. "U1675699.Core") — rowType, dpl (daily), nl (net liquidity),
+        upl (unrealized), el (excess liquidity), mv (margin value). There is no
+        per-position/conid breakdown in this endpoint at all, despite an earlier
+        version of this docstring claiming one; for per-position detail use
+        get_positions instead. Verified against
+        https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
+        (scraped 2026-07-02, re-verified 2026-07-07).
+        """
         pnl = self._client.get_pnl()
-        if not pnl:
+        partitions = pnl.get("upnl") if isinstance(pnl, dict) else None
+        if not partitions or not isinstance(partitions, dict):
             return "No P&L data returned. Ensure IBKR gateway is connected.", None
         lines = ["Real-time P&L:"]
         upnl_total = 0.0
         dpnl_total = 0.0
-        for _acct, data in pnl.items():
-            if not isinstance(data, dict):
+        for account, row in partitions.items():
+            if not isinstance(row, dict):
                 continue
-            for conid, pos_pnl in data.items():
-                if not isinstance(pos_pnl, dict):
-                    continue
-                symbol = pos_pnl.get("ticker", str(conid))
-                try:
-                    upnl = float(pos_pnl.get("uPnl") or 0)
-                    dpnl = float(pos_pnl.get("dPnl") or 0)
-                except (ValueError, TypeError):
-                    log.warning("Non-numeric P&L for %s, skipping position", symbol)
-                    continue
-                upnl_total += upnl
-                dpnl_total += dpnl
-                lines.append(f"  {symbol}: unrealized={upnl:+.2f}  daily={dpnl:+.2f}")
+            try:
+                upl = float(row.get("upl") or 0)
+                dpl = float(row.get("dpl") or 0)
+            except (ValueError, TypeError):
+                log.warning("Non-numeric P&L for %s, skipping partition", account)
+                continue
+            upnl_total += upl
+            dpnl_total += dpl
+            nl = row.get("nl")
+            el = row.get("el")
+            extra = f"  net_liq={float(nl):.2f}" if isinstance(nl, (int, float)) else ""
+            extra += f"  excess_liq={float(el):.2f}" if isinstance(el, (int, float)) else ""
+            lines.append(f"  {account}: unrealized={upl:+.2f}  daily={dpl:+.2f}{extra}")
         lines.append(f"\nTotal unrealized P&L: {upnl_total:+.2f}")
         lines.append(f"Total daily P&L:      {dpnl_total:+.2f}")
         return "\n".join(lines), None
@@ -1965,6 +2057,11 @@ class ClaudeToolkit:
         self, sym: str, sec_type: str, exchange: str | None
     ) -> tuple[int, str | None]:
         """Resolve one symbol to a conid using the correct endpoint for its sec_type.
+
+        The single conid-resolution implementation for the toolkit (register item 15,
+        docs/claude-tools-audit-2026-07.md) — every handler needing a conid
+        (_fetch_market_data, _get_contract_info, _preview_order, _get_market_snapshot,
+        _create_price_alert) calls this rather than a duplicated STK/IND/BOND-only path.
 
         /iserver/secdef/search (used by search_contract) only documents support for
         STK, IND, BOND — NOT FUT or CASH. Using it for those types silently returns
@@ -2032,7 +2129,7 @@ class ClaudeToolkit:
             ]
             contracts = matches or contracts
 
-        conid = contracts[0].get("conid")
+        conid = contracts[0].get("conid") or contracts[0].get("con_id")
         try:
             conid_int = int(conid) if conid else 0
         except (ValueError, TypeError):
@@ -2155,7 +2252,18 @@ class ClaudeToolkit:
         return json.dumps(alerts, indent=2), None
 
     def _create_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Create an IBKR server-side price alert that fires via the mobile app regardless of session state."""
+        """Create an IBKR server-side price alert that fires via the mobile app
+        regardless of session state.
+
+        Conid resolution goes through _resolve_snapshot_conid (STK/IND/BOND via
+        search_contract; FUT via get_futures front-month; CASH via
+        get_currency_pairs) — NOT a raw search_contract call, which per client.py's
+        documented endpoint scope only supports STK/IND/BOND and would silently
+        mis-resolve or fail for FUT/CASH. See docs/claude-tools-audit-2026-07.md.
+        The alert condition's exchange is always "SMART" (IBKR's standard routing
+        default, used throughout this codebase) since _resolve_snapshot_conid does
+        not return a resolved listing exchange.
+        """
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -2166,17 +2274,10 @@ class ClaudeToolkit:
         tif = inputs.get("tif", "GTC")
         outside_rth = inputs.get("outside_rth", False)
         repeat = inputs.get("repeat", False)
-        contracts = self._client.search_contract(symbol, sec_type)
-        if not contracts:
-            return f"No contract found for {symbol} ({sec_type}).", None
-        conid = contracts[0].get("conid")
-        if not conid:
-            return f"Contract found for {symbol} but conid missing.", None
-        try:
-            conid_int = int(conid)
-        except (ValueError, TypeError):
-            return f"Invalid conid '{conid}' returned for {symbol}.", None
-        exchange = contracts[0].get("exchange", "SMART")
+        conid_int, err = self._resolve_snapshot_conid(symbol, sec_type, None)
+        if err:
+            return err, None
+        exchange = "SMART"
         name = inputs.get("name") or f"{symbol} {operator} {price}"
         alert = {
             "orderId": 0,
@@ -2228,7 +2329,11 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _delete_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Permanently delete a price alert by ID."""
+        """Permanently delete an IBKR price alert by ID for the primary account.
+
+        Resolves the account via _first_account_id first; returns that error if no
+        account is found. The deletion itself is not gated (alerts are not orders).
+        """
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -2236,7 +2341,11 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _activate_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Toggle an alert on or off without deleting it."""
+        """Enable or disable an existing IBKR price alert without deleting it.
+
+        The `activate` input defaults to True when omitted. Resolves the primary
+        account via _first_account_id. Returns the raw IBKR response as JSON.
+        """
         account_id, err = self._first_account_id()
         if err:
             return err, None
@@ -2277,7 +2386,11 @@ class ClaudeToolkit:
         return json.dumps(status, indent=2), None
 
     def _delete_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Remove a specific dataset from the Drive market-data cache."""
+        """Delete one dataset from the Drive market-data cache, keyed by symbol/timeframe/period/end.
+
+        Checks existence first and returns a "No cached entry" message if absent,
+        so a miss is reported rather than silently succeeding.
+        """
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]

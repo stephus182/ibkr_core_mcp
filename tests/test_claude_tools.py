@@ -348,6 +348,16 @@ def test_execute_get_market_snapshot_exchange_filter_no_match_falls_back(toolkit
     toolkit._client.get_market_snapshot.assert_called_once_with([1])
 
 
+def test_resolve_snapshot_conid_stk_falls_back_to_con_id_key(toolkit):
+    """STK/IND/BOND resolution must apply the same .get("conid") or .get("con_id")
+    fallback _resolve_conid uses — some IBKR responses key it "con_id" instead of
+    "conid" (CLAUDE.md convention). This branch omitted the fallback."""
+    toolkit._client.search_contract.return_value = [{"con_id": 42, "exchange": "SMART"}]
+    conid, err = toolkit._resolve_snapshot_conid("AAPL", "STK", None)
+    assert err is None
+    assert conid == 42
+
+
 def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit):
     """CASH must resolve via /iserver/currency/pairs, not /iserver/secdef/search.
 
@@ -420,6 +430,12 @@ def test_execute_get_alerts_returns_json(toolkit):
     assert fig is None
 
 
+# create_price_alert conid resolution — via _resolve_snapshot_conid (verified
+# 2026-07-07): the old implementation called self._client.search_contract directly,
+# which per client.py's own docstring only supports STK/IND/BOND. The tool schema
+# advertised FUT/OPT/FX support that was unreachable — FUT/CASH alerts would
+# silently resolve to the wrong contract or fail. See docs/claude-tools-audit-2026-07.md.
+
 def test_execute_create_price_alert_resolves_symbol(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL", "exchange": "NASDAQ"}]
@@ -433,20 +449,40 @@ def test_execute_create_price_alert_resolves_symbol(toolkit):
     assert call_alert["conditions"][0]["conid"] == 265598
     assert call_alert["conditions"][0]["operator"] == ">="
     assert call_alert["conditions"][0]["value"] == "200.0"
-    assert call_alert["conditions"][0]["exchange"] == "NASDAQ"
     assert call_alert["conditions"][0]["conditionType"] == "Price"
     assert fig is None
 
 
-def test_execute_create_price_alert_futures_uses_contract_exchange(toolkit):
+def test_execute_create_price_alert_futures_resolves_via_get_futures(toolkit):
+    """FUT alerts must resolve via get_futures (front month), NOT search_contract —
+    search_contract doesn't support FUT per client.py's documented endpoint scope."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.search_contract.return_value = [{"conid": 12345, "symbol": "CL", "exchange": "NYMEX"}]
+    toolkit._client.get_futures.return_value = [
+        {"conid": 12345, "symbol": "CL", "expirationDate": "20260918"},
+        {"conid": 12346, "symbol": "CL", "expirationDate": "20261016"},
+    ]
     toolkit._client.create_alert.return_value = {"orderId": 7}
     toolkit.execute("create_price_alert", {
         "symbol": "CL", "sec_type": "FUT", "operator": ">=", "price": 85.0
     })
+    toolkit._client.search_contract.assert_not_called()
+    toolkit._client.get_futures.assert_called_once_with(["CL"])
     call_alert = toolkit._client.create_alert.call_args[0][1]
-    assert call_alert["conditions"][0]["exchange"] == "NYMEX"
+    assert call_alert["conditions"][0]["conid"] == 12345  # front month (earliest expiration)
+
+
+def test_execute_create_price_alert_fx_resolves_via_currency_pairs(toolkit):
+    """CASH (FX) alerts must resolve via get_currency_pairs, not search_contract."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_currency_pairs.return_value = [{"symbol": "EUR.USD", "conid": 99999}]
+    toolkit._client.create_alert.return_value = {"orderId": 9}
+    toolkit.execute("create_price_alert", {
+        "symbol": "EUR.USD", "sec_type": "CASH", "operator": ">=", "price": 1.10
+    })
+    toolkit._client.search_contract.assert_not_called()
+    toolkit._client.get_currency_pairs.assert_called_once_with("EUR")
+    call_alert = toolkit._client.create_alert.call_args[0][1]
+    assert call_alert["conditions"][0]["conid"] == 99999
 
 
 def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
@@ -455,7 +491,7 @@ def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
     text, fig = toolkit.execute("create_price_alert", {
         "symbol": "AAPL", "operator": ">=", "price": 200.0
     })
-    assert "Invalid conid" in text
+    assert "conid" in text.lower()
     toolkit._client.create_alert.assert_not_called()
 
 
@@ -465,7 +501,7 @@ def test_execute_create_price_alert_no_contract(toolkit):
     text, fig = toolkit.execute("create_price_alert", {
         "symbol": "FAKE", "operator": "<=", "price": 50.0
     })
-    assert "No contract found" in text
+    assert "Could not resolve conid" in text or "No" in text
     toolkit._client.create_alert.assert_not_called()
 
 
@@ -614,7 +650,7 @@ def test_fetch_market_data_no_contract(toolkit):
     toolkit._cache.check.return_value = False
     toolkit._client.search_contract.return_value = []
     text, fig = toolkit.execute("fetch_market_data", {"symbol": "FAKE", "period": "1Y", "bar": "1d"})
-    assert "No contract" in text
+    assert "Could not resolve conid" in text
 
 
 def test_fetch_market_data_empty_data(toolkit):
@@ -800,7 +836,12 @@ def test_get_ledger_empty(toolkit):
     assert "No ledger data" in text
 
 
-# ── _get_pnl — empty and non-numeric guards ──────────────────────────────────
+# ── _get_pnl — official /iserver/account/pnl/partitioned response shape ──────
+# Shape verified against https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
+# (scraped 2026-07-02, re-verified 2026-07-07): {"upnl": {"<acct>.Core": {rowType,
+# dpl, nl, upl, el, mv}}} — account/model-partition level, NOT per-position/conid.
+# The old tests below invented a {account: {conid: {ticker, uPnl, dPnl}}} shape
+# that never matched IBKR's real response — see docs/claude-tools-audit-2026-07.md.
 
 def test_get_pnl_empty(toolkit):
     toolkit._client.get_pnl.return_value = {}
@@ -808,15 +849,50 @@ def test_get_pnl_empty(toolkit):
     assert "No P&L" in text or "P&L" in text
 
 
-def test_get_pnl_skips_non_numeric(toolkit):
+def test_get_pnl_reports_account_partition_totals(toolkit):
     toolkit._client.get_pnl.return_value = {
-        "U1234": {
-            "265598": {"ticker": "AAPL", "uPnl": "N/A", "dPnl": "N/A"},
+        "upnl": {
+            "U1675699.Core": {
+                "rowType": 1, "dpl": 15.7, "nl": 10000.0,
+                "upl": 607.0, "el": 10000.0, "mv": 0.0,
+            }
         }
     }
     text, fig = toolkit.execute("get_pnl", {})
-    # Should not raise; AAPL line skipped, total should still print
+    assert "U1675699.Core" in text
+    assert "607.00" in text  # unrealized
+    assert "15.70" in text   # daily
+
+
+def test_get_pnl_multiple_account_partitions(toolkit):
+    toolkit._client.get_pnl.return_value = {
+        "upnl": {
+            "U1.Core": {"rowType": 1, "dpl": 10.0, "nl": 5000.0, "upl": 20.0, "el": 5000.0, "mv": 0.0},
+            "U2.Core": {"rowType": 1, "dpl": -5.0, "nl": 2000.0, "upl": -8.0, "el": 2000.0, "mv": 0.0},
+        }
+    }
+    text, fig = toolkit.execute("get_pnl", {})
+    assert "U1.Core" in text and "U2.Core" in text
+    assert "+12.00" in text  # total unrealized: 20 + -8
+    assert "+5.00" in text   # total daily: 10 + -5
+
+
+def test_get_pnl_skips_non_numeric(toolkit):
+    toolkit._client.get_pnl.return_value = {
+        "upnl": {
+            "U1234.Core": {"rowType": 1, "dpl": "N/A", "nl": 10000.0, "upl": "N/A", "el": 10000.0, "mv": 0.0},
+        }
+    }
+    text, fig = toolkit.execute("get_pnl", {})
+    # Should not raise; malformed partition skipped, totals still print
     assert "Total" in text
+
+
+def test_get_pnl_missing_upnl_key_returns_no_data_message(toolkit):
+    """A response with no 'upnl' key (e.g. an unexpected shape) must not crash."""
+    toolkit._client.get_pnl.return_value = {"unexpected": {}}
+    text, fig = toolkit.execute("get_pnl", {})
+    assert "No P&L" in text
 
 
 # ── _preview_order — LMT includes price in order payload ─────────────────────
@@ -1561,7 +1637,7 @@ def test_get_contract_info_no_contract(toolkit):
     toolkit._client.search_contract.return_value = []
     text, fig = toolkit.execute("get_contract_info", {"symbol": "FAKESYM"})
     assert fig is None
-    assert "No contract" in text
+    assert "Could not resolve conid" in text
 
 
 def test_get_contract_info_error(toolkit):
