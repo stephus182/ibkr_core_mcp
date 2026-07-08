@@ -12,6 +12,29 @@ schema-level guardrail that a tool's advertised description matches what
 `ClaudeToolkit` actually ships (e.g. no order-write tool should ever claim
 execution capability — see CLAUDE.md's "Claude AI Tool Layer" section).
 
+**Measured, not assumed:** `pytest tests/test_claude_tools.py --durations=15`
+shows the file runs in 11.5s, and 86% of that (10s) is 3 tests:
+`test_fetch_market_data_empty_data` (4.01s), `test_firecrawl_search_returns_formatted_results`
+(3.91s), `test_firecrawl_crawl_saves_pages_to_drive` (2.05s). Root causes:
+
+- `test_fetch_market_data_empty_data` exercises the real `time.sleep(2)` retry
+  loop at `claude_tools.py:1128` (IBKR's documented 3-attempt/2s warmup retry),
+  unmocked — unlike `tests/test_rate_limiter.py`, which already wraps its retry
+  tests in `patch("time.sleep")`.
+- The two firecrawl tests mock markdown content (`"# Hello"`, `"# Page"`) short
+  enough to fall under `assess_quality`'s ~40-word floor, classifying it
+  `"fallback"` quality — which skips past the Firecrawl mock entirely and
+  constructs a real `Crawl4AIScraper` that hits `https://example.com` over the
+  actual network (`claude_tools.py:2599`). These tests' names claim to test
+  formatting/Drive-save, not the network fallback path — the short fixture
+  content is accidentally exercising untested-by-name behavior.
+
+This is the dominant lever for "reduce test time at scale," not file layout —
+splitting into domain files relocates these costs without removing them; if
+future tests add retry/fallback coverage without noticing this gap, wall time
+keeps growing for real (sleeps, network flakiness in CI) independent of test
+count.
+
 ## Directory layout
 
 ```
@@ -53,10 +76,40 @@ from today so `git blame` / history stays meaningful and no assertions change.
 | `test_pa_analytics.py` | get_analytics, get_pa_periods, get_pa_performance, get_pa_transactions | 11 |
 | `test_backtest_pinescript.py` | run_backtest, generate_pinescript | 8 |
 | `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_validate_public_url` | ~25 |
-| `test_errors.py` | `_safe_error` | 10 |
+| `test_errors.py` | `_safe_error` | 10 → 1 parametrized |
 
-Total: 177, matching today's collected count exactly (verified via
-`pytest --collect-only -q` before and after the move).
+Total: 177 test *cases* preserved exactly (verified via `pytest --collect-only -q`
+before and after the move) — collected *item* count may show 168 once the 10
+`test_safe_error_*` functions become 1 parametrized test with 10 cases (see
+below); no coverage is lost.
+
+## Fixes applied during the move
+
+Applied while relocating tests (not left for a follow-up), since these tests
+are being physically rewritten into new files regardless:
+
+- `test_fetch_market_data_empty_data` → moves into `test_market_data.py`
+  wrapped in `with patch("time.sleep"):` (matching `test_rate_limiter.py`'s
+  existing convention), removing ~4s of real delay. Also covered for free by
+  the new autouse `_no_real_io` fixture, but the explicit patch stays for
+  readability/intent at the call site.
+- `test_firecrawl_search_returns_formatted_results` and
+  `test_firecrawl_crawl_saves_pages_to_drive` → move into `test_web_scraping.py`
+  with their mocked markdown lengthened to realistic, unambiguous "ok"-quality
+  content (≥40 words, no paywall keywords), so they exercise the happy path
+  their names actually claim to test instead of silently falling through to
+  the Crawl4AI/network branch. The `_no_real_io` fixture's `disable_socket()`
+  also becomes a hard backstop: if quality classification ever regresses again,
+  the test now fails fast with a clear "socket blocked" error instead of
+  quietly making a real HTTP request.
+- `test_safe_error_*` (10 functions) → collapse into one
+  `@pytest.mark.parametrize` table `test_safe_error_mapping` in
+  `test_errors.py`. Pure input→output mapping, no per-case mock wiring, the
+  cleanest parametrize candidate in the file. `preview_order`,
+  `get_market_snapshot`, and `verify_flex_import` clusters stay as separate
+  named functions — each case wires distinct mock responses and asserts
+  different things, so collapsing them would hurt readability more than it
+  helps.
 
 ## Fixtures — `tests/claude_tools/conftest.py`
 
@@ -75,7 +128,27 @@ def toolkit(mock_config):
 
 `mock_config` and `tmp_db` keep living in the root `tests/conftest.py` — pytest
 resolves fixtures up the directory chain automatically, so nothing there needs
-to change. No new fixtures are introduced; nothing else in the current file is
+to change.
+
+**New: an autouse guardrail fixture**, added specifically because of the
+measured findings above — makes it structurally impossible for a future test
+in this domain to silently reintroduce a multi-second real sleep or a real
+network call:
+
+```python
+import pytest
+from pytest_socket import disable_socket
+
+
+@pytest.fixture(autouse=True)
+def _no_real_io(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    disable_socket()  # any real socket.connect() now raises SocketBlockedError
+```
+
+Requires adding `pytest-socket` to the `dev` extra in `pyproject.toml`
+alongside the existing `pytest>=8.0`, `pytest-asyncio>=0.23`, `pytest-mock>=3.12`.
+No other new fixtures are introduced — nothing else in the current file is
 shared across enough tests to justify one (YAGNI).
 
 ## Markers
@@ -139,7 +212,17 @@ A short reference page at `tests/claude_tools/TEST_INDEX.md`:
   `tests/test_client_live.py`, `tests/test_alerts_live.py`,
   `tests/test_web_scraper_live.py`, `tests/test_web_scraper_drive_live.py`,
   `tests/test_crawl4ai_live.py` (unchanged, out of scope here)
-- A "Known gaps" line noting the deferred description-vs-handler check
+- A "Known gaps / follow-ups" section noting:
+  - The deferred description-vs-handler behavioral check (see above)
+  - **Handler-side testability gap (not fixed here):** `claude_tools.py:1128`
+    and `:2272` hardcode `time.sleep(...)` inline rather than accepting an
+    injectable sleep function, unlike `rate_limiter.py`'s `with_retry`, which
+    at least centralizes its retry logic in one place even though it also
+    sleeps directly. A future small refactor — e.g. both call sites taking a
+    `sleep_fn: Callable[[float], None] = time.sleep` parameter, or routing
+    through a shared retry helper — would let tests mock retries without
+    reaching into `time.sleep` globally. Flagged, not implemented: this reorg
+    stays test-only.
 
 ## CLAUDE.md update
 
@@ -155,18 +238,26 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
 
 ## Verification
 
-- `pytest --collect-only -q` count for `tests/claude_tools/` == 177 (today's
-  count for the file being replaced), plus whatever new tests
+- `pytest --collect-only -q` for `tests/claude_tools/` accounts for all 177
+  original test cases (10 of them now as 1 parametrized function with 10
+  params, per the `_safe_error` consolidation above), plus whatever new tests
   `test_tool_descriptions.py` adds.
 - Full repo `pytest -m "not integration"` passes with the same pass/fail
-  outcome as before the move (no behavior change, pure reorganization).
+  outcome as before the move — same assertions, same behavior, only the 3
+  slow tests' *mock setup* changes (not their intent).
 - `tests/test_claude_tools.py` is removed only after the above two checks
   pass.
+- File runtime drops from ~11.5s to roughly ~1.5s (removing the ~10s of real
+  sleep/network) — spot-checked via `--durations=15` after the move, not just
+  assumed.
 
 ## Out of scope
 
 - Layer 3 (live/integration tests) — stays exactly where it is today.
 - Description-vs-handler behavioral matching — deferred, tracked as a known
   gap in `TEST_INDEX.md`.
-- Any change to `ibkr_core_mcp/claude_tools.py` itself — this is a test-only
-  reorganization.
+- Handler-side injectable-sleep refactor (`claude_tools.py:1128`, `:2272`) —
+  flagged as a follow-up in `TEST_INDEX.md`'s "Known gaps," not implemented.
+- Any other change to `ibkr_core_mcp/claude_tools.py` itself — this stays a
+  test-only reorganization; the only "production-adjacent" additions are a new
+  dev-only dependency (`pytest-socket`) and mock-content changes inside tests.
