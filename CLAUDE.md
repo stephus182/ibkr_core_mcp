@@ -410,10 +410,13 @@ Available metrics: `sharpe`, `sortino`, `calmar`, `cagr`, `max_drawdown`, `max_d
 
 ```python
 # Trading calendar for the current + next year — holidays, half-days, session hours
-ctx = SQLiteStore.get_market_calendar_context()          # NYSE + CME (default)
-ctx = SQLiteStore.get_market_calendar_context(["XLON"])  # add LSE
+ctx = SQLiteStore.get_market_calendar_context()            # default: 20 exchanges (G20 + Eurex)
+ctx = SQLiteStore.get_market_calendar_context(["XLON"])     # REPLACES the default — returns XLON only, not default+XLON
 
-# Returns: { "generated_at": "...", "exchanges": { "XNYS": { "holidays": [...], ... }, ... } }
+# Returns: { "today": "...", "is_trading_day": bool, "last_trading_day": "...",
+#            "next_trading_day": "...", "primary_exchange": "XNYS",
+#            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... } }
+# See README.md's "Market Calendar" section for the full 20-exchange default list and a worked example.
 ```
 
 Used internally by `ClaudeToolkit.get_analytics()` to give the LLM context-aware trading-day awareness.
