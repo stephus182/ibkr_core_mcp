@@ -469,7 +469,7 @@ script = pinescript.indicator_script("AAPL Indicators", ["rsi", "macd", "bolling
 
 ## MCP Server
 
-`ibkr_core_mcp` ships a built-in MCP server exposing 44 tools and 3 resources.
+`ibkr_core_mcp` ships a built-in MCP server exposing 44 tools and 4 resources.
 Any MCP-compatible client — Claude Desktop, a custom chatbot, a dashboard, or an
 ML pipeline — connects without requiring the `anthropic` SDK.
 
@@ -518,9 +518,9 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 The server binds to `127.0.0.1` only — never exposed to external networks.
 Connect MCP clients to `http://localhost:5174/sse`.
 
-### Tools (40)
+### Tools (44)
 
-All 38 `ClaudeToolkit` tools plus:
+All 42 `ClaudeToolkit` tools plus:
 - `add_price_alert` — register a threshold alert (persisted to SQLite)
 - `get_price_alerts` — list active or all alerts
 

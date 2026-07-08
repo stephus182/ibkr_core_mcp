@@ -349,9 +349,9 @@ def test_execute_get_market_snapshot_exchange_filter_no_match_falls_back(toolkit
 
 
 def test_resolve_snapshot_conid_stk_falls_back_to_con_id_key(toolkit):
-    """STK/IND/BOND resolution must apply the same .get("conid") or .get("con_id")
-    fallback _resolve_conid uses — some IBKR responses key it "con_id" instead of
-    "conid" (CLAUDE.md convention). This branch omitted the fallback."""
+    """STK/IND/BOND resolution must apply the .get("conid") or .get("con_id")
+    fallback — some IBKR responses key it "con_id" instead of "conid"
+    (CLAUDE.md convention). This branch omitted the fallback."""
     toolkit._client.search_contract.return_value = [{"con_id": 42, "exchange": "SMART"}]
     conid, err = toolkit._resolve_snapshot_conid("AAPL", "STK", None)
     assert err is None
