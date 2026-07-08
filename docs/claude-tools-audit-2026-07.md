@@ -1,6 +1,6 @@
 # claude_tools.py Audit — 2026-07
 
-**Status:** SYNTHESIS COMPLETE (2026-07-02); D1 REFINED 2026-07-06 with a real before/after caching comparison and a measured TradingView tool payload — D3–D4 remain recommendations for future work; D2 reaffirmed with new evidence 2026-07-07 (see below); D5 applied 2026-07-02, extended with 6 more live-found/review-found fixes through 2026-07-07 (652 unit tests green; 59/59 live-integration tests green as of 2026-07-06 — the one apparent failure on an earlier combined run was the documented session-warmup ordering effect from `docs/live-test-log.md`'s 2026-06-30 entry, confirmed by re-running `test_client_live.py` standalone: 58 passed, 3 skipped, 0 failed). Live order-flow tested end-to-end 2026-07-06 (place → 3 chained replies → Submitted); the resulting reply-confirmation fix (register item 14) is now **implemented and verified** (commits `62e7e8b`, `251ef54`; 613 unit tests + 31 claudia_ui order_flow tests green). **2026-07-07: full fresh code review + cleanup pass** found and TDD-fixed 2 real defects (`get_pnl`'s response shape was entirely wrong; `create_price_alert`'s FUT/OPT/FX support was unreachable), added 11 handler docstrings, enriched 12 tool descriptions for cross-tool disambiguation, and partially executed Candidate 1's helper extraction (conid-resolution cluster 3 copies → 2). See Appendix C's "2026-07-07 fresh independent pass" section and Appendix E's "Recommendation reaffirmed" section. **2026-07-07 (session 2): register item 15 completed** — `_resolve_conid` deleted; its 3 callers (`_fetch_market_data`, `_get_contract_info`, `_preview_order`) now call `_resolve_snapshot_conid`, collapsing the conid-resolution cluster from 2 copies to 1 (Candidate 1 fully executed, not just partially). Two tests' error-text assertions updated to match `_resolve_snapshot_conid`'s wording ("Could not resolve conid..." vs the deleted helper's "No contract found..."); 652 unit tests still green, ruff/mypy clean. Open: run 3 (optional, noise-reduction only), register items 6/10/12/13 and item 11's remainder (private-API reach-ins) — item 5 closed by item 15. **Final gate re-run 2026-07-07 (session 3): 652 unit tests green, ruff clean, mypy clean; tool surface re-measured 10,614 tok (Appendix A addendum); CLAUDE.md MCP counts corrected (44 tools / 4 resources / 42 toolkit).**
+**Status:** SYNTHESIS COMPLETE (2026-07-02); D1 REFINED 2026-07-06 with a real before/after caching comparison and a measured TradingView tool payload — D3–D4 remain recommendations for future work; D2 reaffirmed with new evidence 2026-07-07 (see below); D5 applied 2026-07-02, extended with 6 more live-found/review-found fixes through 2026-07-07 (652 unit tests green; 59/59 live-integration tests green as of 2026-07-06 — the one apparent failure on an earlier combined run was the documented session-warmup ordering effect from `docs/live-test-log.md`'s 2026-06-30 entry, confirmed by re-running `test_client_live.py` standalone: 58 passed, 3 skipped, 0 failed). Live order-flow tested end-to-end 2026-07-06 (place → 3 chained replies → Submitted); the resulting reply-confirmation fix (register item 14) is now **implemented and verified** (commits `62e7e8b`, `251ef54`; 613 unit tests + 31 claudia_ui order_flow tests green). **2026-07-07: full fresh code review + cleanup pass** found and TDD-fixed 2 real defects (`get_pnl`'s response shape was entirely wrong; `create_price_alert`'s FUT/OPT/FX support was unreachable), added 11 handler docstrings, enriched 12 tool descriptions for cross-tool disambiguation, and partially executed Candidate 1's helper extraction (conid-resolution cluster 3 copies → 2). See Appendix C's "2026-07-07 fresh independent pass" section and Appendix E's "Recommendation reaffirmed" section. **2026-07-07 (session 2): register item 15 completed** — `_resolve_conid` deleted; its 3 callers (`_fetch_market_data`, `_get_contract_info`, `_preview_order`) now call `_resolve_snapshot_conid`, collapsing the conid-resolution cluster from 2 copies to 1 (Candidate 1 fully executed, not just partially). Two tests' error-text assertions updated to match `_resolve_snapshot_conid`'s wording ("Could not resolve conid..." vs the deleted helper's "No contract found..."); 652 unit tests still green, ruff/mypy clean. Open: run 3 (optional, noise-reduction only), register items 6/10/12/13 and item 11's remainder (private-API reach-ins) — item 5 closed by item 15. **Final gate re-run 2026-07-07 (session 3): 652 unit tests green, ruff clean, mypy clean; tool surface re-measured 10,614 tok (Appendix A addendum); CLAUDE.md MCP counts corrected (44 tools / 4 resources / 42 toolkit). Cross-cutting synthesis of all findings added — see "Findings analysis" section below.**
 **Spec:** docs/2026-07-02-claude-tools-audit-design.md
 **Model used for all token counts:** claude-opus-4-8 (ClaudIA default)
 
@@ -15,6 +15,127 @@
 | D5 | Documentation verdicts | **33 accurate / 8 fix / 1 enrich / 0 trim / 0 unverified** — applied to `claude_tools.py` in the companion commit (doc-text only). Reconciliation: Appendix C's `get_option_chain` "none" rated code *structure* only; Appendix G's non-functional-endpoint verdict governs the tool's real status. Live-session addendum (Appendix B): two findings exceed doc-text scope and become follow-up work items — `sync_flex_trades` silently verifying empty daily statements (data-integrity defect observed live), and `run_backtest`'s opaque error surface. | Appendices G, B |
 
 **Follow-up register (out of this audit's scope, in priority order):** 1. ~~prompt caching in claudia_ui~~ **LANDED 2026-07-03 independently of this audit** (`claudia/agent.py` commits `bb77111`..`f68c43d` — 3 breakpoints: tools, system prompt, conversation history); **live-confirmed 2026-07-06, Appendix B run 2** — 82.4% input-token cost reduction, no confirmed latency change (see D1); 2. ~~Flex `_get_statement` poller fix~~ **FIXED 2026-07-02, commit 252729f; live-confirmed 2026-07-06** — first real sync imported 122/122 trades incl. the missing July 1–2 fills (July 1: +$2,957.00, July 2: +$94.50 — the true week P&L was **+$430.00**, not the −$2,621.50 reported from the stale store on 2026-07-02); 3. ~~live re-verification of `/iserver/account/trades` empty result~~ **RESOLVED 2026-07-06** — two-call warmup, origin coverage complete once primed; auto-retry fixed in `client.get_trades()` (see Appendix B finding 2); 4. ~~`get_analytics` periods fix~~ **FIXED 2026-07-02, commit 3fb22f4**; ~~`run_backtest` error-surface improvement~~ **FIXED 2026-07-03, commit 7559ff2** (handler returns sandbox error detail + df columns + signal contract; exception type included in the wrap; TDD with the live KeyError scenario); 5. ~~helper extraction (D2 Candidate 1)~~ **DONE 2026-07-07 in two steps**: session 1 deleted `_create_price_alert`'s inline third copy of conid resolution (now calls `_resolve_snapshot_conid`); session 2 (register item 15) deleted `_resolve_conid` itself and migrated its 3 callers — cluster at 1 copy, Candidate 1 fully executed; 6. `get_option_chain` reimplementation via `secdef/search → strikes`; 7. ~~latency runs 2–3~~ **run 2 DONE 2026-07-06** (cached-state comparison, Appendix B — Run 2 is now the reference session; Run 1 retained only as the pre-caching baseline, see Appendix B note) — a "run 3" is optional and would compare against Run 2, not Run 1; 8. response-length policy experiment (D1 lever 2); 9. ~~"6 months → 84 bars" period-mapping check~~ **RESOLVED + FIXED 2026-07-06, commit c397428** — IBKR period strings are case-sensitive; uppercase ('6M', '1Y') silently falls back to ~84 bars. Client now lowercases period/bar; schema examples corrected to lowercase; 10. `preview_order` structural schema gap — no stop-price or `sec_type` field. **UPGRADED to confirmed functional defect, live-verified 2026-07-06**: called through the real handler (not a hand-rolled request), `order_type='STP'` and `'STOP_LIMIT'` both return **HTTP 500** (LMT and MKT succeed) — the handler's own whitelist admits these types but only populates `price` for `LMT`, so IBKR rejects the incomplete order and `_safe_error` reports a generic, unactionable message. No longer "beyond doc-text" — this needs a real code fix (add `stop_price`/schema field, map to `price`/`auxPrice` per type); 11. Appendix C minors not covered by helper extraction: ~~`get_positions` None-formatting `TypeError`~~ **FIXED 2026-07-03, commit 9a4181d (TDD)**; still open: private-API reach-ins in `diagnose_orders` (`client._get`) and `get_pa_periods` (`client._post`); 12. **sortino/calmar variant decision** (found 2026-07-02 while verifying analytics docs): `analytics.sortino` implements the simplified discrete form (std of below-target returns only) that the canonical source explicitly disfavors — canonical is target downside deviation over ALL observations (https://en.wikipedia.org/wiki/Sortino_ratio); `analytics.calmar` is whole-series, formally the MAR-ratio convention vs Young 1991's trailing-36-month Calmar (https://en.wikipedia.org/wiki/Calmar_ratio). Both variants now documented in docstrings; migrating changes every existing backtest figure — deliberate decision required, not a doc fix. 13. **`generate_pinescript` exposes only 1 of 3 pinescript.py capabilities** (found live 2026-07-06): `ibkr_core_mcp/pinescript.py` has `indicator_script()`, `strategy_from_signals()`, and `strategy_from_backtest()` — all three are part of the public Python API (documented in CLAUDE.md) — but `ClaudeToolkit._generate_pinescript` (claude_tools.py:1812) only ever calls `indicator_script()`. Live consequence: asked for a strategy script matching a just-run backtest, ClaudIA had no tool for it and hand-wrote PineScript v5 `strategy()` syntax from her own knowledge instead of calling the tested, deterministic generator — happened to be correct this time, but the tool gap creates a real syntax-hallucination surface. Fix: add a `strategy_name`/`from_backtest` path (or a second tool) wiring `strategy_from_backtest`/`strategy_from_signals` into the dispatch, matching the D5-corrected tool description's honesty about current scope. 14. **Reply-confirmation flow — FIXED, cross-repo, 2026-07-06.** Live order-flow test (a real `BUY 1 AAPL @ $100 GTC`; see "Live order-flow test" findings above) found: (a) `claudia_ui/claudia/order_flow.py`'s `execute_staged_order` called `place_order()` and declared "staged successfully" without ever calling `reply_order()` — an order tripping any IBKR confirmation message (price-band, no-market-data, etc.) was left `Inactive`/`Pending Submit` on IBKR's side while the UI falsely reported success; confirmed via live `get_live_orders`. (b) `reply_order()`'s own response can require ANOTHER reply — this order needed 3 sequential confirmations (price-band 3%, no-market-data `o354`, mandatory-cap-price `o10153`) before reaching `Submitted`; official docs warn a pending reply must be answered immediately or it invalidates (503). (c) `ibkr_core_mcp/order_confirm.py`'s `confirm_reply_dialog()` showed only a generic "Reply ID: xxx" — never the actual IBKR warning text — violating CLAUDE.md's own Gate-2 "full order details" principle; the owner explicitly required the real message be shown and validated by the human before confirming. **Implemented per the approved design** (`docs/2026-07-06-order-reply-confirmation-design.md`), commits `62e7e8b` (auto-resolve chained replies, show real IBKR text) and `251ef54` (tighten HTML-strip regex, normalizer tests) — verified against the spec 2026-07-06: new `place_order_and_confirm()`/`modify_order_and_confirm()` methods in `ibkr_core_mcp/client.py` centralize the reply loop via a shared `_resolve_one_reply()` helper (Gate 1 + Gate 2 + confirm/decline POST per chain entry); `confirm_reply_dialog()` now takes `message`/`options` and strips HTML via a tag-aware regex (deliberately not a naive `<[^>]+>`, to avoid corrupting a message containing a bare `<`/`>`, e.g. a price comparison); decline explicitly POSTs `{"confirmed": false}` before raising, rather than leaving the order ambiguous; `modify_order_and_confirm` added proactively (same bug shape, still unverified live — no live modify test has been run). `claudia_ui/order_flow.py:258` now calls `place_order_and_confirm()`. All design decisions matched exactly (own Confirm/Decline labels, not IBKR's varying wording; `messageOptions` accepted but not rendered as button text; no IBKR-native suppression used). Test coverage: 613 unit tests (`ibkr_core_mcp`, up from 593) + 31 `order_flow`-scoped tests (`claudia_ui`) all green; ruff/mypy clean. 15. ~~Complete Candidate 1's conid-resolution consolidation~~ **DONE 2026-07-07 (session 2), register item 5's remaining half.** `_resolve_conid` (STK/IND/BOND/FUT only) deleted; its 3 callers (`_fetch_market_data`, `_get_contract_info`, `_preview_order`, per Appendix D's dependency graph) now call `_resolve_snapshot_conid` (STK/IND/BOND/FUT/CASH) directly, passing `exchange=None`. The merge was mechanical — each caller already immediately did `int(conid)` on the old string return, which `_resolve_snapshot_conid`'s native `int` return made redundant, so those casts were dropped too. Net effect beyond the consolidation itself: `_get_contract_info` and `_preview_order` (whose `sec_type` comes from user input) now correctly resolve `CASH` symbols via `/iserver/currency/pairs` instead of silently mis-resolving through `search_contract`, matching the same fix already applied to `_create_price_alert`. Two tests (`test_fetch_market_data_no_contract`, `test_get_contract_info_no_contract`) had their error-text assertion updated from the deleted helper's wording ("No contract found for...") to `_resolve_snapshot_conid`'s ("Could not resolve conid for..."); no other tests referenced `_resolve_conid` by name. Conid-resolution cluster is now at 1 copy, not 2. 652 unit tests green, ruff/mypy clean. Also fixed in the same pass: 2 defects (`get_pnl`'s response shape was entirely wrong per the official docs; `create_price_alert`'s FUT/OPT/FX support was unreachable), 3 minors (`_resolve_snapshot_conid` missing `con_id` fallback, `_verify_flex_import`'s triplicated `dupe_note` construction, `run_scanner`'s undocumented location_code/instrument mismatch), 11 handler docstrings added, 12 tool descriptions enriched for cross-tool disambiguation (+705 tok). See Appendix C's "2026-07-07 fresh independent pass" and Appendix E's "Recommendation reaffirmed" sections for full detail.
+
+## Findings analysis — cross-cutting synthesis (2026-07-07)
+
+The appendices record findings one at a time; this section analyzes them as a set —
+what kinds of defects this codebase actually produces, which detection methods found
+them, and what that implies for the remaining open items and for future work. Every
+claim below cites the appendix or register item it derives from.
+
+### Findings inventory (deduplicated)
+
+Counting each distinct underlying problem once (a defect found statically and later
+confirmed live is one finding), the audit surfaced **22 distinct findings**:
+
+| Class | Count | Findings | Status |
+|---|---|---|---|
+| **Functional defects** (wrong output/behavior on real data) | 8 | Flex poller archiving error responses as verified imports (App. B f.1); order reply chain never resolved + Gate 2 hiding the real IBKR message (reg. 14); `get_pnl` wrong response shape (App. C 07-07 §1); `create_price_alert` FUT/OPT/FX unreachable (App. C 07-07 §2); `get_analytics` daily annualization on intraday data (App. C, reg. 4); period case-sensitivity — `'6M'` silently ≈84 bars (reg. 9); `preview_order` STP/STOP_LIMIT → HTTP 500 (reg. 10); `get_trades` two-call warmup returning empty (App. B f.2) | 7 fixed, 1 open (reg. 10) |
+| **Robustness/minor code** | 5 | `get_positions` None-format `TypeError`; `run_backtest` opaque error surface; `_resolve_snapshot_conid` missing `con_id` fallback; `_verify_flex_import` triplicated `dupe_note`; private-API reach-ins (`client._get`/`._post`) | 4 fixed, 1 open (reg. 11 rem.) |
+| **Capability gaps** (code delivers less than the surface implies) | 3 | `get_option_chain` built on an endpoint absent from the documented CP API (reg. 6); `generate_pinescript` wires 1 of 3 pinescript.py generators (reg. 13); `preview_order` schema has no `sec_type`/stop-price field (folded into reg. 10) | 0 fixed — all doc-flagged honestly, none reimplemented |
+| **Documentation defects** (Claude-facing text factually wrong) | 5 | 8 fix + 1 enrich verdicts (App. G) collapsing to: invalid PA `period` examples (2 tools); `get_trades` "6 days" vs the documented 7; unbacked claims (`get_pnl` realized-P&L, `generate_pinescript` backtest path); wrong `sec_type` lists (`search_contract`, `create_price_alert`); missing warnings (`get_analytics`, `get_option_chain`) | all fixed (D5 + 07-07 pass) |
+| **Measurement corrections** (beliefs the data overturned) | 1 | caching = large cost win (−82.4% input cost), *not* a latency win (ttft rose 1.62→2.52 s; stream share unchanged ~91–93%) — D1 honest correction (App. B run 2) | n/a — recorded |
+
+Plus one deliberate-decision item that is neither bug nor doc error: the
+sortino/calmar variant question (reg. 12), where the implementation is internally
+consistent but uses a non-canonical formula — changing it silently re-scores every
+historical backtest, so it needs an owner decision, not a patch.
+
+### Root-cause patterns (what actually generates defects here)
+
+Ranked by how many distinct findings each pattern explains:
+
+1. **Assumed wire contracts — 8 findings.** Response shapes, parameter value sets,
+   endpoint existence, and string casing were written from plausible memory instead
+   of the official reference: `get_pnl`'s imagined per-position nesting, the PA
+   `period` examples, `get_trades`' "6 days", `search_contract`/`create_price_alert`'s
+   inflated `sec_type` lists, `/trsrv/secdef/chains` not being in the documented API,
+   `'6M'` vs `'6m'`, and the Flex poller treating any non-`WhenAvailable` body as a
+   statement. This is the same failure mode as the two pre-audit incidents in
+   CLAUDE.md's docs-first table — the rule existed; the older code predated its
+   enforcement. **Implication:** the docs-first protocol is the highest-value rule in
+   the repo, and it must extend to *response* shapes and *value enums*, not just URLs.
+2. **IBKR's stateful/multi-step protocols treated as single-shot — 4 findings.**
+   The reply chain (up to 3 sequential confirmations), the two-call subscription
+   warmup (orders *and* trades), and Flex's async generation all require
+   loop-until-terminal handling; code that fired one request and read one response
+   produced silent wrongness in each case. **Implication:** any new IBKR endpoint
+   should be assumed stateful until the docs prove otherwise; the fixed patterns
+   (`place_order_and_confirm`'s reply loop, `get_trades`' warmup retry, the poller's
+   status check) are the templates.
+3. **Duplication diverging — the conid cluster.** Three copies of conid resolution
+   drifted until the copy in `create_price_alert` made three advertised instrument
+   types unreachable. D2's original no-go on the module split rested on "duplication
+   is inconsistency, not defects"; the 07-07 pass converted that into a proven
+   defect-generator and Candidate 1 (now fully executed, 3 copies → 1) is validated
+   in hindsight as the *right-sized* structural response — the defect traced to
+   duplication, not to file size, so the 7-module split remains correctly deferred.
+4. **Schema text written aspirationally — 3 findings.** `preview_order` advertising
+   STP, `create_price_alert` advertising OPT/FX, `generate_pinescript` advertising
+   backtest scripts: in each case the Claude-facing description promised what the
+   handler never implemented. The LLM trusts the schema completely, so every one of
+   these is a guaranteed wrong-call generator. **Implication:** treat `TOOL_DEFINITIONS`
+   text as a *contract test surface* — when a description names a capability, a unit
+   test should exercise it (this is exactly how the 07-07 fixes were TDD'd).
+
+### Detection-method yield (what found what)
+
+| Method | Distinct findings | Character of findings |
+|---|---|---|
+| Live sessions with real gateway/orders (07-02, 07-06) | 9 | The highest-severity items: Flex silent failure, reply chain, warmup, case-sensitivity, STP 500 live confirmation. None were findable statically — they required real IBKR state. |
+| Docs cross-check, fresh scrapes (App. G) | 7 | All 5 doc-defect groups + the non-functional endpoint + the STP gap's root cause. |
+| Static per-handler read (App. C, 07-02) | 6 | 1 defect + 5 minors — robustness issues, duplication map. |
+| Fresh independent re-review (07-07) | 2 defects + 3 minors | Both defects were in handlers the first pass had rated **none** — `get_pnl` "defensive, uniform" — because the first pass judged internal robustness, not the wire contract. |
+| Instrumented measurement (App. A/B) | 1 major correction | The caching latency/cost split; also the priced token facts that decided D3/D4. |
+
+Two process lessons fall out. First, **the unit suite was structurally unable to catch
+the worst class**: the `get_pnl` test mocked the same wrong shape the handler
+expected — self-referential by construction. 652 green tests said nothing about wire
+correctness; only doc-scrapes and live calls did. Where a shape matters, the test
+fixture must be transcribed from the official docs (as the 07-07 rewrites now do) or
+from a captured live response. Second, **review passes have a rating ceiling set by
+their rubric**: the 07-02 pass read all 42 handlers in full and still missed both
+07-07 defects because its rubric asked "is this code robust?" not "is this code's
+model of IBKR true?". A second pass with a different question was worth 2 defects;
+a second pass with the same question would likely have been worth ~0.
+
+### Open-item priorities (evidence-weighted)
+
+1. **Reg. 10 — `preview_order` stop-type support** (defect, live-confirmed HTTP 500):
+   the only *open functional defect*. Fix shape is known: add `stop_price` +
+   `sec_type` schema fields, map to `price`/`auxPrice` per order type against the
+   documented whatif contract. Everything else open is a gap or decision, not wrong
+   output.
+2. **Reg. 13 — wire `strategy_from_backtest`/`strategy_from_signals`** (capability
+   gap with hallucination surface): observed live consequence — ClaudIA hand-wrote
+   PineScript when the tested generator existed. Cheap fix (dispatch + schema), and
+   it removes a correctness risk that grows with usage.
+3. **Reg. 6 — `get_option_chain` reimplementation** via documented
+   `secdef/search → secdef/strikes`: currently honestly labeled non-functional, so
+   the LLM avoids it — no active harm, but it is the only advertised-then-disabled
+   tool left. Do it when options work matters; the reimplementation is feature-sized.
+4. **Reg. 12 — sortino/calmar variant**: owner decision required (migrating re-scores
+   every stored backtest). Present the two variants with a worked example on real
+   stored results; don't change silently.
+5. **Reg. 11 remainder — private-API reach-ins** (`diagnose_orders`, `get_pa_periods`):
+   hygiene only; promote the two `client._get`/`._post` uses into public client
+   methods the next time either file is touched.
+6. **Run 3** (optional): only if a decision would change on ±noise in run 2's numbers;
+   none currently would.
+
+### What the audit changed, in one paragraph
+
+Five decisions (D1–D5) were made on measured evidence rather than intuition, and two
+of them reversed the intuitive answer (caching ≠ faster; split ≠ better). Fifteen
+register items were opened; ten are closed with commits, tests, and — where the claim
+was about IBKR behavior — live confirmation. The toolkit went from 3 conid-resolution
+copies to 1, from 2 known-wrong wire contracts to 0, from 8 factually wrong tool
+descriptions to 0 (at a measured, cache-discounted cost of ≈+1,100 tokens of schema
+text), and the order path went from silently-unresolved reply chains to a gated,
+message-showing loop verified against a real 3-reply order. The remaining open work
+is one confirmed defect (reg. 10), two capability gaps (reg. 6, 13), one owner
+decision (reg. 12), and hygiene (reg. 11) — all scoped, none blocking the package's
+current advertised surface.
 
 ## Next live session — verification checklist (planned 2026-07-03)
 
