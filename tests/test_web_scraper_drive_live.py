@@ -27,6 +27,7 @@ don't accumulate files but the folder layout stays inspectable.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -73,3 +74,29 @@ def toolkit(live_config):
 def drive_service(live_config):
     from ibkr_core_mcp.web_scraper import WebDocsStore
     return WebDocsStore(live_config)._get_service()
+
+
+@pytest.mark.integration
+def test_firecrawl_search_saves_snapshot_to_drive(toolkit, drive_service):
+    text, fig = toolkit.execute(
+        "firecrawl_search",
+        {
+            "query": "Interactive Brokers Client Portal API",
+            "limit": 1,
+            "save_to_drive": True,
+        },
+    )
+    assert fig is None
+    match = re.search(r"file ID: ([^)]+)\)", text)
+    assert match, f"No Drive file ID found in response: {text}"
+    file_id = match.group(1)
+
+    try:
+        # Verify the file really exists in Drive (real read, not just trusting
+        # the tool's return text) before deleting it.
+        meta = drive_service.files().get(fileId=file_id, fields="id,name,parents").execute()
+        assert meta["name"].endswith(".md")
+    finally:
+        # Cleanup policy: delete the file once its existence is proven; the
+        # web_docs/searches/ folder itself is left in place.
+        drive_service.files().delete(fileId=file_id).execute()
