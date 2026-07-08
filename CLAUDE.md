@@ -104,7 +104,7 @@ Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` mu
 
 | Gate | Mechanism | Behaviour |
 |---|---|---|
-| **Gate 1 — Touch ID** | Apple `LocalAuthentication` (`LAPolicyDeviceOwnerAuthenticationWithBiometrics`) | Fingerprint only — no password fallback. 60-second timeout. |
+| **Gate 1 — Touch ID** | Apple `LocalAuthentication` (`LAPolicyDeviceOwnerAuthentication`) | Touch ID/Face ID first, falls back to the device's system password on a failed/cancelled biometric scan. 60-second timeout. |
 | **Gate 2 — Visual confirmation** | tkinter modal dialog with full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
 
 If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and the IBKR endpoint is never contacted.
@@ -132,10 +132,10 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 
 **Rules for contributors:**
 
-- Never add a bypass flag, session cache, or fallback to `require_touch_id` or any dialog function.
+- Never add a bypass flag, session cache, or library-side fallback to `require_touch_id` or any dialog function — no code path may skip or cache a prior Touch ID / dialog success.
 - Never move the gates out of `IBKRClient` — enforcement must be at the innermost call site.
-- Never add password/PIN fallback — `LAPolicyDeviceOwnerAuthenticationWithBiometrics` is the required policy.
-- Any PR that weakens these gates will be rejected.
+- The required policy is `LAPolicyDeviceOwnerAuthentication` (Touch ID/Face ID, falling back to the device's system password on a failed/cancelled biometric scan) — Apple's own recovery path for a genuinely-failed biometric read, not a bypass this library adds. The stricter biometrics-only policy was evaluated and rejected: a failed scan under it has no recovery path at all. Don't change this policy without updating both this file and `README.md`'s Security section in the same PR.
+- Any PR that weakens these gates *beyond* the documented policy above — e.g. skipping `require_touch_id`/`confirm_order_dialog` entirely, caching a prior success, or adding a fallback beyond the OS's own password prompt — will be rejected.
 
 ---
 

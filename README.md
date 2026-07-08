@@ -41,7 +41,7 @@ Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `
 | Operating system | macOS 10.12.1 (Sierra) |
 | Hardware | Any Mac with a built-in Touch ID sensor or a [Touch ID keyboard](https://www.apple.com/shop/product/MK293LL/A/) |
 | Python package | `pyobjc-framework-LocalAuthentication` (installed automatically with `ibkr_core_mcp`) |
-| Policy | `LAPolicyDeviceOwnerAuthenticationWithBiometrics` — biometric only, **no password fallback** |
+| Policy | `LAPolicyDeviceOwnerAuthentication` — Touch ID/Face ID first, falls back to the device's system password if the biometric scan fails or is cancelled |
 
 Touch ID is available on: MacBook Pro (late 2016+), MacBook Air (2018+), Mac mini (2020+), iMac (2021+), Mac Studio, Mac Pro (2023+).
 
@@ -336,8 +336,8 @@ Copy `.env.example` to `.env` and fill in:
 
 Implemented in `human_auth.py` using the macOS `LocalAuthentication` framework via `pyobjc-framework-LocalAuthentication`.
 
-- **Policy:** `LAPolicyDeviceOwnerAuthenticationWithBiometrics` — fingerprint or Face ID only
-- **No fallback:** Password / PIN entry is explicitly excluded. If biometrics are unavailable the call raises `HumanAuthError` immediately.
+- **Policy:** `LAPolicyDeviceOwnerAuthentication` — tries Touch ID/Face ID first, then falls back to the device's system password if the biometric scan fails or is cancelled. The fallback exists because a fingerprint scan can genuinely fail to read (wet/dry skin, worn ridge detail, sensor angle) even for the real account owner — the stricter biometrics-only policy has no recovery path on a failed scan.
+- **No bypass inside the library:** `ibkr_core_mcp` itself never intercepts, caches, or skips this call — every order-write attempt calls `require_touch_id()` fresh. If both the biometric scan and the system password fail, `HumanAuthError` is raised immediately and the order is never submitted.
 - **Timeout:** 60 seconds. An unanswered prompt raises `HumanAuthError` and the order is not submitted.
 - **Prompt text:** The caller-supplied `reason` string appears in the macOS Touch ID dialog (e.g. *"Confirm order: BUY 100 AAPL"*).
 - **Thread-safe:** Uses a `threading.Event` to wait for the async `LAContext` reply callback without blocking the main run loop.
