@@ -100,3 +100,46 @@ def test_firecrawl_search_saves_snapshot_to_drive(toolkit, drive_service):
         # Cleanup policy: delete the file once its existence is proven; the
         # web_docs/searches/ folder itself is left in place.
         drive_service.files().delete(fileId=file_id).execute()
+
+
+@pytest.mark.integration
+def test_firecrawl_crawl_saves_pages_to_drive(toolkit, drive_service, live_config):
+    from ibkr_core_mcp.web_scraper import _slugify
+
+    text, fig = toolkit.execute(
+        "firecrawl_crawl",
+        {"url": "https://example.com", "max_pages": 1, "timeout_s": 60},
+    )
+    assert fig is None
+    assert "Crawl complete" in text
+
+    slug = _slugify("https://example.com")
+
+    web_docs_q = (
+        "name='web_docs' and mimeType='application/vnd.google-apps.folder'"
+        f" and '{live_config.gdrive_folder_id}' in parents and trashed=false"
+    )
+    web_docs = drive_service.files().list(q=web_docs_q, fields="files(id)").execute()["files"]
+    assert web_docs, "web_docs/ folder not found in Drive"
+    web_docs_id = web_docs[0]["id"]
+
+    slug_q = (
+        f"name='{slug}' and mimeType='application/vnd.google-apps.folder'"
+        f" and '{web_docs_id}' in parents and trashed=false"
+    )
+    slug_folders = drive_service.files().list(q=slug_q, fields="files(id)").execute()["files"]
+    assert slug_folders, f"web_docs/{slug}/ folder not found in Drive"
+    slug_folder_id = slug_folders[0]["id"]
+
+    contents_q = f"'{slug_folder_id}' in parents and trashed=false"
+    contents = drive_service.files().list(q=contents_q, fields="files(id,name)").execute()["files"]
+    names = {f["name"] for f in contents}
+
+    try:
+        assert "index.json" in names, f"index.json missing from web_docs/{slug}/: {names}"
+        assert any(n.endswith(".md") for n in names), f"No page .md file in web_docs/{slug}/: {names}"
+    finally:
+        # Cleanup policy: delete the files we just verified; leave the
+        # web_docs/<slug>/ folder itself in place.
+        for f in contents:
+            drive_service.files().delete(fileId=f["id"]).execute()
