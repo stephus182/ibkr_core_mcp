@@ -56,27 +56,34 @@ Never commit `.env`, `token.json`, or `credentials.json`.
 
 ```
 ibkr_core_mcp/
-├── __init__.py        # Public API — import everything from here
-├── auth.py            # Auth strategies: BrowserCookieAuth, TokenAuth, NoAuth
-├── client.py          # All 79 IBKR Client Portal API endpoints
-├── models.py          # Pydantic v2 schemas for all response types
-├── exceptions.py      # Custom exception hierarchy (IBKRCoreError → subclasses)
-├── cache.py           # Google Drive parquet cache (market data, shared cross-machine)
-├── store.py           # SQLite store (trades, signals, backtest results, positions)
-├── backtest.py        # RestrictedPython sandbox executor
-├── indicators.py      # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
-├── analytics.py       # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
-├── claude_tools.py    # Claude tool definitions + handlers (42 tools, portable)
-├── pinescript.py      # PineScript v5 generation from strategies and indicators
-├── rate_limiter.py    # Token-bucket rate limiter + exponential backoff on 429
-├── config.py          # Config dataclass loaded from environment variables
+├── __init__.py           # Public API — import everything from here
+├── auth.py               # Auth strategies: BrowserCookieAuth, TokenAuth, NoAuth
+├── client.py             # All 75 IBKR Client Portal API endpoints
+├── models.py             # Pydantic v2 schemas for all response types
+├── exceptions.py         # Custom exception hierarchy (IBKRCoreError → subclasses)
+├── cache.py              # Google Drive parquet cache (market data, shared cross-machine)
+├── store.py              # SQLite store (trades, signals, backtest results, positions)
+├── flex_query.py         # FlexQueryClient — Flex Web Service historical trade sync (T+1, unlimited history)
+├── backtest.py           # RestrictedPython sandbox executor
+├── indicators.py         # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
+├── analytics.py          # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
+├── claude_tools.py       # Claude tool definitions + handlers (42 tools, portable)
+├── mcp_server.py         # MCP server (stdio + SSE transports) — 44 tools, 4 resources
+├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
+├── order_confirm.py      # Gate 2: visual order confirmation dialog (tkinter/AppKit)
+├── streaming.py          # IBKRWebSocket — live quotes, execution/P&L push; AlertManager
+├── web_scraper.py        # FirecrawlClient + WebDocsStore — search/crawl, Drive snapshots
+├── scrape_fallback.py    # Crawl4AI fallback + SSRF guard for web scraping
+├── pinescript.py         # PineScript v5 generation from strategies and indicators
+├── rate_limiter.py       # Token-bucket rate limiter + exponential backoff on 429
+├── config.py             # Config dataclass loaded from environment variables
 └── gateway/
-    ├── manager.py     # GatewayManager — Docker lifecycle, auth polling
-    ├── Dockerfile     # eclipse-temurin:21 + IBKR Client Portal zip
-    ├── conf.yaml      # Gateway config (port, SSL, CORS, IP allowlist)
-    ├── run_gateway.sh # Entrypoint: start Java process + tickler
-    ├── tickler.sh     # Periodic POST /tickle to keep session alive
-    └── healthcheck.sh # curl-based readiness probe used by run_gateway.sh
+    ├── manager.py        # GatewayManager — Docker lifecycle, auth polling
+    ├── Dockerfile        # eclipse-temurin:21 + IBKR Client Portal zip
+    ├── conf.yaml         # Gateway config (port, SSL, CORS, IP allowlist)
+    ├── run_gateway.sh    # Entrypoint: start Java process + tickler
+    ├── tickler.sh        # Periodic POST /tickle to keep session alive
+    └── healthcheck.sh    # curl-based readiness probe used by run_gateway.sh
 ```
 
 ---
