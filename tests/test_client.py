@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from unittest.mock import MagicMock, call, patch
 from unittest.mock import patch as _patch
 
@@ -98,7 +99,7 @@ def test_ensure_accounts_initialized_calls_once(client):
 
 def test_get_live_orders_initializes_accounts_first(client):
     client._accounts_initialized = False
-    with patch.object(client._session, "get") as mock_get:
+    with patch.object(client._session, "get") as mock_get, patch("time.sleep"):
         mock_get.return_value = _make_ok_response({"orders": []})
         client.get_live_orders()
     first_call_url = mock_get.call_args_list[0][0][0]
@@ -660,11 +661,13 @@ def test_get_currency_pairs_returns_empty_on_unexpected_type(client):
 
 # ── get_live_orders filtering ─────────────────────────────────────────────────
 
+@contextmanager
 def _mock_orders_response(client, orders):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"orders": orders}
-    return patch.object(client._session, "get", return_value=mock_resp)
+    with patch.object(client._session, "get", return_value=mock_resp), patch("time.sleep"):
+        yield
 
 
 def test_get_live_orders_excludes_filled(client):
