@@ -256,6 +256,52 @@ def test_execute_generate_pinescript_tool(toolkit):
     assert "//@version=5" in text
 
 
+def test_generate_pinescript_from_backtest_uses_stored_result(toolkit):
+    """source='backtest' must call the tested strategy_from_backtest generator on
+    the most recent stored run — not leave the LLM to hand-write strategy() syntax
+    (audit register item 13, live hallucination surface observed 2026-07-06)."""
+    toolkit._store.get_backtests.return_value = [{
+        "id": 7, "run_at": "2026-07-06T15:00:00+00:00", "symbol": "AAPL",
+        "strategy_name": "RSI Mean Reversion", "total_return": 0.12,
+        "sharpe": 1.4, "sortino": 1.9, "max_drawdown": -0.08,
+        "num_trades": 23, "win_rate": 0.61, "metadata": None,
+    }]
+    toolkit._cache.check.return_value = False
+    text, _ = toolkit.execute("generate_pinescript", {
+        "symbol": "AAPL", "source": "backtest",
+    })
+    assert "strategy(" in text
+    assert "RSI Mean Reversion" in text
+    assert "1.40" in text  # Sharpe from the stored run, not a made-up figure
+    toolkit._store.get_backtests.assert_called_once_with(symbol="AAPL", strategy=None)
+
+
+def test_generate_pinescript_from_backtest_filters_by_strategy_name(toolkit):
+    toolkit._store.get_backtests.return_value = [{
+        "id": 9, "run_at": "2026-07-06T16:00:00+00:00", "symbol": "AAPL",
+        "strategy_name": "MACD Cross", "total_return": 0.05, "sharpe": 0.9,
+        "sortino": 1.1, "max_drawdown": -0.11, "num_trades": 40,
+        "win_rate": 0.5, "metadata": None,
+    }]
+    toolkit._cache.check.return_value = False
+    text, _ = toolkit.execute("generate_pinescript", {
+        "symbol": "AAPL", "source": "backtest", "strategy_name": "MACD Cross",
+    })
+    assert "MACD Cross" in text
+    toolkit._store.get_backtests.assert_called_once_with(
+        symbol="AAPL", strategy="MACD Cross"
+    )
+
+
+def test_generate_pinescript_from_backtest_no_stored_run_errors(toolkit):
+    toolkit._store.get_backtests.return_value = []
+    text, _ = toolkit.execute("generate_pinescript", {
+        "symbol": "TSLA", "source": "backtest",
+    })
+    assert "run_backtest" in text
+    assert "strategy(" not in text
+
+
 def test_execute_get_analytics_tool(toolkit):
     import numpy as np
     import pandas as pd
@@ -926,6 +972,92 @@ def test_preview_order_mkt_no_price(toolkit):
     assert "price" not in call_order
 
 
+def test_preview_order_stp_maps_stop_price_to_price(toolkit):
+    """STP orders carry the trigger in `price` — CP API place-order spec:
+    "For STP|TRAIL this is the stop price."
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order"""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = {"commission": "1.00"}
+    text, _ = toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "SELL", "quantity": 10,
+        "order_type": "STP", "stop_price": 170.0,
+    })
+    call_order = toolkit._client.get_order_preview.call_args[0][1]
+    assert call_order["price"] == 170.0
+    assert "auxPrice" not in call_order
+    assert "Order Preview" in text
+
+
+def test_preview_order_stop_limit_maps_limit_to_price_and_stop_to_aux(toolkit):
+    """STOP_LIMIT requires both: price = limit price, auxPrice = stop price.
+    Spec: "You must specify both price and auxPrice for STOP_LIMIT|TRAILLMT orders."
+    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order"""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = {"commission": "1.00"}
+    toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "SELL", "quantity": 10,
+        "order_type": "STOP_LIMIT", "limit_price": 168.0, "stop_price": 170.0,
+    })
+    call_order = toolkit._client.get_order_preview.call_args[0][1]
+    assert call_order["price"] == 168.0
+    assert call_order["auxPrice"] == 170.0
+
+
+def test_preview_order_stp_without_stop_price_errors_before_network(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    text, _ = toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "SELL", "quantity": 10, "order_type": "STP",
+    })
+    assert "stop_price" in text
+    toolkit._client.get_order_preview.assert_not_called()
+
+
+def test_preview_order_stop_limit_missing_either_price_errors(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    text, _ = toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "SELL", "quantity": 10,
+        "order_type": "STOP_LIMIT", "limit_price": 168.0,
+    })
+    assert "stop_price" in text
+    text, _ = toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "SELL", "quantity": 10,
+        "order_type": "STOP_LIMIT", "stop_price": 170.0,
+    })
+    assert "limit_price" in text
+    toolkit._client.get_order_preview.assert_not_called()
+
+
+def test_preview_order_lmt_without_limit_price_errors_before_network(toolkit):
+    """price is 'Required for LMT' per the CP API spec — previously sent priceless
+    and left IBKR to reject it with an unactionable 500."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    text, _ = toolkit.execute("preview_order", {
+        "symbol": "AAPL", "action": "BUY", "quantity": 10, "order_type": "LMT",
+    })
+    assert "limit_price" in text
+    toolkit._client.get_order_preview.assert_not_called()
+
+
+def test_preview_order_rejects_types_the_tool_cannot_complete(toolkit):
+    """TRAIL/TRAILLMT need trailingAmt/trailingType (not exposed by this tool);
+    MOC/LOC are absent from the documented CP API order types. Admitting them
+    reproduced the audit's 'whitelist admits what it can't complete' defect."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    for bad_type in ("TRAIL", "TRAILLMT", "MOC", "LOC"):
+        text, _ = toolkit.execute("preview_order", {
+            "symbol": "AAPL", "action": "BUY", "quantity": 10,
+            "order_type": bad_type, "stop_price": 170.0, "limit_price": 168.0,
+        })
+        assert "Invalid order_type" in text, bad_type
+    toolkit._client.get_order_preview.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _format_coverage — pure formatting helper for trade history summaries
 # ---------------------------------------------------------------------------
@@ -1494,25 +1626,26 @@ def test_firecrawl_crawl_applies_fallback_per_page(mock_c4a_cls, mock_wds_cls, m
 
 
 def test_diagnose_orders_happy_path(toolkit):
-    """Returns formatted order lines when orders list is non-empty."""
-    toolkit._client._get.side_effect = [
-        None,  # first call: instantiate (return value not used)
-        {"orders": [
-            {"orderId": 99, "ticker": "AAPL", "side": "BUY",
-             "totalSize": 10, "price": 182.5, "status": "Submitted",
-             "clientId": "42", "orderRef": "ref1"}
-        ]},
-    ]
+    """Returns formatted order lines when orders list is non-empty.
+
+    Uses the public client.get_orders_raw() — the handler must not reach into
+    client._get (audit register item 11)."""
+    toolkit._client.get_orders_raw.return_value = {"orders": [
+        {"orderId": 99, "ticker": "AAPL", "side": "BUY",
+         "totalSize": 10, "price": 182.5, "status": "Submitted",
+         "clientId": "42", "orderRef": "ref1"}
+    ]}
     text, fig = toolkit.execute("diagnose_orders", {})
     assert fig is None
     assert "orderId=99" in text
     assert "AAPL" in text
     assert "/iserver/account/orders" in text
+    toolkit._client._get.assert_not_called()
 
 
 def test_diagnose_orders_empty_list(toolkit):
     """Returns 'genuinely empty' message when orders list is []."""
-    toolkit._client._get.side_effect = [None, {"orders": []}]
+    toolkit._client.get_orders_raw.return_value = {"orders": []}
     text, fig = toolkit.execute("diagnose_orders", {})
     assert fig is None
     assert "genuinely empty" in text.lower()
@@ -1520,7 +1653,7 @@ def test_diagnose_orders_empty_list(toolkit):
 
 def test_diagnose_orders_unexpected_shape(toolkit):
     """Returns shape-error message when IBKR returns a non-list response."""
-    toolkit._client._get.side_effect = [None, "bad_string"]
+    toolkit._client.get_orders_raw.return_value = "bad_string"
     text, fig = toolkit.execute("diagnose_orders", {})
     assert fig is None
     assert "Unexpected response shape" in text
@@ -1528,14 +1661,11 @@ def test_diagnose_orders_unexpected_shape(toolkit):
 
 def test_diagnose_orders_shows_filtered_status(toolkit):
     """Filled orders are labelled [FILTERED by get_live_orders]."""
-    toolkit._client._get.side_effect = [
-        None,
-        {"orders": [
-            {"orderId": 1, "ticker": "TSLA", "side": "SELL",
-             "totalSize": 5, "price": 200.0, "status": "Filled",
-             "clientId": "1"}
-        ]},
-    ]
+    toolkit._client.get_orders_raw.return_value = {"orders": [
+        {"orderId": 1, "ticker": "TSLA", "side": "SELL",
+         "totalSize": 5, "price": 200.0, "status": "Filled",
+         "clientId": "1"}
+    ]}
     text, fig = toolkit.execute("diagnose_orders", {})
     assert "FILTERED" in text
 
@@ -1655,23 +1785,30 @@ def test_get_contract_info_error(toolkit):
 
 
 def test_get_option_chain_happy_path(toolkit):
-    """Returns JSON option chain data."""
+    """Returns JSON chain from the reimplemented search→strikes client flow."""
     toolkit._client.get_option_chain.return_value = {
-        "expirations": ["2026-07-18", "2026-08-15"],
-        "strikes": [180, 185, 190],
+        "symbol": "AAPL", "conid": 265598,
+        "months": ["JAN26", "FEB26"], "month": "JAN26",
+        "call": [185.0, 190.0], "put": [180.0, 185.0],
     }
     text, fig = toolkit.execute("get_option_chain", {"symbol": "AAPL"})
     assert fig is None
-    assert "expirations" in text
-    assert "180" in text
-    toolkit._client.get_option_chain.assert_called_once_with("AAPL", exchange="SMART")
+    assert "months" in text
+    assert "185.0" in text
+    toolkit._client.get_option_chain.assert_called_once_with(
+        "AAPL", month=None, exchange="SMART"
+    )
 
 
-def test_get_option_chain_custom_exchange(toolkit):
-    """Passes custom exchange to the client."""
-    toolkit._client.get_option_chain.return_value = {}
-    toolkit.execute("get_option_chain", {"symbol": "SPX", "exchange": "CBOE"})
-    toolkit._client.get_option_chain.assert_called_once_with("SPX", exchange="CBOE")
+def test_get_option_chain_passes_month_and_exchange(toolkit):
+    """month (MMMYY) and exchange are forwarded to the client."""
+    toolkit._client.get_option_chain.return_value = {"call": [], "put": []}
+    toolkit.execute("get_option_chain", {
+        "symbol": "SPX", "month": "FEB26", "exchange": "CBOE",
+    })
+    toolkit._client.get_option_chain.assert_called_once_with(
+        "SPX", month="FEB26", exchange="CBOE"
+    )
 
 
 def test_get_option_chain_error(toolkit):
@@ -2104,14 +2241,16 @@ def test_check_flex_coverage_error(toolkit):
 
 
 def test_get_pa_periods_empty_falls_back_to_raw(toolkit):
-    """When get_pa_periods returns [], raw _post response is returned."""
+    """When get_pa_periods returns [], the raw response is fetched via the public
+    get_pa_periods_raw() — not client._post (audit register item 11)."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.get_pa_periods.return_value = []
-    toolkit._client._post.return_value = {"periods": ["1D", "7D", "1M"]}
+    toolkit._client.get_pa_periods_raw.return_value = {"periods": ["1D", "7D", "1M"]}
     text, fig = toolkit.execute("get_pa_periods", {})
     assert fig is None
-    # Raw response must appear in output
-    assert "1D" in text or "periods" in text
+    assert "1D" in text
+    toolkit._client.get_pa_periods_raw.assert_called_once_with(["U123"])
+    toolkit._client._post.assert_not_called()
 
 
 def test_get_pa_periods_returns_valid_periods(toolkit):

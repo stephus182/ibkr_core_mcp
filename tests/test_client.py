@@ -819,3 +819,92 @@ def test_get_market_history_normalizes_period_and_bar_case(client):
     params = mock_get.call_args[1].get("params") or mock_get.call_args[0][1]
     assert params["period"] == "6m"
     assert params["bar"] == "1d"
+
+
+# ---------------------------------------------------------------------------
+# get_option_strikes / get_option_chain — documented secdef flow
+# Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
+# ---------------------------------------------------------------------------
+
+def test_get_option_strikes_returns_call_and_put_arrays(client):
+    """/iserver/secdef/strikes responds {"call": [...], "put": [...]} — there is
+    no "strike" key in the documented response (the old code read one)."""
+    payload = {"call": [185.0, 190.0], "put": [180.0, 185.0]}
+    with patch.object(client._session, "get", return_value=_make_ok_response(payload)) as mock_get:
+        result = client.get_option_strikes(265598, "OPT", "JAN26")
+    assert result == {"call": [185.0, 190.0], "put": [180.0, 185.0]}
+    params = mock_get.call_args[1].get("params") or {}
+    assert params["sectype"] == "OPT"
+    assert params["month"] == "JAN26"
+    assert params["exchange"] == "SMART"
+
+
+def test_get_option_chain_uses_documented_search_then_strikes_flow(client):
+    """Reimplemented per the documented flow: secdef/search (primes the session,
+    yields the OPT section's months) then secdef/strikes for one month."""
+    search_payload = [{
+        "conid": "265598", "symbol": "AAPL",
+        "sections": [
+            {"secType": "STK"},
+            {"secType": "OPT", "months": "JAN26;FEB26;MAR26"},
+        ],
+    }]
+    strikes_payload = {"call": [185.0], "put": [180.0]}
+    with patch.object(client, "_get", side_effect=[search_payload, strikes_payload]) as mock_get:
+        chain = client.get_option_chain("AAPL")
+    assert chain["conid"] == 265598
+    assert chain["months"] == ["JAN26", "FEB26", "MAR26"]
+    assert chain["month"] == "JAN26"  # defaults to nearest expiry
+    assert chain["call"] == [185.0]
+    assert chain["put"] == [180.0]
+    first_call = mock_get.call_args_list[0]
+    assert "/iserver/secdef/search" in first_call[0][0]
+    second_call = mock_get.call_args_list[1]
+    assert "/iserver/secdef/strikes" in second_call[0][0]
+
+
+def test_get_option_chain_honors_requested_month(client):
+    search_payload = [{
+        "conid": "265598", "symbol": "AAPL",
+        "sections": [{"secType": "OPT", "months": "JAN26;FEB26"}],
+    }]
+    strikes_payload = {"call": [], "put": []}
+    with patch.object(client, "_get", side_effect=[search_payload, strikes_payload]) as mock_get:
+        chain = client.get_option_chain("AAPL", month="feb26")
+    assert chain["month"] == "FEB26"
+    params = mock_get.call_args_list[1][0][1]
+    assert params["month"] == "FEB26"
+
+
+def test_get_option_chain_raises_when_no_opt_section(client):
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+    search_payload = [{"conid": "1", "symbol": "XONE", "sections": [{"secType": "STK"}]}]
+    with patch.object(client, "_get", side_effect=[search_payload]):
+        with pytest.raises(IBKRAPIError, match="[Nn]o option"):
+            client.get_option_chain("XONE")
+
+
+# ---------------------------------------------------------------------------
+# get_orders_raw / get_pa_periods_raw — public wrappers replacing the toolkit's
+# private-API reach-ins (audit register item 11)
+# ---------------------------------------------------------------------------
+
+def test_get_orders_raw_uses_two_call_pattern_and_returns_unfiltered(client):
+    """Raw diagnostic dump: same documented two-call warmup as get_live_orders,
+    but no status filtering — terminal orders must survive."""
+    payload = {"orders": [{"orderId": 1, "status": "Filled"}]}
+    with patch.object(client, "_get", side_effect=[None, payload]) as mock_get, \
+         patch("ibkr_core_mcp.client.time.sleep"):
+        raw = client.get_orders_raw()
+    assert raw == payload  # unfiltered — Filled order retained
+    assert "force=true" in mock_get.call_args_list[0][0][0]
+    assert mock_get.call_args_list[1][0][0] == "/iserver/account/orders"
+
+
+def test_get_pa_periods_raw_posts_account_ids(client):
+    payload = {"U1": {"periods": ["1D", "7D"]}}
+    with patch.object(client, "_post", return_value=payload) as mock_post:
+        raw = client.get_pa_periods_raw(["U1"])
+    assert raw == payload
+    assert mock_post.call_args[0][0] == "/pa/allperiods"
+    assert mock_post.call_args[0][1] == {"acctIds": ["U1"]}

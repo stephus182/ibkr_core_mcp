@@ -6,9 +6,12 @@ from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from ibkr_core_mcp import analytics as _analytics
 from ibkr_core_mcp import indicators as _indicators
 from ibkr_core_mcp import pinescript as _pinescript
+from ibkr_core_mcp.backtest import BacktestResult
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
@@ -322,16 +325,19 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_option_chain",
         "description": (
-            "Get the options chain for a symbol — expirations, strikes, and contract IDs. "
-            "KNOWN ISSUE: the underlying endpoint (/trsrv/secdef/chains) is not part of IBKR's "
-            "documented Client Portal API (verified against the official reference, scraped 2026-07-02) "
-            "and is expected to fail — this tool should be treated as non-functional pending "
-            "reimplementation via the documented secdef/search → secdef/strikes flow."
+            "Get the option chain for an underlying symbol: all available expiry months "
+            "plus call and put strike prices for one month (default: nearest expiry). "
+            "Uses IBKR's documented secdef/search → secdef/strikes flow. Returns strikes "
+            "only — not per-contract conids or greeks."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string"},
+                "symbol": {"type": "string", "description": "Underlying ticker, e.g. AAPL"},
+                "month": {
+                    "type": "string",
+                    "description": "Expiry month as 3-letter month + 2-digit year, e.g. 'JAN26' (default: nearest expiry; the response's 'months' field lists all)",
+                },
                 "exchange": {"type": "string", "default": "SMART"},
             },
             "required": ["symbol"],
@@ -422,21 +428,36 @@ TOOL_DEFINITIONS = [
     {
         "name": "generate_pinescript",
         "description": (
-            "Generate a PineScript v5 indicator script for TradingView from a list of indicators. "
-            "Output can be pasted directly into the TradingView Pine Editor."
+            "Generate a PineScript v5 script for TradingView. source='indicators' (default) "
+            "emits an indicator study from a list of indicators; source='backtest' emits a "
+            "strategy() script from the most recent stored run_backtest result for the symbol "
+            "(real metrics in the header — always use this after run_backtest instead of "
+            "writing PineScript by hand). Output pastes directly into the Pine Editor."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker symbol"},
+                "source": {
+                    "type": "string",
+                    "description": "'indicators' (indicator study) or 'backtest' (strategy script from the latest stored run_backtest result)",
+                    "default": "indicators",
+                },
                 "indicators": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of indicators: 'rsi', 'macd', 'bollinger_bands', 'ema', 'sma', 'atr'",
+                    "description": "For source='indicators': list of indicators: 'rsi', 'macd', 'bollinger_bands', 'ema', 'sma', 'atr'",
                 },
-                "strategy_name": {"type": "string", "description": "Optional name for the script", "default": ""},
+                "strategy_name": {
+                    "type": "string",
+                    "description": "Script name; for source='backtest' also filters which stored run to use (default: most recent for the symbol)",
+                    "default": "",
+                },
+                "timeframe": {"type": "string", "description": "For source='backtest': cache timeframe of the backtested bars (for chart-timeframe inference; optional)"},
+                "period": {"type": "string", "description": "For source='backtest': cache period key (optional)"},
+                "end": {"type": "string", "description": "For source='backtest': cache end-date key (optional)"},
             },
-            "required": ["symbol", "indicators"],
+            "required": ["symbol"],
         },
     },
     {
@@ -477,12 +498,21 @@ TOOL_DEFINITIONS = [
                 "quantity": {"type": "integer", "description": "Number of shares"},
                 "order_type": {
                     "type": "string",
-                    "description": "'MKT' or 'LMT'. Stop orders (STP) aren't supported — the tool has no stop-price field, so IBKR's whatif can't evaluate them.",
+                    "description": "'MKT', 'LMT', 'STP' (stop-market), 'STOP_LIMIT', or 'MIDPRICE'. Trailing types (TRAIL/TRAILLMT) are not supported by this tool.",
                     "default": "MKT",
                 },
                 "limit_price": {
                     "type": "number",
-                    "description": "Limit price (required if order_type='LMT')",
+                    "description": "Limit price (required for order_type='LMT' and 'STOP_LIMIT'; optional price cap for 'MIDPRICE')",
+                },
+                "stop_price": {
+                    "type": "number",
+                    "description": "Stop trigger price (required for order_type='STP' and 'STOP_LIMIT')",
+                },
+                "sec_type": {
+                    "type": "string",
+                    "description": "Security type of the symbol: STK (default), IND, BOND, FUT (resolves front month), or CASH (FX pair like 'EUR.USD')",
+                    "default": "STK",
                 },
             },
             "required": ["symbol", "action", "quantity"],
@@ -512,7 +542,7 @@ TOOL_DEFINITIONS = [
                 "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, AAPL, SPY"},
                 "sec_type": {
                     "type": "string",
-                    "description": "Security type: STK, IND, or BOND (default: STK) — the only values /iserver/secdef/search supports. For futures use get_futures; for FX or options use get_market_snapshot (use get_option_chain only once it's reimplemented).",
+                    "description": "Security type: STK, IND, or BOND (default: STK) — the only values /iserver/secdef/search supports. For futures use get_futures; for FX use get_market_snapshot; for option strikes use get_option_chain.",
                 },
             },
             "required": ["symbol"],
@@ -1559,10 +1589,7 @@ class ClaudeToolkit:
 
     def _diagnose_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return the raw unfiltered orders response to diagnose empty results."""
-        import time
-        self._client._get("/iserver/account/orders?force=true")  # instantiate
-        time.sleep(1)
-        raw = self._client._get("/iserver/account/orders")  # retrieve
+        raw = self._client.get_orders_raw()
         if isinstance(raw, dict):
             orders = raw.get("orders", raw)
         else:
@@ -1681,7 +1708,7 @@ class ClaudeToolkit:
         if periods:
             return "Valid PA periods:\n" + "\n".join(f"  - {p}" for p in periods), None
         # Extraction failed — fetch raw response to help diagnose the unknown shape.
-        raw = self._client._post("/pa/allperiods", {"acctIds": account_ids})
+        raw = self._client.get_pa_periods_raw(account_ids)
         return (
             f"get_pa_periods returned no periods. "
             f"Raw IBKR response (use this to identify the correct response key):\n"
@@ -1778,18 +1805,16 @@ class ClaudeToolkit:
         return json.dumps(info, indent=2), None
 
     def _get_option_chain(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """KNOWN NON-FUNCTIONAL as of the 2026-07 audit — kept for future repair.
+        """Return the option chain via the documented secdef/search → strikes flow.
 
-        client.get_option_chain() targets /trsrv/secdef/chains, which is absent
-        from IBKR's documented Client Portal API reference (verified 2026-07-02).
-        Calling this returns whatever error the client raises, not a real chain.
-        The tool schema's own description carries this warning for the LLM; this
-        docstring exists so a maintainer reading only the handler sees it too.
-        Register follow-up: reimplement via secdef/search -> strikes.
+        Reimplemented 2026-07-07 (audit register item 6). client.get_option_chain()
+        now performs the two-step documented flow and returns all expiry months plus
+        call/put strikes for the requested month (default: nearest expiry).
         """
         symbol = inputs["symbol"].upper()
+        month = inputs.get("month")
         exchange = inputs.get("exchange", "SMART")
-        chain = self._client.get_option_chain(symbol, exchange=exchange)
+        chain = self._client.get_option_chain(symbol, month=month, exchange=exchange)
         return json.dumps(chain, indent=2), None
 
     def _run_scanner(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -1893,28 +1918,73 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _generate_pinescript(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Generate a PineScript v5 indicator script for the requested symbol and indicators."""
+        """Generate a PineScript v5 script — indicator study or backtest-derived strategy.
+
+        source='indicators' (default) emits an indicator study; source='backtest'
+        rebuilds the most recent stored run_backtest result (optionally filtered by
+        strategy_name) and emits a strategy() script via pinescript.strategy_from_backtest,
+        with the real stored metrics in the header. strategy_from_signals is not wired —
+        the signal series is never persisted (Python-API-only, see pinescript.py).
+        """
         symbol = inputs["symbol"].upper()
+        source = inputs.get("source", "indicators")
+        strategy_name = inputs.get("strategy_name", "")
+
+        if source == "backtest":
+            runs = self._store.get_backtests(symbol=symbol, strategy=strategy_name or None)
+            if not runs:
+                which = f" named {strategy_name!r}" if strategy_name else ""
+                return (
+                    f"No stored backtest{which} for {symbol}. "
+                    "Run run_backtest first — its result is persisted and this tool "
+                    "generates the strategy script from the most recent run."
+                ), None
+            row = runs[0]
+            result = BacktestResult(
+                symbol=row.get("symbol") or symbol,
+                strategy_name=row.get("strategy_name") or f"{symbol} Strategy",
+                total_return=row.get("total_return") or 0.0,
+                sharpe=row.get("sharpe") or 0.0,
+                sortino=row.get("sortino") or 0.0,
+                max_drawdown=row.get("max_drawdown") or 0.0,
+                num_trades=row.get("num_trades") or 0,
+                win_rate=row.get("win_rate") or 0.0,
+            )
+            # df is only used for timeframe inference; fall back to an empty frame
+            # (infers '1D') when the bars aren't in cache under the provided keys.
+            df = pd.DataFrame()
+            timeframe = inputs.get("timeframe")
+            period = inputs.get("period")
+            end = inputs.get("end")
+            if timeframe and period and end and self._cache.check(symbol, timeframe, period, end):
+                df = self._cache.load(symbol, timeframe, period, end)
+            return _pinescript.strategy_from_backtest(result, df), None
+
         indicators_list = inputs.get("indicators", ["rsi", "macd"])
-        strategy_name = inputs.get("strategy_name", f"{symbol} Indicators")
-        script = _pinescript.indicator_script(strategy_name, indicators_list, {})
+        script = _pinescript.indicator_script(
+            strategy_name or f"{symbol} Indicators", indicators_list, {}
+        )
         return script, None
 
     def _preview_order(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return a whatif order preview (commission, margin impact) without submitting.
 
-        sec_type is passed through to contract resolution — defaults to STK but must
-        be set to 'FUT', 'OPT', etc. for non-equity instruments.
+        sec_type routes contract resolution (_resolve_snapshot_conid): STK (default),
+        IND, BOND, FUT (front month), or CASH ('BASE.QUOTE'). OPT is not supported.
+        Price mapping per order type follows the CP API place-order spec.
         """
-        # Order type names match IBKR CP API place-order field spec.
+        # Order type names match IBKR CP API place-order field spec. Only types this
+        # tool can fully parameterize are admitted: TRAIL/TRAILLMT need trailingAmt/
+        # trailingType (not exposed here); MOC/LOC are not in the documented type list.
         # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
-        _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE", "TRAIL", "TRAILLMT", "MOC", "LOC"})
+        _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
         quantity = int(inputs["quantity"])
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
+        stop_price = inputs.get("stop_price")
         sec_type = inputs.get("sec_type", "STK").upper()
 
         if action not in _VALID_ACTIONS:
@@ -1923,6 +1993,15 @@ class ClaudeToolkit:
             return f"Invalid order_type {order_type!r}. Must be one of: {', '.join(sorted(_VALID_ORDER_TYPES))}.", None
         if quantity <= 0:
             return f"Invalid quantity {quantity}. Must be a positive integer.", None
+        if order_type == "LMT" and limit_price is None:
+            return "order_type='LMT' requires limit_price.", None
+        if order_type == "STP" and stop_price is None:
+            return "order_type='STP' requires stop_price.", None
+        if order_type == "STOP_LIMIT":
+            if stop_price is None:
+                return "order_type='STOP_LIMIT' requires stop_price (and limit_price).", None
+            if limit_price is None:
+                return "order_type='STOP_LIMIT' requires limit_price (and stop_price).", None
 
         conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
         if err:
@@ -1944,8 +2023,16 @@ class ClaudeToolkit:
             # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
             order["manualIndicator"] = True
             order["extOperator"] = "ClaudIA"
-        if order_type == "LMT" and limit_price is not None:
+        # Price-field mapping per the CP API place-order spec: `price` is the limit
+        # for LMT/STOP_LIMIT, the stop for STP, the option price cap for MIDPRICE;
+        # `auxPrice` is the stop for STOP_LIMIT.
+        if order_type in ("LMT", "MIDPRICE") and limit_price is not None:
             order["price"] = float(limit_price)  # IBKR requires float
+        elif order_type == "STP" and stop_price is not None:
+            order["price"] = float(stop_price)
+        elif order_type == "STOP_LIMIT" and limit_price is not None and stop_price is not None:
+            order["price"] = float(limit_price)
+            order["auxPrice"] = float(stop_price)
 
         result = self._client.get_order_preview(account_id, order)
         lines = [

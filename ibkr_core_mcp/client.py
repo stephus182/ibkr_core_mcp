@@ -10,7 +10,7 @@ import urllib3
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError
+from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.order_confirm import (
     confirm_cancel_dialog,
@@ -462,35 +462,67 @@ class IBKRClient:
         """
         return self._get("/iserver/secdef/info", {"conid": conid})
 
-    def get_option_strikes(self, conid: int, sec_type: str, month: str, exchange: str = "SMART") -> list[float]:
-        """Available strike prices for an options chain. month format: "JAN2026".
+    def get_option_strikes(self, conid: int, sec_type: str, month: str, exchange: str = "SMART") -> dict[str, list[float]]:
+        """Available strikes for one expiry month, split into call/put arrays.
+
+        month format per the official spec: {3-char month}{2-char year}, e.g. "JAN26".
+        Returns {"call": [...], "put": [...]} — the documented response shape (there
+        is no "strike" key; earlier code read one and always got []). Always returns
+        empty arrays unless /iserver/secdef/search was called for the same underlying
+        beforehand (without the `name` field).
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
         Endpoint: GET /iserver/secdef/strikes
         """
         data = self._get("/iserver/secdef/strikes", {"conid": conid, "sectype": sec_type, "month": month, "exchange": exchange})
-        return data.get("strike", [])
+        return {"call": data.get("call", []), "put": data.get("put", [])}
 
-    def get_option_chain(self, symbol: str, exchange: str = "SMART", currency: str = "USD") -> dict[str, Any]:
-        """Full options chain — all expirations, strikes, and conids.
+    def get_option_chain(self, symbol: str, month: str | None = None, exchange: str = "SMART") -> dict[str, Any]:
+        """Option chain for an underlying via the documented two-step flow.
 
-        WARNING: /trsrv/secdef/chains is NOT documented in the official IBKR Client Portal
-        API or Web API reference (verified 2026-06-30 against full page scrape of both).
-        This method currently calls a nonexistent endpoint and will raise IBKRAPIError (404)
-        on every call. It is live-exposed in ClaudeToolkit.
+        1. GET /iserver/secdef/search?symbol=<sym> — required first call (primes the
+           session; strikes returns empty arrays otherwise) and source of the OPT
+           section's expiry months ("JAN26;FEB26;...").
+        2. GET /iserver/secdef/strikes for the requested month (format "JAN26"),
+           defaulting to the nearest available expiry.
 
-        The officially documented option chain flow is multi-step:
-          1. GET /iserver/secdef/search?symbol=<sym>&secType=STK → get underlying conid
-             (must be called before step 2 — secdef/strikes returns [] otherwise)
-          2. GET /iserver/secdef/strikes?conid=<conid>&sectype=OPT&month=<MMM YYYY>&exchange=<ex>
-             → strikes for one expiry month. Repeat per month.
-        Available expiry months are returned by secdef/search in the derivative info.
+        Returns {"symbol", "conid", "months": [all expiries], "month": <queried>,
+        "call": [strikes], "put": [strikes]}. Raises IBKRAPIError when the underlying
+        has no OPT section or no expiry months.
 
-        This method needs to be reimplemented using the above documented flow.
+        Reimplemented 2026-07-07 (audit register item 6) — replaces the previous call
+        to /trsrv/secdef/chains, which is absent from the documented CP API and 404'd
+        on every call.
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search-symbol-contract
-        Endpoint: GET /trsrv/secdef/chains (DOES NOT EXIST — see Warning above)
+        Endpoints: GET /iserver/secdef/search + GET /iserver/secdef/strikes
         """
-        return self._get("/trsrv/secdef/chains", {"symbol": symbol, "exchange": exchange, "currency": currency})
+        results = self._get("/iserver/secdef/search", {"symbol": symbol})
+        conid: int | None = None
+        months: list[str] = []
+        for entry in results or []:
+            sections = entry.get("sections") or []
+            opt = next((s for s in sections if s.get("secType") == "OPT"), None)
+            if opt is not None and entry.get("conid"):
+                conid = int(entry["conid"])
+                months = [m for m in (opt.get("months") or "").split(";") if m]
+                break
+        if conid is None:
+            raise IBKRAPIError(f"No options available for {symbol!r} — secdef/search returned no OPT section.")
+        if not months:
+            raise IBKRAPIError(f"No option expiry months listed for {symbol!r} (conid {conid}).")
+        chosen = month.upper() if month else months[0]
+        strikes = self._get(
+            "/iserver/secdef/strikes",
+            {"conid": conid, "sectype": "OPT", "month": chosen, "exchange": exchange},
+        )
+        return {
+            "symbol": symbol.upper(),
+            "conid": conid,
+            "months": months,
+            "month": chosen,
+            "call": strikes.get("call", []),
+            "put": strikes.get("put", []),
+        }
 
     def get_bond_filters(self, symbol: str, issue_id: str) -> dict[str, Any]:
         """Available filter criteria for bond search.
@@ -727,6 +759,21 @@ class IBKRClient:
             return []
         return [o for o in orders if o.get("status") and o.get("status") not in self._TERMINAL_STATUSES]
 
+    def get_orders_raw(self) -> Any:
+        """Raw, unfiltered /iserver/account/orders response, for diagnostics.
+
+        Same documented two-call warmup as get_live_orders, but returns the response
+        exactly as IBKR sent it — no status filtering, no shape normalization. Used
+        by ClaudeToolkit's diagnose_orders to show what the server actually returned.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#live-orders
+        Endpoint: GET /iserver/account/orders
+        """
+        self._ensure_accounts_initialized()
+        self._get("/iserver/account/orders?force=true")  # instantiate subscription
+        time.sleep(1)
+        return self._get("/iserver/account/orders")
+
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         """Full order details for a specific order ID.
 
@@ -822,6 +869,18 @@ class IBKRClient:
                 if isinstance(val, list):
                     return val
         return []
+
+    def get_pa_periods_raw(self, account_ids: list[str]) -> Any:
+        """Raw /pa/allperiods response, for diagnosing unrecognized shapes.
+
+        get_pa_periods() extracts the period list from the documented nesting; when
+        that extraction returns [], this method exposes the untouched response so the
+        caller can identify the shape (used by ClaudeToolkit's get_pa_periods fallback).
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-all-periods
+        Endpoint: POST /pa/allperiods
+        """
+        return self._post("/pa/allperiods", {"acctIds": account_ids})
 
     def get_pa_performance(self, account_ids: list[str], period: str) -> dict[str, Any]:
         """NAV cumulative performance series for the given period.

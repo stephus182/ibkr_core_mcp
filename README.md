@@ -202,7 +202,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `get_pa_transactions` | Portfolio Analyst transactions |
 | `search_contract` | Resolve symbol → conid, exchange, currency |
 | `get_contract_info` | Full contract details (exchange, trading hours, etc.) |
-| `get_option_chain` | Options chain — expirations, strikes, conids |
+| `get_option_chain` | Option chain — expiry months + call/put strikes |
 | `get_futures` | Futures contracts — expiry months, conids |
 | `get_market_snapshot` | Live bid/ask/last/volume for one or more symbols |
 | `get_trading_schedule` | Trading hours and next session for a symbol |

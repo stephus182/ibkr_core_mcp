@@ -196,20 +196,28 @@ def test_get_currency_pairs_usd(live_client):
 @pytest.mark.integration
 def test_get_option_strikes_aapl(live_client):
     import datetime
-    # Use the next calendar month as the option expiry month
+    # secdef/search must precede strikes (documented prerequisite) — otherwise
+    # the endpoint always returns empty arrays.
+    live_client.search_contract("AAPL")
+    # Documented month format: {3-char month}{2-char year}, e.g. "AUG26"
     today = datetime.date.today()
     next_month = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
-    month_str = next_month.strftime("%b %Y").upper()  # e.g. "AUG 2026"
+    month_str = next_month.strftime("%b%y").upper()  # e.g. "AUG26"
     result = live_client.get_option_strikes(265598, "OPT", month_str)
-    assert isinstance(result, list)
+    assert isinstance(result, dict)
+    assert "call" in result and "put" in result
 
 
 @pytest.mark.integration
-def test_get_option_chain_raises(live_client):
-    # /trsrv/secdef/chains does not exist — should raise IBKRAPIError every time
-    from ibkr_core_mcp.exceptions import IBKRAPIError
-    with pytest.raises(IBKRAPIError):
-        live_client.get_option_chain("AAPL")
+def test_get_option_chain_documented_flow(live_client):
+    # Reimplemented 2026-07-07 via secdef/search → secdef/strikes (register item 6).
+    chain = live_client.get_option_chain("AAPL")
+    assert chain["symbol"] == "AAPL"
+    assert isinstance(chain["conid"], int)
+    assert chain["months"], "expected at least one expiry month"
+    assert chain["month"] == chain["months"][0]
+    assert chain["call"], "expected call strikes for the nearest expiry"
+    assert chain["put"], "expected put strikes for the nearest expiry"
 
 
 # ---------------------------------------------------------------------------
