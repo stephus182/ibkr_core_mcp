@@ -60,3 +60,16 @@ def test_crawl4ai_scraper_real_browser_scrape(crawl4ai_available, tmp_path):
 
     assert result["url"] == "https://example.com"
     assert "Example Domain" in result["markdown"]
+
+
+@pytest.mark.integration
+def test_scrape_with_fallback_triggers_real_crawl4ai_on_empty_firecrawl_result(
+    crawl4ai_available, toolkit
+):
+    """Empty Firecrawl markdown makes assess_quality() return "fallback",
+    which skips the LLM judge entirely and routes straight to the real
+    Crawl4AIScraper — proving the full wiring, not just the isolated unit."""
+    markdown, note = toolkit._scrape_with_fallback("https://example.com", "", {})
+
+    assert "Example Domain" in markdown
+    assert "Crawl4AI fallback" in note
