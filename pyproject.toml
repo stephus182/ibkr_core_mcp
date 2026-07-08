@@ -52,7 +52,7 @@ server = [
     "websockets>=12.0",
 ]
 scraper = ["crawl4ai>=0.5.0"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "mypy>=1.8", "ruff>=0.3"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "mypy>=1.8", "ruff>=0.3"]
 
 [project.urls]
 Homepage = "https://github.com/stephus182/ibkr_core_mcp"
@@ -72,7 +72,19 @@ ibkr_core_mcp = [
 ]
 
 [tool.pytest.ini_options]
-markers = ["integration: requires live IBKR gateway and credentials"]
+markers = [
+    "integration: requires live IBKR gateway and credentials",
+    "market_data: claude_tools market-data handlers",
+    "account: claude_tools account/portfolio handlers",
+    "trades: claude_tools trade-history handlers",
+    "orders: claude_tools order read/preview handlers",
+    "flex: claude_tools Flex Query handlers",
+    "alerts: claude_tools price-alert handlers",
+    "pa_analytics: claude_tools PA/analytics handlers",
+    "backtest_pinescript: claude_tools backtest/pinescript handlers",
+    "web_scraping: claude_tools firecrawl/scrape-fallback handlers",
+    "errors: claude_tools _safe_error mapping",
+]
 asyncio_mode = "auto"
 
 [tool.mypy]
