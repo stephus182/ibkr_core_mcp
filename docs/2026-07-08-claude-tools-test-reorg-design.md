@@ -70,24 +70,27 @@ from today so `git blame` / history stays meaningful and no assertions change.
 
 ## Test-to-file mapping
 
-| File | Tools / helpers covered | Approx. count |
+| File | Tools / helpers covered | Count |
 | --- | --- | --- |
-| `test_tool_descriptions.py` | `TOOL_DEFINITIONS` schema shape, tool count, execution-verb scan (new) | 4 existing + new |
-| `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators | ~40 |
-| `test_account.py` | get_account_summary, get_positions, get_ledger, get_pnl, get_allocation, get_watchlists, get_notifications | ~24 |
-| `test_trades.py` | get_trades, `_parse_live_trades` | 9 |
+| `test_tool_descriptions.py` | `TOOL_DEFINITIONS` schema shape, tool count, execution-verb scan (new) | 3 existing + 3 new = 6 |
+| `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators | 38 |
+| `test_account.py` | get_account_summary, get_positions, get_ledger, get_pnl, get_allocation, get_watchlists, get_notifications | 20 |
+| `test_trades.py` | get_trades, `_parse_live_trades` | 10 |
 | `test_orders.py` | get_live_orders, diagnose_orders, preview_order, get_order_status | 16 |
-| `test_flex.py` | sync_flex_trades, sync_flex_archive, import_flex_file, check_flex_coverage, verify_flex_import, `_format_coverage`, `flex_query.extract_execution_ids` | ~21 |
-| `test_alerts.py` | get_alerts, create_price_alert, delete_alert, activate_alert, modify_price_alert | 16 |
+| `test_flex.py` | sync_flex_trades, sync_flex_archive, import_flex_file, check_flex_coverage, verify_flex_import, `_format_coverage`, `flex_query.extract_execution_ids` | 22 |
+| `test_alerts.py` | get_alerts, create_price_alert, delete_alert, activate_alert, modify_price_alert | 15 |
 | `test_pa_analytics.py` | get_analytics, get_pa_periods, get_pa_performance, get_pa_transactions | 11 |
 | `test_backtest_pinescript.py` | run_backtest, generate_pinescript | 8 |
-| `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_validate_public_url` | ~25 |
-| `test_errors.py` | `_safe_error` | 10 → 1 parametrized |
+| `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_validate_public_url` | 22 |
+| `test_errors.py` | `_safe_error` | 11 → 13 parametrized (+2 new cases for `StoreError`/`HumanAuthError`, previously untested branches) |
 
-Total: 177 test *cases* preserved exactly (verified via `pytest --collect-only -q`
-before and after the move) — collected *item* count may show 168 once the 10
-`test_safe_error_*` functions become 1 parametrized test with 10 cases (see
-below); no coverage is lost.
+Total after the move: 181 (verified precisely, not estimated, while writing
+the implementation plan — see `docs/plans/2026-07-08-claude-tools-test-reorg-plan.md`).
+Net +4 vs. today's 177: `test_tool_descriptions.py` goes from 4 tests (3
+verbatim + the old "at least 19" check) to 6 (net +2), and `test_errors.py`
+goes from 11 original functions to 13 parametrized cases (net +2). No test
+coverage is lost — every original assertion still runs, plus 2 new
+`_safe_error` branch cases and 2 new Layer 1 schema checks.
 
 ## Fixes applied during the move
 
@@ -108,10 +111,13 @@ are being physically rewritten into new files regardless:
   also becomes a hard backstop: if quality classification ever regresses again,
   the test now fails fast with a clear "socket blocked" error instead of
   quietly making a real HTTP request.
-- `test_safe_error_*` (10 functions) → collapse into one
-  `@pytest.mark.parametrize` table `test_safe_error_mapping` in
-  `test_errors.py`. Pure input→output mapping, no per-case mock wiring, the
-  cleanest parametrize candidate in the file. `preview_order`,
+- `test_safe_error_*` (11 functions, not 10 as originally counted — corrected
+  during plan-writing) → collapse into one `@pytest.mark.parametrize` table
+  `test_safe_error_mapping` in `test_errors.py`, **plus 2 new cases** for
+  `StoreError` and `HumanAuthError` — both are real branches in `_safe_error`
+  with zero existing test coverage, found while transcribing the table.
+  Pure input→output mapping, no per-case mock wiring, the cleanest
+  parametrize candidate in the file. `preview_order`,
   `get_market_snapshot`, and `verify_flex_import` clusters stay as separate
   named functions — each case wires distinct mock responses and asserts
   different things, so collapsing them would hurt readability more than it
