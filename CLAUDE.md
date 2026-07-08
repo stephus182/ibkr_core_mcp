@@ -13,7 +13,7 @@ Standalone pip-installable Python package providing a complete IBKR Client Porta
 pip install git+https://github.com/stephus182/ibkr_core_mcp.git
 
 # Pinned version
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v0.1.0
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.0.0
 
 # Local editable dev
 pip install -e /path/to/ibkr_core_mcp
@@ -727,9 +727,17 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
 
 ## Publishing a New Version
 
+Check the current latest tag first — do not reuse an existing one:
+
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag -l --sort=-v:refname | head -1
 ```
 
-Consumers pin to: `pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v0.3.0`
+Then tag and push the next version (semver — bump patch/minor/major as appropriate for the change):
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+Consumers pin to: `pip install git+https://github.com/stephus182/ibkr_core_mcp.git@vX.Y.Z`
