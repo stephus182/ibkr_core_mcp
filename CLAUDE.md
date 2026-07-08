@@ -692,6 +692,13 @@ pytest
 
 # Specific module
 pytest tests/test_indicators.py -v
+
+# Targeted claude_tools subsets (see tests/claude_tools/TEST_INDEX.md)
+pytest tests/claude_tools/                            # all claude_tools unit tests
+pytest tests/claude_tools/ -m "not integration"        # same, explicit
+pytest tests/claude_tools/test_flex.py                 # one domain file
+pytest -m orders                                       # one domain, repo-wide
+pytest tests/claude_tools/test_tool_descriptions.py    # schema/description honesty only
 ```
 
 ---
