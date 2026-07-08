@@ -1,8 +1,14 @@
 # claude_tools test suite restructure — design
 
 **Date:** 2026-07-08
-**Scope:** `tests/test_claude_tools.py` only (177 collected tests). Repo-wide test
-count is 753; this does not touch any other test file.
+**Scope:** `tests/test_claude_tools.py`'s domain split (177 collected tests) is
+the core of this plan. Repo-wide test count is 753 (669 non-integration + 84
+integration). Two small additions extend past that one file, justified by
+measured full-suite data below: (1) an equivalent sleep-mock fix for 6 tests
+in `test_client.py` that share the exact same root-cause bug, and (2)
+promoting the guardrail fixture to the root `tests/conftest.py` so it protects
+all 753 tests, not just the claude_tools subset. No other file is
+reorganized — see "Why not restructure the whole repo" below.
 
 ## Problem
 
@@ -37,7 +43,7 @@ count.
 
 ## Directory layout
 
-```
+```text
 tests/claude_tools/
 ├── __init__.py                    # empty, matches tests/__init__.py pattern
 ├── conftest.py                    # `toolkit` fixture only
@@ -65,7 +71,7 @@ from today so `git blame` / history stays meaningful and no assertions change.
 ## Test-to-file mapping
 
 | File | Tools / helpers covered | Approx. count |
-|---|---|---|
+| --- | --- | --- |
 | `test_tool_descriptions.py` | `TOOL_DEFINITIONS` schema shape, tool count, execution-verb scan (new) | 4 existing + new |
 | `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators | ~40 |
 | `test_account.py` | get_account_summary, get_positions, get_ledger, get_pnl, get_allocation, get_watchlists, get_notifications | ~24 |
@@ -111,9 +117,45 @@ are being physically rewritten into new files regardless:
   different things, so collapsing them would hurt readability more than it
   helps.
 
-## Fixtures — `tests/claude_tools/conftest.py`
+## Why not restructure the whole repo
 
-Only the `toolkit` fixture moves here (currently inline in
+`test_claude_tools.py` (2373 lines, 177 tests) is a genuine outlier, not a
+symptom of a repo-wide problem: the next-largest file is `test_client.py` at
+910 lines (2.6× smaller), then a steady drop-off (`test_web_scraper.py` 618,
+`test_store.py` 559, `test_flex_query.py` 517, `test_scrape_fallback.py` 514,
+`test_streaming.py` 498). No other file mixes 42 unrelated tool domains with
+zero grouping the way this one did — splitting the rest into domain-folders
+now would solve a problem that doesn't exist yet elsewhere. Revisit only if a
+specific file later grows to a comparable size/test-count.
+
+Full-suite timing (`pytest -m "not integration" --durations=25`: 669 tests,
+24.76s) confirms this: of the ~15.74s of "fixable dead weight" found across
+the whole suite, 9.68s is the 3 claude_tools tests already in scope here, and
+5.52s (`test_store.py`'s `mkt` fixture, `scope="module"`, real
+`exchange_calendars` computation for 20 exchanges) is legitimate, already
+correctly amortized — not a bug, not touched. The remaining 6.06s is a
+same-shape bug in a different file, addressed as a small paired fix below
+rather than a reorg (see "test_client.py sleep fix").
+
+## test_client.py sleep fix (paired with this plan)
+
+`client.py:755` — `get_live_orders()` does an **unconditional**
+`time.sleep(1)` between its documented two-call warmup (`?force=true` then the
+real fetch), regardless of whether the mocked response already contains data.
+`test_client.py`'s `_mock_orders_response()` helper never patches
+`time.sleep`, so all 6 `test_get_live_orders_*` tests pay this for real:
+1.01s × 6 = 6.06s, ~24% of the entire non-integration suite's runtime.
+
+Fix (test-only, no reorg — `test_client.py` isn't disorganized, just missing
+this one mock): wrap each of the 6 tests' `_mock_orders_response(...)` context
+in `patch("time.sleep")`, matching the exact convention `test_rate_limiter.py`
+already uses. This is folded into the same implementation pass as the
+claude_tools work since it's the same root-cause bug, found by the same
+`--durations` sweep — not a separate initiative.
+
+## Fixtures — `tests/claude_tools/conftest.py` and root `tests/conftest.py`
+
+Only the `toolkit` fixture moves to `tests/claude_tools/conftest.py` (currently inline in
 `test_claude_tools.py`):
 
 ```python
@@ -130,26 +172,45 @@ def toolkit(mock_config):
 resolves fixtures up the directory chain automatically, so nothing there needs
 to change.
 
-**New: an autouse guardrail fixture**, added specifically because of the
-measured findings above — makes it structurally impossible for a future test
-in this domain to silently reintroduce a multi-second real sleep or a real
-network call:
+**New: an autouse guardrail fixture, added directly to the root
+`tests/conftest.py`** — added specifically because of the measured findings
+above (claude_tools' 3 tests, `test_client.py`'s 6 tests), and promoted repo-
+wide immediately rather than staged locally-then-promoted, since the same bug
+shape already proved itself in two unrelated files. Makes it structurally
+impossible for *any* future test, in any file, to silently reintroduce a
+multi-second real sleep or a real network call:
 
 ```python
 import pytest
-from pytest_socket import disable_socket
+from pytest_socket import disable_socket, enable_socket
 
 
 @pytest.fixture(autouse=True)
-def _no_real_io(monkeypatch):
+def _no_real_io(request, monkeypatch):
+    if request.node.get_closest_marker("integration"):
+        yield  # live/integration tests intentionally hit real sockets and timing
+        return
     monkeypatch.setattr("time.sleep", lambda seconds: None)
-    disable_socket()  # any real socket.connect() now raises SocketBlockedError
+    disable_socket()
+    yield
+    enable_socket()
 ```
+
+Root-level placement means it must not break the 5 existing live/integration
+files (`test_client_live.py`, `test_alerts_live.py`, `test_web_scraper_live.py`,
+`test_web_scraper_drive_live.py`, `test_crawl4ai_live.py`) — confirmed all 5
+consistently carry the `integration` marker, so the `get_closest_marker` check
+above is a reliable gate. **Implementation must verify `pytest-socket`'s
+official recommended pattern for per-test enable/disable against its docs
+before writing this** (CLAUDE.md's docs-first rule) — the exact
+`disable_socket()`/`enable_socket()` pairing shown here is illustrative, not
+yet confirmed against the library's current API.
 
 Requires adding `pytest-socket` to the `dev` extra in `pyproject.toml`
 alongside the existing `pytest>=8.0`, `pytest-asyncio>=0.23`, `pytest-mock>=3.12`.
-No other new fixtures are introduced — nothing else in the current file is
-shared across enough tests to justify one (YAGNI).
+Besides this guardrail, `tests/claude_tools/conftest.py` itself only gains the
+`toolkit` fixture — nothing else in the current file is shared across enough
+tests to justify a new fixture (YAGNI).
 
 ## Markers
 
@@ -250,14 +311,32 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
 - File runtime drops from ~11.5s to roughly ~1.5s (removing the ~10s of real
   sleep/network) — spot-checked via `--durations=15` after the move, not just
   assumed.
+- `test_client.py`'s 6 `test_get_live_orders_*` tests drop from ~1.01s each to
+  near-zero once wrapped in `patch("time.sleep")`.
+- Full repo `pytest -m "not integration"` runtime drops from ~24.76s to
+  roughly ~9s (removing ~15.74s combined) — spot-checked, not assumed.
+- `pytest tests/test_client_live.py tests/test_alerts_live.py --collect-only`
+  (or a full `pytest -m integration --collect-only`) still collects the same
+  tests after the root conftest change, confirming the `integration`-marker
+  gate correctly exempts live tests from the socket/sleep guardrail.
 
 ## Out of scope
 
-- Layer 3 (live/integration tests) — stays exactly where it is today.
+- Layer 3 (live/integration tests) — stays exactly where it is today; the
+  root guardrail fixture explicitly exempts anything marked `integration`.
 - Description-vs-handler behavioral matching — deferred, tracked as a known
   gap in `TEST_INDEX.md`.
-- Handler-side injectable-sleep refactor (`claude_tools.py:1128`, `:2272`) —
+- Handler-side injectable-sleep refactor in `claude_tools.py` (`:1128`,
+  `:2272`) **and** `client.py` (`:755`, plus 3 other `time.sleep(1)` sites at
+  `:168`, `:774`, `:825` not yet individually audited for test impact) —
   flagged as a follow-up in `TEST_INDEX.md`'s "Known gaps," not implemented.
-- Any other change to `ibkr_core_mcp/claude_tools.py` itself — this stays a
-  test-only reorganization; the only "production-adjacent" additions are a new
-  dev-only dependency (`pytest-socket`) and mock-content changes inside tests.
+  The test-side fix (patching `time.sleep` in the affected tests) ships now;
+  making the production retry logic itself injectable/configurable is a
+  separate, later change.
+- Domain-folder reorganization of any file other than `test_claude_tools.py`
+  — no other file shows the size/disorganization signal that justified it
+  here (see "Why not restructure the whole repo" above).
+- Any other change to `ibkr_core_mcp/claude_tools.py` or `ibkr_core_mcp/client.py`
+  themselves — both stay test-only changes; the only "production-adjacent"
+  additions are a new dev-only dependency (`pytest-socket`) and mock-content/
+  mock-patching changes inside tests.
