@@ -47,7 +47,7 @@ each task; they exist specifically to catch this.
 
 **Files:** none created/modified — this is a read-only safety net for Task 19.
 
-- [ ] **Step 1: Capture the sorted list of test names currently in the file**
+- [x] **Step 1: Capture the sorted list of test names currently in the file**
 
 Run:
 ```bash
@@ -57,7 +57,7 @@ wc -l /tmp/claude_tools_baseline.txt
 ```
 Expected: `177 /tmp/claude_tools_baseline.txt`
 
-- [ ] **Step 2: Confirm current full-suite timing baseline (for the final comparison in Task 19)**
+- [x] **Step 2: Confirm current full-suite timing baseline (for the final comparison in Task 19)**
 
 Run:
 ```bash
@@ -75,7 +75,7 @@ No commit for this task (nothing changed yet).
 **Files:**
 - Modify: `pyproject.toml`
 
-- [ ] **Step 1: Add `pytest-socket` to the `dev` extra**
+- [x] **Step 1: Add `pytest-socket` to the `dev` extra**
 
 In `pyproject.toml`, find:
 ```toml
@@ -86,7 +86,7 @@ Replace with:
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "mypy>=1.8", "ruff>=0.3"]
 ```
 
-- [ ] **Step 2: Register the new markers**
+- [x] **Step 2: Register the new markers**
 
 Find:
 ```toml
@@ -111,17 +111,17 @@ markers = [
 ]
 ```
 
-- [ ] **Step 3: Install the new dependency**
+- [x] **Step 3: Install the new dependency**
 
 Run: `pip install -e ".[dev]"`
 Expected: `pytest-socket` installed, no errors.
 
-- [ ] **Step 4: Verify markers are recognized**
+- [x] **Step 4: Verify markers are recognized**
 
 Run: `pytest --markers | grep -E "market_data|account|trades|orders|flex|alerts|pa_analytics|backtest_pinescript|web_scraping|errors"`
 Expected: all 10 new marker lines printed, no "unknown marker" warnings anywhere.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyproject.toml
@@ -147,12 +147,12 @@ design doc's "Why not restructure the whole repo" section. It must exempt
 anything marked `integration`, since the 5 live test files intentionally use
 real sockets and timing.
 
-- [ ] **Step 1: Read the current file to confirm exact current content**
+- [x] **Step 1: Read the current file to confirm exact current content**
 
 Run: `cat tests/conftest.py`
 Expected: the existing `tmp_db` and `mock_config` fixtures, nothing else.
 
-- [ ] **Step 2: Add the guardrail fixture**
+- [x] **Step 2: Add the guardrail fixture**
 
 Append to `tests/conftest.py`:
 ```python
@@ -177,7 +177,7 @@ def _no_real_io(request, monkeypatch):
     enable_socket()
 ```
 
-- [ ] **Step 3: Verify non-integration tests still pass (this is the risky step — a bad fixture breaks everything)**
+- [x] **Step 3: Verify non-integration tests still pass (this is the risky step — a bad fixture breaks everything)**
 
 Run: `pytest -m "not integration" -q 2>&1 | tail -5`
 Expected: `669 passed, 84 deselected` — same counts as Task 1's baseline. If
@@ -185,7 +185,7 @@ anything newly fails, read the failure: it means some non-integration test
 was relying on a real sleep or real socket somewhere not yet identified.
 Do not proceed until this is green.
 
-- [ ] **Step 4: Verify integration tests are unaffected (collection only — don't require live gateway)**
+- [x] **Step 4: Verify integration tests are unaffected (collection only — don't require live gateway)**
 
 Run: `pytest -m integration --collect-only -q 2>&1 | tail -5`
 Expected: `84 tests collected` (or however many `--collect-only` reports),
@@ -193,7 +193,7 @@ no collection errors. This confirms the marker-based exemption doesn't break
 anything at collection time; actually running integration tests requires a
 live gateway and is out of scope for this verification.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/conftest.py
@@ -216,11 +216,11 @@ EOF
 - Create: `tests/claude_tools/__init__.py`
 - Create: `tests/claude_tools/conftest.py`
 
-- [ ] **Step 1: Create the empty init file**
+- [x] **Step 1: Create the empty init file**
 
 Run: `touch tests/claude_tools/__init__.py`
 
-- [ ] **Step 2: Create the local conftest with the `toolkit` fixture**
+- [x] **Step 2: Create the local conftest with the `toolkit` fixture**
 
 Write `tests/claude_tools/conftest.py`:
 ```python
@@ -238,14 +238,14 @@ def toolkit(mock_config):
     return ClaudeToolkit(client, cache, store, mock_config)
 ```
 
-- [ ] **Step 3: Verify the fixture is discoverable**
+- [x] **Step 3: Verify the fixture is discoverable**
 
 Run: `pytest tests/claude_tools/ --collect-only -q`
 Expected: `no tests ran` (no test files exist yet) but no collection errors —
 confirms `conftest.py` itself is syntactically valid and `mock_config` resolves
 from the root `tests/conftest.py`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/claude_tools/__init__.py tests/claude_tools/conftest.py
@@ -259,7 +259,7 @@ git commit -m "test: scaffold tests/claude_tools/ package with toolkit fixture"
 **Files:**
 - Create: `tests/claude_tools/test_tool_descriptions.py`
 
-- [ ] **Step 1: Extract the 3 unchanged verbatim tests**
+- [x] **Step 1: Extract the 3 unchanged verbatim tests**
 
 Run:
 ```bash
@@ -272,7 +272,7 @@ sed -n '17,40p' tests/test_claude_tools.py
 } > tests/claude_tools/test_tool_descriptions.py
 ```
 
-- [ ] **Step 2: Append the tightened tool-count test (replaces the old "at least 19" check) and the 2 new tests**
+- [x] **Step 2: Append the tightened tool-count test (replaces the old "at least 19" check) and the 2 new tests**
 
 Append to `tests/claude_tools/test_tool_descriptions.py`:
 ```python
@@ -311,7 +311,7 @@ def test_no_tool_claims_execution_capability(toolkit):
             )
 ```
 
-- [ ] **Step 3: Verify collection and pass**
+- [x] **Step 3: Verify collection and pass**
 
 Run: `pytest tests/claude_tools/test_tool_descriptions.py -v`
 Expected: 6 tests pass (`test_tools_returns_list_of_dicts`,
@@ -320,13 +320,13 @@ Expected: 6 tests pass (`test_tools_returns_list_of_dicts`,
 `test_required_params_exist_in_properties`,
 `test_no_tool_claims_execution_capability`).
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_tool_descriptions.py --fix`
 Expected: no remaining issues (or auto-fixed). Re-run Step 3's pytest command
 to confirm still green if ruff changed anything.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_tool_descriptions.py
@@ -340,7 +340,7 @@ git commit -m "test: add claude_tools Layer 1 schema/description honesty tests"
 **Files:**
 - Create: `tests/claude_tools/test_market_data.py`
 
-- [ ] **Step 1: Extract the market-data test bodies**
+- [x] **Step 1: Extract the market-data test bodies**
 
 Run:
 ```bash
@@ -357,7 +357,7 @@ sed -n '42,84p;212,230p;323,440p;666,714p;715,745p;746,775p;1753,1786p;1787,1826
 } > tests/claude_tools/test_market_data.py
 ```
 
-- [ ] **Step 2: Fix `test_fetch_market_data_empty_data` to not depend on the real 4s retry sleep**
+- [x] **Step 2: Fix `test_fetch_market_data_empty_data` to not depend on the real 4s retry sleep**
 
 The `_no_real_io` root fixture already neutralizes `time.sleep` for this test,
 so it will pass fast regardless — but add an explicit `patch("time.sleep")`
@@ -386,24 +386,24 @@ def test_fetch_market_data_empty_data(toolkit):
     assert "no data" in text.lower()
 ```
 
-- [ ] **Step 3: Verify collection count**
+- [x] **Step 3: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_market_data.py --collect-only -q | tail -3`
 Expected: `38 tests collected` (if this doesn't match, see "How the bulk moves
 work" above — check for a cut-off function near one of the range boundaries).
 
-- [ ] **Step 4: Verify all pass and confirm the timing fix worked**
+- [x] **Step 4: Verify all pass and confirm the timing fix worked**
 
 Run: `pytest tests/claude_tools/test_market_data.py -v --durations=5`
 Expected: all tests pass; `test_fetch_market_data_empty_data` no longer
 appears among the slowest durations (should be under 0.1s, down from 4.01s).
 
-- [ ] **Step 5: Lint**
+- [x] **Step 5: Lint**
 
 Run: `ruff check tests/claude_tools/test_market_data.py --fix`, then re-run
 Step 4's pytest command if anything changed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/claude_tools/test_market_data.py
@@ -417,7 +417,7 @@ git commit -m "test: extract claude_tools market-data tests, fix unmocked retry 
 **Files:**
 - Create: `tests/claude_tools/test_account.py`
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 Run:
 ```bash
@@ -434,21 +434,21 @@ sed -n '85,95p;198,207p;783,833p;834,891p;892,945p;1863,1899p;1935,1960p;2314,23
 } > tests/claude_tools/test_account.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_account.py --collect-only -q | tail -3`
 Expected: `20 tests collected`.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_account.py -v`
 Expected: all pass.
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_account.py --fix`, re-verify Step 3 if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_account.py
@@ -462,7 +462,7 @@ git commit -m "test: extract claude_tools account/portfolio tests"
 **Files:**
 - Create: `tests/claude_tools/test_trades.py`
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 This domain needs the top-level `_parse_live_trades` import (used directly by
 several tests, not via the `toolkit` fixture):
@@ -482,21 +482,21 @@ sed -n '96,119p;120,197p' tests/test_claude_tools.py
 } > tests/claude_tools/test_trades.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_trades.py --collect-only -q | tail -3`
 Expected: `10 tests collected`.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_trades.py -v`
 Expected: all pass.
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_trades.py --fix`, re-verify if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_trades.py
@@ -510,7 +510,7 @@ git commit -m "test: extract claude_tools trade-history tests"
 **Files:**
 - Create: `tests/claude_tools/test_orders.py`
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 ```bash
 {
@@ -526,20 +526,20 @@ sed -n '441,460p;946,1064p;1628,1677p;1961,1985p' tests/test_claude_tools.py
 } > tests/claude_tools/test_orders.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_orders.py --collect-only -q | tail -3`
 Expected: `16 tests collected`.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_orders.py -v`
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_orders.py --fix`, re-verify if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_orders.py
@@ -558,7 +558,7 @@ read of the next test's start line would suggest — there's a `_make_toolkit()`
 helper function for the web-scraping tests sitting between them (lines
 1222-1247) that must NOT end up in this file. See design doc discovery notes.
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 ```bash
 {
@@ -574,7 +574,7 @@ sed -n '776,782p;1065,1133p;1134,1189p;1190,1220p;2071,2131p;2132,2203p;2204,224
 } > tests/claude_tools/test_flex.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_flex.py --collect-only -q | tail -3`
 Expected: `22 tests collected`. If it's higher and includes anything named
@@ -584,15 +584,15 @@ too much — re-check line 1220 is the last line of
 `assert raw_count == 2  # duplicate detected: raw(2) != unique(1)`) and
 line 1222 starts the `# === Firecrawl handler tests ===` banner.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_flex.py -v`
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_flex.py --fix`, re-verify if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_flex.py
@@ -606,7 +606,7 @@ git commit -m "test: extract claude_tools Flex Query tests"
 **Files:**
 - Create: `tests/claude_tools/test_alerts.py`
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 ```bash
 {
@@ -622,20 +622,20 @@ sed -n '461,484p;485,564p;565,572p;573,588p;2014,2070p' tests/test_claude_tools.
 } > tests/claude_tools/test_alerts.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_alerts.py --collect-only -q | tail -3`
 Expected: `15 tests collected`.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_alerts.py -v`
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_alerts.py --fix`, re-verify if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_alerts.py
@@ -649,7 +649,7 @@ git commit -m "test: extract claude_tools price-alert tests"
 **Files:**
 - Create: `tests/claude_tools/test_pa_analytics.py`
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 ```bash
 {
@@ -665,20 +665,20 @@ sed -n '305,322p;1678,1703p;1704,1752p;2243,2313p' tests/test_claude_tools.py
 } > tests/claude_tools/test_pa_analytics.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_pa_analytics.py --collect-only -q | tail -3`
 Expected: `11 tests collected`.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_pa_analytics.py -v`
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_pa_analytics.py --fix`, re-verify if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_pa_analytics.py
@@ -692,7 +692,7 @@ git commit -m "test: extract claude_tools PA/analytics tests"
 **Files:**
 - Create: `tests/claude_tools/test_backtest_pinescript.py`
 
-- [ ] **Step 1: Extract**
+- [x] **Step 1: Extract**
 
 ```bash
 {
@@ -708,20 +708,20 @@ sed -n '231,251p;252,304p;2338,2373p' tests/test_claude_tools.py
 } > tests/claude_tools/test_backtest_pinescript.py
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_backtest_pinescript.py --collect-only -q | tail -3`
 Expected: `8 tests collected`.
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_backtest_pinescript.py -v`
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_backtest_pinescript.py --fix`, re-verify if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_backtest_pinescript.py
@@ -735,7 +735,7 @@ git commit -m "test: extract claude_tools backtest/pinescript tests"
 **Files:**
 - Create: `tests/claude_tools/test_web_scraping.py`
 
-- [ ] **Step 1: Extract (includes the `_make_toolkit()` helper at the top of this range)**
+- [x] **Step 1: Extract (includes the `_make_toolkit()` helper at the top of this range)**
 
 ```bash
 {
@@ -776,7 +776,7 @@ sed -n '1222,1627p' tests/test_claude_tools.py
 } > tests/claude_tools/test_web_scraping.py
 ```
 
-- [ ] **Step 2: Verify `_REALISTIC_MARKDOWN` is actually >= 200 words (the "ok"-quality threshold)**
+- [x] **Step 2: Verify `_REALISTIC_MARKDOWN` is actually >= 200 words (the "ok"-quality threshold)**
 
 Run:
 ```bash
@@ -789,7 +789,7 @@ Expected: a number >= 200 (223 expected). If under 200, the content will be
 classified "ambiguous" and still trigger a real (unmocked) `judge_completeness_llm`
 call to the Anthropic API — the exact bug being fixed. Do not proceed if under 200.
 
-- [ ] **Step 3: Fix `test_firecrawl_search_returns_formatted_results` to use realistic content**
+- [x] **Step 3: Fix `test_firecrawl_search_returns_formatted_results` to use realistic content**
 
 Find in the new file:
 ```python
@@ -813,7 +813,7 @@ Replace the `mock_fc.search.return_value` line with:
     ]
 ```
 
-- [ ] **Step 4: Fix `test_firecrawl_crawl_saves_pages_to_drive` the same way**
+- [x] **Step 4: Fix `test_firecrawl_crawl_saves_pages_to_drive` the same way**
 
 Find:
 ```python
@@ -828,19 +828,19 @@ Replace with:
     ]
 ```
 
-- [ ] **Step 5: Verify collection count**
+- [x] **Step 5: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_web_scraping.py --collect-only -q | tail -3`
 Expected: `22 tests collected`.
 
-- [ ] **Step 6: Verify all pass and confirm both timing fixes worked**
+- [x] **Step 6: Verify all pass and confirm both timing fixes worked**
 
 Run: `pytest tests/claude_tools/test_web_scraping.py -v --durations=5`
 Expected: all pass; neither `test_firecrawl_search_returns_formatted_results`
 nor `test_firecrawl_crawl_saves_pages_to_drive` appears among the slowest
 durations (both should be under 0.1s, down from 3.91s/2.05s).
 
-- [ ] **Step 7: Confirm the fix didn't just move the network call somewhere else**
+- [x] **Step 7: Confirm the fix didn't just move the network call somewhere else**
 
 Run: `pytest tests/claude_tools/test_web_scraping.py -k "returns_formatted_results or saves_pages_to_drive" -v -p no:cacheprovider`
 Expected: both pass with no `SocketBlockedError` — if either raises
@@ -851,11 +851,11 @@ reading`, `already a subscriber`, `unlock this article`, `create a free
 account to continue`, `this content is reserved for subscribers`) appears in
 `_REALISTIC_MARKDOWN`.
 
-- [ ] **Step 8: Lint**
+- [x] **Step 8: Lint**
 
 Run: `ruff check tests/claude_tools/test_web_scraping.py --fix`, re-verify Step 6 if changed.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add tests/claude_tools/test_web_scraping.py
@@ -882,7 +882,7 @@ functions collapse into one parametrized test, plus 2 new cases for
 `StoreError` and `HumanAuthError`, which are real branches in `_safe_error`
 with zero prior test coverage (discovered while transcribing this table).
 
-- [ ] **Step 1: Write the file**
+- [x] **Step 1: Write the file**
 
 ```python
 import pytest
@@ -930,22 +930,22 @@ def test_safe_error_mapping(tool, exc, expected_substrs):
     )
 ```
 
-- [ ] **Step 2: Verify collection count**
+- [x] **Step 2: Verify collection count**
 
 Run: `pytest tests/claude_tools/test_errors.py --collect-only -q | tail -3`
 Expected: `13 tests collected` (1 parametrized function × 13 cases).
 
-- [ ] **Step 3: Verify all pass**
+- [x] **Step 3: Verify all pass**
 
 Run: `pytest tests/claude_tools/test_errors.py -v`
 Expected: all 13 cases pass, including the 2 new ones (`store_error`,
 `human_auth`) that had zero prior coverage.
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `ruff check tests/claude_tools/test_errors.py --fix`, re-verify Step 3 if changed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/claude_tools/test_errors.py
@@ -966,7 +966,7 @@ EOF
 **Files:**
 - Create: `tests/claude_tools/TEST_INDEX.md`
 
-- [ ] **Step 1: Write the file**
+- [x] **Step 1: Write the file**
 
 ```markdown
 # claude_tools Test Index
@@ -1031,7 +1031,7 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
   fixture entirely. Not implemented here; this reorg stayed test-only.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add tests/claude_tools/TEST_INDEX.md
@@ -1045,13 +1045,13 @@ git commit -m "docs: add tests/claude_tools/TEST_INDEX.md"
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Find the "Running Tests" section**
+- [x] **Step 1: Find the "Running Tests" section**
 
 Run: `grep -n "## Running Tests" -A 15 CLAUDE.md`
 Expected: the existing section with `pytest -m "not integration"`,
 `pytest`, and `pytest tests/test_indicators.py -v` examples.
 
-- [ ] **Step 2: Add targeted claude_tools commands**
+- [x] **Step 2: Add targeted claude_tools commands**
 
 Find:
 ```
@@ -1071,7 +1071,7 @@ pytest -m orders                                       # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py    # schema/description honesty only
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md
@@ -1092,7 +1092,7 @@ already fast — but add explicit patches at the call sites for the same
 readability reason as Task 6, and because `test_get_live_orders_initializes_accounts_first`
 doesn't use the shared helper so needs its own patch.
 
-- [ ] **Step 1: Add the `contextlib` import**
+- [x] **Step 1: Add the `contextlib` import**
 
 Find in `tests/test_client.py`:
 ```python
@@ -1106,7 +1106,7 @@ from unittest.mock import MagicMock, call, patch
 from unittest.mock import patch as _patch
 ```
 
-- [ ] **Step 2: Fix the shared `_mock_orders_response` helper (fixes 5 of the 6 tests with one change)**
+- [x] **Step 2: Fix the shared `_mock_orders_response` helper (fixes 5 of the 6 tests with one change)**
 
 Find:
 ```python
@@ -1133,7 +1133,7 @@ No changes needed to the 5 tests that use this helper
 `test_get_live_orders_handles_missing_status`) — the `with _mock_orders_response(...):`
 call sites are unchanged.
 
-- [ ] **Step 3: Fix the 6th test, which doesn't use the shared helper**
+- [x] **Step 3: Fix the 6th test, which doesn't use the shared helper**
 
 Find:
 ```python
@@ -1158,23 +1158,23 @@ def test_get_live_orders_initializes_accounts_first(client):
     assert client._accounts_initialized is True
 ```
 
-- [ ] **Step 4: Verify all 6 pass and are fast**
+- [x] **Step 4: Verify all 6 pass and are fast**
 
 Run: `pytest tests/test_client.py -k get_live_orders -v --durations=10`
 Expected: all 6 pass; none appear among durations over 0.1s (down from ~1.01s each).
 
-- [ ] **Step 5: Verify the full file still passes**
+- [x] **Step 5: Verify the full file still passes**
 
 Run: `pytest tests/test_client.py -q`
 Expected: same pass count as before this change (check against Task 1's
 knowledge that `test_client.py` contributes to the 669 non-integration total
 — no count should change, only timing).
 
-- [ ] **Step 6: Lint**
+- [x] **Step 6: Lint**
 
 Run: `ruff check tests/test_client.py --fix`, re-verify Step 5 if changed.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add tests/test_client.py
@@ -1197,7 +1197,7 @@ EOF
 **Files:**
 - Delete: `tests/test_claude_tools.py`
 
-- [ ] **Step 1: Diff test names between old and new (excluding the intentionally-consolidated safe_error tests)**
+- [x] **Step 1: Diff test names between old and new (excluding the intentionally-consolidated safe_error tests)**
 
 Run:
 ```bash
@@ -1208,7 +1208,7 @@ comm -23 /tmp/claude_tools_baseline_no_safe_error.txt /tmp/claude_tools_after.tx
 Expected: **empty output**. Any line printed is a test name that existed
 before and is missing now — investigate and restore it before continuing.
 
-- [ ] **Step 2: Confirm the new package's total test count**
+- [x] **Step 2: Confirm the new package's total test count**
 
 Run: `pytest tests/claude_tools/ --collect-only -q | tail -3`
 Expected: `181 tests collected`
@@ -1220,16 +1220,16 @@ tests (3 verbatim + the old "at least 19" check) to 6 (same 3 verbatim +
 net +2. If your total differs, re-add the per-file expected counts from
 each task's Step 2/3 and find which file is off.
 
-- [ ] **Step 3: Full claude_tools directory run**
+- [x] **Step 3: Full claude_tools directory run**
 
 Run: `pytest tests/claude_tools/ -v 2>&1 | tail -20`
 Expected: all 187 pass, 0 failures, 0 errors.
 
-- [ ] **Step 4: Delete the old file**
+- [x] **Step 4: Delete the old file**
 
 Run: `rm tests/test_claude_tools.py`
 
-- [ ] **Step 5: Full repo non-integration run — compare against Task 1's baseline**
+- [x] **Step 5: Full repo non-integration run — compare against Task 1's baseline**
 
 Run: `pytest -m "not integration" -q 2>&1 | tail -5`
 Expected: pass count changes from 669 to roughly 669 − 177 + 181 = 673 (or
@@ -1239,13 +1239,13 @@ claude_tools + 6.06s test_client.py). If runtime didn't drop, check that
 Task 3's `_no_real_io` fixture and Task 6/14/18's explicit patches actually
 landed (re-run with `--durations=10` to see what's still slow).
 
-- [ ] **Step 6: Full repo mypy/ruff sanity check (nothing left broken)**
+- [x] **Step 6: Full repo mypy/ruff sanity check (nothing left broken)**
 
 Run: `ruff check . && mypy ibkr_core_mcp/`
 Expected: no new errors introduced by this reorg (pre-existing errors, if
 any, are not this plan's concern).
 
-- [ ] **Step 7: Final commit**
+- [x] **Step 7: Final commit**
 
 ```bash
 git add -A
@@ -1263,7 +1263,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 8: Confirm clean git state**
+- [x] **Step 8: Confirm clean git state**
 
 Run: `git status`
 Expected: clean working tree, all changes committed across Tasks 2-19.
