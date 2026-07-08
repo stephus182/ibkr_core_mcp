@@ -77,18 +77,24 @@ def sharpe(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> fl
 def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> float:
     """Annualised Sortino ratio (penalises only downside volatility).
 
-    VARIANT NOTE (verified 2026-07-02): this implements the *simplified discrete*
-    form — sample std of the below-target excess returns only. The canonical
-    definition (Sortino/van der Meer; Rollinger & Hoffman "Sortino: A Sharper
-    Ratio") uses target downside deviation computed over ALL observations,
-    sqrt(mean(min(r − T, 0)²)), without mean-centering — and its authors explicitly
-    prefer it over this discrete form. Numbers from the two variants differ;
-    do not compare this output against tools using the canonical form.
-    Source: https://en.wikipedia.org/wiki/Sortino_ratio (Definition section, incl.
-    the "simpler discrete version" caveat). Whether to migrate to the canonical
-    form is tracked in the audit follow-up register
-    (docs/claude-tools-audit-2026-07.md) — changing it shifts every existing
-    backtest/analytics figure, so it is a deliberate decision, not a doc fix.
+    Implements the CANONICAL target-downside-deviation form: the denominator is
+    sqrt(mean(min(r − T, 0)²)) computed over ALL observations, without
+    mean-centering (Sortino/van der Meer; Rollinger & Hoffman "Sortino: A Sharper
+    Ratio"). This matches TradingView's documented calculation exactly — their
+    reference implementation sums min(0, r − target)² over every period and
+    divides by the total period count (support article 43000756110, "Analysis:
+    Sortino ratio", verified 2026-07-07) — so figures are comparable with TV and
+    other canonical-form tools.
+
+    MIGRATED 2026-07-07 (audit register item 12, owner-decided after verifying
+    TradingView's definition): previously this was the *simplified discrete*
+    form (sample std of only the below-target excess returns) that the canonical
+    authors explicitly disfavor. Sortino figures computed before the migration
+    are NOT comparable with current output — on real data the delta reached
+    +55.8% for a flat-heavy signal strategy (see
+    scripts/audit/sortino_calmar_worked_example.py).
+    Source: https://en.wikipedia.org/wiki/Sortino_ratio (Definition section) +
+    https://www.tradingview.com/support/solutions/43000756110-analysis-sortino-ratio/
 
     Args:
         returns: Per-bar return series.
@@ -96,11 +102,14 @@ def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> f
         periods: Trading periods per year. See ``sharpe`` for values.
 
     Returns:
-        Annualised Sortino ratio; 0.0 if downside std is zero or NaN.
+        Annualised Sortino ratio; 0.0 if target downside deviation is zero
+        (no below-target returns) or the series is empty.
     """
+    if len(returns) == 0:
+        return 0.0
     excess = returns - risk_free / periods
-    downside = excess[excess < 0].std()
-    if not downside or pd.isna(downside):
+    downside = float(np.sqrt(np.mean(np.square(np.minimum(excess, 0.0)))))
+    if downside == 0 or np.isnan(downside):
         return 0.0
     return float(excess.mean() / downside * np.sqrt(periods))
 
@@ -144,10 +153,12 @@ def cagr(returns: pd.Series, periods: int = 252) -> float:
 def calmar(returns: pd.Series, periods: int = 252) -> float:
     """Calmar ratio: CAGR divided by absolute max drawdown. 0.0 if drawdown is zero.
 
-    VARIANT NOTE (verified 2026-07-02): computed over the WHOLE supplied series.
-    Young's original Calmar (Futures, 1991) uses the trailing 36 months on a
-    monthly basis; the from-inception form implemented here is formally the
-    MAR-ratio convention. Both are common; label accordingly when comparing.
+    VARIANT NOTE (verified 2026-07-02; owner-decided KEEP 2026-07-07, audit
+    register item 12): computed over the WHOLE supplied series. Young's original
+    Calmar (Futures, 1991) uses the trailing 36 months on a monthly basis; the
+    from-inception form implemented here is formally the MAR-ratio convention.
+    On any window <= 36 months the two coincide over the available data, which
+    covers every stored backtest — hence the decision to keep this form.
     Source: https://en.wikipedia.org/wiki/Calmar_ratio (Young 1991 definition and
     the Calmar-vs-MAR distinction).
     """

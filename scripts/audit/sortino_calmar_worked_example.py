@@ -24,6 +24,13 @@ Result 2026-07-07 (recorded in docs/claude-tools-audit-2026-07.md, Findings
 analysis → Open-item priorities): buy-and-hold 2.1924 → 2.3395 (+6.7%);
 MACD long-only 1.9954 → 3.1083 (+55.8%). Calmar variants coincide on any
 window <= 36 months, so the 6-month example cannot distinguish them.
+
+DECISION EXECUTED 2026-07-07: analytics.sortino was migrated to the canonical
+TDD form after verifying TradingView's documented calculation matches it
+(support article 43000756110). The 'sortino current' column below therefore
+now equals 'sortino canonical' when rerun; the historical delta this script
+demonstrated is preserved in the audit report. analytics.calmar kept as
+whole-series MAR (owner decision).
 """
 
 import numpy as np

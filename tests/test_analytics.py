@@ -223,3 +223,37 @@ def test_periods_for_timeframe_unrecognized_returns_none():
     assert periods_for_timeframe("banana") is None
     assert periods_for_timeframe("") is None
     assert periods_for_timeframe("0d") is None
+
+
+def test_sortino_reproduces_tradingview_official_example():
+    """Pin the canonical target-downside-deviation form to TradingView's own
+    worked example (support article 43000756110, 'Analysis: Sortino ratio',
+    scraped 2026-07-07): monthly returns [0, 0, 3.2, -2.3]%, annual RFR 2% →
+    per-period ratio ≈ 0.047. Our sortino annualizes by sqrt(periods), so
+    divide that back out to compare."""
+    import numpy as np
+    import pandas as pd
+
+    from ibkr_core_mcp.analytics import sortino
+
+    returns = pd.Series([0.0, 0.0, 3.2, -2.3])
+    per_period = sortino(returns, risk_free=2.0, periods=12) / np.sqrt(12)
+    assert abs(per_period - 0.047) < 0.001
+
+
+def test_sortino_counts_all_observations_in_downside_deviation():
+    """The canonical form computes sqrt(mean(min(r − T, 0)²)) over ALL
+    observations. The old simplified-discrete form took the sample std of the
+    below-target returns only — with a single negative return that std is NaN
+    (ddof=1) and it returned 0.0. Canonical must return the real value."""
+    import numpy as np
+    import pandas as pd
+
+    from ibkr_core_mcp.analytics import sortino
+
+    returns = pd.Series([0.01, 0.0, -0.02, 0.0])
+    # TDD = sqrt(0.02² / 4) = 0.01; mean = -0.0025; ratio = -0.25 annualized
+    expected = -0.0025 / 0.01 * np.sqrt(252)
+    result = sortino(returns, periods=252)
+    assert result != 0.0
+    assert abs(result - expected) < 1e-9
