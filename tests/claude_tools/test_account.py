@@ -262,15 +262,3 @@ def test_get_positions_tolerates_null_value_fields(toolkit):
     assert "0.00" in text
     assert "error" not in text.lower()
 
-
-def _ohlcv_df(n=60):
-    import numpy as np
-    import pandas as pd
-    np.random.seed(3)
-    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    return pd.DataFrame({
-        "open": close, "high": close + 0.5, "low": close - 0.5,
-        "close": close, "volume": np.ones(n) * 1e6,
-    }, index=pd.date_range("2026-01-01", periods=n, freq="B"))
-
-
