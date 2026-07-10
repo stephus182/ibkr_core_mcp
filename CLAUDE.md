@@ -44,11 +44,11 @@ IBKR_GATEWAY_URL=https://localhost:5055/v1/api
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_DRIVE_FOLDER_ID=1abc...xyz
 IBKR_SQLITE_PATH=~/.ibkr_core/store.db
-GDRIVE_TOKEN_FILE=~/.ibkr_core/token.json
-GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials.json
+GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json
+GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 ```
 
-Never commit `.env`, `token.json`, or `credentials.json`.
+Never commit `.env` or any GDrive OAuth credential/token file (e.g. `credentials_ibkr_core_mcp.json`, `token_ibkr_core_mcp.json`).
 
 ---
 
@@ -507,8 +507,8 @@ Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_conf
         "ANTHROPIC_API_KEY": "sk-ant-...",
         "GOOGLE_DRIVE_FOLDER_ID": "...",
         "IBKR_SQLITE_PATH": "~/.ibkr_core/store.db",
-        "GDRIVE_TOKEN_FILE": "~/.ibkr_core/token.json",
-        "GDRIVE_CREDENTIALS_FILE": "~/.ibkr_core/credentials.json"
+        "GDRIVE_TOKEN_FILE": "~/.ibkr_core/token_ibkr_core_mcp.json",
+        "GDRIVE_CREDENTIALS_FILE": "~/.ibkr_core/credentials_ibkr_core_mcp.json"
       }
     }
   }
