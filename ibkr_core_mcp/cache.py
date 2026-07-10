@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -10,14 +9,13 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import CacheMissError, CacheWriteError
+from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _MANIFEST_NAME = "manifest.json"
@@ -74,35 +72,23 @@ class GDriveCache:
     def _get_service(self) -> Any:
         """Return an authenticated Drive API v3 service object.
 
-        Token refresh: if the stored credentials are expired and have a refresh_token,
-        they are silently refreshed via google.auth.transport.requests.Request.
-        First-time auth: InstalledAppFlow opens a local browser flow on port 0
-        (OS-assigned). The resulting token is written to GDRIVE_TOKEN_FILE with
-        mode 0o600 (user-only read/write).
+        Delegates token loading/refresh to ibkr_core_mcp.gdrive_auth.load_or_refresh_credentials
+        (shared with claudia_ui's GDriveSync). If no valid token exists, runs the interactive
+        first-time bootstrap: InstalledAppFlow opens a local browser flow on port 0
+        (OS-assigned), and the resulting token is persisted via gdrive_auth.persist_credentials
+        with mode 0o600 (user-only read/write).
 
         Source: https://developers.google.com/drive/api/quickstart/python
         """
         if self._service:
             return self._service
-        creds = None
-        if self._config.gdrive_token_file.exists():
-            creds = Credentials.from_authorized_user_file(
-                str(self._config.gdrive_token_file), _SCOPES
+        creds = load_or_refresh_credentials(self._config.gdrive_token_file, _SCOPES)
+        if creds is None:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(self._config.gdrive_credentials_file), _SCOPES
             )
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(self._config.gdrive_credentials_file), _SCOPES
-                )
-                creds = flow.run_local_server(port=0)
-            self._config.gdrive_token_file.parent.mkdir(parents=True, exist_ok=True)
-            token_path = str(self._config.gdrive_token_file)
-            fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                fh.write(creds.to_json())
-            os.chmod(token_path, 0o600)  # enforce on pre-existing files too
+            creds = flow.run_local_server(port=0)
+            persist_credentials(self._config.gdrive_token_file, creds)
         if not self._config.gdrive_folder_id and not self._config.gdrive_cache_folder_id:
             from ibkr_core_mcp.exceptions import CacheError
             raise CacheError(
