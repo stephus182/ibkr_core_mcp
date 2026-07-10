@@ -1123,8 +1123,15 @@ class IBKRClient:
         confirm_modify_dialog(order_id, order, account_id)
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", order)
 
-    def cancel_order(self, account_id: str, order_id: str) -> dict[str, Any]:
+    def cancel_order(
+        self, account_id: str, order_id: str, order_details: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Cancel an order. Requires Touch ID (Gate 1) + tkinter confirmation dialog (Gate 2).
+
+        `order_details` is optional display-only info (symbol/side/qty/price/TIF/etc.) shown
+        in the Gate 2 dialog so the human can verify the right order before cancelling —
+        mirrors modify_order()'s dialog, which already receives the full order dict. Found
+        missing live 2026-07-10 — user-flagged hard requirement.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#cancel-order
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -1133,7 +1140,7 @@ class IBKRClient:
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
         require_touch_id(f"IBKR: Cancel order {order_id}")
-        confirm_cancel_dialog(order_id, account_id)
+        confirm_cancel_dialog(order_id, account_id, order_details)
         url = f"{self._base}/iserver/account/{account_id}/order/{order_id}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30))
         return resp.json()

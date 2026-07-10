@@ -82,11 +82,26 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
     )
 
 
-def confirm_cancel_dialog(order_id: str, account_id: str) -> None:
-    """Gate 2 for cancel_order."""
+def confirm_cancel_dialog(
+    order_id: str, account_id: str, order: dict[str, Any] | None = None
+) -> None:
+    """Gate 2 for cancel_order.
+
+    `order` is optional display-only detail (symbol/side/qty/price/TIF/etc.) so the human
+    can visually verify which order they're cancelling — mirrors confirm_modify_dialog's
+    pattern. None preserves the old order-id-only dialog for any caller without full order
+    detail available. Found missing live 2026-07-10 — user-flagged hard requirement.
+    """
+    details: dict[str, Any] = {}
+    if order:
+        details.update(
+            {k: str(v) for k, v in order.items() if k not in ("Order ID", "Account")}
+        )
+    details["Order ID"] = order_id
+    details["Account"] = account_id
     _show_confirm_dialog(
         title="⚠  CANCEL ORDER CONFIRMATION",
-        details={"Order ID": order_id, "Account": account_id},
+        details=details,
         disclaimer="This will CANCEL a live order at Interactive Brokers.",
         confirm_label="CANCEL ORDER",
     )

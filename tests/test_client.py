@@ -240,12 +240,27 @@ def test_modify_order_calls_both_gates(client):
 def test_cancel_order_calls_both_gates(client):
     call_order = []
     with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
-         _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=lambda o_id, a: call_order.append("dialog")), \
+         _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=lambda o_id, a, order=None: call_order.append("dialog")), \
          _patch.object(client._session, "delete") as mock_del:
         mock_del.return_value = _make_ok_response({"status": "cancelled"})
         client.cancel_order("U1234567", "ORD456")
     assert call_order == ["touch_id", "dialog"]
     mock_del.assert_called_once()
+
+
+def test_cancel_order_passes_order_details_to_dialog(client):
+    captured = {}
+    with _patch("ibkr_core_mcp.client.require_touch_id"), \
+         _patch(
+             "ibkr_core_mcp.client.confirm_cancel_dialog",
+             side_effect=lambda o_id, a, order=None: captured.update(order or {}),
+         ), \
+         _patch.object(client._session, "delete") as mock_del:
+        mock_del.return_value = _make_ok_response({"status": "cancelled"})
+        client.cancel_order(
+            "U1234567", "ORD456", order_details={"symbol": "AAPL", "side": "SELL"}
+        )
+    assert captured == {"symbol": "AAPL", "side": "SELL"}
 
 
 def test_reply_order_calls_both_gates(client):

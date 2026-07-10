@@ -210,6 +210,24 @@ def test_confirm_cancel_dialog_passes_order_id():
     assert "CANCEL" in kwargs["confirm_label"]
 
 
+def test_confirm_cancel_dialog_shows_order_details_when_provided():
+    """User-flagged hard requirement, 2026-07-10: the cancel dialog must show full
+    order details (symbol/side/qty/price/TIF), not just an opaque order ID — mirrors
+    what confirm_modify_dialog already does."""
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
+        confirm_cancel_dialog(
+            "ORD456", "U1234567",
+            {"symbol": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 100.0},
+        )
+    kwargs = mock_show.call_args.kwargs
+    assert kwargs["details"]["Order ID"] == "ORD456"
+    assert kwargs["details"]["Account"] == "U1234567"
+    assert kwargs["details"]["symbol"] == "AAPL"
+    assert kwargs["details"]["side"] == "BUY"
+    assert kwargs["details"]["price"] == "100.0"
+
+
 def test_confirm_reply_dialog_passes_reply_id():
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         from ibkr_core_mcp.order_confirm import confirm_reply_dialog
