@@ -187,6 +187,42 @@ def test_diagnose_orders_shows_filtered_status(toolkit):
     assert "FILTERED" in text
 
 
+def test_execute_get_live_orders_labels_claudia_staged_via_order_ref(toolkit):
+    """IBKR's real Live Orders field is order_ref (snake_case), not orderRef/cOID —
+    2026-07-10 live finding: every order fell through to EXTERNAL because neither
+    checked key ever matched a real response."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 1, "ticker": "AAPL", "side": "BUY", "totalSize": 1,
+         "price": 100.0, "status": "Submitted", "order_ref": "CLAUDIA-1783692527147"},
+    ]
+    text, fig = toolkit.execute("get_live_orders", {})
+    assert "ClaudIA-staged" in text
+    assert "EXTERNAL" not in text
+
+
+def test_execute_get_live_orders_still_falls_back_to_external_without_order_ref(toolkit):
+    """Regression guard: an order with no order_ref/orderRef/cOID and clientId=0 must
+    still show as EXTERNAL — this is the correct behavior for genuinely external orders."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 2, "ticker": "EEM", "side": "BUY", "totalSize": 1,
+         "price": 50.0, "status": "Submitted", "clientId": 0},
+    ]
+    text, fig = toolkit.execute("get_live_orders", {})
+    assert "EXTERNAL" in text
+
+
+def test_diagnose_orders_labels_claudia_staged_via_order_ref(toolkit):
+    """_diagnose_orders must use the same order_ref-first lookup as _get_live_orders —
+    they were inconsistent before this fix (get_live_orders computed an origin label,
+    diagnose_orders only showed raw clientId/ref with no origin at all)."""
+    toolkit._client.get_orders_raw.return_value = {"orders": [
+        {"orderId": 1, "ticker": "AAPL", "side": "BUY", "totalSize": 1,
+         "price": 100.0, "status": "Submitted", "order_ref": "CLAUDIA-1783692527147"},
+    ]}
+    text, fig = toolkit.execute("diagnose_orders", {})
+    assert "ClaudIA-staged" in text
+
+
 # ============================================================================
 # _get_pa_performance
 # ============================================================================

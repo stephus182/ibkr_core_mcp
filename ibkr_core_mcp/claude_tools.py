@@ -1554,8 +1554,10 @@ class ClaudeToolkit:
     def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return working orders (all statuses except Filled/Cancelled/Expired) across all instrument types.
 
-        Origin is determined from orderRef prefix ('CLAUDIA-' = ClaudIA-staged) rather than
-        clientId, which is unreliable — both CP API and mobile orders can show clientId=0.
+        Origin is determined from the order_ref prefix ('CLAUDIA-' = ClaudIA-staged) rather
+        than clientId, which is unreliable — both CP API and mobile orders can show clientId=0.
+        order_ref is IBKR's real Live Orders field (snake_case); orderRef/cOID/clientOrderId
+        are kept as fallbacks only (see docs/project-status.md Known Gaps, found 2026-07-10).
         """
         orders = self._client.get_live_orders()
         if not orders:
@@ -1568,7 +1570,14 @@ class ClaudeToolkit:
             price = o.get("price", "MKT")
             status = o.get("status", "?")
             tif = o.get("timeInForce") or o.get("tif") or ""
-            order_ref = o.get("orderRef") or o.get("cOID") or o.get("clientOrderId") or ""
+            order_ref = (
+                o.get("order_ref")  # IBKR's real Live Orders field (snake_case) — verified
+                                     # against docs/superpowers/audit-evidence/scrapes/cpapi-v1.md
+                or o.get("orderRef")  # kept in case IBKR ever adds a camelCase alias
+                or o.get("cOID")
+                or o.get("clientOrderId")
+                or ""
+            )
             client_id = o.get("clientId")
             # Determine origin: CLAUDIA-prefixed cOID is definitive; clientId is unreliable
             # because both ClaudIA (Client Portal API) and mobile orders may show clientId=0
@@ -1612,12 +1621,21 @@ class ClaudeToolkit:
         for o in orders:
             status = o.get("status", "MISSING")
             filtered = " [FILTERED by get_live_orders]" if status in terminal or not status else ""
-            order_ref = o.get("orderRef") or o.get("cOID") or ""
+            order_ref = (
+                o.get("order_ref") or o.get("orderRef") or o.get("cOID") or ""
+            )
             client_id = o.get("clientId", "absent")
+            if order_ref.startswith("CLAUDIA-"):
+                origin = "ClaudIA-staged"
+            elif client_id not in (0, "0", "absent", None):
+                origin = f"API (clientId={client_id})"
+            else:
+                origin = "EXTERNAL"
             lines.append(
                 f"orderId={o.get('orderId')} ticker={o.get('ticker', o.get('symbol'))} "
                 f"side={o.get('side')} qty={o.get('totalSize')} price={o.get('price')} "
-                f"status={status} clientId={client_id} ref={order_ref or 'none'}{filtered}"
+                f"status={status} origin={origin} clientId={client_id} "
+                f"ref={order_ref or 'none'}{filtered}"
             )
         return (
             f"Endpoint used: /iserver/account/orders\nRaw IBKR orders ({len(orders)} total):\n" + "\n".join(lines)
