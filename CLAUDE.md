@@ -2,7 +2,7 @@
 
 Standalone pip-installable Python package providing a complete IBKR Client Portal API client, Google Drive parquet cache, SQLite store, backtest sandbox, technical indicators, portfolio analytics, Claude AI tool layer, and PineScript generation utilities.
 
-**Design spec:** `docs/specs/2026-05-22-ibkr-core-mcp-design.md`
+**Design spec:** `docs/2026-05-22-ibkr-core-mcp-design.md`
 
 ---
 
@@ -19,8 +19,6 @@ pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.0.0
 pip install -e /path/to/ibkr_core_mcp
 ```
 
----
-
 ## Dev Setup
 
 ```bash
@@ -30,8 +28,32 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-**Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`).  
+**Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`).
 **Package manager:** `brew install` for macOS tooling, `pip install -e ".[dev]"` for Python deps.
+
+## Running Tests
+
+```bash
+pytest -m "not integration"                            # unit tests only, no gateway/Drive/IBKR needed
+pytest                                                  # all tests, requires live IBKR gateway + .env
+pytest tests/test_indicators.py -v                      # specific module
+
+# Targeted claude_tools subsets — see tests/claude_tools/TEST_INDEX.md
+pytest tests/claude_tools/                              # all claude_tools unit tests
+pytest tests/claude_tools/ -m "not integration"          # same, explicit
+pytest tests/claude_tools/test_flex.py                   # one domain file
+pytest -m orders                                         # one domain, repo-wide
+pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
+```
+
+## Publishing a New Version
+
+```bash
+git tag -l --sort=-v:refname | head -1    # check current latest tag first — don't reuse one
+git tag vX.Y.Z                             # semver — bump patch/minor/major as appropriate
+git push origin vX.Y.Z
+```
+Consumers pin to: `pip install git+https://github.com/stephus182/ibkr_core_mcp.git@vX.Y.Z`
 
 ---
 
@@ -86,28 +108,16 @@ ibkr_core_mcp/
     └── healthcheck.sh    # curl-based readiness probe used by run_gateway.sh
 ```
 
----
-
-## IBKR API
-
-### Setup
-
-```python
-from ibkr_core_mcp import IBKRClient, GDriveCache, SQLiteStore, Config
-
-cfg = Config.from_env()          # reads .env
-client = IBKRClient(cfg)
-cache  = GDriveCache(cfg)
-store  = SQLiteStore(cfg)
-```
+Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDriveCache`,
+`SQLiteStore`) and all per-module usage examples: @docs/api-usage-examples.md
 
 ---
 
-### Security & Fingerprint Authentication
+## Security & Fingerprint Authentication
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR. `place_order_and_confirm` / `modify_order_and_confirm` (see [Order Management](#order-management)) run the same two gates again for every chained reply IBKR asks for, not just once:
+Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR. `place_order_and_confirm` / `modify_order_and_confirm` run the same two gates again for every chained reply IBKR asks for, not just once. Full usage examples: @docs/order-management-examples.md
 
 | Gate | Mechanism | Behaviour |
 |---|---|---|
@@ -127,7 +137,7 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 | `cancel_order` | Touch ID → cancel dialog |
 | `reply_order` | Touch ID → reply dialog |
 
-`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state (see [Order Management](#order-management)), and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step.
+`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step.
 
 **Explicitly ungated (read-only, no execution risk):**
 
@@ -146,535 +156,35 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 
 ---
 
-### Gateway Authentication & Session
+## Gateway Authentication & Session
 
-The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate. No cloud deployment possible.
-
-`BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`. On first use:
-
-1. Start the gateway using the built-in `GatewayManager` (see below)
-2. Open `https://localhost:5055` in Chrome
-3. Log in with IBKR credentials + 2FA (approve push notification on phone)
-4. Wait for "Client login succeeds" in browser
-5. The package reads the session cookie automatically
-
-**Starting the gateway:**
-```python
-from ibkr_core_mcp import GatewayManager
-
-gm = GatewayManager()
-gm.startup()   # builds Docker image on first run, then opens browser for login
-```
-
-Or from a script:
-```bash
-python -c "from ibkr_core_mcp import GatewayManager; GatewayManager().startup()"
-```
-
-The gateway Docker image (`ibkr-core-gateway`) is built from assets bundled
-inside `ibkr_core_mcp/gateway/`. No external repo is required.
-
-For headless use (ML batch jobs), pass a pre-extracted cookie string:
-```python
-from ibkr_core_mcp import IBKRClient, TokenAuth, Config
-
-client = IBKRClient(Config.from_env(), auth=TokenAuth("cookie_string_here"))
-```
-
-**Session constraints:**
-- Session expires without activity — call `client.tickle()` every 60 s to keep it alive
-- Rate limit: ~5 requests/second — handled transparently by `rate_limiter.py`
+The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit ~5 requests/second, handled transparently by `rate_limiter.py`. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: @docs/gateway-auth-reference.md
 
 ---
 
-### Market Data
-
-Fetch OHLCV bars via the IBKR gateway with automatic Google Drive parquet caching. Cache is shared across machines via Drive.
-
-```python
-from ibkr_core_mcp import IBKRClient, GDriveCache, Config, bars_to_dataframe
-
-cfg = Config.from_env()
-client = IBKRClient(cfg)
-cache  = GDriveCache(cfg)
-
-symbol, timeframe, period, end = "AAPL", "1D", "1Y", "2026-05-22"
-
-if cache.check(symbol, timeframe, period, end):
-    df = cache.load(symbol, timeframe, period, end)
-else:
-    contracts = client.search_contract(symbol)
-    conid = contracts[0]["conid"]
-    bars  = client.get_market_history(conid, period=period, bar="1d")
-    df    = bars_to_dataframe(bars)
-    cache.save(df, symbol, timeframe, period, end)
-```
-
-**Constraints:**
-- Snapshot data may be 15-min delayed depending on market data subscription level
-- Most endpoints require `conid` (contract ID) — use `client.search_contract(symbol)` to resolve
-
----
-
-### Technical Indicators
-
-14 pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
-
-```python
-from ibkr_core_mcp import indicators
-
-df = cache.load("AAPL", "1D", "1Y", "2026-05-22")
-df = indicators.add_all(df)           # adds all 14 indicator columns in-place
-
-# Individual indicators
-rsi      = indicators.rsi(df, period=14)
-macd_df  = indicators.macd(df)        # columns: macd, signal, histogram
-bb_df    = indicators.bollinger_bands(df)
-atr      = indicators.atr(df)
-vwap     = indicators.vwap(df)
-```
-
-Available: `sma`, `ema`, `rsi`, `macd`, `bollinger_bands`, `atr`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`
-
----
-
-### Backtesting
-
-Run strategy code in a `RestrictedPython` sandbox — no network, no file I/O, no `os` access.
-
-```python
-from ibkr_core_mcp import run_backtest
-
-code = """
-df['signal'] = 0
-df.loc[df['rsi'] < 30, 'signal'] = 1
-df.loc[df['rsi'] > 70, 'signal'] = -1
-"""
-result = run_backtest(code, df, strategy_name="RSI Mean Reversion")
-print(f"Sharpe: {result.sharpe:.2f}  |  Max DD: {result.max_drawdown:.1f}%  |  Win rate: {result.win_rate:.0%}")
-```
-
-`BacktestResult` fields: `sharpe`, `sortino`, `calmar`, `max_drawdown`, `cagr`, `win_rate`, `profit_factor`, `trades`, `equity_curve`
-
----
-
-### Historical Trade Data (Flex Queries)
-
-The Client Portal API (`/iserver/account/trades`) returns only the **last 7 days** of trade history (current day + 6 previous). For full historical data, the package ships a complete Flex Query suite — the only manual step is the one-time Flex Query configuration on the IBKR website below. After that, `FlexQueryClient` fetches/parses statements and maintains the historical database end-to-end (upsert into `SQLiteStore` for unlimited history + daily GDrive parquet snapshots), and the toolkit exposes the full lifecycle as tools: `sync_flex_trades` (daily fetch), `sync_flex_archive` / `import_flex_file` (bulk/manual XML import), `check_flex_coverage` (history completeness), and `verify_flex_import` (SHA-256 manifest verification).
-
-**One-time setup on IBKR website:**
-1. Log in → Reports → Flex Queries → Create
-2. Select "Trades" activity type, all fields, all dates
-3. Note the Token and Query ID → add to `.env`:
-
-```
-IBKR_FLEX_TOKEN=your_token_here
-IBKR_FLEX_QUERY_ID=your_query_id_here
-```
-
-**Usage:**
-```python
-from ibkr_core_mcp import FlexQueryClient, SQLiteStore, GDriveCache, Config
-
-cfg   = Config.from_env()
-store = SQLiteStore(cfg)
-cache = GDriveCache(cfg)
-flex  = FlexQueryClient(cfg, store, cache)
-
-# Fetch → parse → upsert SQLite → save daily GDrive parquet
-trades = flex.fetch_trades("U1234567")
-print(f"Loaded {len(trades)} trades")
-
-# Query historical trades from SQLite (unlimited history)
-all_trades = store.get_trades(symbol="AAPL", start="2022-01-01")
-```
-
-The daily parquet snapshot is saved to GDrive under key `FLEX_TRADES_ALL_{account_id}_{YYYY-MM-DD}`. Run `flex.fetch_trades()` daily (cron or agent schedule) to keep the store current.
-
-**Constraints:**
-- Flex Token and Query ID must be configured manually on the IBKR website — they are not the same as Client Portal credentials
-- Statement generation is asynchronous; `FlexQueryClient` polls up to 5 times (15 s total) before raising `FlexQueryError`
-
----
-
-### Order Management
-
-> **All write operations require fingerprint (Touch ID) + visual confirmation. See [Security & Fingerprint Authentication](#security--fingerprint-authentication).**
-
-**Read-only — no auth required:**
-```python
-# List open orders
-orders = client.get_live_orders()
-for o in orders:
-    print(f"{o['orderId']}  {o.get('ticker')}  {o.get('side')}  qty={o.get('remainingQuantity')}")
-
-# Preview an order before placing (whatif — never executes)
-preview = client.get_order_preview(account_id, order)
-print(f"Estimated cost: {preview.get('equity', '?')}")
-```
-
-**Place a live order — Gate 1 (Touch ID) + Gate 2 (confirmation dialog), full reply chain resolved automatically:**
-```python
-from ibkr_core_mcp import IBKRClient, Config, HumanAuthError
-
-cfg    = Config.from_env()
-client = IBKRClient(cfg)
-
-contracts = client.search_contract("AAPL")
-order = {
-    "conid":     contracts[0]["conid"],
-    "ticker":    "AAPL",
-    "side":      "BUY",
-    "quantity":  10,
-    "orderType": "LIMIT",
-    "price":     182.50,
-    "tif":       "DAY",
-}
-
-try:
-    # place_order_and_confirm() is the recommended entry point: it calls
-    # place_order(), then loops Touch ID + a dialog showing the real IBKR
-    # message through every chained reply, until a terminal response.
-    # Verified live 2026-07-06: a single order needed 3 sequential replies
-    # (price-band %, no-market-data, mandatory-cap-price) before Submitted.
-    # Declining any reply mid-chain POSTs {"confirmed": False} to IBKR before
-    # raising HumanAuthError — unlike bare reply_order() below, which raises
-    # without ever telling IBKR, leaving the order ambiguous on IBKR's side.
-    result = client.place_order_and_confirm(account_id, order)
-except HumanAuthError as e:
-    print(f"Order not sent: {e}")
-```
-
-**Manual control — call `place_order`/`reply_order` yourself instead of `place_order_and_confirm`:**
-```python
-try:
-    responses = client.place_order(account_id, order)
-    # A reply can chain into ANOTHER reply requirement — loop until terminal.
-    # Must run immediately, back-to-back — IBKR invalidates (503) a reply left
-    # pending while other requests are made. Show resp["message"] to the human
-    # before confirming — it is the exact text they are agreeing to.
-    while responses and "id" in responses[0]:
-        print(responses[0]["message"])  # show the human what they're confirming
-        responses = client.reply_order(responses[0]["id"])
-except HumanAuthError as e:
-    print(f"Order not sent: {e}")
-```
-
-**GTC orders are not indefinite:** they auto-cancel at the end of the calendar
-quarter *following* the current one (placed in Q3 → cancels end of Q4; placed in
-Q1 → cancels end of Q2) — not simply "year-end." Confirmed live 2026-07-06: an
-order placed in Q3 returned "will be automatically canceled at 20261231 16:00:00
-EST" (end of Q4), matching IBKR's documented convention exactly. Source:
-https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/
-
-**Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does (not yet live-verified to require chained replies, but shares `modify_order`'s response shape); cancel has no reply chain:**
-```python
-try:
-    client.modify_order_and_confirm(account_id, order_id, {"price": 180.00, "tif": "DAY"})
-except HumanAuthError as e:
-    print(f"Modification not sent: {e}")
-
-try:
-    client.cancel_order(account_id, order_id)
-except HumanAuthError as e:
-    print(f"Cancellation not sent: {e}")
-```
-
-**IBKR order constraints:**
-- Trade history via API limited to last 7 days (current + 6 previous) — `SQLiteStore` persists indefinitely
-- Orders require `conid` — resolve via `client.search_contract(symbol)`
-
----
-
-### Portfolio Analytics
-
-```python
-from ibkr_core_mcp import analytics
-
-# Live positions and account summary (read-only)
-positions = client.get_positions(account_id)
-summary   = client.get_account_summary(account_id)
-
-# Full performance report from equity returns + trade history
-trades = store.get_trades()
-report = analytics.full_report(equity_returns, trades)           # daily bars (default)
-report = analytics.full_report(equity_returns, trades, periods=1440)  # 1-min bars
-# → { sharpe, sortino, calmar, max_drawdown, cagr, win_rate, profit_factor, avg_win_loss_ratio, ... }
-
-print(f"Sharpe: {report['sharpe']:.2f}  |  Calmar: {report['calmar']:.2f}  |  Max DD: {report['max_drawdown']:.1f}%")
-```
-
-Available metrics: `sharpe`, `sortino`, `calmar`, `cagr`, `max_drawdown`, `max_drawdown_duration`, `win_rate`, `profit_factor`, `avg_win_loss_ratio`, `trade_summary`
-
-**Market calendar context** (static method on `SQLiteStore`):
-
-```python
-# Trading calendar for the current + next year — holidays, half-days, session hours
-ctx = SQLiteStore.get_market_calendar_context()            # default: 20 exchanges (G20 + Eurex)
-ctx = SQLiteStore.get_market_calendar_context(["XLON"])     # REPLACES the default — returns XLON only, not default+XLON
-
-# Returns: { "today": "...", "is_trading_day": bool, "last_trading_day": "...",
-#            "next_trading_day": "...", "primary_exchange": "XNYS",
-#            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... } }
-# See README.md's "Market Calendar" section for the full 20-exchange default list and a worked example.
-```
-
-Used internally by `ClaudeToolkit.get_analytics()` to give the LLM context-aware trading-day awareness.
-
----
-
-### Claude AI Tool Layer
-
-Exposes all IBKR capabilities as Claude tool definitions. Drop into any Claude-powered app.
-
-```python
-from ibkr_core_mcp import IBKRClient, GDriveCache, SQLiteStore, ClaudeToolkit, Config
-import anthropic
-
-cfg     = Config.from_env()
-toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg)
-
-client   = anthropic.Anthropic()
-response = client.messages.create(
-    model="claude-sonnet-4-6",
-    tools=toolkit.tools,          # 42 tools, ready to use
-    messages=[{"role": "user", "content": "Show my open positions and run a backtest on AAPL"}],
-)
-for block in response.content:
-    if block.type == "tool_use":
-        text, fig = toolkit.execute(block.name, block.input)
-```
-
-Note: `ClaudeToolkit` exposes no order-write tools. Order placement must go through `IBKRClient` directly, which enforces the fingerprint gates.
-
-**Layering exception:** `scrape_fallback.judge_completeness_llm()` (used by the
-`firecrawl_search`/`firecrawl_crawl` handlers) is the one place `ibkr_core_mcp` calls
-the Anthropic API directly with `config.anthropic_api_key`, rather than only handing
-`ClaudeToolkit.tools` to a host app's own client. This was a deliberate, scoped
-choice (a single cheap Haiku completeness check) — don't treat it as precedent for
-adding more direct API calls elsewhere without the same scrutiny; a host app's own
-token-usage tracking won't see this call's cost.
-
----
-
-### PineScript Generation
-
-Generate TradingView PineScript v5 directly from backtest results or indicator configs.
-
-```python
-from ibkr_core_mcp import pinescript
-
-# From a backtest result
-script = pinescript.strategy_from_backtest(result, df)
-print(script)   # paste directly into TradingView Pine Editor
-
-# From signals DataFrame
-script = pinescript.strategy_from_signals("RSI Reversal", df["signal"], symbol="AAPL", timeframe="1D")
-
-# Indicator-only script
-script = pinescript.indicator_script("AAPL Indicators", ["rsi", "macd", "bollinger_bands"], params={})
-```
-
----
-
-## MCP Server
-
-`ibkr_core_mcp` ships a built-in MCP server exposing 44 tools and 4 resources.
-Any MCP-compatible client — Claude Desktop, a custom chatbot, a dashboard, or an
-ML pipeline — connects without requiring the `anthropic` SDK.
-
-### Install
-
-```bash
-pip install "ibkr_core_mcp[server]"
-```
-
-### stdio — Claude Desktop
-
-```bash
-python -m ibkr_core_mcp.mcp_server
-```
-
-Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "ibkr": {
-      "command": "/path/to/.venv/bin/python",
-      "args": ["-m", "ibkr_core_mcp.mcp_server"],
-      "env": {
-        "IBKR_GATEWAY_URL": "https://localhost:5055/v1/api",
-        "ANTHROPIC_API_KEY": "sk-ant-...",
-        "GOOGLE_DRIVE_FOLDER_ID": "...",
-        "IBKR_SQLITE_PATH": "~/.ibkr_core/store.db",
-        "GDRIVE_TOKEN_FILE": "~/.ibkr_core/token_ibkr_core_mcp.json",
-        "GDRIVE_CREDENTIALS_FILE": "~/.ibkr_core/credentials_ibkr_core_mcp.json"
-      }
-    }
-  }
-}
-```
-
-### HTTP/SSE — dashboard and chatbots
-
-```bash
-# Read-only (no streaming)
-python -m ibkr_core_mcp.mcp_server --transport sse --port 5174
-
-# With WebSocket live quotes and price alerts
-python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
-```
-
-The server binds to `127.0.0.1` only — never exposed to external networks.
-Connect MCP clients to `http://localhost:5174/sse`.
-
-### Tools (44)
-
-All 42 `ClaudeToolkit` tools plus:
-- `add_price_alert` — register a threshold alert (persisted to SQLite)
-- `get_price_alerts` — list active or all alerts
-
-### Resources
-
-| URI | Content |
-|---|---|
-| `ibkr://accounts` | All IBKR accounts |
-| `ibkr://positions/current` | Current positions for primary account |
-| `ibkr://trades/recent` | Last 100 trades from SQLite |
-| `ibkr://pnl/live` | Latest account P&L snapshot (WebSocket `spl` topic, `--stream` only) |
-
-### Price alerts (programmatic)
-
-```python
-import asyncio
-from ibkr_core_mcp import Config, IBKRWebSocket, AlertManager, SQLiteStore
-from ibkr_core_mcp.auth import BrowserCookieAuth
-import requests
-
-async def main():
-    cfg = Config.from_env()
-    store = SQLiteStore(cfg)
-
-    session = requests.Session()
-    BrowserCookieAuth().apply(session)
-    cookie = session.headers.get("Cookie", "")
-
-    ws = IBKRWebSocket(cfg.gateway_url, cookie)
-    await ws.connect()
-    await ws.subscribe(265598)  # AAPL conid
-
-    store.add_alert(265598, "AAPL", 185.0, "above")
-    manager = AlertManager(store)
-
-    async for quote in ws.listen():
-        for alert in manager.check_quote(quote):
-            print(f"ALERT: {alert['symbol']} hit {alert['threshold']}")
-
-asyncio.run(main())
-```
-
-### TradingView integration
-
-`tradingview-mcp` (MIT, Node.js) connects to TradingView Desktop via Chrome
-DevTools Protocol and exposes 78 tools: chart reading, PineScript injection,
-drawings, and replay. Run it alongside ibkr-core-mcp so Claude can read live
-charts and query your IBKR account in the same conversation:
-
-```json
-{
-  "mcpServers": {
-    "ibkr":        { "command": "python", "args": ["-m", "ibkr_core_mcp.mcp_server"], "env": { "..." : "..." } },
-    "tradingview": { "command": "npx",    "args": ["-y", "tradingview-mcp"] }
-  }
-}
-```
-
-See: https://github.com/tradesdontlie/tradingview-mcp
-
----
-
-## IBKR API Reference — Docs First
-
-**Never assume IBKR endpoint behavior, error codes, field names, or URL paths from memory or training data. Always verify against official documentation before writing any code, error message, or diagnosis.**
-
-This rule exists because assumption-based development caused two confirmed incidents in this codebase:
-
-| Incident | Assumed | Actual | Cost |
-|---|---|---|---|
-| Flex error 1001 | "rate limit — wait 5 min" | Transient generation failure — retry | Multiple failed sync attempts, misdiagnosed |
-| Flex endpoint URL | `gdcdyn.interactivebrokers.com/Universal/servlet/...` | `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` | Flex API never worked from day one |
-
-**Protocol:** Use `WebFetch` to load the relevant doc page before writing any fix, error message, or new endpoint. Cite the source URL in the commit message.
-
-### Official Documentation URLs — All External APIs
-
-**IBKR Client Portal API** (`client.py`, `rate_limiter.py`, `claude_tools.py`)
-
-| Topic | URL |
-|---|---|
-| **Client Portal API reference** (all CP endpoints) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
-| **Web API reference** | https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-ref/ |
-| **Orders / modify** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
-| **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
-
-**IBKR Flex Web Service** (`flex_query.py`)
-
-| Topic | URL |
-|---|---|
-| **Flex Web Service setup** (endpoints, params, headers) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
-| **Flex Web Service error codes** (all 21 codes, last updated 2025-10-03) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
-| **Enable Flex Web Service** (one-time token + query setup) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex-web-service.htm |
-| **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
-
-**IBKR WebSocket Streaming** (`streaming.py`)
-
-| Topic | URL |
-|---|---|
-| **WebSocket API reference** (subscriptions, message format) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
-| **Market data subscriptions** (fields, tick types) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#market-data |
-| **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-trades-sub |
-| **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-pnl-sub |
-
-**Google Drive API v3** (`cache.py`)
-
-| Topic | URL |
-|---|---|
-| **Drive API v3 reference** (files, upload, download) | https://developers.google.com/drive/api/reference/rest/v3 |
-| **Python client library** (MediaIoBaseUpload, MediaIoBaseDownload) | https://googleapis.github.io/google-api-python-client/docs/dyn/drive_v3.html |
-| **OAuth2 credentials** (token refresh, scopes) | https://google-auth.readthedocs.io/en/master/reference/google.oauth2.credentials.html |
-
-**macOS LocalAuthentication** (`human_auth.py`)
-
-| Topic | URL |
-|---|---|
-| **LAPolicy reference** (biometric policy constants) | https://developer.apple.com/documentation/localauthentication/lapolicy |
-| **evaluatePolicy** (method, error codes) | https://developer.apple.com/documentation/localauthentication/lacontext/evaluatepolicy(_:localizedreason:reply:) |
-
-**Web Scraping — Firecrawl + Crawl4AI fallback** (`web_scraper.py`, `scrape_fallback.py`)
-
-| Topic | URL |
-|---|---|
-| **Firecrawl API reference** (scrape/search/crawl endpoints) | https://docs.firecrawl.dev/api-reference/endpoint/scrape , https://docs.firecrawl.dev/api-reference/endpoint/crawl-get |
-| **Crawl4AI docs** (optional fallback; no built-in confidence score on Firecrawl side — confirmed 2026-06-30) | https://docs.crawl4ai.com/ |
-| **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
-| **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
-
-`crawl4ai>=0.5.0` is a hard floor, verified against the published wheels on PyPI
-(2026-06-30): `BrowserProfiler` does not exist in the 0.4.x series (checked 0.4.248,
-the newest 0.4.x release) — it was introduced in 0.5.0. `crawl4ai<0.5.0` will import
-successfully but raise `Crawl4AIUnavailableError` with a misleading "not installed"
-message when `create_profile()` is actually called, since that message is only
-generated from an `ImportError` on `BrowserProfiler`.
-
-### Known IBKR API Behaviors (Documented, Not Assumed)
-
-These are verified against official sources — not guesses:
-
-- **`/iserver/account/orders`** — two-call pattern: first call instantiates the subscription, second call retrieves data. Source: [IBKR Campus — Orders](https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/)
-- **`/iserver/marketdata/history`** — primary fetch endpoint, max 1000 data points per request. First-call warmup (404/500) auto-retried 3× with 2s delay in `claude_tools.py`. Pagination for large requests handled by `get_market_history_paginated()` using `startTime` chunks. Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
-- **`/iserver/account/trades`** — **the direct access point for today's + recent fills**: `get_trades(source='live')` → `client.get_trades()` → `GET /iserver/account/trades?days=7`. It is the only REST source that can contain same-day executions (Flex is T+1). Official reference documents: "a list of trades for the currently selected account for current day and six previous days" (`?days=7` max), "advised to call this endpoint once per session." Origin coverage is not documented officially but **verified live 2026-07-06: all origins appear (mobile included) once the subscription is primed** — the endpoint has the same two-call warmup as `/iserver/account/orders` (fresh session's first call returns empty; `client.get_trades()` auto-retries once, 1 s apart). The 2026-07-02 empty observation was this warmup, not an origin filter. For real-time execution push, the WebSocket **`str` (trades) topic** is implemented in `streaming.py` (`IBKRWebSocket.subscribe_executions()`/`unsubscribe_executions()`, args: `realtimeUpdatesOnly`, `days`) and persists executions into the same `trades` table used by REST/Flex via `_parse_stream_execution()` — so `get_trades(source='store')` and `ibkr://trades/recent` pick them up automatically once a `--stream` server has captured them. Beyond 7 days or for origin-complete history: the Flex store. Source: CP API reference "Trades" + WebSocket sections, scraped 2026-07-02, `str`/`spl` topics re-confirmed 2026-07-06.
-- **Flex Web Service** — T+1 delay, back-office data. Captures all trades from all interfaces (mobile, TWS, API). Requires separate token + query ID, not CP API credentials.
-- **Flex endpoint** — `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` (not `gdcdyn`). Requires `User-Agent` header for programmatic access.
+## Conventions
+
+- **API Docs First**: never assume IBKR endpoint behavior, error codes, field names, or URL
+  paths from memory or training data. Always verify against official documentation before
+  writing any code, error message, or diagnosis. This rule exists because assumption-based
+  development caused two confirmed incidents in this codebase:
+
+  | Incident | Assumed | Actual | Cost |
+  |---|---|---|---|
+  | Flex error 1001 | "rate limit — wait 5 min" | Transient generation failure — retry | Multiple failed sync attempts, misdiagnosed |
+  | Flex endpoint URL | `gdcdyn.interactivebrokers.com/Universal/servlet/...` | `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/` | Flex API never worked from day one |
+
+  **Protocol:** Use `WebFetch` to load the relevant doc page before writing any fix, error
+  message, or new endpoint. Cite the source URL in the commit message. Full official-doc
+  URL tables (Client Portal, Flex, WebSocket, Drive, LocalAuthentication, web scraping):
+  @docs/external-docs-reference.md. Verified (not assumed) IBKR API behaviors already documented:
+  @docs/ibkr-api-behaviors-reference.md
+
+- **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
+  deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single
+  cheap Haiku completeness check). Don't treat it as precedent for adding another direct API
+  call without the same scrutiny; a host app's own token-usage tracking won't see it. Detail:
+  @docs/api-usage-examples.md
 
 ---
 
@@ -691,53 +201,15 @@ These are verified against official sources — not guesses:
 
 ---
 
-## Running Tests
+## Pointers
 
-```bash
-# Unit tests only (no gateway, no Drive, no IBKR account needed)
-pytest -m "not integration"
-
-# All tests (requires live IBKR gateway + .env)
-pytest
-
-# Specific module
-pytest tests/test_indicators.py -v
-
-# Targeted claude_tools subsets (see tests/claude_tools/TEST_INDEX.md)
-pytest tests/claude_tools/                            # all claude_tools unit tests
-pytest tests/claude_tools/ -m "not integration"        # same, explicit
-pytest tests/claude_tools/test_flex.py                 # one domain file
-pytest -m orders                                       # one domain, repo-wide
-pytest tests/claude_tools/test_tool_descriptions.py    # schema/description honesty only
-```
-
----
-
-## Consuming Projects
-
-| Project | Repo | Uses |
-|---|---|---|
-| ClaudIA Trading Assistant | `github.com/stephus182/claudia_ui` | IBKRClient, GDriveCache, SQLiteStore, ClaudeToolkit, GatewayManager |
-| Order Management UI | (future) | IBKRClient (order endpoints), SQLiteStore, ClaudeToolkit |
-| ML Feature Pipeline | (future) | IBKRClient, GDriveCache, SQLiteStore, indicators |
-| PineScript Generator | (future) | IBKRClient, GDriveCache, indicators, pinescript |
-| Automated Scanner Bot | (future) | IBKRClient, SQLiteStore, analytics |
-
----
-
-## Publishing a New Version
-
-Check the current latest tag first — do not reuse an existing one:
-
-```bash
-git tag -l --sort=-v:refname | head -1
-```
-
-Then tag and push the next version (semver — bump patch/minor/major as appropriate for the change):
-
-```bash
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-Consumers pin to: `pip install git+https://github.com/stephus182/ibkr_core_mcp.git@vX.Y.Z`
+- Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting,
+  Portfolio Analytics, Claude AI Tool Layer, PineScript Generation): @docs/api-usage-examples.md
+- Order Management full code examples (read-only, place/confirm, manual reply-chain
+  control, modify/cancel, GTC quarter-end auto-cancel behavior): @docs/order-management-examples.md
+- Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`: @docs/gateway-auth-reference.md
+- Historical Trade Data / Flex Queries (one-time setup, usage, constraints): @docs/flex-query-reference.md
+- MCP Server (install, stdio/SSE transports, 44 tools, 4 resources, price alerts, TradingView integration): @docs/mcp-server-reference.md
+- Known IBKR API behaviors, verified not assumed: @docs/ibkr-api-behaviors-reference.md
+- Official documentation URLs, all external APIs: @docs/external-docs-reference.md
+- Consuming projects: @docs/consumers.md
