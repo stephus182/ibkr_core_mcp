@@ -109,7 +109,7 @@ ibkr_core_mcp/
 ```
 
 Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDriveCache`,
-`SQLiteStore`) and all per-module usage examples: @docs/api-usage-examples.md
+`SQLiteStore`) and all per-module usage examples: `docs/api-usage-examples.md`
 
 ---
 
@@ -117,7 +117,7 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR. `place_order_and_confirm` / `modify_order_and_confirm` run the same two gates again for every chained reply IBKR asks for, not just once. Full usage examples: @docs/order-management-examples.md
+Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR. `place_order_and_confirm` / `modify_order_and_confirm` run the same two gates again for every chained reply IBKR asks for, not just once. Full usage examples: `docs/order-management-examples.md`
 
 | Gate | Mechanism | Behaviour |
 |---|---|---|
@@ -158,7 +158,7 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 
 ## Gateway Authentication & Session
 
-The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit ~5 requests/second, handled transparently by `rate_limiter.py`. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: @docs/gateway-auth-reference.md
+The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit ~5 requests/second, handled transparently by `rate_limiter.py`. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
 
 ---
 
@@ -177,14 +177,14 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
   **Protocol:** Use `WebFetch` to load the relevant doc page before writing any fix, error
   message, or new endpoint. Cite the source URL in the commit message. Full official-doc
   URL tables (Client Portal, Flex, WebSocket, Drive, LocalAuthentication, web scraping):
-  @docs/external-docs-reference.md. Verified (not assumed) IBKR API behaviors already documented:
-  @docs/ibkr-api-behaviors-reference.md
+  `docs/external-docs-reference.md`. Verified (not assumed) IBKR API behaviors already documented:
+  `docs/ibkr-api-behaviors-reference.md`
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
   deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single
   cheap Haiku completeness check). Don't treat it as precedent for adding another direct API
   call without the same scrutiny; a host app's own token-usage tracking won't see it. Detail:
-  @docs/api-usage-examples.md
+  `docs/api-usage-examples.md`
 
 ---
 
@@ -203,13 +203,16 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 
 ## Pointers
 
+Read these on demand when working in the relevant area — they are plain file references,
+not `@import`s, so they don't load into every session's context automatically.
+
 - Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting,
-  Portfolio Analytics, Claude AI Tool Layer, PineScript Generation): @docs/api-usage-examples.md
+  Portfolio Analytics, Claude AI Tool Layer, PineScript Generation): `docs/api-usage-examples.md`
 - Order Management full code examples (read-only, place/confirm, manual reply-chain
-  control, modify/cancel, GTC quarter-end auto-cancel behavior): @docs/order-management-examples.md
-- Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`: @docs/gateway-auth-reference.md
-- Historical Trade Data / Flex Queries (one-time setup, usage, constraints): @docs/flex-query-reference.md
-- MCP Server (install, stdio/SSE transports, 44 tools, 4 resources, price alerts, TradingView integration): @docs/mcp-server-reference.md
-- Known IBKR API behaviors, verified not assumed: @docs/ibkr-api-behaviors-reference.md
-- Official documentation URLs, all external APIs: @docs/external-docs-reference.md
-- Consuming projects: @docs/consumers.md
+  control, modify/cancel, GTC quarter-end auto-cancel behavior): `docs/order-management-examples.md`
+- Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`: `docs/gateway-auth-reference.md`
+- Historical Trade Data / Flex Queries (one-time setup, usage, constraints): `docs/flex-query-reference.md`
+- MCP Server (install, stdio/SSE transports, 44 tools, 4 resources, price alerts, TradingView integration): `docs/mcp-server-reference.md`
+- Known IBKR API behaviors, verified not assumed: `docs/ibkr-api-behaviors-reference.md`
+- Official documentation URLs, all external APIs: `docs/external-docs-reference.md`
+- Consuming projects: `docs/consumers.md`
