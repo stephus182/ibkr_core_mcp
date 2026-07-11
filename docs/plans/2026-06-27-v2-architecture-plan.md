@@ -1,8 +1,33 @@
 # v2.0 Architecture Plan — ibkr_core_mcp
 
 **Created:** 2026-06-27  
-**Status:** Draft — post v1.0 work  
-**Prerequisite:** v1.0 tagged and claudia verified stable on it
+**Status:** CANCELLED 2026-07-10 — audit found split not worth the cost; see decision below
+
+---
+
+## Decision (2026-07-10)
+
+The Stripe resource-pattern domain split will not be implemented.
+
+**What the audit found:**
+
+The two real sources of friction were CLAUDE.md context bloat and test file navigation — neither required touching `claude_tools.py`:
+
+- **CLAUDE.md split** (done): lean index loads every session; per-domain reference files (`docs/api-reference.md`, `docs/flex-query-reference.md`, etc.) load only when working in that area. Token cost per session dropped significantly.
+- **Test file structure** (done): `# ===…===` section markers already in place; 508 tests in one file remains navigable when sections are clear.
+
+**Why the split was not worth it:**
+
+- ~1 day refactor cost, every `ClaudeToolkit` internal mock in 500+ tests needs updating
+- Cross-domain call pattern (Option A vs B) was never resolved — an undesigned refactor would produce a dependency graph harder to read than the original god class
+- No new tool domains are planned; without a triggering domain addition, the split has no payoff moment
+- claudia uses `ClaudeToolkit` as a black box — the public API stability is more valuable than internal tidiness
+
+**Rule going forward:** Add new handlers inline to `claude_tools.py`. The 4,000-line threshold and a resolved cross-domain design are the only conditions that would re-open this.
+
+The rest of this document is preserved as a design reference in case conditions change.
+
+---
 
 ---
 

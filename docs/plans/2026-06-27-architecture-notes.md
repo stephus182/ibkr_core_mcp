@@ -1,7 +1,30 @@
 # Architecture Notes — claude_tools.py refactor
 
 **Created:** 2026-06-27  
-**Status:** Deferred — do at first new-domain addition, not before v1.0
+**Status:** CLOSED 2026-07-10 — split not worth the benefit; practical wins delivered differently (see below)
+
+---
+
+## Decision (2026-07-10)
+
+The domain split was audited post-v1.0 and **will not be implemented**.
+
+**Audit finding:** The daily friction was cognitive load from two sources — not from `claude_tools.py` itself:
+
+1. **CLAUDE.md** was loading the full developer guide into every session context, burning tokens on docs not relevant to the current task. Fix: split into a lean index + on-demand `docs/` reference files. Done.
+2. **test_claude_tools.py** was a monolithic 1,000+ line file that was slow to navigate. Fix: already organized with `# ===…===` section markers; adding tests by section addressed iteration speed.
+
+**Neither fix touched `claude_tools.py`.** The god class stays as-is.
+
+**Cost/benefit re-evaluation:**
+
+- Refactor cost: ~1 day, touches every test that patches `ClaudeToolkit` internals, regression risk, zero user-visible benefit
+- Actual benefit: developer velocity when adding new tools — already achieved more cheaply by the test file structure and CLAUDE.md split
+- The cross-domain call pattern problem (see below) was never solved; starting the refactor without that answer would produce a dependency graph harder to read than the original
+
+**How to apply going forward:** Add new tool handlers inline to `claude_tools.py`. Do NOT re-open this question unless the file grows past 4,000 lines and the cross-domain call pattern has a clear, documented answer.
+
+---
 
 ---
 
