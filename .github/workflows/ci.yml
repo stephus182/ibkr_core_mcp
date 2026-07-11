@@ -28,6 +28,15 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,server]"
 
+      - name: Show resolved versions of unpinned-ceiling deps
+        # These deps have no upper bound in pyproject.toml on purpose, so pip always
+        # takes their latest release. That's convenient but means a new release can
+        # silently change behavior mypy relies on (e.g. RestrictedPython 8.4 added a
+        # py.typed marker mid-range and broke the build). Printing resolved versions
+        # here puts the culprit right next to a failing lint/mypy/test step instead of
+        # requiring a separate bisection.
+        run: pip show RestrictedPython google-auth google-auth-oauthlib google-api-python-client defusedxml crawl4ai browser_cookie3 2>/dev/null | grep -E "^(Name|Version):"
+
       - name: Lint (ruff)
         run: ruff check .
 

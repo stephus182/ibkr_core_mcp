@@ -32,7 +32,7 @@ dependencies = [
     "anthropic>=0.28",
     "pandas>=2.2",
     "numpy>=1.26",
-    "RestrictedPython>=7.0",
+    "RestrictedPython>=7.0",  # no ceiling by design — CI prints the resolved version so a breaking release is easy to spot
     "pyarrow>=16.0",
     "google-api-python-client>=2.130",
     "google-auth-httplib2>=0.2",
@@ -115,6 +115,12 @@ module = [
 ]
 ignore_missing_imports = true
 
+# RestrictedPython>=8.4 ships py.typed but its __init__.py re-exports
+# compile_restricted/safe_globals without `__all__`, tripping mypy strict's
+# implicit-reexport check even though the names are genuinely public API.
+[[tool.mypy.overrides]]
+module = ["RestrictedPython", "RestrictedPython.*"]
+implicit_reexport = true
 
 [[tool.mypy.overrides]]
 module = ["ibkr_core_mcp.client"]
@@ -128,6 +134,11 @@ disallow_untyped_calls = false
 [[tool.mypy.overrides]]
 module = ["ibkr_core_mcp.cache"]
 disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["ibkr_core_mcp.gdrive_auth"]
+disallow_untyped_calls = false
+warn_return_any = false
 
 [tool.ruff]
 target-version = "py311"
