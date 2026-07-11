@@ -54,7 +54,7 @@ df = indicators.add_all(df)           # adds all 14 indicator columns in-place
 
 # Individual indicators
 rsi      = indicators.rsi(df, period=14)
-macd_df  = indicators.macd(df)        # columns: macd, signal, histogram
+macd_df  = indicators.macd(df)        # columns: macd, macd_signal, histogram
 bb_df    = indicators.bollinger_bands(df)
 atr      = indicators.atr(df)
 vwap     = indicators.vwap(df)
@@ -78,7 +78,7 @@ result = run_backtest(code, df, strategy_name="RSI Mean Reversion")
 print(f"Sharpe: {result.sharpe:.2f}  |  Max DD: {result.max_drawdown:.1f}%  |  Win rate: {result.win_rate:.0%}")
 ```
 
-`BacktestResult` fields: `sharpe`, `sortino`, `calmar`, `max_drawdown`, `cagr`, `win_rate`, `profit_factor`, `trades`, `equity_curve`
+`BacktestResult` fields: `symbol`, `strategy_name`, `total_return`, `sharpe`, `sortino`, `max_drawdown`, `num_trades`, `win_rate`, `equity_curve`
 
 ## Portfolio Analytics
 
@@ -93,12 +93,15 @@ summary   = client.get_account_summary(account_id)
 trades = store.get_trades()
 report = analytics.full_report(equity_returns, trades)           # daily bars (default)
 report = analytics.full_report(equity_returns, trades, periods=1440)  # 1-min bars
-# → { sharpe, sortino, calmar, max_drawdown, cagr, win_rate, profit_factor, avg_win_loss_ratio, ... }
+# → { total_return, cagr, sharpe, sortino, calmar, max_drawdown, max_drawdown_duration,
+#     num_bars, total_trades, win_rate, profit_factor, avg_win_loss_ratio }
+# trade-derived keys (total_trades, win_rate, profit_factor, avg_win_loss_ratio) are only
+# present when `trades` is passed — they're merged into the top-level dict, not nested.
 
 print(f"Sharpe: {report['sharpe']:.2f}  |  Calmar: {report['calmar']:.2f}  |  Max DD: {report['max_drawdown']:.1f}%")
 ```
 
-Available metrics: `sharpe`, `sortino`, `calmar`, `cagr`, `max_drawdown`, `max_drawdown_duration`, `win_rate`, `profit_factor`, `avg_win_loss_ratio`, `trade_summary`
+Available metrics: `total_return`, `cagr`, `sharpe`, `sortino`, `calmar`, `max_drawdown`, `max_drawdown_duration`, `num_bars`, `total_trades`, `win_rate`, `profit_factor`, `avg_win_loss_ratio`
 
 **Market calendar context** (static method on `SQLiteStore`):
 
@@ -109,7 +112,8 @@ ctx = SQLiteStore.get_market_calendar_context(["XLON"])     # REPLACES the defau
 
 # Returns: { "today": "...", "is_trading_day": bool, "last_trading_day": "...",
 #            "next_trading_day": "...", "primary_exchange": "XNYS",
-#            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... } }
+#            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... },
+#            "futures": { "cme_open_nyse_closed": [...], ... } }  # CME/NYSE futures-session overrides
 # See README.md's "Market Calendar" section for the full 20-exchange default list and a worked example.
 ```
 
@@ -136,6 +140,8 @@ for block in response.content:
     if block.type == "tool_use":
         text, fig = toolkit.execute(block.name, block.input)
 ```
+
+Note: `fig` is currently always `None` — reserved for a future chart-returning tool, no current tool populates it.
 
 Note: `ClaudeToolkit` exposes no order-write tools. Order placement must go through `IBKRClient` directly, which enforces the fingerprint gates.
 

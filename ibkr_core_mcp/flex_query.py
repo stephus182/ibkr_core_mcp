@@ -37,7 +37,8 @@ _POLL_SLEEP = 3
 
 # Official IBKR Flex Web Service Version 3 error codes.
 # Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm
-# Page last updated 2025-10-03 (verified via Firecrawl scrape 2026-06-30). All 21 codes present.
+# Page last updated 2025-08-18 (re-verified live 2026-07-10; supersedes a stale 2025-10-03
+# note from the original 2026-06-30 Firecrawl scrape). All 21 codes present.
 # Format: code → (short_description, action)
 _FLEX_ERROR_CODES: dict[str, tuple[str, str]] = {
     "1001": (

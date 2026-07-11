@@ -14,7 +14,7 @@
 | Topic | URL |
 |---|---|
 | **Flex Web Service setup** (endpoints, params, headers) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
-| **Flex Web Service error codes** (all 21 codes, last updated 2025-10-03) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
+| **Flex Web Service error codes** (all 21 codes, last updated 2025-08-18 — re-verified live 2026-07-10, corrected from a stale 2025-10-03 note) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
 | **Enable Flex Web Service** (one-time token + query setup) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex-web-service.htm |
 | **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
 

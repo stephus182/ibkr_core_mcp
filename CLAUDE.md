@@ -144,7 +144,7 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 | Method | Reason |
 |---|---|
 | `get_order_preview` | IBKR `whatif` — simulates, never executes |
-| `get_live_orders` / `get_order_status` | Read-only |
+| `get_live_orders` / `get_order_status` / `get_orders_raw` | Read-only |
 | `create_alert` / `delete_alert` / `activate_alert` | Price notifications, not order execution |
 
 **Rules for contributors:**

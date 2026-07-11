@@ -34,5 +34,16 @@ client = IBKRClient(Config.from_env(), auth=TokenAuth("cookie_string_here"))
 ```
 
 **Session constraints:**
-- Session expires without activity — call `client.tickle()` every 60 s to keep it alive
-- Rate limit: ~5 requests/second — handled transparently by `rate_limiter.py`
+
+- Session expires without activity. The Docker gateway container already keeps it alive on
+  its own — `tickler.sh` runs inside the container and POSTs `/tickle` every 60 s
+  (`TICKLE_INTERVAL`, set by `GatewayManager`). Call `client.tickle()` yourself only if you're
+  managing session keepalive outside the bundled container (e.g. a headless `TokenAuth` client
+  talking to a gateway you started/manage separately).
+- Rate limit: IBKR's documented global limit is **10 requests/second** for any endpoint not in
+  its per-endpoint table (several endpoints are far stricter — e.g. `/iserver/account/orders`
+  and `/iserver/account/trades` are 1 req/5s, `/tickle` is 1 req/s). `rate_limiter.py` does not
+  proactively pace requests to this limit; it reactively retries 429/503 with exponential
+  backoff (1s, 2s, 4s over 3 attempts) and raises `IBKRRateLimitError` if still failing.
+  Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#rate-limiting
+  (full per-endpoint table in `rate_limiter.py`'s docstring).
