@@ -124,3 +124,33 @@ def test_sandbox_cannot_import_os(ohlcv):
     code = "import os\ndf['signal'] = 0"
     with pytest.raises(BacktestRuntimeError, match="__import__"):
         run_backtest(code, ohlcv)
+
+
+def test_sandbox_blocks_dataframe_eval(ohlcv):
+    """df.eval() runs pandas' OWN expression engine outside RestrictedPython's
+    compiled-bytecode boundary — it can reach __globals__/sys.modules/os and
+    achieve RCE. Must be blocked at the sandbox's _getattr_ hook.
+    See docs/security-audit-2026-07-11.md H-1."""
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    code = (
+        "leak = df.eval(\"@df.__init__.__func__.__globals__['sys'].modules['os'].popen('id').read()\")\n"
+        "df['signal'] = 0\n"
+    )
+    with pytest.raises(BacktestRuntimeError, match="eval"):
+        run_backtest(code, ohlcv)
+
+
+def test_sandbox_blocks_dataframe_query(ohlcv):
+    """df.query() uses the same unsandboxed expression engine as df.eval()."""
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    code = "df.query(\"close > 0\")\ndf['signal'] = 0\n"
+    with pytest.raises(BacktestRuntimeError, match="query"):
+        run_backtest(code, ohlcv)
+
+
+def test_sandbox_still_allows_ordinary_dataframe_methods(ohlcv):
+    """Denying eval/query must not break normal indicator-style strategy code."""
+    from ibkr_core_mcp.backtest import run_backtest
+    code = "df['signal'] = (df['close'] > df['close'].rolling(5).mean()).astype(int)"
+    result = run_backtest(code, ohlcv)
+    assert isinstance(result.total_return, float)

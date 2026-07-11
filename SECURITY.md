@@ -204,6 +204,8 @@ This prevents reading arbitrary files via `pd.read_parquet`, writing files via `
 
 **DataFrame write methods** — Strategy code can call `df.to_csv()`, `df.to_json()`, or `df.to_parquet()` on its own DataFrame copy. This can write the OHLCV market data passed to the sandbox to a local file, but cannot access credentials, read arbitrary paths, or make network calls. The `_SAFE_PD` namespace excludes all `pd.read_*` methods, so only write-only access to non-sensitive content is possible. Full elimination requires a subprocess with OS-level restrictions (`seccomp`, macOS sandbox, or Docker).
 
+**`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook now denies `eval`/`query` by name before falling through to `safer_getattr`. Any future DataFrame method found to accept and internally evaluate a string as code (rather than treat it as data) should be added to `backtest.py`'s `_DENIED_ATTRS`.
+
 **Thread timeout non-termination** — The sandbox runs in a `ThreadPoolExecutor` thread. `Future.cancel()` cannot stop a thread that is already executing. Strategy code containing `while True: pass` will survive the 10-second timeout and continue consuming CPU in a background thread until the process exits. This does not allow filesystem writes beyond the DataFrame methods above, and the 4,096-character code limit constrains what can be submitted, but it does create unbounded CPU consumption. Full mitigation requires running the sandbox in a subprocess. Tracked for v2.0 scope.
 
 ---

@@ -31,6 +31,26 @@ def _write_guard(ob: object) -> object:
         return full_write_guard(ob)
     return ob
 
+
+# df.eval()/df.query() run pandas' OWN expression engine (pandas/core/computation/
+# expr.py) on a string, entirely outside compile_restricted's AST-level guards —
+# it does unfiltered getattr/getitem/call resolution and can reach @varname (the
+# sandbox's own locals), then walk __init__.__func__.__globals__ to pandas'
+# unrestricted module globals, then sys.modules['os'] for RCE. safer_getattr does
+# not block these — they're ordinary public method names, not dunders. Block them
+# explicitly. See docs/security-audit-2026-07-11.md H-1.
+_DENIED_ATTRS = frozenset({"eval", "query"})
+
+
+def _sandboxed_getattr(obj: object, name: str, default: object = None) -> object:
+    if name in _DENIED_ATTRS:
+        raise AttributeError(
+            f"backtest sandbox: access to {name!r} is blocked — pandas' own "
+            "eval/query expression engine is not sandboxed by RestrictedPython"
+        )
+    return safer_getattr(obj, name, default)  # type: ignore[no-untyped-call]
+
+
 # Safe numpy namespace — math/array operations only, no file I/O
 _SAFE_NP = types.SimpleNamespace(
     array=np.array,
@@ -117,9 +137,10 @@ def run_backtest(
     Strategy code receives `df` (OHLCV DataFrame) and must set df['signal']:
         1 = long, 0 = flat, -1 = short
     Allowed: pd (safe subset), np (safe subset), basic builtins.
-    Blocked: network access, os, sys, imports, attribute/name mutation.
-    Not blocked: DataFrame public methods (df.to_csv etc.) — accepted residual
-    risk, documented in SECURITY.md §Residual risk.
+    Blocked: network access, os, sys, imports, attribute/name mutation,
+    df.eval()/df.query() (pandas' own unsandboxed expression engine).
+    Not blocked: other DataFrame public methods (df.to_csv etc.) — accepted
+    residual risk, documented in SECURITY.md §Residual risk.
     """
     if len(code) > _MAX_CODE_LEN:
         raise BacktestSyntaxError(
@@ -139,7 +160,7 @@ def run_backtest(
     sandbox: dict[str, Any] = {
         **safe_globals,
         "_write_": _write_guard,
-        "_getattr_": safer_getattr,
+        "_getattr_": _sandboxed_getattr,
         "_getitem_": lambda ob, key: ob[key],
         "_getiter_": iter,
         "pd": _SAFE_PD,
