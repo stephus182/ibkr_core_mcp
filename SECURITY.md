@@ -139,12 +139,16 @@ This directly implements the [MCP scope minimization principle](https://modelcon
 The [confused deputy attack](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#confused-deputy-problem) occurs when a trusted intermediary is manipulated into using its elevated privileges on behalf of an attacker. In this system:
 
 - The LLM (deputy) has no path to order execution regardless of instruction — no tool exists for it to call.
-- `account_id` values from LLM-generated tool input are validated with a strict regex before use in URLs or database queries, preventing path-manipulation attacks:
+- `account_id`, `order_id`/`alert_id`, and `reply_id` values from LLM-generated tool input are validated with strict regexes before use in URLs, preventing path-manipulation attacks:
 
 ```python
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
-# Blocks values like "../../iserver/auth/status", "../.env", etc.
+_ORDER_ID_RE = re.compile(r"^\d+$")
+_REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
+# Blocks values like "../../iserver/auth/status", "../order/987654321", etc.
 ```
+
+  (`order_id`/`alert_id` validation was added 2026-07-11 after an audit found `delete_alert(alert_id="../order/<id>")` could collapse to `cancel_order`'s URL — see `docs/security-audit-2026-07-11.md` H-2. `account_id` alone was not sufficient; every path-interpolated identifier needs the same treatment.)
 
 ### Token Passthrough Prevention
 

@@ -26,6 +26,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # This prevents path traversal in URLs and matches the claude_tools validator.
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 
+# IBKR order/alert IDs are numeric (CP API reference: order/status example
+# ".../order/status/1234567890"; alertId documented as "int. Required").
+_ORDER_ID_RE = re.compile(r"^\d+$")
+
+# IBKR reply IDs are documented as "String. Required" with example value
+# "a12b34c5-d678-9e012f-3456-7a890b12cd3e" — hex + hyphens, non-standard
+# UUID grouping (not 8-4-4-4-12), so match on charset/length, not exact
+# segment structure. Source: docs/superpowers/audit-evidence/scrapes/cpapi-v1.md
+# (https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply)
+_REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
+
 # ---------------------------------------------------------------------------
 # Market history pagination helpers
 # /iserver/marketdata/history is capped at 1000 data points per request.
@@ -69,6 +80,24 @@ def _validate_account_id(account_id: str) -> None:
         raise ConfigError(
             f"Invalid account_id {account_id!r}: must be 4–12 uppercase alphanumeric chars."
         )
+
+
+def _validate_order_id(order_id: str) -> None:
+    """Raise ConfigError if order_id/alert_id is not a valid IBKR numeric ID.
+
+    Prevents path traversal in URLs built by f-string interpolation — the same
+    threat _validate_account_id addresses for account_id. Applies to order_id
+    and alert_id (IBKR reuses the same numeric ID namespace for both — see
+    docs/security-audit-2026-07-11.md H-2).
+    """
+    if not order_id or not _ORDER_ID_RE.fullmatch(order_id):
+        raise ConfigError(f"Invalid order_id/alert_id {order_id!r}: must be numeric.")
+
+
+def _validate_reply_id(reply_id: str) -> None:
+    """Raise ConfigError if reply_id is not a plausible IBKR reply ID."""
+    if not reply_id or not _REPLY_ID_RE.fullmatch(reply_id):
+        raise ConfigError(f"Invalid reply_id {reply_id!r}: must be a hex/hyphen string.")
 
 
 def _as_reply_list(data: Any) -> list[dict[str, Any]]:
@@ -780,6 +809,7 @@ class IBKRClient:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#order-status
         Endpoint: GET /iserver/account/order/status/{orderId}
         """
+        _validate_order_id(order_id)
         self._ensure_accounts_initialized()
         return self._get(f"/iserver/account/order/status/{order_id}")
 
@@ -1118,6 +1148,7 @@ class IBKRClient:
         Endpoint: POST /iserver/account/{accountId}/order/{orderId}
         """
         _validate_account_id(account_id)
+        _validate_order_id(order_id)
         self._ensure_accounts_initialized()
         require_touch_id(f"IBKR: Modify order {order_id}")
         confirm_modify_dialog(order_id, order, account_id)
@@ -1138,6 +1169,7 @@ class IBKRClient:
         Endpoint: DELETE /iserver/account/{accountId}/order/{orderId}
         """
         _validate_account_id(account_id)
+        _validate_order_id(order_id)
         self._ensure_accounts_initialized()
         require_touch_id(f"IBKR: Cancel order {order_id}")
         confirm_cancel_dialog(order_id, account_id, order_details)
@@ -1166,6 +1198,7 @@ class IBKRClient:
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/reply/{replyId}
         """
+        _validate_reply_id(reply_id)
         self._ensure_accounts_initialized()
         require_touch_id(f"IBKR: Confirm order reply {reply_id}")
         confirm_reply_dialog(reply_id)
@@ -1285,6 +1318,7 @@ class IBKRClient:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert
         Endpoint: GET /iserver/account/alert/{order_id}?type=Q
         """
+        _validate_order_id(alert_id)
         return self._get(f"/iserver/account/alert/{alert_id}", params={"type": "Q"})
 
     def create_alert(self, account_id: str, alert: dict[str, Any]) -> dict[str, Any]:
@@ -1306,6 +1340,7 @@ class IBKRClient:
         Endpoint: DELETE /iserver/account/{accountId}/alert/{alertId}
         """
         _validate_account_id(account_id)
+        _validate_order_id(alert_id)
         url = f"{self._base}/iserver/account/{account_id}/alert/{alert_id}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30))
         return resp.json()
@@ -1317,6 +1352,7 @@ class IBKRClient:
         Endpoint: POST /iserver/account/{accountId}/alert/activate
         """
         _validate_account_id(account_id)
+        _validate_order_id(alert_id)
         return self._post(f"/iserver/account/{account_id}/alert/activate", {"alertId": alert_id, "alertActive": int(activate)})
 
     # ------------------------------------------------------------------

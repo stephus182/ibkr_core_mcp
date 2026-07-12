@@ -204,7 +204,7 @@ def test_modify_order_aborts_if_touch_id_fails(client):
     with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
          _patch.object(client._session, "post") as mock_post:
         with pytest.raises(HumanAuthError):
-            client.modify_order("U1234567", "ORD123", {"side": "SELL"})
+            client.modify_order("U1234567", "1234567890", {"side": "SELL"})
     mock_post.assert_not_called()
 
 
@@ -213,7 +213,7 @@ def test_cancel_order_aborts_if_touch_id_fails(client):
     with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
          _patch.object(client._session, "delete") as mock_del:
         with pytest.raises(HumanAuthError):
-            client.cancel_order("U1234567", "ORD456")
+            client.cancel_order("U1234567", "9876543210")
     mock_del.assert_not_called()
 
 
@@ -222,7 +222,7 @@ def test_reply_order_aborts_if_touch_id_fails(client):
     with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
          _patch.object(client._session, "post") as mock_post:
         with pytest.raises(HumanAuthError):
-            client.reply_order("RPL789")
+            client.reply_order("abc123def456")
     mock_post.assert_not_called()
 
 
@@ -232,7 +232,7 @@ def test_modify_order_calls_both_gates(client):
          _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=lambda o_id, o, a: call_order.append("dialog")), \
          _patch.object(client._session, "post") as mock_post:
         mock_post.return_value = _make_ok_response({"status": "modified"})
-        client.modify_order("U1234567", "ORD123", {"side": "SELL"})
+        client.modify_order("U1234567", "1234567890", {"side": "SELL"})
     assert call_order == ["touch_id", "dialog"]
     mock_post.assert_called_once()
 
@@ -243,7 +243,7 @@ def test_cancel_order_calls_both_gates(client):
          _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=lambda o_id, a, order=None: call_order.append("dialog")), \
          _patch.object(client._session, "delete") as mock_del:
         mock_del.return_value = _make_ok_response({"status": "cancelled"})
-        client.cancel_order("U1234567", "ORD456")
+        client.cancel_order("U1234567", "9876543210")
     assert call_order == ["touch_id", "dialog"]
     mock_del.assert_called_once()
 
@@ -258,7 +258,7 @@ def test_cancel_order_passes_order_details_to_dialog(client):
          _patch.object(client._session, "delete") as mock_del:
         mock_del.return_value = _make_ok_response({"status": "cancelled"})
         client.cancel_order(
-            "U1234567", "ORD456", order_details={"symbol": "AAPL", "side": "SELL"}
+            "U1234567", "9876543210", order_details={"symbol": "AAPL", "side": "SELL"}
         )
     assert captured == {"symbol": "AAPL", "side": "SELL"}
 
@@ -269,7 +269,7 @@ def test_reply_order_calls_both_gates(client):
          _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=lambda r: call_order.append("dialog")), \
          _patch.object(client._session, "post") as mock_post:
         mock_post.return_value = _make_ok_response([{"status": "submitted"}])
-        client.reply_order("RPL789")
+        client.reply_order("abc123def456")
     assert call_order == ["touch_id", "dialog"]
     mock_post.assert_called_once()
 
@@ -280,7 +280,7 @@ def test_modify_order_aborts_if_dialog_cancelled(client):
          _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=HumanAuthError("cancelled")), \
          _patch.object(client._session, "post") as mock_post:
         with pytest.raises(HumanAuthError):
-            client.modify_order("U1234567", "ORD123", {"side": "SELL"})
+            client.modify_order("U1234567", "1234567890", {"side": "SELL"})
     mock_post.assert_not_called()
 
 
@@ -290,7 +290,7 @@ def test_cancel_order_aborts_if_dialog_cancelled(client):
          _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=HumanAuthError("cancelled")), \
          _patch.object(client._session, "delete") as mock_del:
         with pytest.raises(HumanAuthError):
-            client.cancel_order("U1234567", "ORD456")
+            client.cancel_order("U1234567", "9876543210")
     mock_del.assert_not_called()
 
 
@@ -300,7 +300,7 @@ def test_reply_order_aborts_if_dialog_cancelled(client):
          _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
          _patch.object(client._session, "post") as mock_post:
         with pytest.raises(HumanAuthError):
-            client.reply_order("RPL789")
+            client.reply_order("abc123def456")
     mock_post.assert_not_called()
 
 
@@ -428,7 +428,7 @@ def test_modify_order_and_confirm_zero_replies(client):
          _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
          _patch.object(client._session, "post") as mock_post:
         mock_post.return_value = _make_ok_response({"order_status": "Submitted"})
-        result = client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+        result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_status": "Submitted"}
     mock_post.assert_called_once()
     mock_reply_dlg.assert_not_called()
@@ -445,7 +445,7 @@ def test_modify_order_and_confirm_chained_replies(client):
             _make_ok_response({"id": "RPL2", "message": ["No market data."]}),
             _make_ok_response({"order_status": "Submitted"}),
         ]
-        result = client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+        result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_status": "Submitted"}
     assert mock_post.call_count == 3
     assert mock_reply_dlg.call_args_list == [
@@ -465,7 +465,7 @@ def test_modify_order_and_confirm_decline_mid_chain(client):
             _make_ok_response({"confirmed": False}),
         ]
         with pytest.raises(HumanAuthError):
-            client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+            client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert mock_post.call_count == 2
     decline_call = mock_post.call_args_list[1]
     assert decline_call[0][0] == f"{client._base}/iserver/reply/RPL1"
@@ -544,7 +544,7 @@ def test_modify_order_and_confirm_handles_ibkr_documented_list_shaped_reply(clie
                 [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
             ),
         ]
-        result = client.modify_order_and_confirm("U1234567", "ORD123", {"price": 180.0})
+        result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
 
 
@@ -594,6 +594,59 @@ def test_validate_account_id_applied_to_write_methods(client):
         with pytest.raises(ConfigError):
             client.place_order("../inject", order)
     mock_tid.assert_not_called()  # validation must fire before biometric gate
+
+
+@pytest.mark.parametrize("method_name,args", [
+    ("get_order_status", ("../../etc/passwd",)),
+    ("get_alert", ("../../etc/passwd",)),
+])
+def test_validate_order_id_rejects_path_traversal_read_methods(client, method_name, args):
+    from ibkr_core_mcp.exceptions import ConfigError
+    with pytest.raises(ConfigError, match="[Ii]nvalid"):
+        getattr(client, method_name)(*args)
+
+
+def test_delete_alert_rejects_path_traversal_alert_id(client):
+    """The exact H-2 exploit path: alert_id='../order/<real orderId>' must never
+    reach the network. See docs/security-audit-2026-07-11.md H-2."""
+    from ibkr_core_mcp.exceptions import ConfigError
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid:
+        with pytest.raises(ConfigError, match="[Ii]nvalid"):
+            client.delete_alert("DU1234567", "../order/987654321")
+    mock_tid.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_order_id", [
+    "", "../order/1", "123/456", "123#456", "123 456", "abc123",
+])
+def test_validate_order_id_rejects_invalid_ids(client, bad_order_id):
+    from ibkr_core_mcp.exceptions import ConfigError
+    with pytest.raises(ConfigError, match="[Ii]nvalid"):
+        client.get_order_status(bad_order_id)
+
+
+def test_validate_order_id_accepts_valid_id(client):
+    client._session.get = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {}))
+    client.get_order_status("987654321")  # must not raise ConfigError
+
+
+@pytest.mark.parametrize("bad_reply_id", [
+    "", "../reply/1", "abc/def", "abc def",
+])
+def test_validate_reply_id_rejects_invalid_ids(client, bad_reply_id):
+    from ibkr_core_mcp.exceptions import ConfigError
+    with pytest.raises(ConfigError, match="[Ii]nvalid"):
+        client.reply_order(bad_reply_id)
+
+
+def test_validate_reply_id_accepts_valid_uuid_shaped_id(client):
+    """IBKR's documented replyId example: hex + hyphens, non-standard grouping —
+    regex must not assume strict 8-4-4-4-12 UUID segments."""
+    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
+         _patch("ibkr_core_mcp.client.confirm_reply_dialog"):
+        client._session.post = MagicMock(return_value=MagicMock(status_code=200, json=lambda: []))
+        client.reply_order("a12b34c5-d678-9e012f-3456-7a890b12cd3e")
+    mock_tid.assert_called_once()
 
 
 # ── get_stocks / get_futures dict-response fix ───────────────────────────────
