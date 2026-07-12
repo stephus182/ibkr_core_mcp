@@ -266,6 +266,21 @@ def test_import_flex_file_blocked_path(toolkit, tmp_path):
     assert "Blocked" in text
 
 
+def test_import_flex_file_blocks_sibling_prefixed_path(toolkit, tmp_path):
+    """A prefix-string check (not a path-boundary check) incorrectly admits any
+    directory whose name is a superstring of '.ibkr_core', e.g. '.ibkr_core_evil'.
+    See docs/security-audit-2026-07-11.md M-2."""
+    sibling = tmp_path / ".ibkr_core_evil"
+    sibling.mkdir()
+    xml_file = sibling / "archive.xml"
+    xml_file.write_text("<FlexQueryResponse/>")
+
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
+    assert fig is None
+    assert "Blocked" in text
+
+
 def test_import_flex_file_not_found(toolkit, tmp_path):
     """Returns 'File not found' for a valid-root path that does not exist."""
     with patch("pathlib.Path.home", return_value=tmp_path):

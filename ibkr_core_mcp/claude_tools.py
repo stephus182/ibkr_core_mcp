@@ -1379,14 +1379,17 @@ class ClaudeToolkit:
         path = inputs["path"]
         # Path allowlist: only files under ~/.ibkr_core are permitted.
         # Prevents LLM prompt-injection from reading arbitrary local files.
+        # is_relative_to (not a string-prefix check) so a sibling directory whose
+        # name is a superstring of ".ibkr_core" (e.g. ".ibkr_core_evil") can't
+        # pass — see docs/security-audit-2026-07-11.md M-2.
         allowed_root = Path.home() / ".ibkr_core"
         resolved = Path(path).expanduser().resolve()
-        if not str(resolved).startswith(str(allowed_root)):
+        if resolved != allowed_root and not resolved.is_relative_to(allowed_root):
             return f"Blocked: import path must be under {allowed_root}.", None
         if not resolved.exists():
             return f"File not found: {path}", None
         flex = FlexQueryClient(self._config, self._store, self._cache)
-        trades = flex.import_from_file(path)
+        trades = flex.import_from_file(str(resolved))
         if not trades:
             return f"No trades found in {path}.", None
         dates = sorted(t["time"][:10] for t in trades)
