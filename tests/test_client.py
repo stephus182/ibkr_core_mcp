@@ -617,7 +617,7 @@ def test_delete_alert_rejects_path_traversal_alert_id(client):
 
 
 @pytest.mark.parametrize("bad_order_id", [
-    "", "../order/1", "123/456", "123#456", "123 456", "abc123",
+    "", "../order/1", "123/456", "123#456", "123 456", "abc123", "١٢٣",
 ])
 def test_validate_order_id_rejects_invalid_ids(client, bad_order_id):
     from ibkr_core_mcp.exceptions import ConfigError

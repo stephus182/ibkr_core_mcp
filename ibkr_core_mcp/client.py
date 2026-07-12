@@ -28,7 +28,7 @@ _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 
 # IBKR order/alert IDs are numeric (CP API reference: order/status example
 # ".../order/status/1234567890"; alertId documented as "int. Required").
-_ORDER_ID_RE = re.compile(r"^\d+$")
+_ORDER_ID_RE = re.compile(r"^[0-9]+$")
 
 # IBKR reply IDs are documented as "String. Required" with example value
 # "a12b34c5-d678-9e012f-3456-7a890b12cd3e" — hex + hyphens, non-standard
