@@ -287,7 +287,7 @@ The gateway configuration file (`gateway/conf.yaml`) is a derivative of the IBKR
 |---|---|---|
 | `cors.origin.allowed` | `"*"` | IBKR default; mitigated by `allowCredentials: false` — the browser will not send authentication cookies in cross-origin requests, so any cross-origin request will receive HTTP 401 |
 | `cors.allowCredentials` | `false` | Prevents credential forwarding in CORS requests; effective mitigation for the wildcard origin |
-| `ips.allow` | `127.*`, `192.*`, `172.*`, `131.216.*` | IBKR-required set: loopback + RFC 1918 private ranges + IBKR's own proxy infrastructure (`131.216.*`) needed for `proxyRemoteHost: api.ibkr.com` |
+| `ips.allow` | `127.*`, `192.168.*`, `172.16.*`–`172.31.*` (16 entries), `131.216.*` | Loopback + the *actual* RFC 1918 private ranges (fixed 2026-07-11 — `192.*`/`172.*` previously matched the full `192.0.0.0/8`/`172.0.0.0/8` blocks, 256×/16× broader than RFC 1918 and including public IPv4 space; see `docs/security-audit-2026-07-11.md` M-1) + IBKR's own proxy infrastructure (`131.216.*`) needed for `proxyRemoteHost: api.ibkr.com`. This allowlist is a compensating control, not the primary defense — see H-3's fix for why the container shouldn't be reachable beyond loopback in the first place. |
 | `sslPwd` | `"mywebapi"` | Well-known default password for the IBKR-bundled self-signed JKS keystore. Not a secret — all IBKR Client Portal users share this default cert and password. The certificate is self-signed and localhost-only. |
 | `listenSsl` | `true` | Gateway always uses HTTPS, even on loopback |
 
@@ -492,7 +492,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Unauthenticated session on cookie failure | `warnings.warn` on extraction error (not silent) | `browser_cookie3` access restricted to allowlisted browser names |
 | Session credential exposure in 401 retry | 401 raises `IBKRAuthError` immediately, never retried | — |
 | Docker supply chain (IBKR zip download) | HTTPS with server cert verification from IBKR's official distribution server | Accepted risk: same class as `pip install` without a separately-verified hash |
-| Cross-origin browser requests to gateway | `allowCredentials: false` prevents session cookie forwarding in CORS requests | IP allowlist (`127.*`, `192.*`, `172.*`, `131.216.*`) restricts inbound connections to loopback and private ranges |
+| Cross-origin browser requests to gateway | `allowCredentials: false` prevents session cookie forwarding in CORS requests | IP allowlist (`127.*`, `192.168.*`, `172.16.*`–`172.31.*`, `131.216.*`, fixed 2026-07-11) restricts inbound connections to loopback and the actual RFC 1918 private ranges |
 | Gateway container compromise / escape | Loopback-only port exposure (`-p 127.0.0.1:5055:5055`, fixed 2026-07-11), no `--privileged`, no host volume mounts | Standard Docker isolation; gateway has no access to host filesystem or other containers |
 
 ---
