@@ -493,7 +493,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Session credential exposure in 401 retry | 401 raises `IBKRAuthError` immediately, never retried | — |
 | Docker supply chain (IBKR zip download) | HTTPS with server cert verification from IBKR's official distribution server | Accepted risk: same class as `pip install` without a separately-verified hash |
 | Cross-origin browser requests to gateway | `allowCredentials: false` prevents session cookie forwarding in CORS requests | IP allowlist (`127.*`, `192.*`, `172.*`, `131.216.*`) restricts inbound connections to loopback and private ranges |
-| Gateway container compromise / escape | Port-only exposure (`-p 5055:5055`), no `--privileged`, no host volume mounts | Standard Docker isolation; gateway has no access to host filesystem or other containers |
+| Gateway container compromise / escape | Loopback-only port exposure (`-p 127.0.0.1:5055:5055`, fixed 2026-07-11), no `--privileged`, no host volume mounts | Standard Docker isolation; gateway has no access to host filesystem or other containers |
 
 ---
 
