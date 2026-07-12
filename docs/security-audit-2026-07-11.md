@@ -3,7 +3,7 @@
 **Date:** 2026-07-11
 **Scope:** Full codebase (`ibkr_core_mcp/` + `ibkr_core_mcp/gateway/`) — no pending PR diff existed at audit time, so this covers the shipped code on `main`, not a changeset.
 **Auditor:** Claude Sonnet 5 (multi-agent parallel static analysis — 6 independent domain agents, each finding independently re-verified by a second adversarial agent against source before inclusion)
-**Status:** 6 findings identified (4 High, 2 Medium). Fix plan: [`docs/plans/2026-07-11-security-fixes-plan.md`](plans/2026-07-11-security-fixes-plan.md). All findings must be fixed — none deferred.
+**Status:** All 6 findings resolved (4 High, 2 Medium). Fixes: `4e38655..e587695` on branch `security-fixes-2026-07-11`, one commit per finding (plus 3 small follow-up commits from code-review loops) — see [`docs/plans/2026-07-11-security-fixes-plan.md`](plans/2026-07-11-security-fixes-plan.md) for implementation detail on each. Every fix and its tests were independently reviewed for spec compliance and code quality before being accepted; two review rounds (H-2's regex, H-3's second stale doc reference) found real issues that were fixed forward in follow-up commits.
 
 ---
 
