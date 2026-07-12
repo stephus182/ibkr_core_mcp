@@ -32,7 +32,11 @@ def test_is_private_host_allows_public_hostname(monkeypatch):
     import socket
 
     from ibkr_core_mcp.scrape_fallback import is_private_host
-    monkeypatch.setattr(socket, "gethostbyname", lambda h: "93.184.216.34")
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
     assert is_private_host("example.com") is False
 
 
@@ -41,7 +45,11 @@ def test_is_private_host_blocks_hostname_resolving_to_private_ip(monkeypatch):
     import socket
 
     from ibkr_core_mcp.scrape_fallback import is_private_host
-    monkeypatch.setattr(socket, "gethostbyname", lambda h: "127.0.0.1")
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
     assert is_private_host("evil-rebinding.example") is True
 
 
@@ -50,10 +58,38 @@ def test_is_private_host_unresolvable_hostname_not_blocked(monkeypatch):
     import socket
 
     from ibkr_core_mcp.scrape_fallback import is_private_host
-    def _raise(_h):
+    def _raise(_h, *args, **kwargs):
         raise socket.gaierror("unresolvable")
-    monkeypatch.setattr(socket, "gethostbyname", _raise)
+    monkeypatch.setattr(socket, "getaddrinfo", _raise)
     assert is_private_host("nonexistent.invalid") is False
+
+
+def test_is_private_host_blocks_aaaa_only_hostname_resolving_to_loopback(monkeypatch):
+    """A hostname with no A record but an AAAA record pointing at ::1 must be
+    blocked — socket.gethostbyname alone can't see AAAA records and used to
+    fail open here. See docs/security-audit-2026-07-11.md H-4."""
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", 0, 0, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    assert is_private_host("aaaa-only-evil.example") is True
+
+
+def test_is_private_host_allows_aaaa_only_hostname_resolving_to_public_ipv6(monkeypatch):
+    """A genuinely public IPv6-only hostname must still be allowed through."""
+    import socket
+
+    from ibkr_core_mcp.scrape_fallback import is_private_host
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:2800:220:1:248:1893:25c8:1946", 0, 0, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    assert is_private_host("public-ipv6-only.example") is False
 
 
 def _make_config(**overrides):
@@ -247,7 +283,11 @@ async def test_reject_private_requests_aborts_dns_rebound_host(monkeypatch):
     import socket
 
     from ibkr_core_mcp.scrape_fallback import _reject_private_requests
-    monkeypatch.setattr(socket, "gethostbyname", lambda h: "127.0.0.1")
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
     route = _FakeRoute()
     await _reject_private_requests(route, _FakeRequest("http://evil-rebinding.example/x"))
     assert route.aborted is True
@@ -259,7 +299,11 @@ async def test_reject_private_requests_continues_public_host(monkeypatch):
     import socket
 
     from ibkr_core_mcp.scrape_fallback import _reject_private_requests
-    monkeypatch.setattr(socket, "gethostbyname", lambda h: "93.184.216.34")
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
     route = _FakeRoute()
     await _reject_private_requests(route, _FakeRequest("https://example.com/article"))
     assert route.continued is True

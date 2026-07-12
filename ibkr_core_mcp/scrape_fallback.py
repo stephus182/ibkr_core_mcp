@@ -102,12 +102,25 @@ def is_private_host(host: str) -> bool:
         # Not a literal IP — resolve via DNS and re-check. Catches decimal
         # (2130706433) and hex (0x7f000001) encoded IPs as well as ordinary
         # hostnames that happen to resolve to a private address.
+        #
+        # getaddrinfo (not gethostbyname) so AAAA-only hosts can't bypass this
+        # by having no A record — gethostbyname is IPv4-only and used to treat
+        # "unresolvable via IPv4" as "safe," which is wrong for a host that
+        # resolves fine via IPv6. See docs/security-audit-2026-07-11.md H-4.
         try:
-            resolved = socket.gethostbyname(host)
-            addr = ipaddress.ip_address(resolved)
-            return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+            infos = socket.getaddrinfo(host, None)
         except socket.gaierror:
             return False
+        for info in infos:
+            sockaddr = info[4]
+            ip_str = sockaddr[0]
+            try:
+                addr = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return True
+        return False
 
 
 class Crawl4AIUnavailableError(Exception):
