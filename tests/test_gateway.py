@@ -170,9 +170,27 @@ class TestStart:
             gm.start()
         args = mock_run.call_args.args[0]
         joined = " ".join(str(a) for a in args)
-        assert "5055:5055" in joined
         assert "GATEWAY_PORT=5055" in joined
         assert "TICKLE_INTERVAL=60" in joined
+
+    def test_docker_run_binds_port_to_loopback_only(self) -> None:
+        """The gateway holds an authenticated IBKR session with no gate enforcement
+        of its own — publishing beyond loopback makes it reachable from the LAN.
+        See docs/security-audit-2026-07-11.md H-3."""
+        gm = GatewayManager(port=5055)
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "container_exists", return_value=False),
+            patch.object(gm, "image_exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            gm.start()
+        args = mock_run.call_args.args[0]
+        assert "-p" in args
+        p_value = args[args.index("-p") + 1]
+        assert p_value == "127.0.0.1:5055:5055", (
+            f"expected loopback-only publish, got {p_value!r}"
+        )
 
 
 class TestStop:

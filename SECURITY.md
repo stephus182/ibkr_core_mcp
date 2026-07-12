@@ -252,7 +252,7 @@ Import and extraction failures are handled distinctly to prevent silent unauthen
 
 ### Container Isolation Model
 
-The gateway container is started with `-p 5055:5055` — a single port binding to `localhost`. No host networking (`--network host`) is used, no host volumes are mounted, and no `--privileged` flag is passed. The gateway is unreachable from outside the machine.
+The gateway container is started with `-p 127.0.0.1:5055:5055` (fixed 2026-07-11 — the prior `-p 5055:5055` form, with no host-IP prefix, published the container on all host interfaces by Docker's default behavior, not loopback only; see `docs/security-audit-2026-07-11.md` H-3). No host networking (`--network host`) is used, no host volumes are mounted, and no `--privileged` flag is passed. The gateway is unreachable from outside the machine.
 
 ### Subprocess Injection Analysis
 

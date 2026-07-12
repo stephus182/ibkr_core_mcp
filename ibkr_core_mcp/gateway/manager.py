@@ -157,7 +157,7 @@ class GatewayManager:
                 [
                     "docker", "run", "-d",
                     "--name", self.CONTAINER_NAME,
-                    "-p", f"{self._port}:{self._port}",
+                    "-p", f"127.0.0.1:{self._port}:{self._port}",
                     # Pass env vars used by tickler.sh inside the container
                     "-e", f"GATEWAY_PORT={self._port}",
                     "-e", "TICKLE_INTERVAL=60",
