@@ -6,7 +6,8 @@ Chainlit asyncio event loop.
 
 Protocol
 --------
-stdin  : JSON payload (see _run_alert for keys)
+stdin  : JSON payload — side, details (dict), disclaimer, confirm_label, title,
+         timeout_s (see _run_alert's docstring for defaults)
 stdout : "CONFIRMED" or "CANCELLED"
 stderr : "ERROR: <msg>" on fatal failure
 exit   : 0 on user decision, 1 on fatal error
@@ -27,6 +28,7 @@ _NS_ALERT_FIRST_BUTTON_RETURN = 1000
 
 
 def main() -> None:
+    """Entry point: read the JSON payload from stdin and run the alert it describes."""
     try:
         data = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, OSError) as exc:
@@ -43,6 +45,20 @@ def main() -> None:
 
 
 def _run_alert(data: dict[str, Any]) -> None:
+    """Build and run the app-modal NSAlert described by `data`.
+
+    Keys read from `data` (all optional except where noted):
+      side          - "BUY"/"SELL"/etc; anything containing SELL or SHORT gets
+                       the red banner, everything else gets the green one.
+      details       - dict rendered as "key: value" lines in the alert body.
+      disclaimer    - free text appended after the details.
+      confirm_label - text for the right-hand (confirm) button. Default "CONFIRM".
+      title         - alert message text. Default "LIVE ORDER CONFIRMATION".
+      timeout_s     - seconds before auto-dismiss (counts as cancel). Default 60.
+
+    Prints "CONFIRMED" or "CANCELLED" to stdout; never raises for user input,
+    only for a genuinely broken AppKit call (caught by main()'s caller).
+    """
     from AppKit import (
         NSAlert,
         NSApplication,
@@ -120,6 +136,7 @@ def _run_alert(data: dict[str, Any]) -> None:
     # so the timer is scheduled directly into that mode on the current (main) run loop rather
     # than fired from a background thread.
     def _abort(_timer: Any) -> None:
+        """Timer callback: abort the running modal session (counts as cancel)."""
         try:
             from AppKit import NSApp
             NSApp.abortModal()
