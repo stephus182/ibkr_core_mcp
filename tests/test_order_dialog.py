@@ -75,3 +75,12 @@ def test_confirm_button_return_key_disabled_and_cancel_uses_escape(monkeypatch: 
 
     confirm_btn.setKeyEquivalent_.assert_called_once_with("")
     cancel_btn.setKeyEquivalent_.assert_called_once_with("\x1b")
+
+
+def test_main_exits_1_on_bad_json_stdin(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO("not json"))
+    from ibkr_core_mcp import _order_dialog
+    with pytest.raises(SystemExit) as exc_info:
+        _order_dialog.main()
+    assert exc_info.value.code == 1
+    assert "ERROR: bad payload" in capsys.readouterr().err
