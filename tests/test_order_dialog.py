@@ -84,3 +84,24 @@ def test_main_exits_1_on_bad_json_stdin(monkeypatch: pytest.MonkeyPatch, capsys:
         _order_dialog.main()
     assert exc_info.value.code == 1
     assert "ERROR: bad payload" in capsys.readouterr().err
+
+
+def test_abort_timer_scheduled_on_main_thread_in_modal_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_appkit(monkeypatch)
+    alert_mock = fake.NSAlert.alloc.return_value.init.return_value
+    alert_mock.runModal.return_value = 1000
+    mock_timer_obj = MagicMock(name="scheduled_timer")
+    fake.NSTimer.timerWithTimeInterval_repeats_block_.return_value = mock_timer_obj
+
+    from ibkr_core_mcp import _order_dialog
+    _order_dialog._run_alert(_base_payload(timeout_s=42))
+
+    fake.NSTimer.timerWithTimeInterval_repeats_block_.assert_called_once()
+    call_args = fake.NSTimer.timerWithTimeInterval_repeats_block_.call_args.args
+    assert call_args[0] == 42
+    assert call_args[1] is False
+    assert callable(call_args[2])
+
+    fake.NSRunLoop.currentRunLoop.return_value.addTimer_forMode_.assert_called_once_with(
+        mock_timer_obj, fake.NSModalPanelRunLoopMode
+    )

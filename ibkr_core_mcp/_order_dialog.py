@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import sys
-import threading
 from typing import Any
 
 
@@ -43,7 +42,10 @@ def _run_alert(data: dict[str, Any]) -> None:
         NSColor,
         NSFont,
         NSMakeRect,
+        NSModalPanelRunLoopMode,
+        NSRunLoop,
         NSTextField,
+        NSTimer,
         NSView,
     )
 
@@ -104,21 +106,23 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     alert.setAccessoryView_(container)
 
-    # Auto-dismiss after timeout — NSApp.abortModal() returns NSModalResponseAbort (-1000)
-    def _abort() -> None:
+    # Auto-dismiss after timeout — NSApp.abortModal() returns NSModalResponseAbort (-1000).
+    # Must run on the main thread: AppKit's threading rules require UI/run-loop calls there
+    # (Apple Cocoa Thread Safety Summary), and NSAlert.runModal() pumps NSModalPanelRunLoopMode,
+    # so the timer is scheduled directly into that mode on the current (main) run loop rather
+    # than fired from a background thread.
+    def _abort(_timer: Any) -> None:
         try:
             from AppKit import NSApp
             NSApp.abortModal()
         except Exception:
             pass
 
-    timer = threading.Timer(timeout_s, _abort)
-    timer.daemon = True
-    timer.start()
+    abort_timer = NSTimer.timerWithTimeInterval_repeats_block_(timeout_s, False, _abort)
+    NSRunLoop.currentRunLoop().addTimer_forMode_(abort_timer, NSModalPanelRunLoopMode)
 
     app.activateIgnoringOtherApps_(True)
     response = alert.runModal()
-    timer.cancel()
 
     # NSAlertFirstButtonReturn = 1000
     print("CONFIRMED" if response == 1000 else "CANCELLED")
