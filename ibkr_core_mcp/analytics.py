@@ -3,10 +3,9 @@
 Conventions (verified against sources 2026-07-02; see each function's docstring):
 - Annualisation uses `periods` = bars per YEAR (derive via periods_for_timeframe()).
 - `sortino` implements the simplified discrete variant, not canonical target
-  downside deviation; `calmar` is whole-series (formally the MAR-ratio convention),
-  not Young's trailing-36-month Calmar. Both variants are widespread, but numbers
-  are not comparable across tools that use the canonical forms — read the
-  docstrings before quoting these figures against external references.
+downside deviation; `calmar` is whole-series (formally the MAR-ratio convention),
+not Young's trailing-36-month Calmar. Both variants are widespread, but numbers
+are not comparable across tools that use the canonical forms — read the docstrings before quoting these figures against external references.
 """
 from __future__ import annotations
 
