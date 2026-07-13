@@ -17,6 +17,14 @@ import json
 import sys
 from typing import Any
 
+# Cocoa constants (kept as local int literals rather than imported from AppKit —
+# these are the actual runtime values already exercised by this file; naming them
+# here documents intent without adding another PyObjC-bridging dependency).
+_NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
+_NS_BOX_CUSTOM = 4
+_NS_NO_TITLE = 0
+_NS_ALERT_FIRST_BUTTON_RETURN = 1000
+
 
 def main() -> None:
     try:
@@ -70,7 +78,7 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     # Initialize NSApplication as an accessory app (no Dock icon, no menu bar)
     app = NSApplication.sharedApplication()
-    app.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory
+    app.setActivationPolicy_(_NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY)
 
     alert = NSAlert.alloc().init()
     alert.setMessageText_(title)
@@ -85,13 +93,13 @@ def _run_alert(data: dict[str, Any]) -> None:
     buttons.objectAtIndex_(0).setKeyEquivalent_("")       # disable Return on confirm
     buttons.objectAtIndex_(1).setKeyEquivalent_("\x1b")  # Escape = cancel
 
-    # Colored banner via NSBox (NSBoxCustom = 4, NSNoTitle = 0)
+    # Colored banner via NSBox
     container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 420, 48))
     box = NSBox.alloc().initWithFrame_(NSMakeRect(0, 0, 420, 48))
-    box.setBoxType_(4)
+    box.setBoxType_(_NS_BOX_CUSTOM)
     box.setFillColor_(bg_color)
     box.setBorderColor_(bg_color)
-    box.setTitlePosition_(0)
+    box.setTitlePosition_(_NS_NO_TITLE)
     container.addSubview_(box)
 
     lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(14, 12, 392, 24))
@@ -125,8 +133,7 @@ def _run_alert(data: dict[str, Any]) -> None:
     response = alert.runModal()
     abort_timer.invalidate()
 
-    # NSAlertFirstButtonReturn = 1000
-    print("CONFIRMED" if response == 1000 else "CANCELLED")
+    print("CONFIRMED" if response == _NS_ALERT_FIRST_BUTTON_RETURN else "CANCELLED")
 
 
 if __name__ == "__main__":
