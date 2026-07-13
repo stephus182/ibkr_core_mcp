@@ -1,0 +1,80 @@
+diff --git a/claudia/agent.py b/claudia/agent.py
+index 76c35c7..c6b6d98 100644
+--- a/claudia/agent.py
++++ b/claudia/agent.py
+@@ -31,6 +31,8 @@ import chainlit as cl
+ from anthropic import AsyncAnthropic
+ from anthropic.types import MessageParam
+ 
++from claudia._timing import emit
++
+ if TYPE_CHECKING:
+     from claudia.conversation_store import ConversationStore
+     from claudia.context_loader import ContextLoader
+@@ -301,6 +303,8 @@ class ClaudIAAgent:
+         Process one user message: stream Claude's response, handle tool calls,
+         render order proposals as action buttons, and persist everything.
+         """
++        emit("user_message")
++        api_turn = 0
+         # Persist user message
+         self._store.add_message(self._session_id, "user", user_text)
+ 
+@@ -332,6 +336,9 @@ class ClaudIAAgent:
+             tool_calls: list[dict] = []
+             stop_reason: str | None = None
+ 
++            api_turn += 1
++            first_event = False
++            emit("api_call_start", turn=api_turn)
+             async with self._client.messages.stream(
+                 model=self._model,
+                 max_tokens=4096,
+@@ -342,6 +349,15 @@ class ClaudIAAgent:
+                 async for event in stream:
+                     etype = event.type
+ 
++                    if not first_event:
++                        first_event = True
++                        emit("first_event", turn=api_turn)
++                    if etype == "message_start":
++                        u = event.message.usage
++                        emit("usage", turn=api_turn,
++                             input_tokens=u.input_tokens,
++                             cache_read=getattr(u, "cache_read_input_tokens", 0) or 0)
++
+                     if etype == "content_block_start":
+                         block = event.content_block
+                         if block.type == "tool_use":
+@@ -362,6 +378,7 @@ class ClaudIAAgent:
+                         stop_reason = event.delta.stop_reason
+ 
+             # --- Stream complete ---
++            emit("stream_end", turn=api_turn, stop_reason=stop_reason)
+ 
+             if stop_reason == "max_tokens":
+                 await cl.Message(
+@@ -399,6 +416,7 @@ class ClaudIAAgent:
+             # Execute tools and collect results
+             tool_results = []
+             for tc in tool_calls:
++                emit("tool_start", turn=api_turn, name=tc["name"])
+                 async with cl.Step(name=tc["name"], type="tool") as step:
+                     step.input = json.dumps(tc["input"], indent=2)
+                     if tc["name"] in _LOCAL_TOOL_NAMES:
+@@ -410,6 +428,7 @@ class ClaudIAAgent:
+                             tc["name"], tc["input"]
+                         )
+                     step.output = result_text
++                emit("tool_end", turn=api_turn, name=tc["name"])
+ 
+                 self._store.add_message(
+                     self._session_id,
+@@ -427,6 +446,7 @@ class ClaudIAAgent:
+ 
+             messages.append({"role": "user", "content": tool_results})
+ 
++        emit("message_done", turns=api_turn)
+         # --- Final response ---
+         display_text, order_proposal = _strip_order_proposal(full_response_text)
+ 

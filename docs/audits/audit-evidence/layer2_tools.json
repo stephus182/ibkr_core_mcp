@@ -1,0 +1,34 @@
+[
+  {
+    "name": "list_web_docs",
+    "description": "Enumerate all scraped web documents stored in Drive web_docs/. Metadata-only filters; returns the complete set with doc_id, kind, source_url, title, content_hash, saved_at, site, stale.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "kind": {"type": "string", "enum": ["crawl_page", "search_snapshot"], "description": "Filter by document kind (default: both)"},
+        "url_contains": {"type": "string", "description": "Substring match on source_url or query (metadata only, not content)"}
+      }
+    }
+  },
+  {
+    "name": "read_web_doc",
+    "description": "Fetch one stored web document's full markdown by doc_id. Returns doc_id, source_url, title, saved_at, content_hash, markdown.",
+    "input_schema": {
+      "type": "object",
+      "properties": {"doc_id": {"type": "string", "description": "Drive file id from list_web_docs"}},
+      "required": ["doc_id"]
+    }
+  },
+  {
+    "name": "delete_web_docs",
+    "description": "Delete stored web documents by exactly one selector: doc_id (single doc), site (whole crawled site), or older_than_days (prune old snapshots). Scoped to Drive web_docs/ only.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "doc_id": {"type": "string", "description": "Delete a single doc"},
+        "site": {"type": "string", "description": "Delete a whole crawled site (folder + manifest)"},
+        "older_than_days": {"type": "integer", "description": "Prune snapshots older than N days"}
+      }
+    }
+  }
+]

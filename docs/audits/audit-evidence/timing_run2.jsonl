@@ -1,0 +1,116 @@
+{"event": "user_message", "t": 22648.918258291}
+{"turn": 1, "event": "api_call_start", "t": 22648.938289791}
+{"turn": 1, "event": "first_event", "t": 22650.368063}
+{"turn": 1, "input_tokens": 2, "cache_read": 0, "cache_created": 24563, "event": "usage", "t": 22650.368598583}
+{"turn": 1, "stop_reason": "end_turn", "event": "stream_end", "t": 22653.031390666}
+{"turns": 1, "event": "message_done", "t": 22653.031615083}
+{"event": "user_message", "t": 22668.953542458}
+{"turn": 1, "event": "api_call_start", "t": 22668.960843791}
+{"turn": 1, "event": "first_event", "t": 22672.06470825}
+{"turn": 1, "input_tokens": 2, "cache_read": 24563, "cache_created": 173, "event": "usage", "t": 22672.065406666}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 22672.906147125}
+{"turn": 1, "name": "tv_health_check", "event": "tool_start", "t": 22672.906790041}
+{"turn": 1, "name": "tv_health_check", "event": "tool_end", "t": 22673.030576583}
+{"turn": 2, "event": "api_call_start", "t": 22673.032335375}
+{"turn": 2, "event": "first_event", "t": 22675.88070075}
+{"turn": 2, "input_tokens": 2, "cache_read": 24736, "cache_created": 265, "event": "usage", "t": 22675.881336291}
+{"turn": 2, "stop_reason": "end_turn", "event": "stream_end", "t": 22679.433557916}
+{"turns": 2, "event": "message_done", "t": 22679.434345833}
+{"event": "user_message", "t": 22747.339087416}
+{"turn": 1, "event": "api_call_start", "t": 22747.350098291}
+{"turn": 1, "event": "first_event", "t": 22748.792444791}
+{"turn": 1, "input_tokens": 2, "cache_read": 24736, "cache_created": 299, "event": "usage", "t": 22748.793059}
+{"turn": 1, "stop_reason": "end_turn", "event": "stream_end", "t": 22751.189516208}
+{"turns": 1, "event": "message_done", "t": 22751.189939125}
+{"event": "user_message", "t": 22781.904197791}
+{"turn": 1, "event": "api_call_start", "t": 22781.914899166}
+{"turn": 1, "event": "first_event", "t": 22787.490585708}
+{"turn": 1, "input_tokens": 2, "cache_read": 25035, "cache_created": 128, "event": "usage", "t": 22787.490939541}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 22787.4997205}
+{"turn": 1, "name": "get_positions", "event": "tool_start", "t": 22787.499969166}
+{"turn": 1, "name": "get_positions", "event": "tool_end", "t": 22788.138662}
+{"turn": 2, "event": "api_call_start", "t": 22788.141657541}
+{"turn": 2, "event": "first_event", "t": 22789.561808666}
+{"turn": 2, "input_tokens": 2, "cache_read": 25163, "cache_created": 183, "event": "usage", "t": 22789.562858208}
+{"turn": 2, "stop_reason": "end_turn", "event": "stream_end", "t": 22796.176452333}
+{"turns": 2, "event": "message_done", "t": 22796.177920333}
+{"event": "user_message", "t": 22824.587765916}
+{"turn": 1, "event": "api_call_start", "t": 22824.594629541}
+{"turn": 1, "event": "first_event", "t": 22826.107079}
+{"turn": 1, "input_tokens": 2, "cache_read": 25163, "cache_created": 504, "event": "usage", "t": 22826.107568291}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 22827.231914041}
+{"turn": 1, "name": "fetch_market_data", "event": "tool_start", "t": 22827.232139375}
+{"turn": 1, "name": "fetch_market_data", "event": "tool_end", "t": 22831.025719041}
+{"turn": 2, "event": "api_call_start", "t": 22831.032268041}
+{"turn": 2, "event": "first_event", "t": 22832.7749215}
+{"turn": 2, "input_tokens": 2, "cache_read": 25667, "cache_created": 176, "event": "usage", "t": 22832.775640333}
+{"turn": 2, "stop_reason": "tool_use", "event": "stream_end", "t": 22833.233301083}
+{"turn": 2, "name": "add_indicators", "event": "tool_start", "t": 22833.233806541}
+{"turn": 2, "name": "add_indicators", "event": "tool_end", "t": 22833.930464666}
+{"turn": 3, "event": "api_call_start", "t": 22833.932288708}
+{"turn": 3, "event": "first_event", "t": 22836.75581925}
+{"turn": 3, "input_tokens": 2, "cache_read": 25843, "cache_created": 294, "event": "usage", "t": 22836.756669708}
+{"turn": 3, "stop_reason": "end_turn", "event": "stream_end", "t": 22845.208056}
+{"turns": 3, "event": "message_done", "t": 22845.208581583}
+{"event": "user_message", "t": 22878.057047458}
+{"turn": 1, "event": "api_call_start", "t": 22878.063036125}
+{"turn": 1, "event": "first_event", "t": 22882.595112833}
+{"turn": 1, "input_tokens": 2, "cache_read": 25667, "cache_created": 611, "event": "usage", "t": 22882.595951833}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 22887.879296375}
+{"turn": 1, "name": "run_backtest", "event": "tool_start", "t": 22887.879797}
+{"turn": 1, "name": "run_backtest", "event": "tool_end", "t": 22889.770491125}
+{"turn": 2, "event": "api_call_start", "t": 22889.774333583}
+{"turn": 2, "event": "first_event", "t": 22890.9668025}
+{"turn": 2, "input_tokens": 2, "cache_read": 26278, "cache_created": 673, "event": "usage", "t": 22890.967859958}
+{"turn": 2, "stop_reason": "tool_use", "event": "stream_end", "t": 22895.889758583}
+{"turn": 2, "name": "run_backtest", "event": "tool_start", "t": 22895.8907895}
+{"turn": 2, "name": "run_backtest", "event": "tool_end", "t": 22897.605542416}
+{"turn": 3, "event": "api_call_start", "t": 22897.608206}
+{"turn": 3, "event": "first_event", "t": 22898.722772875}
+{"turn": 3, "input_tokens": 2, "cache_read": 26951, "cache_created": 645, "event": "usage", "t": 22898.723779666}
+{"turn": 3, "stop_reason": "end_turn", "event": "stream_end", "t": 22907.160114125}
+{"turns": 3, "event": "message_done", "t": 22907.161114541}
+{"event": "user_message", "t": 22942.279765125}
+{"turn": 1, "event": "api_call_start", "t": 22942.287640291}
+{"turn": 1, "event": "first_event", "t": 22950.894367}
+{"turn": 1, "input_tokens": 2, "cache_read": 26278, "cache_created": 631, "event": "usage", "t": 22950.894931166}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 22952.04390725}
+{"turn": 1, "name": "get_market_snapshot", "event": "tool_start", "t": 22952.044291583}
+{"turn": 1, "name": "get_market_snapshot", "event": "tool_end", "t": 22952.342695291}
+{"turn": 1, "name": "get_market_snapshot", "event": "tool_start", "t": 22952.347997375}
+{"turn": 1, "name": "get_market_snapshot", "event": "tool_end", "t": 22953.657349375}
+{"turn": 2, "event": "api_call_start", "t": 22953.659027916}
+{"turn": 2, "event": "first_event", "t": 22957.086192416}
+{"turn": 2, "input_tokens": 2, "cache_read": 26909, "cache_created": 920, "event": "usage", "t": 22957.086657}
+{"turn": 2, "stop_reason": "end_turn", "event": "stream_end", "t": 22962.600288375}
+{"turns": 2, "event": "message_done", "t": 22962.601300041}
+{"event": "user_message", "t": 23049.491763416}
+{"turn": 1, "event": "api_call_start", "t": 23049.498829416}
+{"turn": 1, "event": "first_event", "t": 23050.839908375}
+{"turn": 1, "input_tokens": 2, "cache_read": 26909, "cache_created": 462, "event": "usage", "t": 23050.840555208}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 23051.751189291}
+{"turn": 1, "name": "get_trades", "event": "tool_start", "t": 23051.751853291}
+{"turn": 1, "name": "get_trades", "event": "tool_end", "t": 23051.829581583}
+{"turn": 2, "event": "api_call_start", "t": 23051.83351625}
+{"turn": 2, "event": "first_event", "t": 23052.891085708}
+{"turn": 2, "input_tokens": 2, "cache_read": 27371, "cache_created": 650, "event": "usage", "t": 23052.891753}
+{"turn": 2, "stop_reason": "end_turn", "event": "stream_end", "t": 23067.436521291}
+{"turns": 2, "event": "message_done", "t": 23067.437038291}
+{"event": "user_message", "t": 23146.211345041}
+{"turn": 1, "event": "api_call_start", "t": 23146.22065975}
+{"turn": 1, "event": "first_event", "t": 23147.944164583}
+{"turn": 1, "input_tokens": 2, "cache_read": 27371, "cache_created": 861, "event": "usage", "t": 23147.944937041}
+{"turn": 1, "stop_reason": "tool_use", "event": "stream_end", "t": 23151.326372291}
+{"turn": 1, "name": "generate_pinescript", "event": "tool_start", "t": 23151.32697725}
+{"turn": 1, "name": "generate_pinescript", "event": "tool_end", "t": 23151.330232208}
+{"turn": 2, "event": "api_call_start", "t": 23151.339893625}
+{"turn": 2, "event": "first_event", "t": 23152.914674125}
+{"turn": 2, "input_tokens": 2, "cache_read": 28232, "cache_created": 427, "event": "usage", "t": 23152.915723166}
+{"turn": 2, "stop_reason": "end_turn", "event": "stream_end", "t": 23165.230999541}
+{"turns": 2, "event": "message_done", "t": 23165.233039416}
+{"event": "user_message", "t": 23211.687252333}
+{"turn": 1, "event": "api_call_start", "t": 23211.698465916}
+{"turn": 1, "event": "first_event", "t": 23213.100311083}
+{"turn": 1, "input_tokens": 2, "cache_read": 28232, "cache_created": 1018, "event": "usage", "t": 23213.100853958}
+{"turn": 1, "stop_reason": "end_turn", "event": "stream_end", "t": 23225.1910965}
+{"turns": 1, "event": "message_done", "t": 23225.192862291}

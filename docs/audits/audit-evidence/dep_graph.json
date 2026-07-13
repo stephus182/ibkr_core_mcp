@@ -1,0 +1,70 @@
+{
+  "_first_account_id": [
+    "_get_accounts"
+  ],
+  "_all_account_ids": [
+    "_get_accounts"
+  ],
+  "_fetch_market_data": [
+    "_resolve_conid"
+  ],
+  "_get_account_summary": [
+    "_first_account_id"
+  ],
+  "_get_positions": [
+    "_first_account_id"
+  ],
+  "_sync_flex_trades": [
+    "_first_account_id"
+  ],
+  "_get_ledger": [
+    "_first_account_id"
+  ],
+  "_get_allocation": [
+    "_first_account_id"
+  ],
+  "_get_pa_periods": [
+    "_all_account_ids"
+  ],
+  "_get_pa_performance": [
+    "_all_account_ids"
+  ],
+  "_get_pa_transactions": [
+    "_all_account_ids"
+  ],
+  "_get_contract_info": [
+    "_resolve_conid"
+  ],
+  "_preview_order": [
+    "_first_account_id",
+    "_resolve_conid"
+  ],
+  "_get_market_snapshot": [
+    "_resolve_snapshot_conid"
+  ],
+  "_get_alerts": [
+    "_first_account_id"
+  ],
+  "_create_price_alert": [
+    "_first_account_id"
+  ],
+  "_modify_price_alert": [
+    "_first_account_id"
+  ],
+  "_delete_alert": [
+    "_first_account_id"
+  ],
+  "_activate_alert": [
+    "_first_account_id"
+  ],
+  "_scrape_with_fallback": [
+    "_validate_public_url"
+  ],
+  "_handle_firecrawl_search": [
+    "_scrape_with_fallback"
+  ],
+  "_handle_firecrawl_crawl": [
+    "_scrape_with_fallback",
+    "_validate_public_url"
+  ]
+}

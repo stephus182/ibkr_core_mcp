@@ -1,0 +1,18 @@
+"""Opt-in JSONL timing logger for the 2026-07 audit. Active only when
+CLAUDIA_TIMING is set to a writable file path. TEMPORARY — delete after WS1b."""
+from __future__ import annotations
+
+import json
+import os
+import time
+
+_PATH = os.environ.get("CLAUDIA_TIMING")
+
+
+def emit(event: str, **fields: object) -> None:
+    if not _PATH:
+        return
+    fields["event"] = event
+    fields["t"] = time.monotonic()
+    with open(_PATH, "a") as f:
+        f.write(json.dumps(fields) + "\n")

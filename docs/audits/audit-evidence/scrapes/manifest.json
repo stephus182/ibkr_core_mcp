@@ -1,0 +1,82 @@
+[
+  {
+    "url": "https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/",
+    "retrieved_at": "2026-07-02T23:05:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 810435
+  },
+  {
+    "url": "https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/",
+    "retrieved_at": "2026-07-02T23:04:30Z",
+    "method": "firecrawl",
+    "status": "failed",
+    "bytes": 152,
+    "note": "Akamai edge-block error page (Reference #102...), not real content; keyless default scrape"
+  },
+  {
+    "url": "https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/",
+    "retrieved_at": "2026-07-02T23:04:45Z",
+    "method": "webfetch",
+    "status": "failed",
+    "bytes": 0,
+    "note": "HTTP 403 Forbidden"
+  },
+  {
+    "url": "https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/",
+    "retrieved_at": "2026-07-02T23:05:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 91918,
+    "note": "retry with --wait-for 3000 --proxy auto succeeded after prior firecrawl-default and webfetch failures"
+  },
+  {
+    "url": "https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm",
+    "retrieved_at": "2026-07-02T23:04:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 20898
+  },
+  {
+    "url": "https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm",
+    "retrieved_at": "2026-07-02T23:04:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 16891
+  },
+  {
+    "url": "https://docs.firecrawl.dev/api-reference/endpoint/search",
+    "retrieved_at": "2026-07-02T23:03:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 23216
+  },
+  {
+    "url": "https://docs.firecrawl.dev/api-reference/endpoint/crawl-post",
+    "retrieved_at": "2026-07-02T23:04:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 17850
+  },
+  {
+    "url": "https://docs.firecrawl.dev/api-reference/endpoint/crawl-get",
+    "retrieved_at": "2026-07-02T23:04:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 12933
+  },
+  {
+    "url": "https://docs.firecrawl.dev/migrate-to-v2",
+    "retrieved_at": "2026-07-02T23:04:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 13034
+  },
+  {
+    "url": "https://developers.google.com/drive/api/reference/rest/v3",
+    "retrieved_at": "2026-07-02T23:04:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 86068
+  }
+]
