@@ -1,15 +1,16 @@
 # claude_tools.py Full Audit — Design
 
-**Status:** Design approved 2026-07-02; amended same day — prompt caching excluded from the audit (tracked in claudia_ui docs), D5 documentation adjustments included in scope. Structural findings remain deferred recommendations.
-**Scope repos:** `ibkr_core_mcp` (audited in depth) + `claudia_ui` (measured as the consumer).
+**Status:** Design approved 2026-07-02; amended same day — prompt caching excluded from the audit (tracked in the consuming project's docs), D5 documentation adjustments included in scope. Structural findings remain deferred recommendations.
+**Scope repos:** `ibkr_core_mcp` (audited in depth) + the consuming project (measured as the consumer).
 
 ## Problem
 
 `ibkr_core_mcp/claude_tools.py` is 2,516 lines holding 42 tool schemas, 42 handlers, shared
-helpers, and dispatch — the largest module in the package by 2×. ClaudIA (claudia_ui, Chainlit)
-sends every schema (`toolkit.tools` + TradingView tools + local tools) on **every** Anthropic API
-call, and already feels slow. The approved scraping-RAG pipeline (claudia_ui spec
-`2026-07-01-scraping-rag-pipeline-design.md`, layer 2) would add 3 more tools on top.
+helpers, and dispatch — the largest module in the package by 2×. ClaudIA (the consuming
+project's Chainlit-based assistant) sends every schema (`toolkit.tools` + TradingView tools +
+local tools) on **every** Anthropic API call, and already feels slow. The approved scraping-RAG
+pipeline (the consuming project's own spec `2026-07-01-scraping-rag-pipeline-design.md`, layer 2)
+would add 3 more tools on top.
 
 Before any architectural change, we audit: is the toolkit actually the cause of the slowness,
 does the god class need splitting (and how), and are the 42 tool descriptions accurate against
@@ -17,19 +18,20 @@ official documentation. The audit produces **evidence-backed recommendations for
 not immediate structural changes** — reflection over speed, per the project owner's direction.
 The one exception is D5: documentation adjustments are applied as part of this effort.
 
-**Fact found during design (handled outside this audit):** claudia_ui uses **no prompt
-caching** — no `cache_control` anywhere in `claudia/agent.py`. The full static prefix (system
-prompt + 42+ tool schemas) is re-processed uncached on every message *and* every tool-loop turn.
-The upgrade is tracked in claudia_ui docs (see "Excluded from the audit" below).
+**Fact found during design (handled outside this audit):** the consuming project uses **no
+prompt caching** — no `cache_control` anywhere in its agent module. The full static prefix
+(system prompt + 42+ tool schemas) is re-processed uncached on every message *and* every
+tool-loop turn. The upgrade is tracked in the consuming project's own docs (see "Excluded from
+the audit" below).
 
 ## Prior art this audit builds on
 
 - `docs/plans/2026-06-27-architecture-notes.md` — existing target split (7-module `tools/`
   package, composition "Option A"), deferred until a new tool domain lands. Names the
   cross-domain call graph as a mandatory precondition. This audit validates or amends it.
-- `claudia_ui/docs/superpowers/specs/2026-07-01-scraping-rag-pipeline-design.md` — layer-2
-  web-docs tools (`list_web_docs`, `read_web_doc`, `delete_web_docs`) whose sequencing this
-  audit must decide.
+- The consuming project's own scraping-RAG pipeline spec (`2026-07-01-scraping-rag-pipeline-design.md`,
+  tracked in its own repo) — layer-2 web-docs tools (`list_web_docs`, `read_web_doc`,
+  `delete_web_docs`) whose sequencing this audit must decide.
 - CLAUDE.md **docs-first rule** — all documentation claims verified against official sources
   via scrape, with cited URLs; never from memory.
 
@@ -41,16 +43,17 @@ Criteria are fixed here, before data collection, so conclusions cannot be retro-
 |---|---|---|
 | D1 | Where ClaudIA slowness comes from | Attribute ≥80% of measured wall-clock per turn to named components (API prompt processing, streaming, handler/IBKR time, Chainlit). |
 | D2 | Split go/no-go + final architecture | **Go** if the cross-domain dependency graph is cleanly cuttable (few/acyclic edges) AND the findings table shows the monolith actively causing defects or inconsistency. **No-go (defer again)** if evidence shows the problem is cosmetic. |
-| D3 | Runtime tool-exposure strategy for claudia_ui | Compare "all tools (with the separately planned prompt-caching upgrade)" vs. "per-context tool profiles" on measured token cost and observed wrong-tool selections. Profiles recommended only if caching would still leave a material problem. |
+| D3 | Runtime tool-exposure strategy for the consuming project | Compare "all tools (with the separately planned prompt-caching upgrade)" vs. "per-context tool profiles" on measured token cost and observed wrong-tool selections. Profiles recommended only if caching would still leave a material problem. |
 | D4 | Sequencing: split vs. scraping-RAG layer 2 | Decided by D2's outcome plus the measured token delta of adding the 3 layer-2 tools. |
 | D5 | Per-tool documentation verdicts | 42-row verdict table (accurate / fix / enrich / trim) with citations and proposed replacement text + token delta for every non-accurate verdict. |
 
 ## Excluded from the audit: prompt caching
 
-Prompt caching in claudia_ui (`cache_control` on the tools block and system prompt) is a
-separately decided upgrade, **fully excluded from this audit** — no before/after measurement,
-no sequencing dependency, no audit recommendation. It is tracked as an implementation note at
-`claudia_ui/docs/prompt-caching-upgrade.md`, which will drive that work independently.
+Prompt caching in the consuming project (`cache_control` on the tools block and system prompt)
+is a separately decided upgrade, **fully excluded from this audit** — no before/after
+measurement, no sequencing dependency, no audit recommendation. It is tracked as an
+implementation note in the consuming project's own repo, which will drive that work
+independently.
 
 ## Workstream 1 — Quantify (numbers before opinions)
 
@@ -58,13 +61,13 @@ no sequencing dependency, no audit recommendation. It is tracked as an implement
 (exact, not estimated):
 
 - Each of the 42 schemas individually → ranked cost-per-tool table.
-- The full `tools=` payload exactly as claudia_ui sends it (`toolkit.tools` + TradingView
-  `extra_tools` + `_LOCAL_TOOLS` from `claudia/agent.py:296`).
+- The full `tools=` payload exactly as the consuming project sends it (`toolkit.tools` +
+  TradingView `extra_tools` + its own local tools).
 - The system prompt (rides on every call; part of the same static prefix).
 - Projection: same totals with the 3 scraping-RAG layer-2 tools added (for D4).
 
 **1b. Latency decomposition of a real ClaudIA session** — temporary timestamp instrumentation
-around existing call sites in `claudia/agent.py` (no architecture changes), over a scripted
+around existing call sites in the consuming project's agent module (no architecture changes), over a scripted
 session of 6–8 representative messages (market-data fetch, backtest, multi-tool question,
 plain chat). Per turn, decompose wall-clock into:
 
@@ -170,8 +173,7 @@ only — no structural changes).
 - Implementing the split, exposure profiles, or layer 2 — structural outputs of the audit,
   planned separately after the owner reviews the report. (D5 doc-text adjustments *are* in
   scope — see Execution order.)
-- Prompt caching in claudia_ui — excluded entirely; tracked at
-  `claudia_ui/docs/prompt-caching-upgrade.md`.
+- Prompt caching in the consuming project — excluded entirely; tracked in its own repo.
 - `mcp_server.py` internals and the MCP-only alert tools (`add_price_alert`,
   `get_price_alerts`).
 - TradingView bridge tools — counted in the token math (they ride in the same payload), not
@@ -196,6 +198,6 @@ only — no structural changes).
 - IBKR Client Portal API: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
 - Full per-domain doc URL table: CLAUDE.md § "IBKR API Reference — Docs First"
 - Prior architecture design: `docs/plans/2026-06-27-architecture-notes.md`
-- Scraping-RAG pipeline spec: `claudia_ui/docs/superpowers/specs/2026-07-01-scraping-rag-pipeline-design.md`
+- Scraping-RAG pipeline spec: tracked in the consuming project's own repo (`2026-07-01-scraping-rag-pipeline-design.md`)
 - Code touch points: `ibkr_core_mcp/claude_tools.py` (`ClaudeToolkit`, `TOOL_DEFINITIONS`,
-  `execute()`), `claudia_ui/claudia/agent.py` (`_all_tools`, streaming loop).
+  `execute()`), the consuming project's agent module (`_all_tools`, streaming loop).

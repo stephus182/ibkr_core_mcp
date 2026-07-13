@@ -2,12 +2,12 @@
 
 **Status:** Design approved 2026-07-06; **implemented and verified 2026-07-06** —
 `ibkr_core_mcp` commits `62e7e8b` (auto-resolve chained replies, show real IBKR
-text) and `251ef54` (tighten HTML-strip regex, normalizer tests); `claudia_ui`
-switched its one call site. All design decisions matched exactly (see
+text) and `251ef54` (tighten HTML-strip regex, normalizer tests); the consuming
+project switched its one call site. All design decisions matched exactly (see
 `docs/claude-tools-audit-2026-07.md` register item 14 for the verification
-detail). 613 `ibkr_core_mcp` unit tests + 31 `claudia_ui` order_flow tests green.
-**Scope repos:** `ibkr_core_mcp` (new orchestrating methods + dialog fix) and `claudia_ui`
-(one call-site update).
+detail). 613 `ibkr_core_mcp` unit tests + 31 consuming-project order_flow tests green.
+**Scope repos:** `ibkr_core_mcp` (new orchestrating methods + dialog fix) and the consuming
+project (one call-site update).
 
 ## Problem
 
@@ -15,7 +15,7 @@ A live order-flow test on 2026-07-06 (`BUY 1 AAPL, LMT @ $100.00, GTC` — see
 `docs/claude-tools-audit-2026-07.md`, Appendix B "Live order-flow test" findings, and
 register item 14) surfaced three real gaps:
 
-1. **`claudia_ui/claudia/order_flow.py`'s `execute_staged_order`** calls `IBKRClient.place_order()`
+1. **The consuming project's `order_flow.py`'s `execute_staged_order`** calls `IBKRClient.place_order()`
    and immediately declares "Order staged successfully" — it never checks whether the
    response requires a reply (`{"id", "message", ...}`) and never calls `reply_order()`.
    Confirmed live: the order sat `Inactive`/`Pending Submit` on IBKR's side while the UI
@@ -35,7 +35,7 @@ register item 14) surfaced three real gaps:
 ## Constraints (non-negotiable, per CLAUDE.md)
 
 - Never bypass or weaken Gate 1 (Touch ID) or Gate 2 (visual confirmation).
-- Enforcement stays at the innermost call site (`IBKRClient`), not pushed up to `claudia_ui`.
+- Enforcement stays at the innermost call site (`IBKRClient`), not pushed up to the consuming project.
 - No password/PIN fallback; no session cache for the gates.
 - `ClaudeToolkit` continues to expose no tool for any of these methods — order execution
   remains UI-layer only, triggered by a physical button click.
@@ -102,14 +102,14 @@ def confirm_reply_dialog(reply_id: str, message: str, options: list[str] | None 
 - `_show_confirm_dialog`'s existing `details` dict gains a `"Message"` key
   carrying the (HTML-stripped) text, displayed prominently.
 
-### 3. `claudia_ui` update
+### 3. Consuming-project update
 
-One call site: `claudia/order_flow.py:255`, `ibkr.place_order(...)` →
+One call site: `order_flow.py:255`, `ibkr.place_order(...)` →
 `ibkr.place_order_and_confirm(...)`. Downstream result handling (extracting
 `orderId`, logging the staged-order decision) adapts to the guaranteed-terminal
 response shape — no more risk of "success" being reported on a non-terminal reply.
 
-No `modify_order` UI call site exists yet in `claudia_ui` — `modify_order_and_confirm`
+No `modify_order` UI call site exists yet in the consuming project — `modify_order_and_confirm`
 ships ready for when that UI is built.
 
 ### 4. Testing (TDD)
@@ -125,7 +125,7 @@ cleanly — same pattern applies here). New cases:
 - `confirm_reply_dialog` receives the correct `message`/`options` at each step.
 - HTML-stripping in the dialog display path.
 - `modify_order_and_confirm` mirrors the same cases.
-- `claudia_ui`: `execute_staged_order` calls the new method (mock-level test, matching
+- Consuming project: `execute_staged_order` calls the new method (mock-level test, matching
   existing `order_flow.py` test conventions if any exist — check before assuming).
 
 ## Out of scope

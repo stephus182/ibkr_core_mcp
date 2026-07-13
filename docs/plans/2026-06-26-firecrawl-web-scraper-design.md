@@ -17,16 +17,16 @@ Primary use cases:
 1. Fetching and archiving IBKR API documentation for offline reference
 2. Searching financial news, broker pages, and research content during a session
 
-These tools augment the existing `fetch_web_page` local tool in `claudia/agent.py` (which handles simple single-URL fetches via `requests`). Firecrawl's value over plain requests: handles JS-rendered pages and structured extraction at scale.
+These tools augment the existing `fetch_web_page` local tool in the consuming project's agent module (which handles simple single-URL fetches via `requests`). Firecrawl's value over plain requests: handles JS-rendered pages and structured extraction at scale.
 
-Approach chosen: **Approach A** — new module in `ibkr_core_mcp`, folded into `ClaudeToolkit`. Follows every existing pattern (Config, Drive credentials, tool dispatch) with no changes required in `claudia/`.
+Approach chosen: **Approach A** — new module in `ibkr_core_mcp`, folded into `ClaudeToolkit`. Follows every existing pattern (Config, Drive credentials, tool dispatch) with no changes required in the consuming project.
 
 ---
 
 ## Architecture
 
 ```
-claudia/agent.py
+consuming project's agent module
   └─ ClaudeToolkit.handle_tool("firecrawl_search" | "firecrawl_crawl")
        └─ ibkr_core_mcp/web_scraper.py
             ├─ FirecrawlClient          — Firecrawl REST v1 wrapper
@@ -35,7 +35,7 @@ claudia/agent.py
                       (same credential chain as GDriveCache — no new auth)
 ```
 
-No changes to `claudia/agent.py` are required. Tools appear in `ClaudeToolkit.get_tool_definitions()` automatically once `web_scraper.py` is imported and `TOOL_DEFINITIONS` is extended.
+No changes to the consuming project's agent module are required. Tools appear in `ClaudeToolkit.get_tool_definitions()` automatically once `web_scraper.py` is imported and `TOOL_DEFINITIONS` is extended.
 
 ---
 
@@ -195,7 +195,7 @@ class WebDocsStore:
     """
     Persists web content (crawl results and search snapshots) to Google Drive.
 
-    Writes to a dedicated subfolder tree under the root ClaudIA Drive folder
+    Writes to a dedicated subfolder tree under the consuming project's root Drive folder
     (GOOGLE_DRIVE_FOLDER_ID):
 
         web_docs/               — created on first use
@@ -439,7 +439,7 @@ Both are initialised on the first call to their respective handler. If `config.f
 
 ### SSRF guard (crawl only)
 
-Before calling `FirecrawlClient.crawl`, the handler performs the same URL validation as `_fetch_web_page` in `claudia/agent.py`:
+Before calling `FirecrawlClient.crawl`, the handler performs the same URL validation as `_fetch_web_page` in the consuming project's agent module:
 - Scheme must be `http` or `https`
 - Hostname must not be `localhost`, `0.0.0.0`, or start with `127.` / `169.254.`
 - Literal IP addresses must not be private, loopback, link-local, or reserved
@@ -499,7 +499,7 @@ Returns `"Blocked: cannot crawl private or localhost addresses."` on violation.
 
 ```
 GOOGLE_DRIVE_FOLDER_ID/          ← existing root folder
-  db/                            ← existing (claudia.db)
+  db/                            ← existing (the consuming project's own db)
   market_data/                   ← existing (OHLCV Parquet cache)
   account_data/                  ← existing (Flex XMLs, store.db backup)
   web_docs/                      ← NEW — auto-created by WebDocsStore on first use
@@ -515,7 +515,7 @@ GOOGLE_DRIVE_FOLDER_ID/          ← existing root folder
 
 ## Explicitly Out of Scope
 
-- `firecrawl_scrape` (single URL): existing `fetch_web_page` in `claudia/agent.py` covers this
+- `firecrawl_scrape` (single URL): existing `fetch_web_page` in the consuming project's agent module covers this
 - `firecrawl_interact` (browser automation): not selected; no use case identified
 - Crawl result retrieval tool: ClaudIA can surface Drive content via search if needed in a future iteration
 - Rate-limit retry loop inside `FirecrawlClient`: single attempt; clear error returned; LLM can retry

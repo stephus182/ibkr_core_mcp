@@ -872,7 +872,7 @@ class WebDocsStore:
     """
     Persists web content (crawl results and search snapshots) to Google Drive.
 
-    Writes to a dedicated subfolder tree under the root ClaudIA Drive folder
+    Writes to a dedicated subfolder tree under the consuming project's root Drive folder
     (GOOGLE_DRIVE_FOLDER_ID):
 
         web_docs/               — created on first use
@@ -1895,7 +1895,7 @@ Append the following method to the `ClaudeToolkit` class in `ibkr_core_mcp/claud
         if not url:
             return "url must not be empty.", None
 
-        # SSRF guard — same validation as _fetch_web_page in claudia/agent.py
+        # SSRF guard — same validation as _fetch_web_page in the consuming project's agent module
         try:
             parsed = urllib.parse.urlparse(url)
             if parsed.scheme not in ("http", "https"):
