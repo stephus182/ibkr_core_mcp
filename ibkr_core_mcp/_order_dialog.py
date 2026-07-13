@@ -123,6 +123,7 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     app.activateIgnoringOtherApps_(True)
     response = alert.runModal()
+    abort_timer.invalidate()
 
     # NSAlertFirstButtonReturn = 1000
     print("CONFIRMED" if response == 1000 else "CANCELLED")
