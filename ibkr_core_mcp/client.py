@@ -834,8 +834,10 @@ class IBKRClient:
 
         ## When this is NOT the right tool
         - Full history beyond 7 days → FlexQueryClient.fetch_trades (T+1, all origins)
-        - Real-time execution push → the WebSocket `str` (trades) topic is documented
-          (args: realtimeUpdatesOnly, days) but not implemented in streaming.py yet
+        - Real-time execution push → use the WebSocket `str` (trades) topic instead:
+          IBKRWebSocket.subscribe_executions(realtime_updates_only, days) in streaming.py,
+          which normalizes each push via _parse_stream_execution into this same trades
+          table shape
 
         ## Two-call warmup (verified live 2026-07-06)
         A fresh brokerage session returns an EMPTY list on the first call and the
