@@ -14,8 +14,13 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 42 tools. See
 - **Layer 3 — live/integration:** intentionally **not** part of this
   directory. Lives in `tests/test_client_live.py`, `tests/test_alerts_live.py`,
   `tests/test_web_scraper_live.py`, `tests/test_web_scraper_drive_live.py`,
-  `tests/test_crawl4ai_live.py` — all marked `integration`, requiring a live
-  IBKR gateway and/or real credentials.
+  `tests/test_web_scraper_dev_cache_live.py`, `tests/test_crawl4ai_live.py` —
+  all marked `integration`, requiring a live IBKR gateway and/or real
+  credentials. `test_web_scraper_dev_cache_live.py` specifically covers
+  Drive caching when developing ibkr_core_mcp standalone (a local,
+  gitignored `.env` with just `FIRECRAWL_API_KEY`, `GDRIVE_WEB_DOCS_FOLDER_ID`,
+  and token/credentials paths — no `GOOGLE_DRIVE_FOLDER_ID` needed), as
+  distinct from `test_web_scraper_drive_live.py`'s claudia_ui-production-folder path.
 
 ## Domain files
 

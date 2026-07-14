@@ -70,6 +70,16 @@ GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json
 GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 ```
 
+**Standalone dev exception:** with no `.env` here, `firecrawl_search`/`firecrawl_crawl`
+correctly report "not configured" and never touch Drive — by design, not a bug, since
+`Config.from_env()` reads empty strings. To exercise Drive caching while developing
+ibkr_core_mcp in isolation (not inside a consuming project), a local `.env` **in this
+repo** is fine — it's gitignored and never committed. Only 4 vars are needed (no
+`GOOGLE_DRIVE_FOLDER_ID` required): `FIRECRAWL_API_KEY`, `GDRIVE_WEB_DOCS_FOLDER_ID`
+(an existing `web_docs/` folder ID), `GDRIVE_TOKEN_FILE`, `GDRIVE_CREDENTIALS_FILE`
+(reuse an already-authenticated token to skip interactive OAuth). Verify with
+`pytest tests/test_web_scraper_dev_cache_live.py -v -m integration`.
+
 Never commit `.env` or any GDrive OAuth credential/token file (e.g. `credentials_ibkr_core_mcp.json`, `token_ibkr_core_mcp.json`).
 
 ---
