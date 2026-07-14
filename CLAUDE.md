@@ -168,7 +168,7 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 
 ## Gateway Authentication & Session
 
-The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit ~5 requests/second, handled transparently by `rate_limiter.py`. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
+The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit 10 requests/second globally (lower per-endpoint limits apply to some endpoints — see `docs/gateway-auth-reference.md`), handled transparently by `rate_limiter.py`. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
 
 ---
 
