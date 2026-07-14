@@ -23,6 +23,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - `_scrape_with_fallback`'s "Crawl4AI fallback used" reporting no longer overcounts — it now returns an explicit `used_fallback` flag instead of inferring from a non-empty note; `WebDocsStore.save_crawl` disambiguates filenames that collide after slugifying (e.g. `/a-b` vs `/a_b`)
 - `gdrive_auth.load_or_refresh_credentials()` docstring promises it never raises, but an uncaught `RefreshError` from a revoked/expired token could propagate anyway — now caught and treated as no-credentials, matching the documented contract
 - `pyproject.toml`'s `version` field was never bumped for the `v1.1.0` tag (stayed at `1.0.0`) — since `__version__` is derived via `importlib.metadata`, any `v1.1.0` install silently self-reported `1.0.0`. Corrected to `1.2.0` here; that stale `v1.1.0` tag itself is left as-is rather than rewritten.
+
+---
+
+## [1.2.1] — 2026-07-14
+
+### Fixed
 - `docs/api-usage-examples.md`: two print statements used `:.1f}%` instead of `:.1%` for `max_drawdown` (a negative fraction), which would silently print a 30% drawdown as "-0.3%"; the Portfolio Analytics 1-minute-bar example passed `periods=1440` (minutes/day) instead of `98280` (bars/year), mis-annualizing Sharpe/Sortino/CAGR/Calmar by ~68x
 
 ---
