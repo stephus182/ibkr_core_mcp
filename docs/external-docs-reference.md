@@ -88,7 +88,7 @@ the newest 0.4.x release) — it was introduced in 0.5.0. `crawl4ai<0.5.0` will 
 successfully but raise `Crawl4AIUnavailableError` with a misleading "not installed"
 message when `create_profile()` is actually called, since that message is only
 generated from an `ImportError` on `BrowserProfiler`. Confirmed 2026-07-14 (follow-up
-plan Task 5) against the project's own CHANGELOG (fetched via `FirecrawlClient.crawl()`
+plan Task 5) against Crawl4AI's own CHANGELOG (fetched via `FirecrawlClient.crawl()`
 from `raw.githubusercontent.com/unclecode/crawl4ai/main/CHANGELOG.md`): the entry for
 **Version 0.5.0 (2025-03-02)** lists under "Added" — `*(profiles)* Add BrowserProfiler
 class for dedicated browser profile management` — matching the PyPI-wheel finding
