@@ -426,7 +426,9 @@ def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
     crawl() must follow it until exhausted rather than returning only the first
     chunk, despite its own docstring's claim of returning "all pages"."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
-    mock_time.monotonic.side_effect = [0.0, 1.0]
+    # 0.0/1.0 = deadline calc + outer poll-loop check; 2.0 = the pagination
+    # loop's own deadline check before fetching the one "next" chunk.
+    mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
 
     start_resp = MagicMock()
     start_resp.status_code = 200
@@ -462,6 +464,105 @@ def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
     assert pages[1]["url"] == "https://example.com/p2"
     # The follow-up request must hit the exact `next` URL Firecrawl provided.
     assert mock_requests.get.call_args_list[1][0][0] == "https://api.firecrawl.dev/v1/crawl/job-big?skip=1"
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, mock_time):
+    """The "next"-chunk GET must go through the same _request_with_backoff
+    wrapper as every other Firecrawl call in this method — a 429 on the first
+    next-chunk fetch must be retried, not treated as a terminal failure. Mirrors
+    test_search_honors_retry_after_header / test_crawl_job_start_retries_on_429_then_succeeds."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    # 0.0/1.0 = deadline calc + outer poll-loop check; 2.0 = the pagination
+    # loop's own deadline check before fetching the one "next" chunk.
+    mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-retry"}
+
+    poll = MagicMock()
+    poll.status_code = 200
+    poll.json.return_value = {
+        "status": "completed",
+        "next": "https://api.firecrawl.dev/v1/crawl/job-retry?skip=1",
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}
+        ],
+    }
+
+    next_rate_limited = MagicMock()
+    next_rate_limited.status_code = 429
+    next_rate_limited.headers = {}
+
+    next_page = MagicMock()
+    next_page.status_code = 200
+    next_page.json.return_value = {
+        "next": None,
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}
+        ],
+    }
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.side_effect = [poll, next_rate_limited, next_page]
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert len(pages) == 2
+    assert pages[1]["url"] == "https://example.com/p2"
+    assert mock_requests.get.call_count == 3  # poll + 429 + retried success
+    # A backoff sleep (not just the poll loop's own time.sleep(5)) must have occurred.
+    sleep_delays = [call.args[0] for call in mock_time.sleep.call_args_list]
+    assert any(d != 5 for d in sleep_delays), f"expected a backoff delay distinct from the poll cadence, got {sleep_delays}"
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time):
+    """If Firecrawl ever returned a "next" cursor that fails to advance (API bug,
+    or a chunk response that doesn't null it out), crawl() must not spin forever —
+    it stops once the same cursor repeats, returning whatever was collected so far
+    rather than looping indefinitely."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-loop"}
+
+    same_next_url = "https://api.firecrawl.dev/v1/crawl/job-loop?skip=1"
+    poll = MagicMock()
+    poll.status_code = 200
+    poll.json.return_value = {
+        "status": "completed",
+        "next": same_next_url,
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}
+        ],
+    }
+
+    looping_chunk = MagicMock()
+    looping_chunk.status_code = 200
+    looping_chunk.json.return_value = {
+        "next": same_next_url,  # cursor fails to advance — must not be re-fetched
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}
+        ],
+    }
+
+    mock_requests.post.return_value = start_resp
+    # Only 2 responses queued: if the guard failed to stop the loop, a 3rd
+    # requests.get() call would raise StopIteration, failing this test.
+    mock_requests.get.side_effect = [poll, looping_chunk]
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert len(pages) == 2
+    assert mock_requests.get.call_count == 2
 
 
 # ── WebDocsStore — Drive service and folder helpers ───────────────────────────

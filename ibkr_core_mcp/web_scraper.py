@@ -56,6 +56,13 @@ _FIRECRAWL_RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _FIRECRAWL_MAX_RETRIES = 3
 _FIRECRAWL_MAX_BACKOFF = 30.0
 
+# Hard cap on how many "next" pagination chunks crawl() will follow after a
+# completed job (see GET /v1/crawl/{id} docs: "next" pages the >10MB result).
+# Guards against a misbehaving/looping cursor (e.g. an API bug that returns
+# the same "next" URL forever) in addition to the seen-URL and deadline
+# checks in crawl() itself.
+_FIRECRAWL_MAX_NEXT_CHUNKS = 50
+
 
 def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Response:
     """
@@ -249,7 +256,10 @@ class FirecrawlClient:
           3. Once status == "completed", follows the response's "next" pagination
              cursor (present when the crawl's result exceeds 10MB — see
              https://docs.firecrawl.dev/api-reference/endpoint/crawl-get) until it
-             is absent, accumulating every chunk's pages before returning
+             is absent, accumulating every chunk's pages before returning. This
+             is bounded by the same timeout_s deadline as step 2, plus a hard
+             cap on chunk count and a repeated-cursor guard, so pagination
+             itself can never hang or exceed the requested wall-clock budget
           4. Returns all pages collected so far (partial results on timeout)
 
         On timeout, a warning is logged and whatever pages were collected are
@@ -340,13 +350,42 @@ class FirecrawlClient:
                 # Result exceeded 10MB — Firecrawl paginates via "next", a
                 # fully-formed URL to the next chunk of `data` (not a delta;
                 # append, don't replace). Absent/null "next" means done.
+                #
+                # Bounded three ways so a misbehaving/looping cursor or a very
+                # large paginated result can't hang or blow past the caller's
+                # requested timeout_s: a hard chunk-count cap, a seen-URL guard
+                # against a cursor that fails to advance, and the same
+                # wall-clock deadline the outer poll loop honors.
                 next_url = data.get("next")
+                seen_next_urls: set[str] = set()
+                chunks_fetched = 0
                 while next_url:
+                    if next_url in seen_next_urls:
+                        log.warning(
+                            "firecrawl crawl next-cursor repeated — stopping "
+                            "pagination early with %d pages", len(pages),
+                        )
+                        break
+                    if chunks_fetched >= _FIRECRAWL_MAX_NEXT_CHUNKS:
+                        log.warning(
+                            "firecrawl crawl hit the %d-chunk pagination cap — "
+                            "stopping early with %d pages",
+                            _FIRECRAWL_MAX_NEXT_CHUNKS, len(pages),
+                        )
+                        break
+                    if time.monotonic() >= deadline:
+                        log.warning(
+                            "firecrawl crawl pagination exceeded timeout_s=%ds — "
+                            "returning %d partial pages", timeout_s, len(pages),
+                        )
+                        break
+                    seen_next_urls.add(next_url)
                     next_resp = _fetch_next(next_url)
                     next_resp.raise_for_status()
                     next_data = next_resp.json()
                     pages.extend(_pages_from(next_data))
                     next_url = next_data.get("next")
+                    chunks_fetched += 1
                 return pages
             if status == "failed":
                 raise FirecrawlError(
