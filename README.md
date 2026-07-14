@@ -221,7 +221,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `generate_pinescript` | Generate PineScript v5 strategy/indicator |
 | `get_analytics` | Sharpe, Sortino, Calmar, CAGR, max drawdown |
 | `firecrawl_search` | Web search with full markdown content per result; optional Drive snapshot |
-| `firecrawl_crawl` | Bulk documentation/site crawl, saved to Google Drive |
+| `firecrawl_crawl` | Bulk documentation/site crawl, saved to Google Drive; reuses a cached crawl <48h old |
 
 ---
 
@@ -290,6 +290,8 @@ Strategy code runs in a `RestrictedPython` sandbox — no file system or network
 `firecrawl_search` and `firecrawl_crawl` use [Firecrawl](https://firecrawl.dev) as the default scraper — full markdown extraction, JS-rendered pages, no local browser. Results are optionally saved to Google Drive under `web_docs/`.
 
 When Firecrawl's result looks incomplete — blocked, empty, or paywalled (WSJ, Bloomberg, FT, and similar metered news sites) — the tools automatically fall back to [Crawl4AI](https://docs.crawl4ai.com/), an open-source, Playwright-based scraper with no API key. Detection uses Firecrawl's own error signals plus word-count/paywall-keyword heuristics; ambiguous cases get one cheap Claude Haiku completeness check before falling back, so clean results never pay for the extra call.
+
+`firecrawl_crawl` checks Drive for an existing manifest before calling Firecrawl at all — if one less than 48h old already exists for that URL, it's returned directly with zero Firecrawl requests (`force_refresh: true` bypasses this). The 48h window matches Firecrawl's own server-side `scrapeOptions.maxAge` cache default. All Firecrawl requests also retry automatically on 429/408/5xx with backoff honoring the `Retry-After` header, per Firecrawl's documented error-handling guidance.
 
 ```bash
 # Enable the fallback (optional — base install works fine without it)
