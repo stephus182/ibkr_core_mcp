@@ -7,6 +7,68 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+---
+
+## [1.2.0] — 2026-07-14
+
+### Added
+- Firecrawl requests now retry on 429/408/5xx with Retry-After-aware exponential backoff (search, crawl job-start, crawl polling)
+- `firecrawl_crawl` checks a Drive read-cache (<48h) before re-fetching a previously-archived URL
+
+### Fixed
+- `get_pa_transactions` was sending IBKR the wrong request body (a period string instead of a resolved conid) — redesigned to take `symbol`/`sec_type`/`currency`/`days`, matching `client.py`'s real signature
+- `FirecrawlClient.crawl()` now follows the `"next"` pagination cursor — crawls whose result exceeded 10MB were silently truncated to the first chunk; retry loop bounded
+- `_scrape_with_fallback`'s "Crawl4AI fallback used" reporting no longer overcounts — it now returns an explicit `used_fallback` flag instead of inferring from a non-empty note; `WebDocsStore.save_crawl` disambiguates filenames that collide after slugifying (e.g. `/a-b` vs `/a_b`)
+- `gdrive_auth.load_or_refresh_credentials()` docstring promises it never raises, but an uncaught `RefreshError` from a revoked/expired token could propagate anyway — now caught and treated as no-credentials, matching the documented contract
+- `pyproject.toml`'s `version` field was never bumped for the `v1.1.0` tag (stayed at `1.0.0`) — since `__version__` is derived via `importlib.metadata`, any `v1.1.0` install silently self-reported `1.0.0`. Corrected to `1.2.0` here; that stale `v1.1.0` tag itself is left as-is rather than rewritten.
+
+---
+
+## [1.1.0] — 2026-07-12
+
+### Added
+- Crawl4AI fallback (`scrape_fallback.py`) for incomplete/paywalled Firecrawl results, gated by an LLM completeness check
+- WebSocket `str` (trades) and `spl` (P&L) topics added to `IBKRWebSocket`
+- `IBKRClient.place_order_and_confirm()` / `modify_order_and_confirm()` — loop Gate 1 (Touch ID) + Gate 2 (dialog showing the real IBKR reply text) across a chained-reply sequence until a terminal order state is reached
+- `cancel_order()` gained an optional `order_details` param so Gate 2's cancel dialog shows full order details instead of just the order ID
+- Futures support (STK/FUT/FOP) added to order staging
+- `client.get_orders_raw()` / `get_pa_periods_raw()` made public — removes the last private `client._get`/`client._post` reach-ins from `claude_tools.py`
+- `get_option_chain` reimplemented via the documented `secdef/search` → `secdef/strikes` flow
+
+### Fixed
+- SSRF guard closes DNS-rebinding and open-redirect gaps in the Crawl4AI fallback path
+- `preview_order` gains `stop_price`/`sec_type` schema fields with correct `price`/`auxPrice` mapping for STP/STOP_LIMIT orders (previously a live HTTP 500 for any stop order)
+- `get_option_strikes` read a nonexistent `'strike'` key and claimed the wrong month format (`'JAN2026'` vs IBKR's actual `'JAN26'`)
+- `get_pnl` response shape corrected to match IBKR's documented `/iserver/account/pnl/partitioned` format; `create_price_alert`'s advertised FUT/OPT/FX support was unreachable and now resolves through the same conid-resolution path as market data
+- `get_live_orders`/`diagnose_orders` checked `orderRef`/`cOID` instead of IBKR's real `order_ref` field — every order, including ClaudIA's own, fell through to an unreliable `clientId` check and was mislabeled EXTERNAL
+- Chained order-reply confirmations (e.g. price-band %, no-market-data, mandatory-cap-price warnings) now auto-resolve through Gate 1 + Gate 2 instead of requiring manual `reply_order()` calls per step; the reply dialog shows the real IBKR warning text (HTML-stripped) instead of just a reply ID
+- `run_backtest` sandbox errors now surface the real exception type and message (plus available DataFrame columns and the `signal` contract) instead of a redacted "strategy runtime error" — the LLM can no longer self-correct from a blanked message
+- `get_analytics` annualizes by the request's actual timeframe instead of always assuming daily bars
+- Flex `_get_statement` no longer swallows a `Warn`/error-1019 response as if it were a valid (empty) statement
+- `get_market_history` period/bar values are lowercased before the request — IBKR silently mis-serves uppercase periods (e.g. `'6M'` returned ~4 months of data, not 6) and the tool schema itself had been teaching the LLM the wrong case
+- `get_trades()` auto-retries an empty first response once — `/iserver/account/trades` has the same two-call subscription warmup as `/iserver/account/orders`; a prior "mobile fills missing" observation was this warmup, not an origin filter
+- False "DATA STALE" warning on Flex sync no longer fires on ordinary T+1 lag (newest trade == yesterday); threshold now requires 2+ trading days with no new data
+- `_create_alert` correctly detects a 403 response returned as toolkit text (the internal `except IBKRAPIError` branch never fired, since `ClaudeToolkit.execute()` already converts it to text)
+- Gate 1 Touch ID policy corrected in-code and in docs to `LAPolicyDeviceOwnerAuthentication` (biometric with system-password fallback, not biometric-only)
+
+### Security
+- 5 GitHub CodeQL alerts resolved: least-privilege `permissions: contents: read` added to the CI test job; 3 `py/incomplete-url-substring-sanitization` false positives replaced with structural checks or suppressed with justification
+- `DataFrame.eval`/`.query` blocked in the backtest sandbox — both run pandas' own expression engine outside `RestrictedPython`'s AST guards and could reach `sys.modules['os']` for RCE
+- `order_id`/`alert_id`/`reply_id` now validated against strict regexes before URL construction — `delete_alert(alert_id="../order/<id>")` previously normalized to `cancel_order`'s exact URL, bypassing Touch ID and the confirmation dialog on live order cancellation
+- `_ORDER_ID_RE` tightened from Unicode `\d` (accepted non-ASCII digit code points) to an explicit `[0-9]` class
+- Gateway Docker container now binds to `127.0.0.1` explicitly — the prior `-p {port}:{port}` form published on all host interfaces by Docker's default behavior, not loopback-only as documented
+- Gateway `conf.yaml` IP allowlist scoped from `192.*`/`172.*` (which matched the full `/8` blocks, including public IPv4 space) to the actual RFC 1918 ranges
+- SSRF guard (`scrape_fallback.is_private_host`) now resolves both A and AAAA records via `getaddrinfo` — an IPv6-only private host previously bypassed the guard entirely via `gethostbyname`'s IPv4-only resolution
+- `import_flex_file`'s path-boundary check switched from `str.startswith()` to `Path.is_relative_to()` — a sibling directory whose name was a superstring of `.ibkr_core` (e.g. `.ibkr_core_evil`) previously passed the allowlist
+
+### Changed
+- `analytics.sortino` migrated to the canonical target-downside-deviation form (Sortino's own definition, computed over all observations, not just below-target ones) — pre-migration Sortino figures are not directly comparable to figures produced after this change
+- `claude_tools.py` full audit (design decisions D1–D5): several tool descriptions and behaviors corrected across the 42-tool set
+
+---
+
 ## [1.0.0] — 2026-06-27
 
 ### Fixed
@@ -135,7 +197,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v0.1.0...v0.2.0

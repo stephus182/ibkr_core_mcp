@@ -1,8 +1,8 @@
 # Test Coverage — ibkr_core_mcp
 
-**714 unit tests · 84 integration tests (798 total) · 83% line coverage (non-integration)**
+**730 unit tests · 85 integration tests (815 total) · 83% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
-Counts and coverage below regenerated 2026-07-13 via
+Counts and coverage below regenerated 2026-07-14 via
 `pytest -m "not integration" --cov=ibkr_core_mcp --cov-report=term-missing`; re-run that command
 after any significant test or source addition rather than hand-editing these numbers.
 
@@ -32,11 +32,11 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `human_auth.py` | 96% | 14 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `backtest.py` | 97% | 185–186 | `concurrent.futures.TimeoutError` path in strategy executor — requires a real timeout, not deterministically triggerable |
 | `store.py` | 92% | 273–275, 303–308, 312–317, 321–323, 334–337, 528–529, 543 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
-| `rate_limiter.py` | 93% | 90–91 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
+| `rate_limiter.py` | 93% | 106–107 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
 | `__init__.py` | 92% | 57–58 | Optional-dependency import guard (module absent from environment) |
 | `auth.py` | 90% | 54, 78, 86–87 | `browser_cookie3` import and cookie-apply path — requires a real installed browser's cookie store |
 | `pinescript.py` | 90% | 141–142, 230, 232, 234, 237 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe-inference edge cases for sub-1-minute and multi-day intervals |
-| `web_scraper.py` | 90% | 341–354, 381, 442–443, 472–473, 526–527 | Google Drive OAuth flow (`InstalledAppFlow.run_local_server`, token refresh/write) and other live-Drive branches — require real OAuth credentials |
+| `web_scraper.py` | 90% | 90–91, 370–375, 377–381, 448–461, 488, 629–630, 659–660, 713–714 | `crawl()`'s pagination-cursor bail-out branches (repeated-cursor guard, chunk cap, mid-pagination timeout — added with the "next"-cursor fix) and retry-backoff delay math, none deterministically triggerable without a live multi-page/rate-limited crawl; Google Drive OAuth token refresh/write and other live-Drive branches (folder creation, index/search-snapshot write failures) — require real OAuth credentials |
 
 ---
 
