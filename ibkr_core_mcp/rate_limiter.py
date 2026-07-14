@@ -28,7 +28,21 @@ def with_retry(
     Violators receive HTTP 429; IP is put in a penalty box for 15 minutes.
     Repeat violators may be permanently blocked.
 
-    Per-endpoint limits (official table):
+    Per-endpoint limits (official table, re-verified live 2026-07-14 via a real
+    firecrawl_crawl of the source page below — archived to Drive under
+    web_docs/www-interactivebrokers-com-campus-ibkr-api-page-cpapi-v1/):
+      /fyi/unreadnumber              GET   1 req/sec
+      /fyi/settings                  GET   1 req/sec
+      /fyi/settings/{typecode}       POST  1 req/sec
+      /fyi/disclaimer/{typecode}     GET   1 req/sec
+      /fyi/disclaimer/{typecode}     PUT   1 req/sec
+      /fyi/deliveryoptions           GET   1 req/sec
+      /fyi/deliveryoptions/email     PUT   1 req/sec
+      /fyi/deliveryoptions/device    POST  1 req/sec
+      /fyi/deliveryoptions/{deviceId} DELETE 1 req/sec
+      /fyi/notifications             GET   1 req/sec
+      /fyi/notifications/more        GET   1 req/sec
+      /fyi/notifications/{notificationId} PUT 1 req/sec
       /iserver/account/orders        GET   1 req/5 secs
       /iserver/account/pnl/partitioned GET 1 req/5 secs
       /iserver/account/trades        GET   1 req/5 secs

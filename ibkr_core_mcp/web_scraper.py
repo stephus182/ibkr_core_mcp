@@ -432,15 +432,19 @@ class WebDocsStore:
         verification pass re-checking the same reference URLs) re-fetch every URL
         every time and cascade into Firecrawl's own rate limit.
 
-        max_age_hours default (48h) mirrors Firecrawl's own server-side scrape
-        cache default (`scrapeOptions.maxAge`, 172800000ms = 48h) rather than an
-        arbitrary window — see https://docs.firecrawl.dev/api-reference/endpoint/crawl-post,
-        verified 2026-07-14. Reference documentation content doesn't change multiple
-        times a day, so reusing Firecrawl's own chosen freshness tradeoff for the
-        same kind of data is a reasonable default; pass force_refresh-style logic
-        at the caller if a specific job needs to bypass it (e.g. a future scheduled
-        refresh job would pass a very small max_age_hours, or skip this check
-        entirely, to always get a fresh crawl).
+        max_age_hours default (48h) is informed by Firecrawl's own `scrapeOptions.maxAge`
+        cache parameter on the **v2** `/crawl` endpoint (172800000ms = 48h default) — but
+        this repo's `BASE_URL` targets Firecrawl's **v1** API
+        (https://api.firecrawl.dev/v1), where the same parameter's documented default is
+        actually `0` (caching disabled) per
+        https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post (verified
+        2026-07-14). So 48h is NOT "the same default Firecrawl already uses" for what we
+        actually call — it's this repo's own deliberate choice, using Firecrawl's v2
+        default as a reasonable, externally-validated reference point for "how fresh is
+        fresh enough" for reference documentation content (which doesn't change multiple
+        times a day), rather than an arbitrary number invented from nothing. Pass a
+        smaller max_age_hours (or skip this check) for a job that needs a shorter window,
+        e.g. a future scheduled refresh job.
 
         Never creates or writes anything — a pure read. (One minor exception: if no
         `gdrive_web_docs_folder_id` override is configured, the underlying

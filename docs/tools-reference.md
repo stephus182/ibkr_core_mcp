@@ -725,9 +725,13 @@ Use for archiving IBKR documentation or other reference sites.
 
 **Caches reads:** if a Drive manifest for this exact URL already exists and is
 less than 48h old, the cached manifest is returned directly and Firecrawl is
-never called (0 requests, 0 credits) — this is the same freshness window
-Firecrawl's own server-side `scrapeOptions.maxAge` cache uses by default, not
-an arbitrary one. Pass `force_refresh: true` to always re-crawl.
+never called (0 requests, 0 credits). 48h is informed by Firecrawl's own
+`scrapeOptions.maxAge` cache default on its **v2** API (172800000ms) — the
+**v1** API this package actually calls (`BASE_URL = .../v1`) defaults that
+same parameter to `0`/disabled, so this isn't literally Firecrawl's own
+default for what we call, just a deliberate choice using their v2 number as
+a reference point for reference-doc content, not an arbitrary one. Pass
+`force_refresh: true` to always re-crawl.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
