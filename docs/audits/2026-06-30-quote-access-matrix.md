@@ -6,7 +6,7 @@ official IBKR Client Portal API documentation. Triggered by a false "Delayed" as
 live-subscribed symbols, which led to a full audit of how every asset class resolves a ticker
 to a conid before requesting a snapshot.
 
-**Previous audit:** `docs/security-audit-2026-06-25.md`
+**Previous audit:** none on file
 
 ---
 
