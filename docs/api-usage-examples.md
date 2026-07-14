@@ -75,7 +75,7 @@ df.loc[df['rsi'] < 30, 'signal'] = 1
 df.loc[df['rsi'] > 70, 'signal'] = -1
 """
 result = run_backtest(code, df, strategy_name="RSI Mean Reversion")
-print(f"Sharpe: {result.sharpe:.2f}  |  Max DD: {result.max_drawdown:.1f}%  |  Win rate: {result.win_rate:.0%}")
+print(f"Sharpe: {result.sharpe:.2f}  |  Max DD: {result.max_drawdown:.1%}  |  Win rate: {result.win_rate:.0%}")
 ```
 
 `BacktestResult` fields: `symbol`, `strategy_name`, `total_return`, `sharpe`, `sortino`, `max_drawdown`, `num_trades`, `win_rate`, `equity_curve`
@@ -92,13 +92,13 @@ summary   = client.get_account_summary(account_id)
 # Full performance report from equity returns + trade history
 trades = store.get_trades()
 report = analytics.full_report(equity_returns, trades)           # daily bars (default)
-report = analytics.full_report(equity_returns, trades, periods=1440)  # 1-min bars
+report = analytics.full_report(equity_returns, trades, periods=98280)  # 1-min bars (390 * 252)
 # → { total_return, cagr, sharpe, sortino, calmar, max_drawdown, max_drawdown_duration,
 #     num_bars, total_trades, win_rate, profit_factor, avg_win_loss_ratio }
 # trade-derived keys (total_trades, win_rate, profit_factor, avg_win_loss_ratio) are only
 # present when `trades` is passed — they're merged into the top-level dict, not nested.
 
-print(f"Sharpe: {report['sharpe']:.2f}  |  Calmar: {report['calmar']:.2f}  |  Max DD: {report['max_drawdown']:.1f}%")
+print(f"Sharpe: {report['sharpe']:.2f}  |  Calmar: {report['calmar']:.2f}  |  Max DD: {report['max_drawdown']:.1%}")
 ```
 
 Available metrics: `total_return`, `cagr`, `sharpe`, `sortino`, `calmar`, `max_drawdown`, `max_drawdown_duration`, `num_bars`, `total_trades`, `win_rate`, `profit_factor`, `avg_win_loss_ratio`

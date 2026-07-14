@@ -436,7 +436,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Cross-reference: `ibkr_core_mcp/config.py` (`Config`), `ibkr_core_mcp/client.py` (`IBKRClient`), `ibkr_core_mcp/cache.py` (`GDriveCache`), `ibkr_core_mcp/store.py` (`SQLiteStore`), `ibkr_core_mcp/indicators.py`, `ibkr_core_mcp/backtest.py`, `ibkr_core_mcp/analytics.py`, `ibkr_core_mcp/claude_tools.py` (`ClaudeToolkit` — already exhaustively verified as of `1bccb2c`, so this task only needs to check that api-usage-examples.md's *construction/setup* examples for it are current, not re-verify each tool), `ibkr_core_mcp/pinescript.py`
 - Modify: `docs/api-usage-examples.md` only
 
-- [ ] **Step 1: Dispatch the investigation agent**
+- [x] **Step 1: Dispatch the investigation agent**
 
 ```
 Repo: /Users/steph/Claude_Projects/ibkr_core_mcp. docs/api-usage-examples.md is the per-module
@@ -472,14 +472,14 @@ mismatch), plus one-line clean confirmations per section for everything that che
 total response under 700 words.
 ```
 
-- [ ] **Step 2: Triage, fix, verify, run tests** — same procedure as Task 1 Steps 2-6.
+- [x] **Step 2: Triage, fix, verify, run tests** — same procedure as Task 1 Steps 2-6.
 
 ```bash
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
 python -m pytest -m "not integration" -q
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
@@ -622,7 +622,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ## Final verification sweep (after all 8 tasks)
 
-- [ ] **Step 1: Full unit suite one more time**
+- [x] **Step 1: Full unit suite one more time**
 
 ```bash
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
@@ -630,7 +630,9 @@ python -m pytest -m "not integration" -q
 ```
 Expected: all green, count ≥ 717 (the baseline as of commit `1bccb2c`; higher if any task added tests for a real bug fix).
 
-- [ ] **Step 2: Confirm every task's doc file changed and every task committed separately**
+Actual (2026-07-14, after Task 6): `730 passed, 85 deselected` — green, above baseline.
+
+- [x] **Step 2: Confirm every task's doc file changed and every task committed separately**
 
 ```bash
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
@@ -638,6 +640,34 @@ git log --oneline 1bccb2c..HEAD -- docs/
 ```
 Expected: one commit per task (8 total, or fewer if some tasks were run together — but never a single mega-commit covering multiple doc files, per this repo's established pattern of one focused commit per fix).
 
-- [ ] **Step 3: Update memory**
+- [x] **Step 3: Update memory**
 
 If this plan was executed by a Claude Code session with access to the project's memory system, update `project_docs_accuracy_pass_2026_07_13.md` (or create a new dated memory) recording: which of the 8 tasks found real code bugs (not just doc drift) vs. which came back clean, so a future doc-audit pass knows which files are lower-risk to skip next time.
+
+---
+
+## Closing note — all 8 tasks complete (2026-07-14)
+
+Tasks 1/2/3/5/8 executed and committed under ad-hoc (non-plan-template) commit
+messages before this plan file's checkboxes were kept in sync; Task 6 was the
+one task never executed until this pass, and Tasks 4/7 were executed earlier
+but their actual fixes landed in files other than their own target doc. Recording
+all 8 here so a future pass doesn't re-run `git log -- <target-doc>` alone and
+wrongly conclude a task was skipped:
+
+| # | Doc file | Outcome | Fix landed in | Commit |
+|---|---|---|---|---|
+| 1 | `docs/api-reference.md` | doc drift found, fixed | `docs/api-reference.md` | `468c2ec` |
+| 2 | `docs/mcp-server-reference.md` | doc drift found, fixed | `docs/mcp-server-reference.md` | `ec49289` |
+| 3 | `docs/order-management-examples.md` | doc drift found, fixed | `docs/order-management-examples.md` | `984f13b` |
+| 4 | `docs/gateway-auth-reference.md` | doc itself clean; found stale rate-limit claim ("~5 req/s" vs. actual 10 req/s) elsewhere | `CLAUDE.md` (Gateway Authentication & Session section) | `b040ca0` |
+| 5 | `docs/flex-query-reference.md` | doc drift found, fixed | `docs/flex-query-reference.md` | `cfa4122` |
+| 6 | `docs/api-usage-examples.md` | 3 doc-only formatting/unit bugs found, fixed (`max_drawdown` needed `:.1%` not `:.1f}%` in two print statements; `full_report(..., periods=1440)` used minutes/day instead of bars/year, corrected to `98280`) — no code bug | `docs/api-usage-examples.md` | *(this commit)* |
+| 7 | `docs/ibkr-api-behaviors-reference.md` | all 5 claims re-verified VERIFIED, doc itself clean; found stale docstring elsewhere | `ibkr_core_mcp/client.py` (`get_trades()` docstring, wrongly claimed WebSocket str topic unimplemented) | `7531b3e` |
+| 8 | `docs/external-docs-reference.md` | doc drift found, fixed | `docs/external-docs-reference.md` | `eec9cbe` |
+
+Final unit suite: 730 passed, 85 deselected (baseline at plan creation was 717).
+Two tasks (4, 7) found their doc target already accurate but surfaced real drift
+in an adjacent file (`CLAUDE.md`, `client.py`) via the same exhaustive cross-check
+method — evidence the method generalizes beyond its original `tools-reference.md`
+target, not just a one-off.
