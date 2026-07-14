@@ -2,7 +2,7 @@
 
 Standalone pip-installable Python package providing a complete IBKR Client Portal API client, Google Drive parquet cache, SQLite store, backtest sandbox, technical indicators, portfolio analytics, Claude AI tool layer, and PineScript generation utilities.
 
-**Design spec:** `docs/2026-05-22-ibkr-core-mcp-design.md`
+**Design spec:** `docs/plans/2026-05-22-ibkr-core-mcp-design.md`
 
 ---
 

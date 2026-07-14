@@ -1,7 +1,7 @@
 # ibkr_core_mcp Documentation
 
-This directory holds three kinds of documentation. See `CLAUDE.md`'s Pointers section for the
-9 most commonly needed links; this file is the full catalog.
+This directory holds three kinds of documentation. See `CLAUDE.md`'s Design spec line and
+Pointers section for the most commonly needed links; this file is the full catalog.
 
 ## Reference
 
@@ -25,12 +25,14 @@ code changes.
 
 ## Plans (`docs/plans/`)
 
-Point-in-time records of what was decided and how — a design spec (`*-design.md`) captures
-the why/what, a plan (`*-plan.md`) captures the how, for both features and fixes. Filenames
-are `YYYY-MM-DD-<topic>-{design,plan}.md`; sorting the directory by filename gives
-chronological order. These are not living documents — once written they are not edited to
-reflect later changes; a later revisit gets a new dated file. Browse the directory directly
-rather than looking for an index entry here.
+Point-in-time records of what was decided and how — a design spec captures the why/what, an
+implementation plan captures the how, for both features and fixes. Every filename carries a
+`YYYY-MM-DD-<topic>` prefix, so sorting the directory by filename gives chronological order;
+where a `-design.md`/`-plan.md` suffix is present it distinguishes the two documents for the
+same topic, but not every file uses the suffix — some use a plain descriptive topic name
+instead. These are not living documents — once written they are not edited to reflect later
+changes; a later revisit gets a new dated file. Browse the directory directly rather than
+looking for an index entry here.
 
 ## Audits (`docs/audits/`)
 
