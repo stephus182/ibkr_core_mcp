@@ -4,24 +4,13 @@
 > themselves live in CLAUDE.md's Security & Fingerprint Authentication section, not here.**
 > This doc is the "how to call it" code walkthrough.
 
-**Read-only — no auth required:**
-```python
-# List open orders
-orders = client.get_live_orders()
-for o in orders:
-    print(f"{o['orderId']}  {o.get('ticker')}  {o.get('side')}  qty={o.get('remainingQuantity')}")
-
-# Preview an order before placing (whatif — never executes)
-preview = client.get_order_preview(account_id, order)
-print(f"Estimated cost: {preview.get('equity', '?')}")
-```
-
-**Place a live order — Gate 1 (Touch ID) + Gate 2 (confirmation dialog), full reply chain resolved automatically:**
+**Setup (used by every snippet below — see `docs/api-usage-examples.md` for the full `Config`/`IBKRClient` walkthrough):**
 ```python
 from ibkr_core_mcp import IBKRClient, Config, HumanAuthError
 
-cfg    = Config.from_env()
-client = IBKRClient(cfg)
+cfg        = Config.from_env()
+client     = IBKRClient(cfg)
+account_id = client.get_accounts()[0]["accountId"]
 
 contracts = client.search_contract("AAPL")
 order = {
@@ -33,7 +22,22 @@ order = {
     "price":     182.50,
     "tif":       "DAY",
 }
+```
 
+**Read-only — no auth required:**
+```python
+# List open orders
+orders = client.get_live_orders()
+for o in orders:
+    print(f"{o.get('orderId')}  {o.get('ticker')}  {o.get('side')}  qty={o.get('remainingQuantity')}")
+
+# Preview an order before placing (whatif — never executes)
+preview = client.get_order_preview(account_id, order)
+print(f"Estimated cost: {preview.get('equity', '?')}")
+```
+
+**Place a live order — Gate 1 (Touch ID) + Gate 2 (confirmation dialog), full reply chain resolved automatically:**
+```python
 try:
     # place_order_and_confirm() is the recommended entry point: it calls
     # place_order(), then loops Touch ID + a dialog showing the real IBKR
@@ -75,6 +79,8 @@ https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cance
 
 **Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does (not yet live-verified to require chained replies, but shares `modify_order`'s response shape); cancel has no reply chain:**
 ```python
+order_id = result[0]["order_id"]  # from a previously placed order, e.g. result above
+
 try:
     client.modify_order_and_confirm(account_id, order_id, {"price": 180.00, "tif": "DAY"})
 except HumanAuthError as e:
