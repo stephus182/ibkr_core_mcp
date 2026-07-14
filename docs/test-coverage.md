@@ -3,7 +3,7 @@
 **508 unit tests · 63 integration tests · 72% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
 
-Live integration test log: [`docs/live-test-log.md`](live-test-log.md)
+Live integration test log: [`docs/live-test-log.md`](audits/live-test-log.md)
 
 ---
 
