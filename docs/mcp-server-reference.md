@@ -39,7 +39,7 @@ Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_conf
 ## HTTP/SSE — dashboard and chatbots
 
 ```bash
-# Read-only (no streaming)
+# No live push (ibkr://pnl/live resource stays empty; all 44 tools remain fully callable)
 python -m ibkr_core_mcp.mcp_server --transport sse --port 5174
 
 # With WebSocket live quotes and price alerts
