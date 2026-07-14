@@ -6,6 +6,8 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 
 ---
 
+📚 Full documentation catalog: [`docs/README.md`](docs/README.md)
+
 ## Feature overview
 
 | Module | What it does |
