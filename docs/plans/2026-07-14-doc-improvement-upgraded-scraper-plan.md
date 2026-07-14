@@ -108,28 +108,28 @@ completed result exceeds 10MB ("The URL to retrieve the next 10MB of data"). For
 `crawl()` currently returns only the first chunk despite its own docstring's claim that it
 "returns all pages collected."
 
-- [ ] **Step 1: Confirm the gap still exists**
+- [x] **Step 1: Confirm the gap still exists**
 
 Read the current `ibkr_core_mcp/web_scraper.py`'s `crawl()` method in full. Confirm `next` is
 still unread. (If commit `da5289f`'s retry-with-backoff changes touched this method's structure,
 re-verify the finding against the current code rather than assuming the old line numbers still
 apply.)
 
-- [ ] **Step 2: Write a failing test (TDD, superpowers:test-driven-development)**
+- [x] **Step 2: Write a failing test (TDD, superpowers:test-driven-development)**
 
 Mock a crawl-poll response sequence where the final "completed" response includes a `"next"` URL
 and fewer pages than the crawl's total; assert `crawl()` currently returns only the first batch
 (RED — confirms the bug), then implement following `next` until it's absent, accumulating all
 pages, then confirm GREEN.
 
-- [ ] **Step 3: Run the full unit suite**
+- [x] **Step 3: Run the full unit suite**
 
 ```bash
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
 python -m pytest -m "not integration" -q
 ```
 
-- [ ] **Step 4: Dispatch a fresh verification agent, then commit**
+- [x] **Step 4: Dispatch a fresh verification agent, then commit**
 
 Same pattern as prior passes: fresh `Agent`, re-read the fixed method and the new test, confirm
 PASS, rerun the suite, then commit with a message citing the `next`-cursor Firecrawl behavior and
@@ -148,7 +148,7 @@ The prior pass re-pointed this claim's citation to IBKR's Activity Statements gl
 (confirms account-level, not per-platform, reporting) but could not find a single official page
 that explicitly enumerates "CP API, mobile app, TWS, web portal" together for Flex specifically.
 
-- [ ] **Step 1: Search for a better source using `firecrawl_search`**
+- [x] **Step 1: Search for a better source using `firecrawl_search`**
 
 Use `ClaudeToolkit.firecrawl_search` (or `FirecrawlClient.search()` directly) with queries such as
 "IBKR Flex Activity Statement all order origins TWS mobile API", "Interactive Brokers Activity
@@ -156,14 +156,14 @@ Statement trade origin completeness", etc. — try a few phrasings. Read full ma
 promising result (`WebDocsStore.get_cached_crawl` first if a Drive snapshot already exists for a
 candidate URL).
 
-- [ ] **Step 2: If found, update the citation; if not, document that explicitly**
+- [x] **Step 2: If found, update the citation; if not, document that explicitly**
 
 If a page explicitly backs the claim, update `Source:` in all 3 docstring locations and the Flex
 row in `docs/external-docs-reference.md`. If nothing definitive turns up after a reasonable
 search effort, update the "Missing URLs / known gaps" section to say a further search was
 attempted and still came up empty, rather than leaving it looking un-investigated.
 
-- [ ] **Step 3: Run the full unit suite, verify, commit** (same pattern as prior tasks).
+- [x] **Step 3: Run the full unit suite, verify, commit** (same pattern as prior tasks).
 
 ---
 
