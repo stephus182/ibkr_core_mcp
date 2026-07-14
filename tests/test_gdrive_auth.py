@@ -8,6 +8,8 @@ import os
 import stat
 from unittest.mock import MagicMock, patch
 
+from google.auth.exceptions import RefreshError
+
 from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -77,6 +79,27 @@ def test_load_or_refresh_returns_none_when_expired_and_unrefreshable(tmp_path):
 
     assert result is None
     # No refresh attempted, nothing persisted — file untouched.
+    assert token_file.read_text() == '{"existing": "token"}'
+
+
+def test_load_or_refresh_returns_none_when_refresh_fails(tmp_path):
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"existing": "token"}')
+
+    mock_creds = MagicMock()
+    mock_creds.valid = False
+    mock_creds.expired = True
+    mock_creds.refresh_token = "rt"
+    mock_creds.refresh.side_effect = RefreshError("invalid_grant: token revoked")
+
+    with patch(
+        "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
+        return_value=mock_creds,
+    ), patch("ibkr_core_mcp.gdrive_auth.Request"):
+        result = load_or_refresh_credentials(token_file, _SCOPES)
+
+    assert result is None
+    # A failed refresh must not be persisted — the stale token file is left untouched.
     assert token_file.read_text() == '{"existing": "token"}'
 
 

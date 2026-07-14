@@ -51,7 +51,9 @@ def with_retry(
     - No more than 60 requests in any 10-minute rolling window
     - Max 50 concurrent open historical data requests
     - BID_ASK tick type counts as 2 requests against all of the above limits
-    - Bars >30 seconds: historical data limitations have been lifted (per official docs)
+    - Bars >=1 minute: historical data limitations have been lifted (per official docs;
+      bars <1 minute remain subject to the limitations above, and bars <=30 seconds
+      become unavailable once older than six months)
     Source: https://interactivebrokers.github.io/tws-api/historical_limitations.html
     Note: these are TWS API pacing rules — not confirmed to apply identically to
     CP API REST (/iserver/marketdata/history) endpoints. Applied here as a

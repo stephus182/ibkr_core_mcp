@@ -2,10 +2,15 @@
 
 The Client Portal API (`/iserver/account/trades`) returns only the **last 7 days** of trade history (current day + 6 previous). For full historical data, the package ships a complete Flex Query suite — the only manual step is the one-time Flex Query configuration on the IBKR website below. After that, `FlexQueryClient` fetches/parses statements and maintains the historical database end-to-end (upsert into `SQLiteStore` for unlimited history + raw-XML archive to Drive for audit/verification), and the toolkit exposes the full lifecycle as tools: `sync_flex_trades` (daily fetch), `sync_flex_archive` / `import_flex_file` (bulk/manual XML import), `check_flex_coverage` (history completeness), and `verify_flex_import` (SHA-256 manifest verification).
 
-**One-time setup on IBKR website:**
-1. Log in → Reports → Flex Queries → Create
-2. Select "Trades" activity type, all fields, all dates
-3. Note the Token and Query ID → add to `.env`:
+**One-time setup on IBKR website (two separate screens):**
+1. Create the query: Log in → Performance & Reports → Flex Queries → Create → select "Trades"
+   activity type, all fields, all dates → note the **Query ID**.
+2. Enable the Flex Web Service (a distinct screen from step 1): Performance & Reports →
+   Flex Queries → **Flex Web Service Configuration** (or Menu → Reporting → Flex Queries →
+   Flex Web Service Configuration) → click the gear icon → toggle the service on → click
+   **Generate A New Token**, choosing an expiration and (optionally) an IP restriction →
+   note the **Token**.
+3. Add both to `.env`:
 
 ```
 IBKR_FLEX_TOKEN=your_token_here
