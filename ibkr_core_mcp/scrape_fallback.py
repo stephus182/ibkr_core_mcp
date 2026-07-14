@@ -106,7 +106,7 @@ def is_private_host(host: str) -> bool:
         # getaddrinfo (not gethostbyname) so AAAA-only hosts can't bypass this
         # by having no A record — gethostbyname is IPv4-only and used to treat
         # "unresolvable via IPv4" as "safe," which is wrong for a host that
-        # resolves fine via IPv6. See docs/security-audit-2026-07-11.md H-4.
+        # resolves fine via IPv6. See docs/audits/security-audit-2026-07-11.md H-4.
         try:
             infos = socket.getaddrinfo(host, None)
         except socket.gaierror:

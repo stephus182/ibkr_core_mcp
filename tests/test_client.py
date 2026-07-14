@@ -608,7 +608,7 @@ def test_validate_order_id_rejects_path_traversal_read_methods(client, method_na
 
 def test_delete_alert_rejects_path_traversal_alert_id(client):
     """The exact H-2 exploit path: alert_id='../order/<real orderId>' must never
-    reach the network. See docs/security-audit-2026-07-11.md H-2."""
+    reach the network. See docs/audits/security-audit-2026-07-11.md H-2."""
     from ibkr_core_mcp.exceptions import ConfigError
     with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid:
         with pytest.raises(ConfigError, match="[Ii]nvalid"):

@@ -1381,7 +1381,7 @@ class ClaudeToolkit:
         # Prevents LLM prompt-injection from reading arbitrary local files.
         # is_relative_to (not a string-prefix check) so a sibling directory whose
         # name is a superstring of ".ibkr_core" (e.g. ".ibkr_core_evil") can't
-        # pass — see docs/security-audit-2026-07-11.md M-2.
+        # pass — see docs/audits/security-audit-2026-07-11.md M-2.
         allowed_root = Path.home() / ".ibkr_core"
         resolved = Path(path).expanduser().resolve()
         if resolved != allowed_root and not resolved.is_relative_to(allowed_root):
@@ -1575,7 +1575,7 @@ class ClaudeToolkit:
             tif = o.get("timeInForce") or o.get("tif") or ""
             order_ref = (
                 o.get("order_ref")  # IBKR's real Live Orders field (snake_case) — verified
-                                     # against docs/superpowers/audit-evidence/scrapes/cpapi-v1.md
+                                     # against docs/audits/audit-evidence/scrapes/cpapi-v1.md
                 or o.get("orderRef")  # kept in case IBKR ever adds a camelCase alias
                 or o.get("cOID")
                 or o.get("clientOrderId")
@@ -2167,7 +2167,7 @@ class ClaudeToolkit:
         """Resolve one symbol to a conid using the correct endpoint for its sec_type.
 
         The single conid-resolution implementation for the toolkit (register item 15,
-        docs/claude-tools-audit-2026-07.md) — every handler needing a conid
+        docs/audits/claude-tools-audit-2026-07.md) — every handler needing a conid
         (_fetch_market_data, _get_contract_info, _preview_order, _get_market_snapshot,
         _create_price_alert) calls this rather than a duplicated STK/IND/BOND-only path.
 
@@ -2367,7 +2367,7 @@ class ClaudeToolkit:
         search_contract; FUT via get_futures front-month; CASH via
         get_currency_pairs) — NOT a raw search_contract call, which per client.py's
         documented endpoint scope only supports STK/IND/BOND and would silently
-        mis-resolve or fail for FUT/CASH. See docs/claude-tools-audit-2026-07.md.
+        mis-resolve or fail for FUT/CASH. See docs/audits/claude-tools-audit-2026-07.md.
         The alert condition's exchange is always "SMART" (IBKR's standard routing
         default, used throughout this codebase) since _resolve_snapshot_conid does
         not return a resolved listing exchange.

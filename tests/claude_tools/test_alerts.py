@@ -25,7 +25,7 @@ def test_execute_get_alerts_returns_json(toolkit):
 # 2026-07-07): the old implementation called self._client.search_contract directly,
 # which per client.py's own docstring only supports STK/IND/BOND. The tool schema
 # advertised FUT/OPT/FX support that was unreachable — FUT/CASH alerts would
-# silently resolve to the wrong contract or fail. See docs/claude-tools-audit-2026-07.md.
+# silently resolve to the wrong contract or fail. See docs/audits/claude-tools-audit-2026-07.md.
 
 def test_execute_create_price_alert_resolves_symbol(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]

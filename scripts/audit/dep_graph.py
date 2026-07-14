@@ -38,7 +38,7 @@ def main() -> None:
         if calls:
             graph[fn.name] = sorted(calls)
 
-    Path("docs/superpowers/audit-evidence/dep_graph.json").write_text(
+    Path("docs/audits/audit-evidence/dep_graph.json").write_text(
         json.dumps(graph, indent=2))
 
     print("```mermaid\nflowchart LR")

@@ -131,7 +131,7 @@ def test_get_ledger_empty(toolkit):
 # (scraped 2026-07-02, re-verified 2026-07-07): {"upnl": {"<acct>.Core": {rowType,
 # dpl, nl, upl, el, mv}}} — account/model-partition level, NOT per-position/conid.
 # The old tests below invented a {account: {conid: {ticker, uPnl, dPnl}}} shape
-# that never matched IBKR's real response — see docs/claude-tools-audit-2026-07.md.
+# that never matched IBKR's real response — see docs/audits/claude-tools-audit-2026-07.md.
 
 def test_get_pnl_empty(toolkit):
     toolkit._client.get_pnl.return_value = {}

@@ -20,7 +20,7 @@ Calmar variants:
 Run (needs Drive credentials; reads claudia_ui's .env for them):
   .venv/bin/python scripts/audit/sortino_calmar_worked_example.py
 
-Result 2026-07-07 (recorded in docs/claude-tools-audit-2026-07.md, Findings
+Result 2026-07-07 (recorded in docs/audits/claude-tools-audit-2026-07.md, Findings
 analysis → Open-item priorities): buy-and-hold 2.1924 → 2.3395 (+6.7%);
 MACD long-only 1.9954 → 3.1083 (+55.8%). Calmar variants coincide on any
 window <= 36 months, so the 6-month example cannot distinguish them.

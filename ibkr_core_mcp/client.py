@@ -33,7 +33,7 @@ _ORDER_ID_RE = re.compile(r"^[0-9]+$")
 # IBKR reply IDs are documented as "String. Required" with example value
 # "a12b34c5-d678-9e012f-3456-7a890b12cd3e" — hex + hyphens, non-standard
 # UUID grouping (not 8-4-4-4-12), so match on charset/length, not exact
-# segment structure. Source: docs/superpowers/audit-evidence/scrapes/cpapi-v1.md
+# segment structure. Source: docs/audits/audit-evidence/scrapes/cpapi-v1.md
 # (https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply)
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
@@ -88,7 +88,7 @@ def _validate_order_id(order_id: str) -> None:
     Prevents path traversal in URLs built by f-string interpolation — the same
     threat _validate_account_id addresses for account_id. Applies to order_id
     and alert_id (IBKR reuses the same numeric ID namespace for both — see
-    docs/security-audit-2026-07-11.md H-2).
+    docs/audits/security-audit-2026-07-11.md H-2).
     """
     if not order_id or not _ORDER_ID_RE.fullmatch(order_id):
         raise ConfigError(f"Invalid order_id/alert_id {order_id!r}: must be numeric.")

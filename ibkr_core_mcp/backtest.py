@@ -38,7 +38,7 @@ def _write_guard(ob: object) -> object:
 # sandbox's own locals), then walk __init__.__func__.__globals__ to pandas'
 # unrestricted module globals, then sys.modules['os'] for RCE. safer_getattr does
 # not block these — they're ordinary public method names, not dunders. Block them
-# explicitly. See docs/security-audit-2026-07-11.md H-1.
+# explicitly. See docs/audits/security-audit-2026-07-11.md H-1.
 _DENIED_ATTRS = frozenset({"eval", "query"})
 
 

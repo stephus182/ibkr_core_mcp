@@ -156,7 +156,7 @@ def test_get_statement_raises_after_max_retries(flex_client):
 
 # Byte-exact copy of the error document IBKR returned live on 2026-07-02, which
 # _get_statement passed through as a "statement" (0 trades, logged as verified —
-# see docs/claude-tools-audit-2026-07.md, Appendix B finding 1).
+# see docs/audits/claude-tools-audit-2026-07.md, Appendix B finding 1).
 GET_STATEMENT_XML_WARN_1019 = (
     b"<FlexStatementResponse timestamp='02 July, 2026 08:05 PM EDT'>\n"
     b"<Status>Warn</Status>\n"

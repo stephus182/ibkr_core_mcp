@@ -130,7 +130,7 @@ def test_sandbox_blocks_dataframe_eval(ohlcv):
     """df.eval() runs pandas' OWN expression engine outside RestrictedPython's
     compiled-bytecode boundary — it can reach __globals__/sys.modules/os and
     achieve RCE. Must be blocked at the sandbox's _getattr_ hook.
-    See docs/security-audit-2026-07-11.md H-1."""
+    See docs/audits/security-audit-2026-07-11.md H-1."""
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
     code = (
         "leak = df.eval(\"@df.__init__.__func__.__globals__['sys'].modules['os'].popen('id').read()\")\n"

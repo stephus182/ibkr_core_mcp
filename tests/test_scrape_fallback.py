@@ -67,7 +67,7 @@ def test_is_private_host_unresolvable_hostname_not_blocked(monkeypatch):
 def test_is_private_host_blocks_aaaa_only_hostname_resolving_to_loopback(monkeypatch):
     """A hostname with no A record but an AAAA record pointing at ::1 must be
     blocked — socket.gethostbyname alone can't see AAAA records and used to
-    fail open here. See docs/security-audit-2026-07-11.md H-4."""
+    fail open here. See docs/audits/security-audit-2026-07-11.md H-4."""
     import socket
 
     from ibkr_core_mcp.scrape_fallback import is_private_host

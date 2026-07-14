@@ -10,7 +10,7 @@ Counts (all exact, per https://platform.claude.com/docs/en/docs/build-with-claud
 Usage:
   python scripts/audit/count_tool_tokens.py \
       --env-file /Users/steph/Claude_Projects/claudia_ui/.env \
-      --out docs/superpowers/audit-evidence/token_counts.json \
+      --out docs/audits/audit-evidence/token_counts.json \
       [--extra-tools path/to/extra_tools.json]   # e.g. layer-2 projection or TV dump
 """
 from __future__ import annotations

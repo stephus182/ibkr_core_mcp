@@ -153,7 +153,7 @@ class FlexQueryClient:
       two-call subscription warmup is handled — `IBKRClient.get_trades()` retries an
       empty first response automatically. Flex remains the authoritative record for
       anything beyond 7 days (T+1, unlimited history). Sources: CP API reference
-      "Trades" section (scraped 2026-07-02); docs/claude-tools-audit-2026-07.md
+      "Trades" section (scraped 2026-07-02); docs/audits/claude-tools-audit-2026-07.md
       Appendix B finding 2.
     - Real-time prices or positions
     """
@@ -348,7 +348,7 @@ class FlexQueryClient:
         raises via _FLEX_ERROR_CODES. A final guard rejects any 200 response with
         no FlexStatement element, so an unexpected non-statement document can never
         again be parsed as a legitimate 0-trade import (root cause of the
-        2026-07-02 silent empty sync; docs/claude-tools-audit-2026-07.md,
+        2026-07-02 silent empty sync; docs/audits/claude-tools-audit-2026-07.md,
         Appendix B finding 1).
         """
         for attempt in range(_MAX_POLL_RETRIES):

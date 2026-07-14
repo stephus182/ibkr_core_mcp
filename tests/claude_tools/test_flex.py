@@ -269,7 +269,7 @@ def test_import_flex_file_blocked_path(toolkit, tmp_path):
 def test_import_flex_file_blocks_sibling_prefixed_path(toolkit, tmp_path):
     """A prefix-string check (not a path-boundary check) incorrectly admits any
     directory whose name is a superstring of '.ibkr_core', e.g. '.ibkr_core_evil'.
-    See docs/security-audit-2026-07-11.md M-2."""
+    See docs/audits/security-audit-2026-07-11.md M-2."""
     sibling = tmp_path / ".ibkr_core_evil"
     sibling.mkdir()
     xml_file = sibling / "archive.xml"

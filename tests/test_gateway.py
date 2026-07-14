@@ -176,7 +176,7 @@ class TestStart:
     def test_docker_run_binds_port_to_loopback_only(self) -> None:
         """The gateway holds an authenticated IBKR session with no gate enforcement
         of its own — publishing beyond loopback makes it reachable from the LAN.
-        See docs/security-audit-2026-07-11.md H-3."""
+        See docs/audits/security-audit-2026-07-11.md H-3."""
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),

@@ -2,7 +2,7 @@
 """WS3 — dump every tool's Claude-facing text to one markdown file for side-by-side
 review against scraped official docs. No imports of the package (AST only).
 
-Usage: python scripts/audit/dump_tool_texts.py > docs/superpowers/audit-evidence/tool_texts.md
+Usage: python scripts/audit/dump_tool_texts.py > docs/audits/audit-evidence/tool_texts.md
 """
 from __future__ import annotations
 
