@@ -246,7 +246,11 @@ class FirecrawlClient:
           1. Starts the job with POST /v1/crawl
           2. Polls GET /v1/crawl/{id} every 5 seconds until status == "completed"
              or timeout_s seconds have elapsed
-          3. Returns all pages collected so far (partial results on timeout)
+          3. Once status == "completed", follows the response's "next" pagination
+             cursor (present when the crawl's result exceeds 10MB — see
+             https://docs.firecrawl.dev/api-reference/endpoint/crawl-get) until it
+             is absent, accumulating every chunk's pages before returning
+          4. Returns all pages collected so far (partial results on timeout)
 
         On timeout, a warning is logged and whatever pages were collected are
         returned. The return value is never raised on timeout — callers receive
@@ -296,6 +300,25 @@ class FirecrawlClient:
         self._raise_for_status(resp)
         job_id = resp.json()["id"]
 
+        def _pages_from(data: dict[str, Any]) -> list[dict[str, str]]:
+            return [
+                {
+                    "url": p.get("metadata", {}).get("sourceURL", p.get("url", "")),
+                    "markdown": p.get("markdown") or "",
+                    "metadata": p.get("metadata", {}),
+                }
+                for p in (data.get("data") or [])
+            ]
+
+        def _fetch_next(next_page_url: str) -> requests.Response:
+            # A plain nested function (not a loop-body lambda) so next_page_url
+            # is this call's own parameter, not a mutating loop variable.
+            return _request_with_backoff(lambda: requests.get(
+                next_page_url,
+                headers=self._headers,
+                timeout=30,
+            ))
+
         # Poll for completion
         deadline = time.monotonic() + timeout_s
         pages: list[dict[str, str]] = []
@@ -311,16 +334,19 @@ class FirecrawlClient:
             data = poll.json()
             status = data.get("status", "")
 
-            pages = [
-                {
-                    "url": p.get("metadata", {}).get("sourceURL", p.get("url", "")),
-                    "markdown": p.get("markdown") or "",
-                    "metadata": p.get("metadata", {}),
-                }
-                for p in (data.get("data") or [])
-            ]
+            pages = _pages_from(data)
 
             if status == "completed":
+                # Result exceeded 10MB — Firecrawl paginates via "next", a
+                # fully-formed URL to the next chunk of `data` (not a delta;
+                # append, don't replace). Absent/null "next" means done.
+                next_url = data.get("next")
+                while next_url:
+                    next_resp = _fetch_next(next_url)
+                    next_resp.raise_for_status()
+                    next_data = next_resp.json()
+                    pages.extend(_pages_from(next_data))
+                    next_url = next_data.get("next")
                 return pages
             if status == "failed":
                 raise FirecrawlError(

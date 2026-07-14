@@ -418,6 +418,52 @@ def test_crawl_max_pages_clamped(mock_requests, mock_time):
     assert payload["limit"] == 100
 
 
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
+    """Per Firecrawl's GET /v1/crawl/{id} docs, a completed crawl whose result
+    exceeds 10MB includes a "next" URL to fetch the remaining data in chunks.
+    crawl() must follow it until exhausted rather than returning only the first
+    chunk, despite its own docstring's claim of returning "all pages"."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_time.monotonic.side_effect = [0.0, 1.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-big"}
+
+    poll = MagicMock()
+    poll.status_code = 200
+    poll.json.return_value = {
+        "status": "completed",
+        "next": "https://api.firecrawl.dev/v1/crawl/job-big?skip=1",
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}
+        ],
+    }
+
+    next_page = MagicMock()
+    next_page.status_code = 200
+    next_page.json.return_value = {
+        "next": None,
+        "data": [
+            {"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}
+        ],
+    }
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.side_effect = [poll, next_page]
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert len(pages) == 2
+    assert pages[0]["url"] == "https://example.com/p1"
+    assert pages[1]["url"] == "https://example.com/p2"
+    # The follow-up request must hit the exact `next` URL Firecrawl provided.
+    assert mock_requests.get.call_args_list[1][0][0] == "https://api.firecrawl.dev/v1/crawl/job-big?skip=1"
+
+
 # ── WebDocsStore — Drive service and folder helpers ───────────────────────────
 
 def _make_cfg_with_drive(tmp_path):
