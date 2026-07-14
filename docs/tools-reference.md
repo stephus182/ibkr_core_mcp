@@ -1,6 +1,11 @@
 # ClaudeToolkit — Tools Reference
 
-**40 core tools** exposed by `ClaudeToolkit.tools` and `ClaudeToolkit.execute()`, plus **2 optional web scraper tools** when `FIRECRAWL_API_KEY` is set (42 total).
+**42 tools total** (40 core + 2 web scraper) exposed by `ClaudeToolkit.tools` and
+`ClaudeToolkit.execute()`. `ClaudeToolkit.tools` always advertises all 42 regardless of
+environment — the 2 scraper tools (`firecrawl_search`, `firecrawl_crawl`) are not conditionally
+omitted from the schema. `FIRECRAWL_API_KEY` is instead checked at call time, inside
+`execute()`: calling either scraper tool without the key set returns an error string rather
+than the tool being absent from what's offered to the model.
 
 Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`None` for chart tools (currently none — reserved for a future equity-curve chart tool).
 
@@ -174,8 +179,10 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 | `symbol` | string | ✅ | Ticker, e.g. `"AAPL"` |
 | `action` | string | ✅ | `"BUY"` or `"SELL"` |
 | `quantity` | integer | ✅ | Number of shares/contracts |
-| `order_type` | string | — | `"MKT"` (default), `"LMT"`, or `"STP"` |
-| `limit_price` | number | — | Required when `order_type="LMT"` |
+| `order_type` | string | — | `"MKT"` (default), `"LMT"`, `"STP"`, `"STOP_LIMIT"`, or `"MIDPRICE"`. Trailing types (`TRAIL`/`TRAILLMT`) are not supported by this tool. |
+| `limit_price` | number | — | Required for `order_type="LMT"`/`"STOP_LIMIT"`; optional price cap for `"MIDPRICE"` |
+| `stop_price` | number | — | Required for `order_type="STP"`/`"STOP_LIMIT"` |
+| `sec_type` | string | — | `"STK"` (default), `"IND"`, `"BOND"`, `"FUT"` (resolves front month), or `"CASH"` (FX pair, e.g. `"EUR.USD"`) |
 
 **Output:** JSON with `equity`, `commission`, `marginImpact`, `buyingPowerEffect`.
 
@@ -302,11 +309,14 @@ Resolves symbols to conids automatically.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbols` | array[string] | ✅ | e.g. `["AAPL", "MSFT", "SPY"]` |
-| `sec_type` | string | — | `"STK"` (default), `"FUT"`, `"OPT"`, `"FX"` |
+| `symbols` | array[string] | ✅ | For FX: `"EUR.USD"` format. For FUT: root symbol only (`"ES"`, not `"ESH25"`). For international STK: ticker as listed on the exchange. |
+| `sec_type` | string | — | `"STK"` (default), `"IND"`, `"FUT"`, `"CASH"`, `"BOND"`. **`OPT` is not supported** — resolve the option conid first via `search_contract` + `get_option_chain`, then pass that conid directly rather than a ticker. |
+| `exchange` | string | — | Optional, for STK/IND only — filters to a specific listing (e.g. `"AMS"` Euronext Amsterdam, `"ETR"` Xetra, `"LSE"` London, `"TSE"` Tokyo, `"HKEX"` Hong Kong, `"ASX"` Sydney, `"TSX"` Toronto, `"BVSP"` Brazil, `"NSE"` India). Omit for US equities (SMART routing). Without it, the first search result is used. |
 
 **Output:** JSON array with live quote fields. Field codes: `"31"` = last price, `"84"` = bid,
-`"86"` = ask, `"87"` = volume.
+`"86"` = ask, `"87"` = volume. Each quote also includes `_data_status` (`"Live (Real-Time)"` when
+subscribed, `"Delayed (15–20 min)"` when not) and `_quote_time` (ET timestamp) — always report
+both to the user.
 
 **Note:** Max 100 conids per request, max 50 fields per request. Snapshot subscriptions require
 a brief warm-up (≈1s); empty result on first call — retry once.
@@ -323,8 +333,8 @@ Look up IBKR contract details for a symbol.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker, e.g. `"AAPL"`, `"CL"`, `"SPY"` |
-| `sec_type` | string | — | `"STK"` (default), `"FUT"`, `"OPT"`, `"FX"`, `"IND"`, `"CFD"`, `"BOND"` |
+| `symbol` | string | ✅ | Ticker, e.g. `"AAPL"`, `"IBM"` |
+| `sec_type` | string | — | `"STK"`, `"IND"`, or `"BOND"` (default `"STK"`) — **the only values `/iserver/secdef/search` supports.** For futures use `get_futures`; for FX use `get_market_snapshot`; for option strikes use `get_option_chain`. |
 
 **Output:** JSON array of matching contracts. Each entry has `conid`, `symbol`, `companyName`,
 `exchange`, `currency`.
@@ -334,12 +344,13 @@ Look up IBKR contract details for a symbol.
 ---
 
 ### `get_contract_info`
-Full contract details: conid, exchange, currency, trading hours, margin class.
+Full contract details: conid, exchange, currency, trading hours, margin class. Resolves the
+conid internally, so `search_contract` doesn't need to be called first.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker symbol |
-| `sec_type` | string | — | Default `"STK"` |
+| `sec_type` | string | — | `"STK"`, `"IND"`, `"BOND"`, or `"FUT"` (front-month) — default `"STK"`. **Does not support `CASH` (FX) or `OPT`.** |
 
 **Output:** Full contract JSON from IBKR.
 
@@ -348,14 +359,21 @@ Full contract details: conid, exchange, currency, trading hours, margin class.
 ---
 
 ### `get_option_chain`
-Options chain for a symbol — all expirations, strikes, and contract IDs.
+Option chain for an underlying symbol: all available expiry months, plus call and put strike
+prices for **one** month (default: nearest expiry). Uses IBKR's documented
+`secdef/search` → `secdef/strikes` flow internally. Returns strikes only — not per-contract
+conids or greeks.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Underlying symbol |
+| `symbol` | string | ✅ | Underlying ticker, e.g. `"AAPL"` |
+| `month` | string | — | Expiry month as 3-letter month + 2-digit year, e.g. `"JAN26"` (default: nearest expiry; the response's `months` field lists all available ones) |
 | `exchange` | string | — | Default `"SMART"` |
 
-**Output:** JSON object keyed by expiration date, each containing a list of strike/conid pairs.
+**Output:** JSON object: `{"symbol", "conid", "months": [all expiries], "month": <resolved>, "call": [strikes], "put": [strikes]}`.
+
+Reimplemented 2026-07-07 — a previous version called the undocumented `/trsrv/secdef/chains`,
+which 404'd on every call. It no longer does.
 
 **IBKR endpoint:** `GET /trsrv/secdef/chains`
 
@@ -485,19 +503,32 @@ Full analytics report on a cached dataset.
 ---
 
 ### `generate_pinescript`
-Generate a PineScript v5 indicator or strategy script.
+Generate a PineScript v5 script for TradingView. Two modes, selected by `source`:
+
+- `source="indicators"` (default) — emits an indicator study from a list of indicators.
+- `source="backtest"` — emits a `strategy()` script from the most recent stored
+  `run_backtest` result for the symbol, with real metrics in the header. Always use this
+  mode after `run_backtest` instead of writing PineScript by hand.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker (used in comments/title) |
-| `indicators` | array[string] | ✅ | One or more of: `"rsi"`, `"macd"`, `"bollinger_bands"`, `"ema"`, `"sma"`, `"atr"` |
-| `strategy_name` | string | — | Script title |
+| `source` | string | — | `"indicators"` (default) or `"backtest"` |
+| `indicators` | array[string] | — | For `source="indicators"`: one or more of `"rsi"`, `"macd"`, `"bollinger_bands"`, `"ema"`, `"sma"`, `"atr"` |
+| `strategy_name` | string | — | Script title; for `source="backtest"` also filters which stored run to use (default: most recent for the symbol) |
+| `timeframe` | string | — | For `source="backtest"`: cache timeframe of the backtested bars, for chart-timeframe inference (optional) |
+| `period` | string | — | For `source="backtest"`: cache period key (optional) |
+| `end` | string | — | For `source="backtest"`: cache end-date key (optional) |
+
+Only `symbol` is required — `indicators` is optional (used only in `source="indicators"` mode).
 
 **Output:** PineScript v5 code starting with `//@version=5`. Can be pasted directly into
 TradingView Pine Editor.
 
-**Note:** Generated code is a functional template. Entry/exit conditions use placeholder
-logic that should be customized for your specific strategy.
+**Note:** In `source="indicators"` mode, generated code is a functional template — entry/exit
+conditions use placeholder logic that should be customized for your specific strategy. In
+`source="backtest"` mode, the script reflects the actual stored backtest's signal logic and
+metrics.
 
 ---
 
@@ -525,17 +556,20 @@ Create a native IBKR server-side price alert.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker, e.g. `"AAPL"`, `"CL"` |
+| `symbol` | string | ✅ | Ticker, e.g. `"AAPL"`, `"CL"`, or `"EUR.USD"` for CASH |
 | `operator` | string | ✅ | `">="` (at or above) or `"<="` (at or below) |
 | `price` | number | ✅ | Price threshold |
-| `sec_type` | string | — | `"STK"` (default), `"FUT"`, `"OPT"`, `"FX"` |
+| `sec_type` | string | — | `"STK"`, `"IND"`, or `"BOND"` (default `"STK"`) — resolved via contract search; `"FUT"` — resolved to the front-month contract; `"CASH"` — FX pair, `symbol` must be `"BASE.QUOTE"` e.g. `"EUR.USD"`. **`OPT` is not supported** (options need a strike/expiry, not just a symbol). |
+| `tif` | string | — | `"GTC"` (default) or `"DAY"` (expires at market close) |
+| `outside_rth` | boolean | — | `true` = also monitor extended hours (pre/after-market); default `false` |
 | `name` | string | — | Human-readable label (auto-generated if omitted) |
 | `repeat` | boolean | — | Repeat after firing (default `false`) |
 
 **Output:** JSON confirmation with the new alert's `orderId`.
 
-**Note:** Exchange is resolved from the contract — futures use their native exchange
-(NYMEX, CME), not SMART.
+**Note:** the alert condition's exchange is always `"SMART"` — including for futures — because
+`create_price_alert`'s conid-resolution path (shared with `get_market_snapshot`) does not
+return a resolved listing exchange to build the condition from.
 
 **IBKR endpoint:** `POST /iserver/account/{accountId}/alert`
 

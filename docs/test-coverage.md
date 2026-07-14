@@ -1,7 +1,10 @@
 # Test Coverage — ibkr_core_mcp
 
-**508 unit tests · 63 integration tests · 72% line coverage (non-integration)**
+**714 unit tests · 84 integration tests (798 total) · 83% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
+Counts and coverage below regenerated 2026-07-13 via
+`pytest -m "not integration" --cov=ibkr_core_mcp --cov-report=term-missing`; re-run that command
+after any significant test or source addition rather than hand-editing these numbers.
 
 Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log.md)
 
@@ -11,13 +14,12 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 
 | Module | Notes |
 |---|---|
-| `__init__.py` | Public exports, version |
 | `analytics.py` | All metric functions including all zero/empty edge cases |
 | `config.py` | Config dataclass and validation |
 | `exceptions.py` | Exception hierarchy |
 | `gateway/__init__.py` | Re-export only |
+| `gdrive_auth.py` | Google Drive OAuth token helper (55 statements) — pure logic, no live Drive call |
 | `indicators.py` | All technical indicator functions |
-| `rate_limiter.py` | Token bucket implementation |
 
 ---
 
@@ -25,13 +27,16 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 
 | Module | Coverage | Uncovered lines | Reason |
 |---|---|---|---|
-| `store.py` | 99% | 341–342 | `except Exception: return {}` in `get_market_calendar_context` — fires only on catastrophic unhandled exception inside the calendar build block; all known failure modes are tested via specific paths |
-| `models.py` | 99% | 117 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
+| `scrape_fallback.py` | 98% | 119–120, 506 | SSRF guard's private/loopback/link-local/reserved IP branch (needs a live DNS resolution to a private address to hit); `if __name__ == "__main__"` CLI entrypoint |
+| `models.py` | 99% | 147 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
 | `human_auth.py` | 96% | 14 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
-| `backtest.py` | 96% | 30, 163–164 | Line 30: non-Module write-guard fallback (only fires for exotic object types); 163–164: `concurrent.futures.TimeoutError` path in strategy executor — requires real timeout, not deterministically triggerable |
-| `auth.py` | 91% | 50, 64, 72–73 | `TokenAuth.__repr__` (trivial); `browser_cookie3` import and cookie apply — requires a real browser install |
-| `order_confirm.py` | 92% | 135–136, 166–171 | tkinter `after_cancel` and countdown tick — require a running display/event loop; macOS only |
-| `pinescript.py` | 90% | 134–135, 220, 222, 224, 227 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe inference edge cases for sub-1-minute and multi-day intervals |
+| `backtest.py` | 97% | 185–186 | `concurrent.futures.TimeoutError` path in strategy executor — requires a real timeout, not deterministically triggerable |
+| `store.py` | 92% | 273–275, 303–308, 312–317, 321–323, 334–337, 528–529, 543 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
+| `rate_limiter.py` | 93% | 90–91 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
+| `__init__.py` | 92% | 57–58 | Optional-dependency import guard (module absent from environment) |
+| `auth.py` | 90% | 54, 78, 86–87 | `browser_cookie3` import and cookie-apply path — requires a real installed browser's cookie store |
+| `pinescript.py` | 90% | 141–142, 230, 232, 234, 237 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe-inference edge cases for sub-1-minute and multi-day intervals |
+| `web_scraper.py` | 90% | 341–354, 381, 442–443, 472–473, 526–527 | Google Drive OAuth flow (`InstalledAppFlow.run_local_server`, token refresh/write) and other live-Drive branches — require real OAuth credentials |
 
 ---
 
@@ -41,13 +46,15 @@ These modules are fully functional but cannot be meaningfully unit-tested withou
 
 | Module | Coverage | Why low |
 |---|---|---|
-| `cache.py` | 33% | All GDrive API operations (upload, download, manifest) require live OAuth tokens and Drive access. Error paths exercised in integration tests only. |
-| `client.py` | 58% | IBKR Client Portal REST API endpoints — all require a running gateway at `localhost:5055`. Tested live via integration tests. The tested 42% covers shared infrastructure: auth, request signing, error handling, retry logic. |
-| `mcp_server.py` | 49% | MCP protocol request handlers exercise the full tool chain. Require live IBKR gateway + MCP client. Tested integration-only. |
-| `streaming.py` | 82% | WebSocket I/O methods (`connect`, `subscribe`, `listen`, `disconnect`) require a live IBKR WebSocket. `_parse_message` (the pure parsing logic) is 100% tested; only network I/O is untested. |
-| `gateway/manager.py` | 73% | Docker container lifecycle (`ensure_docker_running`, `image_exists`) and interactive startup flow (268–304) require Docker Desktop and a terminal for user input. All pure logic is tested. |
-| `claude_tools.py` | 68% | The tested 32% covers all pure functions: `_parse_live_trades` (10 tests), `_format_coverage` (3 tests), tool definitions and routing. The untested 32% is live tool handlers that call `IBKRClient` methods — all require a running IBKR gateway. |
-| `flex_query.py` | 77% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
+| `cache.py` | 59% | All GDrive API operations (upload, download, manifest) require live OAuth tokens and Drive access. Error paths exercised in integration tests only. |
+| `mcp_server.py` | 65% | SSE transport wiring (`uvicorn`, `starlette` app/routes) and MCP protocol request handlers exercise the full tool chain — require a live IBKR gateway + MCP client. Tested integration-only. |
+| `gateway/manager.py` | 72% | Docker container lifecycle (`ensure_docker_running`, `image_exists`) and the interactive startup flow require Docker Desktop and a terminal for user input. All pure logic is tested. |
+| `client.py` | 64% | IBKR Client Portal REST API endpoints — all require a running gateway at `localhost:5055`. Tested live via integration tests. The tested 64% covers shared infrastructure: auth, request signing, pagination math, error handling, retry logic. |
+| `_order_dialog.py` | 83% | macOS AppKit `NSAlert`/`NSRunLoop` modal dialog subprocess (Gate 2's actual display code, split into its own process — see the pyobjc/Tahoe/Python 3.14 spurious-auto-confirm workaround) — requires a real running display/event loop, not unit-testable |
+| `order_confirm.py` | 84% | AppleScript `display dialog` fallback path and countdown-tick internals — require a running display/event loop; macOS only |
+| `flex_query.py` | 81% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
+| `streaming.py` | 89% | WebSocket I/O methods (`connect`, `subscribe`, `listen`, `disconnect`) require a live IBKR WebSocket. `_parse_message` (the pure parsing logic) is fully tested; only network I/O is untested. |
+| `claude_tools.py` | 88% | The untested 12% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
 
 ---
 

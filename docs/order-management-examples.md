@@ -54,10 +54,13 @@ try:
     responses = client.place_order(account_id, order)
     # A reply can chain into ANOTHER reply requirement — loop until terminal.
     # Must run immediately, back-to-back — IBKR invalidates (503) a reply left
-    # pending while other requests are made. Show resp["message"] to the human
-    # before confirming — it is the exact text they are agreeing to.
+    # pending while other requests are made. Show the human the text they're
+    # agreeing to before confirming — IBKR sends "message" as a list of strings,
+    # not a single string, so join it first (place_order_and_confirm's internal
+    # _resolve_one_reply does the same join before displaying it in Gate 2).
     while responses and "id" in responses[0]:
-        print(responses[0]["message"])  # show the human what they're confirming
+        message = " ".join(responses[0].get("message", []))
+        print(message)  # show the human what they're confirming
         responses = client.reply_order(responses[0]["id"])
 except HumanAuthError as e:
     print(f"Order not sent: {e}")

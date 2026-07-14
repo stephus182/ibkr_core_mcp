@@ -4,9 +4,10 @@
 
 | Topic | URL |
 |---|---|
-| **Client Portal API reference** (all CP endpoints) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
-| **Web API reference** | https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-ref/ |
-| **Orders / modify** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
+| **Client Portal API reference** (all CP endpoints — cited per-endpoint throughout `client.py`, see `docs/api-reference.md`) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
+| **Web API changelog** (field/behavior changes, e.g. Dec 2025 snapshot fields, May 2025 FUT/FOP `manualIndicator`/`extOperator` requirement) | https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/ |
+| **Orders / modify / cancel** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
+| **GTC order lifecycle** (quarter-end auto-cancel behavior) | https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/ |
 | **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
 
 **IBKR Flex Web Service** (`flex_query.py`)
@@ -22,8 +23,7 @@
 
 | Topic | URL |
 |---|---|
-| **WebSocket API reference** (subscriptions, message format) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
-| **Market data subscriptions** (fields, tick types) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#market-data |
+| **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
 | **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-trades-sub |
 | **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-pnl-sub |
 
@@ -31,16 +31,21 @@
 
 | Topic | URL |
 |---|---|
-| **Drive API v3 reference** (files, upload, download) | https://developers.google.com/drive/api/reference/rest/v3 |
-| **Python client library** (MediaIoBaseUpload, MediaIoBaseDownload) | https://googleapis.github.io/google-api-python-client/docs/dyn/drive_v3.html |
-| **OAuth2 credentials** (token refresh, scopes) | https://google-auth.readthedocs.io/en/master/reference/google.oauth2.credentials.html |
+| **Drive API v3 reference** (files, upload, download; `cache.py` also cites the `files.list` sub-page directly) | https://developers.google.com/drive/api/reference/rest/v3 , https://developers.google.com/drive/api/reference/rest/v3/files/list |
+| **Python quickstart** (OAuth flow, `InstalledAppFlow`) | https://developers.google.com/drive/api/quickstart/python |
+| **OAuth2 credentials** (token refresh, scopes) | https://google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html |
 
 **macOS LocalAuthentication** (`human_auth.py`)
 
 | Topic | URL |
 |---|---|
-| **LAPolicy reference** (biometric policy constants) | https://developer.apple.com/documentation/localauthentication/lapolicy |
+| **LAPolicy reference** (biometric policy constants, incl. `LAPolicyDeviceOwnerAuthentication`) | https://developer.apple.com/documentation/localauthentication/lapolicy |
 | **evaluatePolicy** (method, error codes) | https://developer.apple.com/documentation/localauthentication/lacontext/evaluatepolicy(_:localizedreason:reply:) |
+
+`human_auth.py` itself has no inline `Source:` comment citing these — the two URLs above are the
+correct canonical references for `LAPolicyDeviceOwnerAuthentication` and the pyobjc-bound
+`evaluatePolicy_localizedReason_reply_` it calls, but that mapping currently lives only here,
+not in the code.
 
 **Web Scraping — Firecrawl + Crawl4AI fallback** (`web_scraper.py`, `scrape_fallback.py`)
 

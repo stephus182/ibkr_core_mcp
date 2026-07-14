@@ -11,7 +11,7 @@ code changes.
 | File | Description |
 | --- | --- |
 | [`api-reference.md`](api-reference.md) | Full reference for all `IBKRClient` methods — request/response shapes, exceptions raised |
-| [`tools-reference.md`](tools-reference.md) | Full reference for all `ClaudeToolkit` tools (40 core + 2 optional scraper) — parameters, output shapes |
+| [`tools-reference.md`](tools-reference.md) | Full reference for all 42 `ClaudeToolkit` tools (40 core + 2 web scraper) — parameters, output shapes |
 | [`api-usage-examples.md`](api-usage-examples.md) | Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting, Portfolio Analytics, Claude AI Tool Layer, PineScript Generation) |
 | [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) |
 | [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth` |

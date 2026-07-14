@@ -50,7 +50,7 @@ else:
 from ibkr_core_mcp import indicators
 
 df = cache.load("AAPL", "1D", "1Y", "2026-05-22")
-df = indicators.add_all(df)           # adds all 14 indicator columns in-place
+df = indicators.add_all(df)           # returns a new DataFrame (copy) with 20 indicator columns added
 
 # Individual indicators
 rsi      = indicators.rsi(df, period=14)

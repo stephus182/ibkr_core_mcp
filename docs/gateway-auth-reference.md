@@ -6,7 +6,7 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 
 1. Start the gateway using the built-in `GatewayManager` (see below)
 2. Open `https://localhost:5055` in Chrome
-3. Log in with IBKR credentials + 2FA (approve push notification on phone)
+3. Log in with IBKR credentials + 2FA (challenge code shown in-browser → IBKR Mobile → enter the response code)
 4. Wait for "Client login succeeds" in browser
 5. The package reads the session cookie automatically
 
