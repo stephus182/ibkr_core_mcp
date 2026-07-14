@@ -213,20 +213,32 @@ CLAUDE.md and `docs/external-docs-reference.md` state `crawl4ai>=0.5.0` is a har
 
 ## Final verification sweep (after all 5 tasks)
 
-- [ ] **Step 1: Full unit suite one more time**
+- [x] **Step 1: Full unit suite one more time**
 
 ```bash
 cd /Users/steph/Claude_Projects/ibkr_core_mcp
 python -m pytest -m "not integration" -q
 ```
 
-- [ ] **Step 2: Confirm each task committed separately**
+Result: 730 passed, 85 deselected.
+
+- [x] **Step 2: Confirm each task committed separately**
 
 ```bash
 git log --oneline <starting-sha>..HEAD -- docs/ ibkr_core_mcp/
 ```
 
-- [ ] **Step 3: Update memory**
+Confirmed: 13 commits from `b1afb73` (plan added) through `a018774` (final cosmetic fix),
+each task's implementation and review-fix commits clearly separated (Task 1: `1040f1c`,
+`fa966a4`, `928e3fb`; Task 2: `68b0d0c`, `b768a3d`; Task 3: `437c5b2`, `f074df5`; Task 4:
+`ed286ce`, `ff782ee`; Task 5: `691ed6e`, `a018774`; plus `b9a20e9` for cross-task checkbox
+bookkeeping).
+
+- [x] **Step 3: Update memory**
+
+Updated `project_docs_accuracy_pass_2026_07_13.md` with a "Follow-up plan resolved" section
+covering all 5 tasks' outcomes and the sanctioned-client-bypass process lesson from Task 1's
+review loop.
 
 Update `project_docs_accuracy_pass_2026_07_13.md` (or a new dated memory) with which of these 5
 follow-ups actually got resolved vs. remained open, so the next pass doesn't re-investigate the
