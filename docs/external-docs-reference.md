@@ -9,6 +9,7 @@
 | **Orders / modify / cancel** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
 | **GTC order lifecycle** (quarter-end auto-cancel behavior) | https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/ |
 | **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
+| **Historical market data limitations** (TWS API — 50 concurrent request cap, BID_ASK 2x weighting) | https://interactivebrokers.github.io/tws-api/historical_limitations.html |
 
 **IBKR Flex Web Service** (`flex_query.py`)
 
@@ -18,6 +19,7 @@
 | **Flex Web Service error codes** (all 21 codes, last updated 2025-08-18 — re-verified live 2026-07-10, corrected from a stale 2025-10-03 note) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
 | **Enable Flex Web Service** (one-time token + query setup) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex-web-service.htm |
 | **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
+| **What Flex covers** (activity statement scope, all order origins) | https://www.ibkrguides.com/orgportal/performanceandstatements/flex.htm |
 
 **IBKR WebSocket Streaming** (`streaming.py`)
 
@@ -35,17 +37,25 @@
 | **Python quickstart** (OAuth flow, `InstalledAppFlow`) | https://developers.google.com/drive/api/quickstart/python |
 | **OAuth2 credentials** (token refresh, scopes) | https://google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html |
 
-**macOS LocalAuthentication** (`human_auth.py`)
+**macOS LocalAuthentication** (`human_auth.py` — Gate 1) **and AppleScript** (`order_confirm.py` — Gate 2)
 
 | Topic | URL |
 |---|---|
 | **LAPolicy reference** (biometric policy constants, incl. `LAPolicyDeviceOwnerAuthentication`) | https://developer.apple.com/documentation/localauthentication/lapolicy |
 | **evaluatePolicy** (method, error codes) | https://developer.apple.com/documentation/localauthentication/lacontext/evaluatepolicy(_:localizedreason:reply:) |
+| **AppleScript `display dialog`** (Gate 2's visual confirmation mechanism) | https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_cmds.html |
 
 `human_auth.py` itself has no inline `Source:` comment citing these — the two URLs above are the
 correct canonical references for `LAPolicyDeviceOwnerAuthentication` and the pyobjc-bound
 `evaluatePolicy_localizedReason_reply_` it calls, but that mapping currently lives only here,
 not in the code.
+
+**Anthropic API** (`claude_tools.py`)
+
+| Topic | URL |
+|---|---|
+| **Tool use** (schema conventions `TOOL_DEFINITIONS` follows) | https://docs.anthropic.com/en/docs/build-with-claude/tool-use |
+| **Messages API** (request/response shape `ClaudeToolkit.execute()` is designed around) | https://docs.anthropic.com/en/api/messages |
 
 **Web Scraping — Firecrawl + Crawl4AI fallback** (`web_scraper.py`, `scrape_fallback.py`)
 
