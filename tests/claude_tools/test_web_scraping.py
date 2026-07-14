@@ -146,6 +146,7 @@ def test_firecrawl_crawl_saves_pages_to_drive(mock_wds_cls, mock_fc_cls):
     ]
     mock_fc_cls.return_value = mock_fc
     mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
     mock_wds.save_crawl.return_value = {
         "url": "https://example.com",
         "crawled_at": "2026-01-01T00:00:00+00:00",
@@ -156,6 +157,62 @@ def test_firecrawl_crawl_saves_pages_to_drive(mock_wds_cls, mock_fc_cls):
     result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
     assert "Crawl complete: saved 1 page(s)" in result
     assert fig is None
+    mock_wds.save_crawl.assert_called_once()
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+def test_firecrawl_crawl_uses_cached_manifest_and_skips_firecrawl(mock_wds_cls, mock_fc_cls):
+    """A fresh Drive manifest must short-circuit the whole call — zero Firecrawl
+    requests — this is the fix for repeated runs (e.g. re-verifying a fixed list
+    of doc URLs) cascading into Firecrawl's own rate limit."""
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc_cls.return_value = mock_fc
+    mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-14T00:00:00+00:00",
+        "pages": [{"url": "https://example.com/page", "file_id": "fid"}],
+    }
+    mock_wds_cls.return_value = mock_wds
+
+    result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert fig is None
+    assert "cached" in result.lower()
+    mock_fc.crawl.assert_not_called()
+    mock_wds.save_crawl.assert_not_called()
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+def test_firecrawl_crawl_force_refresh_bypasses_cache(mock_wds_cls, mock_fc_cls):
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.crawl.return_value = [
+        {"url": "https://example.com/page", "markdown": _REALISTIC_MARKDOWN}
+    ]
+    mock_fc_cls.return_value = mock_fc
+    mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-14T00:00:00+00:00",
+        "pages": [{"url": "https://example.com/page", "file_id": "fid"}],
+    }
+    mock_wds.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-14T01:00:00+00:00",
+        "pages": [{"url": "https://example.com/page", "file_id": "fid2"}],
+    }
+    mock_wds_cls.return_value = mock_wds
+
+    result, fig = toolkit.execute(
+        "firecrawl_crawl", {"url": "https://example.com", "force_refresh": True}
+    )
+
+    assert fig is None
+    mock_fc.crawl.assert_called_once()
     mock_wds.save_crawl.assert_called_once()
 
 
@@ -399,6 +456,7 @@ def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(
     ]
     mock_fc_cls.return_value = mock_fc
     mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
     mock_wds.save_crawl.return_value = {
         "url": "https://example.com",
         "crawled_at": "2026-01-01T00:00:00+00:00",
@@ -425,6 +483,7 @@ def test_firecrawl_crawl_applies_fallback_per_page(mock_c4a_cls, mock_wds_cls, m
         "markdown": "recovered page content",
     }
     mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
     mock_wds.save_crawl.return_value = {
         "url": "https://example.com",
         "crawled_at": "2026-01-01T00:00:00+00:00",
@@ -461,6 +520,7 @@ def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(
         "Crawl4AI is not installed. Install with `pip install ibkr_core_mcp[scraper]`."
     )
     mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
     mock_wds.save_crawl.return_value = {
         "url": "https://example.com",
         "crawled_at": "2026-01-01T00:00:00+00:00",

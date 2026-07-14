@@ -24,8 +24,10 @@ from __future__ import annotations
 import io
 import json
 import logging
+import random
 import re
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,7 +36,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from ibkr_core_mcp.config import Config
 
@@ -42,6 +44,46 @@ log = logging.getLogger(__name__)
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# Firecrawl's own documented retry guidance (https://docs.firecrawl.dev/api-reference/errors,
+# verified 2026-07-14): retryable statuses are 408/429/500/502/503/504; honor the Retry-After
+# header (seconds) when present, else exponential backoff capped at 30s plus jitter:
+# min(2 ** attempt, 30) + random(). Per-plan rate limits (https://docs.firecrawl.dev/rate-limits,
+# same date) are as low as 1 req/min for /crawl on the Free tier, so a caller issuing several
+# requests back-to-back with no retry at all (the prior behavior here) reliably cascades into
+# a 429 on every subsequent call within that window.
+_FIRECRAWL_RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_FIRECRAWL_MAX_RETRIES = 3
+_FIRECRAWL_MAX_BACKOFF = 30.0
+
+
+def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Response:
+    """
+    Call fn() (a zero-arg thunk wrapping a single requests.post/get call), retrying
+    on Firecrawl's documented retryable statuses with exponential backoff + jitter,
+    honoring the Retry-After header when present. See the module-level comment above
+    _FIRECRAWL_RETRYABLE_STATUSES for the source citation.
+
+    fn is a thunk (not method/url/kwargs passed separately) so callers keep using
+    requests.post(...)/requests.get(...) directly — preserving the existing
+    `@patch("ibkr_core_mcp.web_scraper.requests")` / `mock_requests.post` test mocking
+    convention used throughout this module's test suite.
+
+    Returns the final response (whether it succeeded or retries were exhausted) —
+    callers still run their own status-code handling (_raise_for_status) on it.
+    """
+    attempt = 0
+    while True:
+        resp = fn()
+        if resp.status_code not in _FIRECRAWL_RETRYABLE_STATUSES or attempt >= _FIRECRAWL_MAX_RETRIES:
+            return resp
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            delay = float(retry_after) if retry_after is not None else min(2 ** attempt, _FIRECRAWL_MAX_BACKOFF)
+        except (TypeError, ValueError):
+            delay = min(2 ** attempt, _FIRECRAWL_MAX_BACKOFF)
+        time.sleep(delay + random.random())
+        attempt += 1
 
 
 class FirecrawlError(Exception):
@@ -168,7 +210,7 @@ class FirecrawlClient:
         if not query:
             raise ValueError("query must be non-empty")
         limit = max(1, min(10, limit))
-        resp = requests.post(
+        resp = _request_with_backoff(lambda: requests.post(
             f"{self.BASE_URL}/search",
             headers=self._headers,
             json={
@@ -177,7 +219,7 @@ class FirecrawlClient:
                 "scrapeOptions": {"formats": ["markdown"]},
             },
             timeout=30,
-        )
+        ))
         self._raise_for_status(resp)
         data = resp.json()
         raw = data.get("data") or data.get("results") or []
@@ -245,12 +287,12 @@ class FirecrawlClient:
         timeout_s = max(10, timeout_s)
 
         # Start crawl job
-        resp = requests.post(
+        resp = _request_with_backoff(lambda: requests.post(
             f"{self.BASE_URL}/crawl",
             headers=self._headers,
             json={"url": url, "limit": max_pages, "scrapeOptions": {"formats": ["markdown"]}},
             timeout=30,
-        )
+        ))
         self._raise_for_status(resp)
         job_id = resp.json()["id"]
 
@@ -260,11 +302,11 @@ class FirecrawlClient:
 
         while time.monotonic() < deadline:
             time.sleep(5)
-            poll = requests.get(
+            poll = _request_with_backoff(lambda: requests.get(
                 f"{self.BASE_URL}/crawl/{job_id}",
                 headers=self._headers,
                 timeout=30,
-            )
+            ))
             poll.raise_for_status()
             data = poll.json()
             status = data.get("status", "")
@@ -379,6 +421,71 @@ class WebDocsStore:
         if self._cfg.gdrive_web_docs_folder_id:
             return self._cfg.gdrive_web_docs_folder_id
         return self._find_or_create_folder("web_docs", self._cfg.gdrive_folder_id)
+
+    def get_cached_crawl(self, url: str, max_age_hours: float = 48.0) -> dict[str, Any] | None:
+        """
+        Return the existing Drive manifest for `url` (from a prior save_crawl call)
+        if one exists and is younger than max_age_hours, else None.
+
+        Lets callers skip an entire Firecrawl API call when a recent crawl is
+        already archived — the missing piece that let repeated runs (e.g. a docs
+        verification pass re-checking the same reference URLs) re-fetch every URL
+        every time and cascade into Firecrawl's own rate limit.
+
+        max_age_hours default (48h) mirrors Firecrawl's own server-side scrape
+        cache default (`scrapeOptions.maxAge`, 172800000ms = 48h) rather than an
+        arbitrary window — see https://docs.firecrawl.dev/api-reference/endpoint/crawl-post,
+        verified 2026-07-14. Reference documentation content doesn't change multiple
+        times a day, so reusing Firecrawl's own chosen freshness tradeoff for the
+        same kind of data is a reasonable default; pass force_refresh-style logic
+        at the caller if a specific job needs to bypass it (e.g. a future scheduled
+        refresh job would pass a very small max_age_hours, or skip this check
+        entirely, to always get a fresh crawl).
+
+        Never creates or writes anything — a pure read. (One minor exception: if no
+        `gdrive_web_docs_folder_id` override is configured, the underlying
+        `_get_web_docs_folder_id()` lookup will auto-create the empty `web_docs/`
+        root folder if it doesn't exist yet, same as every other method on this
+        class — harmless, and it would be created on the next save_crawl anyway.)
+
+        Args:
+            url: The root URL that was crawled (same value passed to save_crawl).
+            max_age_hours: Maximum manifest age to treat as still fresh.
+
+        Returns:
+            The manifest dict ({url, crawled_at, pages}) if a fresh cached entry
+            exists, else None (no entry at all, or it's older than max_age_hours).
+        """
+        svc = self._get_service()
+        web_docs_id = self._get_web_docs_folder_id()
+        slug = _slugify(url)
+
+        slug_q = (
+            f"name='{slug}' and mimeType='application/vnd.google-apps.folder'"
+            f" and '{web_docs_id}' in parents and trashed=false"
+        )
+        slug_folders = svc.files().list(q=slug_q, fields="files(id)").execute().get("files", [])
+        if not slug_folders:
+            return None
+        slug_folder_id = slug_folders[0]["id"]
+
+        index_q = f"name='index.json' and '{slug_folder_id}' in parents and trashed=false"
+        index_files = svc.files().list(q=index_q, fields="files(id)").execute().get("files", [])
+        if not index_files:
+            return None
+
+        buf = io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, svc.files().get_media(fileId=index_files[0]["id"]))
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        manifest: dict[str, Any] = json.loads(buf.getvalue())
+
+        crawled_at = datetime.fromisoformat(manifest["crawled_at"])
+        age_hours = (datetime.now(UTC) - crawled_at).total_seconds() / 3600
+        if age_hours > max_age_hours:
+            return None
+        return manifest
 
     def save_crawl(self, url: str, pages: list[dict[str, str]]) -> dict[str, Any]:
         """

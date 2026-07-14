@@ -113,11 +113,58 @@ def test_search_429_raises_rate_limit(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
     mock_resp = MagicMock()
     mock_resp.status_code = 429
+    mock_resp.headers = {}
     mock_requests.post.return_value = mock_resp
     client = FirecrawlClient("fc-test")
     with pytest.raises(FirecrawlError) as exc_info:
         client.search("query")
     assert exc_info.value.status_code == 429
+    # Retries exhausted (persistent 429), not a single immediate raise.
+    assert mock_requests.post.call_count == 4  # 1 initial + 3 retries
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_search_retries_on_429_then_succeeds(mock_requests, mock_time):
+    """Per Firecrawl's own documented error-handling guidance
+    (https://docs.firecrawl.dev/api-reference/errors), a 429 is retryable —
+    the client must not raise on the first one if a later attempt succeeds."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {}
+    ok_resp = MagicMock()
+    ok_resp.status_code = 200
+    ok_resp.json.return_value = {"data": [{"url": "https://example.com", "title": "", "markdown": "hi"}]}
+    mock_requests.post.side_effect = [rate_limited, ok_resp]
+
+    client = FirecrawlClient("fc-test")
+    results = client.search("query")
+
+    assert len(results) == 1
+    assert mock_requests.post.call_count == 2
+    mock_time.sleep.assert_called_once()
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_search_honors_retry_after_header(mock_requests, mock_time):
+    """Must honor the Retry-After header value exactly, per Firecrawl's documented
+    guidance, rather than always using the default backoff formula."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {"Retry-After": "7"}
+    ok_resp = MagicMock()
+    ok_resp.status_code = 200
+    ok_resp.json.return_value = {"data": []}
+    mock_requests.post.side_effect = [rate_limited, ok_resp]
+
+    client = FirecrawlClient("fc-test")
+    client.search("query")
+
+    slept_for = mock_time.sleep.call_args[0][0]
+    assert slept_for >= 7.0
 
 
 @patch("ibkr_core_mcp.web_scraper.requests")
@@ -125,6 +172,7 @@ def test_search_5xx_raises_service_error(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
     mock_resp = MagicMock()
     mock_resp.status_code = 503
+    mock_resp.headers = {}
     mock_requests.post.return_value = mock_resp
     client = FirecrawlClient("fc-test")
     with pytest.raises(FirecrawlError) as exc_info:
@@ -190,6 +238,37 @@ def test_search_limit_clamped_to_10(mock_requests):
 
 
 # ── FirecrawlClient.crawl ─────────────────────────────────────────────────────
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_job_start_retries_on_429_then_succeeds(mock_requests, mock_time):
+    """The job-start POST (/crawl) is subject to the same Firecrawl rate limits
+    as /search — must retry rather than raising on the first 429."""
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
+
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {}
+    job_started = MagicMock()
+    job_started.status_code = 200
+    job_started.json.return_value = {"id": "job-123"}
+    mock_requests.post.side_effect = [rate_limited, job_started]
+
+    completed = MagicMock()
+    completed.status_code = 200
+    completed.json.return_value = {"status": "completed", "data": []}
+    mock_requests.get.return_value = completed
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert pages == []
+    assert mock_requests.post.call_count == 2
+    # A backoff sleep (not just the poll loop's own time.sleep(5)) must have occurred.
+    sleep_delays = [call.args[0] for call in mock_time.sleep.call_args_list]
+    assert any(d != 5 for d in sleep_delays), f"expected a backoff delay distinct from the poll cadence, got {sleep_delays}"
+
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
@@ -484,6 +563,108 @@ def _make_store_with_mock_service(tmp_path):
     store = WebDocsStore(cfg)
     store._svc = MagicMock()
     return store
+
+
+# ── WebDocsStore.get_cached_crawl ──────────────────────────────────────────────
+
+def test_get_cached_crawl_returns_none_when_slug_folder_missing(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+
+    result = store.get_cached_crawl("https://example.com")
+
+    assert result is None
+    svc.files().create.assert_not_called()
+    svc.files().update.assert_not_called()
+
+
+def test_get_cached_crawl_returns_none_when_no_index_json(tmp_path):
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    from ibkr_core_mcp.web_scraper import _slugify
+    slug = _slugify("https://example.com")
+
+    def fake_list(**kwargs):
+        q = kwargs.get("q", "")
+        mock = MagicMock()
+        if f"name='{slug}'" in q:
+            mock.execute.return_value = {"files": [{"id": "slug-folder-id"}]}
+        else:
+            mock.execute.return_value = {"files": []}  # no index.json
+        return mock
+
+    svc.files.return_value.list.side_effect = fake_list
+
+    result = store.get_cached_crawl("https://example.com")
+
+    assert result is None
+    svc.files().create.assert_not_called()
+
+
+def _mock_index_json_download(svc, slug_folder_id, manifest, index_file_id="index-file-id"):
+    """Wire a mock WebDocsStore's svc so get_cached_crawl finds and downloads
+    the given manifest dict as index.json content."""
+    from ibkr_core_mcp.web_scraper import _slugify
+
+    def fake_list(**kwargs):
+        q = kwargs.get("q", "")
+        mock = MagicMock()
+        if "index.json" in q:
+            mock.execute.return_value = {"files": [{"id": index_file_id}]}
+        else:
+            mock.execute.return_value = {"files": [{"id": slug_folder_id}]}
+        return mock
+
+    svc.files.return_value.list.side_effect = fake_list
+
+    import json as _json
+
+    def fake_download(buf, request):
+        buf.write(_json.dumps(manifest).encode("utf-8"))
+        buf.seek(0)
+        m = MagicMock()
+        m.next_chunk.return_value = (None, True)
+        return m
+
+    return fake_download
+
+
+def test_get_cached_crawl_returns_manifest_when_fresh(tmp_path):
+    from datetime import UTC, datetime
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    manifest = {
+        "url": "https://example.com",
+        "crawled_at": datetime.now(UTC).isoformat(),
+        "pages": [{"url": "https://example.com/page", "file_id": "fid"}],
+    }
+    fake_download = _mock_index_json_download(svc, "slug-folder-id", manifest)
+
+    with patch("ibkr_core_mcp.web_scraper.MediaIoBaseDownload", side_effect=fake_download):
+        result = store.get_cached_crawl("https://example.com", max_age_hours=48.0)
+
+    assert result == manifest
+    svc.files().create.assert_not_called()
+    svc.files().update.assert_not_called()
+
+
+def test_get_cached_crawl_returns_none_when_stale(tmp_path):
+    from datetime import UTC, datetime, timedelta
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    stale_time = datetime.now(UTC) - timedelta(hours=100)
+    manifest = {
+        "url": "https://example.com",
+        "crawled_at": stale_time.isoformat(),
+        "pages": [],
+    }
+    fake_download = _mock_index_json_download(svc, "slug-folder-id", manifest)
+
+    with patch("ibkr_core_mcp.web_scraper.MediaIoBaseDownload", side_effect=fake_download):
+        result = store.get_cached_crawl("https://example.com", max_age_hours=48.0)
+
+    assert result is None
 
 
 def test_save_crawl_uploads_pages_and_manifest(tmp_path):

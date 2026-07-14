@@ -847,6 +847,15 @@ TOOL_DEFINITIONS = [
                     "description": "Max seconds to wait for crawl to complete (default 120)",
                     "default": 120,
                 },
+                "force_refresh": {
+                    "type": "boolean",
+                    "description": (
+                        "Re-crawl even if a Drive manifest for this URL already exists and "
+                        "is fresh (default false — reuses the cached manifest and makes zero "
+                        "Firecrawl requests if one is less than 48h old)"
+                    ),
+                    "default": False,
+                },
             },
             "required": ["url"],
         },
@@ -2713,6 +2722,14 @@ class ClaudeToolkit:
         Validates the URL with an SSRF guard before passing to Firecrawl. Lazily
         initializes FirecrawlClient and WebDocsStore on first call. Always saves
         results to Drive (crawl is a bulk operation — Drive storage is the point).
+
+        Checks Drive for an existing, fresh (< 48h) manifest for this URL before
+        calling Firecrawl at all — unless force_refresh is set. Without this, every
+        call re-fetches from Firecrawl regardless of whether the same URL was just
+        crawled, which cascades into Firecrawl's own per-minute rate limit on any
+        multi-URL job that re-runs (e.g. periodically re-verifying a fixed list of
+        reference doc URLs) — see WebDocsStore.get_cached_crawl's docstring for
+        the 48h default's rationale.
         """
         from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
 
@@ -2733,11 +2750,25 @@ class ClaudeToolkit:
 
         max_pages = int(inputs.get("max_pages", 50))
         timeout_s = int(inputs.get("timeout_s", 120))
+        force_refresh = bool(inputs.get("force_refresh", False))
 
         if self._firecrawl is None:
             self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key)
         if self._web_docs is None:
             self._web_docs = WebDocsStore(self._config)
+
+        if not force_refresh:
+            cached = self._web_docs.get_cached_crawl(url)
+            if cached is not None:
+                saved = len(cached["pages"])
+                return (
+                    f"Using cached crawl of {url} from Drive — no Firecrawl request made.\n"
+                    f"Crawled at: {cached['crawled_at']}\n"
+                    f"Saved {saved} page(s). Pass force_refresh=true to re-crawl.\n"
+                    f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10])
+                    + ("..." if saved > 10 else ""),
+                    None,
+                )
 
         try:
             pages = self._firecrawl.crawl(url, max_pages=max_pages, timeout_s=timeout_s)

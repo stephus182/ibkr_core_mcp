@@ -723,10 +723,25 @@ Crawl an entire website starting from a URL and save all pages to Drive under
 `web_docs/{url-slug}/`. Crawls are asynchronous — polls until done or timeout.
 Use for archiving IBKR documentation or other reference sites.
 
+**Caches reads:** if a Drive manifest for this exact URL already exists and is
+less than 48h old, the cached manifest is returned directly and Firecrawl is
+never called (0 requests, 0 credits) — this is the same freshness window
+Firecrawl's own server-side `scrapeOptions.maxAge` cache uses by default, not
+an arbitrary one. Pass `force_refresh: true` to always re-crawl.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `url` | string | ✅ | Root URL to crawl from (public http/https only) |
 | `max_pages` | integer | — | Maximum pages to crawl (1–100, default 50) |
 | `timeout_s` | integer | — | Max seconds to wait (default 120) |
+| `force_refresh` | boolean | — | Re-crawl even if a fresh (<48h) cached manifest exists (default `false`) |
 
-**Output:** Summary of pages saved to Drive with paths and page count.
+**Output:** Summary of pages saved to Drive with paths and page count, or a
+"Using cached crawl..." message with zero Firecrawl requests made if a fresh
+manifest was already on Drive.
+
+**Retry behavior:** all Firecrawl HTTP requests (job start + status polling)
+retry automatically on 429/408/500/502/503/504, honoring the `Retry-After`
+header when present, else exponential backoff capped at 30s + jitter — per
+Firecrawl's own documented error-handling guidance
+(https://docs.firecrawl.dev/api-reference/errors).
