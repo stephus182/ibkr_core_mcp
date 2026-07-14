@@ -25,6 +25,9 @@ flex  = FlexQueryClient(cfg, store, cache)
 trades = flex.fetch_trades("U1234567")
 print(f"Loaded {len(trades)} trades")
 
+# Optionally override the date range configured in the Flex query itself
+trades = flex.fetch_trades("U1234567", start_date="20260101", end_date="20260630")
+
 # Query historical trades from SQLite (unlimited history)
 all_trades = store.get_trades(symbol="AAPL", start="2022-01-01")
 ```
@@ -42,3 +45,11 @@ to keep the store current.
 **Constraints:**
 - Flex Token and Query ID must be configured manually on the IBKR website — they are not the same as Client Portal credentials
 - Statement generation is asynchronous; `FlexQueryClient` polls up to 5 times, 3 s apart (~12 s worst case), before raising `FlexQueryError`
+- **One-day availability lag:** a trade executed on day T is never in Flex on day T itself —
+  it becomes available only when you query on day T+1, after IBKR's overnight batch runs.
+  Querying on day T returns trades only through T-1. For same-day fills, use the Client Portal
+  API (`/iserver/account/trades`, 7-day window) instead — see the note at the top of this doc.
+- `fetch_trades`'s optional `start_date`/`end_date` (format `YYYYMMDD`) override the date range
+  configured in the Flex query itself, capped at a 365-day range per request (an IBKR Flex Web
+  Service limit, not a limitation of this client)
+- Rate limit: max 1 request/second, 10 requests/minute per Flex token (IBKR error 1018 if exceeded)
