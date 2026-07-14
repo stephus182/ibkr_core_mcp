@@ -520,6 +520,69 @@ def test_save_crawl_skips_empty_markdown(tmp_path):
     assert manifest["pages"][0]["url"] == "https://example.com/a"
 
 
+def test_save_crawl_disambiguates_colliding_slugs(tmp_path):
+    """Two distinct page URLs that _slugify to the same filename (e.g. .../a-b
+    and .../a_b both -> 'a-b.md') must not silently collide — the second page's
+    existence-check would otherwise find the first page's just-created file and
+    overwrite it, losing the first page's content while the manifest still
+    claims both URLs were saved under distinct entries."""
+    store = _make_store_with_mock_service(tmp_path)
+    svc = store._svc
+    from ibkr_core_mcp.web_scraper import _slugify
+
+    url_a = "https://example.com/a-b"
+    url_b = "https://example.com/a_b"
+    assert _slugify(url_a) == _slugify(url_b)  # sanity check: these do collide
+
+    created: dict[str, str] = {}  # filename -> file_id
+
+    def fake_list(**kwargs):
+        q = kwargs.get("q", "")
+        mock = MagicMock()
+        for name, fid in created.items():
+            if f"name='{name}'" in q:
+                mock.execute.return_value = {"files": [{"id": fid}]}
+                return mock
+        mock.execute.return_value = {"files": []}
+        return mock
+
+    def fake_create(**kwargs):
+        name = kwargs["body"]["name"]
+        mock = MagicMock()
+        if name == "index.json":
+            mock.execute.return_value = {"id": "index-id"}
+            return mock
+        fid = f"fid-{len(created)}"
+        created[name] = fid
+        mock.execute.return_value = {"id": fid}
+        return mock
+
+    update_calls = []
+
+    def fake_update(**kwargs):
+        update_calls.append(kwargs["fileId"])
+        mock = MagicMock()
+        mock.execute.return_value = {"id": kwargs["fileId"]}
+        return mock
+
+    svc.files.return_value.list.side_effect = fake_list
+    svc.files.return_value.create.side_effect = fake_create
+    svc.files.return_value.update.side_effect = fake_update
+
+    pages = [
+        {"url": url_a, "markdown": "# Content A"},
+        {"url": url_b, "markdown": "# Content B (different page!)"},
+    ]
+    manifest = store.save_crawl("https://example.com", pages)
+
+    assert len(manifest["pages"]) == 2
+    file_ids = {p["file_id"] for p in manifest["pages"]}
+    assert len(file_ids) == 2, (
+        f"expected 2 distinct file_ids for 2 distinct URLs, got {manifest['pages']}"
+    )
+    assert not update_calls, "second page must be create()'d under a disambiguated name, not update() the first"
+
+
 def test_save_crawl_overwrites_existing_file(tmp_path):
     store = _make_store_with_mock_service(tmp_path)
     svc = store._svc

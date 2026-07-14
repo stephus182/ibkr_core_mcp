@@ -413,13 +413,24 @@ class WebDocsStore:
         folder_id = self._find_or_create_folder(slug, web_docs_id)
 
         manifest_pages: list[dict[str, str]] = []
+        # filename -> the page_url that claimed it, this call only. Two distinct
+        # URLs can _slugify to the same string (e.g. "/a-b" and "/a_b" both
+        # collapse to "a-b"); without this, the second page's existence-check
+        # would find the first page's just-created file and overwrite it.
+        claimed_filenames: dict[str, str] = {}
 
         for page in pages:
             md = page.get("markdown") or ""
             if not md:
                 continue
             page_url = page.get("url", "")
-            filename = f"{_slugify(page_url)}.md"
+            base_slug = _slugify(page_url)
+            filename = f"{base_slug}.md"
+            suffix = 2
+            while filename in claimed_filenames and claimed_filenames[filename] != page_url:
+                filename = f"{base_slug}-{suffix}.md"
+                suffix += 1
+            claimed_filenames[filename] = page_url
             content_bytes = md.encode("utf-8")
             media = MediaIoBaseUpload(
                 io.BytesIO(content_bytes), mimetype="text/markdown", resumable=False

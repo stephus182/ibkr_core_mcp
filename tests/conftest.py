@@ -55,6 +55,7 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_firecrawl_search_applies_fallback_when_result_incomplete",
     "test_validate_public_url_allows_public_https",
     "test_firecrawl_crawl_applies_fallback_per_page",
+    "test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable",
 }
 
 

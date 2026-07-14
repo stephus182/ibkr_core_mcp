@@ -2555,11 +2555,11 @@ class ClaudeToolkit:
 
     def _scrape_with_fallback(
         self, url: str, markdown: str, metadata: dict[str, Any] | None
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, bool]:
         """
-        Return (final_markdown, note) for a single Firecrawl result/page, falling
-        back to Crawl4AI when Firecrawl's content looks incomplete (blocked, empty,
-        or paywalled).
+        Return (final_markdown, note, used_fallback) for a single Firecrawl
+        result/page, falling back to Crawl4AI when Firecrawl's content looks
+        incomplete (blocked, empty, or paywalled).
 
         assess_quality decides "ok" / "ambiguous" / "fallback" from Firecrawl's own
         signals plus cheap heuristics. "ambiguous" results get one extra Claude call
@@ -2577,12 +2577,17 @@ class ClaudeToolkit:
             metadata: Firecrawl's per-result/per-page "metadata" dict, or None.
 
         Returns:
-            (final_markdown, note) — final_markdown is either Firecrawl's
-            original content (quality was "ok", the LLM judge confirmed it
-            complete, or the fallback was blocked/unavailable/failed) or
-            Crawl4AI's recovered content. `note` is "" when nothing noteworthy
-            happened, otherwise a short human-readable annotation to surface
-            to the LLM (e.g. which path was taken, or why fallback was skipped).
+            (final_markdown, note, used_fallback). final_markdown is either
+            Firecrawl's original content (quality was "ok", the LLM judge
+            confirmed it complete, or the fallback was blocked/unavailable/
+            failed) or Crawl4AI's recovered content. `note` is "" when nothing
+            noteworthy happened, otherwise a short human-readable annotation to
+            surface to the LLM (e.g. which path was taken, or why fallback was
+            skipped). `used_fallback` is True only when Crawl4AI actually ran
+            and its content replaced Firecrawl's — callers that aggregate a
+            fallback count across pages must use this, not `bool(note)`: most
+            non-empty notes (skipped/unavailable/failed/no-content/judge-error)
+            mean fallback was attempted or considered, not that it succeeded.
         """
         import urllib.parse
 
@@ -2595,18 +2600,18 @@ class ClaudeToolkit:
 
         quality = assess_quality(markdown, metadata, url)
         if quality == "ok":
-            return markdown, ""
+            return markdown, "", False
 
         if quality == "ambiguous":
             try:
                 if judge_completeness_llm(self._config, url, markdown):
-                    return markdown, ""
+                    return markdown, "", False
             except Exception as exc:
                 # Fail safe, not fail expensive: a transient Anthropic API hiccup on
                 # an "ambiguous" (not already-known-bad) result shouldn't silently
                 # trigger the slower, heavier Crawl4AI path. Keep Firecrawl's content.
                 log.warning("judge_completeness_llm failed for %s: %s", url, exc)
-                return markdown, "(Note: completeness check failed — showing Firecrawl's result as-is)"
+                return markdown, "(Note: completeness check failed — showing Firecrawl's result as-is)", False
 
         # SSRF guard: this URL may not be the one the caller explicitly validated —
         # it can be a Firecrawl-discovered sub-page (redirect/internal link) or a
@@ -2615,7 +2620,7 @@ class ClaudeToolkit:
         # trusting upstream scoping.
         blocked = self._validate_public_url(url)
         if blocked:
-            return markdown, f"(Crawl4AI fallback skipped: {blocked})"
+            return markdown, f"(Crawl4AI fallback skipped: {blocked})", False
 
         if self._crawl4ai is None:
             self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
@@ -2623,14 +2628,14 @@ class ClaudeToolkit:
         try:
             result = self._crawl4ai.scrape(url)
         except Crawl4AIUnavailableError as exc:
-            return markdown, f"(Crawl4AI fallback unavailable: {exc})"
+            return markdown, f"(Crawl4AI fallback unavailable: {exc})", False
         except Exception as exc:
             log.warning("Crawl4AI fallback failed for %s: %s", url, exc)
-            return markdown, "(Crawl4AI fallback failed — showing Firecrawl's partial result)"
+            return markdown, "(Crawl4AI fallback failed — showing Firecrawl's partial result)", False
 
         fallback_markdown = result.get("markdown", "")
         if not fallback_markdown:
-            return markdown, "(Crawl4AI fallback returned no content — showing Firecrawl's partial result)"
+            return markdown, "(Crawl4AI fallback returned no content — showing Firecrawl's partial result)", False
 
         domain = urllib.parse.urlparse(url).hostname or ""
         profile_dir = self._config.crawl4ai_profiles_dir / domain
@@ -2642,7 +2647,7 @@ class ClaudeToolkit:
                 f"if this is a paywalled site you subscribe to, run "
                 f"`python -m ibkr_core_mcp.scrape_fallback create-profile {domain}` once)"
             )
-        return fallback_markdown, note
+        return fallback_markdown, note, True
 
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """
@@ -2679,7 +2684,7 @@ class ClaudeToolkit:
 
         lines = [f"## Search results for: {query}\n"]
         for i, r in enumerate(results, 1):
-            md, note = self._scrape_with_fallback(
+            md, note, _ = self._scrape_with_fallback(
                 r.get("url", ""), r.get("markdown", ""), r.get("metadata")
             )
             r["markdown"] = md
@@ -2751,11 +2756,11 @@ class ClaudeToolkit:
         # a shared crawler instance or a fallback page cap if that stops holding.
         fallback_count = 0
         for page in pages:
-            md, note = self._scrape_with_fallback(
+            md, note, used_fallback = self._scrape_with_fallback(
                 page.get("url", ""), page.get("markdown", ""), page.get("metadata")
             )
             page["markdown"] = md
-            if note:
+            if used_fallback:
                 fallback_count += 1
 
         try:

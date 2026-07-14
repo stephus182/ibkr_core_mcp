@@ -46,12 +46,16 @@ def test_firecrawl_api_key_reads_from_env(monkeypatch):
     assert cfg.gdrive_web_docs_folder_id == "webdocs-folder-id"
 
 
-def test_firecrawl_config_defaults_to_empty(monkeypatch):
+def test_firecrawl_config_defaults_to_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     monkeypatch.delenv("GDRIVE_WEB_DOCS_FOLDER_ID", raising=False)
     from ibkr_core_mcp.config import Config
-    cfg = Config.from_env()
+    # Explicit nonexistent dotenv_path: this repo may have its own local, gitignored
+    # .env for standalone-dev Drive/Firecrawl testing (see CLAUDE.md's "Standalone dev
+    # exception") — load_dotenv()'s default search would otherwise pick that up and
+    # defeat this test's "no key configured" scenario.
+    cfg = Config.from_env(dotenv_path=str(tmp_path / "nonexistent.env"))
     assert cfg.firecrawl_api_key == ""
     assert cfg.gdrive_web_docs_folder_id == ""
 

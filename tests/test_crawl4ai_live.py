@@ -69,10 +69,11 @@ def test_scrape_with_fallback_triggers_real_crawl4ai_on_empty_firecrawl_result(
     """Empty Firecrawl markdown makes assess_quality() return "fallback",
     which skips the LLM judge entirely and routes straight to the real
     Crawl4AIScraper — proving the full wiring, not just the isolated unit."""
-    markdown, note = toolkit._scrape_with_fallback("https://example.com", "", {})
+    markdown, note, used_fallback = toolkit._scrape_with_fallback("https://example.com", "", {})
 
     assert "Example Domain" in markdown
     assert "Crawl4AI fallback" in note
+    assert used_fallback is True
 
 
 @pytest.mark.integration
@@ -81,7 +82,8 @@ def test_scrape_with_fallback_blocks_private_host_before_any_browser_launch(tool
     private-host URL before Crawl4AI is even imported — this must hold
     whether or not the optional `crawl4ai` dependency is installed, so this
     test intentionally does not depend on the crawl4ai_available fixture."""
-    markdown, note = toolkit._scrape_with_fallback("http://127.0.0.1:9/", "", {})
+    markdown, note, used_fallback = toolkit._scrape_with_fallback("http://127.0.0.1:9/", "", {})
 
     assert markdown == ""
     assert "Blocked" in note
+    assert used_fallback is False
