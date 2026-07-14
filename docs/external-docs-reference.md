@@ -19,7 +19,7 @@
 | **Flex Web Service error codes** (20 official codes — 1001, 1003-1021, no 1002 — last updated 2025-08-18, re-verified live 2026-07-14; `flex_query.py`'s `_FLEX_ERROR_CODES` carries a 21st entry, 1025, explicitly commented as observed in practice but not in this official table) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
 | **Enable Flex Web Service** (one-time token + query setup) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex-web-service.htm |
 | **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
-| **Flex Queries — orgportal landing page** (navigation index only: Run/Create/Edit Flex Query links, delivery settings, 4-year retention note — live-fetched 2026-07-14; kept as a general Flex-Queries pointer, no longer cited as the source for the "all trade origins" claim below) | https://www.ibkrguides.com/orgportal/performanceandstatements/flex.htm |
+| **Flex Queries — landing page** (navigation index only: Run/Create/Edit Flex Query links, delivery settings, 4-year retention note, "Last updated on October 1, 2025" — live-fetched 2026-07-14; kept as a general Flex-Queries pointer, no longer cited as the source for the "all trade origins" claim below) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex.htm |
 | **Activity Statements** (account-level reports, not per-platform logs — backs `flex_query.py`'s "What Flex covers" claim) | https://www.interactivebrokers.com/campus/glossary-terms/activity-statements/ |
 
 **Citation fix (2026-07-14):** `flex_query.py`'s "## What Flex covers" docstring (and two copies
@@ -95,10 +95,18 @@ generated from an `ImportError` on `BrowserProfiler`.
 Pages this repo's citations point at, or should plausibly point at, but that this pass could not
 fully resolve — listed for a future pass rather than guessed at now:
 
-- **A clientportal-scoped Flex Queries overview page.** Every other Flex row above is a
-  `clientportal` page except the orgportal landing page (line 22, institutional/proprietary
-  portal). No `clientportal/performanceandstatements/flex.htm`-equivalent general overview was
-  fetched or confirmed to exist in this pass — worth checking for retail-portal consistency.
+- **A clientportal-scoped Flex Queries overview page — resolved 2026-07-14 (follow-up plan
+  Task 4).** `https://www.ibkrguides.com/clientportal/performanceandstatements/flex.htm` exists
+  (HTTP 200, fetched via `FirecrawlClient.crawl()`) and is the exact retail-portal equivalent of
+  the orgportal page previously cited: identical structure and prose (same "Instructions", "About
+  Flex Queries", "Additional Resources" sections, same "Last updated on October 1, 2025"), with
+  only the sub-page links (`clientportal/...` vs `orgportal/...`) and the institutional-specific
+  "Proprietary Interface"/"Proprietary Trading Groups" resource links (present on the orgportal
+  page, replaced by "Client Portal" resource links on this one) differing. Since `ibkr_core_mcp`
+  talks to individual brokerage accounts via the CP API (not institutional orgportal accounts),
+  the clientportal page is the better fit and now **replaces** the orgportal row above for
+  consistency with every other Flex citation in this table — both pages carry equivalent
+  information, so listing both was judged unnecessary.
 - **An official IBKR page that explicitly enumerates "Activity Statements include trades placed
   via CP API, mobile, TWS, and web portal."** The Activity Statements glossary page (line 20)
   confirms statements are account-level (not per-platform), but no single fetched page spells out

@@ -178,10 +178,10 @@ except the orgportal (institutional) Flex Queries landing page. Check whether
 and is the retail-portal equivalent — if so, consider whether it's a better fit for a
 individual-account-focused package than the orgportal page, or whether both should be listed.
 
-- [ ] **Step 1: Fetch and compare**, using `firecrawl_crawl`/`get_cached_crawl` as above.
-- [ ] **Step 2: Update the doc if a better/complementary page is found; otherwise note the
+- [x] **Step 1: Fetch and compare**, using `firecrawl_crawl`/`get_cached_crawl` as above.
+- [x] **Step 2: Update the doc if a better/complementary page is found; otherwise note the
   orgportal page is intentional (e.g. if no clientportal equivalent exists) in the doc.**
-- [ ] **Step 3: Run the full unit suite, verify, commit.**
+- [x] **Step 3: Run the full unit suite, verify, commit.**
 
 ---
 
