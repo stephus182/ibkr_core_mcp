@@ -194,14 +194,20 @@ CLAUDE.md and `docs/external-docs-reference.md` state `crawl4ai>=0.5.0` is a har
 `BrowserProfiler` doesn't exist in 0.4.x, verified only via PyPI wheel inspection (0.4.248 checked)
 — no `docs.crawl4ai.com` page or changelog has been cited confirming *when* it was introduced.
 
-- [ ] **Step 1: Search Crawl4AI's GitHub releases/CHANGELOG** (e.g.
+- [x] **Step 1: Search Crawl4AI's GitHub releases/CHANGELOG** (e.g.
   `https://github.com/unclecode/crawl4ai/releases` or a `CHANGELOG.md` in the repo) via
   `firecrawl_crawl` for the 0.5.0 release notes mentioning `BrowserProfiler`.
-- [ ] **Step 2: If found, add the citation to `docs/external-docs-reference.md`'s Crawl4AI
+- [x] **Step 2: If found, add the citation to `docs/external-docs-reference.md`'s Crawl4AI
   section, replacing "unverifiable from these pages alone" with the actual source. If not found,
   leave the PyPI-wheel-inspection method as the citation — it's still valid evidence, just note
   that a docs/changelog citation was searched for and not found.**
-- [ ] **Step 3: Run the full unit suite, verify, commit.**
+
+  Found: `https://raw.githubusercontent.com/unclecode/crawl4ai/main/CHANGELOG.md`, fetched via
+  `FirecrawlClient.crawl()`, has a "Version 0.5.0 (2025-03-02)" entry listing under "Added" —
+  `*(profiles)* Add BrowserProfiler class for dedicated browser profile management`. Added as
+  a citation (table row + paragraph) in `docs/external-docs-reference.md`'s Crawl4AI section
+  and removed the corresponding "Missing URLs / known gaps" bullet.
+- [x] **Step 3: Run the full unit suite, verify, commit.**
 
 ---
 

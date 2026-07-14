@@ -80,13 +80,19 @@ not in the code.
 | **Crawl4AI docs** (optional fallback; no built-in confidence score on Firecrawl side — confirmed 2026-06-30) | https://docs.crawl4ai.com/ |
 | **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
 | **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
+| **Crawl4AI CHANGELOG** (confirms `BrowserProfiler`'s introduction — see below) | https://github.com/unclecode/crawl4ai/blob/main/CHANGELOG.md |
 
 `crawl4ai>=0.5.0` is a hard floor, verified against the published wheels on PyPI
 (2026-06-30): `BrowserProfiler` does not exist in the 0.4.x series (checked 0.4.248,
 the newest 0.4.x release) — it was introduced in 0.5.0. `crawl4ai<0.5.0` will import
 successfully but raise `Crawl4AIUnavailableError` with a misleading "not installed"
 message when `create_profile()` is actually called, since that message is only
-generated from an `ImportError` on `BrowserProfiler`.
+generated from an `ImportError` on `BrowserProfiler`. Confirmed 2026-07-14 (follow-up
+plan Task 5) against the project's own CHANGELOG (fetched via `FirecrawlClient.crawl()`
+from `raw.githubusercontent.com/unclecode/crawl4ai/main/CHANGELOG.md`): the entry for
+**Version 0.5.0 (2025-03-02)** lists under "Added" — `*(profiles)* Add BrowserProfiler
+class for dedicated browser profile management` — matching the PyPI-wheel finding
+exactly and dating the introduction precisely.
 
 ---
 
@@ -151,9 +157,6 @@ fully resolve — listed for a future pass rather than guessed at now:
 
   None of the above enumerate the four origins together. Conclusion unchanged — see the parent
   bullet and the "Citation fix" note above; no citation was replaced with a guessed URL.
-- **Crawl4AI release notes / CHANGELOG confirming `BrowserProfiler`'s introduction in 0.5.0.**
-  Confirmed today only via PyPI wheel inspection (no `BrowserProfiler` in 0.4.248); `docs.crawl4ai.com`
-  content fetched in this pass doesn't itself state a version-introduced-in number.
 - **`docs.firecrawl.dev/v1/api-reference/endpoint/scrape`** — not fetched (code never calls
   `/v1/scrape`, so not needed for verification), but would complete the picture if ever added as a
   contrast citation explaining why this repo doesn't use it.
