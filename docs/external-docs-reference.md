@@ -112,10 +112,17 @@ fully resolve — listed for a future pass rather than guessed at now:
   `/v1/scrape`, so not needed for verification), but would complete the picture if ever added as a
   contrast citation explaining why this repo doesn't use it.
 - **Re-tested 2026-07-14 (follow-up plan Task 1, `docs/plans/2026-07-14-doc-improvement-upgraded-scraper-plan.md`)
-  through the upgraded `ClaudeToolkit.firecrawl_crawl`** (retry-with-backoff + Drive read-cache +
-  Crawl4AI fallback all exercised, `max_pages=1`), the "likely JS-rendered" guess above was wrong
-  — the retry/cache upgrade didn't touch the actual cause, and it isn't JS rendering. `crawl()`
-  (`web_scraper.py:290-335`) never surfaces Firecrawl's internal `total`/`completed` job-progress
+  through the upgraded `ClaudeToolkit.firecrawl_crawl`** (retry-with-backoff and the Drive
+  read-cache were both exercised — the latter via `get_cached_crawl`'s pre-check on every call, the
+  former by an observed `HTTP 429` on one call that retried and succeeded moments later. Crawl4AI
+  fallback was *available* but not shown to have fired: its loop only runs over pages `crawl()`
+  actually returned, which was empty for 4 of the 5 URLs, and for the one URL that did succeed
+  (`platform.claude.com/docs/en/api/messages`) the tool output had no
+  `"Crawl4AI fallback used for N page(s)..."` line — the large real-markdown yield suggests
+  Firecrawl's own result was already complete and `assess_quality` never routed it to fallback;
+  `max_pages=1` throughout), the "likely JS-rendered" guess above was wrong — the retry/cache
+  upgrade didn't touch the actual cause, and it isn't JS rendering. `crawl()`'s poll loop
+  (`web_scraper.py:299-333`) never surfaces Firecrawl's internal `total`/`completed` job-progress
   fields to its caller, only the final page list, so those aren't usable as sanctioned evidence —
   root cause for each URL below was instead confirmed with a plain, non-Firecrawl HTTP check
   (`curl -I -L` for redirects, a plain fetch of `robots.txt`) to find where the URL actually leads,
@@ -128,35 +135,36 @@ fully resolve — listed for a future pass rather than guessed at now:
     confirmed live 2026-07-14). `ClaudeToolkit.firecrawl_crawl` still returns 0 pages for the
     pre-redirect seed URL, but called directly on the post-redirect URLs
     (`.../workspace/drive/api/reference/rest/v3/files/list` and
-    `.../workspace/drive/api/quickstart/python`) it reports "saved 1 page(s) ... to Drive" for both
-    (verified live 2026-07-14). The doc citations above still point at the pre-redirect URLs
-    deliberately — they're not broken links (a browser or `WebFetch` follows the redirect fine) —
-    but `FirecrawlClient.crawl()` cannot resolve them without either following the redirect itself
-    before calling `/v1/crawl`, or being pointed at the canonical post-redirect URL.
+    `.../workspace/drive/api/quickstart/python`) it reports `"Crawl complete: saved 1 page(s) from
+    {url} to Drive."` for both (verified live 2026-07-14). The doc citations above still point at
+    the pre-redirect URLs deliberately — they're not broken links (a browser or `WebFetch` follows
+    the redirect fine) — but `FirecrawlClient.crawl()` cannot resolve them without either following
+    the redirect itself before calling `/v1/crawl`, or being pointed at the canonical post-redirect
+    URL.
   - `google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html` — a plain fetch
     of `google-auth.readthedocs.io/robots.txt` shows an explicit `Disallow: /en/stable/` line (and
     `/en/master/`, both marked "Hidden version"; confirmed live 2026-07-14). `ClaudeToolkit.firecrawl_crawl`
     still returns 0 pages for this URL. The equivalent un-disallowed path,
     `google-auth.readthedocs.io/en/latest/reference/google.oauth2.credentials.html` (not matched by
-    any `Disallow` rule), returns "saved 1 page(s) ... to Drive" via the same sanctioned call
-    (verified live 2026-07-14) — same underlying content, no robots block. This is a genuine,
-    working robots.txt restriction, not a bug in this repo's code; `WebFetch` doesn't honor
-    `robots.txt` the same way, which is why it got content anyway last pass.
+    any `Disallow` rule), returns `"Crawl complete: saved 1 page(s) from {url} to Drive."` via the
+    same sanctioned call (verified live 2026-07-14) — same underlying content, no robots block.
+    This is a genuine, working robots.txt restriction, not a bug in this repo's code; `WebFetch`
+    doesn't honor `robots.txt` the same way, which is why it got content anyway last pass.
   - `platform.claude.com/docs/en/docs/build-with-claude/tool-use` — `curl -I -L` shows two chained
     `HTTP 307` redirects (`/docs/en/docs/build-with-claude/tool-use` →
     `/docs/en/build-with-claude/tool-use` → `/docs/en/agents-and-tools/tool-use/overview`; confirmed
     live 2026-07-14), same out-of-scope-redirect cause as the Drive URLs above. Called directly on
     the final `/docs/en/agents-and-tools/tool-use/overview` target, `ClaudeToolkit.firecrawl_crawl`
-    reports "saved 1 page(s) ... to Drive" (verified live 2026-07-14); its content (tool-use
-    overview, schema/round-trip conventions) matches this repo's existing citation description — no
-    doc change needed. The pre-redirect URL cited above is still correct to keep citing (it's a
-    working, permanent redirect for a browser or `WebFetch`), just not resolvable by
-    `FirecrawlClient.crawl()` as-is.
+    reports `"Crawl complete: saved 1 page(s) from {url} to Drive."` (verified live 2026-07-14);
+    its content (tool-use overview, schema/round-trip conventions) matches this repo's existing
+    citation description — no doc change needed. The pre-redirect URL cited above is still correct
+    to keep citing (it's a working, permanent redirect for a browser or `WebFetch`), just not
+    resolvable by `FirecrawlClient.crawl()` as-is.
   - `platform.claude.com/docs/en/api/messages` — **now succeeds directly**: `curl -I -L` shows a
-    plain `HTTP 200`, no redirect involved. `ClaudeToolkit.firecrawl_crawl` returned "saved 1
-    page(s) ... to Drive" (~1.39MB of real markdown, verified live 2026-07-14); content is the
-    Messages API schema reference, consistent with the existing citation's description — no
-    discrepancy found.
+    plain `HTTP 200`, no redirect involved. `ClaudeToolkit.firecrawl_crawl` returned
+    `"Crawl complete: saved 1 page(s) from {url} to Drive."` (~1.39MB of real markdown, verified
+    live 2026-07-14); content is the Messages API schema reference, consistent with the existing
+    citation's description — no discrepancy found.
 
   Net: of the original 5, 1 now succeeds outright (Messages API — no redirect to trip over) and the
   other 4 have a confirmed, specific cause (redirect-scope or robots.txt), not a vague JS-rendering
