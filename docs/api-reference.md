@@ -131,7 +131,7 @@ parameter, then merges, sorts by timestamp, and deduplicates.
 |----------|------------|-------------------------|
 | `1d` | 1000 calendar days | ~690 trading days |
 | `1w` | 1000 calendar days | ~142 trading weeks |
-| `1h` | 197 calendar days | ~128 trading days × 6.5h |
+| `1h` | 246 calendar days | ~160 trading days × 6.5h |
 | `1m` | 1000 calendar days | ~33 months |
 
 **Endpoint:** `GET /iserver/marketdata/history` (chunked via `startTime`)
@@ -888,5 +888,7 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#logout
 `_validate_order_id`, and `_validate_reply_id` reject malformed IDs before they're interpolated
 into a URL, preventing path traversal via f-string-built request paths.
 
-All methods use `with_retry()` internally (3 retries, 1s base backoff, handles 429 and 503).
-401 responses are not retried — they raise `IBKRAuthError` immediately.
+All methods except `ping()` and `tickle()` use `with_retry()` internally (3 retries, 1s base
+backoff, handles 429 and 503). 401 responses are not retried — they raise `IBKRAuthError`
+immediately. `ping()` and `tickle()` bypass `with_retry()` entirely — they call the session
+directly with a 5s timeout, catch any exception, and return a `bool`; see their own docstrings.
