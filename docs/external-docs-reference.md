@@ -108,28 +108,41 @@ fully resolve — listed for a future pass rather than guessed at now:
 
   **Follow-up search, still empty (2026-07-14, follow-up plan Task 3):** re-searched specifically
   for this enumeration via `FirecrawlClient.search()` (the same sanctioned method
-  `ClaudeToolkit.firecrawl_search` wraps) using eight distinct phrasings — "IBKR Flex Activity
-  Statement all order origins TWS mobile API", "Interactive Brokers Activity Statement trade
-  origin completeness", "Interactive Brokers Flex Query includes trades from all trading
-  platforms", "IBKR Activity Statement CP API mobile TWS web portal trades included", "IBKR trade
-  confirmation report all order entry platforms consolidated", "Interactive Brokers statements
-  reflect trades regardless of order entry method", "IBKR API trades endpoint origin mobile TWS
-  web CP API", "Interactive Brokers Client Portal API trades vs TWS mobile consolidated
-  reporting" — then fetched the full markdown (via `FirecrawlClient.crawl()`) of every plausible
-  result: the Flex Web Service page, the Activity Flex Query / Trade Confirmation Flex Query /
-  Default Trades Flex Query / Statement Type / Trade Confirmation Report glossary entries, the
-  orgportal "Types of Statements", "Create an Activity Flex Query", and "Trade Confirmation Flex
-  Queries" pages, the "Reporting Tools" trading lesson, the interactivebrokers.ie reporting
-  overview page, the "Trade Confirmation Report" instructions page, and an older
-  `Statements_Trade_Confirmations.pdf` webinar deck. None of these enumerate the four origins
-  together; the closest is the webinar PDF's "Trade Confirmation Reports: intraday trade
-  confirmations for all orders" bullet, which says "all orders" but never names CP API, mobile,
-  TWS, or web portal specifically, and predates the CP API entirely (no `API`, `TWS`, or
-  `platform` keyword occurs anywhere in that PDF's text). Conclusion unchanged: no single official
-  page backs the specific 4-origin enumeration. The existing citation (Activity Statements
-  glossary page for the account-level-vs-per-platform claim, plus this repo's own `get_trades()`
-  note for the specific enumeration) stands as the best available sourcing — not replaced with a
-  guessed URL.
+  `ClaudeToolkit.firecrawl_search` wraps), using these query phrasings:
+  - "IBKR Flex Activity Statement all order origins TWS mobile API"
+  - "Interactive Brokers Activity Statement trade origin completeness"
+  - "Interactive Brokers Flex Query includes trades from all trading platforms"
+  - "IBKR Activity Statement CP API mobile TWS web portal trades included"
+  - "IBKR trade confirmation report all order entry platforms consolidated"
+  - "Interactive Brokers statements reflect trades regardless of order entry method"
+  - "IBKR API trades endpoint origin mobile TWS web CP API"
+  - "Interactive Brokers Client Portal API trades vs TWS mobile consolidated reporting"
+
+  Fetched full markdown (via `FirecrawlClient.crawl()`) of every plausible result:
+  - `interactivebrokers.com/campus/ibkr-api-page/flex-web-service/` (Flex Web Service page)
+  - `interactivebrokers.com/campus/glossary-terms/activity-flex-query/`
+  - `interactivebrokers.com/campus/glossary-terms/trade-confirmation-flex-query/`
+  - `interactivebrokers.com/campus/glossary-terms/default-trades-flex-query/`
+  - `interactivebrokers.com/campus/glossary-terms/statement-type/`
+  - `interactivebrokers.com/campus/glossary-terms/trade-confirmation-report/` (glossary
+    definition, distinct from the instructions page below)
+  - `ibkrguides.com/orgportal/performanceandstatements/typestatement.htm` ("Types of Statements")
+  - `ibkrguides.com/orgportal/performanceandstatements/activityflex.htm` ("Create an Activity
+    Flex Query")
+  - `ibkrguides.com/orgportal/performanceandstatements/tradeflex.htm` ("Trade Confirmation Flex
+    Queries")
+  - `ibkrguides.com/adminportal/performanceandstatements/runtradeconfirm.htm` ("Trade
+    Confirmation Report" — step-by-step run instructions, distinct from the glossary entry above)
+  - `interactivebrokers.com/campus/trading-lessons/client-portal-reporting/` ("Reporting Tools"
+    trading lesson)
+  - `interactivebrokers.ie/en/whyib/reporting.php` (reporting overview)
+  - `interactivebrokers.com/webinars/Statements_Trade_Confirmations.pdf` (older webinar deck —
+    its closest hit, "Trade Confirmation Reports: intraday trade confirmations for all orders,"
+    says "all orders" but never names CP API, mobile, TWS, or web portal, and the deck predates
+    the CP API entirely: no `API`, `TWS`, or `platform` keyword occurs anywhere in its text)
+
+  None of the above enumerate the four origins together. Conclusion unchanged — see the parent
+  bullet and the "Citation fix" note above; no citation was replaced with a guessed URL.
 - **Crawl4AI release notes / CHANGELOG confirming `BrowserProfiler`'s introduction in 0.5.0.**
   Confirmed today only via PyPI wheel inspection (no `BrowserProfiler` in 0.4.248); `docs.crawl4ai.com`
   content fetched in this pass doesn't itself state a version-introduced-in number.
