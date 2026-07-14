@@ -223,10 +223,8 @@ fully resolve — listed for a future pass rather than guessed at now:
   callers pass the canonical post-redirect URL directly; the robots.txt block is not something to
   "fix" at all — it's a real crawling restriction to respect, not this repo's error.
 
-**Known code limitation surfaced, not fixed here (`web_scraper.py` is being edited by another
-change in parallel, so out of scope for this pass):** `FirecrawlClient.crawl()`'s poll loop never
-reads or follows the `next` pagination cursor that Firecrawl's `GET /crawl/{id}` response includes
-for crawls whose completed result exceeds 10MB. For a crawl that large, `crawl()` will silently
-return only the first chunk of pages despite its own docstring's claim that it "returns all pages
-collected." Not currently an issue for this repo's usage (single-page or small crawls), but worth
-a TDD fix if `crawl()` is ever used against a larger site.
+**Resolved 2026-07-14 (follow-up plan Task 2):** `FirecrawlClient.crawl()`'s poll loop previously
+never followed the `next` pagination cursor Firecrawl's `GET /crawl/{id}` response includes for
+crawls whose completed result exceeds 10MB, silently truncating large crawls to the first chunk
+despite the method's own "returns all pages collected" docstring claim. Fixed via TDD, bounded by
+a chunk cap, a seen-URL cycle guard, and the caller's own `timeout_s` deadline.
