@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
@@ -24,9 +25,9 @@ def load_or_refresh_credentials(token_file: Path, scopes: list[str]) -> Credenti
     Returns the credentials unchanged if still valid. If expired but refreshable (has a
     refresh_token), refreshes via google.auth.transport.requests.Request, persists the
     refreshed token via persist_credentials, and returns it. Returns None if the file
-    doesn't exist, or if the credentials are expired with no refresh_token — never raises;
-    callers decide what "no usable credentials" means for them (interactive bootstrap, or
-    a hard error).
+    doesn't exist, if the credentials are expired with no refresh_token, or if a refresh
+    attempt fails (e.g. the refresh token was revoked) — never raises; callers decide what
+    "no usable credentials" means for them (interactive bootstrap, or a hard error).
     """
     if not token_file.exists():
         return None
@@ -34,7 +35,10 @@ def load_or_refresh_credentials(token_file: Path, scopes: list[str]) -> Credenti
     if creds.valid:
         return creds
     if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError:
+            return None
         persist_credentials(token_file, creds)
         return creds
     return None

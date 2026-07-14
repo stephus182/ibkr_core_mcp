@@ -16,10 +16,22 @@
 | Topic | URL |
 |---|---|
 | **Flex Web Service setup** (endpoints, params, headers) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
-| **Flex Web Service error codes** (all 21 codes, last updated 2025-08-18 — re-verified live 2026-07-10, corrected from a stale 2025-10-03 note) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
+| **Flex Web Service error codes** (20 official codes — 1001, 1003-1021, no 1002 — last updated 2025-08-18, re-verified live 2026-07-14; `flex_query.py`'s `_FLEX_ERROR_CODES` carries a 21st entry, 1025, explicitly commented as observed in practice but not in this official table) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
 | **Enable Flex Web Service** (one-time token + query setup) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex-web-service.htm |
 | **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
-| **What Flex covers** (activity statement scope, all order origins) | https://www.ibkrguides.com/orgportal/performanceandstatements/flex.htm |
+| **Flex Queries — orgportal landing page** (navigation index only: Run/Create/Edit Flex Query links, delivery settings, 4-year retention note — live-fetched 2026-07-14; kept as a general Flex-Queries pointer, no longer cited as the source for the "all trade origins" claim below) | https://www.ibkrguides.com/orgportal/performanceandstatements/flex.htm |
+| **Activity Statements** (account-level reports, not per-platform logs — backs `flex_query.py`'s "What Flex covers" claim) | https://www.interactivebrokers.com/campus/glossary-terms/activity-statements/ |
+
+**Citation fix (2026-07-14):** `flex_query.py`'s "## What Flex covers" docstring (and two copies
+of the same claim in `claude_tools.py`) previously cited the orgportal landing page above as
+`Source:` for "all trade origins are included (CP API, mobile app, TWS, web portal)." Live-fetching
+that URL showed it's only a generic navigation index page — it never made an origin-completeness
+claim, so the citation didn't back the text next to it. Reworded the claim to what's actually
+sourced (Activity Statements are account-level reports, not per-platform logs — confirmed by the
+Activity Statements glossary page above) and re-pointed `Source:` to that page; the specific
+enumeration of origins (CP API, mobile, TWS, web portal) is attributed to this repo's own
+separately-verified claim instead (`get_trades()`'s "Origin coverage — verified live 2026-07-06"
+note in `client.py`), not re-presented as independently sourced from the glossary page.
 
 **IBKR WebSocket Streaming** (`streaming.py`)
 
@@ -54,14 +66,17 @@ not in the code.
 
 | Topic | URL |
 |---|---|
-| **Tool use** (schema conventions `TOOL_DEFINITIONS` follows) | https://docs.anthropic.com/en/docs/build-with-claude/tool-use |
-| **Messages API** (request/response shape `ClaudeToolkit.execute()` is designed around) | https://docs.anthropic.com/en/api/messages |
+| **Tool use** (schema conventions `TOOL_DEFINITIONS` follows) | https://platform.claude.com/docs/en/docs/build-with-claude/tool-use |
+| **Messages API** (request/response shape `ClaudeToolkit.execute()` is designed around) | https://platform.claude.com/docs/en/api/messages |
+
+`docs.anthropic.com` now 301-redirects to `platform.claude.com` for both pages above
+(re-verified live 2026-07-14) — updated to the new canonical domain.
 
 **Web Scraping — Firecrawl + Crawl4AI fallback** (`web_scraper.py`, `scrape_fallback.py`)
 
 | Topic | URL |
 |---|---|
-| **Firecrawl API reference** (scrape/search/crawl endpoints) | https://docs.firecrawl.dev/api-reference/endpoint/scrape , https://docs.firecrawl.dev/api-reference/endpoint/crawl-get |
+| **Firecrawl API reference — v1** (search/crawl endpoints — `web_scraper.py`'s `BASE_URL` is `https://api.firecrawl.dev/v1`; it only calls `POST /v1/search` and `POST /v1/crawl` + `GET /v1/crawl/{id}`, never `/v1/scrape`. The bare `docs.firecrawl.dev/api-reference/endpoint/...` paths now render **v2** docs — use the `/v1/...`-prefixed paths below, re-verified live 2026-07-14, to match what this repo actually targets) | https://docs.firecrawl.dev/v1/api-reference/endpoint/search , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-get |
 | **Crawl4AI docs** (optional fallback; no built-in confidence score on Firecrawl side — confirmed 2026-06-30) | https://docs.crawl4ai.com/ |
 | **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
 | **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
@@ -72,3 +87,43 @@ the newest 0.4.x release) — it was introduced in 0.5.0. `crawl4ai<0.5.0` will 
 successfully but raise `Crawl4AIUnavailableError` with a misleading "not installed"
 message when `create_profile()` is actually called, since that message is only
 generated from an `ImportError` on `BrowserProfiler`.
+
+---
+
+## Missing URLs / known gaps (live-verification pass, 2026-07-14)
+
+Pages this repo's citations point at, or should plausibly point at, but that this pass could not
+fully resolve — listed for a future pass rather than guessed at now:
+
+- **A clientportal-scoped Flex Queries overview page.** Every other Flex row above is a
+  `clientportal` page except the orgportal landing page (line 22, institutional/proprietary
+  portal). No `clientportal/performanceandstatements/flex.htm`-equivalent general overview was
+  fetched or confirmed to exist in this pass — worth checking for retail-portal consistency.
+- **An official IBKR page that explicitly enumerates "Activity Statements include trades placed
+  via CP API, mobile, TWS, and web portal."** The Activity Statements glossary page (line 20)
+  confirms statements are account-level (not per-platform), but no single fetched page spells out
+  all four origins together for Flex specifically — the enumeration currently rests on this
+  repo's own live-verified `get_trades()` observation, not an IBKR citation. See the "Citation
+  fix" note above.
+- **Crawl4AI release notes / CHANGELOG confirming `BrowserProfiler`'s introduction in 0.5.0.**
+  Confirmed today only via PyPI wheel inspection (no `BrowserProfiler` in 0.4.248); `docs.crawl4ai.com`
+  content fetched in this pass doesn't itself state a version-introduced-in number.
+- **`docs.firecrawl.dev/v1/api-reference/endpoint/scrape`** — not fetched (code never calls
+  `/v1/scrape`, so not needed for verification), but would complete the picture if ever added as a
+  contrast citation explaining why this repo doesn't use it.
+- **Five URLs this session's `FirecrawlClient.crawl()` call returned zero pages for** (likely
+  JS-rendered and not fully extractable via a single-page crawl call): `developers.google.com/drive/api/reference/rest/v3/files/list`,
+  `developers.google.com/drive/api/quickstart/python`,
+  `google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html`, and (before
+  their domain migration was discovered) the two old `docs.anthropic.com` Anthropic pages.
+  `WebFetch` was used as a fallback for all five and got real content each time — worth noting as
+  an operational limitation of `web_scraper.py`'s single-page crawl approach for future live-doc
+  passes, separate from the unrelated Drive-caching bug being fixed elsewhere in this file.
+
+**Known code limitation surfaced, not fixed here (`web_scraper.py` is being edited by another
+change in parallel, so out of scope for this pass):** `FirecrawlClient.crawl()`'s poll loop never
+reads or follows the `next` pagination cursor that Firecrawl's `GET /crawl/{id}` response includes
+for crawls whose completed result exceeds 10MB. For a crawl that large, `crawl()` will silently
+return only the first chunk of pages despite its own docstring's claim that it "returns all pages
+collected." Not currently an issue for this repo's usage (single-page or small crawls), but worth
+a TDD fix if `crawl()` is ever used against a larger site.

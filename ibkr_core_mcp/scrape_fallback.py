@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 Quality = Literal["ok", "ambiguous", "fallback"]
 
 # Cheap, fast model for the binary completeness check — not the main conversation model.
-# Model catalogue: see the claude-api skill / https://docs.anthropic.com/en/docs/about-claude/models
+# Model catalogue: see the claude-api skill / https://platform.claude.com/docs/en/docs/about-claude/models
 _JUDGE_MODEL = "claude-haiku-4-5-20251001"
 _JUDGE_MAX_MARKDOWN_CHARS = 3000
 

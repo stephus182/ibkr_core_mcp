@@ -492,8 +492,9 @@ after a 1s pause if the first response is empty; two empty responses mean genuin
 **When this is NOT the right tool:**
 - Full history beyond 7 days → `FlexQueryClient.fetch_trades` (T+1, all origins) — see
   `docs/flex-query-reference.md`
-- Real-time execution push → the WebSocket `str` (trades) topic is documented (args:
-  `realtimeUpdatesOnly`, `days`) but not implemented in `streaming.py` yet
+- Real-time execution push → use the WebSocket `str` (trades) topic instead:
+  `IBKRWebSocket.subscribe_executions(realtime_updates_only, days)` in `streaming.py`, which
+  normalizes each push via `_parse_stream_execution` into this same trades table shape
 
 **Endpoint:** `GET /iserver/account/trades`
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trades
