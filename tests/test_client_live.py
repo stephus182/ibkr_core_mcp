@@ -421,7 +421,7 @@ def test_get_pa_transactions(live_client, account_id):
     # ("1D","7D","MTD","1M","YTD","1Y", days=7/30/90) — parameter format TBD.
     # The implementation passes "period" but the docstring says "days" (int).
     # Skipping until the correct request format is confirmed from official docs.
-    pytest.skip("/pa/transactions: correct request parameter format not yet confirmed — see live-test-log.md#run-2026-06-30")
+    pytest.skip("/pa/transactions: correct request parameter format not yet confirmed — see docs/audits/live-test-log.md#run-2026-06-30")
 
 
 # ---------------------------------------------------------------------------
