@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, `requests` (already a dep), `google-api-python-client` (already a dep), Firecrawl REST API v1, pytest + `unittest.mock`.
 
-**Spec:** `docs/superpowers/specs/2026-06-26-firecrawl-web-scraper-design.md`
+**Spec:** `docs/plans/2026-06-26-firecrawl-web-scraper-design.md`
 
 ---
 
