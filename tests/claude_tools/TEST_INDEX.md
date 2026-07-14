@@ -33,7 +33,7 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 42 tools. See
 | `test_orders.py` | get_live_orders, diagnose_orders, preview_order, get_order_status | `orders` | 16 |
 | `test_flex.py` | sync_flex_trades, sync_flex_archive, import_flex_file, check_flex_coverage, verify_flex_import, `_format_coverage`, `FlexQueryClient.extract_execution_ids` | `flex` | 22 |
 | `test_alerts.py` | get_alerts, create_price_alert, delete_alert, activate_alert, modify_price_alert | `alerts` | 15 |
-| `test_pa_analytics.py` | get_analytics, get_pa_periods, get_pa_performance, get_pa_transactions | `pa_analytics` | 11 |
+| `test_pa_analytics.py` | get_analytics, get_pa_periods, get_pa_performance, get_pa_transactions | `pa_analytics` | 12 |
 | `test_backtest_pinescript.py` | run_backtest, generate_pinescript | `backtest_pinescript` | 8 |
 | `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_validate_public_url` | `web_scraping` | 22 |
 | `test_errors.py` | `_safe_error` (parametrized, 13 cases) | `errors` | 13 |

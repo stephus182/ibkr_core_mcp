@@ -275,7 +275,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pa_periods",
-        "description": "Get the list of valid period strings for Portfolio Analyst queries (performance and transactions). Call this first if unsure which period to use.",
+        "description": "Get the list of valid period strings for get_pa_performance queries. Call this first if unsure which period to use.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -296,13 +296,20 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pa_transactions",
-        "description": "Get transaction history from IBKR Portfolio Analyst (all origins: mobile, TWS, API). Use get_pa_periods first to discover valid period strings.",
+        "description": (
+            "Get transaction history from IBKR Portfolio Analyst for one symbol "
+            "(all origins: mobile, TWS, API — not session-scoped). IBKR only "
+            "supports one instrument per call."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. '7D', 'MTD', 'YTD'"},
+                "symbol": {"type": "string", "description": "Ticker symbol to fetch transactions for"},
+                "sec_type": {"type": "string", "description": "Security type for conid resolution: 'STK' (default), 'IND', 'BOND', 'FUT', or 'CASH'"},
+                "currency": {"type": "string", "description": "Currency code for the request (default 'USD')"},
+                "days": {"type": "integer", "description": "Optional lookback window in days; omit for IBKR's default range"},
             },
-            "required": ["period"],
+            "required": ["symbol"],
         },
     },
     {
@@ -390,7 +397,7 @@ TOOL_DEFINITIONS = [
         "name": "add_indicators",
         "description": (
             "Load cached market data for a symbol and compute all technical indicators "
-            "(RSI, MACD, Bollinger Bands, ATR, VWAP, OBV, Stochastic, Williams %R, Keltner Channels). "
+            "(RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, Williams %R, and Volume Ratio). "
             "Returns a summary of current indicator values."
         ),
         "input_schema": {
@@ -1712,7 +1719,8 @@ class ClaudeToolkit:
         """Return valid period strings for Portfolio Analyst queries from IBKR's /pa/allperiods endpoint.
 
         ## Purpose
-        Call this before get_pa_transactions when unsure which period values IBKR accepts.
+        Call this before get_pa_performance when unsure which period values IBKR accepts.
+        get_pa_transactions does not take a period — it takes a symbol (resolved to a conid).
         Documented period values (verified 2026-06-26): "1D", "7D", "MTD", "1M", "YTD", "1Y".
         Always fetch from this endpoint rather than hardcoding — IBKR may return a subset
         based on account age/type.
@@ -1758,38 +1766,29 @@ class ClaudeToolkit:
         stated in the official docs. Observed: same-day fills appear accessible, but this
         has not been confirmed across all trade origins and time zones.
 
-        ## Period values
-        Documented values: "1D", "7D", "MTD", "1M", "YTD", "1Y". Must come from
-        get_pa_periods — IBKR returns HTTP 400 for invalid period strings, and the
-        exact set returned may vary by account age/type.
-        On HTTP 400: this handler automatically fetches valid periods and returns them in the
-        error so the caller can retry with the correct value.
+        ## Instrument scope
+        IBKR's /pa/transactions endpoint takes `conids`, not a period string — and only one
+        conid per call is supported. `symbol` is resolved to a conid via
+        `_resolve_snapshot_conid` (same dispatch used by get_market_snapshot/get_contract_info).
+        `days` is an optional lookback window; omit it for IBKR's default range.
 
         ## vs Flex (sync_flex_trades)
         Both cover all origins. Flex is T+1 (yesterday at best) but provides multi-year
         authoritative history. PA is faster (likely same-day) but limited to recent periods.
         """
-        from ibkr_core_mcp.exceptions import IBKRAPIError
+        symbol = inputs["symbol"].upper()
+        sec_type = inputs.get("sec_type", "STK")
+        currency = inputs.get("currency", "USD")
+        days = inputs.get("days")
+        conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
+        if err:
+            return err, None
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
-        period = inputs["period"]
-        try:
-            txns = self._client.get_pa_transactions(account_ids, period)
-        except IBKRAPIError as exc:
-            if exc.status_code == 400:
-                valid = self._client.get_pa_periods(account_ids)
-                hint = (
-                    f"Valid periods from IBKR: {', '.join(valid)}"
-                    if valid else "Could not retrieve valid periods from IBKR."
-                )
-                return (
-                    f"get_pa_transactions failed: IBKR rejected period '{period}' (HTTP 400). "
-                    f"{hint}"
-                ), None
-            raise
+        txns = self._client.get_pa_transactions(account_ids, [conid], currency, days)
         if not txns:
-            return f"No transactions found for period '{period}'.", None
+            return f"No transactions found for {symbol}.", None
 
         lines = []
         total_amount = 0.0
@@ -1798,18 +1797,16 @@ class ClaudeToolkit:
                 continue
             date = str(t.get("date") or t.get("settleDate") or "?")[:10]
             desc = t.get("desc") or t.get("description") or t.get("type") or "?"
-            symbol = t.get("symbol") or t.get("conid") or ""
             amount = t.get("amount") or t.get("netCash") or 0
             try:
                 amount = float(amount)
             except (ValueError, TypeError):
                 amount = 0.0
             total_amount += amount
-            symbol_part = f" [{symbol}]" if symbol else ""
-            lines.append(f"- {date}{symbol_part} {desc}: {amount:+.2f}")
+            lines.append(f"- {date} {desc}: {amount:+.2f}")
 
         return (
-            f"PA Transactions — {inputs['period']} ({len(lines)} records, all origins):\n"
+            f"PA Transactions — {symbol} ({len(lines)} records, all origins):\n"
             + "\n".join(lines[:50])
             + (f"\n  (showing first 50 of {len(lines)})" if len(lines) > 50 else "")
             + f"\nNet total: {total_amount:+.2f}"

@@ -48,45 +48,56 @@ def test_get_pa_performance_error(toolkit):
 
 
 def test_get_pa_transactions_happy_path(toolkit):
-    """Returns formatted transaction list for a valid period."""
+    """Resolves symbol to conid, passes it (not a period) to client.get_pa_transactions."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
     toolkit._client.get_pa_transactions.return_value = [
         {"date": "2026-06-01", "desc": "BUY AAPL", "symbol": "AAPL", "amount": -18250.0},
         {"date": "2026-06-02", "desc": "SELL AAPL", "symbol": "AAPL", "amount": 18500.0},
     ]
-    text, fig = toolkit.execute("get_pa_transactions", {"period": "1M"})
+    text, fig = toolkit.execute("get_pa_transactions", {"symbol": "AAPL"})
     assert fig is None
     assert "AAPL" in text
     assert "2 records" in text
+    toolkit._client.get_pa_transactions.assert_called_once_with(["U123"], [265598], "USD", None)
+
+
+def test_get_pa_transactions_custom_currency_and_days(toolkit):
+    """currency and days pass through to client.get_pa_transactions unchanged."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
+    toolkit._client.get_pa_transactions.return_value = []
+    toolkit.execute("get_pa_transactions", {"symbol": "AAPL", "currency": "CAD", "days": 30})
+    toolkit._client.get_pa_transactions.assert_called_once_with(["U123"], [265598], "CAD", 30)
 
 
 def test_get_pa_transactions_empty(toolkit):
     """Returns 'No transactions' when IBKR returns empty list."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
     toolkit._client.get_pa_transactions.return_value = []
-    text, fig = toolkit.execute("get_pa_transactions", {"period": "1D"})
+    text, fig = toolkit.execute("get_pa_transactions", {"symbol": "AAPL"})
     assert "No transactions" in text
     assert fig is None
 
 
-def test_get_pa_transactions_http_400_fallback(toolkit):
-    """On HTTP 400, handler fetches valid periods and returns them in the error."""
-    from ibkr_core_mcp.exceptions import IBKRAPIError
+def test_get_pa_transactions_conid_resolution_failure(toolkit):
+    """When the symbol can't be resolved to a conid, the error is returned and IBKR is never called."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.get_pa_transactions.side_effect = IBKRAPIError("bad period", status_code=400)
-    toolkit._client.get_pa_periods.return_value = ["1D", "7D", "1M"]
-    text, fig = toolkit.execute("get_pa_transactions", {"period": "BAD"})
+    toolkit._client.search_contract.return_value = []
+    text, fig = toolkit.execute("get_pa_transactions", {"symbol": "BOGUS"})
     assert fig is None
-    assert "HTTP 400" in text
-    assert "1D" in text or "7D" in text
+    assert "BOGUS" in text
+    toolkit._client.get_pa_transactions.assert_not_called()
 
 
-def test_get_pa_transactions_non_400_error_propagates(toolkit):
-    """Non-400 IBKRAPIError re-raises through _safe_error."""
+def test_get_pa_transactions_error_propagates(toolkit):
+    """IBKRAPIError from the transactions call re-raises through _safe_error."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
     toolkit._client.get_pa_transactions.side_effect = IBKRAPIError("server error", status_code=500)
-    text, fig = toolkit.execute("get_pa_transactions", {"period": "1M"})
+    text, fig = toolkit.execute("get_pa_transactions", {"symbol": "AAPL"})
     assert fig is None
     assert "500" in text
 

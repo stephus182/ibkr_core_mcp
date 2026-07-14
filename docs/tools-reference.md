@@ -18,34 +18,39 @@ Pass `toolkit.tools` directly to the Anthropic SDK `tools=` parameter. Route res
 ## Portfolio & Account
 
 ### `get_account_summary`
-Net liquidation value, total cash, unrealized P&L, and realized P&L.
+Net liquidation value, total cash, gross position value, unrealized P&L, realized P&L, and buying power.
 
 **Inputs:** none
 
-**Output:** JSON with `netliquidation`, `totalcashvalue`, `unrealizedpnl`, `realizedpnl`.
+**Output:** Text summary with `Account`, `Net Liquidation`, `Cash`, `Gross Position Val`,
+`Unrealized P&L`, `Realized P&L`, `Buying Power`.
 
 **IBKR endpoint:** `GET /portfolio/{accountId}/summary`
 
 ---
 
 ### `get_positions`
-All open positions for the primary account.
+All open positions for the primary account. Flat entries (`position=0`) are filtered out.
 
 **Inputs:** none
 
-**Output:** JSON array of positions. Each entry includes `conid`, `contractDesc` (symbol),
-`position` (size), `mktPrice`, `mktValue`, `unrealizedPnl`, `realizedPnl`.
+**Output:** Text list of open positions — one line per position with symbol, `qty`, `mktVal`,
+`unrealPnL`.
 
 **IBKR endpoint:** `GET /portfolio/{accountId}/positions/0`
 
 ---
 
 ### `get_pnl`
-Real-time partitioned P&L — daily, unrealized, and realized — broken down by position.
+Real-time account-level P&L — daily and unrealized. **Not** broken down by position (IBKR's
+`/iserver/account/pnl/partitioned` returns one summary row per account/model partition, no
+per-conid detail); use `get_positions` for per-position unrealized P&L. No realized figure is
+returned by this endpoint.
 
 **Inputs:** none
 
-**Output:** Raw JSON from `/iserver/account/pnl/partitioned`.
+**Output:** Text summary — per-partition unrealized/daily P&L (plus net/excess liquidity where
+present), and totals across partitions.
 
 **Rate limit:** 1 req/5 secs (official).
 
@@ -77,13 +82,13 @@ Portfolio breakdown by asset class, industry, sector, and group.
 ---
 
 ### `get_pa_periods`
-Return the exact period strings accepted by Portfolio Analyst for this account.
+Return the exact period strings accepted by `get_pa_performance` for this account.
 
-**Always call this before `get_pa_performance` or `get_pa_transactions`** — IBKR returns HTTP 400 for invalid period strings, and the valid set comes from this endpoint.
+**Always call this before `get_pa_performance`** — IBKR returns HTTP 400 for invalid period strings, and the valid set comes from this endpoint. `get_pa_transactions` does not take a period (see below).
 
 **Inputs:** none
 
-**Output:** JSON array of valid period strings (e.g. `["last7days", "last30days", "ytd", "last365days", "alltime"]`).
+**Output:** Text list of valid period strings (documented values: `"1D"`, `"7D"`, `"MTD"`, `"1M"`, `"YTD"`, `"1Y"` — the exact set returned may vary by account age/type).
 
 **IBKR endpoint:** `POST /pa/allperiods`
 
@@ -96,9 +101,9 @@ Portfolio NAV performance from IBKR Portfolio Analyst.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `period` | string | ✅ | Period string from `get_pa_periods` (e.g. `"last7days"`, `"ytd"`, `"last365days"`) |
+| `period` | string | ✅ | Period string from `get_pa_periods`, e.g. `"1D"`, `"7D"`, `"MTD"`, `"1M"`, `"YTD"`, `"1Y"` |
 
-**Output:** NAV performance data for the requested period.
+**Output:** Text summary of NAV performance data for the requested period.
 
 **Rate limit:** 1 req/15 mins (official).
 
@@ -107,15 +112,18 @@ Portfolio NAV performance from IBKR Portfolio Analyst.
 ---
 
 ### `get_pa_transactions`
-Transaction history from IBKR Portfolio Analyst. Covers all order origins (mobile, TWS, API) — not session-scoped.
+Transaction history from IBKR Portfolio Analyst for **one symbol**. Covers all order origins (mobile, TWS, API) — not session-scoped.
 
-**Call `get_pa_periods` first** to get the exact period strings IBKR accepts.
+IBKR's `/pa/transactions` endpoint takes a resolved conid, not a period — `symbol` is resolved to a conid internally (same dispatch used by `get_market_snapshot`/`get_contract_info`), so `search_contract` doesn't need to be called first. Only one instrument is supported per call.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `period` | string | ✅ | Period string from `get_pa_periods` (e.g. `"last7days"`, `"ytd"`) |
+| `symbol` | string | ✅ | Ticker symbol to fetch transactions for |
+| `sec_type` | string | — | `"STK"` (default), `"IND"`, `"BOND"`, `"FUT"`, or `"CASH"` — used for conid resolution |
+| `currency` | string | — | Currency code for the request (default `"USD"`) |
+| `days` | integer | — | Optional lookback window in days; omit for IBKR's default range |
 
-**Output:** Transaction list for the requested period.
+**Output:** Text list of transactions (date, description, amount) plus a net total.
 
 **Rate limit:** 1 req/15 mins (official).
 
@@ -135,8 +143,9 @@ Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify
 
 **Inputs:** none
 
-**Output:** JSON array of working orders. Each entry includes `orderId`, `ticker`, `side`,
-`totalSize`, `price`, `orderType`, `status`.
+**Output:** Text list of working orders — one line per order with `orderId`, `ticker`, `side`,
+quantity, price, `status`, time-in-force, and origin (`ClaudIA-staged`, `API (clientId=...)`,
+or `EXTERNAL`).
 
 **Rate limit:** 1 req/5 secs (official).
 
@@ -151,7 +160,9 @@ shape, so you can see whether orders are present but filtered, or genuinely abse
 
 **Inputs:** none
 
-**Output:** Raw JSON from IBKR orders endpoint, unfiltered.
+**Output:** Text list of every order with all fields plus a `[FILTERED by get_live_orders]`
+marker on terminal-status orders — or the raw JSON response verbatim for the edge cases where
+the response isn't a populated list (empty list, or an unexpected non-list shape).
 
 **IBKR endpoint:** `GET /iserver/account/orders`
 
@@ -184,7 +195,8 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 | `stop_price` | number | — | Required for `order_type="STP"`/`"STOP_LIMIT"` |
 | `sec_type` | string | — | `"STK"` (default), `"IND"`, `"BOND"`, `"FUT"` (resolves front month), or `"CASH"` (FX pair, e.g. `"EUR.USD"`) |
 
-**Output:** JSON with `equity`, `commission`, `marginImpact`, `buyingPowerEffect`.
+**Output:** Text summary — `Commission est.`, `Equity with loan`, `Initial margin`,
+`Maintenance margin`, `Buying power effect` (equity change).
 
 **IBKR endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 
@@ -198,14 +210,15 @@ Trade history from IBKR or local SQLite store.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `symbol` | string | — | Filter by symbol |
-| `source` | string | — | `"live"` (IBKR API, last 6 days, all origins) or `"store"` (SQLite, full history) — default `"store"` |
+| `source` | string | — | `"live"` (IBKR API, last 7 days, all origins) or `"store"` (SQLite, full history) — default `"store"` |
 | `start` | string | — | Start date `YYYY-MM-DD` (store only) |
 | `end` | string | — | End date `YYYY-MM-DD` (store only) |
 
-**Output:** JSON array of trade executions.
+**Output:** Text list of trade executions — one line per trade with time, symbol, asset class,
+side, size, price (plus commission and realized P&L for `source="store"`).
 
 **Note (live):** Returns all trades on the account regardless of order origin (mobile, TWS, API).
-`?days` supports up to a maximum of 7 days; if unspecified, only the current day is returned.
+Calls IBKR with `?days=7`, the documented maximum for this endpoint.
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
 
 **Rate limit:** 1 req/5 secs (official).
@@ -354,7 +367,7 @@ conid internally, so `search_contract` doesn't need to be called first.
 
 **Output:** Full contract JSON from IBKR.
 
-**IBKR endpoint:** `GET /iserver/contract/{conid}/info`
+**IBKR endpoint:** `GET /iserver/contract/{conid}/info-and-rules`
 
 ---
 
@@ -375,7 +388,7 @@ conids or greeks.
 Reimplemented 2026-07-07 — a previous version called the undocumented `/trsrv/secdef/chains`,
 which 404'd on every call. It no longer does.
 
-**IBKR endpoint:** `GET /trsrv/secdef/chains`
+**IBKR endpoint:** `GET /iserver/secdef/search` (resolve underlying) + `GET /iserver/secdef/strikes` (strikes for the resolved month)
 
 ---
 
@@ -428,8 +441,8 @@ List all datasets cached in Google Drive.
 
 **Inputs:** none
 
-**Output:** JSON array of cache manifest entries with `symbol`, `timeframe`, `period`,
-`cached_at`, `row_count`.
+**Output:** `"Drive cache is empty."`, or a text list — one line per dataset,
+`<key>: <rows> bars, cached <YYYY-MM-DD>`.
 
 ---
 
@@ -460,7 +473,7 @@ Load cached market data and compute all technical indicators.
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
 
 **Output:** Current values for: RSI(14), MACD, MACD signal, Bollinger Bands (upper/mid/lower),
-ATR(14), VWAP, OBV, Stochastic %K/%D, Williams %R, Keltner Channels.
+ATR(14), VWAP, Stochastic %K/%D, Williams %R, Volume Ratio.
 
 **Prerequisite:** Data must be cached. Call `fetch_market_data` first if needed.
 
@@ -498,7 +511,8 @@ Full analytics report on a cached dataset.
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
 
-**Output:** Sharpe, Sortino, Calmar, CAGR, max drawdown, max drawdown duration (bars).
+**Output:** Total return, CAGR, Sharpe, Sortino, Calmar, max drawdown, max drawdown duration
+(bars), bars analyzed.
 
 ---
 
@@ -630,7 +644,7 @@ List all IBKR watchlists and their contents.
 
 **Output:** JSON array of watchlists. Each entry has `id`, `name`, `rows` (array of instruments).
 
-**IBKR endpoint:** `GET /iserver/account/watchlists`
+**IBKR endpoint:** `GET /iserver/watchlists`
 
 ---
 
