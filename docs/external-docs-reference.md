@@ -105,6 +105,31 @@ fully resolve — listed for a future pass rather than guessed at now:
   all four origins together for Flex specifically — the enumeration currently rests on this
   repo's own live-verified `get_trades()` observation, not an IBKR citation. See the "Citation
   fix" note above.
+
+  **Follow-up search, still empty (2026-07-14, follow-up plan Task 3):** re-searched specifically
+  for this enumeration via `FirecrawlClient.search()` (the same sanctioned method
+  `ClaudeToolkit.firecrawl_search` wraps) using eight distinct phrasings — "IBKR Flex Activity
+  Statement all order origins TWS mobile API", "Interactive Brokers Activity Statement trade
+  origin completeness", "Interactive Brokers Flex Query includes trades from all trading
+  platforms", "IBKR Activity Statement CP API mobile TWS web portal trades included", "IBKR trade
+  confirmation report all order entry platforms consolidated", "Interactive Brokers statements
+  reflect trades regardless of order entry method", "IBKR API trades endpoint origin mobile TWS
+  web CP API", "Interactive Brokers Client Portal API trades vs TWS mobile consolidated
+  reporting" — then fetched the full markdown (via `FirecrawlClient.crawl()`) of every plausible
+  result: the Flex Web Service page, the Activity Flex Query / Trade Confirmation Flex Query /
+  Default Trades Flex Query / Statement Type / Trade Confirmation Report glossary entries, the
+  orgportal "Types of Statements", "Create an Activity Flex Query", and "Trade Confirmation Flex
+  Queries" pages, the "Reporting Tools" trading lesson, the interactivebrokers.ie reporting
+  overview page, the "Trade Confirmation Report" instructions page, and an older
+  `Statements_Trade_Confirmations.pdf` webinar deck. None of these enumerate the four origins
+  together; the closest is the webinar PDF's "Trade Confirmation Reports: intraday trade
+  confirmations for all orders" bullet, which says "all orders" but never names CP API, mobile,
+  TWS, or web portal specifically, and predates the CP API entirely (no `API`, `TWS`, or
+  `platform` keyword occurs anywhere in that PDF's text). Conclusion unchanged: no single official
+  page backs the specific 4-origin enumeration. The existing citation (Activity Statements
+  glossary page for the account-level-vs-per-platform claim, plus this repo's own `get_trades()`
+  note for the specific enumeration) stands as the best available sourcing — not replaced with a
+  guessed URL.
 - **Crawl4AI release notes / CHANGELOG confirming `BrowserProfiler`'s introduction in 0.5.0.**
   Confirmed today only via PyPI wheel inspection (no `BrowserProfiler` in 0.4.248); `docs.crawl4ai.com`
   content fetched in this pass doesn't itself state a version-introduced-in number.
