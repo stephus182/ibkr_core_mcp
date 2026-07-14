@@ -111,14 +111,52 @@ fully resolve — listed for a future pass rather than guessed at now:
 - **`docs.firecrawl.dev/v1/api-reference/endpoint/scrape`** — not fetched (code never calls
   `/v1/scrape`, so not needed for verification), but would complete the picture if ever added as a
   contrast citation explaining why this repo doesn't use it.
-- **Five URLs this session's `FirecrawlClient.crawl()` call returned zero pages for** (likely
-  JS-rendered and not fully extractable via a single-page crawl call): `developers.google.com/drive/api/reference/rest/v3/files/list`,
-  `developers.google.com/drive/api/quickstart/python`,
-  `google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html`, and (before
-  their domain migration was discovered) the two old `docs.anthropic.com` Anthropic pages.
-  `WebFetch` was used as a fallback for all five and got real content each time — worth noting as
-  an operational limitation of `web_scraper.py`'s single-page crawl approach for future live-doc
-  passes, separate from the unrelated Drive-caching bug being fixed elsewhere in this file.
+- **Re-tested 2026-07-14 (follow-up plan Task 1, `docs/plans/2026-07-14-doc-improvement-upgraded-scraper-plan.md`)
+  through the upgraded `ClaudeToolkit.firecrawl_crawl`** (retry-with-backoff + Drive read-cache +
+  Crawl4AI fallback all exercised, `max_pages=1`), the "likely JS-rendered" guess above was wrong
+  — the retry/cache upgrade didn't touch the actual cause, and it isn't JS rendering. Root cause is
+  confirmed per URL, using raw `POST /v1/crawl` + `GET /v1/crawl/{id}` calls to inspect Firecrawl's
+  `total`/`completed`/`data` fields directly:
+  - `developers.google.com/drive/api/reference/rest/v3/files/list` and
+    `developers.google.com/drive/api/quickstart/python` — both 301-redirect to a
+    `developers.google.com/workspace/drive/api/...` path (Google's Workspace-docs migration).
+    Firecrawl's `/v1/crawl` with `limit=1` returns `total=0, completed=0, data=[]` for the
+    pre-redirect URL — the crawl doesn't complete the redirect within its discovery scope.
+    Crawling the post-redirect `.../workspace/drive/api/reference/rest/v3/files/list` and
+    `.../workspace/drive/api/quickstart/python` URLs directly returns `total=1, completed=1` with
+    real markdown both times (verified live 2026-07-14). The doc citations above still point at
+    the pre-redirect URLs deliberately — they're not broken links (a browser or `WebFetch` follows
+    the redirect fine) — but `FirecrawlClient.crawl()` cannot resolve them without either following
+    `total`/redirect metadata itself or being pointed at the canonical post-redirect URL.
+  - `google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html` —
+    `google-auth.readthedocs.io/robots.txt` explicitly disallows `/en/stable/` (and `/en/master/`,
+    both "hidden version" aliases; confirmed live 2026-07-14). Firecrawl honors `robots.txt` and
+    returns `total=0`. The equivalent un-disallowed path,
+    `google-auth.readthedocs.io/en/latest/reference/google.oauth2.credentials.html`, crawls fine
+    (`total=1, completed=1`, verified live 2026-07-14) — same content, no robots block. This is a
+    genuine, working robots.txt restriction, not a bug in this repo's code; `WebFetch` doesn't
+    honor `robots.txt` the same way, which is why it got content anyway last pass.
+  - `platform.claude.com/docs/en/docs/build-with-claude/tool-use` — two chained 307 redirects
+    (`/docs/en/docs/build-with-claude/tool-use` → `/docs/en/build-with-claude/tool-use` →
+    `/docs/en/agents-and-tools/tool-use/overview`), same out-of-scope-redirect cause as the Drive
+    URLs above; the final `/docs/en/agents-and-tools/tool-use/overview` target crawls fine
+    (`total=1, completed=1`, 14,293 chars of real markdown, verified live 2026-07-14) and its
+    content (tool-use overview, schema/round-trip conventions) matches this repo's existing
+    citation description — no doc change needed. The pre-redirect URL cited above is still correct
+    to keep citing (it's a working, permanent redirect for a browser or `WebFetch`), just not
+    resolvable by `FirecrawlClient.crawl()` as-is.
+  - `platform.claude.com/docs/en/api/messages` — **now succeeds directly**, no redirect involved
+    (plain `HTTP 200`). `ClaudeToolkit.firecrawl_crawl` returned 1 page and saved ~1.39MB of real
+    markdown to Drive (verified live 2026-07-14); content is the Messages API schema reference,
+    consistent with the existing citation's description — no discrepancy found.
+
+  Net: of the original 5, 1 now succeeds outright (Messages API — no redirect to trip over) and the
+  other 4 have a confirmed, specific cause (redirect-scope or robots.txt), not a vague JS-rendering
+  guess. None of these are addressed by the retry-with-backoff/Drive-cache upgrade, since none of
+  them were rate-limit or repeat-fetch problems — fixing the redirect-scope gap (if ever prioritized)
+  would mean either following the seed URL's redirect chain before calling `/v1/crawl`, or having
+  callers pass the canonical post-redirect URL directly; the robots.txt block is not something to
+  "fix" at all — it's a real crawling restriction to respect, not this repo's error.
 
 **Known code limitation surfaced, not fixed here (`web_scraper.py` is being edited by another
 change in parallel, so out of scope for this pass):** `FirecrawlClient.crawl()`'s poll loop never

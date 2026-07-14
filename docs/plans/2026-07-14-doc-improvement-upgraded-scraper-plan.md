@@ -73,7 +73,7 @@ for all of them, suggesting a JS-rendering limitation rather than a rate-limit p
 - `https://docs.anthropic.com/en/docs/build-with-claude/tool-use` (now `platform.claude.com/docs/en/docs/build-with-claude/tool-use` — already fixed in docs, but worth re-testing the fetch itself)
 - `https://docs.anthropic.com/en/api/messages` (now `platform.claude.com/docs/en/api/messages`)
 
-- [ ] **Step 1: Re-fetch each URL through the upgraded client**
+- [x] **Step 1: Re-fetch each URL through the upgraded client**
 
 Use `ClaudeToolkit.firecrawl_crawl` (or `FirecrawlClient.crawl()` directly with the new
 retry-with-backoff already built in — no manual sleep loop needed) for each of the 5 URLs above
@@ -87,7 +87,7 @@ retry-with-backoff already built in — no manual sleep loop needed) for each of
    already in the docs (`docs/gateway-auth-reference.md`'s Google Drive / OAuth sections,
    `docs/external-docs-reference.md`'s Anthropic API rows) and flag any discrepancy.
 
-- [ ] **Step 2: Report findings, no fix needed if inconclusive**
+- [x] **Step 2: Report findings, no fix needed if inconclusive**
 
 If this step reveals `crawl()` still can't extract JS-rendered pages, that's a known, documented
 limitation (not a bug to fix in this task) — note it in
