@@ -119,6 +119,10 @@ class IBKRWebSocket:
 
     def __init__(self, gateway_url: str, session_cookie: str) -> None:
         base = gateway_url.rstrip("/")
+        if base.endswith("/v1/api"):
+            # Callers commonly pass config.gateway_url, which already carries
+            # the /v1/api REST prefix — strip it so it isn't doubled below.
+            base = base[: -len("/v1/api")]
         self._ws_url = base.replace("https://", "wss://").replace("http://", "ws://") + "/v1/api/ws"
         self._cookie = session_cookie   # not logged anywhere
         self._ws: Any = None
