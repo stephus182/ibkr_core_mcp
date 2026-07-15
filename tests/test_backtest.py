@@ -154,3 +154,34 @@ def test_sandbox_still_allows_ordinary_dataframe_methods(ohlcv):
     code = "df['signal'] = (df['close'] > df['close'].rolling(5).mean()).astype(int)"
     result = run_backtest(code, ohlcv)
     assert isinstance(result.total_return, float)
+
+
+def test_timeout_actually_kills_runaway_process(ohlcv, monkeypatch):
+    """A strategy that never returns must be killed, not merely abandoned.
+
+    Regression test for the ThreadPoolExecutor-era bug where Future.cancel()
+    could not stop an already-running thread: `while True: pass` would survive
+    the timeout and burn CPU in an orphaned thread forever — and could even
+    block the whole host process from exiting, since ThreadPoolExecutor
+    registers a non-daemon-thread join in its interpreter-shutdown hook.
+    If this fix ever regresses back to something unkillable, this test will
+    hang instead of failing cleanly — a hang here IS the failure signal.
+    """
+    import multiprocessing
+    import time
+
+    from ibkr_core_mcp import backtest
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
+    monkeypatch.setattr(backtest, "_EXEC_TIMEOUT", 0.5)
+    monkeypatch.setattr(backtest, "_KILL_GRACE_S", 0.2)
+
+    start = time.monotonic()
+    with pytest.raises(BacktestRuntimeError, match="timed out"):
+        run_backtest("while True: pass", ohlcv)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5.0, (
+        f"took {elapsed:.1f}s — kill sequence did not terminate the process promptly"
+    )
+    assert multiprocessing.active_children() == [], "runaway strategy process was not cleaned up"

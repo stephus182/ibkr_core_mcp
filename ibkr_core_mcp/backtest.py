@@ -1,7 +1,8 @@
 """RestrictedPython sandbox executor for backtesting strategy code on OHLCV DataFrames."""
 from __future__ import annotations
 
-import concurrent.futures
+import multiprocessing
+import queue
 import types
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,6 +18,7 @@ from ibkr_core_mcp.exceptions import BacktestRuntimeError, BacktestSyntaxError
 
 _MAX_CODE_LEN = 4096
 _EXEC_TIMEOUT = 10  # seconds
+_KILL_GRACE_S = 1.0  # seconds to wait after SIGTERM before escalating to SIGKILL
 
 
 def _write_guard(ob: object) -> object:
@@ -126,6 +128,45 @@ class BacktestResult:
         }
 
 
+def _execute_in_subprocess(code: str, df: pd.DataFrame, result_queue: Any) -> None:
+    """Compile and run strategy code inside an isolated child process.
+
+    Runs entirely in the child (both compile_restricted and exec) so the parent
+    can kill the whole OS process on timeout — a thread cannot be forcibly
+    stopped once it's running, a process can. `result_queue` is a
+    multiprocessing.Queue; puts a ("ok", df) / ("syntax_error", msg) /
+    ("runtime_error", msg) tuple.
+    """
+    try:
+        byte_code = compile_restricted(code, "<strategy>", "exec")
+    except SyntaxError as e:
+        result_queue.put(("syntax_error", str(e)))
+        return
+
+    sandbox: dict[str, Any] = {
+        **safe_globals,
+        "_write_": _write_guard,
+        "_getattr_": _sandboxed_getattr,
+        "_getitem_": lambda ob, key: ob[key],
+        "_getiter_": iter,
+        "pd": _SAFE_PD,
+        "np": _SAFE_NP,
+        "float": float,
+        "int": int,
+        "abs": abs,
+        "range": limited_range,
+        "len": len,
+        "df": df,
+    }
+    try:
+        exec(byte_code, sandbox)  # noqa: S102
+    except Exception as e:
+        result_queue.put(("runtime_error", f"{type(e).__name__}: {e}"))
+        return
+
+    result_queue.put(("ok", sandbox.get("df", df)))
+
+
 def run_backtest(
     code: str,
     df: pd.DataFrame,
@@ -147,55 +188,38 @@ def run_backtest(
             f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)"
         )
 
-    try:
-        byte_code = compile_restricted(code, "<strategy>", "exec")
-    except SyntaxError as e:
-        raise BacktestSyntaxError(f"Strategy syntax error: {e}") from e
-
     # safe_globals already sets __builtins__ = safe_builtins, which excludes
     # __import__, open, eval, exec, compile, print and all introspection attrs.
     # We do NOT override __builtins__ further — replacing it with the tiny
     # limited_builtins dict would strip most safe builtins and make strategies
     # unable to use isinstance, bool, etc.
-    sandbox: dict[str, Any] = {
-        **safe_globals,
-        "_write_": _write_guard,
-        "_getattr_": _sandboxed_getattr,
-        "_getitem_": lambda ob, key: ob[key],
-        "_getiter_": iter,
-        "pd": _SAFE_PD,
-        "np": _SAFE_NP,
-        "float": float,
-        "int": int,
-        "abs": abs,
-        "range": limited_range,
-        "len": len,
-        "df": df.copy(),
-    }
+    ctx = multiprocessing.get_context("spawn")
+    result_queue: Any = ctx.Queue()
+    process = ctx.Process(target=_execute_in_subprocess, args=(code, df, result_queue))
+    process.start()
+    process.join(_EXEC_TIMEOUT)
 
-    def _run(byte_code: types.CodeType, sandbox: dict[str, Any]) -> None:
-        exec(byte_code, sandbox)  # noqa: S102
+    if process.is_alive():
+        process.terminate()
+        process.join(_KILL_GRACE_S)
+        if process.is_alive():
+            process.kill()
+            process.join()
+        raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s")
 
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        fut = pool.submit(_run, byte_code, sandbox)
-        try:
-            fut.result(timeout=_EXEC_TIMEOUT)
-        except concurrent.futures.TimeoutError:
-            fut.cancel()
-            raise BacktestRuntimeError(
-                f"Strategy timed out after {_EXEC_TIMEOUT}s"
-            ) from None
-        except Exception as e:
-            # Include the exception type: str(KeyError('rsi')) is just "'rsi'",
-            # which is not actionable on its own for the LLM that wrote the code.
-            raise BacktestRuntimeError(
-                f"Strategy runtime error: {type(e).__name__}: {e}"
-            ) from e
-    finally:
-        pool.shutdown(wait=False)
+        status, payload = result_queue.get_nowait()
+    except queue.Empty:
+        raise BacktestRuntimeError(
+            f"Strategy process exited unexpectedly (exit code {process.exitcode})"
+        ) from None
 
-    result_df: pd.DataFrame = sandbox.get("df", df)
+    if status == "syntax_error":
+        raise BacktestSyntaxError(f"Strategy syntax error: {payload}")
+    if status == "runtime_error":
+        raise BacktestRuntimeError(f"Strategy runtime error: {payload}")
+
+    result_df: pd.DataFrame = payload
 
     if "signal" not in result_df.columns:
         raise BacktestRuntimeError("Strategy must set df['signal'] (1=long, 0=flat, -1=short)")
