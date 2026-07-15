@@ -33,7 +33,7 @@ docker --version
 docker compose version
 ```
 
-### 3. Python 3.11+
+### 3. Python 3.11 – 3.13
 
 Download the installer from [python.org](https://www.python.org/downloads/). During installation:
 - Check **Add python.exe to PATH**
@@ -41,7 +41,7 @@ Download the installer from [python.org](https://www.python.org/downloads/). Dur
 
 Verify in PowerShell or WSL2:
 ```bash
-python --version   # must be 3.11+
+python --version   # must be 3.11, 3.12, or 3.13 — 3.14 is rejected by requires-python
 ```
 
 ### 4. Chrome

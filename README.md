@@ -29,7 +29,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11 – 3.13 (3.14 not yet supported — enforced by `requires-python`)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for `GatewayManager`)
 - An **Interactive Brokers** account (live or paper)
 - Anthropic API key (for Claude AI tools / MCP server)
