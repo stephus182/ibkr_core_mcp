@@ -129,11 +129,11 @@ class IBKRWebSocket:
 
     async def connect(self) -> None:
         try:
-            import websockets  # optional dep — only imported when streaming is used
+            import websockets  # base dependency — imported lazily to keep import-time cost out of the hot path
         except ModuleNotFoundError as exc:
             raise ModuleNotFoundError(
                 "websockets is required for IBKRWebSocket. "
-                "Install it with: pip install 'ibkr_core_mcp[server]'"
+                "It's a base dependency of ibkr_core_mcp — try: pip install --upgrade ibkr_core_mcp"
             ) from exc
 
         parsed = urlparse(self._ws_url)

@@ -211,7 +211,7 @@ async def test_connect_missing_websockets_raises_import_error():
     from ibkr_core_mcp.streaming import IBKRWebSocket
     ws = IBKRWebSocket("https://localhost:5055/v1/api", "cookie=abc")
     with patch.dict(sys.modules, {"websockets": None}):
-        with pytest.raises(ModuleNotFoundError, match="ibkr_core_mcp\\[server\\]"):
+        with pytest.raises(ModuleNotFoundError, match="base dependency of ibkr_core_mcp"):
             await ws.connect()
 
 
