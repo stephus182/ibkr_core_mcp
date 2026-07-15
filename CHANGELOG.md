@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## [1.2.2] — 2026-07-15
+
 ### Fixed
 - Dev `.venv` was accidentally built on Python 3.14 (Homebrew never had 3.11 installed on this machine) — reverted to 3.11; `requires-python` now pins `>=3.11,<3.14` and rejects 3.14 interpreters at install time, matching the `3.11`–`3.13` classifiers already declared. No 3.14-specific code existed in the package itself; this is a guardrail against future silent drift, not a functional-incompatibility fix.
 - `websockets` moved from the `[server]` optional extra into base `dependencies` — `IBKRWebSocket`/`AlertManager` are exported from the package's top-level `__init__.py` as core public API, not server-only functionality, but their sole dependency was gated behind an extra alongside `mcp`/`starlette`/`uvicorn` (which remain server-only — they're used exclusively by the standalone `mcp_server.py` entry point). Consumers that `import IBKRWebSocket` directly without running the MCP server previously got a silent `ModuleNotFoundError` at runtime instead of an install-time failure.
@@ -208,7 +212,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v0.4.0...v1.0.0
