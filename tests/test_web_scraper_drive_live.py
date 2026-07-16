@@ -24,6 +24,7 @@ just those file(s) in a `finally` block — the `web_docs/searches/` and
 `web_docs/<slug>/` folders themselves are left in place, so repeated runs
 don't accumulate files but the folder layout stays inspectable.
 """
+
 from __future__ import annotations
 
 import os
@@ -67,12 +68,14 @@ def live_config(tmp_path_factory):
 @pytest.fixture(scope="module")
 def toolkit(live_config):
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
+
     return ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), live_config)
 
 
 @pytest.fixture(scope="module")
 def drive_service(live_config):
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     return WebDocsStore(live_config)._get_service()
 
 

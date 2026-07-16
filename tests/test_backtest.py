@@ -18,6 +18,7 @@ def ohlcv():
 
 def test_simple_long_strategy(ohlcv):
     from ibkr_core_mcp.backtest import BacktestResult, run_backtest
+
     code = "df['signal'] = 1"  # always long
     result = run_backtest(code, ohlcv, strategy_name="always_long", symbol="TEST")
     assert isinstance(result, BacktestResult)
@@ -32,6 +33,7 @@ def test_simple_long_strategy(ohlcv):
 
 def test_flat_signal_zero_trades(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
+
     code = "df['signal'] = 0"  # always flat
     result = run_backtest(code, ohlcv)
     assert result.total_return == 0.0
@@ -40,6 +42,7 @@ def test_flat_signal_zero_trades(ohlcv):
 
 def test_rsi_strategy(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
+
     code = """
 delta = df['close'].diff()
 gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
@@ -57,6 +60,7 @@ df.loc[rsi > 70, 'signal'] = -1
 def test_syntax_error_raises(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
     from ibkr_core_mcp.exceptions import BacktestSyntaxError
+
     with pytest.raises(BacktestSyntaxError):
         run_backtest("df['signal'] = (", ohlcv)
 
@@ -64,6 +68,7 @@ def test_syntax_error_raises(ohlcv):
 def test_runtime_error_raises(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
     from ibkr_core_mcp.exceptions import BacktestRuntimeError
+
     with pytest.raises(BacktestRuntimeError):
         run_backtest("df['signal'] = 1 / 0", ohlcv)
 
@@ -71,6 +76,7 @@ def test_runtime_error_raises(ohlcv):
 def test_no_network_access(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
     from ibkr_core_mcp.exceptions import BacktestRuntimeError
+
     with pytest.raises((BacktestRuntimeError, Exception)):
         run_backtest("import urllib.request; urllib.request.urlopen('http://example.com')", ohlcv)
 
@@ -78,12 +84,14 @@ def test_no_network_access(ohlcv):
 def test_no_file_access(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
     from ibkr_core_mcp.exceptions import BacktestRuntimeError
+
     with pytest.raises((BacktestRuntimeError, Exception)):
         run_backtest("open('/etc/passwd', 'r')", ohlcv)
 
 
 def test_result_to_dict(ohlcv):
     from ibkr_core_mcp.backtest import run_backtest
+
     result = run_backtest("df['signal'] = 1", ohlcv, symbol="AAPL")
     d = result.to_dict()
     assert "equity_curve" not in d
@@ -95,8 +103,10 @@ def test_result_to_dict(ohlcv):
 # Safety boundary tests
 # ---------------------------------------------------------------------------
 
+
 def test_code_length_limit_raises(ohlcv):
     from ibkr_core_mcp.backtest import _MAX_CODE_LEN, BacktestSyntaxError, run_backtest
+
     too_long = "x = 1\n" * (_MAX_CODE_LEN // 6 + 1)
     with pytest.raises(BacktestSyntaxError, match="character limit"):
         run_backtest(too_long, ohlcv)
@@ -105,6 +115,7 @@ def test_code_length_limit_raises(ohlcv):
 def test_missing_signal_column_raises(ohlcv):
     """Strategy that never sets df['signal'] must raise, not silently return wrong metrics."""
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
     with pytest.raises(BacktestRuntimeError, match="signal"):
         run_backtest("# no signal set", ohlcv)
 
@@ -112,6 +123,7 @@ def test_missing_signal_column_raises(ohlcv):
 def test_sandbox_cannot_mutate_shared_pd_namespace(ohlcv):
     """Strategy code must not be able to poison the shared pd/np SimpleNamespace."""
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
     # Attempt to overwrite pd.DataFrame — _write_guard should block this
     code = "pd.DataFrame = None\ndf['signal'] = 0"
     with pytest.raises((BacktestRuntimeError, TypeError)):
@@ -121,6 +133,7 @@ def test_sandbox_cannot_mutate_shared_pd_namespace(ohlcv):
 def test_sandbox_cannot_import_os(ohlcv):
     """import os is transformed by RestrictedPython but __import__ is not in sandbox namespace."""
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
     code = "import os\ndf['signal'] = 0"
     with pytest.raises(BacktestRuntimeError, match="__import__"):
         run_backtest(code, ohlcv)
@@ -132,6 +145,7 @@ def test_sandbox_blocks_dataframe_eval(ohlcv):
     achieve RCE. Must be blocked at the sandbox's _getattr_ hook.
     See docs/audits/security-audit-2026-07-11.md H-1."""
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
     code = (
         "leak = df.eval(\"@df.__init__.__func__.__globals__['sys'].modules['os'].popen('id').read()\")\n"
         "df['signal'] = 0\n"
@@ -143,6 +157,7 @@ def test_sandbox_blocks_dataframe_eval(ohlcv):
 def test_sandbox_blocks_dataframe_query(ohlcv):
     """df.query() uses the same unsandboxed expression engine as df.eval()."""
     from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
     code = "df.query(\"close > 0\")\ndf['signal'] = 0\n"
     with pytest.raises(BacktestRuntimeError, match="query"):
         run_backtest(code, ohlcv)
@@ -151,6 +166,7 @@ def test_sandbox_blocks_dataframe_query(ohlcv):
 def test_sandbox_still_allows_ordinary_dataframe_methods(ohlcv):
     """Denying eval/query must not break normal indicator-style strategy code."""
     from ibkr_core_mcp.backtest import run_backtest
+
     code = "df['signal'] = (df['close'] > df['close'].rolling(5).mean()).astype(int)"
     result = run_backtest(code, ohlcv)
     assert isinstance(result.total_return, float)

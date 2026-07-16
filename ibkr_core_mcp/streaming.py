@@ -10,8 +10,7 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
 
-_FIELD_MAP = {"31": "last", "84": "bid", "86": "ask", "87": "volume",
-              "55": "symbol", "70": "high", "71": "low"}
+_FIELD_MAP = {"31": "last", "84": "bid", "86": "ask", "87": "volume", "55": "symbol", "70": "high", "71": "low"}
 _DEFAULT_FIELDS = ["31", "55", "84", "86", "87"]
 
 
@@ -41,19 +40,19 @@ class TradeExecution:
     side: str = ""
     size: float | None = None
     price: float | None = None
-    trade_time: str = ""                  # raw "YYYYMMDD-HH:mm:ss" UTC, as IBKR sends it
-    trade_time_epoch: int | None = None   # IBKR's trade_time_r
+    trade_time: str = ""  # raw "YYYYMMDD-HH:mm:ss" UTC, as IBKR sends it
+    trade_time_epoch: int | None = None  # IBKR's trade_time_r
     order_ref: str = ""
     exchange: str = ""
     net_amount: float | None = None
     account: str = ""
-    account_code: str = ""                # IBKR's accountCode
+    account_code: str = ""  # IBKR's accountCode
     company_name: str = ""
     contract_description_1: str = ""
     contract_description_2: str = ""
     sec_type: str = ""
-    conid_ex: str = ""                    # IBKR's conidEx
-    open_close: str = ""                  # "???" if opening trade
+    conid_ex: str = ""  # IBKR's conidEx
+    open_close: str = ""  # "???" if opening trade
     liquidation_trade: str = ""
     is_event_trading: str = ""
     supports_tax_opt: str = ""
@@ -71,7 +70,7 @@ class PnLUpdate:
     exactly one); extend to list[PnLUpdate] if multi-account traffic is ever observed.
     """
 
-    account: str                          # raw key as sent, e.g. "DU1234567.Core"
+    account: str  # raw key as sent, e.g. "DU1234567.Core"
     row_type: int | None = None
     dpl: float | None = None
     nl: float | None = None
@@ -93,12 +92,12 @@ def _parse_stream_execution(execution: TradeExecution) -> dict[str, Any]:
         "size": execution.size or 0.0,
         "price": execution.price or 0.0,
         "time": execution.trade_time,
-        "commission": 0.0,       # str payload has no commission field
+        "commission": 0.0,  # str payload has no commission field
         "account": execution.account,
         "asset_class": (execution.sec_type or "").upper(),
-        "realized_pnl": None,    # str payload has no realized P&L field (same gap
-                                 # claude_tools._parse_live_trades already documents
-                                 # for the REST trades endpoint)
+        "realized_pnl": None,  # str payload has no realized P&L field (same gap
+        # claude_tools._parse_live_trades already documents
+        # for the REST trades endpoint)
     }
 
 
@@ -124,7 +123,7 @@ class IBKRWebSocket:
             # the /v1/api REST prefix — strip it so it isn't doubled below.
             base = base[: -len("/v1/api")]
         self._ws_url = base.replace("https://", "wss://").replace("http://", "ws://") + "/v1/api/ws"
-        self._cookie = session_cookie   # not logged anywhere
+        self._cookie = session_cookie  # not logged anywhere
         self._ws: Any = None
 
     async def connect(self) -> None:
@@ -139,12 +138,11 @@ class IBKRWebSocket:
         parsed = urlparse(self._ws_url)
         if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
             from ibkr_core_mcp.exceptions import StreamingError
-            raise StreamingError(
-                f"IBKRWebSocket only connects to localhost; got {parsed.hostname!r}"
-            )
+
+            raise StreamingError(f"IBKRWebSocket only connects to localhost; got {parsed.hostname!r}")
 
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_ctx.check_hostname = False      # self-signed cert on localhost
+        ssl_ctx.check_hostname = False  # self-signed cert on localhost
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
         self._ws = await websockets.connect(
@@ -163,7 +161,7 @@ class IBKRWebSocket:
         """
         if self._ws is None:
             raise RuntimeError("Call connect() first")
-        await self._ws.send(f'smd+{conid}+{json.dumps({"fields": fields or _DEFAULT_FIELDS})}')
+        await self._ws.send(f"smd+{conid}+{json.dumps({'fields': fields or _DEFAULT_FIELDS})}")
 
     async def unsubscribe(self, conid: int) -> None:
         """Unsubscribe from real-time market data for a contract.
@@ -222,9 +220,7 @@ class IBKRWebSocket:
             await self._ws.close()
             self._ws = None
 
-    def _parse_message(
-        self, raw: str
-    ) -> LiveQuote | list[TradeExecution] | PnLUpdate | None:
+    def _parse_message(self, raw: str) -> LiveQuote | list[TradeExecution] | PnLUpdate | None:
         try:
             msg = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
@@ -305,7 +301,9 @@ class IBKRWebSocket:
                 "order_description": str(record.get("order_description", "")),
             }
             for field, attr in (
-                ("size", "size"), ("price", "price"), ("net_amount", "net_amount"),
+                ("size", "size"),
+                ("price", "price"),
+                ("net_amount", "net_amount"),
                 ("conid", "conid"),
             ):
                 if field not in record:
@@ -358,9 +356,8 @@ class AlertManager:
         active = [a for a in self._store.get_alerts(active_only=True) if a["conid"] == quote.conid]
         triggered = []
         for alert in active:
-            hit = (
-                (alert["direction"] == "above" and quote.last >= alert["threshold"])
-                or (alert["direction"] == "below" and quote.last <= alert["threshold"])
+            hit = (alert["direction"] == "above" and quote.last >= alert["threshold"]) or (
+                alert["direction"] == "below" and quote.last <= alert["threshold"]
             )
             if hit:
                 self._store.mark_alert_triggered(alert["id"])

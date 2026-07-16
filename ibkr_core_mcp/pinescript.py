@@ -1,4 +1,5 @@
 """PineScript v5 generator — strategy and indicator scripts from backtest results and signals."""
+
 from __future__ import annotations
 
 import re
@@ -17,6 +18,7 @@ def _sanitize(value: str, max_len: int = 128) -> str:
     """
     cleaned = re.sub(r'["\n\r]', " ", str(value))
     return cleaned[:max_len]
+
 
 _INDICATOR_SNIPPETS: dict[str, str] = {
     "rsi": """\

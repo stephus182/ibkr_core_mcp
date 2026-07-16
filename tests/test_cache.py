@@ -9,6 +9,7 @@ import pytest
 @pytest.fixture
 def cache(mock_config):
     from ibkr_core_mcp.cache import GDriveCache
+
     c = GDriveCache.__new__(GDriveCache)
     c._config = mock_config
     c._service = MagicMock()
@@ -18,6 +19,7 @@ def cache(mock_config):
 
 
 # ── Drive-path fixture helpers ────────────────────────────────────────────────
+
 
 def _make_parquet_bytes(df: pd.DataFrame) -> bytes:
     """Serialize a DataFrame to parquet bytes (used to fake Drive downloads)."""
@@ -84,6 +86,7 @@ def test_list_cached_returns_keys(cache):
 
 # ── CA-02: token file permissions ─────────────────────────────────────────────
 
+
 def test_token_file_created_with_restricted_permissions(tmp_path):
     import os
     import stat
@@ -111,9 +114,11 @@ def test_token_file_created_with_restricted_permissions(tmp_path):
     cache._manifest = {}
     cache._manifest_loaded_at = 0.0
 
-    with patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds), \
-         patch("ibkr_core_mcp.gdrive_auth.Request"), \
-         patch("ibkr_core_mcp.cache.build") as mock_build:
+    with (
+        patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds),
+        patch("ibkr_core_mcp.gdrive_auth.Request"),
+        patch("ibkr_core_mcp.cache.build") as mock_build,
+    ):
         mock_build.return_value = MagicMock()
         cache._get_service()
 
@@ -123,14 +128,17 @@ def test_token_file_created_with_restricted_permissions(tmp_path):
 
 # ── CA-06: cache key input validation ─────────────────────────────────────────
 
+
 def test_cache_key_rejects_underscore_in_symbol(cache):
     from ibkr_core_mcp.exceptions import CacheError
+
     with pytest.raises(CacheError, match="symbol"):
         cache.check("AAPL_1D", "1D", "1Y", "2026-01-01")
 
 
 def test_cache_key_rejects_empty_symbol(cache):
     from ibkr_core_mcp.exceptions import CacheError
+
     with pytest.raises(CacheError, match="symbol"):
         cache.check("", "1D", "1Y", "2026-01-01")
 
@@ -143,6 +151,7 @@ def test_cache_key_accepts_valid_inputs(cache):
 
 # ── C-02: folder_id validation ────────────────────────────────────────────────
 
+
 def test_get_service_raises_on_empty_folder_id(tmp_path):
     from unittest.mock import MagicMock
 
@@ -150,7 +159,7 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
     from ibkr_core_mcp.exceptions import CacheError
 
     token_file = tmp_path / "token.json"
-    token_file.write_text('{}')
+    token_file.write_text("{}")
 
     cfg = MagicMock()
     cfg.gdrive_folder_id = ""
@@ -168,14 +177,17 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
     cache._manifest_loaded_at = 0.0
     cache._resolved_cache_folder = ""
 
-    with patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds), \
-         patch("ibkr_core_mcp.cache.build") as mock_build:
+    with (
+        patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds),
+        patch("ibkr_core_mcp.cache.build") as mock_build,
+    ):
         mock_build.return_value = MagicMock()
         with pytest.raises(CacheError, match="GOOGLE_DRIVE_FOLDER_ID"):
             cache._get_service()
 
 
 # ── Drive API call paths: load() ──────────────────────────────────────────────
+
 
 def test_load_happy_path_returns_dataframe(drive_cache):
     """load() downloads parquet bytes via MediaIoBaseDownload and returns a DataFrame."""
@@ -228,6 +240,7 @@ def test_load_drive_error_resets_cache_folder(drive_cache):
     drive_cache._resolved_cache_folder = "old-folder-id"
 
     import contextlib
+
     with contextlib.suppress(Exception):
         drive_cache.load("AAPL", "1D", "1Y", "2026-05-22")
 
@@ -235,6 +248,7 @@ def test_load_drive_error_resets_cache_folder(drive_cache):
 
 
 # ── Drive API call paths: save() ──────────────────────────────────────────────
+
 
 def test_save_creates_new_file_when_none_exists(drive_cache):
     """save() calls files().create() when no existing parquet file is found."""
@@ -265,7 +279,7 @@ def test_save_updates_existing_file_when_found(drive_cache):
     # Second list call (_save_manifest): no existing manifest → create manifest
     svc.files().list().execute.side_effect = [
         {"files": [{"id": "existing-parquet-id"}]},  # parquet search
-        {"files": []},                                 # manifest search
+        {"files": []},  # manifest search
     ]
     svc.files().update().execute.return_value = {}
     svc.files().create().execute.return_value = {"id": "manifest-id"}
@@ -311,6 +325,7 @@ def test_save_updates_manifest_entry(drive_cache):
 
 # ── Drive API call paths: delete() ───────────────────────────────────────────
 
+
 def test_delete_calls_files_delete_when_file_found(drive_cache):
     """delete() calls files().delete() when the parquet file exists in Drive."""
     svc = drive_cache._service
@@ -348,9 +363,7 @@ def test_delete_no_drive_call_when_file_not_found(drive_cache):
 def test_delete_removes_manifest_entry(drive_cache):
     """delete() removes the key from the in-memory manifest."""
     svc = drive_cache._service
-    drive_cache._manifest["AAPL_1D_1Y_2026-05-22"] = {
-        "symbol": "AAPL", "rows": 252, "end": "2026-05-22"
-    }
+    drive_cache._manifest["AAPL_1D_1Y_2026-05-22"] = {"symbol": "AAPL", "rows": 252, "end": "2026-05-22"}
     svc.files().list().execute.side_effect = [
         {"files": [{"id": "parquet-id"}]},
         {"files": []},

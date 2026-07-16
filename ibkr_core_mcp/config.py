@@ -45,9 +45,7 @@ class Config:
     # Local directory holding Crawl4AI browser profiles (saved logins for paywalled
     # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.scrape_fallback
     # create-profile <url>`.
-    crawl4ai_profiles_dir: Path = field(
-        default_factory=lambda: Path("~/.ibkr_core/crawl4ai_profiles").expanduser()
-    )
+    crawl4ai_profiles_dir: Path = field(default_factory=lambda: Path("~/.ibkr_core/crawl4ai_profiles").expanduser())
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
@@ -76,24 +74,17 @@ class Config:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             from ibkr_core_mcp.exceptions import ConfigError
+
             raise ConfigError("ANTHROPIC_API_KEY is required but not set")
 
         return cls(
-            gateway_url=os.environ.get(
-                "IBKR_GATEWAY_URL", "https://localhost:5055/v1/api"
-            ),
+            gateway_url=os.environ.get("IBKR_GATEWAY_URL", "https://localhost:5055/v1/api"),
             anthropic_api_key=api_key,
             gdrive_folder_id=os.environ.get("GOOGLE_DRIVE_FOLDER_ID", ""),
-            sqlite_path=Path(
-                os.environ.get("IBKR_SQLITE_PATH", "~/.ibkr_core/store.db")
-            ).expanduser(),
-            gdrive_token_file=Path(
-                os.environ.get("GDRIVE_TOKEN_FILE", "~/.ibkr_core/token.json")
-            ).expanduser(),
+            sqlite_path=Path(os.environ.get("IBKR_SQLITE_PATH", "~/.ibkr_core/store.db")).expanduser(),
+            gdrive_token_file=Path(os.environ.get("GDRIVE_TOKEN_FILE", "~/.ibkr_core/token.json")).expanduser(),
             gdrive_credentials_file=Path(
-                os.environ.get(
-                    "GDRIVE_CREDENTIALS_FILE", "~/.ibkr_core/credentials.json"
-                )
+                os.environ.get("GDRIVE_CREDENTIALS_FILE", "~/.ibkr_core/credentials.json")
             ).expanduser(),
             flex_token=os.environ.get("IBKR_FLEX_TOKEN", ""),
             flex_query_id=os.environ.get("IBKR_FLEX_QUERY_ID", ""),
@@ -103,8 +94,6 @@ class Config:
             firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
             gdrive_web_docs_folder_id=os.environ.get("GDRIVE_WEB_DOCS_FOLDER_ID", ""),
             crawl4ai_profiles_dir=Path(
-                os.environ.get(
-                    "CRAWL4AI_PROFILES_DIR", "~/.ibkr_core/crawl4ai_profiles"
-                )
+                os.environ.get("CRAWL4AI_PROFILES_DIR", "~/.ibkr_core/crawl4ai_profiles")
             ).expanduser(),
         )

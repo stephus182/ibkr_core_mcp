@@ -9,6 +9,7 @@ import pytest
 def client(mock_config):
     from ibkr_core_mcp.auth import NoAuth
     from ibkr_core_mcp.client import IBKRClient
+
     c = IBKRClient(mock_config, auth=NoAuth())
     # Pre-mark accounts as initialized so existing order/auth tests below don't need
     # to also mock the /iserver/accounts prerequisite call. Tests for
@@ -38,9 +39,7 @@ def test_search_contract_returns_list(client):
     with patch.object(client._session, "get") as mock_get:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = [
-            {"conid": 265598, "symbol": "AAPL", "secType": "STK"}
-        ]
+        mock_resp.json.return_value = [{"conid": 265598, "symbol": "AAPL", "secType": "STK"}]
         mock_get.return_value = mock_resp
         result = client.search_contract("AAPL")
     assert isinstance(result, list)
@@ -78,6 +77,7 @@ def test_get_alert_calls_correct_endpoint(client):
 
 # ── /iserver/accounts prerequisite (get_brokerage_accounts / _ensure_accounts_initialized) ──
 
+
 def test_get_brokerage_accounts_calls_correct_endpoint(client):
     with patch.object(client._session, "get") as mock_get:
         mock_get.return_value = _make_ok_response({"accounts": ["U1234567"], "selectedAccount": "U1234567"})
@@ -110,10 +110,12 @@ def test_get_live_orders_initializes_accounts_first(client):
 def test_place_order_initializes_accounts_before_touch_id(client):
     client._accounts_initialized = False
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
-         patch.object(client._session, "get") as mock_get, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        patch.object(client._session, "get") as mock_get,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_get.return_value = _make_ok_response({"accounts": ["U1234567"]})
         mock_post.return_value = _make_ok_response([{"orderId": "1"}])
         client.place_order("U1234567", order)
@@ -125,8 +127,7 @@ def test_place_order_initializes_accounts_before_touch_id(client):
 def test_get_order_preview_initializes_accounts(client):
     client._accounts_initialized = False
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
-    with patch.object(client._session, "get") as mock_get, \
-         _patch.object(client._session, "post") as mock_post:
+    with patch.object(client._session, "get") as mock_get, _patch.object(client._session, "post") as mock_post:
         mock_get.return_value = _make_ok_response({"accounts": ["U1234567"]})
         mock_post.return_value = _make_ok_response({"equity": 5000})
         client.get_order_preview("U1234567", order)
@@ -139,6 +140,7 @@ def test_get_order_preview_initializes_accounts(client):
 def test_live_ping(mock_config):
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.client import IBKRClient
+
     client = IBKRClient(mock_config, auth=BrowserCookieAuth())
     assert client.ping() is True
 
@@ -147,6 +149,7 @@ def test_live_ping(mock_config):
 def test_live_search_aapl(mock_config):
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.client import IBKRClient
+
     client = IBKRClient(mock_config, auth=BrowserCookieAuth())
     results = client.search_contract("AAPL")
     assert len(results) > 0
@@ -156,6 +159,7 @@ def test_live_search_aapl(mock_config):
 # ---------------------------------------------------------------------------
 # Order gate tests
 # ---------------------------------------------------------------------------
+
 
 def _make_ok_response(payload=None):
     mock_resp = MagicMock()
@@ -167,9 +171,15 @@ def _make_ok_response(payload=None):
 def test_place_order_calls_touch_id_before_post(client):
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100, "orderType": "LIMIT", "price": 182.5}
     call_order = []
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")) as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=lambda o, a: call_order.append("dialog")) as mock_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch(
+            "ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")
+        ) as mock_tid,
+        _patch(
+            "ibkr_core_mcp.client.confirm_order_dialog", side_effect=lambda o, a: call_order.append("dialog")
+        ) as mock_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.return_value = _make_ok_response([{"orderId": "1"}])
         client.place_order("U1234567", order)
     assert call_order == ["touch_id", "dialog"]
@@ -180,9 +190,12 @@ def test_place_order_calls_touch_id_before_post(client):
 
 def test_place_order_aborts_if_touch_id_fails(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
+
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         with pytest.raises(HumanAuthError):
             client.place_order("U1234567", order)
     mock_post.assert_not_called()
@@ -190,10 +203,13 @@ def test_place_order_aborts_if_touch_id_fails(client):
 
 def test_place_order_aborts_if_dialog_cancelled(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
+
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=HumanAuthError("cancelled")), \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=HumanAuthError("cancelled")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         with pytest.raises(HumanAuthError):
             client.place_order("U1234567", order)
     mock_post.assert_not_called()
@@ -201,8 +217,11 @@ def test_place_order_aborts_if_dialog_cancelled(client):
 
 def test_modify_order_aborts_if_touch_id_fails(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
-         _patch.object(client._session, "post") as mock_post:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         with pytest.raises(HumanAuthError):
             client.modify_order("U1234567", "1234567890", {"side": "SELL"})
     mock_post.assert_not_called()
@@ -210,8 +229,11 @@ def test_modify_order_aborts_if_touch_id_fails(client):
 
 def test_cancel_order_aborts_if_touch_id_fails(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
-         _patch.object(client._session, "delete") as mock_del:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
         with pytest.raises(HumanAuthError):
             client.cancel_order("U1234567", "9876543210")
     mock_del.assert_not_called()
@@ -219,8 +241,11 @@ def test_cancel_order_aborts_if_touch_id_fails(client):
 
 def test_reply_order_aborts_if_touch_id_fails(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")), \
-         _patch.object(client._session, "post") as mock_post:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         with pytest.raises(HumanAuthError):
             client.reply_order("abc123def456")
     mock_post.assert_not_called()
@@ -228,9 +253,13 @@ def test_reply_order_aborts_if_touch_id_fails(client):
 
 def test_modify_order_calls_both_gates(client):
     call_order = []
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=lambda o_id, o, a: call_order.append("dialog")), \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")),
+        _patch(
+            "ibkr_core_mcp.client.confirm_modify_dialog", side_effect=lambda o_id, o, a: call_order.append("dialog")
+        ),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.return_value = _make_ok_response({"status": "modified"})
         client.modify_order("U1234567", "1234567890", {"side": "SELL"})
     assert call_order == ["touch_id", "dialog"]
@@ -239,9 +268,14 @@ def test_modify_order_calls_both_gates(client):
 
 def test_cancel_order_calls_both_gates(client):
     call_order = []
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
-         _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=lambda o_id, a, order=None: call_order.append("dialog")), \
-         _patch.object(client._session, "delete") as mock_del:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: call_order.append("dialog"),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
         mock_del.return_value = _make_ok_response({"status": "cancelled"})
         client.cancel_order("U1234567", "9876543210")
     assert call_order == ["touch_id", "dialog"]
@@ -250,24 +284,26 @@ def test_cancel_order_calls_both_gates(client):
 
 def test_cancel_order_passes_order_details_to_dialog(client):
     captured = {}
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch(
-             "ibkr_core_mcp.client.confirm_cancel_dialog",
-             side_effect=lambda o_id, a, order=None: captured.update(order or {}),
-         ), \
-         _patch.object(client._session, "delete") as mock_del:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: captured.update(order or {}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
         mock_del.return_value = _make_ok_response({"status": "cancelled"})
-        client.cancel_order(
-            "U1234567", "9876543210", order_details={"symbol": "AAPL", "side": "SELL"}
-        )
+        client.cancel_order("U1234567", "9876543210", order_details={"symbol": "AAPL", "side": "SELL"})
     assert captured == {"symbol": "AAPL", "side": "SELL"}
 
 
 def test_reply_order_calls_both_gates(client):
     call_order = []
-    with _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=lambda r: call_order.append("dialog")), \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: call_order.append("touch_id")),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=lambda r: call_order.append("dialog")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.return_value = _make_ok_response([{"status": "submitted"}])
         client.reply_order("abc123def456")
     assert call_order == ["touch_id", "dialog"]
@@ -276,9 +312,12 @@ def test_reply_order_calls_both_gates(client):
 
 def test_modify_order_aborts_if_dialog_cancelled(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=HumanAuthError("cancelled")), \
-         _patch.object(client._session, "post") as mock_post:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=HumanAuthError("cancelled")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         with pytest.raises(HumanAuthError):
             client.modify_order("U1234567", "1234567890", {"side": "SELL"})
     mock_post.assert_not_called()
@@ -286,9 +325,12 @@ def test_modify_order_aborts_if_dialog_cancelled(client):
 
 def test_cancel_order_aborts_if_dialog_cancelled(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=HumanAuthError("cancelled")), \
-         _patch.object(client._session, "delete") as mock_del:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=HumanAuthError("cancelled")),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
         with pytest.raises(HumanAuthError):
             client.cancel_order("U1234567", "9876543210")
     mock_del.assert_not_called()
@@ -296,9 +338,12 @@ def test_cancel_order_aborts_if_dialog_cancelled(client):
 
 def test_reply_order_aborts_if_dialog_cancelled(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
-         _patch.object(client._session, "post") as mock_post:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         with pytest.raises(HumanAuthError):
             client.reply_order("abc123def456")
     mock_post.assert_not_called()
@@ -307,8 +352,10 @@ def test_reply_order_aborts_if_dialog_cancelled(client):
 def test_get_order_preview_has_no_gate(client):
     """whatif endpoint is read-only — must NOT trigger Touch ID."""
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.return_value = _make_ok_response({"equity": 5000})
         client.get_order_preview("U1234567", order)
     mock_tid.assert_not_called()
@@ -318,13 +365,16 @@ def test_get_order_preview_has_no_gate(client):
 # place_order_and_confirm / modify_order_and_confirm — reply-chain orchestration
 # ---------------------------------------------------------------------------
 
+
 def test_place_order_and_confirm_zero_replies(client):
     """place_order returns a terminal response straight through — no reply loop entered."""
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.return_value = _make_ok_response([{"order_status": "Submitted", "orderId": "1"}])
         result = client.place_order_and_confirm("U1234567", order)
     assert result == [{"order_status": "Submitted", "orderId": "1"}]
@@ -335,10 +385,12 @@ def test_place_order_and_confirm_zero_replies(client):
 
 def test_place_order_and_confirm_one_reply(client):
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response([{"id": "RPL1", "message": ["Order price is outside of the Price Band."]}]),
             _make_ok_response([{"order_status": "Submitted"}]),
@@ -346,9 +398,7 @@ def test_place_order_and_confirm_one_reply(client):
         result = client.place_order_and_confirm("U1234567", order)
     assert result == [{"order_status": "Submitted"}]
     assert mock_post.call_count == 2
-    mock_reply_dlg.assert_called_once_with(
-        "RPL1", "Order price is outside of the Price Band.", None
-    )
+    mock_reply_dlg.assert_called_once_with("RPL1", "Order price is outside of the Price Band.", None)
     confirm_call = mock_post.call_args_list[1]
     assert confirm_call[0][0] == f"{client._base}/iserver/reply/RPL1"
     assert confirm_call.kwargs.get("json") == {"confirmed": True}
@@ -358,10 +408,12 @@ def test_place_order_and_confirm_one_reply(client):
 def test_place_order_and_confirm_three_chained_replies(client):
     """Matches the live-verified shape: reply -> reply -> reply -> terminal (2026-07-06)."""
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response([{"id": "RPL1", "message": ["Price is outside of the Price Band."]}]),
             _make_ok_response([{"id": "RPL2", "message": ["No market data for this contract."]}]),
@@ -386,10 +438,12 @@ def test_place_order_and_confirm_three_chained_replies(client):
 
 def test_place_order_and_confirm_passes_message_options(client):
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response([{"id": "RPL1", "message": ["Confirm?"], "messageOptions": ["Yes", "No"]}]),
             _make_ok_response([{"order_status": "Submitted"}]),
@@ -405,11 +459,14 @@ def test_place_order_and_confirm_decline_mid_chain(client):
     IBKR on cancel, leaving the order ambiguous on IBKR's side.
     """
     from ibkr_core_mcp.exceptions import HumanAuthError
+
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_order_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response([{"id": "RPL1", "message": ["Price band warning."]}]),
             _make_ok_response({"confirmed": False}),
@@ -423,10 +480,12 @@ def test_place_order_and_confirm_decline_mid_chain(client):
 
 
 def test_modify_order_and_confirm_zero_replies(client):
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.return_value = _make_ok_response({"order_status": "Submitted"})
         result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_status": "Submitted"}
@@ -436,10 +495,12 @@ def test_modify_order_and_confirm_zero_replies(client):
 
 
 def test_modify_order_and_confirm_chained_replies(client):
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg, \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
             _make_ok_response({"id": "RPL2", "message": ["No market data."]}),
@@ -456,10 +517,13 @@ def test_modify_order_and_confirm_chained_replies(client):
 
 def test_modify_order_and_confirm_decline_mid_chain(client):
     from ibkr_core_mcp.exceptions import HumanAuthError
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")), \
-         _patch.object(client._session, "post") as mock_post:
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("cancelled")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
             _make_ok_response({"confirmed": False}),
@@ -488,20 +552,24 @@ def test_modify_order_and_confirm_decline_mid_chain(client):
 # the reply POST actually returns.
 # ---------------------------------------------------------------------------
 
+
 def test_as_reply_list_wraps_a_bare_dict():
     from ibkr_core_mcp.client import _as_reply_list
+
     data = {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
     assert _as_reply_list(data) == [data]
 
 
 def test_as_reply_list_passes_through_a_list():
     from ibkr_core_mcp.client import _as_reply_list
+
     data = [{"id": "RPL1", "message": ["warn"]}]
     assert _as_reply_list(data) == data
 
 
 def test_as_reply_list_returns_empty_for_unexpected_shape():
     from ibkr_core_mcp.client import _as_reply_list
+
     assert _as_reply_list(None) == []
     assert _as_reply_list("not json") == []
 
@@ -512,18 +580,21 @@ def test_as_reply_dict_unwraps_a_single_element_list():
     a dict — a single-element list must be unwrapped, not treated as terminal-with-no-id.
     """
     from ibkr_core_mcp.client import _as_reply_dict
+
     data = [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
     assert _as_reply_dict(data) == data[0]
 
 
 def test_as_reply_dict_passes_through_a_bare_dict():
     from ibkr_core_mcp.client import _as_reply_dict
+
     data = {"id": "RPL1", "message": ["warn"]}
     assert _as_reply_dict(data) == data
 
 
 def test_as_reply_dict_returns_empty_for_unexpected_shape():
     from ibkr_core_mcp.client import _as_reply_dict
+
     assert _as_reply_dict([]) == {}
     assert _as_reply_dict(None) == {}
 
@@ -534,15 +605,15 @@ def test_modify_order_and_confirm_handles_ibkr_documented_list_shaped_reply(clie
     modify_order()'s own initial response is a bare dict — exercises _as_reply_dict()'s
     unwrap branch through the real modify_order_and_confirm() call path.
     """
-    with _patch("ibkr_core_mcp.client.require_touch_id"), \
-         _patch("ibkr_core_mcp.client.confirm_modify_dialog"), \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog"), \
-         _patch.object(client._session, "post") as mock_post:
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
         mock_post.side_effect = [
             _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
-            _make_ok_response(
-                [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
-            ),
+            _make_ok_response([{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]),
         ]
         result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
@@ -552,16 +623,21 @@ def test_modify_order_and_confirm_handles_ibkr_documented_list_shaped_reply(clie
 # account_id validation — path traversal and injection prevention
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("account_id", [
-    "U1234567",
-    "DU123456",
-    "F123ABC",
-    "ABCDEFGHIJ",
-])
+
+@pytest.mark.parametrize(
+    "account_id",
+    [
+        "U1234567",
+        "DU123456",
+        "F123ABC",
+        "ABCDEFGHIJ",
+    ],
+)
 def test_validate_account_id_accepts_valid_ids(client, account_id):
     from unittest.mock import MagicMock
 
     from ibkr_core_mcp.exceptions import ConfigError
+
     client._session.get = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {}))
     # Valid IDs must not raise ConfigError — any other exception (e.g. from mock shape) is ignored
     try:
@@ -570,18 +646,22 @@ def test_validate_account_id_accepts_valid_ids(client, account_id):
         pytest.fail(f"ConfigError raised for valid account_id {account_id!r}")
 
 
-@pytest.mark.parametrize("bad_id", [
-    "",                    # empty
-    "../etc/passwd",       # path traversal
-    "U123/456",            # slash
-    "U123#456",            # special char
-    "U123 456",            # space
-    "U123\r\nX-Header: 1", # CRLF injection
-    "U123\x00null",        # null byte
-    "U123-456",            # hyphen
-])
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "",  # empty
+        "../etc/passwd",  # path traversal
+        "U123/456",  # slash
+        "U123#456",  # special char
+        "U123 456",  # space
+        "U123\r\nX-Header: 1",  # CRLF injection
+        "U123\x00null",  # null byte
+        "U123-456",  # hyphen
+    ],
+)
 def test_validate_account_id_rejects_invalid_ids(client, bad_id):
     from ibkr_core_mcp.exceptions import ConfigError
+
     with pytest.raises(ConfigError, match="[Ii]nvalid account"):
         client.get_account_summary(bad_id)
 
@@ -589,6 +669,7 @@ def test_validate_account_id_rejects_invalid_ids(client, bad_id):
 def test_validate_account_id_applied_to_write_methods(client):
     """Path traversal must be caught before Touch ID gates are evaluated."""
     from ibkr_core_mcp.exceptions import ConfigError
+
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 1}
     with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid:
         with pytest.raises(ConfigError):
@@ -596,12 +677,16 @@ def test_validate_account_id_applied_to_write_methods(client):
     mock_tid.assert_not_called()  # validation must fire before biometric gate
 
 
-@pytest.mark.parametrize("method_name,args", [
-    ("get_order_status", ("../../etc/passwd",)),
-    ("get_alert", ("../../etc/passwd",)),
-])
+@pytest.mark.parametrize(
+    "method_name,args",
+    [
+        ("get_order_status", ("../../etc/passwd",)),
+        ("get_alert", ("../../etc/passwd",)),
+    ],
+)
 def test_validate_order_id_rejects_path_traversal_read_methods(client, method_name, args):
     from ibkr_core_mcp.exceptions import ConfigError
+
     with pytest.raises(ConfigError, match="[Ii]nvalid"):
         getattr(client, method_name)(*args)
 
@@ -610,17 +695,28 @@ def test_delete_alert_rejects_path_traversal_alert_id(client):
     """The exact H-2 exploit path: alert_id='../order/<real orderId>' must never
     reach the network. See docs/audits/security-audit-2026-07-11.md H-2."""
     from ibkr_core_mcp.exceptions import ConfigError
+
     with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid:
         with pytest.raises(ConfigError, match="[Ii]nvalid"):
             client.delete_alert("DU1234567", "../order/987654321")
     mock_tid.assert_not_called()
 
 
-@pytest.mark.parametrize("bad_order_id", [
-    "", "../order/1", "123/456", "123#456", "123 456", "abc123", "١٢٣",
-])
+@pytest.mark.parametrize(
+    "bad_order_id",
+    [
+        "",
+        "../order/1",
+        "123/456",
+        "123#456",
+        "123 456",
+        "abc123",
+        "١٢٣",
+    ],
+)
 def test_validate_order_id_rejects_invalid_ids(client, bad_order_id):
     from ibkr_core_mcp.exceptions import ConfigError
+
     with pytest.raises(ConfigError, match="[Ii]nvalid"):
         client.get_order_status(bad_order_id)
 
@@ -630,11 +726,18 @@ def test_validate_order_id_accepts_valid_id(client):
     client.get_order_status("987654321")  # must not raise ConfigError
 
 
-@pytest.mark.parametrize("bad_reply_id", [
-    "", "../reply/1", "abc/def", "abc def",
-])
+@pytest.mark.parametrize(
+    "bad_reply_id",
+    [
+        "",
+        "../reply/1",
+        "abc/def",
+        "abc def",
+    ],
+)
 def test_validate_reply_id_rejects_invalid_ids(client, bad_reply_id):
     from ibkr_core_mcp.exceptions import ConfigError
+
     with pytest.raises(ConfigError, match="[Ii]nvalid"):
         client.reply_order(bad_reply_id)
 
@@ -642,14 +745,17 @@ def test_validate_reply_id_rejects_invalid_ids(client, bad_reply_id):
 def test_validate_reply_id_accepts_valid_uuid_shaped_id(client):
     """IBKR's documented replyId example: hex + hyphens, non-standard grouping —
     regex must not assume strict 8-4-4-4-12 UUID segments."""
-    with _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid, \
-         _patch("ibkr_core_mcp.client.confirm_reply_dialog"):
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+    ):
         client._session.post = MagicMock(return_value=MagicMock(status_code=200, json=lambda: []))
         client.reply_order("a12b34c5-d678-9e012f-3456-7a890b12cd3e")
     mock_tid.assert_called_once()
 
 
 # ── get_stocks / get_futures dict-response fix ───────────────────────────────
+
 
 def test_get_stocks_handles_dict_response(client):
     """IBKR /trsrv/stocks returns {"AAPL": [{conid: ...}]}, not a list."""
@@ -729,6 +835,7 @@ def test_get_currency_pairs_returns_empty_on_unexpected_type(client):
 
 # ── get_live_orders filtering ─────────────────────────────────────────────────
 
+
 @contextmanager
 def _mock_orders_response(client, orders):
     mock_resp = MagicMock()
@@ -793,15 +900,18 @@ def test_get_live_orders_handles_missing_status(client):
 
 # ── ping() retry behaviour (Fix #2 — IBKR first-call quirk) ─────────────────
 
+
 def test_ping_retries_once_when_first_call_returns_unauthenticated(client):
     """ping() retries once when first call returns authenticated=false (IBKR quirk)."""
     responses = [
         MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False})),
         MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": True})),
     ]
-    with patch.object(client._session, "get", side_effect=responses), \
-         patch.object(client, "tickle", return_value=True), \
-         patch("ibkr_core_mcp.client.time.sleep"):
+    with (
+        patch.object(client._session, "get", side_effect=responses),
+        patch.object(client, "tickle", return_value=True),
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
         result = client.ping()
     assert result is True
 
@@ -809,9 +919,11 @@ def test_ping_retries_once_when_first_call_returns_unauthenticated(client):
 def test_ping_returns_false_when_both_attempts_unauthenticated(client):
     """ping() returns False if authenticated=false on both the first and second attempt."""
     not_authed = MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False}))
-    with patch.object(client._session, "get", return_value=not_authed) as mock_get, \
-         patch.object(client, "tickle", return_value=True), \
-         patch("ibkr_core_mcp.client.time.sleep"):
+    with (
+        patch.object(client._session, "get", return_value=not_authed) as mock_get,
+        patch.object(client, "tickle", return_value=True),
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
         result = client.ping()
     assert result is False
     assert mock_get.call_count == 2, "ping() must attempt exactly twice when not authenticated"
@@ -823,9 +935,11 @@ def test_ping_calls_tickle_between_first_and_second_attempt(client):
         MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": False})),
         MagicMock(status_code=200, json=MagicMock(return_value={"authenticated": True})),
     ]
-    with patch.object(client._session, "get", side_effect=responses), \
-         patch.object(client, "tickle", return_value=True) as mock_tickle, \
-         patch("ibkr_core_mcp.client.time.sleep"):
+    with (
+        patch.object(client._session, "get", side_effect=responses),
+        patch.object(client, "tickle", return_value=True) as mock_tickle,
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
         client.ping()
     mock_tickle.assert_called_once()
 
@@ -833,8 +947,10 @@ def test_ping_calls_tickle_between_first_and_second_attempt(client):
 def test_ping_returns_false_immediately_on_401_without_retry(client):
     """ping() must return False immediately on HTTP 401 — no retry, no tickle."""
     resp_401 = MagicMock(status_code=401)
-    with patch.object(client._session, "get", return_value=resp_401) as mock_get, \
-         patch.object(client, "tickle") as mock_tickle:
+    with (
+        patch.object(client._session, "get", return_value=resp_401) as mock_get,
+        patch.object(client, "tickle") as mock_tickle,
+    ):
         result = client.ping()
     assert result is False
     assert mock_get.call_count == 1, "Must not retry on 401"
@@ -843,14 +959,17 @@ def test_ping_returns_false_immediately_on_401_without_retry(client):
 
 # ── get_trades — two-call warmup (verified live 2026-07-06) ───────────────────
 
+
 def test_get_trades_retries_once_when_first_call_empty(client):
     """Live-verified 2026-07-06: a fresh session returns [] on the first call and
     the fills on the second — same subscription warmup as /iserver/account/orders.
     A single empty call must not be reported as 'no trades'."""
     trades = [{"execution_id": "e1", "symbol": "ES", "side": "S", "trade_time": "20260702-05:29:28"}]
     responses = [_make_ok_response([]), _make_ok_response(trades)]
-    with patch.object(client._session, "get", side_effect=responses) as mock_get, \
-         patch("ibkr_core_mcp.client.time.sleep"):
+    with (
+        patch.object(client._session, "get", side_effect=responses) as mock_get,
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
         client._accounts_initialized = True
         result = client.get_trades()
     assert result == trades
@@ -870,8 +989,10 @@ def test_get_trades_single_call_when_data_returned(client):
 def test_get_trades_empty_after_retry_returns_empty(client):
     """Two empty responses = genuinely no trades in the window."""
     responses = [_make_ok_response([]), _make_ok_response([])]
-    with patch.object(client._session, "get", side_effect=responses) as mock_get, \
-         patch("ibkr_core_mcp.client.time.sleep"):
+    with (
+        patch.object(client._session, "get", side_effect=responses) as mock_get,
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
         client._accounts_initialized = True
         result = client.get_trades()
     assert result == []
@@ -879,6 +1000,7 @@ def test_get_trades_empty_after_retry_returns_empty(client):
 
 
 # ── get_market_history — period/bar case normalization (verified live 2026-07-06) ──
+
 
 def test_get_market_history_normalizes_period_and_bar_case(client):
     """Live-verified 2026-07-06: IBKR treats period='6M' as unrecognized and silently
@@ -897,6 +1019,7 @@ def test_get_market_history_normalizes_period_and_bar_case(client):
 # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
 # ---------------------------------------------------------------------------
 
+
 def test_get_option_strikes_returns_call_and_put_arrays(client):
     """/iserver/secdef/strikes responds {"call": [...], "put": [...]} — there is
     no "strike" key in the documented response (the old code read one)."""
@@ -913,13 +1036,16 @@ def test_get_option_strikes_returns_call_and_put_arrays(client):
 def test_get_option_chain_uses_documented_search_then_strikes_flow(client):
     """Reimplemented per the documented flow: secdef/search (primes the session,
     yields the OPT section's months) then secdef/strikes for one month."""
-    search_payload = [{
-        "conid": "265598", "symbol": "AAPL",
-        "sections": [
-            {"secType": "STK"},
-            {"secType": "OPT", "months": "JAN26;FEB26;MAR26"},
-        ],
-    }]
+    search_payload = [
+        {
+            "conid": "265598",
+            "symbol": "AAPL",
+            "sections": [
+                {"secType": "STK"},
+                {"secType": "OPT", "months": "JAN26;FEB26;MAR26"},
+            ],
+        }
+    ]
     strikes_payload = {"call": [185.0], "put": [180.0]}
     with patch.object(client, "_get", side_effect=[search_payload, strikes_payload]) as mock_get:
         chain = client.get_option_chain("AAPL")
@@ -935,10 +1061,13 @@ def test_get_option_chain_uses_documented_search_then_strikes_flow(client):
 
 
 def test_get_option_chain_honors_requested_month(client):
-    search_payload = [{
-        "conid": "265598", "symbol": "AAPL",
-        "sections": [{"secType": "OPT", "months": "JAN26;FEB26"}],
-    }]
+    search_payload = [
+        {
+            "conid": "265598",
+            "symbol": "AAPL",
+            "sections": [{"secType": "OPT", "months": "JAN26;FEB26"}],
+        }
+    ]
     strikes_payload = {"call": [], "put": []}
     with patch.object(client, "_get", side_effect=[search_payload, strikes_payload]) as mock_get:
         chain = client.get_option_chain("AAPL", month="feb26")
@@ -949,6 +1078,7 @@ def test_get_option_chain_honors_requested_month(client):
 
 def test_get_option_chain_raises_when_no_opt_section(client):
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     search_payload = [{"conid": "1", "symbol": "XONE", "sections": [{"secType": "STK"}]}]
     with patch.object(client, "_get", side_effect=[search_payload]):
         with pytest.raises(IBKRAPIError, match="[Nn]o option"):
@@ -960,12 +1090,15 @@ def test_get_option_chain_raises_when_no_opt_section(client):
 # private-API reach-ins (audit register item 11)
 # ---------------------------------------------------------------------------
 
+
 def test_get_orders_raw_uses_two_call_pattern_and_returns_unfiltered(client):
     """Raw diagnostic dump: same documented two-call warmup as get_live_orders,
     but no status filtering — terminal orders must survive."""
     payload = {"orders": [{"orderId": 1, "status": "Filled"}]}
-    with patch.object(client, "_get", side_effect=[None, payload]) as mock_get, \
-         patch("ibkr_core_mcp.client.time.sleep"):
+    with (
+        patch.object(client, "_get", side_effect=[None, payload]) as mock_get,
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
         raw = client.get_orders_raw()
     assert raw == payload  # unfiltered — Filled order retained
     assert "force=true" in mock_get.call_args_list[0][0][0]

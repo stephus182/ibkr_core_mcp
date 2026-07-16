@@ -1,14 +1,13 @@
-
 import pytest
 
 from ibkr_core_mcp.claude_tools import _parse_live_trades
 
 pytestmark = pytest.mark.trades
 
+
 def test_execute_get_trades(toolkit):
     toolkit._client.get_trades.return_value = [
-        {"execution_id": "E1", "symbol": "AAPL", "side": "BUY", "size": 10,
-         "price": 180, "time": "2026-05-22T10:00:00"}
+        {"execution_id": "E1", "symbol": "AAPL", "side": "BUY", "size": 10, "price": 180, "time": "2026-05-22T10:00:00"}
     ]
     toolkit._store.upsert_trades.return_value = None
     text, fig = toolkit.execute("get_trades", {"source": "live"})
@@ -21,9 +20,14 @@ def test_execute_get_trades(toolkit):
 
 def _raw(overrides: dict) -> dict:
     base = {
-        "execution_id": "EX1", "symbol": "AAPL", "side": "B",
-        "size": 10, "price": 180.0, "time": "2026-05-22T10:00:00",
-        "commission": -1.0, "account": "U123456",
+        "execution_id": "EX1",
+        "symbol": "AAPL",
+        "side": "B",
+        "size": 10,
+        "price": 180.0,
+        "time": "2026-05-22T10:00:00",
+        "commission": -1.0,
+        "account": "U123456",
     }
     base.update(overrides)
     return base
@@ -79,9 +83,13 @@ def test_parse_live_trades_skips_missing_time():
 def test_parse_live_trades_alternate_field_names():
     # IBKR API uses different field names in different endpoints
     t = {
-        "execId": "EX99", "ticker": "CL", "side": "B",
-        "filledQuantity": 5, "avgPrice": 78.5,
-        "trade_time": "2026-05-22T14:30:00", "commission": -0.85,
+        "execId": "EX99",
+        "ticker": "CL",
+        "side": "B",
+        "filledQuantity": 5,
+        "avgPrice": 78.5,
+        "trade_time": "2026-05-22T14:30:00",
+        "commission": -0.85,
         "acctID": "U999999",
     }
     parsed, skipped = _parse_live_trades([t])
@@ -97,13 +105,10 @@ def test_parse_live_trades_alternate_field_names():
 
 def test_parse_live_trades_upsert_error_surfaced(toolkit):
     toolkit._client.get_trades.return_value = [
-        {"execution_id": "E1", "symbol": "AAPL", "side": "B", "size": 10,
-         "price": 180, "time": "2026-05-22T10:00:00"}
+        {"execution_id": "E1", "symbol": "AAPL", "side": "B", "size": 10, "price": 180, "time": "2026-05-22T10:00:00"}
     ]
     toolkit._store.upsert_trades.side_effect = RuntimeError("DB locked")
     text, fig = toolkit.execute("get_trades", {"source": "live"})
     # Raw exception must NOT leak to LLM — only a controlled message appears
     assert "DB locked" not in text
     assert "could not be saved" in text.lower()
-
-

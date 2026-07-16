@@ -4,6 +4,7 @@ Shared by ibkr_core_mcp's GDriveCache and claudia_ui's GDriveSync. See
 docs/superpowers/specs/2026-07-10-gdrive-auth-dedup-design.md (claudia_ui repo) for why
 this module exists.
 """
+
 import os
 import stat
 from unittest.mock import MagicMock, patch
@@ -28,10 +29,13 @@ def test_load_or_refresh_returns_valid_credentials_unchanged(tmp_path):
     mock_creds = MagicMock()
     mock_creds.valid = True
 
-    with patch(
-        "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
-        return_value=mock_creds,
-    ), patch("ibkr_core_mcp.gdrive_auth.Request") as mock_request:
+    with (
+        patch(
+            "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
+            return_value=mock_creds,
+        ),
+        patch("ibkr_core_mcp.gdrive_auth.Request") as mock_request,
+    ):
         result = load_or_refresh_credentials(token_file, _SCOPES)
 
     assert result is mock_creds
@@ -51,10 +55,13 @@ def test_load_or_refresh_refreshes_and_persists_expired_credentials(tmp_path):
     mock_creds.refresh_token = "rt"
     mock_creds.to_json.return_value = '{"refreshed": true}'
 
-    with patch(
-        "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
-        return_value=mock_creds,
-    ), patch("ibkr_core_mcp.gdrive_auth.Request"):
+    with (
+        patch(
+            "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
+            return_value=mock_creds,
+        ),
+        patch("ibkr_core_mcp.gdrive_auth.Request"),
+    ):
         result = load_or_refresh_credentials(token_file, _SCOPES)
 
     assert result is mock_creds
@@ -92,10 +99,13 @@ def test_load_or_refresh_returns_none_when_refresh_fails(tmp_path):
     mock_creds.refresh_token = "rt"
     mock_creds.refresh.side_effect = RefreshError("invalid_grant: token revoked")
 
-    with patch(
-        "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
-        return_value=mock_creds,
-    ), patch("ibkr_core_mcp.gdrive_auth.Request"):
+    with (
+        patch(
+            "ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file",
+            return_value=mock_creds,
+        ),
+        patch("ibkr_core_mcp.gdrive_auth.Request"),
+    ):
         result = load_or_refresh_credentials(token_file, _SCOPES)
 
     assert result is None

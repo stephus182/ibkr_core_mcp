@@ -302,18 +302,14 @@ class SQLiteStore:
         """Return the manifest entry for a filename, or None if not yet logged."""
         self.initialize()
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM flex_import_log WHERE filename = ?", (filename,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM flex_import_log WHERE filename = ?", (filename,)).fetchone()
         return dict(row) if row else None
 
     def get_flex_import_log(self) -> list[dict[str, Any]]:
         """Return all manifest entries ordered by imported_at ascending."""
         self.initialize()
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM flex_import_log ORDER BY imported_at ASC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM flex_import_log ORDER BY imported_at ASC").fetchall()
         return [dict(r) for r in rows]
 
     def mark_flex_import_verified(self, filename: str, verified_at: str) -> None:
@@ -369,13 +365,15 @@ class SQLiteStore:
                 # the day before the next trade — that's the exact range to request.
                 fill_from = (dates[i - 1] + timedelta(days=1)).isoformat()
                 fill_to = (dates[i] - timedelta(days=1)).isoformat()
-                gaps.append({
-                    "gap_start": dates[i - 1].isoformat(),
-                    "gap_end": dates[i].isoformat(),
-                    "calendar_days": delta,
-                    "request_from": fill_from,
-                    "request_to": fill_to,
-                })
+                gaps.append(
+                    {
+                        "gap_start": dates[i - 1].isoformat(),
+                        "gap_end": dates[i].isoformat(),
+                        "calendar_days": delta,
+                        "request_from": fill_from,
+                        "request_to": fill_to,
+                    }
+                )
 
         newest = dates[-1]
         days_since_newest = (date.today() - newest).days
@@ -383,13 +381,12 @@ class SQLiteStore:
         try:
             import exchange_calendars as ec
             from pandas import Timestamp
+
             _cal = ec.get_calendar("XNYS")
             last_trading_day = _cal.previous_close(Timestamp.now(tz="UTC")).date()
             # Flex publishes yesterday's trades today — newest == yesterday is always normal.
             # Only flag stale when data is 2+ trading days behind (genuine gap, not Flex lag).
-            penultimate_trading_day = _cal.previous_close(
-                Timestamp(last_trading_day.isoformat(), tz="UTC")
-            ).date()
+            penultimate_trading_day = _cal.previous_close(Timestamp(last_trading_day.isoformat(), tz="UTC")).date()
             stale = newest < penultimate_trading_day
         except Exception:
             # Fallback: stale if missing more than 2 calendar days (covers weekends)
@@ -439,20 +436,35 @@ class SQLiteStore:
             # from a Mon–Fri perspective — this is correct, not a data error.
             exchanges = [
                 # US
-                "XNYS", "CME",
+                "XNYS",
+                "CME",
                 # Europe — equities + Eurex derivatives
-                "XLON", "XETR", "XEUR", "XPAR", "XMIL",
+                "XLON",
+                "XETR",
+                "XEUR",
+                "XPAR",
+                "XMIL",
                 # Asia-Pacific
-                "XTKS", "XHKG", "XSHG", "XBOM", "XKRX", "XASX",
+                "XTKS",
+                "XHKG",
+                "XSHG",
+                "XBOM",
+                "XKRX",
+                "XASX",
                 # Americas (ex-US)
-                "XTSE", "BVMF", "XMEX",
+                "XTSE",
+                "BVMF",
+                "XMEX",
                 # Africa / Middle East
-                "XJSE", "XSAU",
+                "XJSE",
+                "XSAU",
                 # Other G20
-                "XIDX", "XIST",
+                "XIDX",
+                "XIST",
             ]
         try:
             from datetime import date as _date
+
             _cache_key = (_date.today().isoformat(), tuple(exchanges))
             if _cache_key in _market_calendar_cache:
                 return _market_calendar_cache[_cache_key]
@@ -488,15 +500,9 @@ class SQLiteStore:
                     # Cap end to calendar's precomputed range (~1 year from today)
                     cal_end = min(year_end, cal.last_session.date())
                     cal_start = max(year_start, cal.first_session.date())
-                    sessions = set(
-                        cal.sessions_in_range(Timestamp(cal_start), Timestamp(cal_end)).date
-                    )
-                    weekdays_in_range = {
-                        d for d in all_weekdays if cal_start <= d <= cal_end
-                    }
-                    holidays_by_exchange[xcode] = sorted(
-                        d.isoformat() for d in (weekdays_in_range - sessions)
-                    )
+                    sessions = set(cal.sessions_in_range(Timestamp(cal_start), Timestamp(cal_end)).date)
+                    weekdays_in_range = {d for d in all_weekdays if cal_start <= d <= cal_end}
+                    holidays_by_exchange[xcode] = sorted(d.isoformat() for d in (weekdays_in_range - sessions))
 
             # Days CME trades when NYSE is closed — futures keep going on equity holidays
             cme_extra: list[str] = []
@@ -506,12 +512,8 @@ class SQLiteStore:
                 cme_cap = min(year_end, cme_cal.last_session.date())
                 nyse_cap = min(year_end, nyse_cal.last_session.date())
                 range_cap = min(cme_cap, nyse_cap)
-                cme_sessions = set(
-                    cme_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date
-                )
-                nyse_sessions = set(
-                    nyse_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date
-                )
+                cme_sessions = set(cme_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date)
+                nyse_sessions = set(nyse_cal.sessions_in_range(Timestamp(year_start), Timestamp(range_cap)).date)
                 cme_extra = sorted(d.isoformat() for d in (cme_sessions - nyse_sessions))
 
             result = {
@@ -560,9 +562,7 @@ class SQLiteStore:
     ) -> list[dict[str, Any]]:
         """Return trades, optionally filtered by symbol and date range."""
         self.initialize()
-        query, params = self._apply_filters(
-            "SELECT * FROM trades WHERE 1=1", [], symbol, start, end, "time"
-        )
+        query, params = self._apply_filters("SELECT * FROM trades WHERE 1=1", [], symbol, start, end, "time")
         query += " ORDER BY time DESC"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -595,9 +595,16 @@ class SQLiteStore:
                 rows,
             )
 
-    def record_pnl_snapshot(self, account: str, row_type: int | None, dpl: float | None,
-                            nl: float | None, upl: float | None, uel: float | None,
-                            mv: float | None) -> None:
+    def record_pnl_snapshot(
+        self,
+        account: str,
+        row_type: int | None,
+        dpl: float | None,
+        nl: float | None,
+        upl: float | None,
+        uel: float | None,
+        mv: float | None,
+    ) -> None:
         """Insert one P&L snapshot row. Called once per WS spl tick — append-only, no dedup."""
         self.initialize()
         now = datetime.now(tz=UTC).isoformat()
@@ -638,8 +645,7 @@ class SQLiteStore:
             rows = conn.execute(query, params).fetchall()
         if not rows:
             return pd.DataFrame(
-                columns=["id", "snapshot_at", "conid", "symbol", "position",
-                         "mkt_price", "mkt_value", "unrealized_pnl"]
+                columns=["id", "snapshot_at", "conid", "symbol", "position", "mkt_price", "mkt_value", "unrealized_pnl"]
             )
         return pd.DataFrame([dict(r) for r in rows])
 
@@ -679,16 +685,12 @@ class SQLiteStore:
         Sorted ascending by logged_at.
         """
         self.initialize()
-        query, params = self._apply_filters(
-            "SELECT * FROM signals WHERE 1=1", [], symbol, start, end, "logged_at"
-        )
+        query, params = self._apply_filters("SELECT * FROM signals WHERE 1=1", [], symbol, start, end, "logged_at")
         query += " ORDER BY logged_at"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         if not rows:
-            return pd.DataFrame(
-                columns=["id", "logged_at", "symbol", "signal_type", "value", "metadata"]
-            )
+            return pd.DataFrame(columns=["id", "logged_at", "symbol", "signal_type", "value", "metadata"])
         return pd.DataFrame([dict(r) for r in rows])
 
     def save_backtest(self, result: dict[str, Any]) -> int:
@@ -718,9 +720,7 @@ class SQLiteStore:
             )
             return cursor.lastrowid or 0
 
-    def get_backtests(
-        self, symbol: str | None = None, strategy: str | None = None
-    ) -> list[dict[str, Any]]:
+    def get_backtests(self, symbol: str | None = None, strategy: str | None = None) -> list[dict[str, Any]]:
         """Return backtest results, optionally filtered by symbol and strategy name.
 
         Results are sorted by run_at descending (most recent first).
@@ -747,8 +747,7 @@ class SQLiteStore:
         now = datetime.now(tz=UTC).isoformat()
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO price_alerts (conid, symbol, threshold, direction, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO price_alerts (conid, symbol, threshold, direction, created_at) VALUES (?, ?, ?, ?, ?)",
                 (conid, symbol.upper(), threshold, direction, now),
             )
             return cur.lastrowid or 0

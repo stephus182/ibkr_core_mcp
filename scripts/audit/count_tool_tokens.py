@@ -13,6 +13,7 @@ Usage:
       --out docs/audits/audit-evidence/token_counts.json \
       [--extra-tools path/to/extra_tools.json]   # e.g. layer-2 projection or TV dump
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,7 +71,7 @@ def main() -> None:
 
     marginals: dict[str, int] = {}
     for i, tool in enumerate(all_tools):
-        without = all_tools[:i] + all_tools[i + 1:]
+        without = all_tools[:i] + all_tools[i + 1 :]
         marginals[tool["name"]] = full - count(tools=without)
 
     if len(marginals) != len(all_tools):
@@ -78,9 +79,7 @@ def main() -> None:
 
     # System prompt = context.md + principles.md (Drive overrides may differ slightly;
     # this measures the committed baseline, which is what rides on most calls).
-    sys_text = "\n".join(
-        (CLAUDIA / "docs" / f).read_text() for f in ("context.md", "principles.md")
-    )
+    sys_text = "\n".join((CLAUDIA / "docs" / f).read_text() for f in ("context.md", "principles.md"))
     system_tokens = count(system=sys_text) - baseline
 
     result: dict[str, Any] = {
@@ -98,9 +97,11 @@ def main() -> None:
     out.write_text(json.dumps(result, indent=2))
 
     print(f"model={model}  tools={len(all_tools)}")
-    print(f"tool surface: {result['tool_surface_total']:,} tok   "
-          f"system prompt: {system_tokens:,} tok   "
-          f"static prefix/call: {result['static_prefix_total']:,} tok")
+    print(
+        f"tool surface: {result['tool_surface_total']:,} tok   "
+        f"system prompt: {system_tokens:,} tok   "
+        f"static prefix/call: {result['static_prefix_total']:,} tok"
+    )
     print("\ntop 10 heaviest tools:")
     for name, tok in list(result["per_tool_marginal"].items())[:10]:
         print(f"  {tok:6,}  {name}")

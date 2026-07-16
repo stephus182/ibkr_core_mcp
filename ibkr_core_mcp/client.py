@@ -45,15 +45,31 @@ _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
 _PERIOD_RE = re.compile(r"^(\d+)(min|h|d|w|m|y)$", re.IGNORECASE)
 _UNIT_TO_DAYS: dict[str, float] = {
-    "min": 1 / 1440, "h": 1 / 24, "d": 1, "w": 7, "m": 30, "y": 365,
+    "min": 1 / 1440,
+    "h": 1 / 24,
+    "d": 1,
+    "w": 7,
+    "m": 30,
+    "y": 365,
 }
 # Conservative bars-per-calendar-day estimates (US equity trading hours).
 # Used only for pagination chunk sizing — not exposed to callers.
 _BARS_PER_CALENDAR_DAY: dict[str, float] = {
-    "1min": 135.0, "2min": 67.5, "3min": 45.0, "5min": 27.0,
-    "10min": 13.5, "15min": 9.0, "30min": 4.5,
-    "1h": 3.25, "2h": 1.6, "3h": 1.1, "4h": 0.8, "8h": 0.4,
-    "1d": 0.69, "1w": 0.143, "1m": 0.033,
+    "1min": 135.0,
+    "2min": 67.5,
+    "3min": 45.0,
+    "5min": 27.0,
+    "10min": 13.5,
+    "15min": 9.0,
+    "30min": 4.5,
+    "1h": 3.25,
+    "2h": 1.6,
+    "3h": 1.1,
+    "4h": 0.8,
+    "8h": 0.4,
+    "1d": 0.69,
+    "1w": 0.143,
+    "1m": 0.033,
 }
 _MAX_POINTS = 1000
 _CHUNK_SAFETY = 0.80  # target 80% of limit per chunk
@@ -77,9 +93,7 @@ def _chunk_days_for_bar(bar: str) -> int:
 def _validate_account_id(account_id: str) -> None:
     """Raise ConfigError if account_id is not a valid IBKR account ID."""
     if not account_id or not _ACCOUNT_ID_RE.fullmatch(account_id):
-        raise ConfigError(
-            f"Invalid account_id {account_id!r}: must be 4–12 uppercase alphanumeric chars."
-        )
+        raise ConfigError(f"Invalid account_id {account_id!r}: must be 4–12 uppercase alphanumeric chars.")
 
 
 def _validate_order_id(order_id: str) -> None:
@@ -258,7 +272,9 @@ class IBKRClient:
     # Market Data
     # ------------------------------------------------------------------
 
-    def get_market_history(self, conid: int, period: str = "1y", bar: str = "1d", outside_rth: bool = False) -> dict[str, Any]:
+    def get_market_history(
+        self, conid: int, period: str = "1y", bar: str = "1d", outside_rth: bool = False
+    ) -> dict[str, Any]:
         """OHLCV bars via iserver/marketdata/history.
 
         ## Case sensitivity (verified live 2026-07-06)
@@ -342,13 +358,16 @@ class IBKRClient:
         while offset < total:
             n = min(chunk_days, total - offset)
             chunk_start = now - timedelta(days=offset + n)
-            result = self._get("/iserver/marketdata/history", {
-                "conid": conid,
-                "period": f"{n}d",
-                "bar": bar,
-                "outsideRth": str(outside_rth).lower(),
-                "startTime": chunk_start.strftime("%Y%m%d-00:00:00"),
-            })
+            result = self._get(
+                "/iserver/marketdata/history",
+                {
+                    "conid": conid,
+                    "period": f"{n}d",
+                    "bar": bar,
+                    "outsideRth": str(outside_rth).lower(),
+                    "startTime": chunk_start.strftime("%Y%m%d-00:00:00"),
+                },
+            )
             if result:
                 if not envelope:
                     envelope = {k: v for k, v in result.items() if k != "data"}
@@ -403,7 +422,9 @@ class IBKRClient:
         Endpoint: GET /iserver/marketdata/snapshot
         """
         field_str = ",".join(fields or ["31", "55", "70", "71", "82", "83", "84", "86", "87", "6509"])
-        data = self._get("/iserver/marketdata/snapshot", {"conids": ",".join(str(c) for c in conids), "fields": field_str})
+        data = self._get(
+            "/iserver/marketdata/snapshot", {"conids": ",".join(str(c) for c in conids), "fields": field_str}
+        )
         return data if isinstance(data, list) else []
 
     def unsubscribe_market_data(self, conid: int) -> dict[str, Any]:
@@ -491,7 +512,9 @@ class IBKRClient:
         """
         return self._get("/iserver/secdef/info", {"conid": conid})
 
-    def get_option_strikes(self, conid: int, sec_type: str, month: str, exchange: str = "SMART") -> dict[str, list[float]]:
+    def get_option_strikes(
+        self, conid: int, sec_type: str, month: str, exchange: str = "SMART"
+    ) -> dict[str, list[float]]:
         """Available strikes for one expiry month, split into call/put arrays.
 
         month format per the official spec: {3-char month}{2-char year}, e.g. "JAN26".
@@ -503,7 +526,9 @@ class IBKRClient:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
         Endpoint: GET /iserver/secdef/strikes
         """
-        data = self._get("/iserver/secdef/strikes", {"conid": conid, "sectype": sec_type, "month": month, "exchange": exchange})
+        data = self._get(
+            "/iserver/secdef/strikes", {"conid": conid, "sectype": sec_type, "month": month, "exchange": exchange}
+        )
         return {"call": data.get("call", []), "put": data.get("put", [])}
 
     def get_option_chain(self, symbol: str, month: str | None = None, exchange: str = "SMART") -> dict[str, Any]:
@@ -589,7 +614,9 @@ class IBKRClient:
             return [c for contracts in data.values() for c in (contracts or [])]
         return []
 
-    def get_trading_schedule(self, asset_class: str, symbol: str, exchange: str, exchange_filter: str = "") -> list[dict[str, Any]]:
+    def get_trading_schedule(
+        self, asset_class: str, symbol: str, exchange: str, exchange_filter: str = ""
+    ) -> list[dict[str, Any]]:
         """Trading hours, sessions, and timezone for a symbol/exchange.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-schedule-contract
@@ -764,9 +791,14 @@ class IBKRClient:
 
     # Statuses that indicate an order is still active in the market.
     # Filled/Cancelled orders are executions, not live orders.
-    _TERMINAL_STATUSES = frozenset({
-        "Filled", "Cancelled", "ApiCancelled", "Expired",
-    })
+    _TERMINAL_STATUSES = frozenset(
+        {
+            "Filled",
+            "Cancelled",
+            "ApiCancelled",
+            "Expired",
+        }
+    )
 
     def get_live_orders(self) -> list[dict[str, Any]]:
         """Working orders only (PreSubmitted, Submitted, ApiPending, PendingSubmit, PendingCancel, Inactive).
@@ -979,7 +1011,6 @@ class IBKRClient:
         data = self._post("/iserver/scanner/run", params)
         contracts = data.get("contracts", data) if isinstance(data, dict) else data
         return contracts if isinstance(contracts, list) else []
-
 
     # ------------------------------------------------------------------
     # FYI / Notifications
@@ -1239,9 +1270,7 @@ class IBKRClient:
             raise HumanAuthError("User declined IBKR order reply") from None
         return self._post(f"/iserver/reply/{reply_id}", {"confirmed": True})
 
-    def place_order_and_confirm(
-        self, account_id: str, order: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    def place_order_and_confirm(self, account_id: str, order: dict[str, Any]) -> list[dict[str, Any]]:
         """Place an order and resolve its full reply chain, looping until a terminal response.
 
         Calls the existing place_order() for the initial submission — Gate 1 + Gate 2
@@ -1268,9 +1297,7 @@ class IBKRClient:
             response = _as_reply_list(self._resolve_one_reply(response[0]))
         return response
 
-    def modify_order_and_confirm(
-        self, account_id: str, order_id: str, order: dict[str, Any]
-    ) -> dict[str, Any]:
+    def modify_order_and_confirm(self, account_id: str, order_id: str, order: dict[str, Any]) -> dict[str, Any]:
         """Modify an order and resolve its full reply chain, looping until a terminal response.
 
         Same loop/display/decline semantics as place_order_and_confirm() — see that
@@ -1355,7 +1382,9 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         _validate_order_id(alert_id)
-        return self._post(f"/iserver/account/{account_id}/alert/activate", {"alertId": alert_id, "alertActive": int(activate)})
+        return self._post(
+            f"/iserver/account/{account_id}/alert/activate", {"alertId": alert_id, "alertActive": int(activate)}
+        )
 
     # ------------------------------------------------------------------
     # Watchlists (write)

@@ -1,4 +1,5 @@
 """RestrictedPython sandbox executor for backtesting strategy code on OHLCV DataFrames."""
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -143,9 +144,7 @@ def run_backtest(
     residual risk, documented in SECURITY.md §Residual risk.
     """
     if len(code) > _MAX_CODE_LEN:
-        raise BacktestSyntaxError(
-            f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)"
-        )
+        raise BacktestSyntaxError(f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)")
 
     try:
         byte_code = compile_restricted(code, "<strategy>", "exec")
@@ -183,15 +182,11 @@ def run_backtest(
             fut.result(timeout=_EXEC_TIMEOUT)
         except concurrent.futures.TimeoutError:
             fut.cancel()
-            raise BacktestRuntimeError(
-                f"Strategy timed out after {_EXEC_TIMEOUT}s"
-            ) from None
+            raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
         except Exception as e:
             # Include the exception type: str(KeyError('rsi')) is just "'rsi'",
             # which is not actionable on its own for the LLM that wrote the code.
-            raise BacktestRuntimeError(
-                f"Strategy runtime error: {type(e).__name__}: {e}"
-            ) from e
+            raise BacktestRuntimeError(f"Strategy runtime error: {type(e).__name__}: {e}") from e
     finally:
         pool.shutdown(wait=False)
 

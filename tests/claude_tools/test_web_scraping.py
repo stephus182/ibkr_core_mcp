@@ -40,6 +40,7 @@ def _make_toolkit():
 
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.config import Config
+
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -63,6 +64,7 @@ def test_firecrawl_search_returns_no_key_message_when_key_missing():
 
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.config import Config
+
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -82,9 +84,7 @@ def test_firecrawl_search_returns_no_key_message_when_key_missing():
 def test_firecrawl_search_returns_formatted_results(mock_fc_cls):
     toolkit = _make_toolkit()
     mock_fc = MagicMock()
-    mock_fc.search.return_value = [
-        {"url": "https://example.com", "title": "Example", "markdown": _REALISTIC_MARKDOWN}
-    ]
+    mock_fc.search.return_value = [{"url": "https://example.com", "title": "Example", "markdown": _REALISTIC_MARKDOWN}]
     mock_fc_cls.return_value = mock_fc
 
     result, fig = toolkit.execute("firecrawl_search", {"query": "IBKR API", "limit": 3})
@@ -121,6 +121,7 @@ def test_firecrawl_crawl_returns_no_key_message_when_key_missing():
 
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.config import Config
+
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -141,9 +142,7 @@ def test_firecrawl_crawl_returns_no_key_message_when_key_missing():
 def test_firecrawl_crawl_saves_pages_to_drive(mock_wds_cls, mock_fc_cls):
     toolkit = _make_toolkit()
     mock_fc = MagicMock()
-    mock_fc.crawl.return_value = [
-        {"url": "https://example.com/page", "markdown": _REALISTIC_MARKDOWN}
-    ]
+    mock_fc.crawl.return_value = [{"url": "https://example.com/page", "markdown": _REALISTIC_MARKDOWN}]
     mock_fc_cls.return_value = mock_fc
     mock_wds = MagicMock()
     mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
@@ -190,9 +189,7 @@ def test_firecrawl_crawl_uses_cached_manifest_and_skips_firecrawl(mock_wds_cls, 
 def test_firecrawl_crawl_force_refresh_bypasses_cache(mock_wds_cls, mock_fc_cls):
     toolkit = _make_toolkit()
     mock_fc = MagicMock()
-    mock_fc.crawl.return_value = [
-        {"url": "https://example.com/page", "markdown": _REALISTIC_MARKDOWN}
-    ]
+    mock_fc.crawl.return_value = [{"url": "https://example.com/page", "markdown": _REALISTIC_MARKDOWN}]
     mock_fc_cls.return_value = mock_fc
     mock_wds = MagicMock()
     mock_wds.get_cached_crawl.return_value = {
@@ -207,9 +204,7 @@ def test_firecrawl_crawl_force_refresh_bypasses_cache(mock_wds_cls, mock_fc_cls)
     }
     mock_wds_cls.return_value = mock_wds
 
-    result, fig = toolkit.execute(
-        "firecrawl_crawl", {"url": "https://example.com", "force_refresh": True}
-    )
+    result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com", "force_refresh": True})
 
     assert fig is None
     mock_fc.crawl.assert_called_once()
@@ -246,9 +241,7 @@ def test_scrape_with_fallback_uses_crawl4ai_when_quality_is_fallback(mock_cls):
     }
     mock_cls.return_value = mock_scraper
 
-    result, note, used_fallback = toolkit._scrape_with_fallback(
-        "https://example.com/article", "", None
-    )
+    result, note, used_fallback = toolkit._scrape_with_fallback("https://example.com/article", "", None)
     assert result == "the full recovered article text"
     assert "Crawl4AI" in note
     assert used_fallback is True
@@ -257,16 +250,12 @@ def test_scrape_with_fallback_uses_crawl4ai_when_quality_is_fallback(mock_cls):
 
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
 @patch("ibkr_core_mcp.scrape_fallback.judge_completeness_llm")
-def test_scrape_with_fallback_ambiguous_and_llm_says_complete_keeps_original(
-    mock_judge, mock_cls
-):
+def test_scrape_with_fallback_ambiguous_and_llm_says_complete_keeps_original(mock_judge, mock_cls):
     toolkit = _make_toolkit()
     mock_judge.return_value = True
     markdown = _long_markdown(100)  # borderline band → ambiguous
 
-    result, note, used_fallback = toolkit._scrape_with_fallback(
-        "https://example.com/article", markdown, None
-    )
+    result, note, used_fallback = toolkit._scrape_with_fallback("https://example.com/article", markdown, None)
     assert result == markdown
     assert note == ""
     assert used_fallback is False
@@ -275,9 +264,7 @@ def test_scrape_with_fallback_ambiguous_and_llm_says_complete_keeps_original(
 
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
 @patch("ibkr_core_mcp.scrape_fallback.judge_completeness_llm")
-def test_scrape_with_fallback_ambiguous_and_llm_says_incomplete_falls_back(
-    mock_judge, mock_cls
-):
+def test_scrape_with_fallback_ambiguous_and_llm_says_incomplete_falls_back(mock_judge, mock_cls):
     toolkit = _make_toolkit()
     mock_judge.return_value = False
     mock_scraper = MagicMock()
@@ -288,9 +275,7 @@ def test_scrape_with_fallback_ambiguous_and_llm_says_incomplete_falls_back(
     mock_cls.return_value = mock_scraper
     markdown = _long_markdown(100)
 
-    result, note, used_fallback = toolkit._scrape_with_fallback(
-        "https://example.com/article", markdown, None
-    )
+    result, note, used_fallback = toolkit._scrape_with_fallback("https://example.com/article", markdown, None)
     assert result == "recovered full content"
     assert "Crawl4AI" in note
     assert used_fallback is True
@@ -299,14 +284,13 @@ def test_scrape_with_fallback_ambiguous_and_llm_says_incomplete_falls_back(
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
 def test_scrape_with_fallback_crawl4ai_unavailable_returns_original_with_note(mock_cls):
     from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+
     toolkit = _make_toolkit()
     mock_cls.return_value.scrape.side_effect = Crawl4AIUnavailableError(
         "Crawl4AI is not installed. Install with `pip install ibkr_core_mcp[scraper]`."
     )
 
-    result, note, used_fallback = toolkit._scrape_with_fallback(
-        "https://example.com/article", "", None
-    )
+    result, note, used_fallback = toolkit._scrape_with_fallback("https://example.com/article", "", None)
     assert result == ""
     assert "ibkr_core_mcp[scraper]" in note
     assert used_fallback is False
@@ -393,9 +377,7 @@ def test_scrape_with_fallback_judge_failure_keeps_original_content(mock_judge, m
     mock_judge.side_effect = RuntimeError("anthropic API unavailable")
     markdown = _long_markdown(100)  # borderline band → ambiguous
 
-    result, note, used_fallback = toolkit._scrape_with_fallback(
-        "https://example.com/article", markdown, None
-    )
+    result, note, used_fallback = toolkit._scrape_with_fallback("https://example.com/article", markdown, None)
     assert result == markdown
     assert "completeness check failed" in note.lower()
     assert used_fallback is False
@@ -408,9 +390,7 @@ def test_scrape_with_fallback_never_calls_crawl4ai_for_blocked_url(mock_cls):
     must never reach Crawl4AIScraper.scrape, regardless of how it entered
     _scrape_with_fallback (crawl sub-page, search result, etc.)."""
     toolkit = _make_toolkit()
-    result, note, used_fallback = toolkit._scrape_with_fallback(
-        "http://169.254.169.254/latest/meta-data/", "", None
-    )
+    result, note, used_fallback = toolkit._scrape_with_fallback("http://169.254.169.254/latest/meta-data/", "", None)
     mock_cls.return_value.scrape.assert_not_called()
     assert "Blocked" in note
     assert used_fallback is False
@@ -418,9 +398,7 @@ def test_scrape_with_fallback_never_calls_crawl4ai_for_blocked_url(mock_cls):
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
-def test_firecrawl_search_never_fetches_blocked_result_url_via_crawl4ai(
-    mock_c4a_cls, mock_fc_cls
-):
+def test_firecrawl_search_never_fetches_blocked_result_url_via_crawl4ai(mock_c4a_cls, mock_fc_cls):
     """A search result pointing at a private/internal address (e.g. a manipulated
     or attacker-influenced search result) must not trigger a local Crawl4AI fetch
     just because Firecrawl's own markdown for it looks incomplete."""
@@ -443,9 +421,7 @@ def test_firecrawl_search_never_fetches_blocked_result_url_via_crawl4ai(
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.web_scraper.WebDocsStore")
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
-def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(
-    mock_c4a_cls, mock_wds_cls, mock_fc_cls
-):
+def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
     """A crawled sub-page URL that resolves to a private address (e.g. Firecrawl
     followed a redirect/internal link off the validated root) must not reach
     Crawl4AIScraper.scrape even though the top-level crawl root passed the guard."""
@@ -502,9 +478,7 @@ def test_firecrawl_crawl_applies_fallback_per_page(mock_c4a_cls, mock_wds_cls, m
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.web_scraper.WebDocsStore")
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
-def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(
-    mock_c4a_cls, mock_wds_cls, mock_fc_cls
-):
+def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
     """A page whose fallback attempt fails/is skipped/is unavailable must not be
     counted in the 'Crawl4AI fallback used for N page(s)' summary — that count
     must reflect only pages where Crawl4AI actually replaced the content."""
@@ -536,5 +510,3 @@ def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(
 # ============================================================================
 # _diagnose_orders
 # ============================================================================
-
-

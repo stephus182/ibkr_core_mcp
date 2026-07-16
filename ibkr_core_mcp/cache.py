@@ -28,6 +28,7 @@ _SAFE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def _validate_cache_inputs(symbol: str, timeframe: str, period: str, end: str) -> None:
     from ibkr_core_mcp.exceptions import CacheError
+
     if not symbol or not _SAFE_SYMBOL_RE.match(symbol.upper()):
         raise CacheError(f"Invalid cache symbol {symbol!r}. Must match [A-Z0-9.-]{{1,20}}.")
     if not timeframe or not _SAFE_PERIOD_RE.match(timeframe.upper()):
@@ -84,13 +85,12 @@ class GDriveCache:
             return self._service
         creds = load_or_refresh_credentials(self._config.gdrive_token_file, _SCOPES)
         if creds is None:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(self._config.gdrive_credentials_file), _SCOPES
-            )
+            flow = InstalledAppFlow.from_client_secrets_file(str(self._config.gdrive_credentials_file), _SCOPES)
             creds = flow.run_local_server(port=0)
             persist_credentials(self._config.gdrive_token_file, creds)
         if not self._config.gdrive_folder_id and not self._config.gdrive_cache_folder_id:
             from ibkr_core_mcp.exceptions import CacheError
+
             raise CacheError(
                 "GOOGLE_DRIVE_FOLDER_ID (or GDRIVE_CACHE_FOLDER_ID) is required for "
                 "Drive cache but is not set. Set it in .env or pass it to Config."
@@ -127,6 +127,7 @@ class GDriveCache:
         if files := results.get("files", []):
             if len(files) > 1:
                 import logging
+
                 logging.getLogger(__name__).warning(
                     "GDriveCache: %d 'market_data' folders found in Drive; "
                     "using oldest. Delete duplicates to avoid data split.",
@@ -295,9 +296,7 @@ class GDriveCache:
         buf.seek(0)
         return pd.read_parquet(buf)
 
-    def save(
-        self, df: pd.DataFrame, symbol: str, timeframe: str, period: str, end: str
-    ) -> None:
+    def save(self, df: pd.DataFrame, symbol: str, timeframe: str, period: str, end: str) -> None:
         """Upload DataFrame as parquet to Drive and update manifest.
 
         Raises:
@@ -374,11 +373,10 @@ class GDriveCache:
     def upload_account_file(self, local_path: str | Path, filename: str) -> None:
         """Upload a local file to account_data/ on Drive, replacing any existing file of the same name."""
         from pathlib import Path as _Path
+
         self.upload_account_file_bytes(_Path(local_path).read_bytes(), filename)
 
-    def upload_account_file_bytes(
-        self, data: bytes, filename: str, mimetype: str = "application/octet-stream"
-    ) -> None:
+    def upload_account_file_bytes(self, data: bytes, filename: str, mimetype: str = "application/octet-stream") -> None:
         """Upload raw bytes to account_data/ on Drive, replacing any existing file of the same name."""
         svc = self._get_service()
         folder_id = self._resolve_account_folder()
@@ -423,9 +421,7 @@ class GDriveCache:
             .get("files", [])
         )
         if not folders:
-            raise FileNotFoundError(
-                f"Subfolder '{subfolder_name}' not found in account_data/ on Drive."
-            )
+            raise FileNotFoundError(f"Subfolder '{subfolder_name}' not found in account_data/ on Drive.")
         folder_id = folders[0]["id"]
 
         # List all files in that subfolder

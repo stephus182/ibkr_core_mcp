@@ -9,6 +9,7 @@ that was extracted.
 
 Source (google-auth credentials): https://google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html
 """
+
 from __future__ import annotations
 
 import os

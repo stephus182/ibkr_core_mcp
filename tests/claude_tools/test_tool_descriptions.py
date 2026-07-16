@@ -30,6 +30,7 @@ def test_tools_count_matches_definitions_exactly(toolkit):
     """Tightened from the old 'at least 19' check: fails the moment a tool is
     added or removed without updating this test, instead of silently passing."""
     from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
     assert len(toolkit.tools) == len(TOOL_DEFINITIONS)
 
 
@@ -41,8 +42,7 @@ def test_required_params_exist_in_properties(toolkit):
         properties = schema.get("properties", {})
         for param in required:
             assert param in properties, (
-                f"{tool['name']!r} lists {param!r} as required but it is not "
-                f"in properties: {sorted(properties)}"
+                f"{tool['name']!r} lists {param!r} as required but it is not in properties: {sorted(properties)}"
             )
 
 
@@ -64,4 +64,3 @@ def test_no_tool_claims_execution_capability(toolkit):
             assert not re.search(rf"\b{re.escape(verb)}\b", description), (
                 f"{tool['name']!r} description contains {verb!r}: {tool['description']!r}"
             )
-

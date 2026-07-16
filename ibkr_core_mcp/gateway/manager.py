@@ -20,6 +20,7 @@ Programmatic (non-interactive, e.g. Chainlit)::
     # … user logs in …
     gm.wait_for_auth(timeout=300) # poll until authenticated
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -59,10 +60,13 @@ class GatewayManager:
 
     def is_docker_available(self) -> bool:
         """True if the Docker daemon is running and reachable."""
-        return subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+            ).returncode
+            == 0
+        )
 
     def ensure_docker_running(self, timeout: int = 60) -> None:
         """Start Docker Desktop (macOS) and wait for it to be ready.
@@ -72,9 +76,7 @@ class GatewayManager:
         if self.is_docker_available():
             return
         if platform.system() != "Darwin":
-            raise GatewayError(
-                "Docker is not running. Start Docker Desktop and retry."
-            )
+            raise GatewayError("Docker is not running. Start Docker Desktop and retry.")
         log.info("Docker not running — launching Docker Desktop")
         try:
             subprocess.run(["open", "-a", "Docker"], check=True)
@@ -86,18 +88,19 @@ class GatewayManager:
                 log.info("Docker Desktop is ready")
                 return
             time.sleep(2)
-        raise GatewayError(
-            f"Docker Desktop did not become ready within {timeout}s"
-        )
+        raise GatewayError(f"Docker Desktop did not become ready within {timeout}s")
 
     # ── Image management ─────────────────────────────────────────────────────
 
     def image_exists(self) -> bool:
         """True if the gateway Docker image has already been built."""
-        return subprocess.run(
-            ["docker", "image", "inspect", self.IMAGE_NAME],
-            capture_output=True,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["docker", "image", "inspect", self.IMAGE_NAME],
+                capture_output=True,
+            ).returncode
+            == 0
+        )
 
     def build_image(self) -> None:
         """Build the gateway Docker image from the bundled Dockerfile.
@@ -124,7 +127,10 @@ class GatewayManager:
         """True if the gateway container is currently running."""
         result = subprocess.run(
             [
-                "docker", "inspect", "--format", "{{.State.Running}}",
+                "docker",
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
                 self.CONTAINER_NAME,
             ],
             capture_output=True,
@@ -134,10 +140,13 @@ class GatewayManager:
 
     def container_exists(self) -> bool:
         """True if the container exists in any state (running, stopped, or exited)."""
-        return subprocess.run(
-            ["docker", "inspect", "--format", "{{.Name}}", self.CONTAINER_NAME],
-            capture_output=True,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["docker", "inspect", "--format", "{{.Name}}", self.CONTAINER_NAME],
+                capture_output=True,
+            ).returncode
+            == 0
+        )
 
     def start(self) -> None:
         """Build image if needed, then start the gateway container.
@@ -155,14 +164,22 @@ class GatewayManager:
         try:
             subprocess.run(
                 [
-                    "docker", "run", "-d",
-                    "--name", self.CONTAINER_NAME,
-                    "-p", f"127.0.0.1:{self._port}:{self._port}",
+                    "docker",
+                    "run",
+                    "-d",
+                    "--name",
+                    self.CONTAINER_NAME,
+                    "-p",
+                    f"127.0.0.1:{self._port}:{self._port}",
                     # Pass env vars used by tickler.sh inside the container
-                    "-e", f"GATEWAY_PORT={self._port}",
-                    "-e", "TICKLE_INTERVAL=60",
-                    "-e", f"TICKLE_BASE_URL=https://host.docker.internal:{self._port}/v1/api",
-                    "-e", "TICKLE_ENDPOINT=/tickle",
+                    "-e",
+                    f"GATEWAY_PORT={self._port}",
+                    "-e",
+                    "TICKLE_INTERVAL=60",
+                    "-e",
+                    f"TICKLE_BASE_URL=https://host.docker.internal:{self._port}/v1/api",
+                    "-e",
+                    "TICKLE_ENDPOINT=/tickle",
                     self.IMAGE_NAME,
                 ],
                 check=True,

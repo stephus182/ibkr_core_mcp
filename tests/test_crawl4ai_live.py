@@ -14,6 +14,7 @@ hold regardless of whether the optional dependency is installed.
 Run:
     pytest tests/test_crawl4ai_live.py -v -m integration
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -26,10 +27,7 @@ def crawl4ai_available():
     try:
         import crawl4ai  # noqa: F401
     except ImportError:
-        pytest.skip(
-            "crawl4ai not installed — run `pip install ibkr_core_mcp[scraper]` "
-            "then `crawl4ai-setup`"
-        )
+        pytest.skip("crawl4ai not installed — run `pip install ibkr_core_mcp[scraper]` then `crawl4ai-setup`")
 
 
 @pytest.fixture()
@@ -63,9 +61,7 @@ def test_crawl4ai_scraper_real_browser_scrape(crawl4ai_available, tmp_path):
 
 
 @pytest.mark.integration
-def test_scrape_with_fallback_triggers_real_crawl4ai_on_empty_firecrawl_result(
-    crawl4ai_available, toolkit
-):
+def test_scrape_with_fallback_triggers_real_crawl4ai_on_empty_firecrawl_result(crawl4ai_available, toolkit):
     """Empty Firecrawl markdown makes assess_quality() return "fallback",
     which skips the LLM judge entirely and routes straight to the real
     Crawl4AIScraper — proving the full wiring, not just the isolated unit."""

@@ -29,6 +29,7 @@ All tests are skipped automatically when FIRECRAWL_API_KEY is not set.
   which depends on live page content at run time and isn't deterministic to
   script against a real target.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,6 +40,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def firecrawl_key() -> str:
@@ -51,6 +53,7 @@ def firecrawl_key() -> str:
 @pytest.fixture(scope="module")
 def live_config(firecrawl_key, tmp_path_factory):
     from ibkr_core_mcp.config import Config
+
     tmp = tmp_path_factory.mktemp("web_scraper_live_cfg")
     return Config(
         gateway_url="https://localhost:5055/v1/api",
@@ -66,6 +69,7 @@ def live_config(firecrawl_key, tmp_path_factory):
 @pytest.fixture(scope="module")
 def toolkit(live_config):
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
+
     # firecrawl_search touches none of client/cache/store on its happy path —
     # only self._config and self._firecrawl (lazily built from firecrawl_api_key).
     return ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), live_config)
@@ -74,6 +78,7 @@ def toolkit(live_config):
 # ---------------------------------------------------------------------------
 # FirecrawlClient — direct, real API
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_firecrawl_client_search_real_query(firecrawl_key):
@@ -115,6 +120,7 @@ def test_firecrawl_client_invalid_key_raises():
 # ---------------------------------------------------------------------------
 # ClaudeToolkit.execute("firecrawl_search") — full dispatch path, real API
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_toolkit_firecrawl_search_end_to_end(toolkit):

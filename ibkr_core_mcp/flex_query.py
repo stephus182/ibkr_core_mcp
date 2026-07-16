@@ -72,8 +72,7 @@ _FLEX_ERROR_CODES: dict[str, tuple[str, str]] = {
     ),
     "1012": (
         "Token has expired.",
-        "Regenerate token: IBKR → Reports → Flex Web Service → regenerate token, "
-        "update IBKR_FLEX_TOKEN in .env.",
+        "Regenerate token: IBKR → Reports → Flex Web Service → regenerate token, update IBKR_FLEX_TOKEN in .env.",
     ),
     "1013": (
         "IP restriction.",
@@ -203,11 +202,13 @@ class FlexQueryClient:
                 trades = self.import_from_file(tmp_path)
                 total_trades += len(trades)
                 dates = sorted(t["time"][:10] for t in trades) if trades else []
-                processed.append({
-                    "file": filename,
-                    "trades": len(trades),
-                    "range": f"{dates[0]} → {dates[-1]}" if dates else "no trades",
-                })
+                processed.append(
+                    {
+                        "file": filename,
+                        "trades": len(trades),
+                        "range": f"{dates[0]} → {dates[-1]}" if dates else "no trades",
+                    }
+                )
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
@@ -325,8 +326,7 @@ class FlexQueryClient:
             error_msg = (root.findtext("ErrorMessage") or "").strip()
             desc, action = _FLEX_ERROR_CODES.get(error_code, ("Unknown error.", "Check IBKR Flex configuration."))
             raise FlexQueryError(
-                f"Flex error {error_code}: {desc} {action}"
-                + (f" (IBKR message: {error_msg})" if error_msg else "")
+                f"Flex error {error_code}: {desc} {action}" + (f" (IBKR message: {error_msg})" if error_msg else "")
             )
         if status not in ("Success", "WhenAvailable") or not ref_code:
             raise FlexQueryError(f"Flex SendRequest unexpected response: status={status!r}")
@@ -370,9 +370,7 @@ class FlexQueryClient:
             status = root.findtext("Status")
             error_code = (root.findtext("ErrorCode") or "").strip()
 
-            still_generating = status == "WhenAvailable" or (
-                status == "Warn" and error_code == "1019"
-            )
+            still_generating = status == "WhenAvailable" or (status == "Warn" and error_code == "1019")
             if still_generating:
                 if attempt < _MAX_POLL_RETRIES - 1:
                     time.sleep(_POLL_SLEEP)
@@ -434,6 +432,7 @@ class FlexQueryClient:
         Raises FlexQueryError if more than 20% of records are invalid (likely corrupt file).
         """
         import logging
+
         log = logging.getLogger(__name__)
 
         root = ET.fromstring(xml_text)
@@ -465,18 +464,20 @@ class FlexQueryClient:
             # tradePnl is IBKR's realized P&L for this execution (account currency).
             # assetCategory: STK, FUT, OPT, BOND, CASH, etc.
             raw_pnl = trade_el.get("tradePnl") or trade_el.get("fifoPnlRealized")
-            trades.append({
-                "execution_id": execution_id,
-                "symbol": symbol,
-                "side": side,
-                "size": _safe_float(trade_el.get("quantity")),
-                "price": _safe_float(trade_el.get("tradePrice")),
-                "time": time_iso,
-                "commission": abs(_safe_float(trade_el.get("ibCommission"))),
-                "account": trade_el.get("accountId", ""),
-                "asset_class": (trade_el.get("assetCategory") or "").strip().upper(),
-                "realized_pnl": _safe_float(raw_pnl) if raw_pnl else None,
-            })
+            trades.append(
+                {
+                    "execution_id": execution_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "size": _safe_float(trade_el.get("quantity")),
+                    "price": _safe_float(trade_el.get("tradePrice")),
+                    "time": time_iso,
+                    "commission": abs(_safe_float(trade_el.get("ibCommission"))),
+                    "account": trade_el.get("accountId", ""),
+                    "asset_class": (trade_el.get("assetCategory") or "").strip().upper(),
+                    "realized_pnl": _safe_float(raw_pnl) if raw_pnl else None,
+                }
+            )
 
         total = len(trades) + len(skipped)
         if skipped:

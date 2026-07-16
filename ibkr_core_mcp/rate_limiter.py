@@ -1,4 +1,5 @@
 """Token-bucket rate limiter and exponential backoff for IBKR Client Portal API requests."""
+
 from __future__ import annotations
 
 import time
@@ -93,10 +94,8 @@ def with_retry(
             raise IBKRAuthError("IBKR session not authenticated (401)")
         if status in (429, 503):
             if attempt >= max_retries:
-                raise IBKRRateLimitError(
-                    f"Rate limit exceeded after {max_retries} retries (HTTP {status})"
-                )
-            backoff = _BASE_BACKOFF * (2 ** attempt)
+                raise IBKRRateLimitError(f"Rate limit exceeded after {max_retries} retries (HTTP {status})")
+            backoff = _BASE_BACKOFF * (2**attempt)
             time.sleep(backoff)
             attempt += 1
             continue
@@ -105,6 +104,4 @@ def with_retry(
             body_preview = resp.text[:400]
         except Exception:
             body_preview = ""
-        raise IBKRAPIError(
-            f"IBKR gateway returned HTTP {status}: {body_preview}", status_code=status
-        )
+        raise IBKRAPIError(f"IBKR gateway returned HTTP {status}: {body_preview}", status_code=status)

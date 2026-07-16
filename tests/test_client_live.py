@@ -26,6 +26,7 @@ Explicit exclusions:
 - Alert writes (create/modify/delete/activate) — brokerage session required
 - Regulatory snapshot ($0.01/call) — tested once manually, not run routinely
 """
+
 from __future__ import annotations
 
 import pytest
@@ -34,9 +35,11 @@ import pytest
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def live_config(tmp_path_factory):
     from ibkr_core_mcp.config import Config
+
     tmp = tmp_path_factory.mktemp("live_cfg")
     return Config(
         gateway_url="https://localhost:5055/v1/api",
@@ -52,6 +55,7 @@ def live_config(tmp_path_factory):
 def client(live_config):
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.client import IBKRClient
+
     return IBKRClient(live_config, auth=BrowserCookieAuth())
 
 
@@ -75,6 +79,7 @@ def account_id(live_client):
 # ---------------------------------------------------------------------------
 # Session / Health
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_ping(live_client):
@@ -105,6 +110,7 @@ def test_validate_sso(live_client):
 # ---------------------------------------------------------------------------
 # Contract / Security Definition
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_search_contract_aapl(live_client):
@@ -196,6 +202,7 @@ def test_get_currency_pairs_usd(live_client):
 @pytest.mark.integration
 def test_get_option_strikes_aapl(live_client):
     import datetime
+
     # secdef/search must precede strikes (documented prerequisite) — otherwise
     # the endpoint always returns empty arrays.
     live_client.search_contract("AAPL")
@@ -224,6 +231,7 @@ def test_get_option_chain_documented_flow(live_client):
 # Market Data
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_market_snapshot_aapl(live_client):
     # First call may return empty (warmup) — retry once as the client does internally
@@ -249,6 +257,7 @@ def test_unsubscribe_all_market_data(live_client):
 # ---------------------------------------------------------------------------
 # Portfolio / Account
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_get_accounts(live_client):
@@ -312,6 +321,7 @@ def test_get_pnl(live_client):
 # Orders (read-only)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_live_orders(live_client):
     # Two-call pattern — fixed path #live-orders
@@ -330,6 +340,7 @@ def test_get_trades(live_client):
 # Watchlists (paths fixed 2026-06-30: /iserver/account/* → /iserver/*)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_watchlists(live_client):
     # Was 404ing with /iserver/account/watchlists — fixed to /iserver/watchlists
@@ -341,6 +352,7 @@ def test_get_watchlists(live_client):
 def test_watchlist_roundtrip(live_client):
     """Create → read → delete a watchlist to verify all three fixed paths."""
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
+
     # Create with AAPL (conid 265598)
     try:
         created = live_client.create_watchlist("_test_ibkr_audit", [{"C": 265598}])
@@ -352,15 +364,11 @@ def test_watchlist_roundtrip(live_client):
     # Get all watchlists and find ours
     watchlists = live_client.get_watchlists()
     test_wl = next(
-        (w for w in watchlists if w.get("name") == "_test_ibkr_audit"
-         or w.get("id") == "_test_ibkr_audit"),
+        (w for w in watchlists if w.get("name") == "_test_ibkr_audit" or w.get("id") == "_test_ibkr_audit"),
         None,
     )
     # IBKR may return the id we passed or assign a numeric one
-    wl_id = (
-        test_wl.get("id") if test_wl
-        else created.get("id", created.get("name", "_test_ibkr_audit"))
-    )
+    wl_id = test_wl.get("id") if test_wl else created.get("id", created.get("name", "_test_ibkr_audit"))
 
     # Read specific watchlist
     detail = live_client.get_watchlist(str(wl_id))
@@ -374,6 +382,7 @@ def test_watchlist_roundtrip(live_client):
 # ---------------------------------------------------------------------------
 # Scanner
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_get_scanner_params(live_client):
@@ -398,6 +407,7 @@ def test_run_iserver_scanner(live_client):
 # Portfolio Analyst
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_pa_periods(live_client, account_id):
     result = live_client.get_pa_periods([account_id])
@@ -421,12 +431,15 @@ def test_get_pa_transactions(live_client, account_id):
     # ("1D","7D","MTD","1M","YTD","1Y", days=7/30/90) — parameter format TBD.
     # The implementation passes "period" but the docstring says "days" (int).
     # Skipping until the correct request format is confirmed from official docs.
-    pytest.skip("/pa/transactions: correct request parameter format not yet confirmed — see docs/audits/live-test-log.md#run-2026-06-30")
+    pytest.skip(
+        "/pa/transactions: correct request parameter format not yet confirmed — see docs/audits/live-test-log.md#run-2026-06-30"
+    )
 
 
 # ---------------------------------------------------------------------------
 # FYI / Notifications
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_get_notifications(live_client):
@@ -437,6 +450,7 @@ def test_get_notifications(live_client):
 @pytest.mark.integration
 def test_get_unread_count(live_client):
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.get_unread_count()
         assert isinstance(result, int)
@@ -457,6 +471,7 @@ def test_get_mta_alert(live_client):
 # Alerts (read-only)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_alerts(live_client, account_id):
     result = live_client.get_alerts(account_id)
@@ -466,6 +481,7 @@ def test_get_alerts(live_client, account_id):
 # ---------------------------------------------------------------------------
 # Batch 2: Alert CRUD roundtrip (create → get → activate → delete)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_alert_crud_roundtrip(live_client, account_id):
@@ -505,11 +521,7 @@ def test_alert_crud_roundtrip(live_client, account_id):
     assert isinstance(created, dict), f"create_alert returned {type(created)}"
 
     # Extract the orderId/alertId from the response
-    alert_id = (
-        created.get("orderId")
-        or created.get("id")
-        or created.get("alertId")
-    )
+    alert_id = created.get("orderId") or created.get("id") or created.get("alertId")
     if not alert_id:
         pytest.skip(f"create_alert succeeded but no id in response: {created}")
 
@@ -545,6 +557,7 @@ def test_alert_crud_roundtrip(live_client, account_id):
 #           get_combo_positions, invalidate_positions_cache
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_account_meta(live_client, account_id):
     result = live_client.get_account_meta(account_id)
@@ -555,6 +568,7 @@ def test_get_account_meta(live_client, account_id):
 def test_get_portfolio_allocation(live_client, account_id):
     # /portfolio/allocation — takes a list of account IDs (not a single string)
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.get_portfolio_allocation([account_id])
         assert isinstance(result, (dict, list))
@@ -575,6 +589,7 @@ def test_get_position(live_client, account_id):
 @pytest.mark.integration
 def test_get_combo_positions(live_client, account_id):
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.get_combo_positions(account_id)
         assert isinstance(result, list)
@@ -596,9 +611,11 @@ def test_invalidate_positions_cache(live_client, account_id):
 # Batch 2: FYI — get_delivery_options, mark_notification_read
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_delivery_options(live_client):
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.get_delivery_options()
         assert isinstance(result, (dict, list))
@@ -612,6 +629,7 @@ def test_get_delivery_options(live_client):
 def test_mark_notification_read_noop(live_client):
     """Verify mark_notification_read is callable. Uses a fake id — expect 404 or {} not an exception."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.mark_notification_read("000000000000000000000000")
         assert result is None or isinstance(result, dict)
@@ -629,6 +647,7 @@ def test_mark_notification_read_noop(live_client):
 # Batch 2: Market data — unsubscribe_market_data (single conid)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_unsubscribe_market_data_single(live_client):
     # Subscribe to AAPL snapshot first (creates the subscription), then unsubscribe
@@ -641,10 +660,12 @@ def test_unsubscribe_market_data_single(live_client):
 # Batch 2: Orders — get_order_status, get_order_preview (whatif)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_order_preview(live_client, account_id):
     """Whatif order for AAPL — read-only, no gates."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     order = {
         "conid": 265598,
         "orderType": "LMT",
@@ -665,6 +686,7 @@ def test_get_order_preview(live_client, account_id):
 def test_get_order_status_invalid_id(live_client):
     """get_order_status with a fake order id — expect 404/400/503, not an uncaught exception."""
     from ibkr_core_mcp.exceptions import IBKRAPIError, IBKRRateLimitError
+
     try:
         result = live_client.get_order_status("999999999")
         assert isinstance(result, dict)
@@ -681,10 +703,12 @@ def test_get_order_status_invalid_id(live_client):
 # Batch 2: PA transactions (fixed — now requires conids + currency)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_pa_transactions_aapl(live_client, account_id):
     """PA transaction history for AAPL (conid 265598), 30 days."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.get_pa_transactions(
             account_ids=[account_id],
@@ -701,6 +725,7 @@ def test_get_pa_transactions_aapl(live_client, account_id):
 # ---------------------------------------------------------------------------
 # Batch 2: International stock resolution — verify exchange filter across assets
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_search_contract_international_asml(live_client):
@@ -743,6 +768,7 @@ def test_get_currency_pairs_eur(live_client):
 # Batch 2: Bond filters (read-only)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_get_regulatory_snapshot(live_client):
     """Regulatory (NBBO-grade) snapshot for AAPL. WARNING: $0.01/call unless subscribed."""
@@ -763,6 +789,7 @@ def test_get_bond_filters(live_client):
     # IBM bonds are available on IBKR; issue_id is typically the conid of the bond's issuer.
     # IBM stock conid = 8314; use as issue_id (IBKR bond filter pattern from docs)
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     try:
         result = live_client.get_bond_filters("IBM", "8314")
         assert isinstance(result, (dict, list))

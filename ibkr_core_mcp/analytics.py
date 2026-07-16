@@ -7,6 +7,7 @@ downside deviation; `calmar` is whole-series (formally the MAR-ratio convention)
 not Young's trailing-36-month Calmar. Both variants are widespread, but numbers
 are not comparable across tools that use the canonical forms — read the docstrings before quoting these figures against external references.
 """
+
 from __future__ import annotations
 
 import re
