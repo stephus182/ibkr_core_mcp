@@ -241,9 +241,7 @@ def test_timeout_actually_kills_runaway_process(ohlcv, monkeypatch):
         run_backtest("while True: pass", ohlcv)
     elapsed = time.monotonic() - start
 
-    assert elapsed < 5.0, (
-        f"took {elapsed:.1f}s — kill sequence did not terminate the process promptly"
-    )
+    assert elapsed < 5.0, f"took {elapsed:.1f}s — kill sequence did not terminate the process promptly"
     assert multiprocessing.active_children() == [], "runaway strategy process was not cleaned up"
 
 
@@ -273,9 +271,7 @@ def test_large_result_does_not_false_timeout():
     open_ = close + np.random.randn(n) * 0.2
     volume = np.random.randint(500_000, 2_000_000, n).astype(float)
     idx = pd.date_range("2025-01-01", periods=n, freq="min")
-    big_df = pd.DataFrame(
-        {"open": open_, "high": high, "low": low, "close": close, "volume": volume}, index=idx
-    )
+    big_df = pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": volume}, index=idx)
 
     start = time.monotonic()
     result = run_backtest("df['signal'] = 1", big_df)  # trivial, near-instant strategy

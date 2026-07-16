@@ -286,11 +286,7 @@ def run_backtest(
         # complete result (e.g. a segfault or an immediate OOM-kill).
         process.join()
         exitcode = process.exitcode
-        detail = (
-            f"killed by signal {-exitcode}"
-            if exitcode is not None and exitcode < 0
-            else f"exit code {exitcode}"
-        )
+        detail = f"killed by signal {-exitcode}" if exitcode is not None and exitcode < 0 else f"exit code {exitcode}"
         raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
 
     # Got a complete result — reap the child. Connection.send() is synchronous,
