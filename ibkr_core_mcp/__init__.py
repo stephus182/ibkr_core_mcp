@@ -1,4 +1,5 @@
 """ibkr_core_mcp — IBKR Client Portal API package."""
+
 import logging
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version

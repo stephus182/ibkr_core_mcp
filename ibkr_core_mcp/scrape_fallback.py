@@ -22,6 +22,7 @@ Source: https://docs.crawl4ai.com/ (Crawl4AI, verified against the published
 PyPI wheel for crawl4ai==0.5.0 and crawl4ai==0.9.0 on 2026-06-30 — see the
 `crawl4ai>=0.5.0` floor note in CLAUDE.md's "Web Scraping" reference table).
 """
+
 from __future__ import annotations
 
 import asyncio

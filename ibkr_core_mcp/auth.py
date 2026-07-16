@@ -75,9 +75,7 @@ class BrowserCookieAuth:
 
     def __init__(self, browser: str = "chrome") -> None:
         if browser not in _ALLOWED_BROWSERS:
-            raise ValueError(
-                f"Unsupported browser {browser!r}. Allowed: {sorted(_ALLOWED_BROWSERS)}"
-            )
+            raise ValueError(f"Unsupported browser {browser!r}. Allowed: {sorted(_ALLOWED_BROWSERS)}")
         self._browser = browser
 
     def apply(self, session: requests.Session) -> None:
@@ -104,7 +102,6 @@ class BrowserCookieAuth:
                 )
         except Exception as exc:
             warnings.warn(
-                f"BrowserCookieAuth: cookie extraction failed ({type(exc).__name__}). "
-                "Session will be unauthenticated.",
+                f"BrowserCookieAuth: cookie extraction failed ({type(exc).__name__}). Session will be unauthenticated.",
                 stacklevel=2,
             )

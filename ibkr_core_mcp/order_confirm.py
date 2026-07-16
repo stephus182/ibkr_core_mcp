@@ -82,9 +82,7 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
     )
 
 
-def confirm_cancel_dialog(
-    order_id: str, account_id: str, order: dict[str, Any] | None = None
-) -> None:
+def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] | None = None) -> None:
     """Gate 2 for cancel_order.
 
     `order` is optional display-only detail (symbol/side/qty/price/TIF/etc.) so the human
@@ -94,9 +92,7 @@ def confirm_cancel_dialog(
     """
     details: dict[str, Any] = {}
     if order:
-        details.update(
-            {k: str(v) for k, v in order.items() if k not in ("Order ID", "Account")}
-        )
+        details.update({k: str(v) for k, v in order.items() if k not in ("Order ID", "Account")})
     details["Order ID"] = order_id
     details["Account"] = account_id
     _show_confirm_dialog(
@@ -107,9 +103,7 @@ def confirm_cancel_dialog(
     )
 
 
-def confirm_reply_dialog(
-    reply_id: str, message: str = "", options: list[str] | None = None
-) -> None:
+def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | None = None) -> None:
     """Gate 2 for reply_order. Shows the ACTUAL IBKR warning text, not just the reply_id.
 
     `message` defaults to "" so the standalone reply_order() call site (which only ever
@@ -151,9 +145,7 @@ def _strip_html(text: str) -> str:
     return re.sub(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>", "", text)
 
 
-def _show_confirm_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
-) -> None:
+def _show_confirm_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
 
     macOS primary path: AppKit colored dialog (green for BUY, red for SELL) via subprocess.
@@ -173,14 +165,10 @@ def _show_confirm_dialog(
     elif tk is not None:
         _show_tkinter_dialog(title, details, disclaimer, confirm_label)
     else:
-        raise HumanAuthError(
-            "No GUI dialog available: not on macOS and tkinter is not installed."
-        )
+        raise HumanAuthError("No GUI dialog available: not on macOS and tkinter is not installed.")
 
 
-def _show_appkit_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, side: str
-) -> None:
+def _show_appkit_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, side: str) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
     The subprocess gets its own main thread so NSApplication can run without
@@ -190,14 +178,16 @@ def _show_appkit_dialog(
     Raises HumanAuthError if user cancels/times out.
     Raises RuntimeError if the subprocess itself fails (caller falls back to osascript).
     """
-    payload = _json.dumps({
-        "title": title,
-        "details": details,
-        "disclaimer": disclaimer,
-        "confirm_label": confirm_label,
-        "side": side,
-        "timeout_s": _DIALOG_TIMEOUT_S,
-    })
+    payload = _json.dumps(
+        {
+            "title": title,
+            "details": details,
+            "disclaimer": disclaimer,
+            "confirm_label": confirm_label,
+            "side": side,
+            "timeout_s": _DIALOG_TIMEOUT_S,
+        }
+    )
     dialog_script = Path(__file__).parent / "_order_dialog.py"
     try:
         proc = subprocess.run(
@@ -218,9 +208,7 @@ def _show_appkit_dialog(
         raise HumanAuthError("Order cancelled by user")
 
 
-def _show_osascript_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
-) -> None:
+def _show_osascript_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
     """Native macOS confirmation dialog via osascript.
 
     Uses AppleScript 'display dialog' with caution icon, two buttons (CANCEL / confirm),
@@ -232,22 +220,24 @@ def _show_osascript_dialog(
     message = f"{detail_lines}\n\n{disclaimer}"
 
     script = (
-        f'set dlg to display dialog {_as_str(message)} '
-        f'with title {_as_str(title)} '
+        f"set dlg to display dialog {_as_str(message)} "
+        f"with title {_as_str(title)} "
         f'buttons {{"CANCEL", {_as_str(confirm_label)}}} '
         f'default button "CANCEL" '
-        f'giving up after {_DIALOG_TIMEOUT_S} '
-        f'with icon caution\n'
-        f'if gave up of dlg then\n'
+        f"giving up after {_DIALOG_TIMEOUT_S} "
+        f"with icon caution\n"
+        f"if gave up of dlg then\n"
         f'    return "timeout"\n'
-        f'else\n'
-        f'    return button returned of dlg\n'
-        f'end if'
+        f"else\n"
+        f"    return button returned of dlg\n"
+        f"end if"
     )
     try:
         proc = subprocess.run(
             ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=_DIALOG_TIMEOUT_S + 5,
+            capture_output=True,
+            text=True,
+            timeout=_DIALOG_TIMEOUT_S + 5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         raise HumanAuthError(f"Confirmation dialog failed: {exc}") from exc
@@ -265,9 +255,7 @@ def _as_str(text: str) -> str:
     return f'"{escaped}"'
 
 
-def _show_tkinter_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str
-) -> None:
+def _show_tkinter_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
     """tkinter fallback dialog for non-macOS environments.
 
     Must be called from the main thread. Auto-cancels after _DIALOG_TIMEOUT_S seconds.
@@ -291,23 +279,32 @@ def _show_tkinter_dialog(
     title_frame = tk.Frame(dialog, bg="#c0392b", pady=8)
     title_frame.pack(fill="x")
     tk.Label(
-        title_frame, text=title, bg="#c0392b", fg="white",
+        title_frame,
+        text=title,
+        bg="#c0392b",
+        fg="white",
         font=("Helvetica", 13, "bold"),
     ).pack()
 
     detail_frame = tk.Frame(dialog, padx=20, pady=10)
     detail_frame.pack(fill="x")
     for i, (key, val) in enumerate(details.items()):
-        tk.Label(detail_frame, text=f"{key}:", font=("Helvetica", 11, "bold"),
-                 anchor="w").grid(row=i, column=0, sticky="w", pady=2)
-        tk.Label(detail_frame, text=str(val), font=("Helvetica", 11),
-                 anchor="w").grid(row=i, column=1, sticky="w", padx=(10, 0), pady=2)
+        tk.Label(detail_frame, text=f"{key}:", font=("Helvetica", 11, "bold"), anchor="w").grid(
+            row=i, column=0, sticky="w", pady=2
+        )
+        tk.Label(detail_frame, text=str(val), font=("Helvetica", 11), anchor="w").grid(
+            row=i, column=1, sticky="w", padx=(10, 0), pady=2
+        )
 
     disc_frame = tk.Frame(dialog, bg="#ffeaa7", padx=15, pady=10)
     disc_frame.pack(fill="x", padx=10, pady=5)
     tk.Label(
-        disc_frame, text=disclaimer, bg="#ffeaa7", wraplength=340,
-        font=("Helvetica", 10), justify="left",
+        disc_frame,
+        text=disclaimer,
+        bg="#ffeaa7",
+        wraplength=340,
+        font=("Helvetica", 10),
+        justify="left",
     ).pack()
 
     btn_frame = tk.Frame(dialog, pady=10)
@@ -334,14 +331,21 @@ def _show_tkinter_dialog(
         dialog.destroy()
         root.destroy()
 
-    tk.Button(btn_frame, text="CANCEL", command=on_cancel, width=12,
-              bg="#bdc3c7", font=("Helvetica", 11)).pack(side="left", padx=10)
-    tk.Button(btn_frame, text=confirm_label, command=on_confirm, width=18,
-              bg="#e74c3c", fg="white", font=("Helvetica", 11, "bold")).pack(side="left", padx=10)
+    tk.Button(btn_frame, text="CANCEL", command=on_cancel, width=12, bg="#bdc3c7", font=("Helvetica", 11)).pack(
+        side="left", padx=10
+    )
+    tk.Button(
+        btn_frame,
+        text=confirm_label,
+        command=on_confirm,
+        width=18,
+        bg="#e74c3c",
+        fg="white",
+        font=("Helvetica", 11, "bold"),
+    ).pack(side="left", padx=10)
 
     countdown_var = tk.StringVar(value=f"Auto-cancels in {remaining['secs']}s")
-    tk.Label(dialog, textvariable=countdown_var, fg="#888888",
-             font=("Helvetica", 9)).pack(pady=(0, 6))
+    tk.Label(dialog, textvariable=countdown_var, fg="#888888", font=("Helvetica", 9)).pack(pady=(0, 6))
 
     def _tick() -> None:
         remaining["secs"] -= 1

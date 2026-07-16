@@ -50,6 +50,7 @@ GET_STATEMENT_XML_WHEN_AVAILABLE = b"""<?xml version="1.0" ?>
 # Bootstrap — exception and config
 # ---------------------------------------------------------------------------
 
+
 def test_config_has_flex_fields(mock_config):
     assert hasattr(mock_config, "flex_token")
     assert hasattr(mock_config, "flex_query_id")
@@ -57,6 +58,7 @@ def test_config_has_flex_fields(mock_config):
 
 def test_flex_query_error_is_ibkr_core_error():
     from ibkr_core_mcp.exceptions import FlexQueryError, IBKRCoreError
+
     err = FlexQueryError("failed")
     assert isinstance(err, IBKRCoreError)
     assert str(err) == "failed"
@@ -65,6 +67,7 @@ def test_flex_query_error_is_ibkr_core_error():
 def test_flex_query_error_exported_from_package():
     from ibkr_core_mcp import FlexQueryError
     from ibkr_core_mcp.exceptions import FlexQueryError as _internal
+
     assert FlexQueryError is _internal
 
 
@@ -72,9 +75,11 @@ def test_flex_query_error_exported_from_package():
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def flex_client(mock_config):
     from ibkr_core_mcp.flex_query import FlexQueryClient
+
     mock_config.flex_token = "tok123"
     mock_config.flex_query_id = "123456"
     store = MagicMock()
@@ -85,6 +90,7 @@ def flex_client(mock_config):
 # ---------------------------------------------------------------------------
 # _send_request
 # ---------------------------------------------------------------------------
+
 
 def test_send_request_returns_reference_code(flex_client):
     with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
@@ -120,15 +126,14 @@ def test_send_request_raises_when_url_missing(flex_client):
 # _get_statement
 # ---------------------------------------------------------------------------
 
+
 def test_get_statement_returns_xml_on_success(flex_client):
     with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.content = GET_STATEMENT_XML
         mock_get.return_value = mock_resp
-        xml_text = flex_client._get_statement(
-            "https://example.com/GetStatement", "9876543210"
-        )
+        xml_text = flex_client._get_statement("https://example.com/GetStatement", "9876543210")
     assert "<Trade" in xml_text
 
 
@@ -138,18 +143,20 @@ def test_get_statement_polls_when_available(flex_client):
         MagicMock(status_code=200, content=GET_STATEMENT_XML_WHEN_AVAILABLE),
         MagicMock(status_code=200, content=GET_STATEMENT_XML),
     ]
-    with patch("ibkr_core_mcp.flex_query.requests.get", side_effect=responses), \
-         patch("ibkr_core_mcp.flex_query.time.sleep"):
-        xml_text = flex_client._get_statement(
-            "https://example.com/GetStatement", "9876543210"
-        )
+    with (
+        patch("ibkr_core_mcp.flex_query.requests.get", side_effect=responses),
+        patch("ibkr_core_mcp.flex_query.time.sleep"),
+    ):
+        xml_text = flex_client._get_statement("https://example.com/GetStatement", "9876543210")
     assert "<Trade" in xml_text
 
 
 def test_get_statement_raises_after_max_retries(flex_client):
     always_pending = MagicMock(status_code=200, content=GET_STATEMENT_XML_WHEN_AVAILABLE)
-    with patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_pending), \
-         patch("ibkr_core_mcp.flex_query.time.sleep"):
+    with (
+        patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_pending),
+        patch("ibkr_core_mcp.flex_query.time.sleep"),
+    ):
         with pytest.raises(FlexQueryError, match="not ready"):
             flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
@@ -192,19 +199,21 @@ def test_get_statement_retries_on_warn_1019_then_succeeds(flex_client):
         MagicMock(status_code=200, content=GET_STATEMENT_XML_WARN_1019),
         MagicMock(status_code=200, content=GET_STATEMENT_XML),
     ]
-    with patch("ibkr_core_mcp.flex_query.requests.get", side_effect=responses), \
-         patch("ibkr_core_mcp.flex_query.time.sleep"):
-        xml_text = flex_client._get_statement(
-            "https://example.com/GetStatement", "9876543210"
-        )
+    with (
+        patch("ibkr_core_mcp.flex_query.requests.get", side_effect=responses),
+        patch("ibkr_core_mcp.flex_query.time.sleep"),
+    ):
+        xml_text = flex_client._get_statement("https://example.com/GetStatement", "9876543210")
     assert "<Trade" in xml_text
 
 
 def test_get_statement_raises_when_1019_persists(flex_client):
     """1019 on every poll attempt → raise, never return the error document."""
     always_1019 = MagicMock(status_code=200, content=GET_STATEMENT_XML_WARN_1019)
-    with patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_1019), \
-         patch("ibkr_core_mcp.flex_query.time.sleep"):
+    with (
+        patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_1019),
+        patch("ibkr_core_mcp.flex_query.time.sleep"),
+    ):
         with pytest.raises(FlexQueryError, match="not ready"):
             flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
@@ -212,9 +221,7 @@ def test_get_statement_raises_when_1019_persists(flex_client):
 def test_get_statement_raises_immediately_on_other_warn(flex_client):
     """Non-transient Warn (e.g. 1020) → raise on first attempt with the mapped message."""
     with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
-        mock_get.return_value = MagicMock(
-            status_code=200, content=GET_STATEMENT_XML_WARN_1020
-        )
+        mock_get.return_value = MagicMock(status_code=200, content=GET_STATEMENT_XML_WARN_1020)
         with pytest.raises(FlexQueryError, match="1020"):
             flex_client._get_statement("https://example.com/GetStatement", "9876543210")
     assert mock_get.call_count == 1
@@ -222,9 +229,7 @@ def test_get_statement_raises_immediately_on_other_warn(flex_client):
 
 def test_get_statement_raises_on_fail_status(flex_client):
     with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
-        mock_get.return_value = MagicMock(
-            status_code=200, content=GET_STATEMENT_XML_FAIL
-        )
+        mock_get.return_value = MagicMock(status_code=200, content=GET_STATEMENT_XML_FAIL)
         with pytest.raises(FlexQueryError, match="1012"):
             flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
@@ -233,9 +238,7 @@ def test_get_statement_rejects_document_without_flex_statement(flex_client):
     """Final guard: a 200 response that is not an error but contains no FlexStatement
     element is not a statement — raise instead of returning it to be parsed as 0 trades."""
     with patch("ibkr_core_mcp.flex_query.requests.get") as mock_get:
-        mock_get.return_value = MagicMock(
-            status_code=200, content=GET_STATEMENT_XML_NO_STATEMENT
-        )
+        mock_get.return_value = MagicMock(status_code=200, content=GET_STATEMENT_XML_NO_STATEMENT)
         with pytest.raises(FlexQueryError, match="FlexStatement"):
             flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
@@ -243,6 +246,7 @@ def test_get_statement_rejects_document_without_flex_statement(flex_client):
 # ---------------------------------------------------------------------------
 # _parse_trades
 # ---------------------------------------------------------------------------
+
 
 def test_parse_trades_maps_fields_correctly(flex_client):
     trades = flex_client._parse_trades(GET_STATEMENT_XML.decode())
@@ -287,11 +291,14 @@ def test_parse_trades_tolerates_non_numeric_quantity(flex_client):
 # fetch_trades
 # ---------------------------------------------------------------------------
 
+
 def test_fetch_trades_calls_upsert_and_archives_xml(flex_client):
     """fetch_trades must upsert to SQLite and archive raw XML to Drive account_data/."""
-    with patch.object(flex_client, "_send_request", return_value=("REF123", "https://example.com/Get")), \
-         patch.object(flex_client, "_get_statement", return_value=GET_STATEMENT_XML.decode()), \
-         patch.object(flex_client, "_parse_trades", return_value=[{"execution_id": "1"}]):
+    with (
+        patch.object(flex_client, "_send_request", return_value=("REF123", "https://example.com/Get")),
+        patch.object(flex_client, "_get_statement", return_value=GET_STATEMENT_XML.decode()),
+        patch.object(flex_client, "_parse_trades", return_value=[{"execution_id": "1"}]),
+    ):
         result = flex_client.fetch_trades("U1234567")
     flex_client._store.upsert_trades.assert_called_once_with([{"execution_id": "1"}])
     # XML archived to account_data/, not parquet to market_data/
@@ -301,8 +308,14 @@ def test_fetch_trades_calls_upsert_and_archives_xml(flex_client):
 
 
 def test_fetch_trades_returns_empty_list_on_no_trades(flex_client):
-    with patch.object(flex_client, "_send_request", return_value=("REF123", "https://example.com/Get")), \
-         patch.object(flex_client, "_get_statement", return_value="<FlexQueryResponse><FlexStatements><FlexStatement><Trades/></FlexStatement></FlexStatements></FlexQueryResponse>"):
+    with (
+        patch.object(flex_client, "_send_request", return_value=("REF123", "https://example.com/Get")),
+        patch.object(
+            flex_client,
+            "_get_statement",
+            return_value="<FlexQueryResponse><FlexStatements><FlexStatement><Trades/></FlexStatement></FlexStatements></FlexQueryResponse>",
+        ),
+    ):
         result = flex_client.fetch_trades("U1234567")
     assert result == []
     flex_client._store.upsert_trades.assert_called_once_with([])
@@ -312,6 +325,7 @@ def test_fetch_trades_returns_empty_list_on_no_trades(flex_client):
 # ---------------------------------------------------------------------------
 # _send_request — IBKR error codes (regression guard for 1001/1025 incident)
 # ---------------------------------------------------------------------------
+
 
 def _mock_get(content: bytes):
     """Return a requests.get mock that responds with HTTP 200 and given content."""
@@ -420,6 +434,7 @@ def test_send_request_accepts_gdcdyn_url(flex_client):
     with _mock_get(_GDCDYN_URL):
         ref, url = flex_client._send_request()
     from urllib.parse import urlparse
+
     assert urlparse(url).hostname == "gdcdyn.interactivebrokers.com"
 
 
@@ -462,6 +477,7 @@ def test_invalid_date_format_raises(flex_client):
 # _parse_trades — 20% integrity guard boundary
 # ---------------------------------------------------------------------------
 
+
 def _flex_xml(valid_count: int, invalid_count: int) -> str:
     """Build Flex XML with valid trades and trades missing tradeID (which are skipped)."""
     valid = "".join(
@@ -477,7 +493,8 @@ def _flex_xml(valid_count: int, invalid_count: int) -> str:
     )
     return (
         "<FlexQueryResponse><FlexStatements><FlexStatement><Trades>"
-        + valid + bad
+        + valid
+        + bad
         + "</Trades></FlexStatement></FlexStatements></FlexQueryResponse>"
     )
 
@@ -500,9 +517,11 @@ def test_parse_trades_integrity_guard_above_threshold_raises(flex_client):
 # _parse_flex_datetime — date-only path
 # ---------------------------------------------------------------------------
 
+
 def test_parse_flex_datetime_date_only():
     """YYYYMMDD format (no time) must produce T00:00:00 timestamp."""
     from ibkr_core_mcp.flex_query import _parse_flex_datetime
+
     result = _parse_flex_datetime("20260625")
     assert result == "2026-06-25T00:00:00"
 
@@ -510,6 +529,7 @@ def test_parse_flex_datetime_date_only():
 # ---------------------------------------------------------------------------
 # _validate_flex_date — end_date path
 # ---------------------------------------------------------------------------
+
 
 def test_invalid_end_date_format_raises(flex_client):
     """fetch_trades must raise ValueError for non-YYYYMMDD end_date strings."""

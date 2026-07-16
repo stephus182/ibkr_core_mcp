@@ -10,6 +10,7 @@ Emits a markdown table: per user message (position in session), median across ru
   total       message_done − user_message
   residual    total − stream − tools        — history load, persistence, Chainlit steps
 """
+
 from __future__ import annotations
 
 import json
@@ -48,9 +49,16 @@ def parse_run(path: str) -> list[dict[str, Any]]:
         stream = sum(c["end"] - c["start"] for _, c in calls if "end" in c)
         ttft = calls[0][1].get("first", calls[0][1]["start"]) - calls[0][1]["start"]
         total = m["end"] - m["start"]
-        out.append({"ttft": ttft, "stream": stream, "tools": m["tools"],
-                    "turns": len(calls), "total": total,
-                    "residual": total - stream - m["tools"]})
+        out.append(
+            {
+                "ttft": ttft,
+                "stream": stream,
+                "tools": m["tools"],
+                "turns": len(calls),
+                "total": total,
+                "residual": total - stream - m["tools"],
+            }
+        )
     return out
 
 
@@ -64,9 +72,11 @@ def main() -> None:
     print("| msg # | ttft (s) | stream (s) | tools (s) | api turns | total (s) | residual (s) |")
     print("|---|---|---|---|---|---|---|")
     for i in range(n):
-        print(f"| {i + 1} | {med(i, 'ttft'):.2f} | {med(i, 'stream'):.2f} "
-              f"| {med(i, 'tools'):.2f} | {med(i, 'turns'):.0f} "
-              f"| {med(i, 'total'):.2f} | {med(i, 'residual'):.2f} |")
+        print(
+            f"| {i + 1} | {med(i, 'ttft'):.2f} | {med(i, 'stream'):.2f} "
+            f"| {med(i, 'tools'):.2f} | {med(i, 'turns'):.0f} "
+            f"| {med(i, 'total'):.2f} | {med(i, 'residual'):.2f} |"
+        )
 
 
 if __name__ == "__main__":

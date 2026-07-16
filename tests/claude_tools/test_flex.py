@@ -4,6 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.flex
 
+
 def test_sync_flex_trades_no_token(toolkit):
     text, fig = toolkit.execute("sync_flex_trades", {})
     assert "IBKR_FLEX_TOKEN" in text
@@ -11,10 +12,11 @@ def test_sync_flex_trades_no_token(toolkit):
 
 # ── _get_positions — empty and field fallback ─────────────────────────────────
 
+
 def test_format_coverage_no_gaps():
     from ibkr_core_mcp.claude_tools import _format_coverage
-    cov = {"oldest": "2024-01-01", "newest": "2024-12-31",
-           "total_trades": 500, "stale": False, "gaps": []}
+
+    cov = {"oldest": "2024-01-01", "newest": "2024-12-31", "total_trades": 500, "stale": False, "gaps": []}
     text = "\n".join(_format_coverage(cov))
     assert "no periods" in text
     assert "gap(s)" not in text
@@ -22,14 +24,21 @@ def test_format_coverage_no_gaps():
 
 def test_format_coverage_with_gaps():
     from ibkr_core_mcp.claude_tools import _format_coverage
+
     cov = {
-        "oldest": "2024-01-01", "newest": "2024-12-31",
-        "total_trades": 500, "stale": False,
-        "gaps": [{
-            "gap_start": "2024-03-01", "gap_end": "2024-06-01",
-            "calendar_days": 92,
-            "request_from": "2024-03-02", "request_to": "2024-05-31",
-        }],
+        "oldest": "2024-01-01",
+        "newest": "2024-12-31",
+        "total_trades": 500,
+        "stale": False,
+        "gaps": [
+            {
+                "gap_start": "2024-03-01",
+                "gap_end": "2024-06-01",
+                "calendar_days": 92,
+                "request_from": "2024-03-02",
+                "request_to": "2024-05-31",
+            }
+        ],
     }
     text = "\n".join(_format_coverage(cov))
     assert "1 period" in text
@@ -39,8 +48,15 @@ def test_format_coverage_with_gaps():
 
 def test_format_coverage_stale_flag():
     from ibkr_core_mcp.claude_tools import _format_coverage
-    cov = {"oldest": "2024-01-01", "newest": "2024-06-01",
-           "total_trades": 100, "stale": True, "days_since_newest": 15, "gaps": []}
+
+    cov = {
+        "oldest": "2024-01-01",
+        "newest": "2024-06-01",
+        "total_trades": 100,
+        "stale": True,
+        "days_since_newest": 15,
+        "gaps": [],
+    }
     text = "\n".join(_format_coverage(cov))
     assert "STALE" in text
     assert "15" in text
@@ -83,12 +99,15 @@ _FLEX_XML_B = b"""<?xml version="1.0"?>
 def test_verify_flex_import_all_present(toolkit):
     """All tradeIDs in auto-synced XML present in SQLite, hash matches manifest → hash verified."""
     import hashlib
+
     content_a = _FLEX_XML_A
     sha256_a = hashlib.sha256(content_a).hexdigest()
     toolkit._cache.download_account_files.return_value = [("flex_U123_2024-01-01_REF.xml", content_a)]
     toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002"}
     toolkit._store.get_flex_import_entry.return_value = {
-        "sha256": sha256_a, "imported_at": "2024-01-01T00:00:00", "verified_at": None
+        "sha256": sha256_a,
+        "imported_at": "2024-01-01T00:00:00",
+        "verified_at": None,
     }
 
     result, _ = toolkit.execute("verify_flex_import", {})
@@ -110,9 +129,7 @@ def test_verify_flex_import_missing_records(toolkit):
 
 def test_verify_flex_import_manual_pre_validated(toolkit):
     """Manual archive (ClaudIA_Full_Activity_*.xml) reported as pre-validated, not cross-checked."""
-    toolkit._cache.download_account_files.return_value = [
-        ("ClaudIA_Full_Activity_123120.xml", _FLEX_XML_A)
-    ]
+    toolkit._cache.download_account_files.return_value = [("ClaudIA_Full_Activity_123120.xml", _FLEX_XML_A)]
     toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002"}
     toolkit._store.get_flex_import_entry.return_value = None  # first encounter
 
@@ -139,6 +156,7 @@ def test_verify_flex_import_no_xml_files(toolkit):
 def test_extract_execution_ids():
     """extract_execution_ids returns (unique_ids, raw_count) from <Trade> elements."""
     from ibkr_core_mcp.flex_query import FlexQueryClient
+
     unique_ids, raw_count = FlexQueryClient.extract_execution_ids(_FLEX_XML_A.decode())
     assert unique_ids == {"EX001", "EX002"}
     assert raw_count == 2
@@ -147,6 +165,7 @@ def test_extract_execution_ids():
 def test_extract_execution_ids_skips_empty():
     """extract_execution_ids counts blank-tradeID elements in raw_count but not unique_ids."""
     from ibkr_core_mcp.flex_query import FlexQueryClient
+
     xml = b"""<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
         <Trade tradeID="" symbol="X" buySell="BUY"/>
         <Trade tradeID="GOOD1" symbol="Y" buySell="SELL"/>
@@ -159,6 +178,7 @@ def test_extract_execution_ids_skips_empty():
 def test_extract_execution_ids_within_file_duplicate():
     """raw_count > len(unique_ids) when the same tradeID appears twice in one XML."""
     from ibkr_core_mcp.flex_query import FlexQueryClient
+
     xml = b"""<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
         <Trade tradeID="DUP1" symbol="X" buySell="BUY"/>
         <Trade tradeID="DUP1" symbol="X" buySell="BUY"/>
@@ -167,14 +187,12 @@ def test_extract_execution_ids_within_file_duplicate():
     assert unique_ids == {"DUP1"}
     assert raw_count == 2  # duplicate detected: raw(2) != unique(1)
 
+
 def test_sync_flex_archive_happy_path(toolkit):
     """Returns import summary when files are found and trades imported."""
     from unittest.mock import patch
 
-    store_cov = {
-        "oldest": "2024-01-01", "newest": "2026-05-22",
-        "total_trades": 150, "stale": False, "gaps": []
-    }
+    store_cov = {"oldest": "2024-01-01", "newest": "2026-05-22", "total_trades": 150, "stale": False, "gaps": []}
     toolkit._store.get_trade_date_coverage.return_value = store_cov
 
     mock_flex_instance = MagicMock()
@@ -237,10 +255,7 @@ def test_import_flex_file_happy_path(toolkit, tmp_path):
     xml_file = allowed_root / "flex_test.xml"
     xml_file.write_text("<FlexQueryResponse/>")
 
-    store_cov = {
-        "oldest": "2024-01-01", "newest": "2024-06-30",
-        "total_trades": 5, "stale": False, "gaps": []
-    }
+    store_cov = {"oldest": "2024-01-01", "newest": "2024-06-30", "total_trades": 5, "stale": False, "gaps": []}
     toolkit._store.get_trade_date_coverage.return_value = store_cov
 
     mock_flex_instance = MagicMock()
@@ -249,8 +264,10 @@ def test_import_flex_file_happy_path(toolkit, tmp_path):
         {"time": "2024-06-30T15:00:00", "symbol": "MSFT"},
     ]
 
-    with patch("pathlib.Path.home", return_value=tmp_path), \
-         patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+    with (
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance),
+    ):
         text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
 
     assert fig is None
@@ -302,8 +319,10 @@ def test_import_flex_file_no_trades(toolkit, tmp_path):
     mock_flex_instance = MagicMock()
     mock_flex_instance.import_from_file.return_value = []
 
-    with patch("pathlib.Path.home", return_value=tmp_path), \
-         patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance):
+    with (
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("ibkr_core_mcp.flex_query.FlexQueryClient", return_value=mock_flex_instance),
+    ):
         text, fig = toolkit.execute("import_flex_file", {"path": str(xml_file)})
 
     assert fig is None
@@ -334,7 +353,11 @@ def test_check_flex_coverage_happy_path(toolkit):
 def test_check_flex_coverage_empty_store(toolkit):
     """Returns 'No trade history' when store is empty."""
     toolkit._store.get_trade_date_coverage.return_value = {
-        "oldest": None, "newest": None, "total_trades": 0, "stale": False, "gaps": []
+        "oldest": None,
+        "newest": None,
+        "total_trades": 0,
+        "stale": False,
+        "gaps": [],
     }
     text, fig = toolkit.execute("check_flex_coverage", {})
     assert fig is None
@@ -352,5 +375,3 @@ def test_check_flex_coverage_error(toolkit):
 # ============================================================================
 # _get_pa_periods — empty fallback path
 # ============================================================================
-
-

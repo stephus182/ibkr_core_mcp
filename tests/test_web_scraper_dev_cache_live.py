@@ -41,6 +41,7 @@ Writes into whatever `GDRIVE_WEB_DOCS_FOLDER_ID` points at. Cleanup policy
 direct Drive API read, THEN delete just that file in a `finally` block —
 the `web_docs/searches/` folder itself is left in place.
 """
+
 from __future__ import annotations
 
 import os
@@ -91,12 +92,14 @@ def dev_config(tmp_path_factory):
 @pytest.fixture(scope="module")
 def toolkit(dev_config):
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
+
     return ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), dev_config)
 
 
 @pytest.fixture(scope="module")
 def drive_service(dev_config):
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     return WebDocsStore(dev_config)._get_service()
 
 

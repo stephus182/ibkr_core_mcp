@@ -78,10 +78,9 @@ def _format_coverage(cov: dict[str, Any]) -> list[str]:
             f"(may be inactivity or missing data — only you can tell):"
         )
         for g in gaps:
-            lines.append(
-                f"  {g['gap_start']} → {g['gap_end']} ({g['calendar_days']} calendar days with no trades)"
-            )
+            lines.append(f"  {g['gap_start']} → {g['gap_end']} ({g['calendar_days']} calendar days with no trades)")
     return lines
+
 
 TOOL_DEFINITIONS = [
     {
@@ -227,7 +226,10 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "account_id": {"type": "string", "description": "IBKR account ID (optional — resolved automatically if omitted)"},
+                "account_id": {
+                    "type": "string",
+                    "description": "IBKR account ID (optional — resolved automatically if omitted)",
+                },
             },
             "required": [],
         },
@@ -289,7 +291,10 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "Valid period string from get_pa_periods, e.g. '1D', '7D', 'MTD', '1M', 'YTD', '1Y'"},
+                "period": {
+                    "type": "string",
+                    "description": "Valid period string from get_pa_periods, e.g. '1D', '7D', 'MTD', '1M', 'YTD', '1Y'",
+                },
             },
             "required": ["period"],
         },
@@ -305,9 +310,15 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker symbol to fetch transactions for"},
-                "sec_type": {"type": "string", "description": "Security type for conid resolution: 'STK' (default), 'IND', 'BOND', 'FUT', or 'CASH'"},
+                "sec_type": {
+                    "type": "string",
+                    "description": "Security type for conid resolution: 'STK' (default), 'IND', 'BOND', 'FUT', or 'CASH'",
+                },
                 "currency": {"type": "string", "description": "Currency code for the request (default 'USD')"},
-                "days": {"type": "integer", "description": "Optional lookback window in days; omit for IBKR's default range"},
+                "days": {
+                    "type": "integer",
+                    "description": "Optional lookback window in days; omit for IBKR's default range",
+                },
             },
             "required": ["symbol"],
         },
@@ -324,7 +335,11 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker symbol"},
-                "sec_type": {"type": "string", "description": "Security type: STK, IND, BOND, or FUT (default STK)", "default": "STK"},
+                "sec_type": {
+                    "type": "string",
+                    "description": "Security type: STK, IND, BOND, or FUT (default STK)",
+                    "default": "STK",
+                },
             },
             "required": ["symbol"],
         },
@@ -460,7 +475,10 @@ TOOL_DEFINITIONS = [
                     "description": "Script name; for source='backtest' also filters which stored run to use (default: most recent for the symbol)",
                     "default": "",
                 },
-                "timeframe": {"type": "string", "description": "For source='backtest': cache timeframe of the backtested bars (for chart-timeframe inference; optional)"},
+                "timeframe": {
+                    "type": "string",
+                    "description": "For source='backtest': cache timeframe of the backtested bars (for chart-timeframe inference; optional)",
+                },
                 "period": {"type": "string", "description": "For source='backtest': cache period key (optional)"},
                 "end": {"type": "string", "description": "For source='backtest': cache end-date key (optional)"},
             },
@@ -878,6 +896,7 @@ def _safe_error(tool: str, exc: Exception) -> str:
         IBKRRateLimitError,
         StoreError,
     )
+
     if isinstance(exc, IBKRAuthError):
         return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
     if isinstance(exc, IBKRRateLimitError):
@@ -947,18 +966,20 @@ def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
             skipped += 1
             continue
 
-        parsed.append({
-            "execution_id": execution_id,
-            "symbol": symbol,
-            "side": side,
-            "size": size,
-            "price": price,
-            "time": time_val,
-            "commission": commission,
-            "account": str(t.get("account") or t.get("acctID") or ""),
-            "asset_class": (t.get("assetClass") or t.get("secType") or "").strip().upper(),
-            "realized_pnl": None,  # CP API trades endpoint does not include realized P&L
-        })
+        parsed.append(
+            {
+                "execution_id": execution_id,
+                "symbol": symbol,
+                "side": side,
+                "size": size,
+                "price": price,
+                "time": time_val,
+                "commission": commission,
+                "account": str(t.get("account") or t.get("acctID") or ""),
+                "asset_class": (t.get("assetClass") or t.get("secType") or "").strip().upper(),
+                "realized_pnl": None,  # CP API trades endpoint does not include realized P&L
+            }
+        )
     return parsed, skipped
 
 
@@ -1132,6 +1153,7 @@ class ClaudeToolkit:
         import time
 
         from ibkr_core_mcp.exceptions import IBKRAPIError
+
         raw = None
         for attempt in range(3):
             try:
@@ -1161,9 +1183,7 @@ class ClaudeToolkit:
 
     def _check_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return HIT/MISS for a specific symbol/timeframe/period/end combination."""
-        hit = self._cache.check(
-            inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"]
-        )
+        hit = self._cache.check(inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"])
         label = "HIT" if hit else "MISS"
         return f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']}", None
 
@@ -1287,7 +1307,8 @@ class ClaudeToolkit:
             pnl_line = f"\nTotal realized P&L: {total_pnl:+.2f}" if has_pnl else ""
             return (
                 f"Trade history — Flex store ({len(trades)} total, all origins incl. mobile/TWS){suffix}:\n"
-                + "\n".join(lines) + pnl_line
+                + "\n".join(lines)
+                + pnl_line
             ), None
         # source == 'live'
         # Note: CP API /iserver/account/trades is session-scoped — mobile/TWS-placed
@@ -1321,7 +1342,8 @@ class ClaudeToolkit:
         suffix = f"  (showing first 20 of {len(parsed)})" if len(parsed) > 20 else ""
         return (
             f"Recent trades — CP API session (last 7 days, {len(parsed)} total){skip_note}{suffix}:\n"
-            + "\n".join(lines) + upsert_note
+            + "\n".join(lines)
+            + upsert_note
         ), None
 
     def _sync_flex_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -1348,6 +1370,7 @@ class ClaudeToolkit:
         availability than Flex, not session-scoped).
         """
         from ibkr_core_mcp.flex_query import FlexQueryClient
+
         if not self._config.flex_token or not self._config.flex_query_id:
             return (
                 "Flex Query not configured. Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in .env. "
@@ -1377,6 +1400,7 @@ class ClaudeToolkit:
     def _sync_flex_archive(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Import all Flex XML files from Drive account_data/ into the local store."""
         from ibkr_core_mcp.flex_query import FlexQueryClient
+
         flex = FlexQueryClient(self._config, self._store, self._cache)
         try:
             result = flex.sync_archive_from_drive()
@@ -1401,6 +1425,7 @@ class ClaudeToolkit:
         from pathlib import Path
 
         from ibkr_core_mcp.flex_query import FlexQueryClient
+
         path = inputs["path"]
         # Path allowlist: only files under ~/.ibkr_core are permitted.
         # Prevents LLM prompt-injection from reading arbitrary local files.
@@ -1511,9 +1536,7 @@ class ClaudeToolkit:
                         verified_at=now,
                     )
                 dupe_note = _dupe_note(raw_count, len(unique_ids), verbose=True)
-                file_lines.append(
-                    f"  ✓ pre-validated  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}"
-                )
+                file_lines.append(f"  ✓ pre-validated  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}")
                 all_xml_ids |= unique_ids
                 continue
 
@@ -1522,9 +1545,7 @@ class ClaudeToolkit:
                 # Hash matches what was recorded at sync time — import is confirmed complete.
                 self._store.mark_flex_import_verified(filename, now)
                 dupe_note = _dupe_note(raw_count, len(unique_ids))
-                file_lines.append(
-                    f"  ✓ hash verified  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}"
-                )
+                file_lines.append(f"  ✓ hash verified  {filename}  ({len(unique_ids)} tradeIDs){dupe_note}")
                 all_xml_ids |= unique_ids
                 continue
 
@@ -1534,18 +1555,12 @@ class ClaudeToolkit:
             dupe_note = _dupe_note(raw_count, len(unique_ids))
             if missing:
                 file_lines.append(
-                    f"  ✗ {len(missing)} missing  {filename}  "
-                    f"({len(unique_ids)} in XML, {reason}){dupe_note}"
+                    f"  ✗ {len(missing)} missing  {filename}  ({len(unique_ids)} in XML, {reason}){dupe_note}"
                 )
-                file_lines.append(
-                    f"    Missing tradeIDs (first 5): {sorted(missing)[:5]}"
-                )
+                file_lines.append(f"    Missing tradeIDs (first 5): {sorted(missing)[:5]}")
                 issues.append(filename)
             else:
-                file_lines.append(
-                    f"  ✓ cross-checked  {filename}  "
-                    f"({len(unique_ids)} tradeIDs, {reason}){dupe_note}"
-                )
+                file_lines.append(f"  ✓ cross-checked  {filename}  ({len(unique_ids)} tradeIDs, {reason}){dupe_note}")
                 self._store.log_flex_import(
                     filename=filename,
                     sha256=sha256,
@@ -1571,9 +1586,7 @@ class ClaudeToolkit:
             f"  Missing from SQLite             : {len(total_missing)}",
         ]
         if issues:
-            lines.append(
-                f"  Action: re-import {len(issues)} file(s) using import_flex_file or sync_flex_archive."
-            )
+            lines.append(f"  Action: re-import {len(issues)} file(s) using import_flex_file or sync_flex_archive.")
         else:
             lines.append("  Result: all source tradeIDs confirmed present in SQLite.")
 
@@ -1600,7 +1613,7 @@ class ClaudeToolkit:
             tif = o.get("timeInForce") or o.get("tif") or ""
             order_ref = (
                 o.get("order_ref")  # IBKR's real Live Orders field (snake_case) — verified
-                                     # against docs/audits/audit-evidence/scrapes/cpapi-v1.md
+                # against docs/audits/audit-evidence/scrapes/cpapi-v1.md
                 or o.get("orderRef")  # kept in case IBKR ever adds a camelCase alias
                 or o.get("cOID")
                 or o.get("clientOrderId")
@@ -1649,9 +1662,7 @@ class ClaudeToolkit:
         for o in orders:
             status = o.get("status", "MISSING")
             filtered = " [FILTERED by get_live_orders]" if status in terminal or not status else ""
-            order_ref = (
-                o.get("order_ref") or o.get("orderRef") or o.get("cOID") or ""
-            )
+            order_ref = o.get("order_ref") or o.get("orderRef") or o.get("cOID") or ""
             client_id = o.get("clientId", "absent")
             if order_ref.startswith("CLAUDIA-"):
                 origin = "ClaudIA-staged"
@@ -1868,7 +1879,7 @@ class ClaudeToolkit:
             return f"Scanner returned no results for {inputs['scan_code']}.", None
         max_r = inputs.get("max_results", 25)
         lines = [
-            f"{i+1}. {r.get('symbol', r.get('contractDescription', {}).get('symbol', '?'))} "
+            f"{i + 1}. {r.get('symbol', r.get('contractDescription', {}).get('symbol', '?'))} "
             f"({r.get('contractDescription', {}).get('exchange', '?')})"
             for i, r in enumerate(results[:max_r])
         ]
@@ -1997,9 +2008,7 @@ class ClaudeToolkit:
             return _pinescript.strategy_from_backtest(result, df), None
 
         indicators_list = inputs.get("indicators", ["rsi", "macd"])
-        script = _pinescript.indicator_script(
-            strategy_name or f"{symbol} Indicators", indicators_list, {}
-        )
+        script = _pinescript.indicator_script(strategy_name or f"{symbol} Indicators", indicators_list, {})
         return script, None
 
     def _preview_order(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -2048,10 +2057,10 @@ class ClaudeToolkit:
             return err, None
 
         order: dict[str, Any] = {
-            "conid": conid,                  # IBKR requires int
+            "conid": conid,  # IBKR requires int
             "orderType": order_type,
             "side": action,
-            "quantity": int(quantity),       # int matches place_order convention
+            "quantity": int(quantity),  # int matches place_order convention
             "tif": "DAY",
         }
         if sec_type in ("FUT", "FOP"):
@@ -2176,9 +2185,7 @@ class ClaudeToolkit:
             return f"No futures found for {', '.join(symbols)}.", None
         return json.dumps(futures, indent=2), None
 
-    def _resolve_snapshot_conid(
-        self, sym: str, sec_type: str, exchange: str | None
-    ) -> tuple[int, str | None]:
+    def _resolve_snapshot_conid(self, sym: str, sec_type: str, exchange: str | None) -> tuple[int, str | None]:
         """Resolve one symbol to a conid using the correct endpoint for its sec_type.
 
         The single conid-resolution implementation for the toolkit (register item 15,
@@ -2246,10 +2253,7 @@ class ClaudeToolkit:
             return 0, f"Could not resolve conid for {sym} (as {sec_type})."
 
         if exchange:
-            matches = [
-                c for c in contracts
-                if str(c.get("exchange", "")).upper() == exchange.upper()
-            ]
+            matches = [c for c in contracts if str(c.get("exchange", "")).upper() == exchange.upper()]
             contracts = matches or contracts
 
         conid = contracts[0].get("conid") or contracts[0].get("con_id")
@@ -2298,12 +2302,15 @@ class ClaudeToolkit:
             return f"Could not resolve conids for: {', '.join(symbols)}.", None
 
         import time
+
         snapshot = self._client.get_market_snapshot(conids)
+
         # First call initializes the iServer subscription but returns no price fields.
         # Retry once after 1s — same two-call warmup pattern as /iserver/account/orders.
         # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
         def _has_prices(s: list[dict[str, Any]]) -> bool:
             return any(item.get("31") or item.get("84") or item.get("86") for item in s)
+
         if snapshot and not _has_prices(snapshot):
             time.sleep(1)
             snapshot = self._client.get_market_snapshot(conids)
@@ -2413,7 +2420,7 @@ class ClaudeToolkit:
             "isSizeCondition": False,
             "conditions": [
                 {
-                    "type": 1,          # 1 = Price per IBKR Client Portal API
+                    "type": 1,  # 1 = Price per IBKR Client Portal API
                     "conid": conid_int,
                     "exchange": exchange,
                     "conditionType": "Price",
@@ -2493,10 +2500,11 @@ class ClaudeToolkit:
             wl_id = wl.get("id") or wl.get("watchlistId") or "?"
             wl_name = wl.get("name") or wl.get("watchlistName") or "?"
             rows = wl.get("rows") or wl.get("instruments") or wl.get("symbols") or []
-            symbols = [
-                r.get("ST") or r.get("symbol") or r.get("conid") or str(r)
-                for r in rows if isinstance(r, dict)
-            ] if rows else []
+            symbols = (
+                [r.get("ST") or r.get("symbol") or r.get("conid") or str(r) for r in rows if isinstance(r, dict)]
+                if rows
+                else []
+            )
             lines.append(f"  [{wl_id}] {wl_name}: {', '.join(str(s) for s in symbols) or '(no symbols)'}")
         lines.append("\nRaw IBKR response:")
         lines.append(json.dumps(watchlists, indent=2))
@@ -2568,9 +2576,7 @@ class ClaudeToolkit:
             return f"Invalid URL: {exc}"
         return None
 
-    def _scrape_with_fallback(
-        self, url: str, markdown: str, metadata: dict[str, Any] | None
-    ) -> tuple[str, str, bool]:
+    def _scrape_with_fallback(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[str, str, bool]:
         """
         Return (final_markdown, note, used_fallback) for a single Firecrawl
         result/page, falling back to Crawl4AI when Firecrawl's content looks
@@ -2699,9 +2705,7 @@ class ClaudeToolkit:
 
         lines = [f"## Search results for: {query}\n"]
         for i, r in enumerate(results, 1):
-            md, note, _ = self._scrape_with_fallback(
-                r.get("url", ""), r.get("markdown", ""), r.get("metadata")
-            )
+            md, note, _ = self._scrape_with_fallback(r.get("url", ""), r.get("markdown", ""), r.get("metadata"))
             r["markdown"] = md
             lines.append(f"### {i}. {r.get('title', '(no title)')}")
             lines.append(f"**URL:** {r.get('url', '')}\n")
@@ -2774,8 +2778,7 @@ class ClaudeToolkit:
                     f"Using cached crawl of {url} from Drive — no Firecrawl request made.\n"
                     f"Crawled at: {cached['crawled_at']}\n"
                     f"Saved {saved} page(s). Pass force_refresh=true to re-crawl.\n"
-                    f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10])
-                    + ("..." if saved > 10 else ""),
+                    f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10]) + ("..." if saved > 10 else ""),
                     None,
                 )
 
@@ -2814,7 +2817,8 @@ class ClaudeToolkit:
         return (
             f"Crawl complete: saved {saved} page(s) from {url} to Drive.\n"
             f"Crawled at: {manifest['crawled_at']}\n"
-            f"Pages: " + ", ".join(p['url'] for p in manifest['pages'][:10])
+            f"Pages: "
+            + ", ".join(p["url"] for p in manifest["pages"][:10])
             + ("..." if saved > 10 else "")
             + fallback_line,
             None,

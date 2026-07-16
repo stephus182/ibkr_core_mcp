@@ -4,28 +4,31 @@ import pytest
 
 # ── _slugify ──────────────────────────────────────────────────────────────────
 
+
 def test_slugify_strips_scheme_and_lowercases():
     from ibkr_core_mcp.web_scraper import _slugify
+
     result = _slugify("https://DOCS.EXAMPLE.COM/Foo/Bar")
     assert result == "docs-example-com-foo-bar"
 
 
 def test_slugify_ibkr_campus_url():
     from ibkr_core_mcp.web_scraper import _slugify
-    result = _slugify(
-        "https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/"
-    )
+
+    result = _slugify("https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/")
     assert result == "www-interactivebrokers-com-campus-ibkr-api-page-cpapi-v1"
 
 
 def test_slugify_truncates_to_100_chars():
     from ibkr_core_mcp.web_scraper import _slugify
+
     long_url = "https://example.com/" + "a" * 200
     assert len(_slugify(long_url)) <= 100
 
 
 def test_slugify_no_path_traversal():
     from ibkr_core_mcp.web_scraper import _slugify
+
     result = _slugify("https://example.com/../../../etc/passwd")
     assert ".." not in result
     assert "/" not in result
@@ -34,6 +37,7 @@ def test_slugify_no_path_traversal():
 
 def test_slugify_no_leading_trailing_hyphens():
     from ibkr_core_mcp.web_scraper import _slugify
+
     result = _slugify("https://example.com/")
     assert not result.startswith("-")
     assert not result.endswith("-")
@@ -41,8 +45,10 @@ def test_slugify_no_leading_trailing_hyphens():
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
 
+
 def test_firecrawl_error_stores_status_code():
     from ibkr_core_mcp.web_scraper import FirecrawlError
+
     err = FirecrawlError("bad key", 401)
     assert err.status_code == 401
     assert str(err) == "bad key"
@@ -50,12 +56,14 @@ def test_firecrawl_error_stores_status_code():
 
 def test_firecrawl_error_status_code_optional():
     from ibkr_core_mcp.web_scraper import FirecrawlError
+
     err = FirecrawlError("network failure")
     assert err.status_code is None
 
 
 def test_web_docs_store_error_chains_cause():
     from ibkr_core_mcp.web_scraper import WebDocsStoreError
+
     cause = RuntimeError("drive down")
     try:
         raise WebDocsStoreError("save failed") from cause
@@ -68,6 +76,7 @@ def test_web_docs_store_error_chains_cause():
 
 def test_firecrawl_client_rejects_empty_api_key():
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     with pytest.raises(ValueError, match="api_key"):
         FirecrawlClient("")
 
@@ -75,13 +84,10 @@ def test_firecrawl_client_rejects_empty_api_key():
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_returns_formatted_results(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "data": [
-            {"url": "https://example.com", "title": "Example", "markdown": "# Hello"}
-        ]
-    }
+    mock_resp.json.return_value = {"data": [{"url": "https://example.com", "title": "Example", "markdown": "# Hello"}]}
     mock_requests.post.return_value = mock_resp
     client = FirecrawlClient("fc-test")
     results = client.search("test query", limit=1)
@@ -98,6 +104,7 @@ def test_search_returns_formatted_results(mock_requests):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_401_raises_firecrawl_error(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
     mock_resp = MagicMock()
     mock_resp.status_code = 401
     mock_requests.post.return_value = mock_resp
@@ -111,6 +118,7 @@ def test_search_401_raises_firecrawl_error(mock_requests):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_429_raises_rate_limit(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
     mock_resp = MagicMock()
     mock_resp.status_code = 429
     mock_resp.headers = {}
@@ -130,6 +138,7 @@ def test_search_retries_on_429_then_succeeds(mock_requests, mock_time):
     (https://docs.firecrawl.dev/api-reference/errors), a 429 is retryable —
     the client must not raise on the first one if a later attempt succeeds."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     rate_limited = MagicMock()
     rate_limited.status_code = 429
     rate_limited.headers = {}
@@ -152,6 +161,7 @@ def test_search_honors_retry_after_header(mock_requests, mock_time):
     """Must honor the Retry-After header value exactly, per Firecrawl's documented
     guidance, rather than always using the default backoff formula."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     rate_limited = MagicMock()
     rate_limited.status_code = 429
     rate_limited.headers = {"Retry-After": "7"}
@@ -170,6 +180,7 @@ def test_search_honors_retry_after_header(mock_requests, mock_time):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_5xx_raises_service_error(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
     mock_resp = MagicMock()
     mock_resp.status_code = 503
     mock_resp.headers = {}
@@ -182,6 +193,7 @@ def test_search_5xx_raises_service_error(mock_requests):
 
 def test_search_empty_query_raises():
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     client = FirecrawlClient("fc-test")
     with pytest.raises(ValueError, match="query"):
         client.search("")
@@ -192,6 +204,7 @@ def test_search_includes_result_metadata(mock_requests):
     """Each search result retains Firecrawl's per-result metadata (statusCode/error)
     so callers can assess extraction quality without a second round trip."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {
@@ -213,11 +226,10 @@ def test_search_includes_result_metadata(mock_requests):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_metadata_defaults_to_empty_dict(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "data": [{"url": "https://example.com", "title": "Example", "markdown": "# Hello"}]
-    }
+    mock_resp.json.return_value = {"data": [{"url": "https://example.com", "title": "Example", "markdown": "# Hello"}]}
     mock_requests.post.return_value = mock_resp
     client = FirecrawlClient("fc-test")
     results = client.search("test query", limit=1)
@@ -227,6 +239,7 @@ def test_search_metadata_defaults_to_empty_dict(mock_requests):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_search_limit_clamped_to_10(mock_requests):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"data": []}
@@ -239,12 +252,14 @@ def test_search_limit_clamped_to_10(mock_requests):
 
 # ── FirecrawlClient.crawl ─────────────────────────────────────────────────────
 
+
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_crawl_job_start_retries_on_429_then_succeeds(mock_requests, mock_time):
     """The job-start POST (/crawl) is subject to the same Firecrawl rate limits
     as /search — must retry rather than raising on the first 429."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
 
     rate_limited = MagicMock()
@@ -267,13 +282,16 @@ def test_crawl_job_start_retries_on_429_then_succeeds(mock_requests, mock_time):
     assert mock_requests.post.call_count == 2
     # A backoff sleep (not just the poll loop's own time.sleep(5)) must have occurred.
     sleep_delays = [call.args[0] for call in mock_time.sleep.call_args_list]
-    assert any(d != 5 for d in sleep_delays), f"expected a backoff delay distinct from the poll cadence, got {sleep_delays}"
+    assert any(d != 5 for d in sleep_delays), (
+        f"expected a backoff delay distinct from the poll cadence, got {sleep_delays}"
+    )
 
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_crawl_polls_until_completed(mock_requests, mock_time):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     # monotonic: deadline=0+120=120; first while check=1 (enter); after poll status=completed → exit
     mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
 
@@ -289,9 +307,7 @@ def test_crawl_polls_until_completed(mock_requests, mock_time):
     poll2.status_code = 200
     poll2.json.return_value = {
         "status": "completed",
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/page"}, "markdown": "# Page"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/page"}, "markdown": "# Page"}],
     }
 
     mock_requests.post.return_value = start_resp
@@ -308,6 +324,7 @@ def test_crawl_polls_until_completed(mock_requests, mock_time):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_crawl_failed_status_raises(mock_requests, mock_time):
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
     mock_time.monotonic.side_effect = [0.0, 1.0]
 
     start_resp = MagicMock()
@@ -330,6 +347,7 @@ def test_crawl_failed_status_raises(mock_requests, mock_time):
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_crawl_timeout_returns_partial_results(mock_requests, mock_time):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     # deadline = 0.0 + 10 = 10; first while check = 5.0 (enter loop); second = 200.0 (exit)
     mock_time.monotonic.side_effect = [0.0, 5.0, 200.0]
 
@@ -341,9 +359,7 @@ def test_crawl_timeout_returns_partial_results(mock_requests, mock_time):
     partial_poll.status_code = 200
     partial_poll.json.return_value = {
         "status": "scraping",
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "partial content"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "partial content"}],
     }
 
     mock_requests.post.return_value = start_resp
@@ -363,6 +379,7 @@ def test_crawl_keeps_pages_with_empty_markdown_and_metadata(mock_requests, mock_
     assessment + fallback) need to see blocked/empty pages, not lose them silently.
     Each page also retains its raw Firecrawl metadata dict."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_time.monotonic.side_effect = [0.0, 1.0]
 
     start_resp = MagicMock()
@@ -402,6 +419,7 @@ def test_crawl_keeps_pages_with_empty_markdown_and_metadata(mock_requests, mock_
 @patch("ibkr_core_mcp.web_scraper.requests")
 def test_crawl_max_pages_clamped(mock_requests, mock_time):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_time.monotonic.side_effect = [0.0, 1.0]
     start_resp = MagicMock()
     start_resp.status_code = 200
@@ -426,6 +444,7 @@ def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
     crawl() must follow it until exhausted rather than returning only the first
     chunk, despite its own docstring's claim of returning "all pages"."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     # 0.0/1.0 = deadline calc + outer poll-loop check; 2.0 = the pagination
     # loop's own deadline check before fetching the one "next" chunk.
     mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
@@ -439,18 +458,14 @@ def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
     poll.json.return_value = {
         "status": "completed",
         "next": "https://api.firecrawl.dev/v1/crawl/job-big?skip=1",
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}],
     }
 
     next_page = MagicMock()
     next_page.status_code = 200
     next_page.json.return_value = {
         "next": None,
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}],
     }
 
     mock_requests.post.return_value = start_resp
@@ -474,6 +489,7 @@ def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, moc
     next-chunk fetch must be retried, not treated as a terminal failure. Mirrors
     test_search_honors_retry_after_header / test_crawl_job_start_retries_on_429_then_succeeds."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     # 0.0/1.0 = deadline calc + outer poll-loop check; 2.0 = the pagination
     # loop's own deadline check before fetching the one "next" chunk.
     mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
@@ -487,9 +503,7 @@ def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, moc
     poll.json.return_value = {
         "status": "completed",
         "next": "https://api.firecrawl.dev/v1/crawl/job-retry?skip=1",
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}],
     }
 
     next_rate_limited = MagicMock()
@@ -500,9 +514,7 @@ def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, moc
     next_page.status_code = 200
     next_page.json.return_value = {
         "next": None,
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}],
     }
 
     mock_requests.post.return_value = start_resp
@@ -516,7 +528,9 @@ def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, moc
     assert mock_requests.get.call_count == 3  # poll + 429 + retried success
     # A backoff sleep (not just the poll loop's own time.sleep(5)) must have occurred.
     sleep_delays = [call.args[0] for call in mock_time.sleep.call_args_list]
-    assert any(d != 5 for d in sleep_delays), f"expected a backoff delay distinct from the poll cadence, got {sleep_delays}"
+    assert any(d != 5 for d in sleep_delays), (
+        f"expected a backoff delay distinct from the poll cadence, got {sleep_delays}"
+    )
 
 
 @patch("ibkr_core_mcp.web_scraper.time")
@@ -527,6 +541,7 @@ def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time):
     it stops once the same cursor repeats, returning whatever was collected so far
     rather than looping indefinitely."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
+
     mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
 
     start_resp = MagicMock()
@@ -539,18 +554,14 @@ def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time):
     poll.json.return_value = {
         "status": "completed",
         "next": same_next_url,
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p1"}, "markdown": "# Page 1"}],
     }
 
     looping_chunk = MagicMock()
     looping_chunk.status_code = 200
     looping_chunk.json.return_value = {
         "next": same_next_url,  # cursor fails to advance — must not be re-fetched
-        "data": [
-            {"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}
-        ],
+        "data": [{"metadata": {"sourceURL": "https://example.com/p2"}, "markdown": "# Page 2"}],
     }
 
     mock_requests.post.return_value = start_resp
@@ -567,13 +578,17 @@ def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time):
 
 # ── WebDocsStore — Drive service and folder helpers ───────────────────────────
 
+
 def _make_cfg_with_drive(tmp_path):
     """Helper: Config with dummy Drive creds pointing to tmp files."""
     from ibkr_core_mcp.config import Config
+
     token = tmp_path / "token.json"
     creds_file = tmp_path / "credentials.json"
-    token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
-    creds_file.write_text('{}')
+    token.write_text(
+        '{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}'
+    )
+    creds_file.write_text("{}")
     return Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -589,6 +604,7 @@ def _make_cfg_with_drive(tmp_path):
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     cfg = _make_cfg_with_drive(tmp_path)
     mock_creds = MagicMock()
     mock_creds.valid = True
@@ -606,6 +622,7 @@ def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path)
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     cfg = _make_cfg_with_drive(tmp_path)
     mock_creds = MagicMock()
     mock_creds.valid = True
@@ -623,6 +640,7 @@ def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     cfg = _make_cfg_with_drive(tmp_path)
     mock_creds = MagicMock()
     mock_creds.valid = True
@@ -630,9 +648,7 @@ def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_pa
 
     mock_svc = MagicMock()
     mock_build.return_value = mock_svc
-    mock_svc.files().list().execute.return_value = {
-        "files": [{"id": "existing-folder-id"}]
-    }
+    mock_svc.files().list().execute.return_value = {"files": [{"id": "existing-folder-id"}]}
 
     store = WebDocsStore(cfg)
     fid = store._find_or_create_folder("web_docs", "root-folder-id")
@@ -644,6 +660,7 @@ def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_pa
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     cfg = _make_cfg_with_drive(tmp_path)
     mock_creds = MagicMock()
     mock_creds.valid = True
@@ -665,10 +682,13 @@ def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, 
 def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.config import Config
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     token = tmp_path / "token.json"
     creds_file = tmp_path / "credentials.json"
-    token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
-    creds_file.write_text('{}')
+    token.write_text(
+        '{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}'
+    )
+    creds_file.write_text("{}")
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -690,14 +710,18 @@ def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tm
 
 # ── WebDocsStore.save_crawl ───────────────────────────────────────────────────
 
+
 def _make_store_with_mock_service(tmp_path):
     """Return a WebDocsStore with _svc mocked out (bypasses Drive auth)."""
     from ibkr_core_mcp.config import Config
     from ibkr_core_mcp.web_scraper import WebDocsStore
+
     token = tmp_path / "token.json"
     creds_file = tmp_path / "credentials.json"
-    token.write_text('{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}')
-    creds_file.write_text('{}')
+    token.write_text(
+        '{"token": "tok", "refresh_token": "r", "token_uri": "u", "client_id": "c", "client_secret": "s", "scopes": ["https://www.googleapis.com/auth/drive"]}'
+    )
+    creds_file.write_text("{}")
     cfg = Config(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
@@ -713,6 +737,7 @@ def _make_store_with_mock_service(tmp_path):
 
 
 # ── WebDocsStore.get_cached_crawl ──────────────────────────────────────────────
+
 
 def test_get_cached_crawl_returns_none_when_slug_folder_missing(tmp_path):
     store = _make_store_with_mock_service(tmp_path)
@@ -730,6 +755,7 @@ def test_get_cached_crawl_returns_none_when_no_index_json(tmp_path):
     store = _make_store_with_mock_service(tmp_path)
     svc = store._svc
     from ibkr_core_mcp.web_scraper import _slugify
+
     slug = _slugify("https://example.com")
 
     def fake_list(**kwargs):
@@ -752,7 +778,6 @@ def test_get_cached_crawl_returns_none_when_no_index_json(tmp_path):
 def _mock_index_json_download(svc, slug_folder_id, manifest, index_file_id="index-file-id"):
     """Wire a mock WebDocsStore's svc so get_cached_crawl finds and downloads
     the given manifest dict as index.json content."""
-    from ibkr_core_mcp.web_scraper import _slugify
 
     def fake_list(**kwargs):
         q = kwargs.get("q", "")
@@ -779,6 +804,7 @@ def _mock_index_json_download(svc, slug_folder_id, manifest, index_file_id="inde
 
 def test_get_cached_crawl_returns_manifest_when_fresh(tmp_path):
     from datetime import UTC, datetime
+
     store = _make_store_with_mock_service(tmp_path)
     svc = store._svc
     manifest = {
@@ -798,6 +824,7 @@ def test_get_cached_crawl_returns_manifest_when_fresh(tmp_path):
 
 def test_get_cached_crawl_returns_none_when_stale(tmp_path):
     from datetime import UTC, datetime, timedelta
+
     store = _make_store_with_mock_service(tmp_path)
     svc = store._svc
     stale_time = datetime.now(UTC) - timedelta(hours=100)
@@ -905,9 +932,7 @@ def test_save_crawl_disambiguates_colliding_slugs(tmp_path):
 
     assert len(manifest["pages"]) == 2
     file_ids = {p["file_id"] for p in manifest["pages"]}
-    assert len(file_ids) == 2, (
-        f"expected 2 distinct file_ids for 2 distinct URLs, got {manifest['pages']}"
-    )
+    assert len(file_ids) == 2, f"expected 2 distinct file_ids for 2 distinct URLs, got {manifest['pages']}"
     assert not update_calls, "second page must be create()'d under a disambiguated name, not update() the first"
 
 
@@ -947,9 +972,7 @@ def test_save_search_uploads_markdown_file(tmp_path):
     svc.files().list().execute.return_value = {"files": []}
     svc.files().create().execute.return_value = {"id": "search-file-id"}
 
-    results = [
-        {"url": "https://example.com", "title": "Example", "markdown": "# Hello"}
-    ]
+    results = [{"url": "https://example.com", "title": "Example", "markdown": "# Hello"}]
     file_id = store.save_search("test query", results)
     assert file_id == "search-file-id"
     # create() called at least once for the file
@@ -964,6 +987,7 @@ def test_save_search_filename_format(tmp_path):
     svc.files().create().execute.return_value = {"id": "fid"}
 
     import re as _re
+
     captured = []
 
     def capture_create(**kwargs):

@@ -1,4 +1,5 @@
 """RestrictedPython sandbox executor for backtesting strategy code on OHLCV DataFrames."""
+
 from __future__ import annotations
 
 import multiprocessing
@@ -202,9 +203,7 @@ def run_backtest(
     residual risk, documented in SECURITY.md §Residual risk.
     """
     if len(code) > _MAX_CODE_LEN:
-        raise BacktestSyntaxError(
-            f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)"
-        )
+        raise BacktestSyntaxError(f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)")
 
     # safe_globals already sets __builtins__ = safe_builtins, which excludes
     # __import__, open, eval, exec, compile, print and all introspection attrs.

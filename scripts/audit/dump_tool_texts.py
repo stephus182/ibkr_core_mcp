@@ -4,6 +4,7 @@ review against scraped official docs. No imports of the package (AST only).
 
 Usage: python scripts/audit/dump_tool_texts.py > docs/audits/audit-evidence/tool_texts.md
 """
+
 from __future__ import annotations
 
 import ast
@@ -16,10 +17,15 @@ tree = ast.parse(SRC.read_text())
 tools = None
 for node in ast.walk(tree):
     if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "TOOL_DEFINITIONS" for t in node.targets):
+        isinstance(t, ast.Name) and t.id == "TOOL_DEFINITIONS" for t in node.targets
+    ):
         tools = ast.literal_eval(node.value)
-    elif (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-          and node.target.id == "TOOL_DEFINITIONS" and node.value is not None):
+    elif (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "TOOL_DEFINITIONS"
+        and node.value is not None
+    ):
         tools = ast.literal_eval(node.value)
 assert tools, "TOOL_DEFINITIONS not found"
 

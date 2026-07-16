@@ -33,6 +33,7 @@ See docs/audits/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
 
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
 """
+
 from __future__ import annotations
 
 import json
@@ -44,9 +45,11 @@ import pytest
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def live_config(tmp_path_factory):
     from ibkr_core_mcp.config import Config
+
     tmp = tmp_path_factory.mktemp("alerts_live_cfg")
     return Config(
         gateway_url="https://localhost:5055/v1/api",
@@ -70,6 +73,7 @@ def live_toolkit(live_config):
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
     from ibkr_core_mcp.client import IBKRClient
+
     client = IBKRClient(live_config, auth=BrowserCookieAuth())
     if not client.ping():
         pytest.skip("IBKR gateway not reachable or not authenticated")
@@ -87,6 +91,7 @@ def live_toolkit(live_config):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_alert_id(text: str) -> str:
     """Extract the orderId from a create_price_alert text response (JSON string)."""
     try:
@@ -97,8 +102,9 @@ def _parse_alert_id(text: str) -> str:
         return ""
 
 
-def _create_alert(toolkit, symbol: str = "AAPL", operator: str = ">=",
-                  price: float = 99999.0, **kwargs) -> tuple[str, str]:
+def _create_alert(
+    toolkit, symbol: str = "AAPL", operator: str = ">=", price: float = 99999.0, **kwargs
+) -> tuple[str, str]:
     """Create an alert and return (text_response, alert_id).
 
     Skips with a descriptive message on 403 (no trading session) or rate limit.
@@ -132,6 +138,7 @@ def _delete_safe(toolkit, alert_id: str) -> None:
 # Read-only
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_toolkit_get_alerts(live_toolkit):
     """get_alerts returns a JSON list or the empty-state message — never an exception.
@@ -150,6 +157,7 @@ def test_toolkit_get_alerts(live_toolkit):
 # ---------------------------------------------------------------------------
 # Create + Delete
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_toolkit_alert_price_above(live_toolkit):
@@ -185,9 +193,7 @@ def test_toolkit_alert_custom_name(live_toolkit):
     try:
         data = json.loads(text)
         if "alertName" in data:
-            assert data["alertName"] == "_ci_named_alert", (
-                f"Name not echoed in response: {data}"
-            )
+            assert data["alertName"] == "_ci_named_alert", f"Name not echoed in response: {data}"
     finally:
         _delete_safe(live_toolkit, alert_id)
 
@@ -215,6 +221,7 @@ def test_toolkit_alert_repeat(live_toolkit):
 # Deactivate / Reactivate
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_toolkit_alert_deactivate_and_reactivate(live_toolkit):
     """Toggle an alert off then back on — both activate_alert calls must succeed.
@@ -237,6 +244,7 @@ def test_toolkit_alert_deactivate_and_reactivate(live_toolkit):
 # Modify
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 def test_toolkit_alert_modify_price(live_toolkit):
     """modify_price_alert updates the trigger price — response is a valid JSON dict.
@@ -247,12 +255,8 @@ def test_toolkit_alert_modify_price(live_toolkit):
     _, alert_id = _create_alert(live_toolkit, price=99999.0)
     assert alert_id
     try:
-        mod_text, _ = live_toolkit.execute("modify_price_alert", {
-            "alert_id": alert_id, "price": 99998.0
-        })
-        assert isinstance(json.loads(mod_text), dict), (
-            f"modify_price_alert did not return a JSON dict: {mod_text!r}"
-        )
+        mod_text, _ = live_toolkit.execute("modify_price_alert", {"alert_id": alert_id, "price": 99998.0})
+        assert isinstance(json.loads(mod_text), dict), f"modify_price_alert did not return a JSON dict: {mod_text!r}"
     finally:
         _delete_safe(live_toolkit, alert_id)
 
@@ -263,15 +267,11 @@ def test_toolkit_alert_modify_name(live_toolkit):
     _, alert_id = _create_alert(live_toolkit, name="_ci_original_name")
     assert alert_id
     try:
-        mod_text, _ = live_toolkit.execute("modify_price_alert", {
-            "alert_id": alert_id, "name": "_ci_renamed"
-        })
+        mod_text, _ = live_toolkit.execute("modify_price_alert", {"alert_id": alert_id, "name": "_ci_renamed"})
         data = json.loads(mod_text)
         assert isinstance(data, dict)
         if "alertName" in data:
-            assert data["alertName"] == "_ci_renamed", (
-                f"Name not updated in response: {data}"
-            )
+            assert data["alertName"] == "_ci_renamed", f"Name not updated in response: {data}"
     finally:
         _delete_safe(live_toolkit, alert_id)
 
@@ -282,9 +282,7 @@ def test_toolkit_alert_modify_operator(live_toolkit):
     _, alert_id = _create_alert(live_toolkit, operator=">=", price=99999.0)
     assert alert_id
     try:
-        mod_text, _ = live_toolkit.execute("modify_price_alert", {
-            "alert_id": alert_id, "operator": "<="
-        })
+        mod_text, _ = live_toolkit.execute("modify_price_alert", {"alert_id": alert_id, "operator": "<="})
         assert isinstance(json.loads(mod_text), dict)
     finally:
         _delete_safe(live_toolkit, alert_id)
@@ -293,6 +291,7 @@ def test_toolkit_alert_modify_operator(live_toolkit):
 # ---------------------------------------------------------------------------
 # Full roundtrip  (§4b live test plan)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 def test_toolkit_alert_full_roundtrip(live_toolkit):
@@ -313,9 +312,7 @@ def test_toolkit_alert_full_roundtrip(live_toolkit):
         if list_text.strip().startswith("["):
             alerts = json.loads(list_text)
             ids = [str(a.get("orderId") or a.get("id") or "") for a in alerts]
-            assert alert_id in ids, (
-                f"Created alert {alert_id} not found in get_alerts: {ids}"
-            )
+            assert alert_id in ids, f"Created alert {alert_id} not found in get_alerts: {ids}"
 
         # Modify price
         live_toolkit.execute("modify_price_alert", {"alert_id": alert_id, "price": 99997.0})

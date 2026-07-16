@@ -4,26 +4,28 @@ import pytest
 
 pytestmark = pytest.mark.market_data
 
+
 def test_execute_check_cache_hit(toolkit):
     toolkit._cache.check.return_value = True
-    text, fig = toolkit.execute("check_cache", {
-        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
-    })
+    text, fig = toolkit.execute(
+        "check_cache", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
     assert "HIT" in text
     assert fig is None
 
 
 def test_execute_check_cache_miss(toolkit):
     toolkit._cache.check.return_value = False
-    text, fig = toolkit.execute("check_cache", {
-        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
-    })
+    text, fig = toolkit.execute(
+        "check_cache", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
     assert "MISS" in text
 
 
 # ============================================================================
 # _list_cache
 # ============================================================================
+
 
 def test_list_cache_empty(toolkit):
     """Returns 'cache is empty' when Drive has no entries."""
@@ -50,18 +52,25 @@ def test_list_cache_happy_path(toolkit):
 def test_execute_add_indicators(toolkit):
     import numpy as np
     import pandas as pd
+
     n = 100
     np.random.seed(0)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    df = pd.DataFrame({
-        "open": close, "high": close + 0.5, "low": close - 0.5,
-        "close": close, "volume": np.ones(n) * 1e6,
-    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.ones(n) * 1e6,
+        },
+        index=pd.date_range("2025-01-01", periods=n, freq="B"),
+    )
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = df
-    text, fig = toolkit.execute("add_indicators", {
-        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
-    })
+    text, fig = toolkit.execute(
+        "add_indicators", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
     assert len(text) > 0
     assert fig is None
 
@@ -72,6 +81,7 @@ def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):
         if sym == "AAPL":
             return [{"conid": 265598, "exchange": "NASDAQ"}]
         return []
+
     toolkit._client.search_contract.side_effect = search_side_effect
     toolkit._client.get_market_snapshot.return_value = [{"conid": 265598, "31": "185.0"}]
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL", "BADTICKER"]})
@@ -122,9 +132,7 @@ def test_execute_get_market_snapshot_exchange_filter_selects_listing(toolkit):
         {"conid": 2, "exchange": "AMS"},
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 2, "31": "700.0", "6509": "D"}]
-    text, fig = toolkit.execute(
-        "get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"}
-    )
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"})
     toolkit._client.get_market_snapshot.assert_called_once_with([2])
     assert "700.0" in text
 
@@ -134,9 +142,7 @@ def test_execute_get_market_snapshot_exchange_filter_no_match_falls_back(toolkit
     rather than failing outright — better to return something resolvable."""
     toolkit._client.search_contract.return_value = [{"conid": 1, "exchange": "NYSE"}]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 1, "31": "100.0", "6509": "R"}]
-    text, fig = toolkit.execute(
-        "get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"}
-    )
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"})
     toolkit._client.get_market_snapshot.assert_called_once_with([1])
 
 
@@ -190,24 +196,34 @@ def test_fetch_market_data_live_path(toolkit):
 
     n = 50
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    df = pd.DataFrame({
-        "open": close, "high": close + 0.5, "low": close - 0.5,
-        "close": close, "volume": np.ones(n) * 1e6,
-    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.ones(n) * 1e6,
+        },
+        index=pd.date_range("2025-01-01", periods=n, freq="B"),
+    )
 
     toolkit._cache.check.return_value = False
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     # Simulate IBKR raw response that bars_to_dataframe can parse
     data_rows = [
-        {"t": int(ts.timestamp() * 1000), "o": r["open"], "h": r["high"],
-         "l": r["low"], "c": r["close"], "v": r["volume"]}
+        {
+            "t": int(ts.timestamp() * 1000),
+            "o": r["open"],
+            "h": r["high"],
+            "l": r["low"],
+            "c": r["close"],
+            "v": r["volume"],
+        }
         for ts, r in df.iterrows()
     ]
     toolkit._client.get_market_history_paginated.return_value = {"data": data_rows}
 
-    text, fig = toolkit.execute("fetch_market_data", {
-        "symbol": "AAPL", "period": "1Y", "bar": "1d"
-    })
+    text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "AAPL" in text
     assert "IBKR" in text
     toolkit._cache.save.assert_called_once()
@@ -233,6 +249,7 @@ def test_fetch_market_data_empty_data(toolkit):
 # ============================================================================
 # _search_contract
 # ============================================================================
+
 
 def test_search_contract_happy_path(toolkit):
     """Returns JSON-formatted contract list."""
@@ -265,6 +282,7 @@ def test_search_contract_no_results(toolkit):
 # _get_futures
 # ============================================================================
 
+
 def test_get_futures_happy_path(toolkit):
     """Returns JSON-formatted futures contracts."""
     toolkit._client.get_futures.return_value = [
@@ -295,12 +313,11 @@ def test_get_futures_no_results(toolkit):
 
 # ── _sync_flex_trades — missing token ────────────────────────────────────────
 
+
 def test_get_contract_info_happy_path(toolkit):
     """Returns JSON contract details when conid resolves."""
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit._client.get_contract_info_and_rules.return_value = {
-        "symbol": "AAPL", "secType": "STK", "currency": "USD"
-    }
+    toolkit._client.get_contract_info_and_rules.return_value = {"symbol": "AAPL", "secType": "STK", "currency": "USD"}
     text, fig = toolkit.execute("get_contract_info", {"symbol": "AAPL"})
     assert fig is None
     assert "AAPL" in text
@@ -332,28 +349,32 @@ def test_get_contract_info_error(toolkit):
 def test_get_option_chain_happy_path(toolkit):
     """Returns JSON chain from the reimplemented search→strikes client flow."""
     toolkit._client.get_option_chain.return_value = {
-        "symbol": "AAPL", "conid": 265598,
-        "months": ["JAN26", "FEB26"], "month": "JAN26",
-        "call": [185.0, 190.0], "put": [180.0, 185.0],
+        "symbol": "AAPL",
+        "conid": 265598,
+        "months": ["JAN26", "FEB26"],
+        "month": "JAN26",
+        "call": [185.0, 190.0],
+        "put": [180.0, 185.0],
     }
     text, fig = toolkit.execute("get_option_chain", {"symbol": "AAPL"})
     assert fig is None
     assert "months" in text
     assert "185.0" in text
-    toolkit._client.get_option_chain.assert_called_once_with(
-        "AAPL", month=None, exchange="SMART"
-    )
+    toolkit._client.get_option_chain.assert_called_once_with("AAPL", month=None, exchange="SMART")
 
 
 def test_get_option_chain_passes_month_and_exchange(toolkit):
     """month (MMMYY) and exchange are forwarded to the client."""
     toolkit._client.get_option_chain.return_value = {"call": [], "put": []}
-    toolkit.execute("get_option_chain", {
-        "symbol": "SPX", "month": "FEB26", "exchange": "CBOE",
-    })
-    toolkit._client.get_option_chain.assert_called_once_with(
-        "SPX", month="FEB26", exchange="CBOE"
+    toolkit.execute(
+        "get_option_chain",
+        {
+            "symbol": "SPX",
+            "month": "FEB26",
+            "exchange": "CBOE",
+        },
     )
+    toolkit._client.get_option_chain.assert_called_once_with("SPX", month="FEB26", exchange="CBOE")
 
 
 def test_get_option_chain_error(toolkit):
@@ -375,9 +396,7 @@ def test_run_scanner_happy_path(toolkit):
         {"symbol": "AAPL", "contractDescription": {"exchange": "NASDAQ"}},
         {"symbol": "MSFT", "contractDescription": {"exchange": "NASDAQ"}},
     ]
-    text, fig = toolkit.execute("run_scanner", {
-        "scan_code": "TOP_VOLUME_RATE", "instrument": "STK"
-    })
+    text, fig = toolkit.execute("run_scanner", {"scan_code": "TOP_VOLUME_RATE", "instrument": "STK"})
     assert fig is None
     assert "AAPL" in text
     assert "MSFT" in text
@@ -408,9 +427,7 @@ def test_run_scanner_error(toolkit):
 def test_get_trading_schedule_happy_path(toolkit):
     """Returns JSON trading schedule."""
     toolkit._client.get_trading_schedule.return_value = {
-        "tradingScheduleDate": [
-            {"prop": [{"name": "TRADING_HOURS", "value": "0930-1600"}]}
-        ]
+        "tradingScheduleDate": [{"prop": [{"name": "TRADING_HOURS", "value": "0930-1600"}]}]
     }
     text, fig = toolkit.execute("get_trading_schedule", {"symbol": "AAPL"})
     assert fig is None
@@ -421,9 +438,7 @@ def test_get_trading_schedule_happy_path(toolkit):
 def test_get_trading_schedule_custom_params(toolkit):
     """Passes custom asset_class and exchange to client."""
     toolkit._client.get_trading_schedule.return_value = {}
-    toolkit.execute("get_trading_schedule", {
-        "symbol": "CL", "asset_class": "FUT", "exchange": "NYMEX"
-    })
+    toolkit.execute("get_trading_schedule", {"symbol": "CL", "asset_class": "FUT", "exchange": "NYMEX"})
     toolkit._client.get_trading_schedule.assert_called_once_with("FUT", "CL", "NYMEX")
 
 
@@ -443,9 +458,9 @@ def test_get_trading_schedule_error(toolkit):
 def test_delete_cache_happy_path(toolkit):
     """Deletes cache entry and returns confirmation."""
     toolkit._cache.check.return_value = True
-    text, fig = toolkit.execute("delete_cache", {
-        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
-    })
+    text, fig = toolkit.execute(
+        "delete_cache", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
     assert fig is None
     assert "Deleted" in text
     assert "AAPL" in text
@@ -455,9 +470,9 @@ def test_delete_cache_happy_path(toolkit):
 def test_delete_cache_miss(toolkit):
     """Returns 'No cached entry' when the entry does not exist."""
     toolkit._cache.check.return_value = False
-    text, fig = toolkit.execute("delete_cache", {
-        "symbol": "FAKE", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
-    })
+    text, fig = toolkit.execute(
+        "delete_cache", {"symbol": "FAKE", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
     assert fig is None
     assert "No cached entry" in text
     toolkit._cache.delete.assert_not_called()
@@ -466,5 +481,3 @@ def test_delete_cache_miss(toolkit):
 # ============================================================================
 # _modify_price_alert
 # ============================================================================
-
-

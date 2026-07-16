@@ -16,6 +16,7 @@ def _make_response(status_code: int, json_data: dict | None = None):
 
 def test_success_returns_response():
     from ibkr_core_mcp.rate_limiter import with_retry
+
     mock_fn = MagicMock(return_value=_make_response(200, {"ok": True}))
     result = with_retry(mock_fn)
     assert result.status_code == 200
@@ -25,6 +26,7 @@ def test_success_returns_response():
 def test_429_retries_then_raises():
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
     from ibkr_core_mcp.rate_limiter import with_retry
+
     mock_fn = MagicMock(return_value=_make_response(429))
     with patch("time.sleep"):
         with pytest.raises(IBKRRateLimitError):
@@ -34,6 +36,7 @@ def test_429_retries_then_raises():
 
 def test_429_succeeds_on_retry():
     from ibkr_core_mcp.rate_limiter import with_retry
+
     responses = [_make_response(429), _make_response(200, {"data": 1})]
     mock_fn = MagicMock(side_effect=responses)
     with patch("time.sleep"):
@@ -45,6 +48,7 @@ def test_429_succeeds_on_retry():
 def test_401_raises_auth_error_immediately():
     from ibkr_core_mcp.exceptions import IBKRAuthError
     from ibkr_core_mcp.rate_limiter import with_retry
+
     mock_fn = MagicMock(return_value=_make_response(401))
     with pytest.raises(IBKRAuthError):
         with_retry(mock_fn)
@@ -54,6 +58,7 @@ def test_401_raises_auth_error_immediately():
 def test_other_http_error_raises_api_error():
     from ibkr_core_mcp.exceptions import IBKRAPIError
     from ibkr_core_mcp.rate_limiter import with_retry
+
     mock_fn = MagicMock(return_value=_make_response(500))
     with pytest.raises(IBKRAPIError) as exc_info:
         with_retry(mock_fn)
@@ -63,6 +68,7 @@ def test_other_http_error_raises_api_error():
 def test_503_retries_then_raises():
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
     from ibkr_core_mcp.rate_limiter import with_retry
+
     mock_fn = MagicMock(return_value=_make_response(503))
     with patch("time.sleep"):
         with pytest.raises(IBKRRateLimitError):
@@ -72,6 +78,7 @@ def test_503_retries_then_raises():
 
 def test_503_succeeds_on_retry():
     from ibkr_core_mcp.rate_limiter import with_retry
+
     responses = [_make_response(503), _make_response(200, {"ok": True})]
     mock_fn = MagicMock(side_effect=responses)
     with patch("time.sleep"):
@@ -82,6 +89,7 @@ def test_503_succeeds_on_retry():
 def test_backoff_delays_increase_exponentially():
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
     from ibkr_core_mcp.rate_limiter import with_retry
+
     mock_fn = MagicMock(return_value=_make_response(429))
     sleep_calls = []
     with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):

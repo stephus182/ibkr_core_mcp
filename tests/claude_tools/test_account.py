@@ -1,7 +1,7 @@
-
 import pytest
 
 pytestmark = pytest.mark.account
+
 
 def test_execute_get_account_summary(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
@@ -75,6 +75,7 @@ def test_get_positions_field_fallback(toolkit):
 
 # ── _get_ledger ───────────────────────────────────────────────────────────────
 
+
 def test_get_ledger_formats_usd(toolkit):
     """Ledger formats key fields from the USD currency block."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
@@ -133,6 +134,7 @@ def test_get_ledger_empty(toolkit):
 # The old tests below invented a {account: {conid: {ticker, uPnl, dPnl}}} shape
 # that never matched IBKR's real response — see docs/audits/claude-tools-audit-2026-07.md.
 
+
 def test_get_pnl_empty(toolkit):
     toolkit._client.get_pnl.return_value = {}
     text, fig = toolkit.execute("get_pnl", {})
@@ -143,15 +145,19 @@ def test_get_pnl_reports_account_partition_totals(toolkit):
     toolkit._client.get_pnl.return_value = {
         "upnl": {
             "U1675699.Core": {
-                "rowType": 1, "dpl": 15.7, "nl": 10000.0,
-                "upl": 607.0, "el": 10000.0, "mv": 0.0,
+                "rowType": 1,
+                "dpl": 15.7,
+                "nl": 10000.0,
+                "upl": 607.0,
+                "el": 10000.0,
+                "mv": 0.0,
             }
         }
     }
     text, fig = toolkit.execute("get_pnl", {})
     assert "U1675699.Core" in text
     assert "607.00" in text  # unrealized
-    assert "15.70" in text   # daily
+    assert "15.70" in text  # daily
 
 
 def test_get_pnl_multiple_account_partitions(toolkit):
@@ -164,7 +170,7 @@ def test_get_pnl_multiple_account_partitions(toolkit):
     text, fig = toolkit.execute("get_pnl", {})
     assert "U1.Core" in text and "U2.Core" in text
     assert "+12.00" in text  # total unrealized: 20 + -8
-    assert "+5.00" in text   # total daily: 10 + -5
+    assert "+5.00" in text  # total daily: 10 + -5
 
 
 def test_get_pnl_skips_non_numeric(toolkit):
@@ -186,6 +192,7 @@ def test_get_pnl_missing_upnl_key_returns_no_data_message(toolkit):
 
 
 # ── _preview_order — LMT includes price in order payload ─────────────────────
+
 
 def test_get_watchlists_happy_path(toolkit):
     """Returns watchlist summary and raw JSON."""
@@ -227,9 +234,7 @@ def test_get_watchlists_error(toolkit):
 def test_get_allocation_happy_path(toolkit):
     """Returns JSON allocation data."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.get_account_allocation.return_value = {
-        "assetClass": {"long": {"STK": 0.85, "CASH": 0.15}}
-    }
+    toolkit._client.get_account_allocation.return_value = {"assetClass": {"long": {"STK": 0.85, "CASH": 0.15}}}
     text, fig = toolkit.execute("get_allocation", {})
     assert fig is None
     assert "assetClass" in text
@@ -261,4 +266,3 @@ def test_get_positions_tolerates_null_value_fields(toolkit):
     assert "GLD" in text
     assert "0.00" in text
     assert "error" not in text.lower()
-

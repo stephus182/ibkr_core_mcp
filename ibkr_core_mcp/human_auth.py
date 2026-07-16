@@ -18,18 +18,14 @@ def require_touch_id(reason: str) -> None:
             LAPolicyDeviceOwnerAuthentication,
         )
     except (ImportError, TypeError):
-        raise HumanAuthError(
-            "Touch ID unavailable: pyobjc-framework-LocalAuthentication not installed"
-        ) from None
+        raise HumanAuthError("Touch ID unavailable: pyobjc-framework-LocalAuthentication not installed") from None
 
     # LAPolicyDeviceOwnerAuthentication: tries Touch ID first, falls back to
     # system password if the biometric scan fails or is cancelled.
     # LAPolicyDeviceOwnerAuthenticationWithBiometrics (biometrics-only) was
     # rejected immediately on a failed scan with no recovery path.
     ctx = LAContext.new()
-    can_eval, err = ctx.canEvaluatePolicy_error_(
-        LAPolicyDeviceOwnerAuthentication, None
-    )
+    can_eval, err = ctx.canEvaluatePolicy_error_(LAPolicyDeviceOwnerAuthentication, None)
     if not can_eval:
         raise HumanAuthError(f"Touch ID unavailable: {err}")
 
@@ -41,9 +37,7 @@ def require_touch_id(reason: str) -> None:
         result["error"] = error
         done.set()
 
-    ctx.evaluatePolicy_localizedReason_reply_(
-        LAPolicyDeviceOwnerAuthentication, reason, _reply
-    )
+    ctx.evaluatePolicy_localizedReason_reply_(LAPolicyDeviceOwnerAuthentication, reason, _reply)
 
     if not done.wait(timeout=_TIMEOUT):
         raise HumanAuthError(f"Touch ID timed out after {_TIMEOUT}s")

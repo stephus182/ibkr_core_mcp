@@ -1,32 +1,37 @@
-
 import pytest
 
 pytestmark = pytest.mark.pa_analytics
 
+
 def test_execute_get_analytics_tool(toolkit):
     import numpy as np
     import pandas as pd
+
     n = 100
     np.random.seed(0)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    df = pd.DataFrame({
-        "open": close, "high": close + 0.5, "low": close - 0.5,
-        "close": close, "volume": np.ones(n) * 1e6,
-    }, index=pd.date_range("2025-01-01", periods=n, freq="B"))
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.ones(n) * 1e6,
+        },
+        index=pd.date_range("2025-01-01", periods=n, freq="B"),
+    )
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = df
-    text, fig = toolkit.execute("get_analytics", {
-        "symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"
-    })
+    text, fig = toolkit.execute(
+        "get_analytics", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
     assert "sharpe" in text.lower() or "Sharpe" in text
 
 
 def test_get_pa_performance_happy_path(toolkit):
     """Returns JSON performance blob for the requested period."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.get_pa_performance.return_value = {
-        "nav": [{"date": "2026-06-01", "navReturns": 0.05}]
-    }
+    toolkit._client.get_pa_performance.return_value = {"nav": [{"date": "2026-06-01", "navReturns": 0.05}]}
     text, fig = toolkit.execute("get_pa_performance", {"period": "1M"})
     assert fig is None
     assert len(text) > 0
@@ -94,6 +99,7 @@ def test_get_pa_transactions_conid_resolution_failure(toolkit):
 def test_get_pa_transactions_error_propagates(toolkit):
     """IBKRAPIError from the transactions call re-raises through _safe_error."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
+
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
     toolkit._client.get_pa_transactions.side_effect = IBKRAPIError("server error", status_code=500)
@@ -136,19 +142,26 @@ def test_execute_get_analytics_annualizes_by_timeframe(toolkit):
     import pandas as pd
 
     from ibkr_core_mcp import analytics
+
     n = 100
     np.random.seed(1)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    df = pd.DataFrame({
-        "open": close, "high": close + 0.5, "low": close - 0.5,
-        "close": close, "volume": np.ones(n) * 1e6,
-    }, index=pd.date_range("2026-06-01 09:30", periods=n, freq="h"))
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.ones(n) * 1e6,
+        },
+        index=pd.date_range("2026-06-01 09:30", periods=n, freq="h"),
+    )
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = df
 
-    text, _ = toolkit.execute("get_analytics", {
-        "symbol": "AAPL", "timeframe": "1h", "period": "1M", "end": "2026-07-01"
-    })
+    text, _ = toolkit.execute(
+        "get_analytics", {"symbol": "AAPL", "timeframe": "1h", "period": "1M", "end": "2026-07-01"}
+    )
 
     returns = df["close"].pct_change().dropna()
     expected = analytics.sharpe(returns, periods=1638)
@@ -161,20 +174,25 @@ def test_execute_get_analytics_unknown_timeframe_falls_back_with_caveat(toolkit)
     """Unrecognized timeframe → daily annualisation plus an explicit caveat in output."""
     import numpy as np
     import pandas as pd
+
     n = 50
     np.random.seed(2)
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    df = pd.DataFrame({
-        "open": close, "high": close + 0.5, "low": close - 0.5,
-        "close": close, "volume": np.ones(n) * 1e6,
-    }, index=pd.date_range("2026-01-01", periods=n, freq="B"))
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.ones(n) * 1e6,
+        },
+        index=pd.date_range("2026-01-01", periods=n, freq="B"),
+    )
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = df
 
-    text, _ = toolkit.execute("get_analytics", {
-        "symbol": "AAPL", "timeframe": "weird", "period": "1Y", "end": "2026-07-01"
-    })
+    text, _ = toolkit.execute(
+        "get_analytics", {"symbol": "AAPL", "timeframe": "weird", "period": "1Y", "end": "2026-07-01"}
+    )
     assert "not recognized" in text.lower() or "unrecognized" in text.lower()
     assert "252" in text
-
-

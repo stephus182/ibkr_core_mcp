@@ -1,4 +1,5 @@
 """Unit tests for GatewayManager — all Docker/network calls mocked."""
+
 from __future__ import annotations
 
 import platform
@@ -15,6 +16,7 @@ from ibkr_core_mcp.gateway import GatewayManager
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _run_result(returncode: int, stdout: str = "") -> SimpleNamespace:
     return SimpleNamespace(returncode=returncode, stdout=stdout)
 
@@ -22,6 +24,7 @@ def _run_result(returncode: int, stdout: str = "") -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # is_docker_available
 # ---------------------------------------------------------------------------
+
 
 class TestIsDockerAvailable:
     def test_returns_true_when_docker_info_succeeds(self) -> None:
@@ -36,6 +39,7 @@ class TestIsDockerAvailable:
 # ---------------------------------------------------------------------------
 # ensure_docker_running
 # ---------------------------------------------------------------------------
+
 
 class TestEnsureDockerRunning:
     def test_no_op_when_already_running(self) -> None:
@@ -85,6 +89,7 @@ class TestEnsureDockerRunning:
 # image_exists
 # ---------------------------------------------------------------------------
 
+
 class TestImageExists:
     def test_returns_true_when_inspect_succeeds(self) -> None:
         with patch("subprocess.run", return_value=_run_result(0)):
@@ -99,6 +104,7 @@ class TestImageExists:
 # build_image
 # ---------------------------------------------------------------------------
 
+
 class TestBuildImage:
     def test_calls_docker_build_with_correct_args(self) -> None:
         gm = GatewayManager()
@@ -112,6 +118,7 @@ class TestBuildImage:
 
     def test_build_image_wraps_called_process_error_as_gateway_error(self) -> None:
         import subprocess
+
         gm = GatewayManager()
         with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")):
             with pytest.raises(GatewayError, match="build"):
@@ -119,6 +126,7 @@ class TestBuildImage:
 
     def test_start_wraps_called_process_error_as_gateway_error(self) -> None:
         import subprocess
+
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
@@ -133,6 +141,7 @@ class TestBuildImage:
 # ---------------------------------------------------------------------------
 # start / stop / restart
 # ---------------------------------------------------------------------------
+
 
 class TestStart:
     def test_stops_existing_container_before_starting(self) -> None:
@@ -188,9 +197,7 @@ class TestStart:
         args = mock_run.call_args.args[0]
         assert "-p" in args
         p_value = args[args.index("-p") + 1]
-        assert p_value == "127.0.0.1:5055:5055", (
-            f"expected loopback-only publish, got {p_value!r}"
-        )
+        assert p_value == "127.0.0.1:5055:5055", f"expected loopback-only publish, got {p_value!r}"
 
 
 class TestStop:
@@ -225,6 +232,7 @@ class TestRestart:
 # is_running
 # ---------------------------------------------------------------------------
 
+
 class TestIsRunning:
     def test_returns_true_when_container_running(self) -> None:
         with patch("subprocess.run", return_value=_run_result(0, stdout="true\n")):
@@ -242,6 +250,7 @@ class TestIsRunning:
 # ---------------------------------------------------------------------------
 # is_gateway_reachable / is_authenticated
 # ---------------------------------------------------------------------------
+
 
 class TestIsGatewayReachable:
     def test_returns_true_on_200(self) -> None:
@@ -291,6 +300,7 @@ class TestIsAuthenticated:
 # _poll_until
 # ---------------------------------------------------------------------------
 
+
 class TestPollUntil:
     def test_returns_true_when_check_succeeds_immediately(self) -> None:
         gm = GatewayManager()
@@ -339,6 +349,7 @@ class TestPollUntil:
 # wait_for_gateway / wait_for_auth  (wrapper defaults)
 # ---------------------------------------------------------------------------
 
+
 class TestWaitWrappers:
     def test_wait_for_gateway_delegates_to_poll_until(self) -> None:
         gm = GatewayManager()
@@ -348,8 +359,8 @@ class TestWaitWrappers:
         # _poll_until is called with positional args: check, ready_msg, timeout_msg, timeout, poll_interval
         args = mock_poll.call_args.args
         assert args[0] == gm.is_gateway_reachable  # check function
-        assert args[3] == 90                        # timeout
-        assert args[4] == 2                         # poll_interval
+        assert args[3] == 90  # timeout
+        assert args[4] == 2  # poll_interval
 
     def test_wait_for_auth_delegates_to_poll_until(self) -> None:
         gm = GatewayManager()
@@ -358,5 +369,5 @@ class TestWaitWrappers:
         assert result is False
         args = mock_poll.call_args.args
         assert args[0] == gm.is_authenticated  # check function
-        assert args[3] == 120                   # timeout
-        assert args[4] == 3                     # poll_interval
+        assert args[3] == 120  # timeout
+        assert args[4] == 3  # poll_interval

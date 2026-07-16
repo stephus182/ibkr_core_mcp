@@ -12,6 +12,7 @@ def test_from_env_reads_required_vars(monkeypatch):
     monkeypatch.delenv("GDRIVE_CREDENTIALS_FILE", raising=False)
 
     from ibkr_core_mcp.config import Config
+
     cfg = Config.from_env()
 
     assert cfg.anthropic_api_key == "sk-test"
@@ -24,6 +25,7 @@ def test_from_env_missing_api_key_raises(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     from ibkr_core_mcp.config import Config
     from ibkr_core_mcp.exceptions import ConfigError
+
     with pytest.raises(ConfigError, match="ANTHROPIC_API_KEY"):
         Config.from_env()
 
@@ -32,6 +34,7 @@ def test_sqlite_path_expands_home(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("IBKR_SQLITE_PATH", "~/.ibkr_core/store.db")
     from ibkr_core_mcp.config import Config
+
     cfg = Config.from_env()
     assert not str(cfg.sqlite_path).startswith("~")
 
@@ -41,6 +44,7 @@ def test_firecrawl_api_key_reads_from_env(monkeypatch):
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-abc123")
     monkeypatch.setenv("GDRIVE_WEB_DOCS_FOLDER_ID", "webdocs-folder-id")
     from ibkr_core_mcp.config import Config
+
     cfg = Config.from_env()
     assert cfg.firecrawl_api_key == "fc-abc123"
     assert cfg.gdrive_web_docs_folder_id == "webdocs-folder-id"
@@ -51,6 +55,7 @@ def test_firecrawl_config_defaults_to_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     monkeypatch.delenv("GDRIVE_WEB_DOCS_FOLDER_ID", raising=False)
     from ibkr_core_mcp.config import Config
+
     # Explicit nonexistent dotenv_path: this repo may have its own local, gitignored
     # .env for standalone-dev Drive/Firecrawl testing (see CLAUDE.md's "Standalone dev
     # exception") — load_dotenv()'s default search would otherwise pick that up and
@@ -64,6 +69,7 @@ def test_crawl4ai_profiles_dir_reads_from_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("CRAWL4AI_PROFILES_DIR", "/tmp/my-profiles")
     from ibkr_core_mcp.config import Config
+
     cfg = Config.from_env()
     assert cfg.crawl4ai_profiles_dir == Path("/tmp/my-profiles")
 
@@ -72,5 +78,6 @@ def test_crawl4ai_profiles_dir_defaults_and_expands_home(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("CRAWL4AI_PROFILES_DIR", raising=False)
     from ibkr_core_mcp.config import Config
+
     cfg = Config.from_env()
     assert cfg.crawl4ai_profiles_dir == Path("~/.ibkr_core/crawl4ai_profiles").expanduser()

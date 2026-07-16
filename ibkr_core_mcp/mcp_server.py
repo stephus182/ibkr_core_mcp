@@ -5,6 +5,7 @@ Run:
     python -m ibkr_core_mcp.mcp_server --transport sse   # HTTP/SSE on localhost:5174
     python -m ibkr_core_mcp.mcp_server --transport sse --stream  # + WebSocket streaming
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,16 +31,15 @@ logger = logging.getLogger(__name__)
 _ADD_ALERT_DEF: dict[str, Any] = {
     "name": "add_price_alert",
     "description": (
-        "Create a price alert that fires when a symbol crosses a threshold. "
-        "direction must be 'above' or 'below'."
+        "Create a price alert that fires when a symbol crosses a threshold. direction must be 'above' or 'below'."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "conid":     {"type": "integer", "description": "IBKR contract ID"},
-            "symbol":    {"type": "string",  "description": "Ticker symbol, e.g. 'AAPL'"},
-            "threshold": {"type": "number",  "description": "Price threshold"},
-            "direction": {"type": "string",  "enum": ["above", "below"]},
+            "conid": {"type": "integer", "description": "IBKR contract ID"},
+            "symbol": {"type": "string", "description": "Ticker symbol, e.g. 'AAPL'"},
+            "threshold": {"type": "number", "description": "Price threshold"},
+            "direction": {"type": "string", "enum": ["above", "below"]},
         },
         "required": ["conid", "symbol", "threshold", "direction"],
     },
@@ -68,8 +68,10 @@ def _dispatch(name: str, args: dict[str, Any], toolkit: ClaudeToolkit, store: SQ
             return text
         if name == "add_price_alert":
             aid = store.add_alert(
-                int(args["conid"]), str(args["symbol"]),
-                float(args["threshold"]), str(args["direction"]),
+                int(args["conid"]),
+                str(args["symbol"]),
+                float(args["threshold"]),
+                str(args["direction"]),
             )
             sym = str(args["symbol"]).upper()
             return f"Alert #{aid} created: {sym} {args['direction']} {args['threshold']}."
@@ -110,10 +112,12 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
     @server.list_resources()
     async def handle_list_resources() -> list[Resource]:
         return [
-            Resource(uri=AnyUrl("ibkr://accounts"),          name="IBKR Accounts",          mimeType="application/json"),
-            Resource(uri=AnyUrl("ibkr://positions/current"), name="Current Positions",       mimeType="application/json"),
-            Resource(uri=AnyUrl("ibkr://trades/recent"),     name="Recent Trades (SQLite)",  mimeType="application/json"),
-            Resource(uri=AnyUrl("ibkr://pnl/live"),          name="Live P&L (WebSocket, --stream only)", mimeType="application/json"),
+            Resource(uri=AnyUrl("ibkr://accounts"), name="IBKR Accounts", mimeType="application/json"),
+            Resource(uri=AnyUrl("ibkr://positions/current"), name="Current Positions", mimeType="application/json"),
+            Resource(uri=AnyUrl("ibkr://trades/recent"), name="Recent Trades (SQLite)", mimeType="application/json"),
+            Resource(
+                uri=AnyUrl("ibkr://pnl/live"), name="Live P&L (WebSocket, --stream only)", mimeType="application/json"
+            ),
         ]
 
     @server.read_resource()
@@ -147,7 +151,8 @@ async def _run_stdio(server: Server) -> None:
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
-            read_stream, write_stream,
+            read_stream,
+            write_stream,
             InitializationOptions(
                 server_name="ibkr-core-mcp",
                 server_version=__version__,
@@ -178,9 +183,7 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
     sse_transport = SseServerTransport("/messages/")
 
     async def handle_sse(request: Any) -> Response:
-        async with sse_transport.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
+        async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
             await server.run(streams[0], streams[1], init_opts)
         return Response()
 
@@ -230,7 +233,9 @@ async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: SQLiteStore) ->
             delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
             logger.error(
                 "WebSocket stream error (attempt %d), retrying in %ds: %s",
-                attempt + 1, delay, type(exc).__name__,
+                attempt + 1,
+                delay,
+                type(exc).__name__,
             )
             await asyncio.sleep(delay)
             attempt += 1
@@ -279,15 +284,23 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
                 for alert in triggered:
                     logger.warning(
                         "PRICE ALERT #%d: %s %s %.4f (last=%.4f)",
-                        alert["id"], alert["symbol"], alert["direction"],
-                        alert["threshold"], item.last or 0,
+                        alert["id"],
+                        alert["symbol"],
+                        alert["direction"],
+                        alert["threshold"],
+                        item.last or 0,
                     )
             elif isinstance(item, TradeExecution):
                 store.upsert_trades([_parse_stream_execution(item)])
             elif isinstance(item, PnLUpdate):
                 store.record_pnl_snapshot(
-                    account=item.account, row_type=item.row_type, dpl=item.dpl,
-                    nl=item.nl, upl=item.upl, uel=item.uel, mv=item.mv,
+                    account=item.account,
+                    row_type=item.row_type,
+                    dpl=item.dpl,
+                    nl=item.nl,
+                    upl=item.upl,
+                    uel=item.uel,
+                    mv=item.mv,
                 )
     finally:
         await ws.disconnect()

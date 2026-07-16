@@ -1,4 +1,5 @@
 """Pydantic v2 response models for IBKR Client Portal API endpoints."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -15,10 +16,14 @@ class Contract(BaseModel):
 
     conid: int
     symbol: str
-    sec_type: str = Field(default="", alias="secType", description="Security type (IBKR field: secType) — e.g. STK, OPT, FUT, CASH")
+    sec_type: str = Field(
+        default="", alias="secType", description="Security type (IBKR field: secType) — e.g. STK, OPT, FUT, CASH"
+    )
     exchange: str = ""
     currency: str = "USD"
-    description: str = Field(default="", alias="companyName", description="Company or instrument name (IBKR field: companyName)")
+    description: str = Field(
+        default="", alias="companyName", description="Company or instrument name (IBKR field: companyName)"
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -45,8 +50,12 @@ class Position(BaseModel):
     symbol: str = Field(default="", alias="contractDesc", description="Ticker symbol (IBKR field: contractDesc)")
     position: float
     mkt_price: float = Field(default=0.0, alias="mktPrice", description="Current market price (IBKR field: mktPrice)")
-    mkt_value: float = Field(default=0.0, alias="mktValue", description="Current market value in account currency (IBKR field: mktValue)")
-    unrealized_pnl: float = Field(default=0.0, alias="unrealizedPnl", description="Unrealized P&L (IBKR field: unrealizedPnl)")
+    mkt_value: float = Field(
+        default=0.0, alias="mktValue", description="Current market value in account currency (IBKR field: mktValue)"
+    )
+    unrealized_pnl: float = Field(
+        default=0.0, alias="unrealizedPnl", description="Unrealized P&L (IBKR field: unrealizedPnl)"
+    )
     realized_pnl: float = Field(default=0.0, alias="realizedPnl", description="Realized P&L (IBKR field: realizedPnl)")
 
     model_config = {"populate_by_name": True}
@@ -94,9 +103,13 @@ class Order(BaseModel):
     status: str = ""
     symbol: str = Field(default="", alias="ticker", description="Ticker symbol (IBKR field: ticker)")
     side: str = ""
-    qty: float = Field(default=0.0, alias="totalSize", description="Total order quantity in shares/contracts (IBKR field: totalSize)")
+    qty: float = Field(
+        default=0.0, alias="totalSize", description="Total order quantity in shares/contracts (IBKR field: totalSize)"
+    )
     price: float = 0.0
-    order_type: str = Field(default="", alias="orderType", description="Order type — LMT, MKT, STP, etc. (IBKR field: orderType)")
+    order_type: str = Field(
+        default="", alias="orderType", description="Order type — LMT, MKT, STP, etc. (IBKR field: orderType)"
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -133,11 +146,13 @@ class AccountSummary(BaseModel):
     @classmethod
     def _normalize(cls, data: Any) -> Any:
         if isinstance(data, dict):
+
             def _amount(key: str) -> float:
                 v = data.get(key, {})
                 if isinstance(v, dict):
                     return float(v.get("amount", 0))
                 return float(v or 0)
+
             return {
                 "net_liquidation": _amount("netliquidation"),
                 "total_cash": _amount("totalcashvalue"),
@@ -157,7 +172,9 @@ class Notification(BaseModel):
     date: str = ""
     headline: str = ""
     body: str = ""
-    is_read: bool = Field(default=False, alias="isRead", description="True if the notification has been marked read (IBKR field: isRead)")
+    is_read: bool = Field(
+        default=False, alias="isRead", description="True if the notification has been marked read (IBKR field: isRead)"
+    )
 
     model_config = {"populate_by_name": True}
 

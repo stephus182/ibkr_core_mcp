@@ -40,6 +40,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: Format check (ruff)
+        run: ruff format --check .
+
       - name: Type check (mypy)
         run: mypy ibkr_core_mcp
 

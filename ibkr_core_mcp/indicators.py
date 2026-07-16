@@ -1,4 +1,5 @@
 """Technical indicator functions for OHLCV DataFrames (pure functions, no side effects)."""
+
 from __future__ import annotations
 
 import numpy as np

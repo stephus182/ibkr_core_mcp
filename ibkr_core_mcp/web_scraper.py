@@ -19,6 +19,7 @@ Provides:
   FirecrawlClient   — search and crawl via https://api.firecrawl.dev/v1
   WebDocsStore      — persist crawl/search results to Google Drive under web_docs/
 """
+
 from __future__ import annotations
 
 import io
@@ -86,9 +87,9 @@ def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Respo
             return resp
         retry_after = resp.headers.get("Retry-After")
         try:
-            delay = float(retry_after) if retry_after is not None else min(2 ** attempt, _FIRECRAWL_MAX_BACKOFF)
+            delay = float(retry_after) if retry_after is not None else min(2**attempt, _FIRECRAWL_MAX_BACKOFF)
         except (TypeError, ValueError):
-            delay = min(2 ** attempt, _FIRECRAWL_MAX_BACKOFF)
+            delay = min(2**attempt, _FIRECRAWL_MAX_BACKOFF)
         time.sleep(delay + random.random())
         attempt += 1
 
@@ -183,9 +184,7 @@ class FirecrawlClient:
         if resp.status_code == 429:
             raise FirecrawlError("Rate limit exceeded — wait before retrying", 429)
         if resp.status_code >= 500:
-            raise FirecrawlError(
-                f"Firecrawl service error: {resp.status_code}", resp.status_code
-            )
+            raise FirecrawlError(f"Firecrawl service error: {resp.status_code}", resp.status_code)
         resp.raise_for_status()
 
     def search(self, query: str, limit: int = 5) -> list[dict[str, str]]:
@@ -217,16 +216,18 @@ class FirecrawlClient:
         if not query:
             raise ValueError("query must be non-empty")
         limit = max(1, min(10, limit))
-        resp = _request_with_backoff(lambda: requests.post(
-            f"{self.BASE_URL}/search",
-            headers=self._headers,
-            json={
-                "query": query,
-                "limit": limit,
-                "scrapeOptions": {"formats": ["markdown"]},
-            },
-            timeout=30,
-        ))
+        resp = _request_with_backoff(
+            lambda: requests.post(
+                f"{self.BASE_URL}/search",
+                headers=self._headers,
+                json={
+                    "query": query,
+                    "limit": limit,
+                    "scrapeOptions": {"formats": ["markdown"]},
+                },
+                timeout=30,
+            )
+        )
         self._raise_for_status(resp)
         data = resp.json()
         raw = data.get("data") or data.get("results") or []
@@ -301,12 +302,14 @@ class FirecrawlClient:
         timeout_s = max(10, timeout_s)
 
         # Start crawl job
-        resp = _request_with_backoff(lambda: requests.post(
-            f"{self.BASE_URL}/crawl",
-            headers=self._headers,
-            json={"url": url, "limit": max_pages, "scrapeOptions": {"formats": ["markdown"]}},
-            timeout=30,
-        ))
+        resp = _request_with_backoff(
+            lambda: requests.post(
+                f"{self.BASE_URL}/crawl",
+                headers=self._headers,
+                json={"url": url, "limit": max_pages, "scrapeOptions": {"formats": ["markdown"]}},
+                timeout=30,
+            )
+        )
         self._raise_for_status(resp)
         job_id = resp.json()["id"]
 
@@ -323,11 +326,13 @@ class FirecrawlClient:
         def _fetch_next(next_page_url: str) -> requests.Response:
             # A plain nested function (not a loop-body lambda) so next_page_url
             # is this call's own parameter, not a mutating loop variable.
-            return _request_with_backoff(lambda: requests.get(
-                next_page_url,
-                headers=self._headers,
-                timeout=30,
-            ))
+            return _request_with_backoff(
+                lambda: requests.get(
+                    next_page_url,
+                    headers=self._headers,
+                    timeout=30,
+                )
+            )
 
         # Poll for completion
         deadline = time.monotonic() + timeout_s
@@ -335,11 +340,13 @@ class FirecrawlClient:
 
         while time.monotonic() < deadline:
             time.sleep(5)
-            poll = _request_with_backoff(lambda: requests.get(
-                f"{self.BASE_URL}/crawl/{job_id}",
-                headers=self._headers,
-                timeout=30,
-            ))
+            poll = _request_with_backoff(
+                lambda: requests.get(
+                    f"{self.BASE_URL}/crawl/{job_id}",
+                    headers=self._headers,
+                    timeout=30,
+                )
+            )
             poll.raise_for_status()
             data = poll.json()
             status = data.get("status", "")
@@ -362,21 +369,22 @@ class FirecrawlClient:
                 while next_url:
                     if next_url in seen_next_urls:
                         log.warning(
-                            "firecrawl crawl next-cursor repeated — stopping "
-                            "pagination early with %d pages", len(pages),
+                            "firecrawl crawl next-cursor repeated — stopping pagination early with %d pages",
+                            len(pages),
                         )
                         break
                     if chunks_fetched >= _FIRECRAWL_MAX_NEXT_CHUNKS:
                         log.warning(
-                            "firecrawl crawl hit the %d-chunk pagination cap — "
-                            "stopping early with %d pages",
-                            _FIRECRAWL_MAX_NEXT_CHUNKS, len(pages),
+                            "firecrawl crawl hit the %d-chunk pagination cap — stopping early with %d pages",
+                            _FIRECRAWL_MAX_NEXT_CHUNKS,
+                            len(pages),
                         )
                         break
                     if time.monotonic() >= deadline:
                         log.warning(
-                            "firecrawl crawl pagination exceeded timeout_s=%ds — "
-                            "returning %d partial pages", timeout_s, len(pages),
+                            "firecrawl crawl pagination exceeded timeout_s=%ds — returning %d partial pages",
+                            timeout_s,
+                            len(pages),
                         )
                         break
                     seen_next_urls.add(next_url)
@@ -388,9 +396,7 @@ class FirecrawlClient:
                     chunks_fetched += 1
                 return pages
             if status == "failed":
-                raise FirecrawlError(
-                    f"Crawl job failed: {data.get('error', 'unknown error')}"
-                )
+                raise FirecrawlError(f"Crawl job failed: {data.get('error', 'unknown error')}")
 
         log.warning(
             "firecrawl crawl timed out after %ds — returning %d partial pages",
@@ -448,11 +454,10 @@ class WebDocsStore:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(self._cfg.gdrive_credentials_file), self._SCOPES
-                )
+                flow = InstalledAppFlow.from_client_secrets_file(str(self._cfg.gdrive_credentials_file), self._SCOPES)
                 creds = flow.run_local_server(port=0)
             import os
+
             self._cfg.gdrive_token_file.parent.mkdir(parents=True, exist_ok=True)
             token_path = str(self._cfg.gdrive_token_file)
             fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -608,28 +613,20 @@ class WebDocsStore:
                 suffix += 1
             claimed_filenames[filename] = page_url
             content_bytes = md.encode("utf-8")
-            media = MediaIoBaseUpload(
-                io.BytesIO(content_bytes), mimetype="text/markdown", resumable=False
-            )
+            media = MediaIoBaseUpload(io.BytesIO(content_bytes), mimetype="text/markdown", resumable=False)
             # Check if file already exists
             q = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
             existing = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
             try:
                 if existing:
                     file_id = existing[0]["id"]
-                    svc.files().update(
-                        fileId=file_id, media_body=media
-                    ).execute()
+                    svc.files().update(fileId=file_id, media_body=media).execute()
                 else:
                     meta = {"name": filename, "parents": [folder_id]}
-                    result = svc.files().create(
-                        body=meta, media_body=media, fields="id"
-                    ).execute()
+                    result = svc.files().create(body=meta, media_body=media, fields="id").execute()
                     file_id = result["id"]
             except Exception as exc:
-                raise WebDocsStoreError(
-                    f"Failed to upload {filename} to Drive"
-                ) from exc
+                raise WebDocsStoreError(f"Failed to upload {filename} to Drive") from exc
             manifest_pages.append({"url": page_url, "file_id": file_id})
 
         manifest = {
@@ -638,18 +635,12 @@ class WebDocsStore:
             "pages": manifest_pages,
         }
         manifest_content = json.dumps(manifest, indent=2).encode("utf-8")
-        manifest_media = MediaIoBaseUpload(
-            io.BytesIO(manifest_content), mimetype="application/json", resumable=False
-        )
+        manifest_media = MediaIoBaseUpload(io.BytesIO(manifest_content), mimetype="application/json", resumable=False)
         index_q = f"name='index.json' and '{folder_id}' in parents and trashed=false"
-        existing_index = (
-            svc.files().list(q=index_q, fields="files(id)").execute().get("files", [])
-        )
+        existing_index = svc.files().list(q=index_q, fields="files(id)").execute().get("files", [])
         try:
             if existing_index:
-                svc.files().update(
-                    fileId=existing_index[0]["id"], media_body=manifest_media
-                ).execute()
+                svc.files().update(fileId=existing_index[0]["id"], media_body=manifest_media).execute()
             else:
                 svc.files().create(
                     body={"name": "index.json", "parents": [folder_id]},
@@ -704,9 +695,7 @@ class WebDocsStore:
             lines.append("")
         content = "\n".join(lines).encode("utf-8")
 
-        media = MediaIoBaseUpload(
-            io.BytesIO(content), mimetype="text/markdown", resumable=False
-        )
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype="text/markdown", resumable=False)
         meta = {"name": filename, "parents": [searches_id]}
         try:
             result = svc.files().create(body=meta, media_body=media, fields="id").execute()

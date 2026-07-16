@@ -12,6 +12,7 @@ stdout : "CONFIRMED" or "CANCELLED"
 stderr : "ERROR: <msg>" on fatal failure
 exit   : 0 on user decision, 1 on fatal error
 """
+
 from __future__ import annotations
 
 import json
@@ -102,11 +103,11 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     # Buttons: first added = rightmost = NSAlertFirstButtonReturn (1000)
     alert.addButtonWithTitle_(confirm_label)  # right
-    alert.addButtonWithTitle_("CANCEL")       # left
+    alert.addButtonWithTitle_("CANCEL")  # left
 
     # No Return key on confirm (prevent accidental submission); Escape for cancel
     buttons = alert.buttons()
-    buttons.objectAtIndex_(0).setKeyEquivalent_("")       # disable Return on confirm
+    buttons.objectAtIndex_(0).setKeyEquivalent_("")  # disable Return on confirm
     buttons.objectAtIndex_(1).setKeyEquivalent_("\x1b")  # Escape = cancel
 
     # Colored banner via NSBox
@@ -139,6 +140,7 @@ def _run_alert(data: dict[str, Any]) -> None:
         """Timer callback: abort the running modal session (counts as cancel)."""
         try:
             from AppKit import NSApp
+
             NSApp.abortModal()
         except Exception:
             pass

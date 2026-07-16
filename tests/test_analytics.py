@@ -27,22 +27,26 @@ def crash_returns():
 
 def test_sharpe_flat_is_zero(flat_returns):
     from ibkr_core_mcp.analytics import sharpe
+
     assert sharpe(flat_returns) == 0.0
 
 
 def test_sharpe_positive_returns_gt_zero(positive_returns):
     from ibkr_core_mcp.analytics import sharpe
+
     assert sharpe(positive_returns) > 0
 
 
 def test_sortino_positive_gt_sharpe(positive_returns):
     from ibkr_core_mcp.analytics import sharpe, sortino
+
     # Sortino ignores upside deviation so should be >= Sharpe for positive returns
     assert sortino(positive_returns) >= sharpe(positive_returns)
 
 
 def test_max_drawdown_negative(crash_returns):
     from ibkr_core_mcp.analytics import max_drawdown
+
     mdd = max_drawdown(crash_returns)
     assert mdd < 0
     assert mdd <= -0.40  # at least 40% drawdown
@@ -50,22 +54,26 @@ def test_max_drawdown_negative(crash_returns):
 
 def test_max_drawdown_flat_is_zero(flat_returns):
     from ibkr_core_mcp.analytics import max_drawdown
+
     assert max_drawdown(flat_returns) == 0.0
 
 
 def test_max_drawdown_duration_after_crash(crash_returns):
     from ibkr_core_mcp.analytics import max_drawdown_duration
+
     dur = max_drawdown_duration(crash_returns)
     assert dur >= 100  # recovery takes at least 100 bars
 
 
 def test_cagr_positive_returns_positive(positive_returns):
     from ibkr_core_mcp.analytics import cagr
+
     assert cagr(positive_returns) > 0
 
 
 def test_calmar_positive(positive_returns):
     from ibkr_core_mcp.analytics import calmar
+
     result = calmar(positive_returns)
     # May be 0 if no drawdown, but should not be negative
     assert result >= 0
@@ -73,23 +81,27 @@ def test_calmar_positive(positive_returns):
 
 def test_win_rate_empty():
     from ibkr_core_mcp.analytics import win_rate
+
     assert win_rate([]) == 0.0
 
 
 def test_win_rate_all_winning():
     from ibkr_core_mcp.analytics import win_rate
+
     trades = [{"pnl": 100.0}, {"pnl": 50.0}, {"pnl": 25.0}]
     assert win_rate(trades) == 1.0
 
 
 def test_win_rate_mixed():
     from ibkr_core_mcp.analytics import win_rate
+
     trades = [{"pnl": 100.0}, {"pnl": -50.0}]
     assert win_rate(trades) == 0.5
 
 
 def test_profit_factor_no_losses():
     from ibkr_core_mcp.analytics import profit_factor
+
     trades = [{"pnl": 100.0}, {"pnl": 50.0}]
     pf = profit_factor(trades)
     assert pf == float("inf")
@@ -97,12 +109,14 @@ def test_profit_factor_no_losses():
 
 def test_profit_factor_equal_wins_losses():
     from ibkr_core_mcp.analytics import profit_factor
+
     trades = [{"pnl": 100.0}, {"pnl": -100.0}]
     assert profit_factor(trades) == 1.0
 
 
 def test_full_report_keys(positive_returns):
     from ibkr_core_mcp.analytics import full_report
+
     report = full_report(positive_returns)
     assert "total_return" in report
     assert "cagr" in report
@@ -116,6 +130,7 @@ def test_full_report_keys(positive_returns):
 
 def test_full_report_with_trades(positive_returns):
     from ibkr_core_mcp.analytics import full_report
+
     trades = [{"pnl": 200.0}, {"pnl": -50.0}, {"pnl": 75.0}]
     report = full_report(positive_returns, trades=trades)
     assert "win_rate" in report
@@ -126,11 +141,13 @@ def test_full_report_with_trades(positive_returns):
 # Edge-case branches (zero / empty inputs)
 # ---------------------------------------------------------------------------
 
+
 def test_sortino_no_negative_returns_is_zero():
     """All-positive returns → downside std is NaN → sortino returns 0.0, not ZeroDivisionError."""
     import pandas as pd
 
     from ibkr_core_mcp.analytics import sortino
+
     all_positive = pd.Series([0.01, 0.02, 0.005, 0.015])
     assert sortino(all_positive) == 0.0
 
@@ -140,6 +157,7 @@ def test_cagr_empty_series_returns_zero():
     import pandas as pd
 
     from ibkr_core_mcp.analytics import cagr
+
     assert cagr(pd.Series([], dtype=float)) == 0.0
 
 
@@ -148,6 +166,7 @@ def test_calmar_zero_drawdown_returns_zero():
     import pandas as pd
 
     from ibkr_core_mcp.analytics import calmar
+
     flat = pd.Series([0.0, 0.0, 0.0, 0.0])
     assert calmar(flat) == 0.0
 
@@ -155,6 +174,7 @@ def test_calmar_zero_drawdown_returns_zero():
 def test_profit_factor_all_zero_pnl_returns_zero():
     """No wins and no losses (all pnl == 0) → avg_l == 0, avg_w == 0 → returns 0.0, not inf."""
     from ibkr_core_mcp.analytics import profit_factor
+
     trades = [{"pnl": 0.0}, {"pnl": 0.0}]
     assert profit_factor(trades) == 0.0
 
@@ -162,6 +182,7 @@ def test_profit_factor_all_zero_pnl_returns_zero():
 def test_avg_win_loss_ratio_with_losses():
     """Normal path: avg_w / avg_l when both sides exist."""
     from ibkr_core_mcp.analytics import avg_win_loss_ratio
+
     trades = [{"pnl": 200.0}, {"pnl": -100.0}]
     assert avg_win_loss_ratio(trades) == 2.0
 
@@ -169,6 +190,7 @@ def test_avg_win_loss_ratio_with_losses():
 def test_avg_win_loss_ratio_all_zero_returns_zero():
     """avg_l == 0 and avg_w == 0 (all pnl zero) → returns 0.0, not inf."""
     from ibkr_core_mcp.analytics import avg_win_loss_ratio
+
     trades = [{"pnl": 0.0}, {"pnl": 0.0}]
     assert avg_win_loss_ratio(trades) == 0.0
 
@@ -178,6 +200,7 @@ def test_full_report_empty_returns_gracefully():
     import pandas as pd
 
     from ibkr_core_mcp.analytics import full_report
+
     empty = pd.Series([], dtype=float)
     result = full_report(empty)
     assert result["sharpe"] == 0.0
@@ -190,6 +213,7 @@ def test_sharpe_periods_parameter_affects_result():
     import pandas as pd
 
     from ibkr_core_mcp.analytics import sharpe
+
     rng = pd.Series([0.001, -0.002, 0.003, -0.001, 0.002] * 10)
     daily_sharpe = sharpe(rng, periods=252)
     intraday_sharpe = sharpe(rng, periods=252 * 390)
@@ -200,26 +224,30 @@ def test_sharpe_periods_parameter_affects_result():
 # periods_for_timeframe — timeframe string → bars per year (annualisation)
 # ---------------------------------------------------------------------------
 
+
 def test_periods_for_timeframe_daily_weekly_monthly():
     from ibkr_core_mcp.analytics import periods_for_timeframe
+
     assert periods_for_timeframe("1d") == 252
-    assert periods_for_timeframe("1D") == 252   # case-insensitive
+    assert periods_for_timeframe("1D") == 252  # case-insensitive
     assert periods_for_timeframe("1w") == 52
-    assert periods_for_timeframe("1m") == 12    # IBKR bar notation: m = month
+    assert periods_for_timeframe("1m") == 12  # IBKR bar notation: m = month
 
 
 def test_periods_for_timeframe_intraday_equity_rth():
     from ibkr_core_mcp.analytics import periods_for_timeframe
-    assert periods_for_timeframe("1min") == 98280   # 390 bars/day x 252
-    assert periods_for_timeframe("5min") == 19656   # 78 x 252
+
+    assert periods_for_timeframe("1min") == 98280  # 390 bars/day x 252
+    assert periods_for_timeframe("5min") == 19656  # 78 x 252
     assert periods_for_timeframe("15min") == 6552
     assert periods_for_timeframe("30min") == 3276
-    assert periods_for_timeframe("1h") == 1638      # 6.5 x 252
+    assert periods_for_timeframe("1h") == 1638  # 6.5 x 252
     assert periods_for_timeframe("2h") == 819
 
 
 def test_periods_for_timeframe_unrecognized_returns_none():
     from ibkr_core_mcp.analytics import periods_for_timeframe
+
     assert periods_for_timeframe("banana") is None
     assert periods_for_timeframe("") is None
     assert periods_for_timeframe("0d") is None

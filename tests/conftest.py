@@ -1,4 +1,3 @@
-
 import pytest
 
 
@@ -7,10 +6,12 @@ def tmp_db(tmp_path):
     """Temporary SQLite database path."""
     return tmp_path / "test_store.db"
 
+
 @pytest.fixture
 def mock_config(tmp_path, tmp_db):
     """Config with safe defaults for unit tests."""
     from ibkr_core_mcp.config import Config
+
     return Config(
         gateway_url="https://localhost:5055/v1/api",
         anthropic_api_key="test-key",
@@ -75,14 +76,12 @@ def _no_real_io(request, monkeypatch):
     per pytest-socket's own docs, this is the documented pattern for async
     test suites, not a network hole (AF_INET/DNS stays blocked).
     """
-    if (
-        request.node.get_closest_marker("integration")
-        or request.node.name in _REAL_DNS_EXEMPT_TESTS
-    ):
+    if request.node.get_closest_marker("integration") or request.node.name in _REAL_DNS_EXEMPT_TESTS:
         yield
         return
     monkeypatch.setattr("time.sleep", lambda seconds: None)
     from pytest_socket import disable_socket, enable_socket
+
     disable_socket(allow_unix_socket=True)
     yield
     enable_socket()

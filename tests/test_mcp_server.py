@@ -6,17 +6,20 @@ import pytest
 @pytest.fixture
 def toolkit(mock_config):
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
+
     return ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), mock_config)
 
 
 @pytest.fixture
 def store(tmp_db, mock_config):
     from ibkr_core_mcp.store import SQLiteStore
+
     return SQLiteStore(mock_config)
 
 
 def test_mcp_server_importable():
     from ibkr_core_mcp.mcp_server import build_server
+
     assert callable(build_server)
 
 
@@ -25,6 +28,7 @@ async def test_server_has_44_tools(toolkit, store):
 
     from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
     from ibkr_core_mcp.mcp_server import build_server
+
     server = build_server(toolkit, store)
     req = ListToolsRequest(method="tools/list")
     result = await server.request_handlers[type(req)](req)
@@ -38,16 +42,19 @@ async def test_server_has_44_tools(toolkit, store):
 
 def test_dispatch_get_price_alerts_empty(toolkit, store):
     from ibkr_core_mcp.mcp_server import _dispatch
+
     result = _dispatch("get_price_alerts", {"active_only": True}, toolkit, store)
     assert "No" in result
 
 
 def test_dispatch_add_price_alert(toolkit, store):
     from ibkr_core_mcp.mcp_server import _dispatch
+
     result = _dispatch(
         "add_price_alert",
         {"conid": 265598, "symbol": "AAPL", "threshold": 190.0, "direction": "above"},
-        toolkit, store,
+        toolkit,
+        store,
     )
     assert "AAPL" in result
     assert store.get_alerts(active_only=True)[0]["threshold"] == 190.0
@@ -55,22 +62,26 @@ def test_dispatch_add_price_alert(toolkit, store):
 
 def test_dispatch_add_price_alert_invalid_direction(toolkit, store):
     from ibkr_core_mcp.mcp_server import _dispatch
+
     result = _dispatch(
         "add_price_alert",
         {"conid": 265598, "symbol": "AAPL", "threshold": 190.0, "direction": "sideways"},
-        toolkit, store,
+        toolkit,
+        store,
     )
     assert "error" in result.lower() or "direction" in result.lower() or "unexpected" in result.lower()
 
 
 def test_dispatch_unknown_tool_returns_error(toolkit, store):
     from ibkr_core_mcp.mcp_server import _dispatch
+
     result = _dispatch("nonexistent_tool", {}, toolkit, store)
     assert "unknown" in result.lower()
 
 
 def test_dispatch_get_price_alerts_with_results(toolkit, store):
     from ibkr_core_mcp.mcp_server import _dispatch
+
     store.add_alert(265598, "AAPL", 190.0, "above")
     result = _dispatch("get_price_alerts", {"active_only": True}, toolkit, store)
     assert "AAPL" in result
@@ -78,6 +89,7 @@ def test_dispatch_get_price_alerts_with_results(toolkit, store):
 
 def test_dispatch_get_price_alerts_all_includes_triggered(toolkit, store):
     from ibkr_core_mcp.mcp_server import _dispatch
+
     aid = store.add_alert(265598, "AAPL", 190.0, "above")
     store.mark_alert_triggered(aid)
     active_result = _dispatch("get_price_alerts", {"active_only": True}, toolkit, store)
@@ -88,6 +100,7 @@ def test_dispatch_get_price_alerts_all_includes_triggered(toolkit, store):
 
 
 # ── Resource handlers ─────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_resource_ibkr_accounts(toolkit, store):
@@ -118,9 +131,7 @@ async def test_resource_positions_current(toolkit, store):
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [
-        {"symbol": "AAPL", "position": 100, "mktValue": 18000}
-    ]
+    toolkit._client.get_positions.return_value = [{"symbol": "AAPL", "position": 100, "mktValue": 18000}]
     server = build_server(toolkit, store)
     req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://positions/current")})
     result = await server.request_handlers[type(req)](req)
@@ -138,11 +149,20 @@ async def test_resource_trades_recent(toolkit, store):
 
     from ibkr_core_mcp.mcp_server import build_server
 
-    store.upsert_trades([{
-        "execution_id": "E1", "symbol": "AAPL", "side": "BUY",
-        "size": 10, "price": 180, "time": "2026-01-01T10:00:00+00:00",
-        "commission": 1.0, "account": "U1234",
-    }])
+    store.upsert_trades(
+        [
+            {
+                "execution_id": "E1",
+                "symbol": "AAPL",
+                "side": "BUY",
+                "size": 10,
+                "price": 180,
+                "time": "2026-01-01T10:00:00+00:00",
+                "commission": 1.0,
+                "account": "U1234",
+            }
+        ]
+    )
     server = build_server(toolkit, store)
     req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://trades/recent")})
     result = await server.request_handlers[type(req)](req)
@@ -167,6 +187,7 @@ async def test_resource_unknown_uri_returns_empty(toolkit, store):
 
 # ── _stream_loop_with_retry — retry and cancel ────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_stream_loop_retry_on_error():
     """A transient error in _stream_loop should trigger a retry, not propagate."""
@@ -185,8 +206,10 @@ async def test_stream_loop_retry_on_error():
         # Second call: raise CancelledError to exit the infinite while-loop
         raise asyncio.CancelledError
 
-    with patch("ibkr_core_mcp.mcp_server._stream_loop", side_effect=flaky_loop), \
-         patch("asyncio.sleep", new=AsyncMock()):
+    with (
+        patch("ibkr_core_mcp.mcp_server._stream_loop", side_effect=flaky_loop),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
         with pytest.raises(asyncio.CancelledError):
             await _stream_loop_with_retry(MagicMock(), MagicMock())
 
@@ -211,6 +234,7 @@ async def test_stream_loop_cancelled_propagates():
 
 # ── _stream_loop — dispatch on tagged union (str/spl/smd) ────────────────────
 
+
 @pytest.mark.asyncio
 async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
     """Feed one TradeExecution, one PnLUpdate, one LiveQuote through a fake listen();
@@ -222,11 +246,16 @@ async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
     from ibkr_core_mcp.streaming import LiveQuote, PnLUpdate, TradeExecution
 
     execution = TradeExecution(
-        execution_id="E1", symbol="AAPL", side="B", size=10.0, price=180.0,
-        trade_time="20260706-14:30:00", account="U1234", sec_type="STK",
+        execution_id="E1",
+        symbol="AAPL",
+        side="B",
+        size=10.0,
+        price=180.0,
+        trade_time="20260706-14:30:00",
+        account="U1234",
+        sec_type="STK",
     )
-    pnl = PnLUpdate(account="DU1234567.Core", row_type=1, dpl=12.5, nl=10000.0,
-                     upl=3.0, uel=9000.0, mv=5000.0)
+    pnl = PnLUpdate(account="DU1234567.Core", row_type=1, dpl=12.5, nl=10000.0, upl=3.0, uel=9000.0, mv=5000.0)
     quote = LiveQuote(conid=265598, symbol="AAPL", last=190.0)
 
     async def fake_listen():
@@ -240,8 +269,10 @@ async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
     fake_ws.subscribe_pnl = AsyncMock()
     fake_ws.listen = fake_listen
 
-    with patch("ibkr_core_mcp.auth.BrowserCookieAuth"), \
-         patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=fake_ws):
+    with (
+        patch("ibkr_core_mcp.auth.BrowserCookieAuth"),
+        patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=fake_ws),
+    ):
         await _stream_loop(toolkit, store)
 
     trades = store.get_trades(symbol="AAPL")
@@ -258,6 +289,7 @@ async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
 
 # ── ibkr://pnl/live resource ──────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_resource_pnl_live_populated(toolkit, store):
     from mcp.types import ReadResourceRequest
@@ -265,13 +297,15 @@ async def test_resource_pnl_live_populated(toolkit, store):
 
     from ibkr_core_mcp.mcp_server import build_server
 
-    store.record_pnl_snapshot(account="DU1234567.Core", row_type=1, dpl=12.5,
-                               nl=10000.0, upl=3.0, uel=9000.0, mv=5000.0)
+    store.record_pnl_snapshot(
+        account="DU1234567.Core", row_type=1, dpl=12.5, nl=10000.0, upl=3.0, uel=9000.0, mv=5000.0
+    )
     server = build_server(toolkit, store)
     req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://pnl/live")})
     result = await server.request_handlers[type(req)](req)
     content = result.root.contents[0].text
     import json
+
     data = json.loads(content)
     assert data["account"] == "DU1234567.Core"
     assert data["dpl"] == 12.5
