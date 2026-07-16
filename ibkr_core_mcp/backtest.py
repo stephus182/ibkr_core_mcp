@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import multiprocessing
-import time
+import threading
 import types
 from dataclasses import dataclass, field
-from multiprocessing.connection import Connection, wait
+from multiprocessing.connection import Connection
 from typing import Any
 
 import numpy as np
@@ -129,6 +129,15 @@ class BacktestResult:
         }
 
 
+def _terminate_then_kill(process: multiprocessing.process.BaseProcess) -> None:
+    """Escalate SIGTERM -> SIGKILL against a still-alive child, then reap it."""
+    process.terminate()
+    process.join(_KILL_GRACE_S)
+    if process.is_alive():
+        process.kill()
+        process.join()
+
+
 def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> None:
     """Compile and run strategy code inside an isolated child process.
 
@@ -216,61 +225,66 @@ def run_backtest(
     # EOF instead of an unbounded hang. Bug found in code review of 23c03be.
     writer.close()
 
-    # Wait for either a readable result OR the child's death, bounded overall by
-    # _EXEC_TIMEOUT. process.sentinel becomes ready the instant the OS reports
-    # the child terminated — independent of pipe refcounting — so a crash before
-    # any bytes are sent is still detected, and normal exit and crash unify under
-    # one wait() call.
-    deadline = time.monotonic() + _EXEC_TIMEOUT
+    # A plain reader.recv() has no timeout of its own once ANY bytes are
+    # readable — Connection._recv()'s inner os.read() loop is unbounded, so a
+    # child that sends a partial message and then merely stalls (alive but
+    # wedged — e.g. thrashing under memory pressure from an over-allocating
+    # strategy) would block recv() past _EXEC_TIMEOUT with no way to notice,
+    # even though writer.close() above already handles the case where the
+    # child dies outright mid-send. Bug found in code review of 2ae8366:
+    # multiplexing recv() readiness via wait()+timeout only bounds the wait
+    # for the *first* byte, not the read of the full message.
+    #
+    # Rather than trying to make recv() itself respect a deadline (Connection
+    # exposes no such API), a daemon watchdog thread enforces _EXEC_TIMEOUT by
+    # force-killing the child if the deadline passes. Killing the process is
+    # what actually unblocks recv() — POSIX guarantees a killed process's fds
+    # close, which is the ONE thing that reliably interrupts an in-progress
+    # recv() no matter what internal state it's in. The watchdog's own
+    # worst-case runtime is bounded by _EXEC_TIMEOUT + _KILL_GRACE_S, and it's
+    # a daemon thread besides, so — unlike the ThreadPoolExecutor this whole
+    # module used to use — it can never itself become an unkillable, process-
+    # exit-blocking thread: it always finishes on its own, and even if it
+    # somehow didn't, daemon threads don't block interpreter shutdown.
+    recv_done = threading.Event()
+    watchdog_fired = threading.Event()
+
+    def _watchdog() -> None:
+        if not recv_done.wait(_EXEC_TIMEOUT):
+            watchdog_fired.set()
+            _terminate_then_kill(process)
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
+
     status: str | None = None
     payload: Any = None
-    crashed = False
     try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break  # overall timeout: no result and no crash within budget
-            ready = wait([reader, process.sentinel], timeout=remaining)
-            if reader in ready:
-                # Something is readable. recv() drains a large legitimate result
-                # while the still-alive child keeps writing (no false timeout).
-                # If instead the child has died mid-message, recv() hits EOF and
-                # raises promptly — never blocks — because the parent's write-fd
-                # was closed above so the dead child's fd was the last writer.
-                try:
-                    status, payload = reader.recv()
-                except (EOFError, OSError):
-                    crashed = True
-                break
-            if process.sentinel in ready:
-                # Child gone with nothing readable pending: crashed before it
-                # sent any result at all.
-                crashed = True
-                break
-            # wait() returned [] -> the timeout elapsed with nothing ready; loop
-            # once more to hit the remaining<=0 branch and report a real timeout.
+        status, payload = reader.recv()
+    except (EOFError, OSError):
+        pass  # child died (crashed, or killed by the watchdog) mid-send or before sending
     finally:
         reader.close()
+        recv_done.set()
+        watchdog.join()
+
+    if watchdog_fired.is_set():
+        # Deadline hit — the child was still alive and unresponsive (a genuine
+        # runaway like `while True: pass`, or one stalled mid-send) and had to
+        # be force-killed. Already terminated/killed by _watchdog above.
+        raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
 
     if status is None:
-        if crashed:
-            # Child exited/was killed without delivering a complete result.
-            process.join()
-            exitcode = process.exitcode
-            detail = (
-                f"killed by signal {-exitcode}"
-                if exitcode is not None and exitcode < 0
-                else f"exit code {exitcode}"
-            )
-            raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
-        # Genuine timeout: the child is still running (e.g. `while True: pass`).
-        if process.is_alive():
-            process.terminate()
-            process.join(_KILL_GRACE_S)
-            if process.is_alive():
-                process.kill()
-                process.join()
-        raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
+        # Child exited on its own, before the deadline, without delivering a
+        # complete result (e.g. a segfault or an immediate OOM-kill).
+        process.join()
+        exitcode = process.exitcode
+        detail = (
+            f"killed by signal {-exitcode}"
+            if exitcode is not None and exitcode < 0
+            else f"exit code {exitcode}"
+        )
+        raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
 
     # Got a complete result — reap the child. Connection.send() is synchronous,
     # so the child has already flushed everything by the time recv() returned;
@@ -278,11 +292,7 @@ def run_backtest(
     # belt-and-suspenders guard against a wedged interpreter shutdown.
     process.join(_KILL_GRACE_S)
     if process.is_alive():
-        process.terminate()
-        process.join(_KILL_GRACE_S)
-        if process.is_alive():
-            process.kill()
-            process.join()
+        _terminate_then_kill(process)
 
     if status == "syntax_error":
         raise BacktestSyntaxError(f"Strategy syntax error: {payload}")

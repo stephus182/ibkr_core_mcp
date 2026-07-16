@@ -29,6 +29,24 @@ def _crash_mid_flush_child(code, df, conn):
     os._exit(137)  # die mid-message, as an OOM-kill / external SIGKILL would
 
 
+def _stall_alive_child(code, df, conn):
+    """Test-only spawn target: simulate a child that goes quiet mid-flush
+    WITHOUT dying — e.g. thrashing under memory pressure — as opposed to
+    _crash_mid_flush_child above, which dies outright. Writes a partial
+    message (same technique) then sleeps well past any test timeout instead
+    of exiting. The parent has no EOF to detect here; only a deadline-based
+    watchdog that force-kills the child can ever unblock the reader.
+    """
+    import os
+    import struct
+    import time
+
+    fd = conn.fileno()
+    os.write(fd, struct.pack("!i", 50_000_000))
+    os.write(fd, b"partial")
+    time.sleep(30)  # wedged — never finishes on its own; must be force-killed
+
+
 @pytest.fixture
 def ohlcv():
     np.random.seed(0)
@@ -292,3 +310,43 @@ def test_crash_during_flush_does_not_hang(ohlcv, monkeypatch):
         "child's death, not by waiting out _EXEC_TIMEOUT (10s)"
     )
     assert multiprocessing.active_children() == [], "crashed strategy process was not reaped"
+
+
+def test_stalled_alive_child_is_killed_by_watchdog(ohlcv, monkeypatch):
+    """A child that goes quiet mid-flush WITHOUT dying must still be bounded by
+    _EXEC_TIMEOUT, not left blocking recv() forever.
+
+    Regression test for a hang found in code review of 2ae8366. That fix
+    correctly detects a child that DIES mid-send, via EOF once the parent's own
+    write-fd is closed. But a plain reader.recv() has no timeout of its own —
+    once wait() reports the connection readable, recv()'s inner read loop keeps
+    blocking for as long as the child is alive and simply doesn't finish
+    writing, regardless of _EXEC_TIMEOUT. A daemon watchdog thread now enforces
+    the deadline directly by force-killing the child — which is what actually
+    unblocks recv(), since killing the process closes its fd and delivers EOF —
+    rather than trying to make recv() itself timeout-aware (Connection exposes
+    no such API).
+
+    If this regresses, this test hangs instead of failing cleanly — a hang here
+    IS the failure signal (run under a hang guard).
+    """
+    import multiprocessing
+    import time
+
+    from ibkr_core_mcp import backtest
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
+    monkeypatch.setattr(backtest, "_execute_in_subprocess", _stall_alive_child)
+    monkeypatch.setattr(backtest, "_EXEC_TIMEOUT", 0.5)
+    monkeypatch.setattr(backtest, "_KILL_GRACE_S", 0.2)
+
+    start = time.monotonic()
+    with pytest.raises(BacktestRuntimeError, match="timed out"):
+        run_backtest("df['signal'] = 1", ohlcv)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5.0, (
+        f"took {elapsed:.1f}s — a stalled-but-alive child must be force-killed at "
+        "_EXEC_TIMEOUT, not left blocking recv() indefinitely"
+    )
+    assert multiprocessing.active_children() == [], "stalled strategy process was not reaped"
