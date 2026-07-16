@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Backtest sandbox strategy code that timed out (e.g. `while True: pass`) survived the 10-second timeout indefinitely in an orphaned `ThreadPoolExecutor` thread — `Future.cancel()` cannot stop a thread already executing. Worse, `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit. The sandbox now runs strategy code in an isolated `multiprocessing.Process`, with a daemon watchdog thread that force-kills the child (SIGTERM, then SIGKILL after a grace period) if the timeout elapses — a real OS process can be forcibly stopped, unlike a thread. `run_backtest()`'s public signature and exception contract are unchanged. See `SECURITY.md`'s "Thread timeout non-termination" entry for the full mechanism.
+
 ---
 
 ## [1.2.2] — 2026-07-15
