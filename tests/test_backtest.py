@@ -185,3 +185,44 @@ def test_timeout_actually_kills_runaway_process(ohlcv, monkeypatch):
         f"took {elapsed:.1f}s — kill sequence did not terminate the process promptly"
     )
     assert multiprocessing.active_children() == [], "runaway strategy process was not cleaned up"
+
+
+def test_large_result_does_not_false_timeout():
+    """A fast strategy returning a large DataFrame must not be misreported as timed out.
+
+    Regression test for a pipe-deadlock bug: a multiprocessing.Queue's child-side
+    feeder thread blocks the child's actual process exit until every put() payload
+    is fully flushed through the OS pipe. The previous implementation called
+    process.join(_EXEC_TIMEOUT) *before* draining the queue — for a result
+    DataFrame larger than the OS pipe buffer (commonly ~64KB), the feeder thread
+    would block on write() (since nothing was reading yet), which blocked the
+    child from exiting, so join() never observed the child as exited no matter how
+    fast the strategy itself computed — producing a false "timed out" error even
+    for a near-instant strategy. Uses the real (unpatched) default _EXEC_TIMEOUT
+    so this reproduces the exact failure mode reported against production code.
+    """
+    import time
+
+    from ibkr_core_mcp.backtest import run_backtest
+
+    n = 50_000  # ~2MB pickled — comfortably past any common OS pipe buffer size
+    np.random.seed(1)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    high = close + np.random.uniform(0.1, 1.0, n)
+    low = close - np.random.uniform(0.1, 1.0, n)
+    open_ = close + np.random.randn(n) * 0.2
+    volume = np.random.randint(500_000, 2_000_000, n).astype(float)
+    idx = pd.date_range("2025-01-01", periods=n, freq="min")
+    big_df = pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close, "volume": volume}, index=idx
+    )
+
+    start = time.monotonic()
+    result = run_backtest("df['signal'] = 1", big_df)  # trivial, near-instant strategy
+    elapsed = time.monotonic() - start
+
+    assert isinstance(result.total_return, float)
+    assert elapsed < 8.0, (
+        f"took {elapsed:.1f}s — a fast strategy with a large result should complete in "
+        "well under the default _EXEC_TIMEOUT (10s), not stall on a pipe deadlock"
+    )

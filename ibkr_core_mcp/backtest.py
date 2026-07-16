@@ -197,22 +197,41 @@ def run_backtest(
     result_queue: Any = ctx.Queue()
     process = ctx.Process(target=_execute_in_subprocess, args=(code, df, result_queue))
     process.start()
-    process.join(_EXEC_TIMEOUT)
 
+    # Read from the queue *while* waiting rather than join()-then-get_nowait():
+    # a multiprocessing.Queue's child-side feeder thread blocks the child's
+    # actual process exit until every put() payload is fully flushed through
+    # the OS pipe. For a result DataFrame larger than the pipe buffer (a few
+    # KB-64KB depending on OS), join()-then-get_nowait() would see the child
+    # as still "alive" well past the point it finished computing, producing a
+    # false timeout. Queue.get(timeout=...) actively drains the pipe as bytes
+    # arrive, so the feeder thread never blocks on a full pipe.
+    try:
+        status, payload = result_queue.get(timeout=_EXEC_TIMEOUT)
+    except queue.Empty:
+        if process.is_alive():
+            process.terminate()
+            process.join(_KILL_GRACE_S)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
+        # The child already exited without ever putting a result (e.g. a
+        # segfault or an OOM-kill) — that's a crash, not a slow strategy.
+        process.join()
+        exitcode = process.exitcode
+        detail = f"killed by signal {-exitcode}" if exitcode and exitcode < 0 else f"exit code {exitcode}"
+        raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
+
+    # Got a result — reap the child. Should be near-instant now that the
+    # queue has been drained (the feeder thread's write already completed).
+    process.join(_KILL_GRACE_S)
     if process.is_alive():
         process.terminate()
         process.join(_KILL_GRACE_S)
         if process.is_alive():
             process.kill()
             process.join()
-        raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s")
-
-    try:
-        status, payload = result_queue.get_nowait()
-    except queue.Empty:
-        raise BacktestRuntimeError(
-            f"Strategy process exited unexpectedly (exit code {process.exitcode})"
-        ) from None
 
     if status == "syntax_error":
         raise BacktestSyntaxError(f"Strategy syntax error: {payload}")
