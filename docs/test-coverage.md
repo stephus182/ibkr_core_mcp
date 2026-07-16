@@ -1,8 +1,8 @@
 # Test Coverage — ibkr_core_mcp
 
-**730 unit tests · 85 integration tests (815 total) · 83% line coverage (non-integration)**
+**735 unit tests · 85 integration tests (820 total) · 83% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
-Counts and coverage below regenerated 2026-07-14 via
+Counts and coverage below regenerated 2026-07-16 via
 `pytest -m "not integration" --cov=ibkr_core_mcp --cov-report=term-missing`; re-run that command
 after any significant test or source addition rather than hand-editing these numbers.
 
@@ -30,7 +30,6 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `scrape_fallback.py` | 98% | 119–120, 506 | SSRF guard's private/loopback/link-local/reserved IP branch (needs a live DNS resolution to a private address to hit); `if __name__ == "__main__"` CLI entrypoint |
 | `models.py` | 99% | 147 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
 | `human_auth.py` | 96% | 14 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
-| `backtest.py` | 97% | 185–186 | `concurrent.futures.TimeoutError` path in strategy executor — requires a real timeout, not deterministically triggerable |
 | `store.py` | 92% | 273–275, 303–308, 312–317, 321–323, 334–337, 528–529, 543 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
 | `rate_limiter.py` | 93% | 106–107 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
 | `__init__.py` | 92% | 57–58 | Optional-dependency import guard (module absent from environment) |
@@ -40,12 +39,15 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 
 ---
 
-## Expected low coverage — live external dependencies
+## Expected low coverage — live external dependencies or subprocess execution
 
-These modules are fully functional but cannot be meaningfully unit-tested without live infrastructure.
+These modules are fully functional but read as low-coverage for reasons other than missing tests: most
+require live infrastructure to unit-test meaningfully; `backtest.py` is a different case — its logic runs
+inside a spawned child process, invisible to single-process coverage instrumentation.
 
 | Module | Coverage | Why low |
 |---|---|---|
+| `backtest.py` | 82% | Uncovered: 34–36, 50–55, 138–139, 159–186, 298. Most of this is *not* actually untested: `_write_guard`, `_sandboxed_getattr`, and all of `_execute_in_subprocess` (lines 34–36, 50–55, 159–186) run inside the sandboxed strategy's `multiprocessing.Process` child (see `docs/plans/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`) — `coverage.py`'s default single-process instrumentation can't see code executing in a different OS process, even though the same 20 tests that exercised this logic pre-rewrite still exercise it today. Verified with multiprocessing-aware coverage (`COVERAGE_PROCESS_START` + `concurrency=multiprocessing`, a one-off local check, not wired into CI): real line coverage is ~92%. The two lines that are genuinely untested even under that measurement: `_terminate_then_kill`'s SIGKILL-escalation branch (138–139 — reached only if a killed process is somehow still alive after the SIGTERM grace period) and the success-path reap safety net (298 — reached only if the child is somehow still alive moments after a successful `send()`), both rare defensive branches with no deterministic trigger. |
 | `cache.py` | 59% | All GDrive API operations (upload, download, manifest) require live OAuth tokens and Drive access. Error paths exercised in integration tests only. |
 | `mcp_server.py` | 65% | SSE transport wiring (`uvicorn`, `starlette` app/routes) and MCP protocol request handlers exercise the full tool chain — require a live IBKR gateway + MCP client. Tested integration-only. |
 | `gateway/manager.py` | 72% | Docker container lifecycle (`ensure_docker_running`, `image_exists`) and the interactive startup flow require Docker Desktop and a terminal for user input. All pure logic is tested. |
