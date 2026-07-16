@@ -202,7 +202,7 @@ This prevents reading arbitrary files via `pd.read_parquet`, writing files via `
 | Limit | Value | Error on breach |
 |---|---|---|
 | Code length | 4,096 characters | `BacktestSyntaxError` |
-| Execution timeout | 10 seconds | `BacktestRuntimeError` (via `ThreadPoolExecutor.submit(...).result(timeout=10)`) |
+| Execution timeout | 10 seconds | `BacktestRuntimeError` (via a daemon watchdog thread that force-kills the `multiprocessing.Process` running the strategy — see `backtest.py`) |
 
 ### Residual risk
 
@@ -210,7 +210,7 @@ This prevents reading arbitrary files via `pd.read_parquet`, writing files via `
 
 **`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/audits/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook now denies `eval`/`query` by name before falling through to `safer_getattr`. Any future DataFrame method found to accept and internally evaluate a string as code (rather than treat it as data) should be added to `backtest.py`'s `_DENIED_ATTRS`.
 
-**Thread timeout non-termination** — The sandbox runs in a `ThreadPoolExecutor` thread. `Future.cancel()` cannot stop a thread that is already executing. Strategy code containing `while True: pass` will survive the 10-second timeout and continue consuming CPU in a background thread until the process exits. This does not allow filesystem writes beyond the DataFrame methods above, and the 4,096-character code limit constrains what can be submitted, but it does create unbounded CPU consumption. Full mitigation requires running the sandbox in a subprocess. Tracked for v2.0 scope.
+**Thread timeout non-termination (fixed 2026-07-16)** — The sandbox previously ran in a `ThreadPoolExecutor` thread; `Future.cancel()` cannot stop a thread that is already executing, so strategy code containing `while True: pass` survived the 10-second timeout and kept consuming CPU in a background thread. This was worse than "unbounded CPU consumption" alone: `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit, unable to terminate cleanly without a forced kill. The sandbox now runs strategy code (both `compile_restricted` and `exec`) in an isolated `multiprocessing.Process` (spawn context) communicating results back over a `multiprocessing.Pipe`. A daemon watchdog thread enforces the execution timeout directly: if the deadline passes, it escalates `terminate()` (SIGTERM), then `kill()` (SIGKILL) after a short grace period if the process hasn't exited — a real OS process can be forcibly stopped, unlike a thread. Killing the process is also what reliably unblocks the parent's read of the result pipe no matter what state it's in (waiting for the first byte, or partway through a large payload), since a `multiprocessing.Connection.recv()` call has no timeout of its own once any bytes are readable. The watchdog itself is a daemon thread with a provably bounded lifetime, so — unlike the `ThreadPoolExecutor` it replaced — it can never become an unkillable, process-exit-blocking thread. See `docs/plans/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
 
 ---
 
