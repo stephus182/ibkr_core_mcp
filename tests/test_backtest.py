@@ -3,6 +3,32 @@ import pandas as pd
 import pytest
 
 
+def _crash_mid_flush_child(code, df, conn):
+    """Test-only spawn target: simulate an OOM-kill / SIGKILL landing mid-flush.
+
+    Stands in for backtest._execute_in_subprocess (same 3-arg signature) so the
+    parent's reader logic can be exercised against a crash that happens *while a
+    result is being written*. Writes a valid multiprocessing wire header claiming
+    a large body, then only a few body bytes, then dies via os._exit() — leaving
+    a *partial* message in the pipe with the writer process gone. That is exactly
+    the on-wire state a real crash-during-send produces.
+
+    Uses raw os.write on the connection fd, not conn.send(): conn.send() is
+    atomic and can never leave a half-written message, whereas a genuine
+    mid-flush crash must. The 4-byte big-endian length prefix is
+    multiprocessing.connection's documented wire format. This is deliberately NOT
+    strategy code — the sandbox denies os/fd access — it is a trusted module-level
+    helper, picklable by the spawn context, used only by the test below.
+    """
+    import os
+    import struct
+
+    fd = conn.fileno()
+    os.write(fd, struct.pack("!i", 50_000_000))  # header: claim a 50MB body...
+    os.write(fd, b"partial")  # ...but send only 7 bytes of it
+    os._exit(137)  # die mid-message, as an OOM-kill / external SIGKILL would
+
+
 @pytest.fixture
 def ohlcv():
     np.random.seed(0)
@@ -226,3 +252,43 @@ def test_large_result_does_not_false_timeout():
         f"took {elapsed:.1f}s — a fast strategy with a large result should complete in "
         "well under the default _EXEC_TIMEOUT (10s), not stall on a pipe deadlock"
     )
+
+
+def test_crash_during_flush_does_not_hang(ohlcv, monkeypatch):
+    """A child that dies mid-flush must be detected promptly, never hang forever.
+
+    Regression test for a hang found in code review of 23c03be. That fix switched
+    the reader to Queue.get(timeout=...), but once the first bytes of a result are
+    readable, recv()/_recv_bytes runs with NO timeout. If the child died part-way
+    through sending a large result (e.g. an over-allocating strategy the OS
+    OOM-kills), the parent's own still-open write-fd kept the pipe from ever
+    signalling EOF, so recv() blocked FOREVER — unbounded, immune to _EXEC_TIMEOUT.
+    Strictly worse than the pre-23c03be false-timeout it replaced: no exception,
+    ever, versus a wrong-but-bounded one.
+
+    The fix (raw Pipe + parent closes its write-fd + wait([reader, sentinel]))
+    turns the same event into a prompt EOF/OSError and a clean crash report.
+    _EXEC_TIMEOUT is left at its 10s default on purpose so a pass here proves
+    detection is fast (via EOF/sentinel), not merely "eventually times out".
+
+    If the fix ever regresses to the unbounded hang, this test hangs rather than
+    failing cleanly — a hang here IS the failure signal (run under a hang guard).
+    """
+    import multiprocessing
+    import time
+
+    from ibkr_core_mcp import backtest
+    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+
+    monkeypatch.setattr(backtest, "_execute_in_subprocess", _crash_mid_flush_child)
+
+    start = time.monotonic()
+    with pytest.raises(BacktestRuntimeError, match="exited unexpectedly"):
+        run_backtest("df['signal'] = 1", ohlcv)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 3.0, (
+        f"took {elapsed:.1f}s — a crash-during-flush must be detected promptly via the "
+        "child's death, not by waiting out _EXEC_TIMEOUT (10s)"
+    )
+    assert multiprocessing.active_children() == [], "crashed strategy process was not reaped"

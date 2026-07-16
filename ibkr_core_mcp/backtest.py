@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import multiprocessing
-import queue
+import time
 import types
 from dataclasses import dataclass, field
+from multiprocessing.connection import Connection, wait
 from typing import Any
 
 import numpy as np
@@ -128,19 +129,27 @@ class BacktestResult:
         }
 
 
-def _execute_in_subprocess(code: str, df: pd.DataFrame, result_queue: Any) -> None:
+def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> None:
     """Compile and run strategy code inside an isolated child process.
 
     Runs entirely in the child (both compile_restricted and exec) so the parent
     can kill the whole OS process on timeout — a thread cannot be forcibly
-    stopped once it's running, a process can. `result_queue` is a
-    multiprocessing.Queue; puts a ("ok", df) / ("syntax_error", msg) /
-    ("runtime_error", msg) tuple.
+    stopped once it's running, a process can. `conn` is the write end of a
+    multiprocessing.Pipe; sends a ("ok", df) / ("syntax_error", msg) /
+    ("runtime_error", msg) tuple back to the parent.
+
+    Connection.send() flushes synchronously in the child's own thread — unlike
+    multiprocessing.Queue.put(), which hands the payload to a background feeder
+    thread that keeps flushing after the child's main code has returned. That
+    synchronous property is load-bearing for the parent's crash detection: the
+    child holds the only remaining write-fd (the parent drops its copy right
+    after start()), so if the child dies part-way through send() the reader is
+    delivered EOF promptly instead of hanging. See run_backtest.
     """
     try:
         byte_code = compile_restricted(code, "<strategy>", "exec")
     except SyntaxError as e:
-        result_queue.put(("syntax_error", str(e)))
+        conn.send(("syntax_error", str(e)))
         return
 
     sandbox: dict[str, Any] = {
@@ -161,10 +170,10 @@ def _execute_in_subprocess(code: str, df: pd.DataFrame, result_queue: Any) -> No
     try:
         exec(byte_code, sandbox)  # noqa: S102
     except Exception as e:
-        result_queue.put(("runtime_error", f"{type(e).__name__}: {e}"))
+        conn.send(("runtime_error", f"{type(e).__name__}: {e}"))
         return
 
-    result_queue.put(("ok", sandbox.get("df", df)))
+    conn.send(("ok", sandbox.get("df", df)))
 
 
 def run_backtest(
@@ -194,37 +203,79 @@ def run_backtest(
     # limited_builtins dict would strip most safe builtins and make strategies
     # unable to use isinstance, bool, etc.
     ctx = multiprocessing.get_context("spawn")
-    result_queue: Any = ctx.Queue()
-    process = ctx.Process(target=_execute_in_subprocess, args=(code, df, result_queue))
+    reader, writer = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_execute_in_subprocess, args=(code, df, writer))
     process.start()
+    # Drop the parent's OWN copy of the write end. A pipe only delivers EOF to
+    # its reader once EVERY write-fd across ALL processes is closed. If the
+    # parent kept its (never-used) write-fd open, a child that dies mid-send —
+    # e.g. an over-allocating strategy the OS OOM-kills while its result is
+    # still flushing — would leave the reader's recv() blocked forever on bytes
+    # that can never arrive, because Connection.recv() has no timeout once the
+    # first byte is readable. Closing it here means a dead child yields a prompt
+    # EOF instead of an unbounded hang. Bug found in code review of 23c03be.
+    writer.close()
 
-    # Read from the queue *while* waiting rather than join()-then-get_nowait():
-    # a multiprocessing.Queue's child-side feeder thread blocks the child's
-    # actual process exit until every put() payload is fully flushed through
-    # the OS pipe. For a result DataFrame larger than the pipe buffer (a few
-    # KB-64KB depending on OS), join()-then-get_nowait() would see the child
-    # as still "alive" well past the point it finished computing, producing a
-    # false timeout. Queue.get(timeout=...) actively drains the pipe as bytes
-    # arrive, so the feeder thread never blocks on a full pipe.
+    # Wait for either a readable result OR the child's death, bounded overall by
+    # _EXEC_TIMEOUT. process.sentinel becomes ready the instant the OS reports
+    # the child terminated — independent of pipe refcounting — so a crash before
+    # any bytes are sent is still detected, and normal exit and crash unify under
+    # one wait() call.
+    deadline = time.monotonic() + _EXEC_TIMEOUT
+    status: str | None = None
+    payload: Any = None
+    crashed = False
     try:
-        status, payload = result_queue.get(timeout=_EXEC_TIMEOUT)
-    except queue.Empty:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break  # overall timeout: no result and no crash within budget
+            ready = wait([reader, process.sentinel], timeout=remaining)
+            if reader in ready:
+                # Something is readable. recv() drains a large legitimate result
+                # while the still-alive child keeps writing (no false timeout).
+                # If instead the child has died mid-message, recv() hits EOF and
+                # raises promptly — never blocks — because the parent's write-fd
+                # was closed above so the dead child's fd was the last writer.
+                try:
+                    status, payload = reader.recv()
+                except (EOFError, OSError):
+                    crashed = True
+                break
+            if process.sentinel in ready:
+                # Child gone with nothing readable pending: crashed before it
+                # sent any result at all.
+                crashed = True
+                break
+            # wait() returned [] -> the timeout elapsed with nothing ready; loop
+            # once more to hit the remaining<=0 branch and report a real timeout.
+    finally:
+        reader.close()
+
+    if status is None:
+        if crashed:
+            # Child exited/was killed without delivering a complete result.
+            process.join()
+            exitcode = process.exitcode
+            detail = (
+                f"killed by signal {-exitcode}"
+                if exitcode is not None and exitcode < 0
+                else f"exit code {exitcode}"
+            )
+            raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
+        # Genuine timeout: the child is still running (e.g. `while True: pass`).
         if process.is_alive():
             process.terminate()
             process.join(_KILL_GRACE_S)
             if process.is_alive():
                 process.kill()
                 process.join()
-            raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
-        # The child already exited without ever putting a result (e.g. a
-        # segfault or an OOM-kill) — that's a crash, not a slow strategy.
-        process.join()
-        exitcode = process.exitcode
-        detail = f"killed by signal {-exitcode}" if exitcode and exitcode < 0 else f"exit code {exitcode}"
-        raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
+        raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
 
-    # Got a result — reap the child. Should be near-instant now that the
-    # queue has been drained (the feeder thread's write already completed).
+    # Got a complete result — reap the child. Connection.send() is synchronous,
+    # so the child has already flushed everything by the time recv() returned;
+    # this join is near-instant and the terminate/kill escalation is only a
+    # belt-and-suspenders guard against a wedged interpreter shutdown.
     process.join(_KILL_GRACE_S)
     if process.is_alive():
         process.terminate()
