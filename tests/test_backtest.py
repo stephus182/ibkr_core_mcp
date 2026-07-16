@@ -382,7 +382,7 @@ def test_successful_result_wins_race_against_watchdog(ohlcv, monkeypatch):
 
     _real_event_cls = threading.Event
 
-    class _DelayFirstConstructed(_real_event_cls):  # type: ignore[misc]
+    class _DelayFirstConstructed(_real_event_cls):  # type: ignore[valid-type]
         _next_id = 0
         _target_id: int | None = None
 
