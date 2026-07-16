@@ -350,3 +350,64 @@ def test_stalled_alive_child_is_killed_by_watchdog(ohlcv, monkeypatch):
         "_EXEC_TIMEOUT, not left blocking recv() indefinitely"
     )
     assert multiprocessing.active_children() == [], "stalled strategy process was not reaped"
+
+
+def test_successful_result_wins_race_against_watchdog(ohlcv, monkeypatch):
+    """A result already received via recv() must not be discarded as a false
+    timeout merely because the watchdog's own deadline fires moments later.
+
+    Regression test for a race found in code review of 56c2d9d: the reader
+    checked `if watchdog_fired.is_set():` unconditionally, without checking
+    whether reader.recv() had already produced a valid result. recv()
+    completing and the watchdog's `_EXEC_TIMEOUT` deadline elapsing are timed
+    independently by two different threads, so a legitimate fast result can
+    race a watchdog that times out in the small window between recv()
+    returning and recv_done.set() actually taking effect — and the old code
+    always deferred to the watchdog flag, discarding a real result.
+
+    Deterministically reproduced (not relying on real microsecond-scale
+    jitter) by delaying recv_done — the first threading.Event() run_backtest
+    constructs — so its .set() call blocks past _EXEC_TIMEOUT before actually
+    taking effect, giving the watchdog time to independently fire even though
+    the strategy already completed and was received. Uses a real Event().wait()
+    for the delay, not time.sleep() — this suite's autouse _no_real_io fixture
+    (tests/conftest.py) patches time.sleep to a no-op for every unit test, which
+    would silently defeat a sleep-based delay; Event.wait() blocks via a
+    real lock/condition-variable timeout, unaffected by that patch.
+    """
+    import threading
+
+    from ibkr_core_mcp import backtest
+    from ibkr_core_mcp.backtest import run_backtest
+
+    _real_event_cls = threading.Event
+
+    class _DelayFirstConstructed(_real_event_cls):  # type: ignore[misc]
+        _next_id = 0
+        _target_id: int | None = None
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._id = _DelayFirstConstructed._next_id
+            _DelayFirstConstructed._next_id += 1
+            if _DelayFirstConstructed._target_id is None:
+                _DelayFirstConstructed._target_id = self._id
+
+        def set(self) -> None:
+            if self._id == _DelayFirstConstructed._target_id:
+                _real_event_cls().wait(3.0)  # let the watchdog's own timeout fire first
+            super().set()
+
+    monkeypatch.setattr(backtest.threading, "Event", _DelayFirstConstructed)
+    # Generous relative to real spawn("spawn")+import+compute latency (measured
+    # ~0.4s for a trivial 200-row strategy on this machine) so recv() genuinely
+    # succeeds well within the deadline — this test is about the race between a
+    # real success and a racing watchdog decision, not about a genuine timeout.
+    monkeypatch.setattr(backtest, "_EXEC_TIMEOUT", 2.0)
+
+    result = run_backtest("df['signal'] = 1", ohlcv)  # trivial, near-instant strategy
+
+    assert isinstance(result.total_return, float), (
+        "a strategy that completed and was fully received must return its real "
+        "result, not be discarded because the watchdog also fired moments later"
+    )

@@ -268,10 +268,18 @@ def run_backtest(
         recv_done.set()
         watchdog.join()
 
-    if watchdog_fired.is_set():
-        # Deadline hit — the child was still alive and unresponsive (a genuine
-        # runaway like `while True: pass`, or one stalled mid-send) and had to
-        # be force-killed. Already terminated/killed by _watchdog above.
+    if status is None and watchdog_fired.is_set():
+        # Deadline hit with no result ever received — the child was still
+        # alive and unresponsive (a genuine runaway like `while True: pass`,
+        # or one stalled mid-send) and had to be force-killed. Already
+        # terminated/killed by _watchdog above. Checking `status is None` here
+        # (not just `watchdog_fired.is_set()`) matters: recv() completing
+        # successfully and the watchdog's own deadline firing are timed
+        # independently, so a legitimate fast result can race a watchdog that
+        # times out moments later (e.g. in the gap between recv() returning
+        # and recv_done.set() actually taking effect) — a result we already
+        # received must win over a watchdog decision made without knowing
+        # that. Bug found in code review of 56c2d9d.
         raise BacktestRuntimeError(f"Strategy timed out after {_EXEC_TIMEOUT}s") from None
 
     if status is None:
