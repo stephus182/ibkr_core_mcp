@@ -1,7 +1,7 @@
 # Backtest Sandbox: Subprocess Isolation — Design
 
 **Created:** 2026-07-15
-**Status:** Approved — ready for implementation plan
+**Status:** Superseded by implementation. The `Queue` + `process.join(timeout)` + `get_nowait()` mechanism described below was the starting design, but code review during implementation found two further hang/false-timeout bugs in it and its first fix; the shipped mechanism is a raw `multiprocessing.Pipe` + a daemon watchdog thread that force-kills the child on timeout. For the actual final architecture, read `ibkr_core_mcp/backtest.py`'s `run_backtest()` (extensively comment-annotated with which bug each guard fixes) and `SECURITY.md`'s "Thread timeout non-termination" entry, not this document.
 
 ---
 
