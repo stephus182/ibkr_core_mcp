@@ -57,7 +57,7 @@ present), and totals across partitions.
 
 **Note:** On a cold gateway session this endpoint can return an empty result (`{"upnl": {}}`)
 even with open positions — live-verified 2026-07-17, same class of warm-up quirk as
-`get_market_snapshot` above. The tool self-primes: if the first call comes back empty, it
+`get_market_snapshot` below. The tool self-primes: if the first call comes back empty, it
 briefly subscribes/unsubscribes to the `spl` WebSocket topic and retries once before falling
 back to "No P&L data returned" — callers don't need to retry or know about the quirk.
 
