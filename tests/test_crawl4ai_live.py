@@ -73,6 +73,42 @@ def test_scrape_with_fallback_triggers_real_crawl4ai_on_empty_firecrawl_result(c
 
 
 @pytest.mark.integration
+def test_scrape_batch_reuses_one_real_browser_across_two_real_urls(crawl4ai_available, tmp_path):
+    """Crawl4AIScraper.scrape_batch() against two real, stable, static pages --
+    proves actual browser reuse (not just the fully-mocked unit test in
+    tests/test_scrape_fallback.py) by wrapping the real AsyncWebCrawler class
+    with a construction counter, while still exercising the genuine
+    Playwright/Chromium round-trip for every arun() call."""
+    import crawl4ai
+
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+    construction_count = {"value": 0}
+    RealAsyncWebCrawler = crawl4ai.AsyncWebCrawler
+
+    class CountingAsyncWebCrawler(RealAsyncWebCrawler):
+        def __init__(self, *args, **kwargs):
+            construction_count["value"] += 1
+            super().__init__(*args, **kwargs)
+
+    original = crawl4ai.AsyncWebCrawler
+    crawl4ai.AsyncWebCrawler = CountingAsyncWebCrawler
+    try:
+        scraper = Crawl4AIScraper(tmp_path / "profiles")
+        urls = ["https://example.com", "https://example.org"]
+        outcomes = scraper.scrape_batch(urls, profile_domain="https://example.com")
+    finally:
+        crawl4ai.AsyncWebCrawler = original
+
+    assert construction_count["value"] == 1  # one real Chromium session for both URLs
+    for url in urls:
+        outcome = outcomes[url]
+        assert not isinstance(outcome, Exception), f"{url} failed: {outcome}"
+        assert outcome["url"] == url
+        assert "Example Domain" in outcome["markdown"]
+
+
+@pytest.mark.integration
 def test_scrape_with_fallback_blocks_private_host_before_any_browser_launch(toolkit):
     """The Python-level SSRF guard (_validate_public_url) must reject a
     private-host URL before Crawl4AI is even imported — this must hold
