@@ -2729,6 +2729,70 @@ class ClaudeToolkit:
             return self._finalize_fallback_result(url, markdown, exc)
         return self._finalize_fallback_result(url, markdown, result)
 
+    def _apply_crawl4ai_fallback_batch(self, root_url: str, pages: list[dict[str, Any]]) -> int:
+        """
+        Apply Crawl4AI fallback to every page in `pages` that needs it,
+        mutating each page's "markdown" key in place. Used only by
+        _handle_firecrawl_crawl.
+
+        Batches every fallback-needing page into ONE
+        Crawl4AIScraper.scrape_batch() call (one shared browser) instead of
+        one browser launch per page -- safe because Firecrawl's crawl() only
+        returns pages within the same site as root_url, so every page here
+        shares the same saved-profile decision.
+
+        Args:
+            root_url: The crawl's original root URL -- used only to determine
+                the shared profile domain passed to scrape_batch().
+            pages: Firecrawl's page list for this crawl (each a dict with at
+                least "url", "markdown", "metadata" keys).
+
+        Returns:
+            Count of pages where Crawl4AI's content actually replaced
+            Firecrawl's (mirrors _scrape_with_fallback's used_fallback,
+            summed across pages).
+        """
+        import urllib.parse
+
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+        candidates: list[tuple[dict[str, Any], str]] = []
+        for page in pages:
+            url = page.get("url", "")
+            needs_fallback, md_if_not, _note_if_not = self._assess_fallback_need(
+                url, page.get("markdown", ""), page.get("metadata")
+            )
+            if needs_fallback:
+                candidates.append((page, page.get("markdown", "")))
+            else:
+                page["markdown"] = md_if_not
+
+        if not candidates:
+            return 0
+
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+
+        urls = [p.get("url", "") for p, _ in candidates]
+        root_domain = urllib.parse.urlparse(root_url).hostname or ""
+        try:
+            outcomes = self._crawl4ai.scrape_batch(urls, profile_domain=root_domain)
+        except Exception as exc:
+            # A whole-batch failure (e.g. Crawl4AIUnavailableError, raised
+            # before any URL is attempted) must degrade the same way a
+            # per-URL failure would -- not crash the entire crawl.
+            outcomes = {u: exc for u in urls}
+
+        fallback_count = 0
+        for page, original_markdown in candidates:
+            url = page.get("url", "")
+            outcome = outcomes.get(url, RuntimeError(f"Crawl4AI batch returned no result for {url}"))
+            final_markdown, _note, used_fallback = self._finalize_fallback_result(url, original_markdown, outcome)
+            page["markdown"] = final_markdown
+            if used_fallback:
+                fallback_count += 1
+        return fallback_count
+
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """
         Handle the firecrawl_search tool.
@@ -2846,21 +2910,12 @@ class ClaudeToolkit:
         except FirecrawlError as exc:
             return f"Firecrawl crawl failed (HTTP {exc.status_code}): {exc}", None
 
-        # NOTE: each fallback call here launches its own Crawl4AI browser process
-        # (Crawl4AIScraper.scrape has no connection/browser reuse across calls) and
-        # runs sequentially. A crawl with many blocked/paywalled pages will pay
-        # Chromium startup cost per page and can push total tool latency well past
-        # Firecrawl's own timeout_s budget. Acceptable for now (fallback only fires
-        # on already-incomplete pages, typically a minority) — worth revisiting with
-        # a shared crawler instance or a fallback page cap if that stops holding.
-        fallback_count = 0
-        for page in pages:
-            md, note, used_fallback = self._scrape_with_fallback(
-                page.get("url", ""), page.get("markdown", ""), page.get("metadata")
-            )
-            page["markdown"] = md
-            if used_fallback:
-                fallback_count += 1
+        # Every fallback-needing page in this crawl shares one Crawl4AI
+        # browser session instead of one launch per page -- see
+        # _apply_crawl4ai_fallback_batch's docstring for why this is safe
+        # (Firecrawl's crawl() stays within one site, so every page here
+        # shares the same saved-profile decision).
+        fallback_count = self._apply_crawl4ai_fallback_batch(url, pages)
 
         try:
             manifest = self._web_docs.save_crawl(url, pages)

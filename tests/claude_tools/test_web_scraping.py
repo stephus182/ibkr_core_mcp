@@ -441,7 +441,7 @@ def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(mock_c4a
     mock_wds_cls.return_value = mock_wds
 
     toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
-    mock_c4a_cls.return_value.scrape.assert_not_called()
+    mock_c4a_cls.return_value.scrape_batch.assert_not_called()
 
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
@@ -454,9 +454,11 @@ def test_firecrawl_crawl_applies_fallback_per_page(mock_c4a_cls, mock_wds_cls, m
         {"url": "https://example.com/blocked", "markdown": "", "metadata": {"statusCode": 403}}
     ]
     mock_fc_cls.return_value = mock_fc
-    mock_c4a_cls.return_value.scrape.return_value = {
-        "url": "https://example.com/blocked",
-        "markdown": "recovered page content",
+    mock_c4a_cls.return_value.scrape_batch.return_value = {
+        "https://example.com/blocked": {
+            "url": "https://example.com/blocked",
+            "markdown": "recovered page content",
+        },
     }
     mock_wds = MagicMock()
     mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
@@ -490,7 +492,7 @@ def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(mock_c4a_
         {"url": "https://example.com/blocked", "markdown": "", "metadata": {"statusCode": 403}}
     ]
     mock_fc_cls.return_value = mock_fc
-    mock_c4a_cls.return_value.scrape.side_effect = Crawl4AIUnavailableError(
+    mock_c4a_cls.return_value.scrape_batch.side_effect = Crawl4AIUnavailableError(
         "Crawl4AI is not installed. Install with `pip install ibkr_core_mcp[scraper]`."
     )
     mock_wds = MagicMock()
