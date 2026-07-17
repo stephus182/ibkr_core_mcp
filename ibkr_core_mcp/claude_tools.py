@@ -2576,87 +2576,109 @@ class ClaudeToolkit:
             return f"Invalid URL: {exc}"
         return None
 
-    def _scrape_with_fallback(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[str, str, bool]:
+    def _assess_fallback_need(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[bool, str, str]:
         """
-        Return (final_markdown, note, used_fallback) for a single Firecrawl
-        result/page, falling back to Crawl4AI when Firecrawl's content looks
-        incomplete (blocked, empty, or paywalled).
+        Decide whether `url` needs a Crawl4AI fallback fetch, without
+        performing it -- the "decide" half of _scrape_with_fallback, split out
+        so the crawl-path batch loop (_apply_crawl4ai_fallback_batch) can
+        classify every page up front before opening a single shared browser.
 
-        assess_quality decides "ok" / "ambiguous" / "fallback" from Firecrawl's own
-        signals plus cheap heuristics. "ambiguous" results get one extra Claude call
-        (judge_completeness_llm) before deciding whether to fall back — this keeps
-        the common case (clean results) free of any extra API call. Crawl4AI failures
-        (not installed, scrape error) degrade gracefully: Firecrawl's original
-        content is kept and `note` explains what happened.
+        assess_quality decides "ok" / "ambiguous" / "fallback" from Firecrawl's
+        own signals plus cheap heuristics. "ambiguous" results get one extra
+        Claude call (judge_completeness_llm) before deciding whether to fall
+        back -- this keeps the common case (clean results) free of any extra
+        API call. A transient judge failure fails safe (keeps Firecrawl's
+        content) rather than escalating to the slower Crawl4AI path.
 
         Args:
-            url: Source URL for this result/page. Re-validated against
-                 _validate_public_url before any Crawl4AI fetch — see that
-                 method's docstring for why this can't be skipped even though
-                 firecrawl_crawl already validates its own root URL.
+            url: Source URL for this result/page. Validated against
+                 _validate_public_url as the last check before returning
+                 needs_fallback=True -- this can't be skipped even though
+                 firecrawl_crawl already validates its own root URL, since
+                 this url may be a Firecrawl-discovered sub-page or search
+                 result rather than the one the caller explicitly validated.
             markdown: Firecrawl's markdown for this result/page (may be empty).
             metadata: Firecrawl's per-result/per-page "metadata" dict, or None.
 
         Returns:
-            (final_markdown, note, used_fallback). final_markdown is either
-            Firecrawl's original content (quality was "ok", the LLM judge
-            confirmed it complete, or the fallback was blocked/unavailable/
-            failed) or Crawl4AI's recovered content. `note` is "" when nothing
-            noteworthy happened, otherwise a short human-readable annotation to
-            surface to the LLM (e.g. which path was taken, or why fallback was
-            skipped). `used_fallback` is True only when Crawl4AI actually ran
-            and its content replaced Firecrawl's — callers that aggregate a
-            fallback count across pages must use this, not `bool(note)`: most
-            non-empty notes (skipped/unavailable/failed/no-content/judge-error)
-            mean fallback was attempted or considered, not that it succeeded.
+            (needs_fallback, markdown_if_not_needed, note_if_not_needed). When
+            needs_fallback is True, the other two fields are "" -- the caller
+            is responsible for actually fetching (via Crawl4AIScraper) and
+            turning the outcome into a final result via
+            _finalize_fallback_result. When needs_fallback is False, the
+            caller should use markdown_if_not_needed/note_if_not_needed
+            directly and must not call Crawl4AI at all for this URL.
         """
-        import urllib.parse
-
-        from ibkr_core_mcp.scrape_fallback import (
-            Crawl4AIScraper,
-            Crawl4AIUnavailableError,
-            assess_quality,
-            judge_completeness_llm,
-        )
+        from ibkr_core_mcp.scrape_fallback import assess_quality, judge_completeness_llm
 
         quality = assess_quality(markdown, metadata, url)
         if quality == "ok":
-            return markdown, "", False
+            return False, markdown, ""
 
         if quality == "ambiguous":
             try:
                 if judge_completeness_llm(self._config, url, markdown):
-                    return markdown, "", False
+                    return False, markdown, ""
             except Exception as exc:
-                # Fail safe, not fail expensive: a transient Anthropic API hiccup on
-                # an "ambiguous" (not already-known-bad) result shouldn't silently
-                # trigger the slower, heavier Crawl4AI path. Keep Firecrawl's content.
                 log.warning("judge_completeness_llm failed for %s: %s", url, exc)
-                return markdown, "(Note: completeness check failed — showing Firecrawl's result as-is)", False
+                return (
+                    False,
+                    markdown,
+                    "(Note: completeness check failed — showing Firecrawl's result as-is)",
+                )
 
-        # SSRF guard: this URL may not be the one the caller explicitly validated —
-        # it can be a Firecrawl-discovered sub-page (redirect/internal link) or a
-        # search result (external, attacker-influenceable content). Crawl4AI would
-        # launch a *local* browser fetch, so re-validate every URL here rather than
-        # trusting upstream scoping.
         blocked = self._validate_public_url(url)
         if blocked:
-            return markdown, f"(Crawl4AI fallback skipped: {blocked})", False
+            return False, markdown, f"(Crawl4AI fallback skipped: {blocked})"
 
-        if self._crawl4ai is None:
-            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+        return True, "", ""
 
-        try:
-            result = self._crawl4ai.scrape(url)
-        except Crawl4AIUnavailableError as exc:
-            return markdown, f"(Crawl4AI fallback unavailable: {exc})", False
-        except Exception as exc:
-            log.warning("Crawl4AI fallback failed for %s: %s", url, exc)
-            return markdown, "(Crawl4AI fallback failed — showing Firecrawl's partial result)", False
+    def _finalize_fallback_result(
+        self, url: str, original_markdown: str, outcome: dict[str, str] | Exception
+    ) -> tuple[str, str, bool]:
+        """
+        Turn a Crawl4AI fetch outcome into (final_markdown, note, used_fallback)
+        -- the "after the fetch" half of _scrape_with_fallback, split out so
+        both the single-URL path (_scrape_with_fallback) and the batch path
+        (_apply_crawl4ai_fallback_batch, via Crawl4AIScraper.scrape_batch) can
+        share the exact same note wording and exception-type handling.
 
-        fallback_markdown = result.get("markdown", "")
+        Args:
+            url: The URL that was fetched (used only to compute the
+                 saved-profile note below).
+            original_markdown: Firecrawl's original markdown for this URL,
+                 used as the fallback value whenever Crawl4AI's outcome isn't
+                 usable.
+            outcome: Either the successful {"url": ..., "markdown": ...}
+                 result dict Crawl4AIScraper.scrape()/scrape_batch() produce,
+                 or the Exception that was raised/collected while fetching
+                 this URL.
+
+        Returns:
+            (final_markdown, note, used_fallback) -- used_fallback is True
+            only when Crawl4AI's content actually replaced Firecrawl's.
+        """
+        import urllib.parse
+
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+
+        if isinstance(outcome, Crawl4AIUnavailableError):
+            return original_markdown, f"(Crawl4AI fallback unavailable: {outcome})", False
+        if isinstance(outcome, Exception):
+            log.warning("Crawl4AI fallback failed for %s: %s", url, outcome)
+            return (
+                original_markdown,
+                "(Crawl4AI fallback failed — showing Firecrawl's partial result)",
+                False,
+            )
+
+        fallback_markdown = outcome.get("markdown", "")
         if not fallback_markdown:
-            return markdown, "(Crawl4AI fallback returned no content — showing Firecrawl's partial result)", False
+            return (
+                original_markdown,
+                "(Crawl4AI fallback returned no content — showing Firecrawl's partial result)",
+                False,
+            )
 
         domain = urllib.parse.urlparse(url).hostname or ""
         profile_dir = self._config.crawl4ai_profiles_dir / domain
@@ -2669,6 +2691,43 @@ class ClaudeToolkit:
                 f"`python -m ibkr_core_mcp.scrape_fallback create-profile {domain}` once)"
             )
         return fallback_markdown, note, True
+
+    def _scrape_with_fallback(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[str, str, bool]:
+        """
+        Return (final_markdown, note, used_fallback) for a single Firecrawl
+        result/page, falling back to Crawl4AI when Firecrawl's content looks
+        incomplete (blocked, empty, or paywalled).
+
+        Composes _assess_fallback_need (decide) and _finalize_fallback_result
+        (turn a fetch outcome into the final tuple) around a single
+        Crawl4AIScraper.scrape() call. Used directly by the search path
+        (_handle_firecrawl_search), where each result is typically a
+        different domain, so batching across results isn't valid -- see
+        _apply_crawl4ai_fallback_batch for the crawl path's batched
+        equivalent.
+
+        Args:
+            url: Source URL for this result/page.
+            markdown: Firecrawl's markdown for this result/page (may be empty).
+            metadata: Firecrawl's per-result/per-page "metadata" dict, or None.
+
+        Returns:
+            (final_markdown, note, used_fallback) -- see _finalize_fallback_result.
+        """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+        needs_fallback, md_if_not, note_if_not = self._assess_fallback_need(url, markdown, metadata)
+        if not needs_fallback:
+            return md_if_not, note_if_not, False
+
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+
+        try:
+            result = self._crawl4ai.scrape(url)
+        except Exception as exc:
+            return self._finalize_fallback_result(url, markdown, exc)
+        return self._finalize_fallback_result(url, markdown, result)
 
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """
