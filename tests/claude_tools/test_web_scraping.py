@@ -566,6 +566,40 @@ def test_firecrawl_crawl_batch_maps_outcomes_to_correct_pages(mock_c4a_cls, mock
     assert "Crawl4AI fallback used for 1 page(s)" in result
 
 
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+def test_firecrawl_search_preserves_result_order_under_concurrent_fallback(mock_fc_cls):
+    """Concurrent fallback execution (ThreadPoolExecutor.map) must not reorder
+    results in the final output, even when different results' fallback
+    fetches take different amounts of time -- the first result is given the
+    LONGEST artificial delay specifically to prove ordering survives even
+    when completion order differs from input order."""
+    import time
+
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {"url": "https://a.example.com", "title": "A", "markdown": "", "metadata": {"statusCode": 403}},
+        {"url": "https://b.example.com", "title": "B", "markdown": "", "metadata": {"statusCode": 403}},
+        {"url": "https://c.example.com", "title": "C", "markdown": "", "metadata": {"statusCode": 403}},
+    ]
+    mock_fc_cls.return_value = mock_fc
+
+    delays = {"https://a.example.com": 0.15, "https://b.example.com": 0.05, "https://c.example.com": 0.0}
+
+    def fake_scrape_with_fallback(url, markdown, metadata):
+        time.sleep(delays[url])
+        label = url.split("//")[1].split(".")[0].upper()
+        return f"recovered {label} content", "", True
+
+    toolkit._scrape_with_fallback = fake_scrape_with_fallback  # type: ignore[method-assign]
+    result, fig = toolkit.execute("firecrawl_search", {"query": "test"})
+
+    a_pos = result.index("recovered A content")
+    b_pos = result.index("recovered B content")
+    c_pos = result.index("recovered C content")
+    assert a_pos < b_pos < c_pos
+
+
 # ============================================================================
 # _diagnose_orders
 # ============================================================================

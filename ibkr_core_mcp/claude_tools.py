@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -23,6 +24,11 @@ from ibkr_core_mcp.store import SQLiteStore
 log = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
+
+# Bounds worst-case simultaneous Crawl4AI browser launches in the search-result
+# fallback loop. FirecrawlClient.search()'s own `limit` is already clamped to
+# [1, 10] (see web_scraper.py), so this caps concurrent launches to half that.
+_MAX_CONCURRENT_FALLBACKS = 5
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
 # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
@@ -2800,6 +2806,7 @@ class ClaudeToolkit:
         Lazily initializes FirecrawlClient on first call. Returns a no-key message
         if FIRECRAWL_API_KEY is not configured. Optionally saves a Drive snapshot.
         """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
         from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
 
         if not self._config.firecrawl_api_key:
@@ -2826,9 +2833,23 @@ class ClaudeToolkit:
         if not results:
             return f"No results found for: {query}", None
 
+        # Search results are typically different domains each, so unlike the
+        # crawl path's shared-browser batch, there's no valid single browser
+        # config to reuse here -- instead fetch fallbacks concurrently
+        # (bounded) so independent per-domain browser launches overlap
+        # instead of queuing sequentially behind each other.
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+        with ThreadPoolExecutor(max_workers=min(_MAX_CONCURRENT_FALLBACKS, len(results))) as executor:
+            fallback_results = list(
+                executor.map(
+                    lambda r: self._scrape_with_fallback(r.get("url", ""), r.get("markdown", ""), r.get("metadata")),
+                    results,
+                )
+            )
+
         lines = [f"## Search results for: {query}\n"]
-        for i, r in enumerate(results, 1):
-            md, note, _ = self._scrape_with_fallback(r.get("url", ""), r.get("markdown", ""), r.get("metadata"))
+        for i, (r, (md, note, _used)) in enumerate(zip(results, fallback_results, strict=True), 1):
             r["markdown"] = md
             lines.append(f"### {i}. {r.get('title', '(no title)')}")
             lines.append(f"**URL:** {r.get('url', '')}\n")
