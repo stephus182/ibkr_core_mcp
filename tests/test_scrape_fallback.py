@@ -508,6 +508,96 @@ async def test_installed_ssrf_hook_registers_reject_private_requests_route(monke
     assert handler is _reject_private_requests
 
 
+def _install_fake_crawl4ai_tracking(monkeypatch, markdown_by_url=None, fail_urls=frozenset()):
+    """Separate fake-crawl4ai installer used only by scrape_batch tests below:
+    tracks how many AsyncWebCrawler instances get constructed (proving reuse
+    across multiple arun() calls within one scrape_batch() call) and which
+    URLs were actually passed to arun(), in call order. Kept independent from
+    _install_fake_crawl4ai above rather than changing that helper's return
+    shape, since 5 existing tests depend on its exact 2-tuple return.
+    """
+    construction_count = {"value": 0}
+    arun_urls: list[str] = []
+
+    class FakeCrawlerStrategy:
+        def set_hook(self, hook_type, hook):
+            pass
+
+    class FakeAsyncWebCrawler:
+        def __init__(self, config=None):
+            self.config = config
+            self.crawler_strategy = FakeCrawlerStrategy()
+            construction_count["value"] += 1
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def arun(self, url):
+            arun_urls.append(url)
+            if url in fail_urls:
+                raise RuntimeError("fake crawl4ai failure")
+            content = (markdown_by_url or {}).get(url, f"content for {url}")
+            return _FakeCrawlResult(content)
+
+    class FakeBrowserConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_module = types.ModuleType("crawl4ai")
+    fake_module.AsyncWebCrawler = FakeAsyncWebCrawler
+    fake_module.BrowserConfig = FakeBrowserConfig
+    monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
+    return construction_count, arun_urls
+
+
+def test_scrape_batch_reuses_one_browser_across_all_urls(monkeypatch, tmp_path):
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+    construction_count, arun_urls = _install_fake_crawl4ai_tracking(monkeypatch)
+
+    scraper = Crawl4AIScraper(tmp_path)
+    urls = ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+    outcomes = scraper.scrape_batch(urls, profile_domain="https://example.com")
+
+    assert construction_count["value"] == 1
+    assert arun_urls == urls
+    for url in urls:
+        assert outcomes[url] == {"url": url, "markdown": f"content for {url}"}
+
+
+def test_scrape_batch_isolates_one_url_failure_from_the_rest(monkeypatch, tmp_path):
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+    construction_count, _arun_urls = _install_fake_crawl4ai_tracking(
+        monkeypatch, fail_urls=frozenset({"https://example.com/b"})
+    )
+
+    scraper = Crawl4AIScraper(tmp_path)
+    urls = ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+    outcomes = scraper.scrape_batch(urls, profile_domain="https://example.com")
+
+    assert construction_count["value"] == 1  # browser stayed open despite the failure
+    assert outcomes["https://example.com/a"] == {
+        "url": "https://example.com/a",
+        "markdown": "content for https://example.com/a",
+    }
+    assert isinstance(outcomes["https://example.com/b"], RuntimeError)
+    assert outcomes["https://example.com/c"] == {
+        "url": "https://example.com/c",
+        "markdown": "content for https://example.com/c",
+    }
+
+
+def test_scrape_batch_empty_urls_returns_empty_dict_without_importing_crawl4ai(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+    scraper = Crawl4AIScraper(tmp_path)
+    assert scraper.scrape_batch([], profile_domain="https://example.com") == {}
+
+
 # ── create_profile (interactive login → saved profile) ────────────────────────
 
 

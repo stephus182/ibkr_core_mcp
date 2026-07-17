@@ -360,36 +360,48 @@ class Crawl4AIScraper:
     def __init__(self, profiles_dir: Path) -> None:
         self._profiles_dir = profiles_dir
 
-    def scrape(self, url: str) -> dict[str, str]:
+    def scrape_batch(self, urls: list[str], profile_domain: str) -> dict[str, dict[str, str] | Exception]:
         """
-        Scrape a single URL with Crawl4AI.
+        Scrape multiple URLs using ONE shared Crawl4AI browser session instead
+        of launching a fresh Chromium per URL.
 
-        Launches a fresh headless Chromium instance per call (no connection or
-        browser reuse across calls — see the caller-side note in
-        ClaudeToolkit._handle_firecrawl_crawl's per-page fallback loop for the
-        latency/resource tradeoff this implies for bulk crawls).
+        Safe only when every URL in `urls` shares the same saved-profile
+        decision -- true for pages within a single Firecrawl crawl() call,
+        since Firecrawl's crawl() only returns pages within the same site as
+        its root URL. Callers pass that root's domain as `profile_domain`,
+        not each individual page's own domain.
 
-        Installs a Playwright-level SSRF guard (_reject_private_requests) on
-        every scrape, in addition to trusting the caller's own pre-fetch check
-        (ClaudeToolkit._validate_public_url). Callers should still validate the
-        URL before calling — this method's guard is defense-in-depth against
-        DNS rebinding and redirect-based bypasses of that earlier check, not a
-        replacement for it (the earlier check is cheaper and blocks the common
-        case before a browser is ever launched).
+        Installs the same Playwright-level SSRF guard (_reject_private_requests)
+        as scrape() used to, once per session rather than once per URL -- it
+        re-checks every request (navigation, redirects, subresources) the
+        shared browser makes across the whole batch.
 
         Args:
-            url: The URL to fetch.
+            urls: URLs to fetch. Empty list returns {} without importing
+                crawl4ai or launching a browser.
+            profile_domain: Domain used to decide whether a saved login
+                profile applies (profiles_dir/profile_domain). Pass the
+                crawl's root domain -- all pages in one crawl share this
+                decision by construction (see above).
 
         Returns:
-            {"url": url, "markdown": <raw_markdown or "" if the page had none>}
+            Dict keyed by each input URL. Each value is either a
+            {"url": ..., "markdown": ...} result dict (same shape scrape()
+            returns) or the Exception raised while fetching that specific
+            URL -- one URL failing does not abort the rest of the batch or
+            close the shared browser early.
 
         Raises:
-            Crawl4AIUnavailableError: If `crawl4ai` is not installed. Unlike
-                create_profile(), this method only imports `AsyncWebCrawler` and
-                `BrowserConfig`, both present since crawl4ai 0.4.x — so an old
-                crawl4ai install won't hit this error here even though the
-                package-wide floor is 0.5.0 (see Crawl4AIUnavailableError).
+            Crawl4AIUnavailableError: If `crawl4ai` is not installed. Raised
+                before the browser is launched, before any URL is attempted --
+                an install-time problem, not a per-URL one. Callers that want
+                per-page graceful degradation (rather than the whole batch
+                failing) must catch this around the scrape_batch() call
+                itself, not expect it inside the returned dict.
         """
+        if not urls:
+            return {}
+
         try:
             from crawl4ai import AsyncWebCrawler, BrowserConfig
         except ImportError as exc:
@@ -398,7 +410,7 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        domain = _safe_domain(url)
+        domain = _safe_domain(profile_domain)
         profile_dir = self._profiles_dir / domain
         if profile_dir.is_dir():
             browser_config = BrowserConfig(
@@ -409,14 +421,51 @@ class Crawl4AIScraper:
         else:
             browser_config = BrowserConfig(headless=True)
 
-        async def _scrape() -> dict[str, str]:
+        async def _scrape_all() -> dict[str, dict[str, str] | Exception]:
+            outcomes: dict[str, dict[str, str] | Exception] = {}
             async with AsyncWebCrawler(config=browser_config) as crawler:
                 crawler.crawler_strategy.set_hook("on_page_context_created", _install_ssrf_guard)
-                result = await crawler.arun(url=url)
-                markdown = result.markdown.raw_markdown if result.markdown else ""
-                return {"url": url, "markdown": markdown}
+                for u in urls:
+                    try:
+                        result = await crawler.arun(url=u)
+                        markdown = result.markdown.raw_markdown if result.markdown else ""
+                        outcomes[u] = {"url": u, "markdown": markdown}
+                    except Exception as exc:
+                        # Isolate one URL's failure from the rest of the batch --
+                        # the caller inspects each outcome's type to decide how
+                        # to degrade, matching scrape()'s single-URL contract.
+                        outcomes[u] = exc
+            return outcomes
 
-        return _run_async(_scrape())  # type: ignore[no-any-return]
+        return _run_async(_scrape_all())  # type: ignore[no-any-return]
+
+    def scrape(self, url: str) -> dict[str, str]:
+        """
+        Scrape a single URL with Crawl4AI.
+
+        A 1-URL call to scrape_batch() -- see that method's docstring for the
+        full behavior (browser lifecycle, SSRF guard, profile resolution).
+        This method exists for callers that only ever need one URL at a time
+        (e.g. the search-result fallback path, where each result is typically
+        a different domain and batching wouldn't be valid anyway).
+
+        Args:
+            url: The URL to fetch.
+
+        Returns:
+            {"url": url, "markdown": <raw_markdown or "" if the page had none>}
+
+        Raises:
+            Crawl4AIUnavailableError: If `crawl4ai` is not installed.
+            Exception: Whatever scrape_batch() caught for this URL specifically
+                (e.g. a Playwright navigation error) is re-raised here, since a
+                single-URL caller expects scrape() to either return or raise,
+                not receive an outcome dict.
+        """
+        outcome = self.scrape_batch([url], profile_domain=url)[url]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
