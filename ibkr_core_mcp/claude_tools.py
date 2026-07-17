@@ -2106,9 +2106,22 @@ class ClaudeToolkit:
         get_positions instead. Verified against
         https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
         (scraped 2026-07-02, re-verified 2026-07-07).
+
+        Cold-gateway quirk (live-verified 2026-07-17, see
+        docs/plans/2026-07-17-account-pnl-display-fixes.md in the sibling claudia_ui
+        repo): on a fresh gateway session this endpoint returns an empty {"upnl": {}}
+        even when the account has open positions and real P&L, until something has
+        subscribed to the spl WebSocket topic at least once. If the first call comes
+        back empty, this method self-primes via _prime_pnl_subscription() (a
+        best-effort WS subscribe/unsubscribe touch) and retries the REST call once
+        before giving up — callers never need to know about the warm-up quirk.
         """
         pnl = self._client.get_pnl()
         partitions = pnl.get("upnl") if isinstance(pnl, dict) else None
+        if not partitions or not isinstance(partitions, dict):
+            self._prime_pnl_subscription()
+            pnl = self._client.get_pnl()
+            partitions = pnl.get("upnl") if isinstance(pnl, dict) else None
         if not partitions or not isinstance(partitions, dict):
             return "No P&L data returned. Ensure IBKR gateway is connected.", None
         lines = ["Real-time P&L:"]
@@ -2133,6 +2146,48 @@ class ClaudeToolkit:
         lines.append(f"\nTotal unrealized P&L: {upnl_total:+.2f}")
         lines.append(f"Total daily P&L:      {dpnl_total:+.2f}")
         return "\n".join(lines), None
+
+    def _prime_pnl_subscription(self) -> None:
+        """Best-effort warm-up touch for IBKR's spl (account P&L) WS topic.
+
+        Live-verified 2026-07-17 (docs/plans/2026-07-17-account-pnl-display-fixes.md
+        in the sibling claudia_ui repo): GET /iserver/account/pnl/partitioned returns
+        an empty {"upnl": {}} on a cold gateway session — even with open positions and
+        real P&L — until something has subscribed to the spl WebSocket topic at least
+        once. Merely sending the "spl+{}" subscribe message is enough; no tick needs
+        to actually arrive (a live 45s wait received none, yet the very next REST call
+        returned real data). Same class of undocumented warm-up dependency as
+        /iserver/marketdata/snapshot (see _get_market_snapshot's two-call retry below).
+
+        Only called by _get_pnl when the first REST call comes back empty. Must never
+        raise: any failure here (auth, connect, WS hiccup) is swallowed and logged as
+        a warning, so it degrades to _get_pnl's pre-existing "No P&L data" message
+        instead of crashing the tool call.
+        """
+        try:
+            import os
+
+            import requests
+
+            from ibkr_core_mcp.auth import BrowserCookieAuth
+            from ibkr_core_mcp.scrape_fallback import _run_async
+            from ibkr_core_mcp.streaming import IBKRWebSocket
+
+            async def _touch() -> None:
+                session = requests.Session()
+                BrowserCookieAuth(os.environ.get("IBKR_AUTH_BROWSER", "chrome")).apply(session)
+                cookie = session.headers.get("Cookie", "")
+                ws = IBKRWebSocket(self._config.gateway_url, cookie)
+                try:
+                    await ws.connect()
+                    await ws.subscribe_pnl()
+                    await ws.unsubscribe_pnl()
+                finally:
+                    await ws.disconnect()
+
+            _run_async(_touch())
+        except Exception as exc:
+            log.warning("_get_pnl: failed to prime spl WS subscription: %s", exc)
 
     def _get_analytics(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return return, CAGR, Sharpe, Sortino, Calmar, and drawdown stats from cached bars.

@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 pytestmark = pytest.mark.account
@@ -154,8 +156,17 @@ def test_get_ledger_empty(toolkit):
 
 
 def test_get_pnl_empty(toolkit):
+    """Empty first response now triggers a priming attempt before giving up.
+
+    _prime_pnl_subscription is patched out so this stays a pure unit test (no
+    real WS/network activity) — it still exercises the "still empty after
+    priming" path since get_pnl.return_value (not side_effect) returns the
+    same empty shape on the retry call too.
+    """
     toolkit._client.get_pnl.return_value = {}
-    text, fig = toolkit.execute("get_pnl", {})
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+        text, fig = toolkit.execute("get_pnl", {})
+    mock_prime.assert_called_once()
     assert "No P&L" in text or "P&L" in text
 
 
@@ -203,10 +214,100 @@ def test_get_pnl_skips_non_numeric(toolkit):
 
 
 def test_get_pnl_missing_upnl_key_returns_no_data_message(toolkit):
-    """A response with no 'upnl' key (e.g. an unexpected shape) must not crash."""
+    """A response with no 'upnl' key (e.g. an unexpected shape) must not crash.
+
+    _prime_pnl_subscription is patched out (same reasoning as test_get_pnl_empty
+    above) — this is now the expected code path for this fixture too.
+    """
     toolkit._client.get_pnl.return_value = {"unexpected": {}}
-    text, fig = toolkit.execute("get_pnl", {})
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+        text, fig = toolkit.execute("get_pnl", {})
+    mock_prime.assert_called_once()
     assert "No P&L" in text
+
+
+def test_get_pnl_retries_after_priming_when_first_call_empty(toolkit):
+    """First REST call comes back empty (cold-gateway quirk, live-verified
+    2026-07-17) -> _get_pnl primes the spl WS subscription once and retries
+    the REST call, which then returns real data."""
+    real_data = {
+        "upnl": {
+            "U1675699.Core": {
+                "rowType": 1,
+                "dpl": 663.8,
+                "nl": 62990.0,
+                "upl": -8270.0,
+                "el": 45750.0,
+                "mv": 46970.0,
+            }
+        }
+    }
+    toolkit._client.get_pnl.side_effect = [{"upnl": {}}, real_data]
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+        text, fig = toolkit.execute("get_pnl", {})
+    mock_prime.assert_called_once()
+    assert toolkit._client.get_pnl.call_count == 2
+    assert "U1675699.Core" in text
+    assert "-8270.00" in text
+
+
+def test_get_pnl_skips_priming_when_first_call_has_data(toolkit):
+    """Priming must not run at all when the first REST call already has data."""
+    toolkit._client.get_pnl.return_value = {
+        "upnl": {
+            "U1.Core": {"rowType": 1, "dpl": 1.0, "nl": 1000.0, "upl": 2.0, "el": 1000.0, "mv": 0.0},
+        }
+    }
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+        text, fig = toolkit.execute("get_pnl", {})
+    mock_prime.assert_not_called()
+    assert toolkit._client.get_pnl.call_count == 1
+    assert "U1.Core" in text
+
+
+# ── _prime_pnl_subscription — best-effort spl WS warm-up touch ───────────────
+
+
+def test_prime_pnl_subscription_touches_ws(toolkit):
+    """Happy path: connect -> subscribe_pnl -> unsubscribe_pnl -> disconnect,
+    all awaited, and the call returns None without raising."""
+    mock_ws_instance = MagicMock()
+    mock_ws_instance.connect = AsyncMock()
+    mock_ws_instance.subscribe_pnl = AsyncMock()
+    mock_ws_instance.unsubscribe_pnl = AsyncMock()
+    mock_ws_instance.disconnect = AsyncMock()
+    with (
+        patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=mock_ws_instance) as mock_ws_cls,
+        patch("ibkr_core_mcp.auth.BrowserCookieAuth") as mock_auth_cls,
+    ):
+        mock_auth_cls.return_value.apply = MagicMock()
+        result = toolkit._prime_pnl_subscription()
+    assert result is None
+    mock_ws_cls.assert_called_once()
+    mock_ws_instance.connect.assert_awaited_once()
+    mock_ws_instance.subscribe_pnl.assert_awaited_once()
+    mock_ws_instance.unsubscribe_pnl.assert_awaited_once()
+    mock_ws_instance.disconnect.assert_awaited_once()
+
+
+def test_prime_pnl_subscription_swallows_ws_failure(toolkit, caplog):
+    """Core robustness contract: a WS hiccup must never propagate out of
+    _prime_pnl_subscription — it degrades to a logged warning instead."""
+    mock_ws_instance = MagicMock()
+    mock_ws_instance.connect = AsyncMock(side_effect=Exception("WS boom"))
+    mock_ws_instance.subscribe_pnl = AsyncMock()
+    mock_ws_instance.unsubscribe_pnl = AsyncMock()
+    mock_ws_instance.disconnect = AsyncMock()
+    with (
+        patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=mock_ws_instance),
+        patch("ibkr_core_mcp.auth.BrowserCookieAuth") as mock_auth_cls,
+        caplog.at_level("WARNING"),
+    ):
+        mock_auth_cls.return_value.apply = MagicMock()
+        result = toolkit._prime_pnl_subscription()
+    assert result is None
+    mock_ws_instance.disconnect.assert_awaited_once()
+    assert any("WS boom" in record.message for record in caplog.records)
 
 
 # ── _preview_order — LMT includes price in order payload ─────────────────────
