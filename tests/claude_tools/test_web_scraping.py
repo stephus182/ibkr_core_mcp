@@ -509,6 +509,63 @@ def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(mock_c4a_
     assert "Crawl4AI fallback used" not in result
 
 
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+@patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
+def test_firecrawl_crawl_batch_maps_outcomes_to_correct_pages(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
+    """A crawl with a mix of clean and fallback-needing pages must batch only the
+    fallback-needing URLs into scrape_batch, and must re-attach each candidate's own
+    outcome to its own page -- proving there's no cross-contamination between pages
+    when the batch loop pairs candidates back up with their outcomes."""
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.crawl.return_value = [
+        {"url": "https://example.com/clean", "markdown": _REALISTIC_MARKDOWN, "metadata": {"statusCode": 200}},
+        {"url": "https://example.com/blocked-a", "markdown": "", "metadata": {"statusCode": 403}},
+        {"url": "https://example.com/blocked-b", "markdown": "", "metadata": {"statusCode": 500}},
+    ]
+    mock_fc_cls.return_value = mock_fc
+    mock_c4a_cls.return_value.scrape_batch.return_value = {
+        "https://example.com/blocked-a": {
+            "url": "https://example.com/blocked-a",
+            "markdown": "recovered content for page A",
+        },
+        "https://example.com/blocked-b": RuntimeError("network error fetching page B"),
+    }
+    mock_wds = MagicMock()
+    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
+    mock_wds.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-01-01T00:00:00+00:00",
+        "pages": [
+            {"url": "https://example.com/clean", "file_id": "fid1"},
+            {"url": "https://example.com/blocked-a", "file_id": "fid2"},
+            {"url": "https://example.com/blocked-b", "file_id": "fid3"},
+        ],
+    }
+    mock_wds_cls.return_value = mock_wds
+
+    result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+    assert fig is None
+
+    # The clean page never needed a fallback fetch at all -- only the two
+    # fallback-needing URLs reach scrape_batch, in page order.
+    mock_c4a_cls.return_value.scrape_batch.assert_called_once_with(
+        ["https://example.com/blocked-a", "https://example.com/blocked-b"],
+        profile_domain="example.com",
+    )
+
+    saved_pages = {p["url"]: p["markdown"] for p in mock_wds.save_crawl.call_args[0][1]}
+    assert saved_pages["https://example.com/clean"] == _REALISTIC_MARKDOWN
+    assert saved_pages["https://example.com/blocked-a"] == "recovered content for page A"
+    # Page B's own fallback attempt failed -- it must fall back to its own (empty)
+    # original markdown, never page A's recovered content or vice versa.
+    assert saved_pages["https://example.com/blocked-b"] == ""
+
+    # Only page A's outcome actually replaced Firecrawl's content.
+    assert "Crawl4AI fallback used for 1 page(s)" in result
+
+
 # ============================================================================
 # _diagnose_orders
 # ============================================================================

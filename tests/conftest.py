@@ -57,6 +57,7 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_validate_public_url_allows_public_https",
     "test_firecrawl_crawl_applies_fallback_per_page",
     "test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable",
+    "test_firecrawl_crawl_batch_maps_outcomes_to_correct_pages",
     "test_firecrawl_crawl_uses_cached_manifest_and_skips_firecrawl",
     "test_firecrawl_crawl_force_refresh_bypasses_cache",
 }
