@@ -35,7 +35,7 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 42 tools. See
 | `test_alerts.py` | get_alerts, create_price_alert, delete_alert, activate_alert, modify_price_alert | `alerts` | 15 |
 | `test_pa_analytics.py` | get_analytics, get_pa_periods, get_pa_performance, get_pa_transactions | `pa_analytics` | 12 |
 | `test_backtest_pinescript.py` | run_backtest, generate_pinescript | `backtest_pinescript` | 8 |
-| `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_validate_public_url` | `web_scraping` | 22 |
+| `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_apply_crawl4ai_fallback_batch`, `_validate_public_url` | `web_scraping` | 27 |
 | `test_errors.py` | `_safe_error` (parametrized, 13 cases) | `errors` | 13 |
 
 ## Running targeted subsets
@@ -63,7 +63,7 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
   small refactor — e.g. a shared retry helper, or a `sleep_fn` parameter
   defaulting to `time.sleep` — would remove the need for the guardrail
   fixture entirely. Not implemented here; this reorg stayed test-only.
-- **`_REAL_DNS_EXEMPT_TESTS` in the root `tests/conftest.py`:** 9 tests in
+- **`_REAL_DNS_EXEMPT_TESTS` in the root `tests/conftest.py`:** 14 tests in
   `test_web_scraping.py` are exempted, by name, from the `_no_real_io`
   guardrail's socket block. Their purpose is exercising the real SSRF/DNS
   validation path (`ClaudeToolkit._validate_public_url` ->

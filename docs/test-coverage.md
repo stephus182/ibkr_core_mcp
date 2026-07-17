@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**735 unit tests · 85 integration tests (820 total) · 83% line coverage (non-integration)**
+**740 unit tests · 85 integration tests (825 total) · 83% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
 Counts and coverage below regenerated 2026-07-16 via
 `pytest -m "not integration" --cov=ibkr_core_mcp --cov-report=term-missing`; re-run that command
@@ -27,7 +27,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 
 | Module | Coverage | Uncovered lines | Reason |
 |---|---|---|---|
-| `scrape_fallback.py` | 98% | 119–120, 506 | SSRF guard's private/loopback/link-local/reserved IP branch (needs a live DNS resolution to a private address to hit); `if __name__ == "__main__"` CLI entrypoint |
+| `scrape_fallback.py` | 97% | 121–122, 468, 557 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`); `scrape()`'s re-raise of a per-URL `arun()` exception via `scrape_batch()` — existing tests only cover the whole-batch `Crawl4AIUnavailableError` case, not a single URL failing inside an otherwise-successful `scrape()` call; `if __name__ == "__main__"` CLI entrypoint |
 | `models.py` | 99% | 147 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
 | `human_auth.py` | 96% | 14 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 92% | 273–275, 303–308, 312–317, 321–323, 334–337, 528–529, 543 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
@@ -56,7 +56,7 @@ inside a spawned child process, invisible to single-process coverage instrumenta
 | `order_confirm.py` | 84% | AppleScript `display dialog` fallback path and countdown-tick internals — require a running display/event loop; macOS only |
 | `flex_query.py` | 81% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
 | `streaming.py` | 89% | WebSocket I/O methods (`connect`, `subscribe`, `listen`, `disconnect`) require a live IBKR WebSocket. `_parse_message` (the pure parsing logic) is fully tested; only network I/O is untested. |
-| `claude_tools.py` | 88% | The untested 12% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
+| `claude_tools.py` | 89% | The untested 11% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
 
 ---
 

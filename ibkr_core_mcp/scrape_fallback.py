@@ -73,7 +73,8 @@ def is_private_host(host: str) -> bool:
       1. ClaudeToolkit._validate_public_url — the Python-level pre-check run
          before any URL reaches Crawl4AI at all.
       2. The Playwright-level per-request guard installed in
-         Crawl4AIScraper.scrape() (see _reject_private_requests below), which
+         Crawl4AIScraper.scrape_batch() (see _reject_private_requests below;
+         scrape() delegates to scrape_batch() for a single URL), which
          re-checks every request Chromium actually makes (initial navigation,
          redirects, and subresources) at the moment it's about to be sent —
          closing the DNS-rebinding and redirect-based gaps that layer 1 alone

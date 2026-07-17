@@ -2544,7 +2544,9 @@ class ClaudeToolkit:
 
         Shared by every code path that can trigger a *local* fetch of an
         externally-sourced URL: the firecrawl_crawl root URL, and — critically —
-        every per-page/per-result URL passed to _scrape_with_fallback, since those
+        every per-page/per-result URL passed to _assess_fallback_need (called by
+        both _scrape_with_fallback for the search path and
+        _apply_crawl4ai_fallback_batch for the crawl path), since those
         can originate from Firecrawl's own crawl (redirects/internal links) or from
         search results (which are external, attacker-influenceable content) rather
         than from a URL the caller explicitly typed in.
@@ -2556,7 +2558,7 @@ class ClaudeToolkit:
         docstring in scrape_fallback.py for why a Python-level pre-check alone
         (this method) cannot fully close a DNS-rebinding or redirect-based
         bypass, and how the second layer (a Playwright-level per-request guard
-        installed in Crawl4AIScraper.scrape) closes it.
+        installed in Crawl4AIScraper.scrape/scrape_batch) closes it.
 
         Args:
             url: Candidate URL to validate before any local fetch.
