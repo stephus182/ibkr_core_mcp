@@ -2120,6 +2120,13 @@ class ClaudeToolkit:
         partitions = pnl.get("upnl") if isinstance(pnl, dict) else None
         if not partitions or not isinstance(partitions, dict):
             self._prime_pnl_subscription()
+            # /iserver/account/pnl/partitioned is rate-limited to 1 req/5secs
+            # (rate_limiter.py); the WS priming round-trip above is usually well
+            # under that on localhost, so pace the retry explicitly rather than
+            # relying on with_retry's reactive 429 backoff to absorb it.
+            import time
+
+            time.sleep(1)
             pnl = self._client.get_pnl()
             partitions = pnl.get("upnl") if isinstance(pnl, dict) else None
         if not partitions or not isinstance(partitions, dict):
@@ -2163,6 +2170,12 @@ class ClaudeToolkit:
         raise: any failure here (auth, connect, WS hiccup) is swallowed and logged as
         a warning, so it degrades to _get_pnl's pre-existing "No P&L data" message
         instead of crashing the tool call.
+
+        Caveat: BrowserCookieAuth.apply() is a synchronous, unbounded call (no
+        internal timeout) — a stuck OS keychain-access prompt could block this
+        whole method. Same pre-existing risk as IBKRClient's own construction and
+        mcp_server.py's _stream_loop; not new here, and in practice the keychain
+        item is normally already unlocked by the time get_pnl is first called.
         """
         try:
             import os
@@ -2175,6 +2188,9 @@ class ClaudeToolkit:
 
             async def _touch() -> None:
                 session = requests.Session()
+                # IBKR_AUTH_BROWSER read directly from os.environ (not via Config)
+                # to mirror claudia_ui's own BrowserCookieAuth call sites exactly —
+                # see docs/env-vars-reference.md in that repo.
                 BrowserCookieAuth(os.environ.get("IBKR_AUTH_BROWSER", "chrome")).apply(session)
                 cookie = session.headers.get("Cookie", "")
                 ws = IBKRWebSocket(self._config.gateway_url, cookie)

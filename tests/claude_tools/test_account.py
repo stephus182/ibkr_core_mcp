@@ -164,7 +164,7 @@ def test_get_pnl_empty(toolkit):
     same empty shape on the retry call too.
     """
     toolkit._client.get_pnl.return_value = {}
-    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime, patch("time.sleep"):
         text, fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert "No P&L" in text or "P&L" in text
@@ -220,7 +220,7 @@ def test_get_pnl_missing_upnl_key_returns_no_data_message(toolkit):
     above) — this is now the expected code path for this fixture too.
     """
     toolkit._client.get_pnl.return_value = {"unexpected": {}}
-    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime, patch("time.sleep"):
         text, fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert "No P&L" in text
@@ -243,7 +243,7 @@ def test_get_pnl_retries_after_priming_when_first_call_empty(toolkit):
         }
     }
     toolkit._client.get_pnl.side_effect = [{"upnl": {}}, real_data]
-    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
+    with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime, patch("time.sleep"):
         text, fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert toolkit._client.get_pnl.call_count == 2
