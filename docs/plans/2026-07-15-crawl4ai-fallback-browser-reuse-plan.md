@@ -882,3 +882,71 @@ return to the relevant earlier task and fix before considering the plan complete
   `_finalize_fallback_result(self, url, original_markdown, outcome) -> tuple[str, str, bool]`
   (both defined in Task 2) are called with matching signatures from `_scrape_with_fallback` (Task 2)
   and `_apply_crawl4ai_fallback_batch` (Task 3).
+
+---
+
+## Execution notes (post-implementation, 2026-07-17)
+
+Shipped via superpowers:subagent-driven-development, one implementer + spec review + code-quality
+review per task, plus a final cross-cutting review and a live-verification pass. Merged to `main`
+and pushed: `55fa1d8`..`2c647e9` (7 commits — the 5 tasks above, one follow-up test commit, and
+one live-test commit; see below).
+
+**Findings during review (fixed, not just noted):**
+
+- Task 3's code-quality review flagged a real test-coverage gap: no test exercised a crawl with a
+  *mix* of clean and fallback-needing pages, which is exactly where an off-by-one in
+  `_apply_crawl4ai_fallback_batch`'s candidate/outcome pairing would silently slip through. Closed
+  same-day with `test_firecrawl_crawl_batch_maps_outcomes_to_correct_pages` (`ddefc42`).
+- The final cross-cutting review found `SECURITY.md:386` and two docstrings
+  (`claude_tools.py`'s `_validate_public_url`, `scrape_fallback.py`'s `is_private_host`) still
+  described the SSRF guard as reached only via `_scrape_with_fallback` → `Crawl4AIScraper.scrape()`
+  — stale since Task 3 added a second path (`_apply_crawl4ai_fallback_batch` →
+  `_assess_fallback_need` → `scrape_batch()`) that bypasses `_scrape_with_fallback` entirely.
+  Corrected in `79f170f`, which also regenerated `docs/test-coverage.md` and
+  `tests/claude_tools/TEST_INDEX.md` counts (735→740 unit tests; `test_web_scraping.py` 22→27;
+  `_REAL_DNS_EXEMPT_TESTS` 9→14 — the last one was already stale before this plan, caught in the
+  same pass).
+- All 4 mocked-unit-test live tests in `tests/test_crawl4ai_live.py` initially failed locally —
+  not a code bug, just Chromium not yet downloaded in this venv (`crawl4ai-setup` fixes it; the
+  package's optional-dependency contract, unaffected by this plan).
+- **Live-verification gap closed:** the plan's own test coverage (Task 1 Step 1, Task 4 Step 2) was
+  entirely mocked-`crawl4ai`. Nothing proved the actual claim — "one real Chromium session serves
+  many URLs" — against a real browser. Added
+  `test_scrape_batch_reuses_one_real_browser_across_two_real_urls` (`2c647e9`): wraps the *real*
+  `crawl4ai.AsyncWebCrawler` with a construction counter (still performing genuine Playwright
+  fetches for every `arun()` call) against two real stable pages (`example.com`, `example.org`),
+  asserting exactly one construction. Passed live.
+
+**State of the tool as of `2c647e9` (for whoever writes the dedicated web-scraping reference doc):**
+
+- `Crawl4AIScraper.scrape_batch(urls, profile_domain)` is the one real implementation; `scrape(url)`
+  is a 1-URL delegation. One `AsyncWebCrawler` session per call, SSRF hook installed once per
+  session, per-URL exceptions isolated in the returned dict.
+- `ClaudeToolkit._assess_fallback_need` (classify) / `_finalize_fallback_result` (outcome → tuple)
+  are the shared halves; `_scrape_with_fallback` (single-URL, search path) and
+  `_apply_crawl4ai_fallback_batch` (batched, crawl path) each compose them differently.
+- `firecrawl_crawl`: one shared browser per crawl call (`_apply_crawl4ai_fallback_batch`), safe
+  because Firecrawl's `crawl()` stays within one site so every page shares one profile decision.
+  Whole-batch failure (e.g. `Crawl4AIUnavailableError`) degrades per-page rather than crashing.
+- `firecrawl_search`: bounded concurrency (`ThreadPoolExecutor`, `_MAX_CONCURRENT_FALLBACKS = 5`),
+  since results are typically different domains and can't share a browser config; `.map()`
+  preserves input order.
+- Two independent SSRF layers unchanged in coverage, only in entry point: `_validate_public_url`
+  (Python pre-check, now reached via `_assess_fallback_need` from either path) +
+  `_reject_private_requests` (Playwright per-request guard, installed once per `scrape_batch()`
+  session, re-checked on every request including redirects/subresources).
+- Live test coverage: `tests/test_crawl4ai_live.py` (4 tests — single real fetch, real fallback
+  trigger, real SSRF pre-block, real browser-reuse across 2 URLs). No live test yet exercises
+  `_apply_crawl4ai_fallback_batch` or the concurrent search path end-to-end (both are exercised
+  live only indirectly, via `scrape_batch`/`scrape` at the `Crawl4AIScraper` layer) — a gap worth
+  closing if a dedicated reference doc's "verified" claims need to cover the batch/concurrency
+  entry points specifically, not just the underlying primitive.
+- **Doc fragmentation, not yet consolidated:** tool usage in `docs/tools-reference.md:707-751`;
+  SSRF/fallback security rationale in `SECURITY.md:375-410,492-493`; this plan + its design doc;
+  the original feature design (`docs/plans/2026-06-26-firecrawl-web-scraper*.md`); everything else
+  only in docstrings (`scrape_fallback.py`, `claude_tools.py`). Discussed 2026-07-17: worth a
+  dedicated `docs/web-scraping-reference.md` (matching `gateway-auth-reference.md`,
+  `flex-query-reference.md`, `mcp-server-reference.md`) once this area stabilizes further —
+  deferred, not started. This section exists to seed that doc's "how it actually works today"
+  content when someone picks it up.
