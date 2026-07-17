@@ -133,10 +133,11 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_account_summary",
         "description": (
-            "Retrieve account net liquidation value, cash balance, and P&L from "
-            "IBKR — a single aggregate snapshot for the account. For per-position "
-            "detail use get_positions; for a per-currency breakdown use get_ledger; "
-            "for daily/unrealized P&L by account partition use get_pnl."
+            "Retrieve account net liquidation value, cash balance, gross position "
+            "value, and buying power from IBKR — a single aggregate snapshot for "
+            "the account. This endpoint does not carry P&L fields — for realized/"
+            "unrealized P&L use get_ledger (per-currency) or get_pnl (per account "
+            "partition, no realized figure); for per-position detail use get_positions."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -1226,8 +1227,6 @@ class ClaudeToolkit:
             f"Net Liquidation:     {_fmt('netliquidation')}",
             f"Cash:                {_fmt('totalcashvalue')}",
             f"Gross Position Val:  {_fmt('grosspositionvalue')}",
-            f"Unrealized P&L:      {_fmt('unrealizedpnl')}",
-            f"Realized P&L:        {_fmt('realizedpnl')}",
             f"Buying Power:        {_fmt('buyingpower')}",
         ]
         return "\n".join(lines), None

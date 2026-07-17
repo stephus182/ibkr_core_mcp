@@ -14,6 +14,24 @@ def test_execute_get_account_summary(toolkit):
     assert len(text) > 0
 
 
+def test_get_account_summary_omits_pnl_fields(toolkit):
+    """/portfolio/{accountId}/summary never returns unrealizedpnl/realizedpnl keys
+    (confirmed live 2026-07-17 + official IBKR docs) — the formatter must not
+    claim to show them. Real P&L data comes from get_ledger/get_pnl instead."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_account_summary.return_value = {
+        "netliquidation": {"amount": 100000},
+        "totalcashvalue": {"amount": 50000},
+        "grosspositionvalue": {"amount": 20000},
+        "buyingpower": {"amount": 80000},
+    }
+    text, fig = toolkit.execute("get_account_summary", {})
+    assert fig is None
+    assert "Unrealized P&L" not in text
+    assert "Realized P&L" not in text
+    assert "Net Liquidation" in text
+
+
 def test_execute_get_notifications(toolkit):
     toolkit._client.get_notifications.return_value = [
         {"id": "1", "title": "Test alert", "body": "Something happened", "isRead": False}

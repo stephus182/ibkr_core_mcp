@@ -18,12 +18,15 @@ Pass `toolkit.tools` directly to the Anthropic SDK `tools=` parameter. Route res
 ## Portfolio & Account
 
 ### `get_account_summary`
-Net liquidation value, total cash, gross position value, unrealized P&L, realized P&L, and buying power.
+Net liquidation value, total cash, gross position value, and buying power — a single
+aggregate snapshot for the account. This endpoint does not carry P&L fields — for
+realized/unrealized P&L use `get_ledger` (per-currency) or `get_pnl` (per account
+partition, no realized figure); for per-position detail use `get_positions`.
 
 **Inputs:** none
 
 **Output:** Text summary with `Account`, `Net Liquidation`, `Cash`, `Gross Position Val`,
-`Unrealized P&L`, `Realized P&L`, `Buying Power`.
+`Buying Power`.
 
 **IBKR endpoint:** `GET /portfolio/{accountId}/summary`
 
