@@ -938,6 +938,19 @@ def _validate_account_id(account_id: str) -> str:
     return account_id
 
 
+def _money(v: float) -> str:
+    """'$' + comma-grouped magnitude, sign only shown when negative (e.g. -$8,107.13)."""
+    sign = "-" if v < 0 else ""
+    return f"{sign}${abs(v):,.2f}"
+
+
+def _money_signed(v: float) -> str:
+    """Like _money but always shows an explicit +/- sign — for P&L figures,
+    where the sign is the point (e.g. +$461.56, -$8,107.13)."""
+    sign = "+" if v >= 0 else "-"
+    return f"{sign}${abs(v):,.2f}"
+
+
 _SIDE_MAP = {"B": "BUY", "S": "SELL", "BUY": "BUY", "SELL": "SELL"}
 
 
@@ -1247,7 +1260,7 @@ class ClaudeToolkit:
         positions = [p for p in positions if p.get("position", 0) != 0]
         if not positions:
             return "No open positions.", None
-        lines = []
+        rows = ["| Symbol | Qty | Mkt Val | Unrealized P&L |", "|---|---|---|---|"]
         for p in positions:
             symbol = p.get("contractDesc", p.get("ticker", p.get("symbol", "?")))
             pos = p.get("position", 0)
@@ -1255,8 +1268,8 @@ class ClaudeToolkit:
             # the _get_pnl/_get_ledger convention for the same fields.
             mkt_val = float(p.get("mktValue") or 0)
             pnl = float(p.get("unrealizedPnl") or 0)
-            lines.append(f"- {symbol}: {pos} qty, mktVal={mkt_val:.2f}, unrealPnL={pnl:.2f}")
-        return f"Open positions ({len(positions)}):\n" + "\n".join(lines), None
+            rows.append(f"| {symbol} | {pos} | {_money(mkt_val)} | **{_money_signed(pnl)}** |")
+        return f"Open positions ({len(positions)}):\n\n" + "\n".join(rows), None
 
     def _get_trades(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Query trade history from two complementary sources — choose based on recency and origin needs.
@@ -1725,19 +1738,19 @@ class ClaudeToolkit:
             dividends = _f("dividends")
 
             lines.append(f"Account Ledger ({currency}):")
-            lines.append(f"  Net Liquidation Value : {nlv:>14,.2f}")
-            lines.append(f"  Cash Balance          : {cash:>14,.2f}")
-            lines.append(f"  Stock Market Value    : {stock:>14,.2f}")
+            lines.append(f"  Net Liquidation Value : **{_money(nlv)}**")
+            lines.append(f"  Cash Balance          : {_money(cash)}")
+            lines.append(f"  Stock Market Value    : {_money(stock)}")
             if fut_mv:
-                lines.append(f"  Futures Market Value  : {fut_mv:>14,.2f}")
-            lines.append(f"  Unrealized P&L        : {unrealized:>+14,.2f}")
-            lines.append(f"  Realized P&L          : {realized:>+14,.2f}")
+                lines.append(f"  Futures Market Value  : {_money(fut_mv)}")
+            lines.append(f"  Unrealized P&L        : **{_money_signed(unrealized)}**")
+            lines.append(f"  Realized P&L          : **{_money_signed(realized)}**")
             if fut_pnl:
-                lines.append(f"  Futures P&L           : {fut_pnl:>+14,.2f}")
+                lines.append(f"  Futures P&L           : **{_money_signed(fut_pnl)}**")
             if interest:
-                lines.append(f"  Interest Accrued      : {interest:>+14,.2f}")
+                lines.append(f"  Interest Accrued      : {_money_signed(interest)}")
             if dividends:
-                lines.append(f"  Dividends             : {dividends:>+14,.2f}")
+                lines.append(f"  Dividends             : {_money_signed(dividends)}")
 
         return "\n".join(lines) if lines else json.dumps(ledger, indent=2), None
 

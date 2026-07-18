@@ -93,6 +93,25 @@ def test_get_positions_field_fallback(toolkit):
     assert "GOOG" in text
 
 
+def test_get_positions_renders_as_table_with_dollar_signs_and_bold_pnl(toolkit):
+    """Cosmetic tweak requested 2026-07-17: positions render as a markdown
+    table; mktVal/unrealPnL get $ + comma formatting, and unrealPnL is
+    bolded with an explicit +/- sign so it stands out from the other
+    columns (Chainlit escapes raw HTML, so color isn't available — bold
+    + sign is the agreed substitute)."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_positions.return_value = [
+        {"contractDesc": "GLD", "position": 100.0, "mktValue": 36840.0, "unrealizedPnl": -1487.09},
+        {"contractDesc": "IGV", "position": 125.0, "mktValue": 11648.75, "unrealizedPnl": 564.06},
+    ]
+    text, fig = toolkit.execute("get_positions", {})
+    assert fig is None
+    assert "| Symbol | Qty | Mkt Val | Unrealized P&L |" in text
+    assert "$36,840.00" in text
+    assert "**-$1,487.09**" in text
+    assert "**+$564.06**" in text
+
+
 # ── _get_ledger ───────────────────────────────────────────────────────────────
 
 
@@ -145,6 +164,33 @@ def test_get_ledger_empty(toolkit):
     toolkit._client.get_account_ledger.return_value = {}
     text, fig = toolkit.execute("get_ledger", {})
     assert "No ledger data" in text
+
+
+def test_get_ledger_dollar_signs_and_bold_pnl(toolkit):
+    """Cosmetic tweak requested 2026-07-17: every dollar figure gets a $
+    prefix; Net Liquidation Value and all three P&L rows (Unrealized,
+    Realized, Futures) are bolded with an explicit +/- sign. Cash Balance
+    and Stock Market Value are plain — not P&L, not explicitly called out."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_account_ledger.return_value = {
+        "USD": {
+            "netliquidationvalue": 63166.84,
+            "cashbalance": 16045.96,
+            "stockmarketvalue": 47131.85,
+            "futuresonlymv": 0,
+            "unrealizedpnl": -8107.13,
+            "realizedpnl": 461.56,
+            "futuresonlypnl": 475.00,
+        }
+    }
+    text, fig = toolkit.execute("get_ledger", {})
+    assert "**$63,166.84**" in text
+    assert "$16,045.96" in text
+    assert "**$16,045.96**" not in text
+    assert "$47,131.85" in text
+    assert "**-$8,107.13**" in text
+    assert "**+$461.56**" in text
+    assert "**+$475.00**" in text
 
 
 # ── _get_pnl — official /iserver/account/pnl/partitioned response shape ──────
