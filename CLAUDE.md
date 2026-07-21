@@ -226,3 +226,4 @@ not `@import`s, so they don't load into every session's context automatically.
 - Known IBKR API behaviors, verified not assumed: `docs/ibkr-api-behaviors-reference.md`
 - Official documentation URLs, all external APIs: `docs/external-docs-reference.md`
 - Consuming projects: `docs/consumers.md`
+- Charting/quant/stats package landscape (what we have vs. gaps vs. duplicative-of-existing-code): `docs/python-package-landscape.md`
