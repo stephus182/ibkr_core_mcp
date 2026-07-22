@@ -443,22 +443,6 @@ class IBKRClient:
         """
         return self._get("/iserver/marketdata/unsubscribeall")
 
-    def get_regulatory_snapshot(self, conid: int) -> dict[str, Any]:
-        """Regulatory (NBBO-grade) market snapshot for a single contract.
-
-        WARNING: Each call incurs a fee of $0.01 USD unless the account already
-        holds a direct exchange market data subscription. This applies to both live
-        and paper accounts. This is NOT a free fallback for get_market_snapshot() —
-        use get_market_snapshot() for normal quote access (no per-call charge).
-
-        Returns the same field codes as /iserver/marketdata/snapshot but responds
-        synchronously (no subscription warm-up) and covers only one contract per call.
-
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#regulatory-snapshot
-        Endpoint: GET /md/regsnapshot
-        """
-        return self._get("/md/regsnapshot", {"conid": str(conid)})
-
     # ------------------------------------------------------------------
     # Contract / Security Definition
     # ------------------------------------------------------------------

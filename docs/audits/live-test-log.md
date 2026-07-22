@@ -13,6 +13,41 @@ When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30
 
 ---
 
+<a id="run-2026-07-22-1"></a>
+## Run: 2026-07-22 — full integration suite re-verify (post code-quality audit)
+
+| Field | Value |
+|---|---|
+| Date | 2026-07-22 |
+| Purpose | Re-verify `main` (b714800) end-to-end against real IBKR gateway, Drive, Firecrawl after the 2026-07-22 code-quality audit (`pytest -m "not integration"` only had been run). |
+| Auth method | `BrowserCookieAuth` |
+| Account | `U1675699` |
+| Python | `3.11.15` · pytest |
+| Result | **69 pass · 16 skip · 1 fail** (before fix below) → **all green after removal** |
+
+### Finding: `get_regulatory_snapshot` / `/md/regsnapshot` permanently removed by IBKR
+
+`test_get_regulatory_snapshot` (previously passing, see [2026-06-30 run 4](#run-2026-06-30-4) and
+the 2026-07-08 baseline) now fails with `HTTP 404: Resource not found`.
+
+Confirmed via IBKR's official Web API Changelog (raw HTML, independent of any summarization):
+a **February 11, 2026** entry, tagged `warning`, states verbatim: *"The /md/regsnapshot endpoint
+is no longer supported for users to query a regulatory snapshot via API."*
+Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+
+This account (`U1675699`, live individual) has active real-time US equities/futures market data —
+the 404 is **not** an entitlement gap, contrary to this run's initial hypothesis. IBKR evidently
+enforced the Feb 11 announcement later, after a multi-month grace period: the endpoint still
+returned real live data (with the $0.01 charge) as recently as the 2026-07-08 baseline, and only
+started 404ing sometime between 2026-07-08 and 2026-07-22.
+
+**Resolution:** `get_regulatory_snapshot()` removed entirely from `client.py`, its test removed
+from `test_client_live.py`, and its entry removed from `docs/api-reference.md` — dead API surface
+for a permanently decommissioned endpoint, not something a retry or entitlement fix could restore.
+Not wired into `claude_tools.py`/`mcp_server.py`, so no Claude-tool-layer or MCP surface affected.
+
+---
+
 <a id="run-2026-07-01-1"></a>
 ## Run: 2026-07-01 — alert batch first run
 

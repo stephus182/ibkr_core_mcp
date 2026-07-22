@@ -770,20 +770,6 @@ def test_get_currency_pairs_eur(live_client):
 
 
 @pytest.mark.integration
-def test_get_regulatory_snapshot(live_client):
-    """Regulatory (NBBO-grade) snapshot for AAPL. WARNING: $0.01/call unless subscribed."""
-    # AAPL conid 265598. Cost: $0.01 USD per call (per official IBKR docs).
-    result = live_client.get_regulatory_snapshot(265598)
-    assert isinstance(result, (dict, list))
-    # If it's a list, it may be a list with one dict inside
-    if isinstance(result, list):
-        assert len(result) > 0
-        result = result[0]
-    # Should contain at least one price-related field (31=last, 70=high, 71=low, 84=bid, 86=ask)
-    assert result, "Regulatory snapshot returned empty"
-
-
-@pytest.mark.integration
 def test_get_bond_filters(live_client):
     # get_bond_filters(symbol, issue_id) — requires a bond symbol AND an issue_id
     # IBM bonds are available on IBKR; issue_id is typically the conid of the bond's issuer.

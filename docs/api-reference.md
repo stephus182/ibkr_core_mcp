@@ -180,19 +180,6 @@ Changelog: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-chang
 
 ---
 
-### `get_regulatory_snapshot(conid) -> dict`
-Regulatory (NBBO-grade) market snapshot for a **single** contract. Responds synchronously
-(no subscription warm-up needed) using the same field codes as `get_market_snapshot()`.
-
-**WARNING: incurs a fee of $0.01 USD per call** unless the account already holds a
-direct exchange market data subscription. Applies to live and paper accounts.
-**Do NOT use as a fallback for `get_market_snapshot()`** — that endpoint is free.
-Use this only when compliance-grade NBBO data is specifically required.
-**Endpoint:** `GET /md/regsnapshot` — query param: `conid` (single int, as string)
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#regulatory-snapshot
-
----
-
 ### `unsubscribe_market_data(conid) -> dict`
 Cancel streaming market data for a single contract.
 **Endpoint:** `POST /iserver/marketdata/unsubscribe`
