@@ -23,7 +23,6 @@ Programmatic (non-interactive, e.g. Chainlit)::
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import platform
 import subprocess
@@ -217,7 +216,11 @@ class GatewayManager:
                 timeout=3,
             )
             return 200 <= resp.status_code < 600
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            log.debug("Gateway not reachable yet: %s", exc)
+            return False
+        except Exception as exc:
+            log.warning("Unexpected error checking gateway reachability: %s", exc)
             return False
 
     def is_authenticated(self) -> bool:
@@ -226,15 +229,28 @@ class GatewayManager:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
         Endpoint: GET /iserver/auth/status
         """
-        with contextlib.suppress(Exception):
+        try:
             resp = requests.get(
                 f"{self._api_url}/iserver/auth/status",
                 verify=False,
                 timeout=5,
             )
-            if resp.status_code == 200:
-                return bool(resp.json().get("authenticated", False))
-        return False
+        except requests.exceptions.RequestException as exc:
+            log.debug("Auth status check failed (gateway unreachable): %s", exc)
+            return False
+        except Exception as exc:
+            log.warning("Unexpected error checking auth status: %s", exc)
+            return False
+
+        if resp.status_code != 200:
+            log.warning("Auth status endpoint returned HTTP %d", resp.status_code)
+            return False
+
+        try:
+            return bool(resp.json().get("authenticated", False))
+        except Exception as exc:
+            log.warning("Auth status response was not valid JSON: %s", exc)
+            return False
 
     # ── Polling helper ────────────────────────────────────────────────────────
 

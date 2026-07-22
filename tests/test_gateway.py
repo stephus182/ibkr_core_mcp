@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -265,9 +266,25 @@ class TestIsGatewayReachable:
         with patch("requests.post", return_value=mock_resp):
             assert GatewayManager().is_gateway_reachable() is True
 
-    def test_returns_false_on_connection_error(self) -> None:
-        with patch("requests.post", side_effect=requests.ConnectionError()):
+    def test_returns_false_on_connection_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("requests.post", side_effect=requests.ConnectionError()),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
             assert GatewayManager().is_gateway_reachable() is False
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(debug_records) == 1
+        assert warning_records == []
+
+    def test_returns_false_and_warns_on_unexpected_exception(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("requests.post", side_effect=ValueError("boom")),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
+            assert GatewayManager().is_gateway_reachable() is False
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 1
 
 
 class TestIsAuthenticated:
@@ -278,22 +295,59 @@ class TestIsAuthenticated:
         with patch("requests.get", return_value=mock_resp):
             assert GatewayManager().is_authenticated() is True
 
-    def test_returns_false_when_not_authenticated(self) -> None:
+    def test_returns_false_when_not_authenticated(self, caplog: pytest.LogCaptureFixture) -> None:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"authenticated": False}
-        with patch("requests.get", return_value=mock_resp):
+        with (
+            patch("requests.get", return_value=mock_resp),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
             assert GatewayManager().is_authenticated() is False
+        assert caplog.records == []
 
-    def test_returns_false_on_exception(self) -> None:
-        with patch("requests.get", side_effect=Exception("network error")):
+    def test_returns_false_and_debug_logs_on_connection_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("requests.get", side_effect=requests.ConnectionError()),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
             assert GatewayManager().is_authenticated() is False
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(debug_records) == 1
+        assert warning_records == []
 
-    def test_returns_false_on_non_200_status(self) -> None:
+    def test_returns_false_and_warns_on_unexpected_get_exception(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("requests.get", side_effect=RuntimeError("boom")),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
+            assert GatewayManager().is_authenticated() is False
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 1
+
+    def test_returns_false_and_warns_on_malformed_json(self, caplog: pytest.LogCaptureFixture) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("bad json")
+        with (
+            patch("requests.get", return_value=mock_resp),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
+            assert GatewayManager().is_authenticated() is False
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 1
+
+    def test_returns_false_on_non_200_status(self, caplog: pytest.LogCaptureFixture) -> None:
         mock_resp = MagicMock()
         mock_resp.status_code = 503
-        with patch("requests.get", return_value=mock_resp):
+        with (
+            patch("requests.get", return_value=mock_resp),
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
             assert GatewayManager().is_authenticated() is False
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 1
 
 
 # ---------------------------------------------------------------------------
