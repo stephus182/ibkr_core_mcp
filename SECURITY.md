@@ -113,14 +113,14 @@ reply_order()   ──► require_touch_id() ──► reply_dialog()   ──�
 
 ### Scope Minimization — No Order Writes in Tool Surface
 
-`ClaudeToolkit` exposes **38 read-only tools** to the LLM. None of them can write to IBKR. The complete tool surface is:
+`ClaudeToolkit` exposes **42 read-only tools** to the LLM. None of them can write to IBKR. The complete tool surface is:
 
 | Category | Tools |
 |---|---|
 | Market data | `fetch_market_data`, `check_cache`, `list_cache`, `delete_cache`, `get_market_snapshot` |
 | Contracts | `search_contract`, `get_contract_info`, `get_option_chain`, `get_futures` |
 | Account | `get_account_summary`, `get_positions`, `get_ledger`, `get_allocation`, `get_pnl` |
-| Trades | `get_trades`, `sync_flex_trades`, `sync_flex_archive`, `check_flex_coverage`, `import_flex_file` |
+| Trades | `get_trades`, `sync_flex_trades`, `sync_flex_archive`, `check_flex_coverage`, `import_flex_file`, `verify_flex_import` |
 | Orders (read-only) | `get_live_orders`, `preview_order`, `get_order_status`, `diagnose_orders` |
 | Scheduling | `get_trading_schedule` |
 | Watchlists | `get_watchlists` |
@@ -128,7 +128,8 @@ reply_order()   ──► require_touch_id() ──► reply_dialog()   ──�
 | Notifications | `get_notifications` |
 | Price alerts (local) | `create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert`, `get_alerts` |
 | Analytics & backtest | `add_indicators`, `run_backtest`, `generate_pinescript`, `get_analytics` |
-| PA reporting | `get_pa_performance`, `get_pa_transactions` |
+| PA reporting | `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` |
+| Web scraping | `firecrawl_search`, `firecrawl_crawl` |
 
 `sync_flex_trades` writes to the local SQLite store and GDrive cache, not to IBKR. Order placement must go through `IBKRClient` directly, which enforces both gates.
 
