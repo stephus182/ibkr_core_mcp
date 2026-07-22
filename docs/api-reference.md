@@ -1,6 +1,6 @@
 # IBKRClient — API Reference
 
-Full reference for all 75 public `IBKRClient` methods. All methods return raw dicts/lists from
+Full reference for all 74 public `IBKRClient` methods. All methods return raw dicts/lists from
 the IBKR Client Portal API unless noted. HTTP errors raise exceptions from
 `ibkr_core_mcp.exceptions`. Every endpoint below is sourced from the official Client Portal Web
 API reference at https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ (anchored

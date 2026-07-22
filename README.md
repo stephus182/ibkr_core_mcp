@@ -66,7 +66,7 @@ This library is built on official documented APIs. Any contribution touching API
 | Firecrawl API | https://docs.firecrawl.dev/api-reference/endpoint/scrape |
 | Crawl4AI (optional fallback) | https://docs.crawl4ai.com/ |
 
-Full details and per-file API ownership are in [`CLAUDE.md`](CLAUDE.md#ibkr-api-reference--docs-first).
+Full details and per-file API ownership are in [`CLAUDE.md`](CLAUDE.md#conventions).
 
 ---
 
@@ -87,7 +87,7 @@ Or for local development:
 ```bash
 git clone https://github.com/stephus182/ibkr_core_mcp.git
 cd ibkr_core_mcp
-pip install -e ".[dev]"
+pip install -e ".[dev,server]"
 ```
 
 ---
@@ -334,7 +334,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they re-run both gates automatically for every reply in the chain (see [CLAUDE.md — Order Management](CLAUDE.md#order-management)):
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they re-run both gates automatically for every reply in the chain (see [CLAUDE.md — Security & Fingerprint Authentication](CLAUDE.md#security--fingerprint-authentication)):
 
 ### Gate 1 — Touch ID (macOS LocalAuthentication)
 
@@ -369,7 +369,7 @@ See [SECURITY.md](SECURITY.md) for the full security model.
 
 ## Market Calendar
 
-`SQLiteStore.get_market_calendar_context()` uses [`exchange_calendars`](https://github.com/rsheftel/pandas_market_calendars) to provide trading-day-aware context without any API calls:
+`SQLiteStore.get_market_calendar_context()` uses [`exchange_calendars`](https://github.com/gerrymanoim/exchange_calendars) to provide trading-day-aware context without any API calls:
 
 ```python
 from ibkr_core_mcp.store import SQLiteStore
@@ -403,7 +403,7 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 
 **Default 20 exchanges (full G20 + Eurex):** NYSE (XNYS), CME Futures (CME), LSE London (XLON), Xetra Frankfurt (XETR), Eurex (XEUR), Euronext Paris (XPAR), Borsa Italiana (XMIL), TSE Tokyo (XTKS), HKEX Hong Kong (XHKG), SSE Shanghai (XSHG), BSE Mumbai (XBOM), KRX Seoul (XKRX), ASX Sydney (XASX), TSX Toronto (XTSE), B3 São Paulo (BVMF), BMV Mexico City (XMEX), JSE Johannesburg (XJSE), Tadawul Saudi Arabia (XSAU), IDX Jakarta (XIDX), Borsa Istanbul (XIST). Excludes Russia (XMOS — IBKR suspended most Russian securities since 2022) and Argentina (XBUE — capital controls, very limited IBKR access).
 
-**100+ supported markets** including XNAS (NASDAQ), XPAR (Euronext Paris), XKRX (Korea), XBOM (Bombay), SSE (Shanghai), BVMF (Brazil), and more — [full list](https://github.com/rsheftel/exchange_calendars#calendars).
+**100+ supported markets** including XNAS (NASDAQ), XPAR (Euronext Paris), XKRX (Korea), XBOM (Bombay), SSE (Shanghai), BVMF (Brazil), and more — [full list](https://github.com/gerrymanoim/exchange_calendars).
 
 **Used for:**
 - **Staleness check** — `get_trade_date_coverage()` uses the NYSE calendar to determine if Flex data is current. `newest == last_trading_day` means fully up to date, regardless of whether today is a weekend or holiday.
@@ -483,7 +483,7 @@ pytest
 
 # Lint + type check
 ruff check .
-mypy ibkr_core_mcp
+mypy
 ```
 
 ---
