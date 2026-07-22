@@ -1,3 +1,6 @@
+import subprocess
+import sys
+from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,30 +17,32 @@ def _make_tk_mock(click_label: str | None):
     Build a patched tkinter mock that simulates a button click inside mainloop.
     click_label=None simulates window-close (protocol WM_DELETE_WINDOW fires).
     """
-    captured = {"commands": {}, "close_cmd": None}
+    commands: dict[str, Callable[[], None]] = {}
+    close_cmd: Callable[[], None] | None = None
 
     def fake_button(parent, **kwargs):
         text = kwargs.get("text", "")
         cmd = kwargs.get("command")
         if cmd:
-            captured["commands"][text] = cmd
+            commands[text] = cmd
         return MagicMock()
 
     mock_root = MagicMock()
     mock_dialog = MagicMock()
 
     def fake_protocol(event, cmd):
+        nonlocal close_cmd
         if event == "WM_DELETE_WINDOW":
-            captured["close_cmd"] = cmd
+            close_cmd = cmd
 
     mock_dialog.protocol.side_effect = fake_protocol
 
     def fake_mainloop():
         if click_label is None:
-            if captured["close_cmd"]:
-                captured["close_cmd"]()
-        elif click_label in captured["commands"]:
-            captured["commands"][click_label]()
+            if close_cmd:
+                close_cmd()
+        elif click_label in commands:
+            commands[click_label]()
 
     mock_root.mainloop.side_effect = fake_mainloop
 
@@ -69,7 +74,7 @@ def test_dispatch_darwin_uses_appkit_first():
     import ibkr_core_mcp.order_confirm as oc
 
     with (
-        patch.object(oc.sys, "platform", "darwin"),
+        patch.object(sys, "platform", "darwin"),
         patch.object(oc, "_show_appkit_dialog") as mock_appkit,
         patch.object(oc, "_show_osascript_dialog") as mock_osa,
     ):
@@ -83,7 +88,7 @@ def test_dispatch_darwin_appkit_cancel_does_not_fall_back():
     import ibkr_core_mcp.order_confirm as oc
 
     with (
-        patch.object(oc.sys, "platform", "darwin"),
+        patch.object(sys, "platform", "darwin"),
         patch.object(oc, "_show_appkit_dialog", side_effect=HumanAuthError("Order cancelled by user")),
         patch.object(oc, "_show_osascript_dialog") as mock_osa,
     ):
@@ -97,7 +102,7 @@ def test_dispatch_darwin_appkit_failure_falls_back_to_osascript():
     import ibkr_core_mcp.order_confirm as oc
 
     with (
-        patch.object(oc.sys, "platform", "darwin"),
+        patch.object(sys, "platform", "darwin"),
         patch.object(oc, "_show_appkit_dialog", side_effect=RuntimeError("AppKit dialog failed")),
         patch.object(oc, "_show_osascript_dialog") as mock_osa,
     ):
@@ -109,7 +114,7 @@ def test_show_confirm_dialog_tkinter_confirm_does_not_raise():
     import ibkr_core_mcp.order_confirm as oc
 
     mock_tk = _make_tk_mock("SEND TO IBKR")
-    with patch.object(oc.sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
+    with patch.object(sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
         oc._show_confirm_dialog(**_dialog_args())  # must not raise
 
 
@@ -117,7 +122,7 @@ def test_show_confirm_dialog_tkinter_cancel_raises():
     import ibkr_core_mcp.order_confirm as oc
 
     mock_tk = _make_tk_mock("CANCEL")
-    with patch.object(oc.sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
+    with patch.object(sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
         with pytest.raises(HumanAuthError, match="cancelled by user"):
             oc._show_confirm_dialog(**_dialog_args())
 
@@ -126,7 +131,7 @@ def test_show_confirm_dialog_tkinter_window_close_raises():
     import ibkr_core_mcp.order_confirm as oc
 
     mock_tk = _make_tk_mock(None)  # None → close protocol fires
-    with patch.object(oc.sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
+    with patch.object(sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
         with pytest.raises(HumanAuthError, match="cancelled by user"):
             oc._show_confirm_dialog(**_dialog_args())
 
@@ -134,7 +139,7 @@ def test_show_confirm_dialog_tkinter_window_close_raises():
 def test_show_confirm_dialog_raises_when_no_gui_available():
     import ibkr_core_mcp.order_confirm as oc
 
-    with patch.object(oc.sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", None):
+    with patch.object(sys, "platform", "linux"), patch("ibkr_core_mcp.order_confirm.tk", None):
         with pytest.raises(HumanAuthError, match="tkinter is not installed"):
             oc._show_confirm_dialog(**_dialog_args())
 
@@ -155,14 +160,14 @@ def _appkit_proc(stdout="", returncode=0, stderr=""):
 def test_appkit_dialog_confirmed_does_not_raise():
     import ibkr_core_mcp.order_confirm as oc
 
-    with patch.object(oc.subprocess, "run", return_value=_appkit_proc("CONFIRMED\n")):
+    with patch.object(subprocess, "run", return_value=_appkit_proc("CONFIRMED\n")):
         oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
 
 
 def test_appkit_dialog_cancelled_raises_humanauth():
     import ibkr_core_mcp.order_confirm as oc
 
-    with patch.object(oc.subprocess, "run", return_value=_appkit_proc("CANCELLED\n")):
+    with patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")):
         with pytest.raises(HumanAuthError, match="cancelled by user"):
             oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
 
@@ -171,17 +176,15 @@ def test_appkit_dialog_subprocess_failure_raises_runtimeerror():
     """Non-zero exit = broken subprocess → RuntimeError so caller can fall back."""
     import ibkr_core_mcp.order_confirm as oc
 
-    with patch.object(oc.subprocess, "run", return_value=_appkit_proc("", returncode=1, stderr="ERROR: no AppKit")):
+    with patch.object(subprocess, "run", return_value=_appkit_proc("", returncode=1, stderr="ERROR: no AppKit")):
         with pytest.raises(RuntimeError, match="AppKit dialog failed"):
             oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
 
 
 def test_appkit_dialog_timeout_raises_humanauth():
-    import subprocess as _sp
-
     import ibkr_core_mcp.order_confirm as oc
 
-    with patch.object(oc.subprocess, "run", side_effect=_sp.TimeoutExpired(cmd="dialog", timeout=70)):
+    with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="dialog", timeout=70)):
         with pytest.raises(HumanAuthError, match="timed out"):
             oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
 

@@ -225,7 +225,7 @@ def test_get_log_n_limit(store):
 # ---------------------------------------------------------------------------
 
 
-def _trade(eid: str, day: str) -> dict:
+def _trade(eid: str, day: str) -> dict[str, object]:
     return {
         "execution_id": eid,
         "symbol": "AAPL",

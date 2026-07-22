@@ -591,7 +591,7 @@ def test_firecrawl_search_preserves_result_order_under_concurrent_fallback(mock_
         label = url.split("//")[1].split(".")[0].upper()
         return f"recovered {label} content", "", True
 
-    toolkit._scrape_with_fallback = fake_scrape_with_fallback  # type: ignore[method-assign]
+    toolkit._scrape_with_fallback = fake_scrape_with_fallback
     result, fig = toolkit.execute("firecrawl_search", {"query": "test"})
 
     a_pos = result.index("recovered A content")

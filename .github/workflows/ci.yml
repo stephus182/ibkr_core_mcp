@@ -44,7 +44,7 @@ jobs:
         run: ruff format --check .
 
       - name: Type check (mypy)
-        run: mypy ibkr_core_mcp
+        run: mypy
 
       - name: Test (pytest, unit only)
         run: pytest -m "not integration" -v

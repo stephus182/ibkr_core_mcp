@@ -86,7 +86,7 @@ def test_scrape_batch_reuses_one_real_browser_across_two_real_urls(crawl4ai_avai
     construction_count = {"value": 0}
     RealAsyncWebCrawler = crawl4ai.AsyncWebCrawler
 
-    class CountingAsyncWebCrawler(RealAsyncWebCrawler):
+    class CountingAsyncWebCrawler(RealAsyncWebCrawler):  # type: ignore[misc,valid-type]
         def __init__(self, *args, **kwargs):
             construction_count["value"] += 1
             super().__init__(*args, **kwargs)

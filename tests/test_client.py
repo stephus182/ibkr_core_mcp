@@ -283,7 +283,7 @@ def test_cancel_order_calls_both_gates(client):
 
 
 def test_cancel_order_passes_order_details_to_dialog(client):
-    captured = {}
+    captured: dict[str, object] = {}
     with (
         _patch("ibkr_core_mcp.client.require_touch_id"),
         _patch(
@@ -1068,7 +1068,7 @@ def test_get_option_chain_honors_requested_month(client):
             "sections": [{"secType": "OPT", "months": "JAN26;FEB26"}],
         }
     ]
-    strikes_payload = {"call": [], "put": []}
+    strikes_payload: dict[str, list[float]] = {"call": [], "put": []}
     with patch.object(client, "_get", side_effect=[search_payload, strikes_payload]) as mock_get:
         chain = client.get_option_chain("AAPL", month="feb26")
     assert chain["month"] == "FEB26"

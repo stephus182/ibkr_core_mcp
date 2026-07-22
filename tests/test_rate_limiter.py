@@ -4,7 +4,7 @@ import pytest
 import requests
 
 
-def _make_response(status_code: int, json_data: dict | None = None):
+def _make_response(status_code: int, json_data: dict[str, object] | None = None):
     resp = MagicMock(spec=requests.Response)
     resp.status_code = status_code
     resp.json.return_value = json_data or {}

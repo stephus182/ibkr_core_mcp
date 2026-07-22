@@ -18,7 +18,7 @@ def test_execute_get_trades(toolkit):
 # --- _parse_live_trades unit tests ---
 
 
-def _raw(overrides: dict) -> dict:
+def _raw(overrides: dict[str, object]) -> dict[str, object]:
     base = {
         "execution_id": "EX1",
         "symbol": "AAPL",

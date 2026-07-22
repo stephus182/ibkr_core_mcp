@@ -108,7 +108,7 @@ def test_check_quote_skips_no_last_price(tmp_db, mock_config):
 
 
 def test_parse_market_data_message():
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+    from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote
 
     ws = object.__new__(IBKRWebSocket)
     raw = json.dumps(
@@ -118,7 +118,7 @@ def test_parse_market_data_message():
         }
     )
     quote = ws._parse_message(raw)
-    assert quote is not None
+    assert isinstance(quote, LiveQuote)
     assert quote.conid == 265598
     assert quote.symbol == "AAPL"
     assert quote.last == 182.50
@@ -140,7 +140,7 @@ def test_parse_invalid_json_returns_none():
 
 def test_parse_bare_dict_data():
     """data field as bare dict (not wrapped in a list) should still parse."""
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+    from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote
 
     ws = object.__new__(IBKRWebSocket)
     raw = json.dumps(
@@ -150,7 +150,7 @@ def test_parse_bare_dict_data():
         }
     )
     quote = ws._parse_message(raw)
-    assert quote is not None
+    assert isinstance(quote, LiveQuote)
     assert quote.last == 190.0
 
 
@@ -164,7 +164,7 @@ def test_parse_empty_data_list_returns_none():
 
 def test_parse_conid_fallback_from_topic():
     """When conid is absent from data, it should be parsed from the topic string."""
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+    from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote
 
     ws = object.__new__(IBKRWebSocket)
     raw = json.dumps(
@@ -174,13 +174,13 @@ def test_parse_conid_fallback_from_topic():
         }
     )
     quote = ws._parse_message(raw)
-    assert quote is not None
+    assert isinstance(quote, LiveQuote)
     assert quote.conid == 12345
 
 
 def test_parse_non_numeric_price_skipped():
     """A non-numeric price field should be silently skipped, not raise."""
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+    from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote
 
     ws = object.__new__(IBKRWebSocket)
     raw = json.dumps(
@@ -190,7 +190,7 @@ def test_parse_non_numeric_price_skipped():
         }
     )
     quote = ws._parse_message(raw)
-    assert quote is not None
+    assert isinstance(quote, LiveQuote)
     assert quote.last is None
     assert quote.symbol == "AAPL"
 
@@ -380,7 +380,7 @@ def test_parse_str_non_numeric_fields_skipped():
 
 
 def test_parse_spl_valid():
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+    from ibkr_core_mcp.streaming import IBKRWebSocket, PnLUpdate
 
     ws = object.__new__(IBKRWebSocket)
     raw = json.dumps(
@@ -392,7 +392,7 @@ def test_parse_spl_valid():
         }
     )
     pnl = ws._parse_message(raw)
-    assert pnl is not None
+    assert isinstance(pnl, PnLUpdate)
     assert pnl.account == "DU1234567.Core"
     assert pnl.row_type == 1
     assert pnl.dpl == 12.5
@@ -400,7 +400,7 @@ def test_parse_spl_valid():
 
 
 def test_parse_spl_non_numeric_fields_skipped():
-    from ibkr_core_mcp.streaming import IBKRWebSocket
+    from ibkr_core_mcp.streaming import IBKRWebSocket, PnLUpdate
 
     ws = object.__new__(IBKRWebSocket)
     raw = json.dumps(
@@ -410,7 +410,7 @@ def test_parse_spl_non_numeric_fields_skipped():
         }
     )
     pnl = ws._parse_message(raw)
-    assert pnl is not None
+    assert isinstance(pnl, PnLUpdate)
     assert pnl.dpl is None
 
 
@@ -528,6 +528,8 @@ async def test_unsubscribe_pnl_before_connect_is_noop():
 @pytest.mark.asyncio
 async def test_listen_flattens_execution_list():
     """listen() must yield each TradeExecution individually, not the wrapping list."""
+    from typing import cast
+
     from ibkr_core_mcp.streaming import IBKRWebSocket, TradeExecution
 
     async def fake_ws():
@@ -546,7 +548,8 @@ async def test_listen_flattens_execution_list():
     items = [item async for item in ws.listen()]
     assert len(items) == 2
     assert all(isinstance(i, TradeExecution) for i in items)
-    assert [i.execution_id for i in items] == ["E1", "E2"]
+    executions = cast("list[TradeExecution]", items)
+    assert [i.execution_id for i in executions] == ["E1", "E2"]
 
 
 # ── _parse_stream_execution ──────────────────────────────────────────────────

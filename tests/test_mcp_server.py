@@ -17,6 +17,29 @@ def store(tmp_db, mock_config):
     return SQLiteStore(mock_config)
 
 
+async def _list_tool_names(server) -> list[str]:
+    """Drive the low-level tools/list handler and narrow its ServerResult union."""
+    from mcp.types import ListToolsRequest, ListToolsResult
+
+    req = ListToolsRequest(method="tools/list")
+    result = await server.request_handlers[type(req)](req)
+    assert isinstance(result.root, ListToolsResult)
+    return [t.name for t in result.root.tools]
+
+
+async def _read_resource_text(server, uri: str) -> str:
+    """Drive the low-level resources/read handler and narrow its ServerResult union."""
+    from mcp.types import ReadResourceRequest, ReadResourceRequestParams, ReadResourceResult, TextResourceContents
+    from pydantic import AnyUrl
+
+    req = ReadResourceRequest(method="resources/read", params=ReadResourceRequestParams(uri=AnyUrl(uri)))
+    result = await server.request_handlers[type(req)](req)
+    assert isinstance(result.root, ReadResourceResult)
+    content = result.root.contents[0]
+    assert isinstance(content, TextResourceContents)
+    return content.text
+
+
 def test_mcp_server_importable():
     from ibkr_core_mcp.mcp_server import build_server
 
@@ -24,15 +47,11 @@ def test_mcp_server_importable():
 
 
 async def test_server_has_44_tools(toolkit, store):
-    from mcp.types import ListToolsRequest
-
     from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
     from ibkr_core_mcp.mcp_server import build_server
 
     server = build_server(toolkit, store)
-    req = ListToolsRequest(method="tools/list")
-    result = await server.request_handlers[type(req)](req)
-    tool_names = [t.name for t in result.root.tools]
+    tool_names = await _list_tool_names(server)
     assert len(tool_names) == len(TOOL_DEFINITIONS) + 2  # +2 for add_price_alert, get_price_alerts
     assert "add_price_alert" in tool_names
     assert "get_price_alerts" in tool_names
@@ -106,16 +125,11 @@ def test_dispatch_get_price_alerts_all_includes_triggered(toolkit, store):
 async def test_resource_ibkr_accounts(toolkit, store):
     import json
 
-    from mcp.types import ReadResourceRequest
-    from pydantic import AnyUrl
-
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     server = build_server(toolkit, store)
-    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://accounts")})
-    result = await server.request_handlers[type(req)](req)
-    content = result.root.contents[0].text
+    content = await _read_resource_text(server, "ibkr://accounts")
     accounts = json.loads(content)
     assert isinstance(accounts, list)
     assert accounts[0]["accountId"] == "U1234"
@@ -125,17 +139,12 @@ async def test_resource_ibkr_accounts(toolkit, store):
 async def test_resource_positions_current(toolkit, store):
     import json
 
-    from mcp.types import ReadResourceRequest
-    from pydantic import AnyUrl
-
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_positions.return_value = [{"symbol": "AAPL", "position": 100, "mktValue": 18000}]
     server = build_server(toolkit, store)
-    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://positions/current")})
-    result = await server.request_handlers[type(req)](req)
-    content = result.root.contents[0].text
+    content = await _read_resource_text(server, "ibkr://positions/current")
     positions = json.loads(content)
     assert positions[0]["symbol"] == "AAPL"
 
@@ -143,9 +152,6 @@ async def test_resource_positions_current(toolkit, store):
 @pytest.mark.asyncio
 async def test_resource_trades_recent(toolkit, store):
     import json
-
-    from mcp.types import ReadResourceRequest
-    from pydantic import AnyUrl
 
     from ibkr_core_mcp.mcp_server import build_server
 
@@ -164,24 +170,17 @@ async def test_resource_trades_recent(toolkit, store):
         ]
     )
     server = build_server(toolkit, store)
-    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://trades/recent")})
-    result = await server.request_handlers[type(req)](req)
-    content = result.root.contents[0].text
+    content = await _read_resource_text(server, "ibkr://trades/recent")
     trades = json.loads(content)
     assert any(t["symbol"] == "AAPL" for t in trades)
 
 
 @pytest.mark.asyncio
 async def test_resource_unknown_uri_returns_empty(toolkit, store):
-    from mcp.types import ReadResourceRequest
-    from pydantic import AnyUrl
-
     from ibkr_core_mcp.mcp_server import build_server
 
     server = build_server(toolkit, store)
-    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://unknown/path")})
-    result = await server.request_handlers[type(req)](req)
-    content = result.root.contents[0].text
+    content = await _read_resource_text(server, "ibkr://unknown/path")
     assert content == "[]"
 
 
@@ -292,18 +291,13 @@ async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
 
 @pytest.mark.asyncio
 async def test_resource_pnl_live_populated(toolkit, store):
-    from mcp.types import ReadResourceRequest
-    from pydantic import AnyUrl
-
     from ibkr_core_mcp.mcp_server import build_server
 
     store.record_pnl_snapshot(
         account="DU1234567.Core", row_type=1, dpl=12.5, nl=10000.0, upl=3.0, uel=9000.0, mv=5000.0
     )
     server = build_server(toolkit, store)
-    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://pnl/live")})
-    result = await server.request_handlers[type(req)](req)
-    content = result.root.contents[0].text
+    content = await _read_resource_text(server, "ibkr://pnl/live")
     import json
 
     data = json.loads(content)
@@ -313,13 +307,8 @@ async def test_resource_pnl_live_populated(toolkit, store):
 
 @pytest.mark.asyncio
 async def test_resource_pnl_live_empty_when_never_recorded(toolkit, store):
-    from mcp.types import ReadResourceRequest
-    from pydantic import AnyUrl
-
     from ibkr_core_mcp.mcp_server import build_server
 
     server = build_server(toolkit, store)
-    req = ReadResourceRequest(method="resources/read", params={"uri": AnyUrl("ibkr://pnl/live")})
-    result = await server.request_handlers[type(req)](req)
-    content = result.root.contents[0].text
+    content = await _read_resource_text(server, "ibkr://pnl/live")
     assert content == "{}"

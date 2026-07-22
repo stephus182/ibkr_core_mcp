@@ -91,6 +91,19 @@ asyncio_mode = "auto"
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+files = ["ibkr_core_mcp", "tests"]
+
+# tests/ never annotates function signatures (established convention, 0 annotations
+# across 747 tests) — disallow_untyped_defs would demand annotating every test
+# function/fixture for zero safety benefit. check_untyped_defs (inherited from
+# strict) still type-checks each function's body, so real bugs inside untyped
+# tests are still caught — see the 2026-07-22 code-quality audit for the fresh
+# inventory (1164 raw findings -> 183 real ones once this override is applied).
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
 module = [

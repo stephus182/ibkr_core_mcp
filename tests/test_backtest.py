@@ -149,7 +149,8 @@ def test_result_to_dict(ohlcv):
 
 
 def test_code_length_limit_raises(ohlcv):
-    from ibkr_core_mcp.backtest import _MAX_CODE_LEN, BacktestSyntaxError, run_backtest
+    from ibkr_core_mcp.backtest import _MAX_CODE_LEN, run_backtest
+    from ibkr_core_mcp.exceptions import BacktestSyntaxError
 
     too_long = "x = 1\n" * (_MAX_CODE_LEN // 6 + 1)
     with pytest.raises(BacktestSyntaxError, match="character limit"):
@@ -158,7 +159,8 @@ def test_code_length_limit_raises(ohlcv):
 
 def test_missing_signal_column_raises(ohlcv):
     """Strategy that never sets df['signal'] must raise, not silently return wrong metrics."""
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     with pytest.raises(BacktestRuntimeError, match="signal"):
         run_backtest("# no signal set", ohlcv)
@@ -166,7 +168,8 @@ def test_missing_signal_column_raises(ohlcv):
 
 def test_sandbox_cannot_mutate_shared_pd_namespace(ohlcv):
     """Strategy code must not be able to poison the shared pd/np SimpleNamespace."""
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     # Attempt to overwrite pd.DataFrame — _write_guard should block this
     code = "pd.DataFrame = None\ndf['signal'] = 0"
@@ -176,7 +179,8 @@ def test_sandbox_cannot_mutate_shared_pd_namespace(ohlcv):
 
 def test_sandbox_cannot_import_os(ohlcv):
     """import os is transformed by RestrictedPython but __import__ is not in sandbox namespace."""
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     code = "import os\ndf['signal'] = 0"
     with pytest.raises(BacktestRuntimeError, match="__import__"):
@@ -188,7 +192,8 @@ def test_sandbox_blocks_dataframe_eval(ohlcv):
     compiled-bytecode boundary — it can reach __globals__/sys.modules/os and
     achieve RCE. Must be blocked at the sandbox's _getattr_ hook.
     See docs/audits/security-audit-2026-07-11.md H-1."""
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     code = (
         "leak = df.eval(\"@df.__init__.__func__.__globals__['sys'].modules['os'].popen('id').read()\")\n"
@@ -200,7 +205,8 @@ def test_sandbox_blocks_dataframe_eval(ohlcv):
 
 def test_sandbox_blocks_dataframe_query(ohlcv):
     """df.query() uses the same unsandboxed expression engine as df.eval()."""
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     code = "df.query(\"close > 0\")\ndf['signal'] = 0\n"
     with pytest.raises(BacktestRuntimeError, match="query"):
@@ -231,7 +237,8 @@ def test_timeout_actually_kills_runaway_process(ohlcv, monkeypatch):
     import time
 
     from ibkr_core_mcp import backtest
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     monkeypatch.setattr(backtest, "_EXEC_TIMEOUT", 0.5)
     monkeypatch.setattr(backtest, "_KILL_GRACE_S", 0.2)
@@ -308,7 +315,8 @@ def test_crash_during_flush_does_not_hang(ohlcv, monkeypatch):
     import time
 
     from ibkr_core_mcp import backtest
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     monkeypatch.setattr(backtest, "_execute_in_subprocess", _crash_mid_flush_child)
 
@@ -346,7 +354,8 @@ def test_stalled_alive_child_is_killed_by_watchdog(ohlcv, monkeypatch):
     import time
 
     from ibkr_core_mcp import backtest
-    from ibkr_core_mcp.backtest import BacktestRuntimeError, run_backtest
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
     monkeypatch.setattr(backtest, "_execute_in_subprocess", _stall_alive_child)
     monkeypatch.setattr(backtest, "_EXEC_TIMEOUT", 0.5)
@@ -394,7 +403,7 @@ def test_successful_result_wins_race_against_watchdog(ohlcv, monkeypatch):
 
     _real_event_cls = threading.Event
 
-    class _DelayFirstConstructed(_real_event_cls):  # type: ignore[valid-type]
+    class _DelayFirstConstructed(_real_event_cls):  # type: ignore[misc,valid-type]
         _next_id = 0
         _target_id: int | None = None
 
@@ -410,7 +419,7 @@ def test_successful_result_wins_race_against_watchdog(ohlcv, monkeypatch):
                 _real_event_cls().wait(3.0)  # let the watchdog's own timeout fire first
             super().set()
 
-    monkeypatch.setattr(backtest.threading, "Event", _DelayFirstConstructed)
+    monkeypatch.setattr(threading, "Event", _DelayFirstConstructed)
     # Generous relative to real spawn("spawn")+import+compute latency (measured
     # ~0.4s for a trivial 200-row strategy on this machine) so recv() genuinely
     # succeeds well within the deadline — this test is about the race between a

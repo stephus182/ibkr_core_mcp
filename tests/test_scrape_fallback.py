@@ -2,6 +2,7 @@ import asyncio
 import sys
 import types
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -99,10 +100,10 @@ def test_is_private_host_allows_aaaa_only_hostname_resolving_to_public_ipv6(monk
     assert is_private_host("public-ipv6-only.example") is False
 
 
-def _make_config(**overrides):
+def _make_config(**overrides: Any):
     from ibkr_core_mcp.config import Config
 
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         gateway_url="http://localhost",
         anthropic_api_key="sk-test",
         gdrive_folder_id="root-id",
@@ -386,7 +387,7 @@ def _install_fake_crawl4ai(monkeypatch, raw_markdown: str = "fetched via crawl4a
     """Inject a fake `crawl4ai` module into sys.modules and return
     (captured_configs, installed_hooks) so tests can assert on both the
     BrowserConfig(**kwargs) calls and the crawler_strategy.set_hook(...) calls."""
-    captured_configs: list[dict] = []
+    captured_configs: list[dict[str, object]] = []
     installed_hooks: dict[str, object] = {}
 
     class FakeBrowserConfig:
@@ -413,8 +414,8 @@ def _install_fake_crawl4ai(monkeypatch, raw_markdown: str = "fetched via crawl4a
             return _FakeCrawlResult(raw_markdown)
 
     fake_module = types.ModuleType("crawl4ai")
-    fake_module.AsyncWebCrawler = FakeAsyncWebCrawler
-    fake_module.BrowserConfig = FakeBrowserConfig
+    setattr(fake_module, "AsyncWebCrawler", FakeAsyncWebCrawler)  # noqa: B010 -- ModuleType has no static attrs; setattr keeps mypy happy too
+    setattr(fake_module, "BrowserConfig", FakeBrowserConfig)  # noqa: B010
     monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
     return captured_configs, installed_hooks
 
@@ -547,8 +548,8 @@ def _install_fake_crawl4ai_tracking(monkeypatch, markdown_by_url=None, fail_urls
             self.kwargs = kwargs
 
     fake_module = types.ModuleType("crawl4ai")
-    fake_module.AsyncWebCrawler = FakeAsyncWebCrawler
-    fake_module.BrowserConfig = FakeBrowserConfig
+    setattr(fake_module, "AsyncWebCrawler", FakeAsyncWebCrawler)  # noqa: B010 -- ModuleType has no static attrs; setattr keeps mypy happy too
+    setattr(fake_module, "BrowserConfig", FakeBrowserConfig)  # noqa: B010
     monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
     return construction_count, arun_urls
 
@@ -615,7 +616,7 @@ def _install_fake_browser_profiler(monkeypatch, tmp_path, domain: str = "example
             return str(created_at)
 
     fake_module = types.ModuleType("crawl4ai")
-    fake_module.BrowserProfiler = FakeBrowserProfiler
+    setattr(fake_module, "BrowserProfiler", FakeBrowserProfiler)  # noqa: B010 -- ModuleType has no static attrs; setattr keeps mypy happy too
     monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
     return created_at
 
