@@ -23,13 +23,18 @@ pip install -e /path/to/ibkr_core_mcp
 
 ```bash
 cd /path/to/ibkr_core_mcp
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,server]"
 ```
 
-**Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`).
-**Package manager:** `brew install` for macOS tooling, `pip install -e ".[dev]"` for Python deps.
+**Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`) — invoke the
+versioned binary (`python3.11 -m venv`), not bare `python3`, since Homebrew may resolve that
+to a newer, unsupported interpreter.
+**Package manager:** `brew install` for macOS tooling, `pip install -e ".[dev,server]"` for
+Python deps. The `server` extra (`mcp`, `starlette`, `uvicorn`) is not optional for a full
+local test run — `tests/test_mcp_server.py`'s 17 tests fail to collect without it, even
+though `mcp_server.py` itself is a separate entry point from the rest of the package.
 
 ## Running Tests
 
@@ -45,6 +50,23 @@ pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 ```
+
+## Linting & Type Checking
+
+```bash
+ruff check .              # lint — must be clean
+ruff format --check .     # formatting — must be clean
+mypy                      # type check — must be clean (files= covers both ibkr_core_mcp/ and tests/)
+```
+
+`[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` itself. `tests/` is also checked
+(`files = ["ibkr_core_mcp", "tests"]`) but under a narrower `tests.*` override that relaxes
+only `disallow_untyped_defs`/`disallow_incomplete_defs`/`disallow_untyped_calls` — this
+codebase's tests carry zero signature annotations by established convention, and demanding
+them would be a large, low-value diff. Every other strict check, including body-level
+`check_untyped_defs`, still runs against test code. See
+`docs/audits/2026-07-22-code-quality-audit.md` for the full rationale and a worked example of
+the override in practice (981 boilerplate findings configured away, 183 real ones fixed).
 
 ## Publishing a New Version
 
