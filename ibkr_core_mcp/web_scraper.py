@@ -187,7 +187,7 @@ class FirecrawlClient:
             raise FirecrawlError(f"Firecrawl service error: {resp.status_code}", resp.status_code)
         resp.raise_for_status()
 
-    def search(self, query: str, limit: int = 5) -> list[dict[str, str]]:
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         """
         Search the web and return full page content as markdown for each result.
 
@@ -246,7 +246,7 @@ class FirecrawlClient:
         url: str,
         max_pages: int = 50,
         timeout_s: int = 120,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """
         Crawl a site starting from url and return all pages as markdown.
 
@@ -313,7 +313,7 @@ class FirecrawlClient:
         self._raise_for_status(resp)
         job_id = resp.json()["id"]
 
-        def _pages_from(data: dict[str, Any]) -> list[dict[str, str]]:
+        def _pages_from(data: dict[str, Any]) -> list[dict[str, Any]]:
             return [
                 {
                     "url": p.get("metadata", {}).get("sourceURL", p.get("url", "")),
@@ -336,7 +336,7 @@ class FirecrawlClient:
 
         # Poll for completion
         deadline = time.monotonic() + timeout_s
-        pages: list[dict[str, str]] = []
+        pages: list[dict[str, Any]] = []
 
         while time.monotonic() < deadline:
             time.sleep(5)
