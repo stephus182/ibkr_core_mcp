@@ -4,7 +4,8 @@ Audit of where `ibkr_core_mcp` (and its consumer, `claudia_ui`) sits relative to
 common Python charting / quant-finance / statistics ecosystem. **Documentation only —
 no packages listed here have been added to `pyproject.toml`.** Verified by grepping
 `ibkr_core_mcp/`, `docs/`, `pyproject.toml`, `.venv/`, and `claudia_ui/pyproject.toml`
-on 2026-07-19; nothing below is assumed from memory.
+on 2026-07-19; re-verified 2026-07-25 after `claudia_ui` migrated from Chainlit to
+Panel. Nothing below is assumed from memory.
 
 ## Why this doc exists, and why it doesn't install anything
 
@@ -19,33 +20,46 @@ That's the standing precedent for this codebase: a dependency is added in the sa
 as the code that uses it, not ahead of it. This doc is the inventory that makes future
 "should we add X" decisions fast — it doesn't pre-empt them.
 
-## Current state: no charting library exists anywhere in the pipeline
+## Current state: charting lives in `claudia_ui`, on Bokeh — not in this package
 
-Neither `ibkr_core_mcp` nor `claudia_ui` (the Chainlit chat UI that consumes it)
-declares Matplotlib, Altair, Plotly, ECharts/pyecharts, or deck.gl/pydeck as a
-dependency, and none are importable in `ibkr_core_mcp`'s `.venv`. `claudia_ui`'s only
-UI dependency is `chainlit>=2.0`. If a chart is ever needed end-to-end, the natural
-seam is **`claudia_ui`**, not this package — Chainlit renders figures via
-`cl.Image` / `cl.Pyplot` / `cl.Plotly` message elements, so a chart-producing tool
-would generate a figure object in a handler and `claudia_ui` would pass it to Chainlit.
-`ibkr_core_mcp`'s `execute()` signature already reserves the second return slot for
-this (`tuple[str, None]`, `ibkr_core_mcp/claude_tools.py:1051`) — it was designed for,
-then intentionally left unused pending a real chart tool.
+`ibkr_core_mcp` still declares **no** charting library, and none are importable in its
+`.venv`. That part is unchanged: this package produces data, not figures.
+
+What changed on 2026-07-24/25 is the consumer. `claudia_ui` migrated from Chainlit to
+**Panel**, and in doing so it acquired a real charting stack:
+
+- `claudia_ui/pyproject.toml` declares `panel>=1.9` **and** `bokeh>=3.7` — the latter as
+  a deliberate direct dependency, not a transitive one, because `claudia/panel_chart.py`
+  imports `bokeh.plotting` itself.
+- `claudia/panel_chart.py` renders a **Bokeh candlestick pane** (a high/low `segment` for
+  the wicks plus two `vbar` glyphs, teal up / red down, partitioned on `close >= open`),
+  fed by the Drive parquet cache with an IBKR fetch on miss.
+
+So the seam question is settled by fact rather than prediction: **the chart surface is
+`claudia_ui`, and its rendering engine is Bokeh via Panel.** A chart-producing tool in
+this package would still not return a figure object — `execute()`'s return type was
+tightened to `tuple[str, None]` (`ibkr_core_mcp/claude_tools.py:1051`) precisely because
+every handler returns `None` in the figure slot. `claudia_ui` reads the cached OHLCV
+DataFrame and builds the figure on its own side.
 
 ## A. General-purpose visualization
 
 | Package | Status | Notes |
 |---|---|---|
-| Matplotlib | Not installed | No static-plot rendering anywhere in the pipeline (server-side tool layer + chat UI, not a notebook). |
-| Altair | Not installed | Declarative/Vega-Lite; no notebook or dashboard surface currently consumes it. |
-| Plotly | Not installed (removed) | See history above. Would be the natural pick *if* an interactive chart tool is built, since Chainlit has first-class `cl.Plotly` support. |
-| ECharts (`pyecharts`) | Not installed | No JS-frontend surface in `claudia_ui` (Chainlit renders server-sent elements, not a custom JS bundle) that would host ECharts' interactivity. |
+| Bokeh | **Installed in `claudia_ui`** (not here) | `bokeh>=3.7`, a direct dependency of the consumer. Backs the candlestick pane in `claudia/panel_chart.py`. Panel's native rendering engine, so it needs no bridging element. |
+| Matplotlib | Not installed | No static-plot rendering anywhere in the pipeline. Panel *can* host it via `pn.pane.Matplotlib`, but Bokeh is already the native path. |
+| Altair | Not installed | Declarative/Vega-Lite. Panel supports it (`pn.pane.Vega`), but it would be a second charting stack alongside Bokeh for no current gain. |
+| Plotly | Not installed (removed) | See history above. Panel supports it via `pn.pane.Plotly`, but the earlier "natural pick" reasoning was based on Chainlit's `cl.Plotly` element and no longer applies — Bokeh now holds that position by virtue of being Panel's native engine and already shipping. |
+| ECharts (`pyecharts`) | Not installed | Panel *is* a JS-frontend surface (BokehJS in the browser), so the old "no JS surface to host it" objection is void. It is still unclaimed for the simpler reason that Bokeh already covers the interactivity we need. |
 | deck.gl (`pydeck`) | Not installed, not applicable | Geospatial/large-scale WebGL visualization — no geospatial data anywhere in this domain (equities/options trading). |
 
-**Recommendation:** none of these are missing gaps today — they're unclaimed because
-no chart-producing tool exists yet. When one is built (e.g. an equity-curve or P&L
-chart tool, referenced as a "future" item in `docs/plans/2026-06-27-v2-architecture-plan.md:178`),
-Plotly is the best fit given Chainlit's built-in element support; add it in that same PR.
+**Recommendation:** none of these are missing gaps today, and the question is now
+narrower than it was. Charting is solved in `claudia_ui` with Bokeh via Panel. If a
+further chart is built (e.g. the equity-curve or P&L chart referenced as a "future" item
+in `docs/plans/2026-06-27-v2-architecture-plan.md:178`), **extend the existing Bokeh pane
+rather than introducing a second charting library** — and build it in `claudia_ui`, since
+this package deliberately returns data, never figures. Adding a charting dependency
+*here* would repeat the original `plotly` mistake described above.
 
 ## B. Technical analysis & financial charting
 
