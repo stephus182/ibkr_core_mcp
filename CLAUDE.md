@@ -68,6 +68,22 @@ them would be a large, low-value diff. Every other strict check, including body-
 `docs/audits/2026-07-22-code-quality-audit.md` for the full rationale and a worked example of
 the override in practice (981 boilerplate findings configured away, 183 real ones fixed).
 
+**Docstring coverage is enforced.** `ruff`'s `pydocstyle` rules (`D`) are enabled, so every
+public module, class, method, function, and `__init__` in `ibkr_core_mcp/` must carry a
+docstring or the lint fails. Enabled 2026-07-25 after a pass found 39 undocumented public
+definitions — including `IBKRClient.__init__`, which is what pins the TLS-verify-off exemption
+to localhost. `claudia_ui` adopted the same configuration on the same date, so both repos
+enforce one rule.
+
+Only the *coverage* (`D1xx`) rules are enforced. The formatting-opinion codes are disabled
+because they conflict with this codebase's house style — multi-paragraph docstrings that
+explain *why* and cite source URLs. `pyproject.toml`'s `ignore` list annotates each one; the
+notable pair is `D212`/`D213`, which are mutually exclusive: this codebase opens the summary
+on the **first** line (346 docstrings do, versus 36 that did not and were normalised), so
+`D213` is ignored. Write new docstrings that way. `tests/*` and `scripts/audit/*` are exempt
+from `D` only — test names are the documentation, and the audit scripts are evidence
+artifacts committed as run, not maintained code.
+
 ## Publishing a New Version
 
 ```bash
@@ -211,6 +227,22 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
   URL tables (Client Portal, Flex, WebSocket, Drive, LocalAuthentication, web scraping):
   `docs/external-docs-reference.md`. Verified (not assumed) IBKR API behaviors already documented:
   `docs/ibkr-api-behaviors-reference.md`
+
+  **IBKR moved their Web API docs (discovered 2026-07-25).** The old single-page reference at
+  `interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/` is now a Fern-hosted site at
+  **`interactivebrokers.com/docs/web-api/`**. All 81 deep links in this repo were repointed.
+  Two things to know before citing a source URL again:
+
+  - The old URLs **still return HTTP 200** — they redirect to the new site's Introduction page
+    and *silently drop the `#anchor`*. A link checker reports success while the reader lands
+    on the wrong page. Never re-add a `cpapi-v1/#…` link; a 200 is not evidence it works.
+  - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
+    URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
+    is a complete 517-page index. There is also an MCP server at
+    `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML —
+    `FirecrawlClient.crawl()` returns 0 pages on `interactivebrokers.com` (it needs Firecrawl's
+    `waitFor`/`proxy` options, which the client does not expose) and fails silently rather than
+    reporting the block.
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
   deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single
