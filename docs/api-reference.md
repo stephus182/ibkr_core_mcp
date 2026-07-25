@@ -3,7 +3,7 @@
 Full reference for all 74 public `IBKRClient` methods. All methods return raw dicts/lists from
 the IBKR Client Portal API unless noted. HTTP errors raise exceptions from
 `ibkr_core_mcp.exceptions`. Every endpoint below is sourced from the official Client Portal Web
-API reference at https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ (anchored
+API reference at https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction (anchored
 per-endpoint below) unless explicitly marked unverified.
 
 The client is initialized with a `Config` and an optional `AuthStrategy`:
@@ -38,21 +38,21 @@ around an IBKR gateway quirk where the first `/iserver/auth/status` call of a ne
 returns `authenticated=false` even when fully logged in.
 **Endpoint:** `GET /iserver/auth/status` — official docs list this endpoint as `POST`
 (see Note below); GET is production-verified, not changed without a live test.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-status
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/session/authentication-status
 
 ### `get_auth_status() -> dict`
 Full authentication status including `authenticated`, `competing`, `connected` fields.
 No callers elsewhere in the codebase as of 2026-06-30.
 **Endpoint:** `GET /iserver/auth/status` — same documented-vs-implemented HTTP method
 discrepancy as `ping()` (docs say `POST` with an empty JSON body); see `ping()`'s entry above.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-status
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/session/authentication-status
 
 ### `tickle() -> bool`
 Keep the session alive. Call every few minutes during idle periods. `ConnectivityChecker`
 calls this every 60s as a side effect of its `/tickle` poll, preventing IBKR auto-logout.
 Returns `True` on HTTP 200. Never raises.
 **Endpoint:** `POST /tickle`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#tickle
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/session/ping-the-server
 
 ### `reauthenticate() -> dict`
 Request a new authentication session. Use only when `get_auth_status()` shows
@@ -65,13 +65,13 @@ flow rather than calling it directly.
 **Never call proactively** — it terminates any active authenticated session, including fresh
 logins.
 **Endpoint:** `POST /iserver/reauthenticate` (Deprecated)
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#reauthenticate
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/session/re-authenticate-the-brokerage-session-deprecated
 
 ### `validate_sso() -> dict`
 Validate the SSO token. Used after initial login to confirm the session is active. No callers
 elsewhere in the codebase as of 2026-06-30.
 **Endpoint:** `GET /sso/validate`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sso-validate
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/session/validate-sso
 
 ---
 
@@ -113,7 +113,7 @@ lowercases both inputs before the request to avoid the trap.
 **Returns:** `{"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}` — `t` is UNIX milliseconds UTC.
 
 **Endpoint:** `GET /iserver/marketdata/history`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/market-data/historical-market-data
 
 ---
 
@@ -135,7 +135,7 @@ parameter, then merges, sorts by timestamp, and deduplicates.
 | `1m` | 1000 calendar days | ~33 months |
 
 **Endpoint:** `GET /iserver/marketdata/history` (chunked via `startTime`)
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/market-data/historical-market-data
 
 ---
 
@@ -175,20 +175,20 @@ Note: `/iserver/accounts` is officially documented as required only before order
 (see `get_brokerage_accounts()`), not before market data snapshots — this method does not call it.
 
 **Endpoint:** `GET /iserver/marketdata/snapshot`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
-Changelog: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/market-data/live-market-data-snapshot
+Changelog: https://www.interactivebrokers.com/docs/web-api/changelog
 
 ---
 
 ### `unsubscribe_market_data(conid) -> dict`
 Cancel streaming market data for a single contract.
 **Endpoint:** `POST /iserver/marketdata/unsubscribe`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-unsubscribe-single
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/market-data/unsubscribe-single
 
 ### `unsubscribe_all_market_data() -> dict`
 Cancel all active streaming market data subscriptions. No parameters.
 **Endpoint:** `GET /iserver/marketdata/unsubscribeall`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-unsubscribe-all
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/market-data/unsubscribe-all
 
 ---
 
@@ -210,34 +210,34 @@ Resolve a symbol to one or more contracts. Returns `[]` if no match.
 - `OPT` → `get_option_chain()` (wraps `search_contract()` for the underlying + `get_option_strikes()`), or manually via `search_contract()` then `get_secdef_info()` (`GET /iserver/secdef/info`) for a specific option conid
 
 **Endpoint:** `GET /iserver/secdef/search`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-contract-by-symbol
 
 ---
 
 ### `get_contract_info(conid) -> dict`
 Full contract metadata: exchange, currency, primary exchange, trading class, multiplier, etc.
 **Endpoint:** `GET /iserver/contract/{conid}/info`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#info-conid-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/contract-information-by-contract-id
 
 ### `get_contract_info_and_rules(conid) -> dict`
 Contract info plus trading rules (min tick, order types, etc.).
 **Endpoint:** `GET /iserver/contract/{conid}/info-and-rules`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#info-rules-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/find-all-info-and-rules-for-a-given-contract
 
 ### `get_contract_algos(conid) -> list[dict]`
 Available algorithmic order types for a contract. Returns `[]` if none.
 **Endpoint:** `GET /iserver/contract/{conid}/algos`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#algo-conid-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-algo-params-by-contract-id
 
 ### `get_secdef_info(conid) -> dict`
 Security definition info (type, symbol, currency, exchange, listing exchange).
 **Endpoint:** `GET /iserver/secdef/info`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#secdef-info-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-sec-def-information-by-conid
 
 ### `get_secdef(conids) -> list[dict]`
 Batch security definitions for multiple conids. Returns `[]` if response is not a list.
 **Endpoint:** `GET /trsrv/secdef`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-conid-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id
 
 ---
 
@@ -261,7 +261,7 @@ also suppresses strikes data. `get_option_chain()` below handles this automatica
 call `get_option_strikes()` directly, call `search_contract()` for the underlying first.
 
 **Endpoint:** `GET /iserver/secdef/strikes`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-strikes-by-underlying-contract-id
 
 ---
 
@@ -289,7 +289,7 @@ This method **no longer 404s**; it composes the two documented endpoints above i
 no longer takes a `currency` parameter.
 
 **Endpoints:** `GET /iserver/secdef/search` + `GET /iserver/secdef/strikes`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search-symbol-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-contract-by-symbol
 
 ---
 
@@ -297,7 +297,7 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search
 Available filter criteria for bond search. `issue_id` comes from a prior
 `/iserver/secdef/search` call and can in turn be passed to `/iserver/secdef/info?issuerId=...`.
 **Endpoint:** `GET /iserver/secdef/bond-filters`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search-bond-filters
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-bond-filter-information
 
 ---
 
@@ -308,14 +308,14 @@ Futures contracts for root symbols.
 Returns `[]` if the response shape is unexpected.
 
 **Endpoint:** `GET /trsrv/futures`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-future-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/security-future-by-symbol
 
 ---
 
 ### `get_stocks(symbols) -> list[dict]`
 Stock contracts for symbols. Same dict-flattening behaviour as `get_futures()`.
 **Endpoint:** `GET /trsrv/stocks`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-stock-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/security-stocks-by-symbol
 
 ---
 
@@ -323,7 +323,7 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-
 Trading hours, sessions, and timezone for a symbol/exchange.
 Returns a list of schedule objects (verified live 2026-06-30 — returns `list`, not `dict`).
 **Endpoint:** `GET /trsrv/secdef/schedule`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-schedule-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/trading-schedule-by-symbol
 
 ### `get_currency_pairs(currency) -> list[dict]`
 Available FX pairs for a target currency.
@@ -337,12 +337,12 @@ silently discarded every result). `/iserver/secdef/search` also does not documen
 valid `secType` (only `STK`, `IND`, `BOND`) — this is the only documented FX resolution path.
 
 **Endpoint:** `GET /iserver/currency/pairs`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/currency-pairs
 
 ### `get_contract_rules(conid, is_buy) -> dict`
 Order rules for a contract (min tick, valid order types, size constraints).
 **Endpoint:** `POST /iserver/contract/rules`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#rules-contract
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-contract-rules
 
 ---
 
@@ -352,32 +352,32 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#rules-
 All accounts associated with the authenticated session. Returns `[]` if response is not a list.
 **Returns:** `[{"accountId": "U1234567", ...}, ...]`
 **Endpoint:** `GET /portfolio/accounts`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-accounts
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/portfolio-accounts
 
 ### `get_subaccounts() -> list[dict]`
 Sub-accounts (for IB Family accounts / advisors). Returns `[]` if response is not a list.
 **Endpoint:** `GET /portfolio/subaccounts`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-subaccounts
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/portfolio-subaccounts
 
 ### `get_account_meta(account_id) -> dict`
 Account metadata (display name, status, type).
 **Endpoint:** `GET /portfolio/{accountId}/meta`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-meta
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/specific-accounts-portfolio-information
 
 ### `get_account_summary(account_id) -> dict`
 Net liquidation, cash, P&L. The response uses nested `{"amount": value}` objects.
 **Endpoint:** `GET /portfolio/{accountId}/summary`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-summary
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/portfolio-summary
 
 ### `get_account_ledger(account_id) -> dict`
 Cash balances by currency with detailed ledger fields.
 **Endpoint:** `GET /portfolio/{accountId}/ledger`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-ledger
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/portfolio-ledger
 
 ### `get_account_allocation(account_id) -> dict`
 Portfolio breakdown by asset class, sector, industry.
 **Endpoint:** `GET /portfolio/{accountId}/allocation`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-allocation-single
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/portfolio-allocation-single
 
 ---
 
@@ -388,34 +388,34 @@ Open positions, paginated (page 0 = first 30). Returns `[]` if response is not a
 "mktValue": ..., "unrealizedPnl": ..., "realizedPnl": ...}, ...]`
 
 **Endpoint:** `GET /portfolio/{accountId}/positions/{page}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#positions
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/positions
 
 ---
 
 ### `get_positions_by_conid(conid) -> list[dict]`
 Position data for a specific contract across all accounts. Returns `[]` if response is not a list.
 **Endpoint:** `GET /portfolio/positions/{conid}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#position-contract-info
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/position-contract-info
 
 ### `get_position(account_id, conid) -> dict`
 Position for a specific account + contract pair.
 **Endpoint:** `GET /portfolio/{accountId}/position/{conid}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#contract-positions
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/positions-by-conid
 
 ### `get_combo_positions(account_id) -> list[dict]`
 Combo/spread positions. Returns `[]` if response is not a list.
 **Endpoint:** `GET /portfolio/{accountId}/combo/positions`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-combo
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/combination-positions
 
 ### `get_portfolio_allocation(account_ids) -> dict`
 Aggregated allocation across multiple accounts.
 **Endpoint:** `POST /portfolio/allocation`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-allocation-all
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/portfolio-allocation-all
 
 ### `invalidate_positions_cache(account_id) -> dict`
 Force-refresh the IBKR position cache. Call before `get_positions()` if data looks stale.
 **Endpoint:** `POST /portfolio/{accountId}/positions/invalidate`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-invalidate
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio/invalidate-backend-portfolio-cache
 
 ---
 
@@ -434,7 +434,7 @@ the order subscription; a second call (after a 1s pause) returns the actual live
 This method performs both calls internally.
 
 **Endpoint:** `GET /iserver/account/orders`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#live-orders
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/order-monitoring/live-orders
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
 ---
@@ -446,14 +446,14 @@ shape normalization. Used by `ClaudeToolkit`'s `diagnose_orders` to show what th
 actually returned when `get_live_orders()`'s filtered/normalized view isn't enough to debug a
 missing or unexpected order.
 **Endpoint:** `GET /iserver/account/orders`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#live-orders
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/order-monitoring/live-orders
 
 ---
 
 ### `get_order_status(order_id) -> dict`
 Full order details for a specific order ID.
 **Endpoint:** `GET /iserver/account/order/status/{orderId}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#order-status
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/order-monitoring/order-status
 
 ### `get_trades() -> list[dict]`
 Trade executions for the current day plus up to 6 previous days (7-day window). **This is the
@@ -484,7 +484,7 @@ after a 1s pause if the first response is empty; two empty responses mean genuin
   normalizes each push via `_parse_stream_execution` into this same trades table shape
 
 **Endpoint:** `GET /iserver/account/trades`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trades
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/order-monitoring/trades
 
 ---
 
@@ -513,7 +513,7 @@ This method extracts `periods` from that nesting (falling back to top-level `per
 `Period` / `allPeriods` / `period` keys if present); returns `[]` if none of those shapes match.
 
 **Endpoint:** `POST /pa/allperiods`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-all-periods
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio-analyst/all-periods
 
 ### `get_pa_periods_raw(account_ids) -> Any`
 Raw `/pa/allperiods` response, untouched — for diagnosing response shapes `get_pa_periods()`
@@ -521,7 +521,7 @@ doesn't recognize. `get_pa_periods()` returns `[]` when its documented-nesting e
 finds nothing; this method exposes the raw payload so the caller can identify the actual
 shape (used by `ClaudeToolkit`'s `get_pa_periods` fallback).
 **Endpoint:** `POST /pa/allperiods`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-all-periods
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio-analyst/all-periods
 
 ### `get_pa_performance(account_ids, period) -> dict`
 NAV cumulative performance series for the given period.
@@ -532,7 +532,7 @@ NAV cumulative performance series for the given period.
 other IBKR APIs' period conventions. Use `get_pa_periods()` to retrieve the authoritative list
 for the account rather than hardcoding these.
 **Endpoint:** `POST /pa/performance`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-account-performance
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio-analyst/account-performance
 
 ### `get_pa_transactions(account_ids, conids, currency, days) -> list[dict]`
 Transaction history from Portfolio Analyst — dividends, buys, sells, transfers. Covers all
@@ -552,7 +552,7 @@ field `"period"` — both wrong. Required fields are `conids` (array of ints) an
 missing from the request body.
 
 **Endpoint:** `POST /pa/transactions`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-transaction-history
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/portfolio-analyst/transaction-history
 
 ---
 
@@ -561,12 +561,12 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-tra
 ### `get_scanner_params() -> dict`
 Available scanner types and filter parameters.
 **Endpoint:** `GET /iserver/scanner/params`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#iserver-scanner-parameters
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/scanner/iserver-scanner-parameters
 
 ### `run_iserver_scanner(params) -> list[dict]`
 Run a scanner with full parameter control. Returns `[]` if no contracts matched.
 **Endpoint:** `POST /iserver/scanner/run`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#iserver-market-scanner
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/scanner/iserver-market-scanner
 
 ---
 
@@ -576,32 +576,32 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#iserve
 Account notifications — order fills, margin calls, system messages. `max_results` is clamped
 to `[1, 10]` — IBKR enforces a hard cap of 10 notifications per request.
 **Endpoint:** `GET /fyi/notifications`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#notification-list
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/fy-is-and-notifications/get-a-list-of-notifications
 
 ### `get_unread_count() -> int`
 Number of unread FYI notifications.
 **Endpoint:** `GET /fyi/unreadnumber`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#unread-bulletins
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/fy-is-and-notifications/unread-bulletins
 
 ### `get_delivery_options() -> dict`
 Notification delivery channel configuration.
 **Endpoint:** `GET /fyi/deliveryoptions`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-delivery
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/fy-is-and-notifications/get-delivery-options
 
 ### `get_mta_alert() -> dict`
 Mobile Trading Alerts — account-level watchdog alerts.
 **Endpoint:** `GET /iserver/account/mta`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-mta-alert
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/get-mta-alert
 
 ### `mark_notification_read(notification_id) -> dict`
 Mark a FYI notification as read.
 **Endpoint:** `POST /fyi/notifications/{notificationId}/read`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#read-notification
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/fy-is-and-notifications/mark-notification-read
 
 ### `update_delivery_option(device_id, option, enabled) -> dict`
 Enable/disable a notification delivery channel.
 **Endpoint:** `POST /fyi/deliveryoptions/{option}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#enable-device
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/fy-is-and-notifications/enable-disable-device-option
 
 ---
 
@@ -611,7 +611,7 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#enable
 All price alerts configured on the account. The `orderId` field is the alert ID. Returns `[]`
 if response is not a list.
 **Endpoint:** `GET /iserver/account/{accountId}/alerts`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/get-a-list-of-available-alerts
 
 ### `get_alert(alert_id) -> dict`
 Full details for a specific alert by ID. **Not** account-scoped in the URL — unlike
@@ -619,7 +619,7 @@ every other alert endpoint below, this one takes only the alert ID and a require
 `type=Q` query parameter (same pattern as `get_order_status`); IBKR resolves the alert from the
 session's logged-in account.
 **Endpoint:** `GET /iserver/account/alert/{order_id}?type=Q`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/get-details-of-a-specific-alert
 
 ### `create_alert(account_id, alert) -> dict`
 Create a price alert. The `alert` dict must match the IBKR alert payload schema:
@@ -649,19 +649,19 @@ Use `ClaudeToolkit.execute("create_price_alert", ...)` instead — it resolves c
 exchange automatically.
 
 **Endpoint:** `POST /iserver/account/{accountId}/alert`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/create-or-modify-alert
 
 ---
 
 ### `delete_alert(account_id, alert_id) -> dict`
 Delete an alert permanently. If `alert_id` is `0`, deletes all alerts.
 **Endpoint:** `DELETE /iserver/account/{accountId}/alert/{alertId}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#delete-alert
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/delete-an-alert
 
 ### `activate_alert(account_id, alert_id, activate) -> dict`
 Toggle alert on/off without deleting it. `activate=True` enables; `activate=False` disables.
 **Endpoint:** `POST /iserver/account/{accountId}/alert/activate`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#activate-alert
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/activate-or-deactivate-an-alert
 
 ---
 
@@ -670,22 +670,22 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#activa
 ### `get_watchlists() -> list[dict]`
 All watchlists for the account. Returns `[]` if response is not a list.
 **Endpoint:** `GET /iserver/watchlists` — query param `SC=USER_WATCHLIST`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#all-watchlists
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/watchlists/get-all-watchlists
 
 ### `get_watchlist(watchlist_id) -> dict`
 Contents of a specific watchlist. `watchlist_id` is passed as query param `id`.
 **Endpoint:** `GET /iserver/watchlist`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#watchlist-info
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/watchlists/get-watchlist-information
 
 ### `create_watchlist(name, rows) -> dict`
 Create a new watchlist. `rows` is a list of `{"C": conid}` objects.
 **Endpoint:** `POST /iserver/watchlist`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-watchlist
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/watchlists/create-a-watchlist
 
 ### `delete_watchlist(watchlist_id) -> dict`
 Delete a watchlist. `watchlist_id` passed as query param `id`.
 **Endpoint:** `DELETE /iserver/watchlist`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#delete-watchlist
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/watchlists/delete-a-watchlist
 
 ---
 
@@ -703,7 +703,7 @@ namespace: `GET /forecast/category/tree`, `GET /forecast/contract/market`,
 `GET /forecast/contract/details`. Neither `get_event_contracts()` nor `get_event_contract()`
 calls any of these — reimplementing this pair against the `/forecast/*` endpoints is a known
 gap, not yet scheduled.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#event-contracts
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/event-contracts/introduction
 
 ### `get_event_contracts(conids) -> list[dict]`
 **Endpoint:** `GET /events/contracts` (does not exist — see Status above)
@@ -753,7 +753,7 @@ reply attempt).
 `manualIndicator=True` and `extOperator="<user>"`. Required since May 1, 2025 for CME Group
 Rule 536-B compliance — IBKR returns HTTP 400 without them for FUT/FOP orders. `order_flow.py`
 adds these automatically when `sec_type` is `"FUT"` or `"FOP"`.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
+Source: https://www.interactivebrokers.com/docs/web-api/changelog
 
 ### `place_order(account_id, order) -> list[dict]`
 Place a new order after both security gates pass. Strips display-only underscore-prefixed
@@ -761,13 +761,13 @@ fields (e.g. `_companyName`) from the order dict before sending — those carry 
 metadata, not valid IBKR request fields (`ticker` *is* a valid, optional IBKR field and is not
 stripped).
 **Endpoint:** `POST /iserver/account/{accountId}/orders`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/place-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
 ### `modify_order(account_id, order_id, order) -> dict`
 Modify an existing order after both security gates pass.
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#modify-order
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/modify-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
 ### `cancel_order(account_id, order_id, order_details) -> dict`
@@ -776,7 +776,7 @@ Cancel an order after both security gates pass. `order_details` is optional disp
 order before cancelling — mirrors `modify_order()`'s dialog, which already receives the full
 order dict.
 **Endpoint:** `DELETE /iserver/account/{accountId}/order/{orderId}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#cancel-order
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/cancel-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
 ### `reply_order(reply_id, ibkr_confirmed) -> list[dict]`
@@ -784,7 +784,7 @@ Confirm an order that requires an explicit IBKR reply (e.g. after a warning). Bo
 required. See "Order confirmation may require multiple chained replies" above — a single call
 may not resolve the whole chain; prefer `place_order_and_confirm()` / `modify_order_and_confirm()`.
 **Endpoint:** `POST /iserver/reply/{replyId}`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/place-order-reply-confirmation
 
 ---
 
@@ -801,8 +801,8 @@ warning (see above). If the human declines any reply in the chain, `HumanAuthErr
 IBKR's side. This is a deliberate behavior difference, not a bug.
 
 **Endpoint:** `POST /iserver/account/{accountId}/orders`, then `POST /iserver/reply/{replyId}` per chained reply
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
-         https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/place-order
+         https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/place-order-reply-confirmation
 
 ### `modify_order_and_confirm(account_id, order_id, order) -> dict` — recommended entry point
 Same loop/display/decline semantics as `place_order_and_confirm()`, applied to `modify_order()`
@@ -815,8 +815,8 @@ had before `place_order_and_confirm()` was added, but the gap has **not been liv
 confirmed live.
 
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`, then `POST /iserver/reply/{replyId}` per chained reply
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#modify-order
-         https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/modify-order
+         https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/place-order-reply-confirmation
 
 ---
 
@@ -824,7 +824,7 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#modify
 Whatif preview — cost, commission, margin impact. No order placed, no security gates. Same
 underscore-field-stripping as `place_order()`.
 **Endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#whatif-order
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/orders/preview-order-what-if-order
 
 ---
 
@@ -833,7 +833,7 @@ Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#whatif
 ### `get_pnl() -> dict`
 Real-time partitioned P&L — daily, unrealized, realized — across all positions.
 **Endpoint:** `GET /iserver/account/pnl/partitioned`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/accounts/account-profit-and-loss
 
 ### `get_brokerage_accounts() -> dict`
 List of accounts the user has trading access to, their aliases, the currently selected
@@ -848,17 +848,17 @@ directly under normal use.
 **Returns:** `dict` with keys: `accounts` (list of account ID strings), `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles`, `selectedAccount`. Verified live 2026-06-30 — NOT a bare list.
 
 **Endpoint:** `GET /iserver/accounts`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-brokerage-accounts
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/accounts/receive-brokerage-accounts
 
 ### `switch_account(account_id) -> dict`
 Switch the active account (for advisors / family accounts).
 **Endpoint:** `POST /iserver/account`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#switch-account
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/accounts/switch-account
 
 ### `logout() -> dict`
 End the current session.
 **Endpoint:** `POST /logout`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#logout
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/session/logout-of-the-current-session
 
 ---
 
