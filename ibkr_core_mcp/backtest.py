@@ -118,6 +118,11 @@ class BacktestResult:
     equity_curve: pd.Series = field(default_factory=pd.Series)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the scalar metrics as a plain dict, omitting `equity_curve`.
+
+        JSON- and SQLite-friendly: the pandas Series is deliberately excluded so
+        the result can be persisted or returned to a tool caller directly.
+        """
         return {
             "symbol": self.symbol,
             "strategy_name": self.strategy_name,

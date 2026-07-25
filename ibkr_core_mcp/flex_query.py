@@ -1,3 +1,21 @@
+"""FlexQueryClient — historical trade sync via the IBKR Flex Web Service.
+
+The Client Portal API only exposes a short trailing window of executions. The Flex
+Web Service is the supported route to unlimited trade history, at the cost of a
+T+1 delay: a Flex statement covers completed activity, so today's fills appear
+tomorrow. Use `client.py` for live orders and this module for the archive.
+
+Two-step protocol: request a report reference, then poll for the generated XML.
+Error 1001 is a *transient generation failure* — retry it. It is not a rate limit,
+despite reading like one; assuming otherwise caused a real misdiagnosis in this
+codebase (see the API-Docs-First table in `CLAUDE.md`). XML is parsed with
+defusedxml, since the payload is externally supplied.
+
+Base URL is `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/`
+(not `gdcdyn…`, the other historical wrong assumption). Setup and constraints:
+`docs/flex-query-reference.md`
+"""
+
 from __future__ import annotations
 
 import logging
@@ -163,6 +181,15 @@ class FlexQueryClient:
     """
 
     def __init__(self, config: Config, store: SQLiteStore, cache: GDriveCache) -> None:
+        """Wire the Flex client to its persistence collaborators.
+
+        Args:
+            config: Supplies the Flex token and query IDs.
+            store: SQLite store — parsed trades and import manifests land here.
+            cache: Drive cache, used to archive raw statement XML. Trades
+                themselves are never written to the parquet cache; that holds
+                OHLCV market data only.
+        """
         self._config = config
         self._store = store
         self._cache = cache

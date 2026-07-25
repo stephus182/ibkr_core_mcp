@@ -1,5 +1,4 @@
-"""
-Firecrawl → Crawl4AI fallback for ibkr_core_mcp's web scraping tools.
+"""Firecrawl → Crawl4AI fallback for ibkr_core_mcp's web scraping tools.
 
 Firecrawl (web_scraper.py) is the default scraper. This module decides when its
 result looks incomplete (blocked, empty, or paywalled) and, when so, falls back
@@ -64,8 +63,7 @@ _PAYWALL_MARKERS = (
 
 
 def is_private_host(host: str) -> bool:
-    """
-    True if `host` (a hostname or IP literal, already lowercased by the caller)
+    """True if `host` (a hostname or IP literal, already lowercased by the caller)
     is localhost, link-local, or resolves — as a literal or via DNS — to a
     private/loopback/reserved IP address.
 
@@ -126,8 +124,7 @@ def is_private_host(host: str) -> bool:
 
 
 class Crawl4AIUnavailableError(Exception):
-    """
-    Raised when the optional `crawl4ai` dependency is not installed.
+    """Raised when the optional `crawl4ai` dependency is not installed.
 
     ClaudeToolkit catches this and returns a message to the LLM pointing at the
     install command, rather than letting the ImportError propagate.
@@ -142,8 +139,7 @@ class Crawl4AIUnavailableError(Exception):
 
 
 def _run_async(coro: Coroutine[Any, Any, Any]) -> Any:
-    """
-    Run an async coroutine from sync code, regardless of whether the calling
+    """Run an async coroutine from sync code, regardless of whether the calling
     thread already has a running event loop.
 
     ClaudeToolkit.execute() is invoked synchronously from inside mcp_server.py's
@@ -183,8 +179,7 @@ def _run_async(coro: Coroutine[Any, Any, Any]) -> Any:
 
 
 def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> Quality:
-    """
-    Classify a Firecrawl markdown result as "ok", "ambiguous", or "fallback".
+    """Classify a Firecrawl markdown result as "ok", "ambiguous", or "fallback".
 
     "fallback" (skip the LLM judge, go straight to Crawl4AI):
       - metadata reports an HTTP error status (>= 400) or an "error" value
@@ -223,8 +218,7 @@ def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> 
 
 
 def judge_completeness_llm(config: Config, url: str, markdown: str) -> bool:
-    """
-    Ask Claude whether a scraped page looks complete or truncated/paywalled/blocked.
+    """Ask Claude whether a scraped page looks complete or truncated/paywalled/blocked.
 
     Only called for assess_quality's "ambiguous" verdict — the confident "ok" and
     "fallback" cases never reach here, so this cheap Haiku call only fires on the
@@ -260,8 +254,7 @@ def judge_completeness_llm(config: Config, url: str, markdown: str) -> bool:
 
 
 def _safe_domain(url_or_domain: str) -> str:
-    """
-    Extract a filesystem-safe domain string from a URL or bare domain, for use
+    """Extract a filesystem-safe domain string from a URL or bare domain, for use
     as a `profiles_dir` subdirectory name (`profiles_dir / domain`).
 
     Deliberate defense-in-depth, not incidental: a hostname of ".." would make
@@ -293,8 +286,7 @@ def _safe_domain(url_or_domain: str) -> str:
 
 
 async def _reject_private_requests(route: Any, request: Any) -> None:
-    """
-    Playwright route handler: abort any request whose host is private/loopback/
+    """Playwright route handler: abort any request whose host is private/loopback/
     link-local/reserved; otherwise let it continue.
 
     Installed (via _install_ssrf_guard below) on every request Chromium makes
@@ -328,8 +320,7 @@ async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
 
 
 class Crawl4AIScraper:
-    """
-    Fallback scraper using Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
+    """Fallback scraper using Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
     open-source crawler with no API key. Used only when Firecrawl's result looks
     incomplete (see assess_quality / judge_completeness_llm).
 
@@ -359,11 +350,18 @@ class Crawl4AIScraper:
     """
 
     def __init__(self, profiles_dir: Path) -> None:
+        """Record where saved browser profiles live.
+
+        Args:
+            profiles_dir: Root holding one saved-session profile per domain,
+                matching `Config.crawl4ai_profiles_dir`. It is not created here:
+                `scrape()` only ever reads from it, and `create_profile` is what
+                populates it.
+        """
         self._profiles_dir = profiles_dir
 
     def scrape_batch(self, urls: list[str], profile_domain: str) -> dict[str, dict[str, str] | Exception]:
-        """
-        Scrape multiple URLs using ONE shared Crawl4AI browser session instead
+        """Scrape multiple URLs using ONE shared Crawl4AI browser session instead
         of launching a fresh Chromium per URL.
 
         Safe only when every URL in `urls` shares the same saved-profile
@@ -441,8 +439,7 @@ class Crawl4AIScraper:
         return _run_async(_scrape_all())  # type: ignore[no-any-return]
 
     def scrape(self, url: str) -> dict[str, str]:
-        """
-        Scrape a single URL with Crawl4AI.
+        """Scrape a single URL with Crawl4AI.
 
         A 1-URL call to scrape_batch() -- see that method's docstring for the
         full behavior (browser lifecycle, SSRF guard, profile resolution).
@@ -470,8 +467,7 @@ class Crawl4AIScraper:
 
 
 def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
-    """
-    Interactively log into a site once; save the session for Crawl4AIScraper
+    """Interactively log into a site once; save the session for Crawl4AIScraper
     to reuse on future scrapes of that domain.
 
     Opens a real (non-headless) browser via Crawl4AI's BrowserProfiler — the
@@ -519,8 +515,7 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
 
 
 def _main(argv: list[str] | None = None) -> None:
-    """
-    CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
+    """CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
 
     Reads Config.crawl4ai_profiles_dir from the environment (same .env-driven
     Config.from_env() used everywhere else in this package) and delegates to

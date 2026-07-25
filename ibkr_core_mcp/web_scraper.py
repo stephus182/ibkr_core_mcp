@@ -1,5 +1,4 @@
-"""
-Web scraping tools for ClaudIA — Firecrawl primary + Crawl4AI fallback.
+"""Web scraping tools for ClaudIA — Firecrawl primary + Crawl4AI fallback.
 
 Primary layer: Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
 Fallback layer: Crawl4AI (Playwright-based, open-source) — defined in
@@ -66,8 +65,7 @@ _FIRECRAWL_MAX_NEXT_CHUNKS = 50
 
 
 def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Response:
-    """
-    Call fn() (a zero-arg thunk wrapping a single requests.post/get call), retrying
+    """Call fn() (a zero-arg thunk wrapping a single requests.post/get call), retrying
     on Firecrawl's documented retryable statuses with exponential backoff + jitter,
     honoring the Retry-After header when present. See the module-level comment above
     _FIRECRAWL_RETRYABLE_STATUSES for the source citation.
@@ -95,8 +93,7 @@ def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Respo
 
 
 class FirecrawlError(Exception):
-    """
-    Raised when the Firecrawl REST API returns an error response or a crawl job fails.
+    """Raised when the Firecrawl REST API returns an error response or a crawl job fails.
 
     Attributes:
         message: Human-readable description of the failure.
@@ -105,13 +102,20 @@ class FirecrawlError(Exception):
     """
 
     def __init__(self, message: str, status_code: int | None = None) -> None:
+        """Record the message and, when one was received, the HTTP status.
+
+        Args:
+            message: Human-readable description of the failure.
+            status_code: HTTP status from Firecrawl, or None when the request
+                failed before any response arrived (e.g. a network timeout) —
+                which is why this is None rather than 0.
+        """
         super().__init__(message)
         self.status_code = status_code
 
 
 class WebDocsStoreError(Exception):
-    """
-    Raised when a Drive write operation in WebDocsStore fails.
+    """Raised when a Drive write operation in WebDocsStore fails.
 
     The original Google API exception is always chained as __cause__ so callers
     can inspect it if needed. ClaudeToolkit handlers catch this and return an error
@@ -120,8 +124,7 @@ class WebDocsStoreError(Exception):
 
 
 def _slugify(url: str) -> str:
-    """
-    Convert a URL into a safe Drive filename stem (no extension).
+    """Convert a URL into a safe Drive filename stem (no extension).
 
     Transformation steps:
       1. Strip scheme (http://, https://)
@@ -149,8 +152,7 @@ def _slugify(url: str) -> str:
 
 
 class FirecrawlClient:
-    """
-    Thin wrapper around the Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
+    """Thin wrapper around the Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
 
     Authentication is via Bearer token in the Authorization header. All requests
     use a 30-second timeout via the `requests` library (already a dependency of
@@ -169,6 +171,15 @@ class FirecrawlClient:
     BASE_URL = "https://api.firecrawl.dev/v1"
 
     def __init__(self, api_key: str) -> None:
+        """Store the API key and build the Bearer auth headers.
+
+        Args:
+            api_key: Firecrawl API key (`fc-…`).
+
+        Raises:
+            ValueError: If `api_key` is empty. Checked here so a missing key
+                surfaces at construction rather than as a confusing 401 later.
+        """
         if not api_key:
             raise ValueError("api_key must be non-empty")
         self._api_key = api_key
@@ -188,8 +199,7 @@ class FirecrawlClient:
         resp.raise_for_status()
 
     def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """
-        Search the web and return full page content as markdown for each result.
+        """Search the web and return full page content as markdown for each result.
 
         Calls POST /v1/search with scrapeOptions.formats=["markdown"] so that
         each result includes extracted markdown rather than raw HTML.
@@ -247,8 +257,7 @@ class FirecrawlClient:
         max_pages: int = 50,
         timeout_s: int = 120,
     ) -> list[dict[str, Any]]:
-        """
-        Crawl a site starting from url and return all pages as markdown.
+        """Crawl a site starting from url and return all pages as markdown.
 
         Firecrawl crawls are asynchronous. This method:
           1. Starts the job with POST /v1/crawl
@@ -407,8 +416,7 @@ class FirecrawlClient:
 
 
 class WebDocsStore:
-    """
-    Persist Firecrawl crawl and search results to Google Drive under a 'web_docs/'
+    """Persist Firecrawl crawl and search results to Google Drive under a 'web_docs/'
     subfolder, using the same Drive credentials already in use by GDriveCache.
 
     Drive folder layout (auto-created on first use):
@@ -431,6 +439,15 @@ class WebDocsStore:
     _SCOPES = ["https://www.googleapis.com/auth/drive"]
 
     def __init__(self, config: Config) -> None:
+        """Prepare the store without contacting Drive.
+
+        The Drive service is built lazily on first use, so construction performs
+        no OAuth and no network I/O.
+
+        Args:
+            config: Supplies `gdrive_web_docs_folder_id` and the credential/token
+                paths used by the OAuth flow.
+        """
         self._cfg = config
         self._svc: Any = None
 
@@ -493,8 +510,7 @@ class WebDocsStore:
         return self._find_or_create_folder("web_docs", self._cfg.gdrive_folder_id)
 
     def get_cached_crawl(self, url: str, max_age_hours: float = 48.0) -> dict[str, Any] | None:
-        """
-        Return the existing Drive manifest for `url` (from a prior save_crawl call)
+        """Return the existing Drive manifest for `url` (from a prior save_crawl call)
         if one exists and is younger than max_age_hours, else None.
 
         Lets callers skip an entire Firecrawl API call when a recent crawl is
@@ -562,8 +578,7 @@ class WebDocsStore:
         return manifest
 
     def save_crawl(self, url: str, pages: list[dict[str, str]]) -> dict[str, Any]:
-        """
-        Save crawl results to Drive under web_docs/{url-slug}/.
+        """Save crawl results to Drive under web_docs/{url-slug}/.
 
         Each page is uploaded as a .md file. If a file with the same name already
         exists, it is overwritten via Drive's Files.update method. Pages with empty
@@ -653,8 +668,7 @@ class WebDocsStore:
         return manifest
 
     def save_search(self, query: str, results: list[dict[str, str]]) -> str:
-        """
-        Save a search result snapshot to Drive under web_docs/searches/.
+        """Save a search result snapshot to Drive under web_docs/searches/.
 
         Produces a single markdown file named {YYYYMMDDTHHMMSSz}-{query-slug}.md,
         containing the query and all result titles, URLs, and markdown bodies.

@@ -307,6 +307,11 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
 
 
 def main() -> None:
+    """Console-script entry point for the MCP server.
+
+    Parses `--transport` (stdio or sse), `--port`, and `--stream`, builds the
+    toolkit from environment configuration, and serves until interrupted.
+    """
     parser = argparse.ArgumentParser(description="ibkr-core-mcp MCP server")
     parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
     parser.add_argument("--port", type=int, default=5174, help="Port for SSE transport")

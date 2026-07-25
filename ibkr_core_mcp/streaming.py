@@ -1,3 +1,21 @@
+"""IBKRWebSocket and AlertManager — live push data from the gateway.
+
+Subscribes to the gateway's WebSocket for streaming quotes (`smd`), live order
+updates (`str`), and P&L (`spl`), so consumers are pushed changes instead of
+polling REST endpoints and burning pacing budget.
+
+Quote payloads arrive as numeric IBKR field codes; `_FIELD_MAP` translates the
+subset used here (31 last, 84 bid, 86 ask, 87 volume, 55 symbol, 70 high, 71 low)
+into readable names. `_parse_message` is kept pure so the parsing logic is unit
+testable without a live socket — only the I/O methods need a gateway.
+
+`AlertManager` layers price-threshold alerts over the quote stream. These are
+notifications only and never place orders, which is why they carry none of the
+order-write security gates.
+
+https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/introduction
+"""
+
 from __future__ import annotations
 
 import json
@@ -117,6 +135,16 @@ class IBKRWebSocket:
     """
 
     def __init__(self, gateway_url: str, session_cookie: str) -> None:
+        """Derive the WebSocket URL from a REST gateway URL.
+
+        Args:
+            gateway_url: The REST base URL. A trailing `/v1/api` is stripped
+                before the WebSocket path is appended, because callers usually
+                pass `config.gateway_url`, which already carries that prefix —
+                without this the path would be doubled.
+            session_cookie: Authenticated session cookie. Held in memory only and
+                never logged.
+        """
         base = gateway_url.rstrip("/")
         if base.endswith("/v1/api"):
             # Callers commonly pass config.gateway_url, which already carries
@@ -127,6 +155,11 @@ class IBKRWebSocket:
         self._ws: Any = None
 
     async def connect(self) -> None:
+        """Open the WebSocket and authenticate it with the session cookie.
+
+        Raises:
+            ModuleNotFoundError: If `websockets` is not installed.
+        """
         try:
             import websockets  # base dependency — imported lazily to keep import-time cost out of the hot path
         except ModuleNotFoundError as exc:
@@ -203,6 +236,15 @@ class IBKRWebSocket:
             await self._ws.send("upl")
 
     async def listen(self) -> AsyncGenerator[LiveQuote | TradeExecution | PnLUpdate, None]:
+        """Yield parsed messages until the socket closes.
+
+        Unparseable frames are skipped rather than raised, so one malformed
+        message cannot kill a long-lived stream. Frames carrying several records
+        are flattened, so consumers always receive one object at a time.
+
+        Raises:
+            RuntimeError: If called before `connect()`.
+        """
         if self._ws is None:
             raise RuntimeError("Call connect() first")
         async for raw in self._ws:
@@ -216,6 +258,7 @@ class IBKRWebSocket:
                 yield parsed
 
     async def disconnect(self) -> None:
+        """Close the socket if open. Safe to call more than once."""
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
@@ -347,6 +390,12 @@ class AlertManager:
     """Check live quotes against active price alerts; mark triggered ones in SQLite."""
 
     def __init__(self, store: SQLiteStore) -> None:
+        """Bind the alert manager to the store holding alert definitions.
+
+        Args:
+            store: SQLite store read for active alerts and written to when one
+                triggers, so a trigger survives a restart and cannot re-fire.
+        """
         self._store = store
 
     def check_quote(self, quote: LiveQuote) -> list[dict[str, Any]]:

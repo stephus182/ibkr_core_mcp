@@ -1,5 +1,4 @@
-"""
-IBKR Client Portal Gateway manager.
+"""IBKR Client Portal Gateway manager.
 
 Builds and runs the official IBKR gateway as a Docker container, then guides
 the user through browser login + 2FA before the session can be used by
@@ -11,7 +10,7 @@ Quick start (CLI)::
     gm = GatewayManager()
     gm.startup()          # interactive: starts container, opens browser, waits for auth
 
-Programmatic (non-interactive, e.g. Chainlit)::
+Programmatic (non-interactive, e.g. from a web UI such as ClaudIA)::
 
     gm = GatewayManager()
     gm.start()                    # build image + run container
@@ -51,6 +50,14 @@ class GatewayManager:
     DEFAULT_PORT = 5055
 
     def __init__(self, port: int = DEFAULT_PORT) -> None:
+        """Derive the gateway's base and REST URLs from the host port.
+
+        Args:
+            port: Host port to publish the container on. Must match the port in
+                the bundled `conf.yaml`; the gateway is always reached over
+                `https://localhost` because the browser used to authenticate has
+                to run on the same machine.
+        """
         self._port = port
         self._base_url = f"https://localhost:{port}"
         self._api_url = f"{self._base_url}/v1/api"

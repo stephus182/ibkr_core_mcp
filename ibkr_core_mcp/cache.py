@@ -1,3 +1,17 @@
+"""Google Drive-backed parquet cache for OHLCV market data.
+
+Market bars are expensive to fetch (IBKR pacing limits) and identical across
+machines, so they are cached as parquet files in a shared Drive folder rather than
+locally. Any machine authenticated to the same folder gets the same cache, which is
+what lets a laptop and a server avoid re-fetching each other's bars.
+
+A JSON manifest tracks what is cached so a lookup does not require listing Drive.
+Cache keys are (symbol, bar size, period, end date); a miss falls through to the
+caller, which fetches from IBKR and writes back.
+
+Drive REST v3 reference: https://developers.google.com/drive/api/reference/rest/v3
+"""
+
 from __future__ import annotations
 
 import io
@@ -61,6 +75,16 @@ class GDriveCache:
     """
 
     def __init__(self, config: Config) -> None:
+        """Prepare the cache without contacting Drive.
+
+        The Drive service, the manifest, and both folder IDs are resolved lazily on
+        first use, so constructing a `GDriveCache` never triggers OAuth or network
+        I/O — important because callers build one during start-up regardless of
+        whether they end up touching the cache.
+
+        Args:
+            config: Supplies folder IDs and credential/token paths.
+        """
         self._config = config
         self._service: Any = None
         self._manifest: dict[str, Any] = {}

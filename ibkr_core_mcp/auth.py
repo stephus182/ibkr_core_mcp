@@ -1,3 +1,20 @@
+"""Authentication strategies for the IBKR Client Portal gateway.
+
+Three interchangeable implementations of the `AuthStrategy` protocol:
+
+- `BrowserCookieAuth` (default) reads the gateway session cookie out of a local
+  browser's cookie store. The gateway must therefore run on the *same machine* as
+  the browser used to log in — there is no cloud-deployable variant.
+- `TokenAuth` supplies a pre-obtained session token, for headless/batch callers
+  that manage the session themselves.
+- `NoAuth` sends nothing, for tests and for gateways fronted by another layer.
+
+Cookie values are sanitised before use: per RFC 6265 §4.1.1 a cookie-octet may not
+contain control characters, so CR/LF are stripped to prevent header injection.
+
+See `docs/gateway-auth-reference.md` for the full login walkthrough.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -25,14 +42,16 @@ def _sanitize_cookie_token(value: str) -> str:
 class AuthStrategy(Protocol):
     """Protocol for IBKR Client Portal authentication strategies."""
 
-    def apply(self, session: requests.Session) -> None: ...
+    def apply(self, session: requests.Session) -> None:
+        """Mutate `session` in place so subsequent requests carry credentials."""
+        ...
 
 
 class NoAuth:
     """No-op strategy — for testing or pre-authenticated sessions."""
 
     def apply(self, session: requests.Session) -> None:
-        pass
+        """Leave the session untouched; credentials are supplied elsewhere."""
 
 
 class TokenAuth:
@@ -45,12 +64,19 @@ class TokenAuth:
     """
 
     def __init__(self, cookie_string: str) -> None:
+        """Store `cookie_string`, stripped and sanitised of CR/LF.
+
+        Args:
+            cookie_string: A raw `Cookie` header value obtained out of band.
+        """
         self._cookie_string = _sanitize_cookie_token(cookie_string.strip())
 
     def apply(self, session: requests.Session) -> None:
+        """Set the sanitised cookie as the session's `Cookie` header."""
         session.headers.update({"Cookie": self._cookie_string})
 
     def __repr__(self) -> str:
+        """Return a repr with the cookie redacted, so it is never logged."""
         return "TokenAuth(cookie_string='<redacted>')"
 
     __str__ = __repr__
@@ -74,11 +100,28 @@ class BrowserCookieAuth:
     """
 
     def __init__(self, browser: str = "chrome") -> None:
+        """Select which browser's cookie store to read.
+
+        Args:
+            browser: One of chrome, chromium, firefox, safari, edge.
+
+        Raises:
+            ValueError: If `browser` is not one of the supported names. Validated
+                here rather than at `apply()` time so a typo fails fast, and so the
+                name can never reach `getattr` on the browser_cookie3 module.
+        """
         if browser not in _ALLOWED_BROWSERS:
             raise ValueError(f"Unsupported browser {browser!r}. Allowed: {sorted(_ALLOWED_BROWSERS)}")
         self._browser = browser
 
     def apply(self, session: requests.Session) -> None:
+        """Copy localhost cookies from the browser into the session's Cookie header.
+
+        Builds the header by hand instead of populating the cookie jar: cookiejar
+        domain matching requires a dot-prefixed domain, which `localhost` never
+        satisfies, so requests would silently drop every cookie. A missing
+        browser_cookie3 is treated as headless and skipped rather than raising.
+        """
         try:
             import browser_cookie3
         except ImportError:

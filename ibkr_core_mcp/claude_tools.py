@@ -1,3 +1,23 @@
+"""ClaudeToolkit — the Anthropic tool layer over the rest of the package (42 tools).
+
+`TOOL_DEFINITIONS` holds the JSON schemas Claude sees; `ClaudeToolkit` holds the
+matching handlers and `execute()` dispatches between them. The pair is deliberately
+portable: `mcp_server.py` reuses both to expose the same capabilities over MCP
+(adding two alert tools, for 44), so a tool added here is available to both hosts.
+
+`execute()` returns `tuple[str, None]`. The second slot once carried a figure and
+was tightened when `plotly` was removed — this package returns data, never figures;
+rendering belongs to the consuming UI. See `docs/python-package-landscape.md`.
+
+This is also the only layer meant to talk to the Anthropic API from a host app, so
+that a host's token accounting sees every call. The single sanctioned exception is
+`scrape_fallback.judge_completeness_llm`.
+
+Adding a tool: see the checklist in `CLAUDE.md`. Use `_first_account_id()` /
+`_all_account_ids()` rather than inlining `get_accounts()` — they centralise the
+`"accountId"` / `"id"` key fallback.
+"""
+
 from __future__ import annotations
 
 import json
@@ -1025,6 +1045,16 @@ class ClaudeToolkit:
         store: SQLiteStore,
         config: Config,
     ) -> None:
+        """Wire the toolkit to its four collaborators.
+
+        Args:
+            client: IBKR Client Portal client. Order writes stay gated inside it.
+            cache: Drive parquet cache, consulted before any market-data fetch.
+            store: SQLite store for trades, signals, and backtest results.
+            config: Environment-derived configuration. Optional integrations
+                (Firecrawl, Crawl4AI) report "not configured" at call time when
+                their variables are absent, rather than failing construction.
+        """
         self._client = client
         self._cache = cache
         self._store = store
@@ -1039,17 +1069,21 @@ class ClaudeToolkit:
 
     @property
     def client(self) -> IBKRClient:
+        """The underlying IBKR client, for callers needing an ungated read."""
         return self._client
 
     @property
     def tools(self) -> list[dict[str, Any]]:
+        """The tool schemas to hand to Claude, in `TOOL_DEFINITIONS` order."""
         return TOOL_DEFINITIONS
 
     def execute(self, name: str, inputs: dict[str, Any]) -> tuple[str, None]:
         """Execute a tool call by name. Returns (text_result, None).
 
-        The second element is reserved for future plotly figure output and is
-        always None in this version.
+        The second element is always None. It once carried a plotly figure; that
+        dependency was removed as unused and the return type narrowed to match.
+        This package returns data, and the consuming UI renders it — see
+        `docs/python-package-landscape.md`.
         """
         handlers = {
             "fetch_market_data": self._fetch_market_data,
@@ -2621,8 +2655,7 @@ class ClaudeToolkit:
         return f"Deleted cache entry for {symbol} {timeframe} ({period}, end={end}).", None
 
     def _validate_public_url(self, url: str) -> str | None:
-        """
-        SSRF guard: return None if `url` is safe to fetch directly (http/https,
+        """SSRF guard: return None if `url` is safe to fetch directly (http/https,
         resolves to a public address), or a "Blocked: ..." message if not.
 
         Shared by every code path that can trigger a *local* fetch of an
@@ -2668,8 +2701,7 @@ class ClaudeToolkit:
         return None
 
     def _assess_fallback_need(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[bool, str, str]:
-        """
-        Decide whether `url` needs a Crawl4AI fallback fetch, without
+        """Decide whether `url` needs a Crawl4AI fallback fetch, without
         performing it -- the "decide" half of _scrape_with_fallback, split out
         so the crawl-path batch loop (_apply_crawl4ai_fallback_batch) can
         classify every page up front before opening a single shared browser.
@@ -2727,8 +2759,7 @@ class ClaudeToolkit:
     def _finalize_fallback_result(
         self, url: str, original_markdown: str, outcome: dict[str, str] | Exception
     ) -> tuple[str, str, bool]:
-        """
-        Turn a Crawl4AI fetch outcome into (final_markdown, note, used_fallback)
+        """Turn a Crawl4AI fetch outcome into (final_markdown, note, used_fallback)
         -- the "after the fetch" half of _scrape_with_fallback, split out so
         both the single-URL path (_scrape_with_fallback) and the batch path
         (_apply_crawl4ai_fallback_batch, via Crawl4AIScraper.scrape_batch) can
@@ -2784,8 +2815,7 @@ class ClaudeToolkit:
         return fallback_markdown, note, True
 
     def _scrape_with_fallback(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[str, str, bool]:
-        """
-        Return (final_markdown, note, used_fallback) for a single Firecrawl
+        """Return (final_markdown, note, used_fallback) for a single Firecrawl
         result/page, falling back to Crawl4AI when Firecrawl's content looks
         incomplete (blocked, empty, or paywalled).
 
@@ -2821,8 +2851,7 @@ class ClaudeToolkit:
         return self._finalize_fallback_result(url, markdown, result)
 
     def _apply_crawl4ai_fallback_batch(self, root_url: str, pages: list[dict[str, Any]]) -> int:
-        """
-        Apply Crawl4AI fallback to every page in `pages` that needs it,
+        """Apply Crawl4AI fallback to every page in `pages` that needs it,
         mutating each page's "markdown" key in place. Used only by
         _handle_firecrawl_crawl.
 
@@ -2885,8 +2914,7 @@ class ClaudeToolkit:
         return fallback_count
 
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """
-        Handle the firecrawl_search tool.
+        """Handle the firecrawl_search tool.
 
         Lazily initializes FirecrawlClient on first call. Returns a no-key message
         if FIRECRAWL_API_KEY is not configured. Optionally saves a Drive snapshot.
@@ -2958,8 +2986,7 @@ class ClaudeToolkit:
         return "\n".join(lines) + drive_note, None
 
     def _handle_firecrawl_crawl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """
-        Handle the firecrawl_crawl tool.
+        """Handle the firecrawl_crawl tool.
 
         Validates the URL with an SSRF guard before passing to Firecrawl. Lazily
         initializes FirecrawlClient and WebDocsStore on first call. Always saves

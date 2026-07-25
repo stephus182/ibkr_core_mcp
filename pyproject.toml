@@ -158,7 +158,7 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "S", "B"]
+select = ["E", "F", "W", "I", "UP", "S", "B", "D"]
 ignore = [
     "E501",   # line too long — string literals, test fixtures, and tool descriptions exceed 120 chars
     "S101",   # assert — used in tests
@@ -168,7 +168,36 @@ ignore = [
     "S501",   # verify=False — intentional, IBKR gateway uses a self-signed localhost cert (documented in SECURITY.md)
     "S607",   # partial executable path — docker/open are standard OS tools; full paths would be OS-specific
     "S110",   # try-except-pass — intentional in optional store saves and tkinter after_cancel guard
+
+    # pydocstyle: "D" is enabled for the D1xx *coverage* rules. Those are the ones worth
+    # enforcing — the 2026-07-25 docs pass found 39 undocumented public definitions,
+    # including IBKRClient.__init__ (which pins TLS-verify-off to localhost) and the
+    # FirecrawlClient constructor, and nothing in CI could see them. This mirrors the
+    # configuration adopted in claudia_ui on the same date, so both repos enforce one rule.
+    #
+    # The codes below are formatting opinions that conflict with this codebase's house
+    # style: multi-paragraph docstrings that explain *why*, cite source URLs, and open with
+    # a full-sentence summary. Enforcing them would be pure churn across docstrings whose
+    # content is already correct.
+    "D203",   # incompatible with D211 (ruff warns and drops it anyway)
+    "D205",   # blank line required between summary and description
+    "D209",   # multi-line closing quotes on their own line
+    "D213",   # summary on the second line — the inverse of D212 and of the house style
+              # here, which opens on the first line (346 docstrings vs 36); ruff warns if
+              # both are selected, so exactly one must be ignored
+    "D301",   # backslash in docstring requires a raw string
+    "D400",   # summary must end with a period
+    "D401",   # summary must be in imperative mood
+    "D413",   # blank line required after the last section
+    "D415",   # summary must end with punctuation
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S106", "S108", "S603", "S607"]
+# Docstring coverage is enforced on the package, not the suite: test names are the
+# documentation there, and this codebase's tests carry no signature annotations by
+# established convention (see the mypy tests.* override above for the same rationale).
+"tests/*" = ["S101", "S106", "S108", "S603", "S607", "D"]
+# One-off audit/evidence scripts, committed verbatim as run (timing decomposition, tool-token
+# counts, dependency graph, worked metric examples). They are records of a past analysis, not
+# maintained library code, so docstring coverage is not enforced on them. Every other rule is.
+"scripts/audit/*" = ["D"]

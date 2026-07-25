@@ -1,3 +1,17 @@
+"""Gate 2 of the order-write security model: visual order confirmation.
+
+After Touch ID (Gate 1, `human_auth.py`) succeeds, the user is shown a modal dialog
+carrying the full order details and a live-order disclaimer, and must click to
+confirm. The Enter key deliberately does not confirm — the gate exists to defeat
+reflexive acceptance, so it requires a pointed, explicit action. Any cancellation
+or timeout raises `HumanAuthError` and the IBKR endpoint is never contacted.
+
+Three backends, tried in order: an AppKit `NSAlert` run in a subprocess (colour-coded
+by side; see `_order_dialog.py` for why it must be a subprocess), a tkinter modal,
+and an AppleScript `display dialog` fallback. A host with none of them available
+fails closed rather than proceeding unconfirmed.
+"""
+
 from __future__ import annotations
 
 import contextlib
@@ -172,7 +186,8 @@ def _show_appkit_dialog(title: str, details: dict[str, Any], disclaimer: str, co
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
     The subprocess gets its own main thread so NSApplication can run without
-    conflicting with the Chainlit asyncio event loop.
+    conflicting with the host application's asyncio event loop (e.g. the
+    Panel/Bokeh Tornado loop in ClaudIA).
     Green banner for BUY, red banner for SELL.
 
     Raises HumanAuthError if user cancels/times out.
@@ -256,7 +271,7 @@ def _as_str(text: str) -> str:
 
 
 def _show_tkinter_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
-    """tkinter fallback dialog for non-macOS environments.
+    """Fallback tkinter dialog for non-macOS environments.
 
     Must be called from the main thread. Auto-cancels after _DIALOG_TIMEOUT_S seconds.
 
