@@ -94,7 +94,9 @@ def test_firecrawl_search_returns_formatted_results(mock_fc_cls):
     result, fig = toolkit.execute("firecrawl_search", {"query": "IBKR API", "limit": 3})
     assert "## Search results for: IBKR API" in result
     assert fig is None
-    mock_fc.search.assert_called_once_with("IBKR API", limit=3)
+    # Overrides default to None, which _scrape_options omits — so the request body
+    # Firecrawl actually receives is unchanged from before they existed.
+    mock_fc.search.assert_called_once_with("IBKR API", limit=3, wait_for_ms=None, proxy=None)
 
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
@@ -700,3 +702,18 @@ def test_firecrawl_search_preserves_result_order_under_concurrent_fallback(mock_
 # ============================================================================
 # _diagnose_orders
 # ============================================================================
+
+
+def test_firecrawl_search_forwards_wait_for_and_proxy_to_the_client():
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.search.return_value = []
+
+    toolkit.execute(
+        "firecrawl_search",
+        {"query": "ibkr api", "wait_for_ms": 3000, "proxy": "auto"},
+    )
+
+    kwargs = toolkit._firecrawl.search.call_args[1]
+    assert kwargs["wait_for_ms"] == 3000
+    assert kwargs["proxy"] == "auto"

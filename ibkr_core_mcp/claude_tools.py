@@ -862,6 +862,24 @@ TOOL_DEFINITIONS = [
                     "description": "If true, save a markdown snapshot to Drive (default false)",
                     "default": False,
                 },
+                "wait_for_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Advanced override: milliseconds to wait for JavaScript rendering "
+                        "before extracting. Usually unnecessary — a crawl that comes back "
+                        "empty is retried automatically with 3000."
+                    ),
+                },
+                "proxy": {
+                    "type": "string",
+                    "enum": ["basic", "enhanced", "auto"],
+                    "description": (
+                        "Advanced override: Firecrawl proxy mode. 'basic' costs 1 credit, "
+                        "'enhanced' up to 5, 'auto' retries with enhanced only if basic "
+                        "fails. Usually unnecessary — a crawl that comes back empty is "
+                        "retried automatically with 'auto'."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -889,8 +907,11 @@ TOOL_DEFINITIONS = [
                 },
                 "timeout_s": {
                     "type": "integer",
-                    "description": "Max seconds to wait for crawl to complete (default 120)",
-                    "default": 120,
+                    "description": (
+                        "Max seconds to wait per attempt. Default scales with max_pages "
+                        "(6s per page, clamped to 120-600s). A blocked site runs two "
+                        "attempts, so worst-case wall clock is roughly double this."
+                    ),
                 },
                 "force_refresh": {
                     "type": "boolean",
@@ -900,6 +921,24 @@ TOOL_DEFINITIONS = [
                         "Firecrawl requests if one is less than 48h old)"
                     ),
                     "default": False,
+                },
+                "wait_for_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Advanced override: milliseconds to wait for JavaScript rendering "
+                        "before extracting. Usually unnecessary — a crawl that comes back "
+                        "empty is retried automatically with 3000."
+                    ),
+                },
+                "proxy": {
+                    "type": "string",
+                    "enum": ["basic", "enhanced", "auto"],
+                    "description": (
+                        "Advanced override: Firecrawl proxy mode. 'basic' costs 1 credit, "
+                        "'enhanced' up to 5, 'auto' retries with enhanced only if basic "
+                        "fails. Usually unnecessary — a crawl that comes back empty is "
+                        "retried automatically with 'auto'."
+                    ),
                 },
             },
             "required": ["url"],
@@ -2935,12 +2974,15 @@ class ClaudeToolkit:
         query = inputs.get("query", "").strip()
         limit = int(inputs.get("limit", 5))
         save_to_drive = bool(inputs.get("save_to_drive", False))
+        wait_for_raw = inputs.get("wait_for_ms")
+        wait_for_ms = int(wait_for_raw) if wait_for_raw is not None else None
+        proxy = inputs.get("proxy") or None
 
         if not query:
             return "query must be non-empty.", None
 
         try:
-            results = self._firecrawl.search(query, limit=limit)
+            results = self._firecrawl.search(query, limit=limit, wait_for_ms=wait_for_ms, proxy=proxy)
         except FirecrawlError as exc:
             return f"Firecrawl search failed (HTTP {exc.status_code}): {exc}", None
 
