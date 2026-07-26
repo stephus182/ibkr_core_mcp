@@ -1,3 +1,14 @@
+"""SQLite persistence for trades, signals, positions, and backtest results.
+
+The durable local record of what actually happened, as distinct from `cache.py`,
+which holds re-fetchable market data. Flex import manifests live here too, so a
+historical trade sync can be verified after the fact.
+
+Also memoises market-calendar context per (date, exchanges) in a process-level
+dict: the exchange_calendars lookup is pure for a given trading date, so it is
+recomputed only when the date rolls over.
+"""
+
 from __future__ import annotations
 
 import json
@@ -95,6 +106,15 @@ class SQLiteStore:
     """
 
     def __init__(self, config: Config) -> None:
+        """Resolve the database path and ensure its parent directory exists.
+
+        Creating the directory here (rather than at first query) means a fresh
+        checkout with a default `~/.ibkr_core/` path works without manual setup.
+        The database file and schema are created by `initialize()`.
+
+        Args:
+            config: Supplies `sqlite_path`.
+        """
         self._db_path = str(config.sqlite_path)
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
 

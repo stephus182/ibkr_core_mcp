@@ -1,3 +1,14 @@
+"""Exception hierarchy for ibkr_core_mcp.
+
+Every error raised by this package derives from `IBKRCoreError`, so a caller can
+catch the whole surface with one `except` and still discriminate on the subclass
+when it needs to. The split exists because the recovery differs per class:
+`IBKRAuthError` means re-authenticate, `IBKRRateLimitError` means back off,
+`HumanAuthError` means a security gate was declined and must not be retried
+automatically, and `ConfigError` means the caller's environment is wrong.
+"""
+
+
 class IBKRCoreError(Exception):
     """Base exception for all ibkr_core_mcp errors."""
 
@@ -14,6 +25,13 @@ class IBKRAPIError(IBKRCoreError):
     """Non-auth HTTP error from the IBKR gateway."""
 
     def __init__(self, message: str, status_code: int = 0) -> None:
+        """Record the message and the originating HTTP status.
+
+        Args:
+            message: Human-readable description of the failure.
+            status_code: HTTP status from the gateway; 0 when unknown, so callers
+                can branch on the code without it ever being None.
+        """
         super().__init__(message)
         self.status_code = status_code
 

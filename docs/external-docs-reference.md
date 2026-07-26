@@ -1,11 +1,33 @@
 # Official Documentation URLs — All External APIs
 
+> **IBKR relocated their Web API documentation (found 2026-07-25).** Every link below is
+> already repointed. The old base — `interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/`,
+> a single ~800 KB page — is now a Fern-hosted site at `interactivebrokers.com/docs/web-api/`.
+>
+> **The old URLs still return HTTP 200.** They redirect to the new Introduction page and drop
+> the `#anchor` en route, so a stale deep link looks healthy to a link checker while sending
+> the reader to the wrong page. Treat any surviving `cpapi-v1/#…` reference as broken
+> regardless of its status code.
+>
+> Fastest ways to verify a claim against the new site:
+>
+> | Method | URL |
+> |---|---|
+> | Clean markdown of any page | append `.md` to the page URL |
+> | Full documentation index (517 pages) | https://www.interactivebrokers.com/docs/web-api/llms.txt |
+> | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server |
+>
+> `FirecrawlClient.crawl()` returns 0 pages on `interactivebrokers.com` — the host needs
+> Firecrawl's `waitFor`/`proxy` options, which the client does not expose, and it fails
+> silently rather than signalling the block. Use the `.md` / `llms.txt` routes instead.
+
 **IBKR Client Portal API** (`client.py`, `rate_limiter.py`, `claude_tools.py`)
 
 | Topic | URL |
 |---|---|
-| **Client Portal API reference** (all CP endpoints — cited per-endpoint throughout `client.py`, see `docs/api-reference.md`) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
-| **Web API changelog** (field/behavior changes, e.g. Dec 2025 snapshot fields, May 2025 FUT/FOP `manualIndicator`/`extOperator` requirement) | https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/ |
+| **Client Portal API reference** (all CP endpoints — cited per-endpoint throughout `client.py`, see `docs/api-reference.md`) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction |
+| **Pacing limitations** (global 10 req/s + the per-endpoint table; backs `rate_limiter.py`) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/pacing-limitations |
+| **Web API changelog** (field/behavior changes, e.g. Dec 2025 snapshot fields, May 2025 FUT/FOP `manualIndicator`/`extOperator` requirement) | https://www.interactivebrokers.com/docs/web-api/changelog |
 | **Orders / modify / cancel** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
 | **GTC order lifecycle** (quarter-end auto-cancel behavior) | https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/ |
 | **IBKR Campus** (general) | https://www.interactivebrokers.com/campus/ibkr-api-page/ |
@@ -37,9 +59,9 @@ note in `client.py`), not re-presented as independently sourced from the glossar
 
 | Topic | URL |
 |---|---|
-| **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
-| **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-trades-sub |
-| **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-pnl-sub |
+| **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/introduction |
+| **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/order-position-operations/request-trades-data |
+| **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/order-position-operations/request-profit-loss |
 
 **Google Drive API v3** (`cache.py`)
 

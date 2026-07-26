@@ -1,3 +1,20 @@
+"""Gate 1 of the order-write security model: Touch ID / Face ID.
+
+`require_touch_id()` blocks on Apple's LocalAuthentication framework and raises
+`HumanAuthError` on any failure, denial, cancellation, or timeout (60s). It is
+called by `IBKRClient`'s order write methods before Gate 2 (the visual confirmation
+dialog in `order_confirm.py`) and before any request reaches IBKR.
+
+The policy is `LAPolicyDeviceOwnerAuthentication`: biometrics first, falling back
+to the device password if the biometric read genuinely fails. That fallback is
+Apple's own recovery path, not a bypass added here — the stricter biometrics-only
+policy was evaluated and rejected because a failed scan under it leaves the user no
+recovery at all. There is deliberately no bypass flag and no caching of a prior
+success; every gated call re-authenticates. Do not add one.
+
+https://developer.apple.com/documentation/localauthentication/lapolicy
+"""
+
 from __future__ import annotations
 
 import threading

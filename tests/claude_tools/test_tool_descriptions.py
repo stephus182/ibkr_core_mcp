@@ -64,3 +64,17 @@ def test_no_tool_claims_execution_capability(toolkit):
             assert not re.search(rf"\b{re.escape(verb)}\b", description), (
                 f"{tool['name']!r} description contains {verb!r}: {tool['description']!r}"
             )
+
+
+def test_scraper_tools_expose_wait_for_and_proxy(toolkit):
+    for name in ("firecrawl_search", "firecrawl_crawl"):
+        tool = next(t for t in toolkit.tools if t["name"] == name)
+        schema = tool["input_schema"]
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+        assert "wait_for_ms" in props
+        assert "proxy" in props
+        assert props["proxy"]["enum"] == ["basic", "enhanced", "auto"]
+        assert name not in required
+        assert "wait_for_ms" not in required
+        assert "proxy" not in required

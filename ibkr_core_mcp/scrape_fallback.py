@@ -1,5 +1,4 @@
-"""
-Firecrawl → Crawl4AI fallback for ibkr_core_mcp's web scraping tools.
+"""Firecrawl → Crawl4AI fallback for ibkr_core_mcp's web scraping tools.
 
 Firecrawl (web_scraper.py) is the default scraper. This module decides when its
 result looks incomplete (blocked, empty, or paywalled) and, when so, falls back
@@ -28,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import threading
+import time
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -64,8 +64,7 @@ _PAYWALL_MARKERS = (
 
 
 def is_private_host(host: str) -> bool:
-    """
-    True if `host` (a hostname or IP literal, already lowercased by the caller)
+    """True if `host` (a hostname or IP literal, already lowercased by the caller)
     is localhost, link-local, or resolves — as a literal or via DNS — to a
     private/loopback/reserved IP address.
 
@@ -126,8 +125,7 @@ def is_private_host(host: str) -> bool:
 
 
 class Crawl4AIUnavailableError(Exception):
-    """
-    Raised when the optional `crawl4ai` dependency is not installed.
+    """Raised when the optional `crawl4ai` dependency is not installed.
 
     ClaudeToolkit catches this and returns a message to the LLM pointing at the
     install command, rather than letting the ImportError propagate.
@@ -142,8 +140,7 @@ class Crawl4AIUnavailableError(Exception):
 
 
 def _run_async(coro: Coroutine[Any, Any, Any]) -> Any:
-    """
-    Run an async coroutine from sync code, regardless of whether the calling
+    """Run an async coroutine from sync code, regardless of whether the calling
     thread already has a running event loop.
 
     ClaudeToolkit.execute() is invoked synchronously from inside mcp_server.py's
@@ -183,8 +180,7 @@ def _run_async(coro: Coroutine[Any, Any, Any]) -> Any:
 
 
 def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> Quality:
-    """
-    Classify a Firecrawl markdown result as "ok", "ambiguous", or "fallback".
+    """Classify a Firecrawl markdown result as "ok", "ambiguous", or "fallback".
 
     "fallback" (skip the LLM judge, go straight to Crawl4AI):
       - metadata reports an HTTP error status (>= 400) or an "error" value
@@ -223,8 +219,7 @@ def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> 
 
 
 def judge_completeness_llm(config: Config, url: str, markdown: str) -> bool:
-    """
-    Ask Claude whether a scraped page looks complete or truncated/paywalled/blocked.
+    """Ask Claude whether a scraped page looks complete or truncated/paywalled/blocked.
 
     Only called for assess_quality's "ambiguous" verdict — the confident "ok" and
     "fallback" cases never reach here, so this cheap Haiku call only fires on the
@@ -260,8 +255,7 @@ def judge_completeness_llm(config: Config, url: str, markdown: str) -> bool:
 
 
 def _safe_domain(url_or_domain: str) -> str:
-    """
-    Extract a filesystem-safe domain string from a URL or bare domain, for use
+    """Extract a filesystem-safe domain string from a URL or bare domain, for use
     as a `profiles_dir` subdirectory name (`profiles_dir / domain`).
 
     Deliberate defense-in-depth, not incidental: a hostname of ".." would make
@@ -292,9 +286,51 @@ def _safe_domain(url_or_domain: str) -> str:
     return domain
 
 
-async def _reject_private_requests(route: Any, request: Any) -> None:
+def _resolve_profile_dir(profiles_dir: Path, url_or_domain: str) -> Path | None:
+    """Find the saved browser profile that applies to a URL, or None if there is none.
+
+    Lookup used to be exact-hostname only, which silently defeated the feature it was
+    built for: a profile created for "www.ft.com" was not found for a "ft.com" or
+    "markets.ft.com" article, so the scrape fell back to anonymous and returned the
+    paywall stub with nothing indicating the profile existed.
+
+    Candidates are tried most-specific first: the exact host, the host without a leading
+    "www.", then progressively broader parents while at least two labels remain. Matching
+    therefore only ever broadens *toward* the registrable domain, never toward a sibling
+    host — a profile for "ft.com" can serve "markets.ft.com", which is intended, and
+    cookie scoping still applies on top. Stopping at two labels means a directory named
+    after a bare TLD can never be matched.
+
+    Multi-part suffixes ("ft.co.uk") stop at "co.uk", which will simply never match a
+    saved profile. No public-suffix list is worth adding for that.
+
+    Args:
+        profiles_dir: Root holding one profile directory per domain
+            (Config.crawl4ai_profiles_dir).
+        url_or_domain: A URL or bare domain; only its hostname is used.
+
+    Returns:
+        The first matching profile directory, or None to scrape anonymously.
     """
-    Playwright route handler: abort any request whose host is private/loopback/
+    host = _safe_domain(url_or_domain)
+    candidates = [host]
+    if host.startswith("www."):
+        candidates.append(host[len("www.") :])
+    labels = host.split(".")
+    while len(labels) > 2:
+        labels = labels[1:]
+        candidate = ".".join(labels)
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        path = profiles_dir / candidate
+        if path.is_dir():
+            return path
+    return None
+
+
+async def _reject_private_requests(route: Any, request: Any) -> None:
+    """Playwright route handler: abort any request whose host is private/loopback/
     link-local/reserved; otherwise let it continue.
 
     Installed (via _install_ssrf_guard below) on every request Chromium makes
@@ -328,8 +364,7 @@ async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
 
 
 class Crawl4AIScraper:
-    """
-    Fallback scraper using Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
+    """Fallback scraper using Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
     open-source crawler with no API key. Used only when Firecrawl's result looks
     incomplete (see assess_quality / judge_completeness_llm).
 
@@ -359,11 +394,18 @@ class Crawl4AIScraper:
     """
 
     def __init__(self, profiles_dir: Path) -> None:
+        """Record where saved browser profiles live.
+
+        Args:
+            profiles_dir: Root holding one saved-session profile per domain,
+                matching `Config.crawl4ai_profiles_dir`. It is not created here:
+                `scrape()` only ever reads from it, and `create_profile` is what
+                populates it.
+        """
         self._profiles_dir = profiles_dir
 
     def scrape_batch(self, urls: list[str], profile_domain: str) -> dict[str, dict[str, str] | Exception]:
-        """
-        Scrape multiple URLs using ONE shared Crawl4AI browser session instead
+        """Scrape multiple URLs using ONE shared Crawl4AI browser session instead
         of launching a fresh Chromium per URL.
 
         Safe only when every URL in `urls` shares the same saved-profile
@@ -411,9 +453,8 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        domain = _safe_domain(profile_domain)
-        profile_dir = self._profiles_dir / domain
-        if profile_dir.is_dir():
+        profile_dir = _resolve_profile_dir(self._profiles_dir, profile_domain)
+        if profile_dir is not None:
             browser_config = BrowserConfig(
                 headless=True,
                 use_managed_browser=True,
@@ -441,8 +482,7 @@ class Crawl4AIScraper:
         return _run_async(_scrape_all())  # type: ignore[no-any-return]
 
     def scrape(self, url: str) -> dict[str, str]:
-        """
-        Scrape a single URL with Crawl4AI.
+        """Scrape a single URL with Crawl4AI.
 
         A 1-URL call to scrape_batch() -- see that method's docstring for the
         full behavior (browser lifecycle, SSRF guard, profile resolution).
@@ -470,8 +510,7 @@ class Crawl4AIScraper:
 
 
 def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
-    """
-    Interactively log into a site once; save the session for Crawl4AIScraper
+    """Interactively log into a site once; save the session for Crawl4AIScraper
     to reuse on future scrapes of that domain.
 
     Opens a real (non-headless) browser via Crawl4AI's BrowserProfiler — the
@@ -518,16 +557,40 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
     return dest
 
 
-def _main(argv: list[str] | None = None) -> None:
+def list_profiles(profiles_dir: Path) -> list[tuple[str, Path, float]]:
+    """Return every saved browser profile with its path and age in days.
+
+    Saved sessions expire, and until now expiry presented as a mysteriously truncated
+    article with no way to check what was saved or how old it was. Age is taken from the
+    directory's mtime, which create_profile sets when it copies the profile in.
+
+    Args:
+        profiles_dir: Root holding one profile directory per domain
+            (Config.crawl4ai_profiles_dir). A missing directory is not an error.
+
+    Returns:
+        (domain, path, age_days) tuples sorted by domain. Non-directory entries are
+        skipped. Empty list when nothing is saved.
     """
-    CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
+    if not profiles_dir.is_dir():
+        return []
+    now = time.time()
+    entries: list[tuple[str, Path, float]] = []
+    for child in sorted(profiles_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        entries.append((child.name, child, (now - child.stat().st_mtime) / 86400))
+    return entries
+
+
+def _main(argv: list[str] | None = None) -> None:
+    """CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
 
     Reads Config.crawl4ai_profiles_dir from the environment (same .env-driven
     Config.from_env() used everywhere else in this package) and delegates to
-    create_profile(). Only one subcommand exists today (`create-profile`);
-    the argparse subparser structure is kept so a second subcommand (e.g.
-    listing or deleting saved profiles) can be added without a breaking CLI
-    change.
+    create_profile(). Two subcommands exist: `create-profile` and `list-profiles`.
+    The argparse subparser structure is kept so a further subcommand (e.g.
+    deleting saved profiles) can be added without a breaking CLI change.
 
     Args:
         argv: Command-line arguments excluding the program name, e.g.
@@ -545,12 +608,24 @@ def _main(argv: list[str] | None = None) -> None:
         help="Interactively log into a paywalled site once; save the session for reuse.",
     )
     create_parser.add_argument("url_or_domain")
+    subparsers.add_parser(
+        "list-profiles",
+        help="List saved login profiles and how old each session is.",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "create-profile":
         config = Config.from_env()
         dest = create_profile(args.url_or_domain, config.crawl4ai_profiles_dir)
         print(f"Profile saved to {dest}")
+    elif args.command == "list-profiles":
+        config = Config.from_env()
+        entries = list_profiles(config.crawl4ai_profiles_dir)
+        if not entries:
+            print(f"No saved profiles in {config.crawl4ai_profiles_dir}")
+            return
+        for domain, path, age_days in entries:
+            print(f"{domain:<30} {age_days:>6.1f} days  {path}")
 
 
 if __name__ == "__main__":

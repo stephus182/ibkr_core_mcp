@@ -60,6 +60,23 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_firecrawl_crawl_batch_maps_outcomes_to_correct_pages",
     "test_firecrawl_crawl_uses_cached_manifest_and_skips_firecrawl",
     "test_firecrawl_crawl_force_refresh_bypasses_cache",
+    # The recovery-ladder handler tests, for the same reason as
+    # test_firecrawl_crawl_saves_pages_to_drive above: _handle_firecrawl_crawl
+    # validates the root URL before anything else, so a DNS block short-circuits
+    # the tool into "Invalid URL: ..." and none of the ladder ever runs.
+    # test_crawl_does_not_root_scrape_when_firecrawl_returned_content needs it for
+    # the subtler reason documented above for the blocked-subpage test: with DNS
+    # blocked its scrape.assert_not_called() passes because the root was rejected,
+    # not because Firecrawl's content made the root scrape unnecessary.
+    "test_crawl_falls_back_to_crawl4ai_root_when_firecrawl_returns_nothing",
+    "test_crawl_does_not_root_scrape_when_firecrawl_returned_content",
+    "test_crawl_never_reports_zero_pages_as_success",
+    "test_crawl_degrades_when_crawl4ai_is_not_installed",
+    "test_crawl_reports_network_failure_instead_of_raising",
+    "test_crawl_falls_back_to_crawl4ai_when_firecrawl_is_rate_limited",
+    "test_crawl_falls_back_to_crawl4ai_when_out_of_credits",
+    "test_crawl_falls_back_to_crawl4ai_on_network_error",
+    "test_crawl_no_content_message_names_the_firecrawl_failure",
 }
 
 

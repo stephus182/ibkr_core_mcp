@@ -57,10 +57,10 @@ This library is built on official documented APIs. Any contribution touching API
 
 | API | Official reference |
 |---|---|
-| IBKR Client Portal API | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ |
+| IBKR Client Portal API | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction |
 | IBKR Flex Web Service | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
 | Flex error codes | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
-| IBKR WebSocket streaming | https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets |
+| IBKR WebSocket streaming | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/introduction |
 | Google Drive API v3 | https://developers.google.com/drive/api/reference/rest/v3 |
 | macOS LocalAuthentication | https://developer.apple.com/documentation/localauthentication |
 | Firecrawl API | https://docs.firecrawl.dev/api-reference/endpoint/scrape |
@@ -105,7 +105,7 @@ gm = GatewayManager()
 gm.startup()   # interactive: starts container → opens browser → waits for auth
 ```
 
-Or use the programmatic API (for non-interactive environments like Chainlit):
+Or use the programmatic API (for non-interactive environments, e.g. a web UI or a batch job):
 
 ```python
 gm = GatewayManager()
@@ -357,7 +357,7 @@ Implemented in `order_confirm.py`.
 - **Enter key disabled** — confirmation requires a deliberate mouse click on the "Confirm" button
 - Runs on the main thread; the tkinter event loop is driven internally
 
-Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a Chainlit "Stage this order" button click) before `place_order`/`place_order_and_confirm` is ever invoked.
+Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a "Stage this order" button click in its Panel UI) before `place_order`/`place_order_and_confirm` is ever invoked.
 
 `GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts.
 
@@ -468,7 +468,7 @@ Drive account_data/
 
 ## ClaudIA integration
 
-[ClaudIA](https://github.com/stephus182/claudia_ui) is a Chainlit-based trading assistant that imports `ibkr_core_mcp` directly as a Python package and drives it via `ClaudeToolkit`. If you want a ready-made conversational UI on top of this library, start there.
+[ClaudIA](https://github.com/stephus182/claudia_ui) is a Panel-based trading assistant that imports `ibkr_core_mcp` directly as a Python package and drives it via `ClaudeToolkit`. If you want a ready-made conversational UI on top of this library, start there.
 
 ---
 
@@ -482,9 +482,15 @@ pytest -m "not integration"
 pytest
 
 # Lint + type check
-ruff check .
+ruff check .            # includes pydocstyle D — every public definition needs a docstring
+ruff format --check .
 mypy
 ```
+
+Docstring coverage is enforced in CI: `ruff`'s `pydocstyle` (`D`) rules are enabled, so a new
+public module, class, method, function, or `__init__` without a docstring fails the lint.
+Formatting-opinion codes (imperative mood, trailing periods, and similar) are deliberately
+disabled — see the annotated `ignore` list in `pyproject.toml` for what is off and why.
 
 ---
 

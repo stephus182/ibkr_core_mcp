@@ -1,3 +1,21 @@
+"""IBKRClient — the complete IBKR Client Portal Web API surface (74 endpoints).
+
+Wraps market data, contracts, portfolio, orders, alerts, watchlists, and session
+management, returning typed models from `models.py` where the shape is stable.
+Rate limiting and 429/503 backoff are handled transparently by `rate_limiter.py`.
+
+**Security invariant.** Every order write method — `place_order`, `modify_order`,
+`cancel_order`, `reply_order`, and the `*_and_confirm` variants — runs two
+sequential human gates (Touch ID, then a visual confirmation dialog) *before* any
+network call reaches IBKR. The gates are enforced here, at the innermost call site,
+precisely so that no caller can route around them; they must never be moved
+outward, cached, or made bypassable. Read-only methods (`get_order_preview`, the
+order-status readers, alert management) are deliberately ungated. See the Security
+section of `CLAUDE.md` before touching any of this.
+
+Endpoint reference: https://www.interactivebrokers.com/docs/web-api/
+"""
+
 from __future__ import annotations
 
 import re
@@ -148,6 +166,18 @@ class IBKRClient:
         config: Config,
         auth: AuthStrategy | None = None,
     ) -> None:
+        """Build a client bound to a local gateway.
+
+        Args:
+            config: Supplies `gateway_url`.
+            auth: Authentication strategy; defaults to `BrowserCookieAuth()`.
+
+        Raises:
+            ConfigError: If `gateway_url` is not a loopback host. TLS verification
+                is disabled for this session because the gateway ships a
+                self-signed certificate, so the host is pinned to localhost to keep
+                that exemption from ever applying to a remote server.
+        """
         self._base = config.gateway_url.rstrip("/")
         _host = urlparse(config.gateway_url).hostname
         if _host not in ("localhost", "127.0.0.1", "::1"):

@@ -4,7 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.web_scraping
 
-_REALISTIC_MARKDOWN = (
+_REALISTIC_PARAGRAPH = (
     "# IBKR API Documentation Overview\n\n"
     "The Interactive Brokers Client Portal API provides programmatic access to "
     "account information, market data, and order management functionality for "
@@ -28,6 +28,10 @@ _REALISTIC_MARKDOWN = (
     "endpoint reference table later in this guide, which lists every supported "
     "operation alongside its required parameters and expected response shape."
 )
+
+# Repeated to ~7 KB so it clears web_scraper._MIN_USEFUL_BYTES, matching the size of a
+# real documentation page (12.9-91.9 KB in docs/audits/audit-evidence/scrapes/).
+_REALISTIC_MARKDOWN = _REALISTIC_PARAGRAPH * 4
 
 # ============================================================================
 # Firecrawl handler tests
@@ -90,7 +94,9 @@ def test_firecrawl_search_returns_formatted_results(mock_fc_cls):
     result, fig = toolkit.execute("firecrawl_search", {"query": "IBKR API", "limit": 3})
     assert "## Search results for: IBKR API" in result
     assert fig is None
-    mock_fc.search.assert_called_once_with("IBKR API", limit=3)
+    # Overrides default to None, which _scrape_options omits — so the request body
+    # Firecrawl actually receives is unchanged from before they existed.
+    mock_fc.search.assert_called_once_with("IBKR API", limit=3, wait_for_ms=None, proxy=None)
 
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
@@ -209,6 +215,99 @@ def test_firecrawl_crawl_force_refresh_bypasses_cache(mock_wds_cls, mock_fc_cls)
     assert fig is None
     mock_fc.crawl.assert_called_once()
     mock_wds.save_crawl.assert_called_once()
+
+
+def test_crawl_falls_back_to_crawl4ai_root_when_firecrawl_returns_nothing():
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit  # noqa: F401
+
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = []
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://www.interactivebrokers.com/docs/",
+        "crawled_at": "2026-07-25T00:00:00+00:00",
+        "pages": [{"url": "https://www.interactivebrokers.com/docs/", "file_id": "f1"}],
+    }
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {
+        "url": "https://www.interactivebrokers.com/docs/",
+        "markdown": _REALISTIC_MARKDOWN,
+    }
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://www.interactivebrokers.com/docs/"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://www.interactivebrokers.com/docs/")
+    saved_pages = toolkit._web_docs.save_crawl.call_args[0][1]
+    assert saved_pages[0]["markdown"] == _REALISTIC_MARKDOWN
+    assert "Crawl4AI" in text
+
+
+def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = [
+        {"url": "https://example.com/a", "markdown": _REALISTIC_MARKDOWN, "metadata": {}}
+    ]
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-25T00:00:00+00:00",
+        "pages": [{"url": "https://example.com/a", "file_id": "f1"}],
+    }
+    toolkit._crawl4ai = MagicMock()
+
+    toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_not_called()
+
+
+def test_crawl_never_reports_zero_pages_as_success():
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = []
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": ""}
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "saved 0 page(s)" not in text
+    assert "no content" in text.lower()
+    toolkit._web_docs.save_crawl.assert_not_called()
+
+
+def test_crawl_degrades_when_crawl4ai_is_not_installed():
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = []
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.side_effect = Crawl4AIUnavailableError("not installed")
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "no content" in text.lower()
+
+
+def test_crawl_reports_network_failure_instead_of_raising():
+    import requests
+
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.side_effect = requests.ConnectionError("dns failure")
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "network" in text.lower()
 
 
 # ============================================================================
@@ -603,3 +702,86 @@ def test_firecrawl_search_preserves_result_order_under_concurrent_fallback(mock_
 # ============================================================================
 # _diagnose_orders
 # ============================================================================
+
+
+def test_firecrawl_search_forwards_wait_for_and_proxy_to_the_client():
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.search.return_value = []
+
+    toolkit.execute(
+        "firecrawl_search",
+        {"query": "ibkr api", "wait_for_ms": 3000, "proxy": "auto"},
+    )
+
+    kwargs = toolkit._firecrawl.search.call_args[1]
+    assert kwargs["wait_for_ms"] == 3000
+    assert kwargs["proxy"] == "auto"
+
+
+def _blocked_firecrawl_toolkit(exc):
+    """Toolkit whose Firecrawl crawl raises `exc`, with Crawl4AI ready to rescue it."""
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.side_effect = exc
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-26T00:00:00+00:00",
+        "pages": [{"url": "https://example.com", "file_id": "f1"}],
+    }
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
+    return toolkit
+
+
+def test_crawl_falls_back_to_crawl4ai_when_firecrawl_is_rate_limited():
+    from ibkr_core_mcp.web_scraper import FirecrawlError
+
+    # 429 is exactly when the free local scraper matters most: Firecrawl's Free tier
+    # allows 2 /crawl per minute, so a rate limit means no more paid attempts this minute.
+    toolkit = _blocked_firecrawl_toolkit(FirecrawlError("Rate limit exceeded", 429))
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com")
+    assert "Crawl4AI" in text
+    assert "Crawl complete" in text
+
+
+def test_crawl_falls_back_to_crawl4ai_when_out_of_credits():
+    from ibkr_core_mcp.web_scraper import FirecrawlError
+
+    toolkit = _blocked_firecrawl_toolkit(FirecrawlError("out of credits", 402))
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com")
+    assert "Crawl complete" in text
+
+
+def test_crawl_falls_back_to_crawl4ai_on_network_error():
+    import requests
+
+    toolkit = _blocked_firecrawl_toolkit(requests.ConnectionError("dns failure"))
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com")
+    assert "Crawl complete" in text
+
+
+def test_crawl_no_content_message_names_the_firecrawl_failure():
+    from ibkr_core_mcp.web_scraper import FirecrawlError
+
+    toolkit = _blocked_firecrawl_toolkit(FirecrawlError("Rate limit exceeded", 429))
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": ""}
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    # When everything fails, the message must still say why Firecrawl produced nothing —
+    # "no content" alone would hide an expired key or an empty credit balance.
+    assert "no content" in text.lower()
+    assert "429" in text
+    toolkit._web_docs.save_crawl.assert_not_called()

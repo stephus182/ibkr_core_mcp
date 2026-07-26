@@ -11,7 +11,7 @@ Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`N
 
 Pass `toolkit.tools` directly to the Anthropic SDK `tools=` parameter. Route responses through `toolkit.execute(block.name, block.input)`.
 
-**IBKR API source:** https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+**IBKR API source:** https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
 
 ---
 
@@ -228,7 +228,7 @@ side, size, price (plus commission and realized P&L for `source="store"`).
 
 **Note (live):** Returns all trades on the account regardless of order origin (mobile, TWS, API).
 Calls IBKR with `?days=7`, the documented maximum for this endpoint.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
 
 **Rate limit:** 1 req/5 secs (official).
 
@@ -317,7 +317,7 @@ Automatically paginates requests exceeding the 1000 data-point limit using `star
 **Output:** Summary with row count, date range, and last close.
 
 **Note:** Max 1000 data points per request — handled automatically by pagination.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
 
 **Rate limit:** 5 concurrent requests (official).
 
@@ -342,7 +342,7 @@ both to the user.
 
 **Note:** Max 100 conids per request, max 50 fields per request. Snapshot subscriptions require
 a brief warm-up (≈1s); empty result on first call — retry once.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/ (Dec 10, 2025)
+Source: https://www.interactivebrokers.com/docs/web-api/changelog (Dec 10, 2025)
 
 **IBKR endpoint:** `GET /iserver/marketdata/snapshot`
 
@@ -560,7 +560,7 @@ metrics.
 IBKR alerts are server-side — they fire even when ClaudIA is not running and are delivered
 to the IBKR mobile app.
 
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#alerts
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/introduction
 
 ### `get_alerts`
 List all IBKR price alerts configured on the account.
@@ -670,7 +670,7 @@ IBKR FYI notifications — account alerts, order fills, margin calls, news.
 Also includes total unread count.
 
 **Note:** IBKR enforces a hard cap of 10 notifications per request.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
 
 **IBKR endpoint:** `GET /fyi/notifications`
 
@@ -722,6 +722,8 @@ fetching technical documentation. Optionally saves a snapshot to Drive.
 | `query` | string | ✅ | Search query |
 | `limit` | integer | — | Max results (1–10, default 5) |
 | `save_to_drive` | boolean | — | Save markdown snapshot to Drive `web_docs/searches/` (default `false`) |
+| `wait_for_ms` | integer | — | Advanced. Milliseconds to wait for JavaScript rendering before extraction. Omitted from the request entirely when unset |
+| `proxy` | string | — | Advanced. `basic` (1 credit), `enhanced` (up to 5), or `auto` (basic, retried through enhanced on failure). Omitted when unset |
 
 **Output:** Search results with URL, title, and full markdown content.
 
@@ -746,12 +748,24 @@ a reference point for reference-doc content, not an arbitrary one. Pass
 |-----------|------|----------|-------------|
 | `url` | string | ✅ | Root URL to crawl from (public http/https only) |
 | `max_pages` | integer | — | Maximum pages to crawl (1–100, default 50) |
-| `timeout_s` | integer | — | Max seconds to wait (default 120) |
+| `timeout_s` | integer | — | Max seconds to wait. Default is derived from `max_pages` as `min(600, max(120, 6 × max_pages))` — 120s up to 20 pages, 300s at 50, 600s at 100. Only one Firecrawl attempt is made, so this is the whole budget |
 | `force_refresh` | boolean | — | Re-crawl even if a fresh (<48h) cached manifest exists (default `false`) |
+| `wait_for_ms` | integer | — | Advanced, opt-in. Milliseconds to wait for JavaScript rendering. Try `3000` on a JS-rendered site that came back empty. Omitted from the request when unset |
+| `proxy` | string | — | Advanced, opt-in. `basic` / `enhanced` / `auto`. Try `auto` on a site that blocks automated clients. Omitted when unset |
 
-**Output:** Summary of pages saved to Drive with paths and page count, or a
-"Using cached crawl..." message with zero Firecrawl requests made if a fresh
-manifest was already on Drive.
+**Output:** Summary of pages saved to Drive with byte count, source (Firecrawl or
+Crawl4AI), paths and page count; or a "Using cached crawl..." message with zero
+Firecrawl requests if a fresh manifest was already on Drive.
+
+**Recovery:** exactly one Firecrawl attempt is made. If it yields under 5 KB of
+markdown — for any reason, including a blocked site, a failed job, an exhausted
+budget, empty pages, or an account-level failure (401/402/429) or network error —
+the handler scrapes the root URL locally with Crawl4AI, free, and keeps whichever
+result is larger. Firecrawl is not retried: the Free tier allows only 2 `/crawl`
+requests per minute, so a second attempt would rate-limit the next call. Pass
+`wait_for_ms` / `proxy` explicitly when a host is known to need them. A crawl that
+ends with no content returns a diagnosis naming the Firecrawl failure, never
+"saved 0 page(s)". Full detail: `docs/web-scraper-reference.md`.
 
 **Retry behavior:** all Firecrawl HTTP requests (job start + status polling)
 retry automatically on 429/408/500/502/503/504, honoring the `Retry-After`

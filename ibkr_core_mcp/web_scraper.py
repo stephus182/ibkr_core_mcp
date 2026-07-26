@@ -1,5 +1,4 @@
-"""
-Web scraping tools for ClaudIA — Firecrawl primary + Crawl4AI fallback.
+"""Web scraping tools for ClaudIA — Firecrawl primary + Crawl4AI fallback.
 
 Primary layer: Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
 Fallback layer: Crawl4AI (Playwright-based, open-source) — defined in
@@ -64,10 +63,29 @@ _FIRECRAWL_MAX_BACKOFF = 30.0
 # checks in crawl() itself.
 _FIRECRAWL_MAX_NEXT_CHUNKS = 50
 
+# Minimum total markdown a crawl must yield before it is treated as a success. Applied by
+# the caller (ClaudeToolkit._handle_firecrawl_crawl), not by crawl() itself: crawl()
+# reports what Firecrawl gave it, and the decision to fall back to a local scrape belongs
+# to the orchestration layer that owns the fallback.
+# Calibrated against this repo's own scrape cache (docs/audits/audit-evidence/scrapes/):
+# the largest observed failure is a 152-byte Akamai edge-block page, and the smallest
+# observed real documentation page is 12,933 bytes. 5 KB sits ~34x above the former
+# and ~2.5x below the latter, and is set high enough to also catch partial extractions
+# that returned something but plainly not a page. See
+# docs/plans/2026-07-25-web-scraper-robustness-design.md section 3.1.
+_MIN_USEFUL_BYTES = 5 * 1024
+
+# Firecrawl statuses that describe the *account* rather than the page: a bad key, an
+# empty credit balance, and an active rate limit. These propagate to the caller instead
+# of being flattened into an empty page list, so the handler can name the real cause in
+# its message before it falls back to the free local scraper. Every other failure mode
+# — a failed job, a 4xx mid-poll, an exhausted polling budget — is page-level and is
+# reported as "no content" for the caller to measure and recover from.
+_ACCOUNT_LEVEL_STATUSES = frozenset({401, 402, 429})
+
 
 def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Response:
-    """
-    Call fn() (a zero-arg thunk wrapping a single requests.post/get call), retrying
+    """Call fn() (a zero-arg thunk wrapping a single requests.post/get call), retrying
     on Firecrawl's documented retryable statuses with exponential backoff + jitter,
     honoring the Retry-After header when present. See the module-level comment above
     _FIRECRAWL_RETRYABLE_STATUSES for the source citation.
@@ -95,8 +113,7 @@ def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Respo
 
 
 class FirecrawlError(Exception):
-    """
-    Raised when the Firecrawl REST API returns an error response or a crawl job fails.
+    """Raised when the Firecrawl REST API returns an error response or a crawl job fails.
 
     Attributes:
         message: Human-readable description of the failure.
@@ -105,13 +122,20 @@ class FirecrawlError(Exception):
     """
 
     def __init__(self, message: str, status_code: int | None = None) -> None:
+        """Record the message and, when one was received, the HTTP status.
+
+        Args:
+            message: Human-readable description of the failure.
+            status_code: HTTP status from Firecrawl, or None when the request
+                failed before any response arrived (e.g. a network timeout) —
+                which is why this is None rather than 0.
+        """
         super().__init__(message)
         self.status_code = status_code
 
 
 class WebDocsStoreError(Exception):
-    """
-    Raised when a Drive write operation in WebDocsStore fails.
+    """Raised when a Drive write operation in WebDocsStore fails.
 
     The original Google API exception is always chained as __cause__ so callers
     can inspect it if needed. ClaudeToolkit handlers catch this and return an error
@@ -120,8 +144,7 @@ class WebDocsStoreError(Exception):
 
 
 def _slugify(url: str) -> str:
-    """
-    Convert a URL into a safe Drive filename stem (no extension).
+    """Convert a URL into a safe Drive filename stem (no extension).
 
     Transformation steps:
       1. Strip scheme (http://, https://)
@@ -148,9 +171,52 @@ def _slugify(url: str) -> str:
     return slug[:100]
 
 
-class FirecrawlClient:
+def content_bytes(pages: list[dict[str, Any]]) -> int:
+    """Return the total bytes of extracted markdown across a list of crawl pages.
+
+    This is the single signal the recovery ladder branches on. The decision a caller
+    actually needs is "did I get content?", which is a property of the output — not of
+    how the attempt ended. Blocked, timed out, job-failed and completed-empty all
+    produce the same next move, so they need no separate representation.
+
+    Counts UTF-8 **bytes**, not characters, so a page of accented or CJK text is not
+    undercounted into a false "blocked" verdict.
+
+    Args:
+        pages: Page dicts as returned by `FirecrawlClient.crawl()`. A missing or None
+            "markdown" key contributes zero rather than raising, since Firecrawl returns
+            both shapes for pages it failed to extract.
+
+    Returns:
+        Total markdown size in bytes; 0 for an empty list.
     """
-    Thin wrapper around the Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
+    return sum(len((page.get("markdown") or "").encode("utf-8")) for page in pages)
+
+
+def _resolve_timeout(max_pages: int, timeout_s: int | None) -> int:
+    """Return the per-attempt polling budget in seconds for a crawl.
+
+    `timeout_s` is this client's own polling patience, not Firecrawl's timeout — see
+    FirecrawlClient.crawl(). The old fixed 120s default was under-budgeted for its own
+    50-page default: a slow, JS-heavy site routinely exceeds it, manufacturing a
+    "timed out with nothing" result that is not a block at all. Scaling with page count
+    keeps small crawls fast while giving large ones room to finish.
+
+    Args:
+        max_pages: Page cap for this crawl, already clamped to [1, 100] by the caller.
+        timeout_s: An explicit caller-supplied budget, or None to derive one.
+
+    Returns:
+        The explicit value (floored at 10s, matching the previous behavior), or
+        `min(600, max(120, 6 * max_pages))` when none was supplied.
+    """
+    if timeout_s is not None:
+        return max(10, timeout_s)
+    return min(600, max(120, 6 * max_pages))
+
+
+class FirecrawlClient:
+    """Thin wrapper around the Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
 
     Authentication is via Bearer token in the Authorization header. All requests
     use a 30-second timeout via the `requests` library (already a dependency of
@@ -169,6 +235,15 @@ class FirecrawlClient:
     BASE_URL = "https://api.firecrawl.dev/v1"
 
     def __init__(self, api_key: str) -> None:
+        """Store the API key and build the Bearer auth headers.
+
+        Args:
+            api_key: Firecrawl API key (`fc-…`).
+
+        Raises:
+            ValueError: If `api_key` is empty. Checked here so a missing key
+                surfaces at construction rather than as a confusing 401 later.
+        """
         if not api_key:
             raise ValueError("api_key must be non-empty")
         self._api_key = api_key
@@ -178,18 +253,73 @@ class FirecrawlClient:
         }
 
     def _raise_for_status(self, resp: requests.Response) -> None:
-        """Translate Firecrawl HTTP errors into FirecrawlError with a status code."""
+        """Translate Firecrawl HTTP errors into FirecrawlError with a status code.
+
+        Every HTTP failure leaves this client as a FirecrawlError, never as a raw
+        requests.HTTPError — callers (and ClaudeToolkit's handler) catch one exception
+        type, and crawl()'s escalation logic can read `status_code` to decide whether a
+        retry could possibly help.
+        """
         if resp.status_code == 401:
             raise FirecrawlError("Invalid FIRECRAWL_API_KEY", 401)
+        if resp.status_code == 402:
+            raise FirecrawlError("Firecrawl account is out of credits", 402)
         if resp.status_code == 429:
             raise FirecrawlError("Rate limit exceeded — wait before retrying", 429)
         if resp.status_code >= 500:
             raise FirecrawlError(f"Firecrawl service error: {resp.status_code}", resp.status_code)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise FirecrawlError(f"Firecrawl request failed: HTTP {resp.status_code}", resp.status_code)
 
-    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def _scrape_options(
+        self,
+        *,
+        wait_for_ms: int | None = None,
+        proxy: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Build the Firecrawl `scrapeOptions` payload shared by search() and crawl().
+
+        One builder for both endpoints so their request bodies cannot drift apart, and
+        so a future v2 migration has exactly one seam to change.
+
+        Every option is omitted when None rather than sent as null, which keeps an
+        options-free call byte-for-byte identical to the request this client sent before
+        these parameters existed.
+
+        Field reference (all confirmed present in v1 scrapeOptions):
+        https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post (verified 2026-07-25)
+
+        Args:
+            wait_for_ms: Milliseconds to wait for JavaScript rendering before extracting.
+                0 is meaningful ("don't wait") and is passed through; only None omits it.
+            proxy: One of "basic" (1 credit), "enhanced" (up to 5 credits), or "auto"
+                (basic, retried through enhanced on failure).
+            timeout_ms: Per-page scrape timeout in milliseconds, distinct from this
+                client's own polling budget.
+
+        Returns:
+            The scrapeOptions dict to embed in a /search or /crawl request body.
         """
-        Search the web and return full page content as markdown for each result.
+        options: dict[str, Any] = {"formats": ["markdown"]}
+        if wait_for_ms is not None:
+            options["waitFor"] = wait_for_ms
+        if proxy is not None:
+            options["proxy"] = proxy
+        if timeout_ms is not None:
+            options["timeout"] = timeout_ms
+        return options
+
+    def search(
+        self,
+        query: str,
+        limit: int = 5,
+        *,
+        wait_for_ms: int | None = None,
+        proxy: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search the web and return full page content as markdown for each result.
 
         Calls POST /v1/search with scrapeOptions.formats=["markdown"] so that
         each result includes extracted markdown rather than raw HTML.
@@ -197,6 +327,11 @@ class FirecrawlClient:
         Args:
             query: Free-text search query. Must be non-empty.
             limit: Maximum number of results to return. Clamped to [1, 10].
+            wait_for_ms: Advanced override — milliseconds to wait for JavaScript
+                rendering before extraction. See _scrape_options.
+            proxy: Advanced override — "basic", "enhanced", or "auto". See
+                _scrape_options. Note "enhanced"/"auto" can cost up to 5 credits.
+            timeout_ms: Advanced override — per-page scrape timeout in milliseconds.
 
         Returns:
             List of result dicts, each containing:
@@ -223,7 +358,7 @@ class FirecrawlClient:
                 json={
                     "query": query,
                     "limit": limit,
-                    "scrapeOptions": {"formats": ["markdown"]},
+                    "scrapeOptions": self._scrape_options(wait_for_ms=wait_for_ms, proxy=proxy, timeout_ms=timeout_ms),
                 },
                 timeout=30,
             )
@@ -241,14 +376,62 @@ class FirecrawlClient:
             for r in raw
         ]
 
-    def crawl(
+    def _attempt(
         self,
         url: str,
-        max_pages: int = 50,
-        timeout_s: int = 120,
+        max_pages: int,
+        timeout_s: int,
+        scrape_options: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        """Run one crawl attempt, converting every page-level failure into an empty page
+        list so the caller has something to measure.
+
+        This is the piece that makes recovery possible. Previously a crawl could end
+        three different ways — a raised FirecrawlError on a failed job, a raw
+        requests.HTTPError mid-poll, or a silent empty return on deadline — so there was
+        no single point at which "we got nothing" was decided, and therefore nowhere to
+        attach a fallback. Every page-level route now ends in a list.
+
+        Args:
+            url: Root URL to crawl.
+            max_pages: Page cap, already clamped.
+            timeout_s: Polling budget, already resolved.
+            scrape_options: The scrapeOptions payload for this attempt.
+
+        Returns:
+            The attempt's pages, or [] if it failed at the page level.
+
+        Raises:
+            FirecrawlError: For account-level failures only — see
+                _ACCOUNT_LEVEL_STATUSES. These describe the account rather than the page,
+                so they propagate and let the caller name the cause instead of being
+                indistinguishable from an empty result.
         """
-        Crawl a site starting from url and return all pages as markdown.
+        try:
+            return self._try_crawl(url, max_pages, timeout_s, scrape_options)
+        except FirecrawlError as exc:
+            if exc.status_code in _ACCOUNT_LEVEL_STATUSES:
+                raise
+            log.warning("firecrawl crawl attempt for %s failed: %s", url, exc)
+            return []
+        except requests.RequestException as exc:
+            log.warning("firecrawl crawl attempt for %s failed: %s", url, exc)
+            return []
+
+    def _try_crawl(
+        self,
+        url: str,
+        max_pages: int,
+        timeout_s: int,
+        scrape_options: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Run exactly one Firecrawl crawl attempt: start the job, poll it, follow
+        pagination, and return whatever pages it produced.
+
+        Callers pass an already-clamped `max_pages` and an already-resolved `timeout_s`
+        (see _resolve_timeout), plus a prepared scrapeOptions dict (see _scrape_options).
+        The retry/escalation decision belongs to crawl(), not here — this method's only
+        job is to execute one attempt faithfully.
 
         Firecrawl crawls are asynchronous. This method:
           1. Starts the job with POST /v1/crawl
@@ -276,10 +459,11 @@ class FirecrawlClient:
                  pre-validated here and are re-checked independently by
                  ClaudeToolkit._validate_public_url before any local fetch of
                  them (e.g. the Crawl4AI fallback).
-            max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
-            timeout_s: Maximum wall-clock seconds to wait for the crawl to complete.
-                       Minimum 10s. If the job is still running at timeout, partial
-                       results are returned rather than raising an error.
+            max_pages: Page cap, already clamped to [1, 100].
+            timeout_s: Polling budget in seconds, already resolved. If the job is
+                       still running at timeout, partial results are returned rather
+                       than raising an error.
+            scrape_options: The scrapeOptions payload to send.
 
         Returns:
             List of page dicts, each containing:
@@ -298,15 +482,12 @@ class FirecrawlClient:
             requests.exceptions.Timeout: If a single API call exceeds 30 seconds
                                          (distinct from the overall timeout_s limit).
         """
-        max_pages = max(1, min(100, max_pages))
-        timeout_s = max(10, timeout_s)
-
         # Start crawl job
         resp = _request_with_backoff(
             lambda: requests.post(
                 f"{self.BASE_URL}/crawl",
                 headers=self._headers,
-                json={"url": url, "limit": max_pages, "scrapeOptions": {"formats": ["markdown"]}},
+                json={"url": url, "limit": max_pages, "scrapeOptions": scrape_options},
                 timeout=30,
             )
         )
@@ -347,7 +528,7 @@ class FirecrawlClient:
                     timeout=30,
                 )
             )
-            poll.raise_for_status()
+            self._raise_for_status(poll)
             data = poll.json()
             status = data.get("status", "")
 
@@ -389,7 +570,7 @@ class FirecrawlClient:
                         break
                     seen_next_urls.add(next_url)
                     next_resp = _fetch_next(next_url)
-                    next_resp.raise_for_status()
+                    self._raise_for_status(next_resp)
                     next_data = next_resp.json()
                     pages.extend(_pages_from(next_data))
                     next_url = next_data.get("next")
@@ -405,10 +586,69 @@ class FirecrawlClient:
         )
         return pages
 
+    def crawl(
+        self,
+        url: str,
+        max_pages: int = 50,
+        timeout_s: int | None = None,
+        *,
+        wait_for_ms: int | None = None,
+        proxy: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Crawl a site starting from url and return all pages as markdown.
+
+        Makes exactly **one** Firecrawl attempt and returns whatever it produced, however
+        little that is. Recovery is the caller's job, not this method's: a thin or empty
+        result is the signal for ClaudeToolkit._handle_firecrawl_crawl to fall back to a
+        free local Crawl4AI scrape.
+
+        One attempt rather than an automatic stealth retry, deliberately. Firecrawl's
+        Free tier allows 2 /crawl requests per minute
+        (https://docs.firecrawl.dev/rate-limits, verified 2026-07-25), so a two-attempt
+        ladder spends a whole minute's budget on a single URL and rate-limits the next
+        call. Falling straight to the local scraper is both cheaper and faster, and it is
+        the rung that actually costs nothing.
+
+        Stealth is still available — pass wait_for_ms and/or proxy explicitly. It is
+        opt-in rather than an automatic second request.
+
+        Args:
+            url: Root URL to crawl from. Must be a public http/https URL. The caller is
+                responsible for SSRF validation. Note this only validates the root — the
+                individual page URLs in the returned list were discovered by Firecrawl
+                and are re-checked independently by ClaudeToolkit._validate_public_url
+                before any local fetch of them.
+            max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
+            timeout_s: Polling budget in seconds. None derives one from max_pages (see
+                _resolve_timeout). This is the whole wall-clock budget — there is no
+                second attempt to double it.
+            wait_for_ms: Milliseconds to wait for JavaScript rendering before extraction.
+                Omitted from the request entirely when None.
+            proxy: "basic", "enhanced", or "auto". "enhanced"/"auto" can cost up to 5
+                credits per page. Omitted from the request entirely when None.
+
+        Returns:
+            Page dicts with "url", "markdown" and "metadata" keys. Empty-markdown and
+            error pages are included, not filtered, so callers can see and recover from
+            them. Returns [] when the attempt produced nothing.
+
+        Raises:
+            FirecrawlError: Only for account-level failures — 401 (invalid key), 402
+                (out of credits), 429 (rate limited). Note this method does not raise
+                when the crawl job itself reports "failed", times out, or 4xxs mid-poll;
+                those return [] so the caller can recover locally, which is the point.
+        """
+        max_pages = max(1, min(100, max_pages))
+        return self._attempt(
+            url,
+            max_pages,
+            _resolve_timeout(max_pages, timeout_s),
+            self._scrape_options(wait_for_ms=wait_for_ms, proxy=proxy),
+        )
+
 
 class WebDocsStore:
-    """
-    Persist Firecrawl crawl and search results to Google Drive under a 'web_docs/'
+    """Persist Firecrawl crawl and search results to Google Drive under a 'web_docs/'
     subfolder, using the same Drive credentials already in use by GDriveCache.
 
     Drive folder layout (auto-created on first use):
@@ -431,6 +671,15 @@ class WebDocsStore:
     _SCOPES = ["https://www.googleapis.com/auth/drive"]
 
     def __init__(self, config: Config) -> None:
+        """Prepare the store without contacting Drive.
+
+        The Drive service is built lazily on first use, so construction performs
+        no OAuth and no network I/O.
+
+        Args:
+            config: Supplies `gdrive_web_docs_folder_id` and the credential/token
+                paths used by the OAuth flow.
+        """
         self._cfg = config
         self._svc: Any = None
 
@@ -493,8 +742,7 @@ class WebDocsStore:
         return self._find_or_create_folder("web_docs", self._cfg.gdrive_folder_id)
 
     def get_cached_crawl(self, url: str, max_age_hours: float = 48.0) -> dict[str, Any] | None:
-        """
-        Return the existing Drive manifest for `url` (from a prior save_crawl call)
+        """Return the existing Drive manifest for `url` (from a prior save_crawl call)
         if one exists and is younger than max_age_hours, else None.
 
         Lets callers skip an entire Firecrawl API call when a recent crawl is
@@ -562,8 +810,7 @@ class WebDocsStore:
         return manifest
 
     def save_crawl(self, url: str, pages: list[dict[str, str]]) -> dict[str, Any]:
-        """
-        Save crawl results to Drive under web_docs/{url-slug}/.
+        """Save crawl results to Drive under web_docs/{url-slug}/.
 
         Each page is uploaded as a .md file. If a file with the same name already
         exists, it is overwritten via Drive's Files.update method. Pages with empty
@@ -653,8 +900,7 @@ class WebDocsStore:
         return manifest
 
     def save_search(self, query: str, results: list[dict[str, str]]) -> str:
-        """
-        Save a search result snapshot to Drive under web_docs/searches/.
+        """Save a search result snapshot to Drive under web_docs/searches/.
 
         Produces a single markdown file named {YYYYMMDDTHHMMSSz}-{query-slug}.md,
         containing the query and all result titles, URLs, and markdown bodies.

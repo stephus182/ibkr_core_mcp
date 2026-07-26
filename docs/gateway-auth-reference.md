@@ -45,5 +45,5 @@ client = IBKRClient(Config.from_env(), auth=TokenAuth("cookie_string_here"))
   and `/iserver/account/trades` are 1 req/5s, `/tickle` is 1 req/s). `rate_limiter.py` does not
   proactively pace requests to this limit; it reactively retries 429/503 with exponential
   backoff (1s, 2s, 4s over 3 attempts) and raises `IBKRRateLimitError` if still failing.
-  Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#rate-limiting
+  Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/pacing-limitations
   (full per-endpoint table in `rate_limiter.py`'s docstring).

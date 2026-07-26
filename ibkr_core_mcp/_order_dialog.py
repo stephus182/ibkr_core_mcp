@@ -1,8 +1,10 @@
 """Gate 2 order confirmation dialog — AppKit subprocess runner.
 
 Called by order_confirm._show_appkit_dialog() as a subprocess so it gets its
-own main thread and can spin up NSApplication without conflicting with the
-Chainlit asyncio event loop.
+own main thread and can spin up NSApplication without conflicting with the host
+application's asyncio event loop (e.g. the Panel/Bokeh Tornado loop in ClaudIA).
+NSApplication must own the main thread; any embedding host that already runs an
+event loop there would deadlock, hence the subprocess.
 
 Protocol
 --------

@@ -1,3 +1,16 @@
+"""Environment-driven configuration for every ibkr_core_mcp service.
+
+A single `Config` dataclass carries the gateway URL, Anthropic key, Drive folder
+and credential paths, and SQLite location. `Config.from_env()` is the only intended
+constructor in application code; it reads a `.env` via python-dotenv and falls back
+to process environment variables.
+
+Missing values resolve to empty strings rather than raising, which is deliberate:
+it lets a caller construct a partial `Config` and have the *feature* that needs a
+given variable report "not configured" at the point of use, instead of making an
+unrelated import fail. See the standalone-dev note in `CLAUDE.md`.
+"""
+
 from __future__ import annotations
 
 import os
