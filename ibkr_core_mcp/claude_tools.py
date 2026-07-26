@@ -2986,6 +2986,38 @@ class ClaudeToolkit:
 
         return "\n".join(lines) + drive_note, None
 
+    def _crawl4ai_root_scrape(self, url: str) -> list[dict[str, Any]]:
+        """Fetch a crawl's root URL locally with Crawl4AI as the ladder's last rung.
+
+        The per-page fallback (_apply_crawl4ai_fallback_batch) iterates over Firecrawl's
+        page list, so it cannot recover a crawl that produced no pages at all — the exact
+        failure this closes. Fetching the root at least yields the landing page, and does
+        it locally and free, which is also the right move when Firecrawl is rate-limited
+        or out of credits.
+
+        Args:
+            url: The crawl's root URL, already SSRF-validated by the caller.
+
+        Returns:
+            A single-page list shaped like Firecrawl's own output so it flows into
+            save_crawl unchanged, or [] when Crawl4AI produced nothing or is unavailable.
+        """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+
+        outcome: dict[str, str] | Exception
+        try:
+            outcome = self._crawl4ai.scrape(url)
+        except Exception as exc:
+            outcome = exc
+
+        markdown, _note, used_fallback = self._finalize_fallback_result(url, "", outcome)
+        if not used_fallback or not markdown:
+            return []
+        return [{"url": url, "markdown": markdown, "metadata": {}}]
+
     def _handle_firecrawl_crawl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Handle the firecrawl_crawl tool.
 
@@ -3019,7 +3051,11 @@ class ClaudeToolkit:
             return blocked, None
 
         max_pages = int(inputs.get("max_pages", 50))
-        timeout_s = int(inputs.get("timeout_s", 120))
+        timeout_s_raw = inputs.get("timeout_s")
+        timeout_s = int(timeout_s_raw) if timeout_s_raw is not None else None
+        wait_for_raw = inputs.get("wait_for_ms")
+        wait_for_ms = int(wait_for_raw) if wait_for_raw is not None else None
+        proxy = inputs.get("proxy") or None
         force_refresh = bool(inputs.get("force_refresh", False))
 
         if self._firecrawl is None:
@@ -3039,17 +3075,56 @@ class ClaudeToolkit:
                     None,
                 )
 
+        import requests
+
+        from ibkr_core_mcp.web_scraper import _MIN_USEFUL_BYTES, content_bytes
+
         try:
-            pages = self._firecrawl.crawl(url, max_pages=max_pages, timeout_s=timeout_s)
+            pages = self._firecrawl.crawl(
+                url,
+                max_pages=max_pages,
+                timeout_s=timeout_s,
+                wait_for_ms=wait_for_ms,
+                proxy=proxy,
+            )
         except FirecrawlError as exc:
             return f"Firecrawl crawl failed (HTTP {exc.status_code}): {exc}", None
+        except requests.RequestException as exc:
+            return f"Firecrawl crawl failed (network error): {exc}", None
 
-        # Every fallback-needing page in this crawl shares one Crawl4AI
-        # browser session instead of one launch per page -- see
-        # _apply_crawl4ai_fallback_batch's docstring for why this is safe
-        # (Firecrawl's crawl() stays within one site, so every page here
-        # shares the same saved-profile decision).
+        firecrawl_bytes = content_bytes(pages)
+
+        # Every fallback-needing page in this crawl shares one Crawl4AI browser session
+        # instead of one launch per page -- see _apply_crawl4ai_fallback_batch's
+        # docstring for why that is safe.
         fallback_count = self._apply_crawl4ai_fallback_batch(url, pages)
+
+        # Measured after the batch pass, which mutates page["markdown"] in place: testing
+        # a value captured before it ran would fire a redundant root scrape on a crawl
+        # the per-page fallback just rescued.
+        root_rescued = False
+        if content_bytes(pages) < _MIN_USEFUL_BYTES:
+            root_pages = self._crawl4ai_root_scrape(url)
+            if content_bytes(root_pages) > content_bytes(pages):
+                pages = root_pages
+                root_rescued = True
+
+        final_bytes = content_bytes(pages)
+        if final_bytes == 0:
+            return (
+                f"Crawl of {url} produced no content.\n"
+                f"Firecrawl returned {firecrawl_bytes} B even after retrying with "
+                f"waitFor and an anti-bot proxy, and the local Crawl4AI fallback also "
+                f"returned nothing.\n"
+                f"Likely causes: the site blocks automated clients, its content is "
+                f"rendered by JavaScript the scraper did not wait for, or your Firecrawl "
+                f"plan is rate-limited or out of credits.\n"
+                f"Next: if this is a site you subscribe to, run "
+                f"`python -m ibkr_core_mcp.scrape_fallback create-profile {url}` once. "
+                f"For IBKR documentation, append `.md` to the page URL instead of "
+                f"crawling it.",
+                None,
+            )
 
         try:
             manifest = self._web_docs.save_crawl(url, pages)
@@ -3057,13 +3132,15 @@ class ClaudeToolkit:
             return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
 
         saved = len(manifest["pages"])
+        source = "Crawl4AI (Firecrawl returned nothing usable)" if root_rescued else "Firecrawl"
         fallback_line = (
             f"\nCrawl4AI fallback used for {fallback_count} page(s) Firecrawl couldn't fully extract."
             if fallback_count
             else ""
         )
         return (
-            f"Crawl complete: saved {saved} page(s) from {url} to Drive.\n"
+            f"Crawl complete: saved {saved} page(s) ({final_bytes} B) from {url} to Drive.\n"
+            f"Source: {source}\n"
             f"Crawled at: {manifest['crawled_at']}\n"
             f"Pages: "
             + ", ".join(p["url"] for p in manifest["pages"][:10])
