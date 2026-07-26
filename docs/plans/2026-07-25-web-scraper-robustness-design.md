@@ -126,13 +126,12 @@ The failure/success gap spans two orders of magnitude. 5 KB sits ~34× above the
 failure and ~2.5× below the smallest observed success, and is deliberately set high enough to
 also catch partial/truncated extractions that returned *something* but plainly not a page.
 
-**Log the measurement on every crawl, not only on failure.** The one real cost of collapsing a
-decision to a scalar is that the scalar is a policy constant which will drift as sites change,
-and the table above rests on five data points from a single day. A single `log.info` recording
-the URL, page count, and measured bytes of every crawl — passing or failing — turns that constant
-into something retunable from real usage rather than re-argued from first principles. It costs one
-line, and since scraping is a core function of the consuming application, the calibration data is
-worth having before the threshold is ever questioned again.
+**No separate telemetry is needed to retune this.** The measured byte count is already surfaced on
+every crawl by two things this spec already requires: §5's escalation `log.warning` carries it
+when a crawl falls short, and §7.1's rewritten result message reports it when a crawl succeeds.
+A dedicated `log.info` was considered and rejected — it would record nothing not already visible,
+and at library level would be invisible anyway unless the consuming application enables INFO.
+Recorded here so it isn't re-proposed.
 
 ### 3.2 Keep the best rung, not the last
 
