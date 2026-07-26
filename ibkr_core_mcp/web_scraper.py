@@ -63,6 +63,33 @@ _FIRECRAWL_MAX_BACKOFF = 30.0
 # checks in crawl() itself.
 _FIRECRAWL_MAX_NEXT_CHUNKS = 50
 
+# Minimum total markdown a crawl must yield before it is treated as a success.
+# Calibrated against this repo's own scrape cache (docs/audits/audit-evidence/scrapes/):
+# the largest observed failure is a 152-byte Akamai edge-block page, and the smallest
+# observed real documentation page is 12,933 bytes. 5 KB sits ~34x above the former
+# and ~2.5x below the latter, and is set high enough to also catch partial extractions
+# that returned something but plainly not a page. See
+# docs/plans/2026-07-25-web-scraper-robustness-design.md section 3.1.
+_MIN_USEFUL_BYTES = 5 * 1024
+
+# Escalation options for a crawl that came back under _MIN_USEFUL_BYTES. Proven against
+# interactivebrokers.com in docs/audits/audit-evidence/scrapes/manifest.json (2026-07-02):
+# "retry with --wait-for 3000 --proxy auto succeeded after prior firecrawl-default and
+# webfetch failures". Both are documented v1 scrapeOptions fields:
+# https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post (verified 2026-07-25).
+_ESCALATION_WAIT_FOR_MS = 3000
+_ESCALATION_PROXY = "auto"
+
+# Floor for the escalated attempt's polling budget. Stealth is slower by construction —
+# waitFor adds 3s per page and proxy="auto" retries a failed basic fetch through the
+# enhanced proxy — so reusing a budget that just timed out would reproduce the timeout.
+_ESCALATION_MIN_TIMEOUT_S = 180
+
+# Firecrawl statuses where a stealth retry cannot help: a bad key, an empty credit
+# balance, and an active rate limit are account-level, not page-level. Retrying burns
+# time and money to fail identically, and in the 429 case worsens the throttling.
+_NON_ESCALATING_STATUSES = frozenset({401, 402, 429})
+
 
 def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Response:
     """Call fn() (a zero-arg thunk wrapping a single requests.post/get call), retrying
@@ -149,6 +176,28 @@ def _slugify(url: str) -> str:
     url = url.lower()
     slug = _SLUG_RE.sub("-", url).strip("-")
     return slug[:100]
+
+
+def content_bytes(pages: list[dict[str, Any]]) -> int:
+    """Return the total bytes of extracted markdown across a list of crawl pages.
+
+    This is the single signal the recovery ladder branches on. The decision a caller
+    actually needs is "did I get content?", which is a property of the output — not of
+    how the attempt ended. Blocked, timed out, job-failed and completed-empty all
+    produce the same next move, so they need no separate representation.
+
+    Counts UTF-8 **bytes**, not characters, so a page of accented or CJK text is not
+    undercounted into a false "blocked" verdict.
+
+    Args:
+        pages: Page dicts as returned by `FirecrawlClient.crawl()`. A missing or None
+            "markdown" key contributes zero rather than raising, since Firecrawl returns
+            both shapes for pages it failed to extract.
+
+    Returns:
+        Total markdown size in bytes; 0 for an empty list.
+    """
+    return sum(len((page.get("markdown") or "").encode("utf-8")) for page in pages)
 
 
 class FirecrawlClient:

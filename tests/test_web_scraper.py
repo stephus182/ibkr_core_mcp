@@ -43,6 +43,35 @@ def test_slugify_no_leading_trailing_hyphens():
     assert not result.endswith("-")
 
 
+# ── content_bytes ─────────────────────────────────────────────────────────────
+
+
+def test_content_bytes_sums_markdown_across_pages():
+    from ibkr_core_mcp.web_scraper import content_bytes
+
+    assert content_bytes([{"markdown": "abc"}, {"markdown": "de"}]) == 5
+
+
+def test_content_bytes_treats_missing_and_none_markdown_as_zero():
+    from ibkr_core_mcp.web_scraper import content_bytes
+
+    assert content_bytes([{"markdown": None}, {}, {"markdown": ""}]) == 0
+
+
+def test_content_bytes_counts_utf8_bytes_not_characters():
+    from ibkr_core_mcp.web_scraper import content_bytes
+
+    # U+00E9 is one character but two bytes in UTF-8. A page of accented text
+    # must not be undercounted into a false "blocked" verdict.
+    assert content_bytes([{"markdown": "é" * 10}]) == 20
+
+
+def test_content_bytes_empty_list_is_zero():
+    from ibkr_core_mcp.web_scraper import content_bytes
+
+    assert content_bytes([]) == 0
+
+
 # ── Exceptions ────────────────────────────────────────────────────────────────
 
 
