@@ -239,10 +239,11 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
   - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
     is a complete 517-page index. There is also an MCP server at
-    `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML —
-    `FirecrawlClient.crawl()` returns 0 pages on `interactivebrokers.com` (it needs Firecrawl's
-    `waitFor`/`proxy` options, which the client does not expose) and fails silently rather than
-    reporting the block.
+    `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
+    cost no Firecrawl credits and cannot be edge-blocked. If you do scrape,
+    `FirecrawlClient.crawl()` now escalates automatically (retrying with `waitFor`/`proxy`, both
+    exposed on `crawl()` and `search()`), falls back to a local Crawl4AI scrape of the root URL,
+    and reports an explicit diagnosis instead of the old silent "saved 0 page(s)".
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
   deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single
@@ -279,5 +280,7 @@ not `@import`s, so they don't load into every session's context automatically.
 - MCP Server (install, stdio/SSE transports, 44 tools, 4 resources, price alerts, TradingView integration): `docs/mcp-server-reference.md`
 - Known IBKR API behaviors, verified not assumed: `docs/ibkr-api-behaviors-reference.md`
 - Official documentation URLs, all external APIs: `docs/external-docs-reference.md`
+- Web scraper (Firecrawl + Crawl4AI, recovery ladder, paywalled-site login profiles,
+  per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
 - Consuming projects: `docs/consumers.md`
 - Charting/quant/stats package landscape (what we have vs. gaps vs. duplicative-of-existing-code): `docs/python-package-landscape.md`

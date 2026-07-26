@@ -4,12 +4,6 @@ Firecrawl (hosted, paid) for search and crawling, Crawl4AI (local, free, Playwri
 fallback that recovers what Firecrawl can't reach. This document covers both layers, every tunable,
 the credit-cost model, paywalled-site logins, and what to do when a scrape comes back empty.
 
-> **Status.** Sections 3, 4 and 6 describe the recovery ladder and the profile-matching behavior
-> specified in `docs/plans/2026-07-25-web-scraper-robustness-design.md` and implemented by
-> `docs/plans/2026-07-25-web-scraper-robustness-plan.md`. If you are reading this on a branch where
-> that plan has not landed, `crawl()` makes a single attempt with fixed options and profile lookup
-> is exact-hostname only. Check `git log ibkr_core_mcp/web_scraper.py` if unsure.
-
 ---
 
 ## 1. The two layers
@@ -79,7 +73,8 @@ crawl(url)
   │     └─ >= 5 KB of markdown? ─────────────────────────► return
   │
   ├─ Rung 2: Firecrawl, waitFor=3000 + proxy="auto"         up to 5 credits/page
-  │     └─ >= 5 KB of markdown? ─────────────────────────► return best-of(rung 1, rung 2)
+  │     └─ always ──────────────────────────────────────► return best-of(rung 1, rung 2)
+  │        (crawl() stops here; the handler applies the 5 KB test to that result)
   │
   └─ Rung 3 (handler): Crawl4AI scrapes the root URL        free
         using a saved login profile if one matches
@@ -287,7 +282,7 @@ one.
 
 | Host | Behavior | What to do |
 |---|---|---|
-| `interactivebrokers.com` | Akamai edge-block. Firecrawl defaults return a 152-byte error page; `WebFetch` gets HTTP 403. | Prefer `.md` URLs. If you must scrape, the ladder's rung 2 (`waitFor` + `proxy`) recovers it — verified 2026-07-02. |
+| `interactivebrokers.com` | Intermittent. An Akamai edge-block (152-byte error page) was observed 2026-07-02; on 2026-07-25 rung 1 succeeded on defaults (17,346 B on `request-modify-orders`, 5,718 B on `/docs/web-api/`). Treat the block as something that comes and goes, not a permanent property. | Prefer `.md` URLs regardless — they cost no credits. If you must scrape, the ladder handles both states. |
 | `ibkrguides.com` | Works on defaults | Nothing special |
 | `docs.firecrawl.dev` | Works on defaults | Nothing special |
 | FT / WSJ / Bloomberg / Barron's | Metered paywall; stub content without a session | `create-profile` once per domain (section 6) |
@@ -329,6 +324,7 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-25 | v1 `scrapeOptions` supports `waitFor`, `proxy`, `timeout`, `maxAge`, `location`, `actions`, `blockAds`, `onlyMainContent`. No v2 migration is needed to use them. <https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post> |
 | 2026-07-25 | `proxy` accepts `basic`, `enhanced` (up to 5 credits), and `auto`. |
 | 2026-07-25 | IBKR moved their Web API docs from `campus/ibkr-api-page/cpapi-v1/` to `docs/web-api/`. Old URLs return HTTP 200 but redirect and drop the anchor. |
+| 2026-07-25 | The 2026-07-02 IBKR edge-block did **not** reproduce: rung 1 on cheap defaults returned 17,346 B for `campus/trading-lessons/request-modify-orders/` and 5,718 B for `docs/web-api/`. Rung 2 was exercised against the live API by forcing the threshold high — `waitFor=3000` + `proxy="auto"` is accepted and returns content, so the recovery path is wired correctly even though nothing currently needs it. Evidence: `tests/test_web_scraper_live.py::test_crawl_interactivebrokers_returns_real_content`. |
 
 ---
 

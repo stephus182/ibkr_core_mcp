@@ -722,6 +722,8 @@ fetching technical documentation. Optionally saves a snapshot to Drive.
 | `query` | string | ✅ | Search query |
 | `limit` | integer | — | Max results (1–10, default 5) |
 | `save_to_drive` | boolean | — | Save markdown snapshot to Drive `web_docs/searches/` (default `false`) |
+| `wait_for_ms` | integer | — | Advanced. Milliseconds to wait for JavaScript rendering before extraction. Omitted from the request entirely when unset |
+| `proxy` | string | — | Advanced. `basic` (1 credit), `enhanced` (up to 5), or `auto` (basic, retried through enhanced on failure). Omitted when unset |
 
 **Output:** Search results with URL, title, and full markdown content.
 
@@ -746,12 +748,21 @@ a reference point for reference-doc content, not an arbitrary one. Pass
 |-----------|------|----------|-------------|
 | `url` | string | ✅ | Root URL to crawl from (public http/https only) |
 | `max_pages` | integer | — | Maximum pages to crawl (1–100, default 50) |
-| `timeout_s` | integer | — | Max seconds to wait (default 120) |
+| `timeout_s` | integer | — | Max seconds to wait **per attempt**. Default is derived from `max_pages` as `min(600, max(120, 6 × max_pages))` — 120s up to 20 pages, 300s at 50, 600s at 100. A blocked site runs two attempts, so worst-case wall clock is roughly double this |
 | `force_refresh` | boolean | — | Re-crawl even if a fresh (<48h) cached manifest exists (default `false`) |
+| `wait_for_ms` | integer | — | Advanced. Milliseconds to wait for JavaScript rendering. Rarely needed — a crawl that comes back under 5 KB is retried automatically with 3000 |
+| `proxy` | string | — | Advanced. `basic` / `enhanced` / `auto`. Rarely needed — a crawl that comes back under 5 KB is retried automatically with `auto` |
 
-**Output:** Summary of pages saved to Drive with paths and page count, or a
-"Using cached crawl..." message with zero Firecrawl requests made if a fresh
-manifest was already on Drive.
+**Output:** Summary of pages saved to Drive with byte count, source (Firecrawl or
+Crawl4AI), paths and page count; or a "Using cached crawl..." message with zero
+Firecrawl requests if a fresh manifest was already on Drive.
+
+**Recovery ladder:** a crawl yielding under 5 KB of markdown — for any reason,
+including a blocked site, a failed job, an exhausted budget, or empty pages — is
+retried once with `waitFor=3000` and `proxy="auto"`, and the larger of the two
+results is kept. If that still yields nothing, the handler scrapes the root URL
+locally with Crawl4AI. A crawl that ends with no content returns an explicit
+diagnosis, never "saved 0 page(s)". Full detail: `docs/web-scraper-reference.md`.
 
 **Retry behavior:** all Firecrawl HTTP requests (job start + status polling)
 retry automatically on 429/408/500/502/503/504, honoring the `Retry-After`
