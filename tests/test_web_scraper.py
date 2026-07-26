@@ -345,7 +345,45 @@ def test_search_passes_wait_for_and_proxy_to_api(mock_requests):
     assert payload["scrapeOptions"]["proxy"] == "auto"
 
 
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_search_402_raises_out_of_credits(mock_requests):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
+    resp = MagicMock()
+    resp.status_code = 402
+    mock_requests.post.return_value = resp
+
+    client = FirecrawlClient("fc-test")
+    with pytest.raises(FirecrawlError, match="credits") as exc_info:
+        client.search("anything")
+    assert exc_info.value.status_code == 402
+
+
 # ── FirecrawlClient.crawl ─────────────────────────────────────────────────────
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_poll_http_error_raises_firecrawl_error_not_requests_error(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
+    mock_time.monotonic.side_effect = [0.0, 1.0]
+
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-poll-error"}
+
+    poll = MagicMock()
+    poll.status_code = 403
+
+    mock_requests.post.return_value = start_resp
+    mock_requests.get.return_value = poll
+
+    client = FirecrawlClient("fc-test")
+    # Before this change a 403 mid-poll escaped as a raw requests.HTTPError, which
+    # ClaudeToolkit's handler does not catch. It must be a FirecrawlError.
+    with pytest.raises(FirecrawlError):
+        client.crawl("https://example.com", timeout_s=120)
 
 
 @patch("ibkr_core_mcp.web_scraper.time")

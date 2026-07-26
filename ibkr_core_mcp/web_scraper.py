@@ -260,14 +260,23 @@ class FirecrawlClient:
         }
 
     def _raise_for_status(self, resp: requests.Response) -> None:
-        """Translate Firecrawl HTTP errors into FirecrawlError with a status code."""
+        """Translate Firecrawl HTTP errors into FirecrawlError with a status code.
+
+        Every HTTP failure leaves this client as a FirecrawlError, never as a raw
+        requests.HTTPError — callers (and ClaudeToolkit's handler) catch one exception
+        type, and crawl()'s escalation logic can read `status_code` to decide whether a
+        retry could possibly help.
+        """
         if resp.status_code == 401:
             raise FirecrawlError("Invalid FIRECRAWL_API_KEY", 401)
+        if resp.status_code == 402:
+            raise FirecrawlError("Firecrawl account is out of credits", 402)
         if resp.status_code == 429:
             raise FirecrawlError("Rate limit exceeded — wait before retrying", 429)
         if resp.status_code >= 500:
             raise FirecrawlError(f"Firecrawl service error: {resp.status_code}", resp.status_code)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise FirecrawlError(f"Firecrawl request failed: HTTP {resp.status_code}", resp.status_code)
 
     def _scrape_options(
         self,
@@ -374,13 +383,20 @@ class FirecrawlClient:
             for r in raw
         ]
 
-    def crawl(
+    def _try_crawl(
         self,
         url: str,
-        max_pages: int = 50,
-        timeout_s: int = 120,
+        max_pages: int,
+        timeout_s: int,
+        scrape_options: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Crawl a site starting from url and return all pages as markdown.
+        """Run exactly one Firecrawl crawl attempt: start the job, poll it, follow
+        pagination, and return whatever pages it produced.
+
+        Callers pass an already-clamped `max_pages` and an already-resolved `timeout_s`
+        (see _resolve_timeout), plus a prepared scrapeOptions dict (see _scrape_options).
+        The retry/escalation decision belongs to crawl(), not here — this method's only
+        job is to execute one attempt faithfully.
 
         Firecrawl crawls are asynchronous. This method:
           1. Starts the job with POST /v1/crawl
@@ -408,10 +424,11 @@ class FirecrawlClient:
                  pre-validated here and are re-checked independently by
                  ClaudeToolkit._validate_public_url before any local fetch of
                  them (e.g. the Crawl4AI fallback).
-            max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
-            timeout_s: Maximum wall-clock seconds to wait for the crawl to complete.
-                       Minimum 10s. If the job is still running at timeout, partial
-                       results are returned rather than raising an error.
+            max_pages: Page cap, already clamped to [1, 100].
+            timeout_s: Polling budget in seconds, already resolved. If the job is
+                       still running at timeout, partial results are returned rather
+                       than raising an error.
+            scrape_options: The scrapeOptions payload to send.
 
         Returns:
             List of page dicts, each containing:
@@ -430,15 +447,12 @@ class FirecrawlClient:
             requests.exceptions.Timeout: If a single API call exceeds 30 seconds
                                          (distinct from the overall timeout_s limit).
         """
-        max_pages = max(1, min(100, max_pages))
-        timeout_s = max(10, timeout_s)
-
         # Start crawl job
         resp = _request_with_backoff(
             lambda: requests.post(
                 f"{self.BASE_URL}/crawl",
                 headers=self._headers,
-                json={"url": url, "limit": max_pages, "scrapeOptions": {"formats": ["markdown"]}},
+                json={"url": url, "limit": max_pages, "scrapeOptions": scrape_options},
                 timeout=30,
             )
         )
@@ -479,7 +493,7 @@ class FirecrawlClient:
                     timeout=30,
                 )
             )
-            poll.raise_for_status()
+            self._raise_for_status(poll)
             data = poll.json()
             status = data.get("status", "")
 
@@ -521,7 +535,7 @@ class FirecrawlClient:
                         break
                     seen_next_urls.add(next_url)
                     next_resp = _fetch_next(next_url)
-                    next_resp.raise_for_status()
+                    self._raise_for_status(next_resp)
                     next_data = next_resp.json()
                     pages.extend(_pages_from(next_data))
                     next_url = next_data.get("next")
@@ -536,6 +550,20 @@ class FirecrawlClient:
             len(pages),
         )
         return pages
+
+    def crawl(
+        self,
+        url: str,
+        max_pages: int = 50,
+        timeout_s: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Crawl a site starting from url and return all pages as markdown.
+
+        Replaced by the escalating implementation in the next commit; for now this is a
+        faithful wrapper preserving the previous single-attempt behavior.
+        """
+        max_pages = max(1, min(100, max_pages))
+        return self._try_crawl(url, max_pages, _resolve_timeout(max_pages, timeout_s), self._scrape_options())
 
 
 class WebDocsStore:
