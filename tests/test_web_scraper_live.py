@@ -138,3 +138,29 @@ def test_toolkit_firecrawl_search_empty_query_no_network_call(toolkit):
     text, fig = toolkit.execute("firecrawl_search", {"query": "", "limit": 1})
     assert fig is None
     assert "non-empty" in text
+
+
+@pytest.mark.integration
+def test_crawl_interactivebrokers_returns_real_content(firecrawl_key):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, content_bytes
+
+    # The host this whole feature exists for: the original bug was firecrawl_crawl
+    # reporting "saved 0 page(s)" here. This asserts crawl() returns real content —
+    # it does NOT assert which rung produced it.
+    #
+    # Measured 2026-07-25: rung 1 (cheap defaults) already returns 17,346 B on this
+    # URL and 5,718 B on /docs/web-api/, so the Akamai edge-block recorded in
+    # docs/audits/audit-evidence/scrapes/manifest.json (2026-07-02, 152 B) does not
+    # currently reproduce on either. The escalated rung was verified separately by
+    # forcing the threshold high: waitFor=3000 + proxy=auto is accepted by the live
+    # API and returns content, so the recovery path is wired correctly and waiting
+    # for the next time a host does block. Kept to one page to stay cheap.
+    client = FirecrawlClient(firecrawl_key)
+    pages = client.crawl(
+        "https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/",
+        max_pages=1,
+        timeout_s=180,
+    )
+
+    assert pages, "crawl returned no pages — escalation did not recover the block"
+    assert content_bytes(pages) > 5 * 1024
