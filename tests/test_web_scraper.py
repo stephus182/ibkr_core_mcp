@@ -279,6 +279,28 @@ def test_search_limit_clamped_to_10(mock_requests):
     assert payload["limit"] == 10
 
 
+@pytest.mark.parametrize(
+    ("max_pages", "expected"),
+    [(1, 120), (20, 120), (21, 126), (50, 300), (100, 600)],
+)
+def test_resolve_timeout_scales_with_max_pages(max_pages, expected):
+    from ibkr_core_mcp.web_scraper import _resolve_timeout
+
+    assert _resolve_timeout(max_pages, None) == expected
+
+
+def test_resolve_timeout_explicit_value_wins():
+    from ibkr_core_mcp.web_scraper import _resolve_timeout
+
+    assert _resolve_timeout(100, 45) == 45
+
+
+def test_resolve_timeout_explicit_value_has_a_floor():
+    from ibkr_core_mcp.web_scraper import _resolve_timeout
+
+    assert _resolve_timeout(50, 5) == 10
+
+
 def test_scrape_options_default_is_todays_request_body():
     from ibkr_core_mcp.web_scraper import FirecrawlClient
 

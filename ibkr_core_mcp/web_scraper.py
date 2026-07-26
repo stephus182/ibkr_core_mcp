@@ -200,6 +200,28 @@ def content_bytes(pages: list[dict[str, Any]]) -> int:
     return sum(len((page.get("markdown") or "").encode("utf-8")) for page in pages)
 
 
+def _resolve_timeout(max_pages: int, timeout_s: int | None) -> int:
+    """Return the per-attempt polling budget in seconds for a crawl.
+
+    `timeout_s` is this client's own polling patience, not Firecrawl's timeout — see
+    FirecrawlClient.crawl(). The old fixed 120s default was under-budgeted for its own
+    50-page default: a slow, JS-heavy site routinely exceeds it, manufacturing a
+    "timed out with nothing" result that is not a block at all. Scaling with page count
+    keeps small crawls fast while giving large ones room to finish.
+
+    Args:
+        max_pages: Page cap for this crawl, already clamped to [1, 100] by the caller.
+        timeout_s: An explicit caller-supplied budget, or None to derive one.
+
+    Returns:
+        The explicit value (floored at 10s, matching the previous behavior), or
+        `min(600, max(120, 6 * max_pages))` when none was supplied.
+    """
+    if timeout_s is not None:
+        return max(10, timeout_s)
+    return min(600, max(120, 6 * max_pages))
+
+
 class FirecrawlClient:
     """Thin wrapper around the Firecrawl REST API v1 (https://api.firecrawl.dev/v1).
 
