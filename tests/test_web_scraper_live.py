@@ -96,15 +96,22 @@ def test_firecrawl_client_search_real_query(firecrawl_key):
 
 @pytest.mark.integration
 def test_firecrawl_client_crawl_real_site(firecrawl_key):
-    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, content_bytes
 
+    # Target must clear _MIN_USEFUL_BYTES on the first attempt, or the recovery ladder
+    # spends a second POST /crawl escalating a page that was never broken. This used to
+    # be example.com, which is 167 B — under the 5 KB threshold, so every live run burned
+    # two of Firecrawl's Free-tier budget of 2 /crawl requests per minute
+    # (https://docs.firecrawl.dev/rate-limits, verified 2026-07-25) and 429'd the next
+    # crawl test in the file. docs.firecrawl.dev/introduction measured 14,341 B on
+    # 2026-07-25 and is listed as "works on defaults" in docs/web-scraper-reference.md.
     client = FirecrawlClient(firecrawl_key)
-    pages = client.crawl("https://example.com", max_pages=1, timeout_s=60)
+    pages = client.crawl("https://docs.firecrawl.dev/introduction", max_pages=1, timeout_s=60)
 
     assert len(pages) >= 1
     page = pages[0]
     assert page["url"].startswith("http")
-    assert "Example Domain" in page["markdown"]
+    assert content_bytes(pages) > 5 * 1024, "target no longer clears the threshold — pick another page"
 
 
 @pytest.mark.integration
