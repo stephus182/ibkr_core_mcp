@@ -2,6 +2,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture
+def no_escalation(monkeypatch):
+    monkeypatch.setattr("ibkr_core_mcp.web_scraper._MIN_USEFUL_BYTES", 0)
+
+
 # ── _slugify ──────────────────────────────────────────────────────────────────
 
 
@@ -388,7 +394,7 @@ def test_crawl_poll_http_error_raises_firecrawl_error_not_requests_error(mock_re
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_job_start_retries_on_429_then_succeeds(mock_requests, mock_time):
+def test_crawl_job_start_retries_on_429_then_succeeds(mock_requests, mock_time, no_escalation):
     """The job-start POST (/crawl) is subject to the same Firecrawl rate limits
     as /search — must retry rather than raising on the first 429."""
     from ibkr_core_mcp.web_scraper import FirecrawlClient
@@ -422,7 +428,7 @@ def test_crawl_job_start_retries_on_429_then_succeeds(mock_requests, mock_time):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_polls_until_completed(mock_requests, mock_time):
+def test_crawl_polls_until_completed(mock_requests, mock_time, no_escalation):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
 
     # monotonic: deadline=0+120=120; first while check=1 (enter); after poll status=completed → exit
@@ -478,7 +484,7 @@ def test_crawl_failed_status_raises(mock_requests, mock_time):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_timeout_returns_partial_results(mock_requests, mock_time):
+def test_crawl_timeout_returns_partial_results(mock_requests, mock_time, no_escalation):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
 
     # deadline = 0.0 + 10 = 10; first while check = 5.0 (enter loop); second = 200.0 (exit)
@@ -507,7 +513,7 @@ def test_crawl_timeout_returns_partial_results(mock_requests, mock_time):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_keeps_pages_with_empty_markdown_and_metadata(mock_requests, mock_time):
+def test_crawl_keeps_pages_with_empty_markdown_and_metadata(mock_requests, mock_time, no_escalation):
     """Pages are no longer dropped for empty/None markdown — callers (quality
     assessment + fallback) need to see blocked/empty pages, not lose them silently.
     Each page also retains its raw Firecrawl metadata dict."""
@@ -550,7 +556,7 @@ def test_crawl_keeps_pages_with_empty_markdown_and_metadata(mock_requests, mock_
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_max_pages_clamped(mock_requests, mock_time):
+def test_crawl_max_pages_clamped(mock_requests, mock_time, no_escalation):
     from ibkr_core_mcp.web_scraper import FirecrawlClient
 
     mock_time.monotonic.side_effect = [0.0, 1.0]
@@ -571,7 +577,7 @@ def test_crawl_max_pages_clamped(mock_requests, mock_time):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
+def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time, no_escalation):
     """Per Firecrawl's GET /v1/crawl/{id} docs, a completed crawl whose result
     exceeds 10MB includes a "next" URL to fetch the remaining data in chunks.
     crawl() must follow it until exhausted rather than returning only the first
@@ -616,7 +622,7 @@ def test_crawl_follows_next_cursor_for_large_results(mock_requests, mock_time):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, mock_time):
+def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, mock_time, no_escalation):
     """The "next"-chunk GET must go through the same _request_with_backoff
     wrapper as every other Firecrawl call in this method — a 429 on the first
     next-chunk fetch must be retried, not treated as a terminal failure. Mirrors
@@ -668,7 +674,7 @@ def test_crawl_next_cursor_fetch_retries_on_429_then_succeeds(mock_requests, moc
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time):
+def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time, no_escalation):
     """If Firecrawl ever returned a "next" cursor that fails to advance (API bug,
     or a chunk response that doesn't null it out), crawl() must not spin forever —
     it stops once the same cursor repeats, returning whatever was collected so far
