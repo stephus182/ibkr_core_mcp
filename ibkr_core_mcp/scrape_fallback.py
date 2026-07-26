@@ -285,6 +285,49 @@ def _safe_domain(url_or_domain: str) -> str:
     return domain
 
 
+def _resolve_profile_dir(profiles_dir: Path, url_or_domain: str) -> Path | None:
+    """Find the saved browser profile that applies to a URL, or None if there is none.
+
+    Lookup used to be exact-hostname only, which silently defeated the feature it was
+    built for: a profile created for "www.ft.com" was not found for a "ft.com" or
+    "markets.ft.com" article, so the scrape fell back to anonymous and returned the
+    paywall stub with nothing indicating the profile existed.
+
+    Candidates are tried most-specific first: the exact host, the host without a leading
+    "www.", then progressively broader parents while at least two labels remain. Matching
+    therefore only ever broadens *toward* the registrable domain, never toward a sibling
+    host — a profile for "ft.com" can serve "markets.ft.com", which is intended, and
+    cookie scoping still applies on top. Stopping at two labels means a directory named
+    after a bare TLD can never be matched.
+
+    Multi-part suffixes ("ft.co.uk") stop at "co.uk", which will simply never match a
+    saved profile. No public-suffix list is worth adding for that.
+
+    Args:
+        profiles_dir: Root holding one profile directory per domain
+            (Config.crawl4ai_profiles_dir).
+        url_or_domain: A URL or bare domain; only its hostname is used.
+
+    Returns:
+        The first matching profile directory, or None to scrape anonymously.
+    """
+    host = _safe_domain(url_or_domain)
+    candidates = [host]
+    if host.startswith("www."):
+        candidates.append(host[len("www.") :])
+    labels = host.split(".")
+    while len(labels) > 2:
+        labels = labels[1:]
+        candidate = ".".join(labels)
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        path = profiles_dir / candidate
+        if path.is_dir():
+            return path
+    return None
+
+
 async def _reject_private_requests(route: Any, request: Any) -> None:
     """Playwright route handler: abort any request whose host is private/loopback/
     link-local/reserved; otherwise let it continue.
@@ -409,9 +452,8 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        domain = _safe_domain(profile_domain)
-        profile_dir = self._profiles_dir / domain
-        if profile_dir.is_dir():
+        profile_dir = _resolve_profile_dir(self._profiles_dir, profile_domain)
+        if profile_dir is not None:
             browser_config = BrowserConfig(
                 headless=True,
                 use_managed_browser=True,

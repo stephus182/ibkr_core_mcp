@@ -375,6 +375,49 @@ def test_safe_domain_rejects_empty():
         _safe_domain("")
 
 
+# ── _resolve_profile_dir ─────────────────────────────────────────────────────
+
+
+def test_resolve_profile_dir_prefers_exact_host(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
+    (tmp_path / "markets.ft.com").mkdir()
+    (tmp_path / "ft.com").mkdir()
+
+    assert _resolve_profile_dir(tmp_path, "https://markets.ft.com/x") == tmp_path / "markets.ft.com"
+
+
+def test_resolve_profile_dir_strips_www(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
+    (tmp_path / "ft.com").mkdir()
+
+    assert _resolve_profile_dir(tmp_path, "https://www.ft.com/x") == tmp_path / "ft.com"
+
+
+def test_resolve_profile_dir_finds_parent_domain_for_subdomain(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
+    (tmp_path / "wsj.com").mkdir()
+
+    assert _resolve_profile_dir(tmp_path, "https://www.wsj.com/articles/x") == tmp_path / "wsj.com"
+
+
+def test_resolve_profile_dir_stops_at_two_labels(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
+    # A bare-TLD directory must never be matched — stripping stops while two labels remain.
+    (tmp_path / "com").mkdir()
+
+    assert _resolve_profile_dir(tmp_path, "https://deep.sub.example.com/x") is None
+
+
+def test_resolve_profile_dir_returns_none_when_nothing_matches(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
+    assert _resolve_profile_dir(tmp_path, "https://www.ft.com/x") is None
+
+
 # ── Crawl4AIScraper ──────────────────────────────────────────────────────────
 
 

@@ -2802,9 +2802,10 @@ class ClaudeToolkit:
                 False,
             )
 
+        from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
         domain = urllib.parse.urlparse(url).hostname or ""
-        profile_dir = self._config.crawl4ai_profiles_dir / domain
-        if profile_dir.is_dir():
+        if _resolve_profile_dir(self._config.crawl4ai_profiles_dir, url) is not None:
             note = "(fetched via Crawl4AI fallback using a saved login profile)"
         else:
             note = (
