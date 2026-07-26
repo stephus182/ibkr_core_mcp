@@ -8,6 +8,9 @@ def no_escalation(monkeypatch):
     monkeypatch.setattr("ibkr_core_mcp.web_scraper._MIN_USEFUL_BYTES", 0)
 
 
+_BIG_MARKDOWN = "# Real page\n\n" + ("word " * 2000)  # ~10 KB, comfortably over 5 KB
+
+
 # ── _slugify ──────────────────────────────────────────────────────────────────
 
 
@@ -370,26 +373,23 @@ def test_search_402_raises_out_of_credits(mock_requests):
 
 @patch("ibkr_core_mcp.web_scraper.time")
 @patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_poll_http_error_raises_firecrawl_error_not_requests_error(mock_requests, mock_time):
-    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+def test_crawl_poll_http_error_escalates_then_returns_empty(mock_requests, mock_time):
+    import itertools
 
-    mock_time.monotonic.side_effect = [0.0, 1.0]
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
 
+    mock_time.monotonic.side_effect = itertools.count(0.0, 1.0)
     start_resp = MagicMock()
     start_resp.status_code = 200
     start_resp.json.return_value = {"id": "job-poll-error"}
-
     poll = MagicMock()
     poll.status_code = 403
-
     mock_requests.post.return_value = start_resp
     mock_requests.get.return_value = poll
 
     client = FirecrawlClient("fc-test")
-    # Before this change a 403 mid-poll escaped as a raw requests.HTTPError, which
-    # ClaudeToolkit's handler does not catch. It must be a FirecrawlError.
-    with pytest.raises(FirecrawlError):
-        client.crawl("https://example.com", timeout_s=120)
+    # A 403 mid-poll used to escape as a raw requests.HTTPError the handler never caught.
+    assert client.crawl("https://example.com", timeout_s=120) == []
 
 
 @patch("ibkr_core_mcp.web_scraper.time")
@@ -457,29 +457,6 @@ def test_crawl_polls_until_completed(mock_requests, mock_time, no_escalation):
     assert len(pages) == 1
     assert pages[0]["url"] == "https://example.com/page"
     assert pages[0]["markdown"] == "# Page"
-
-
-@patch("ibkr_core_mcp.web_scraper.time")
-@patch("ibkr_core_mcp.web_scraper.requests")
-def test_crawl_failed_status_raises(mock_requests, mock_time):
-    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
-
-    mock_time.monotonic.side_effect = [0.0, 1.0]
-
-    start_resp = MagicMock()
-    start_resp.status_code = 200
-    start_resp.json.return_value = {"id": "job-fail"}
-
-    fail_poll = MagicMock()
-    fail_poll.status_code = 200
-    fail_poll.json.return_value = {"status": "failed", "error": "blocked by robots.txt"}
-
-    mock_requests.post.return_value = start_resp
-    mock_requests.get.return_value = fail_poll
-
-    client = FirecrawlClient("fc-test")
-    with pytest.raises(FirecrawlError, match="Crawl job failed"):
-        client.crawl("https://example.com")
 
 
 @patch("ibkr_core_mcp.web_scraper.time")
@@ -713,6 +690,202 @@ def test_crawl_next_cursor_stops_on_repeated_url(mock_requests, mock_time, no_es
 
     assert len(pages) == 2
     assert mock_requests.get.call_count == 2
+
+
+# ── FirecrawlClient.crawl — escalation ladder ─────────────────────────────────
+
+
+def _crawl_responses(mock_requests, mock_time, poll_payloads):
+    """Wire mock_requests so each crawl attempt sees the next payload in poll_payloads."""
+    import itertools
+
+    mock_time.monotonic.side_effect = itertools.count(0.0, 1.0)
+    start_resp = MagicMock()
+    start_resp.status_code = 200
+    start_resp.json.return_value = {"id": "job-1"}
+    mock_requests.post.return_value = start_resp
+
+    polls = []
+    for payload in poll_payloads:
+        poll = MagicMock()
+        poll.status_code = 200
+        poll.json.return_value = payload
+        polls.append(poll)
+    mock_requests.get.side_effect = polls
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_escalates_when_first_attempt_returns_no_pages(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [
+            {"status": "completed", "data": []},
+            {
+                "status": "completed",
+                "data": [{"metadata": {"sourceURL": "https://example.com/a"}, "markdown": _BIG_MARKDOWN}],
+            },
+        ],
+    )
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert len(pages) == 1
+    assert mock_requests.post.call_count == 2
+    escalated = mock_requests.post.call_args_list[1][1]["json"]
+    assert escalated["scrapeOptions"]["waitFor"] == 3000
+    assert escalated["scrapeOptions"]["proxy"] == "auto"
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_escalates_when_first_attempt_is_under_threshold(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [
+            {"status": "completed", "data": [{"metadata": {"sourceURL": "https://example.com/a"}, "markdown": "tiny"}]},
+            {
+                "status": "completed",
+                "data": [{"metadata": {"sourceURL": "https://example.com/a"}, "markdown": _BIG_MARKDOWN}],
+            },
+        ],
+    )
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert pages[0]["markdown"] == _BIG_MARKDOWN
+    assert mock_requests.post.call_count == 2
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_does_not_escalate_when_first_attempt_clears_threshold(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [
+            {
+                "status": "completed",
+                "data": [{"metadata": {"sourceURL": "https://example.com/a"}, "markdown": _BIG_MARKDOWN}],
+            }
+        ],
+    )
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    assert len(pages) == 1
+    assert mock_requests.post.call_count == 1
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_keeps_the_better_rung_when_escalation_returns_less(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    partial = "x" * 4000  # under 5 KB, so it escalates — but it is still real content
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [
+            {
+                "status": "completed",
+                "data": [{"metadata": {"sourceURL": "https://example.com/a"}, "markdown": partial}],
+            },
+            {"status": "completed", "data": []},
+        ],
+    )
+
+    client = FirecrawlClient("fc-test")
+    pages = client.crawl("https://example.com", timeout_s=120)
+
+    # The ladder is monotonic: it can never return less than a previous rung produced.
+    assert pages[0]["markdown"] == partial
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_failed_job_escalates_then_returns_empty(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [
+            {"status": "failed", "error": "blocked by robots.txt"},
+            {"status": "failed", "error": "blocked by robots.txt"},
+        ],
+    )
+
+    client = FirecrawlClient("fc-test")
+    # A failed job used to raise before any recovery could run — that abort is the bug.
+    assert client.crawl("https://example.com", timeout_s=120) == []
+    assert mock_requests.post.call_count == 2
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_401_raises_without_escalating(mock_requests, mock_time):
+    import itertools
+
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
+
+    mock_time.monotonic.side_effect = itertools.count(0.0, 1.0)
+    start_resp = MagicMock()
+    start_resp.status_code = 401
+    mock_requests.post.return_value = start_resp
+
+    client = FirecrawlClient("fc-test")
+    with pytest.raises(FirecrawlError, match="FIRECRAWL_API_KEY"):
+        client.crawl("https://example.com", timeout_s=120)
+    # A stealth retry cannot fix a bad key — don't spend a second attempt on it.
+    assert mock_requests.post.call_count == 1
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_escalated_attempt_gets_a_larger_budget(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [{"status": "completed", "data": []}, {"status": "completed", "data": []}],
+    )
+
+    client = FirecrawlClient("fc-test")
+    with patch.object(FirecrawlClient, "_try_crawl", return_value=[]) as spy:
+        client.crawl("https://example.com", max_pages=1, timeout_s=120)
+
+    # Rung 1 uses the caller's 120s; rung 2 is floored at 180s because stealth is slower.
+    assert spy.call_args_list[0][0][2] == 120
+    assert spy.call_args_list[1][0][2] == 180
+
+
+@patch("ibkr_core_mcp.web_scraper.time")
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_crawl_never_makes_more_than_two_attempts(mock_requests, mock_time):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    _crawl_responses(
+        mock_requests,
+        mock_time,
+        [{"status": "completed", "data": []}, {"status": "completed", "data": []}],
+    )
+
+    client = FirecrawlClient("fc-test")
+    assert client.crawl("https://example.com", timeout_s=120) == []
+    assert mock_requests.post.call_count == 2
 
 
 # ── WebDocsStore — Drive service and folder helpers ───────────────────────────

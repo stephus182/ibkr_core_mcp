@@ -383,6 +383,48 @@ class FirecrawlClient:
             for r in raw
         ]
 
+    def _attempt(
+        self,
+        url: str,
+        max_pages: int,
+        timeout_s: int,
+        scrape_options: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Run one crawl attempt, converting every recoverable failure into an empty
+        page list so the caller has something to measure.
+
+        This is the piece that makes the recovery ladder possible. Previously a crawl
+        could end three different ways — a raised FirecrawlError on a failed job, a raw
+        requests.HTTPError mid-poll, or a silent empty return on deadline — so there was
+        no single point at which "we got nothing" was decided, and therefore nowhere to
+        attach recovery. Every route now ends in a list.
+
+        Args:
+            url: Root URL to crawl.
+            max_pages: Page cap, already clamped.
+            timeout_s: Polling budget, already resolved.
+            scrape_options: The scrapeOptions payload for this attempt.
+
+        Returns:
+            The attempt's pages, or [] if it failed recoverably.
+
+        Raises:
+            FirecrawlError: For account-level failures only (401 bad key, 402 out of
+                credits, 429 rate limited). A slower, more expensive retry cannot fix
+                any of them, and in the 429 case would worsen the throttling — so these
+                propagate rather than consuming an escalation.
+        """
+        try:
+            return self._try_crawl(url, max_pages, timeout_s, scrape_options)
+        except FirecrawlError as exc:
+            if exc.status_code in _NON_ESCALATING_STATUSES:
+                raise
+            log.warning("firecrawl crawl attempt for %s failed: %s", url, exc)
+            return []
+        except requests.RequestException as exc:
+            log.warning("firecrawl crawl attempt for %s failed: %s", url, exc)
+            return []
+
     def _try_crawl(
         self,
         url: str,
@@ -556,14 +598,83 @@ class FirecrawlClient:
         url: str,
         max_pages: int = 50,
         timeout_s: int | None = None,
+        *,
+        wait_for_ms: int | None = None,
+        proxy: str | None = None,
     ) -> list[dict[str, Any]]:
         """Crawl a site starting from url and return all pages as markdown.
 
-        Replaced by the escalating implementation in the next commit; for now this is a
-        faithful wrapper preserving the previous single-attempt behavior.
+        Runs up to two Firecrawl attempts. The first uses cheap defaults. If it yields
+        less than _MIN_USEFUL_BYTES of markdown — whether because the site blocked us,
+        the job failed, the budget ran out, or the pages came back empty — a second
+        attempt runs with waitFor and an anti-bot proxy, options proven against
+        interactivebrokers.com (see _ESCALATION_WAIT_FOR_MS).
+
+        The better of the two results is returned, so the ladder is monotonic: it can
+        never hand back less than the first attempt already produced, and a thin
+        escalated result can never silently replace a good cheap one. That is what makes
+        a threshold this aggressive safe — a legitimately short page costs a wasted
+        retry, never a wrong answer.
+
+        A caller that still gets nothing should fall back to a local scrape;
+        ClaudeToolkit._handle_firecrawl_crawl does exactly that with Crawl4AI.
+
+        Args:
+            url: Root URL to crawl from. Must be a public http/https URL. The caller is
+                responsible for SSRF validation. Note this only validates the root — the
+                individual page URLs in the returned list were discovered by Firecrawl
+                and are re-checked independently by ClaudeToolkit._validate_public_url
+                before any local fetch of them.
+            max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
+            timeout_s: Polling budget **per attempt**, in seconds. None derives one from
+                max_pages (see _resolve_timeout). Worst-case wall clock is therefore
+                roughly twice this value when both attempts run.
+            wait_for_ms: Advanced override for the first attempt's JS render wait. The
+                escalated attempt uses _ESCALATION_WAIT_FOR_MS unless this is set, in
+                which case the caller's value is respected on both attempts.
+            proxy: Advanced override for the first attempt's proxy mode, same handling
+                as wait_for_ms. "enhanced"/"auto" can cost up to 5 credits per page.
+
+        Returns:
+            Page dicts with "url", "markdown" and "metadata" keys. Empty-markdown and
+            error pages are included, not filtered, so callers can see and recover from
+            them. Returns [] when both attempts came back with nothing.
+
+        Raises:
+            FirecrawlError: Only for account-level failures — 401 (invalid key), 402
+                (out of credits), 429 (rate limited). Note this method no longer raises
+                when the crawl job itself reports "failed"; that case escalates and then
+                returns whatever the ladder produced, which is the point of the ladder.
         """
         max_pages = max(1, min(100, max_pages))
-        return self._try_crawl(url, max_pages, _resolve_timeout(max_pages, timeout_s), self._scrape_options())
+        resolved_timeout = _resolve_timeout(max_pages, timeout_s)
+
+        first = self._attempt(
+            url,
+            max_pages,
+            resolved_timeout,
+            self._scrape_options(wait_for_ms=wait_for_ms, proxy=proxy),
+        )
+        if content_bytes(first) >= _MIN_USEFUL_BYTES:
+            return first
+
+        log.warning(
+            "firecrawl crawl of %s returned %d B (under the %d B threshold) — retrying with waitFor and an anti-bot proxy",
+            url,
+            content_bytes(first),
+            _MIN_USEFUL_BYTES,
+        )
+        second = self._attempt(
+            url,
+            max_pages,
+            max(resolved_timeout, _ESCALATION_MIN_TIMEOUT_S),
+            self._scrape_options(
+                wait_for_ms=_ESCALATION_WAIT_FOR_MS if wait_for_ms is None else wait_for_ms,
+                proxy=_ESCALATION_PROXY if proxy is None else proxy,
+            ),
+        )
+        # max() returns the first maximal element, so a tie keeps the cheaper rung.
+        return max(first, second, key=content_bytes)
 
 
 class WebDocsStore:
