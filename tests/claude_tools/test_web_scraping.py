@@ -717,3 +717,71 @@ def test_firecrawl_search_forwards_wait_for_and_proxy_to_the_client():
     kwargs = toolkit._firecrawl.search.call_args[1]
     assert kwargs["wait_for_ms"] == 3000
     assert kwargs["proxy"] == "auto"
+
+
+def _blocked_firecrawl_toolkit(exc):
+    """Toolkit whose Firecrawl crawl raises `exc`, with Crawl4AI ready to rescue it."""
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.side_effect = exc
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-26T00:00:00+00:00",
+        "pages": [{"url": "https://example.com", "file_id": "f1"}],
+    }
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
+    return toolkit
+
+
+def test_crawl_falls_back_to_crawl4ai_when_firecrawl_is_rate_limited():
+    from ibkr_core_mcp.web_scraper import FirecrawlError
+
+    # 429 is exactly when the free local scraper matters most: Firecrawl's Free tier
+    # allows 2 /crawl per minute, so a rate limit means no more paid attempts this minute.
+    toolkit = _blocked_firecrawl_toolkit(FirecrawlError("Rate limit exceeded", 429))
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com")
+    assert "Crawl4AI" in text
+    assert "Crawl complete" in text
+
+
+def test_crawl_falls_back_to_crawl4ai_when_out_of_credits():
+    from ibkr_core_mcp.web_scraper import FirecrawlError
+
+    toolkit = _blocked_firecrawl_toolkit(FirecrawlError("out of credits", 402))
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com")
+    assert "Crawl complete" in text
+
+
+def test_crawl_falls_back_to_crawl4ai_on_network_error():
+    import requests
+
+    toolkit = _blocked_firecrawl_toolkit(requests.ConnectionError("dns failure"))
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com")
+    assert "Crawl complete" in text
+
+
+def test_crawl_no_content_message_names_the_firecrawl_failure():
+    from ibkr_core_mcp.web_scraper import FirecrawlError
+
+    toolkit = _blocked_firecrawl_toolkit(FirecrawlError("Rate limit exceeded", 429))
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": ""}
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    # When everything fails, the message must still say why Firecrawl produced nothing —
+    # "no content" alone would hide an expired key or an empty credit balance.
+    assert "no content" in text.lower()
+    assert "429" in text
+    toolkit._web_docs.save_crawl.assert_not_called()

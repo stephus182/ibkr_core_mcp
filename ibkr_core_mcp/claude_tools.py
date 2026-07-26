@@ -865,19 +865,18 @@ TOOL_DEFINITIONS = [
                 "wait_for_ms": {
                     "type": "integer",
                     "description": (
-                        "Advanced override: milliseconds to wait for JavaScript rendering "
-                        "before extracting. Usually unnecessary — a crawl that comes back "
-                        "empty is retried automatically with 3000."
+                        "Advanced: milliseconds to wait for JavaScript rendering before "
+                        "extracting. Try 3000 on a site whose content arrives via JavaScript "
+                        "and came back empty. Omitted from the request when unset."
                     ),
                 },
                 "proxy": {
                     "type": "string",
                     "enum": ["basic", "enhanced", "auto"],
                     "description": (
-                        "Advanced override: Firecrawl proxy mode. 'basic' costs 1 credit, "
-                        "'enhanced' up to 5, 'auto' retries with enhanced only if basic "
-                        "fails. Usually unnecessary — a crawl that comes back empty is "
-                        "retried automatically with 'auto'."
+                        "Advanced: Firecrawl proxy mode. 'basic' costs 1 credit, 'enhanced' "
+                        "up to 5, 'auto' retries with enhanced only if basic fails. Try 'auto' "
+                        "on a site that blocks automated clients. Omitted when unset."
                     ),
                 },
             },
@@ -908,9 +907,9 @@ TOOL_DEFINITIONS = [
                 "timeout_s": {
                     "type": "integer",
                     "description": (
-                        "Max seconds to wait per attempt. Default scales with max_pages "
-                        "(6s per page, clamped to 120-600s). A blocked site runs two "
-                        "attempts, so worst-case wall clock is roughly double this."
+                        "Max seconds to wait for the crawl. Default scales with max_pages "
+                        "(6s per page, clamped to 120-600s). Only one Firecrawl attempt is "
+                        "made, so this is the whole budget."
                     ),
                 },
                 "force_refresh": {
@@ -925,19 +924,18 @@ TOOL_DEFINITIONS = [
                 "wait_for_ms": {
                     "type": "integer",
                     "description": (
-                        "Advanced override: milliseconds to wait for JavaScript rendering "
-                        "before extracting. Usually unnecessary — a crawl that comes back "
-                        "empty is retried automatically with 3000."
+                        "Advanced: milliseconds to wait for JavaScript rendering before "
+                        "extracting. Try 3000 on a site whose content arrives via JavaScript "
+                        "and came back empty. Omitted from the request when unset."
                     ),
                 },
                 "proxy": {
                     "type": "string",
                     "enum": ["basic", "enhanced", "auto"],
                     "description": (
-                        "Advanced override: Firecrawl proxy mode. 'basic' costs 1 credit, "
-                        "'enhanced' up to 5, 'auto' retries with enhanced only if basic "
-                        "fails. Usually unnecessary — a crawl that comes back empty is "
-                        "retried automatically with 'auto'."
+                        "Advanced: Firecrawl proxy mode. 'basic' costs 1 credit, 'enhanced' "
+                        "up to 5, 'auto' retries with enhanced only if basic fails. Try 'auto' "
+                        "on a site that blocks automated clients. Omitted when unset."
                     ),
                 },
             },
@@ -3121,6 +3119,11 @@ class ClaudeToolkit:
 
         from ibkr_core_mcp.web_scraper import _MIN_USEFUL_BYTES, content_bytes
 
+        # An account-level Firecrawl failure is not the end of the call. 401/402/429 and a
+        # dead network are precisely when the free, local Crawl4AI rung is worth the most —
+        # returning here would skip the fallback exactly when Firecrawl cannot be used at
+        # all. The error is kept so the final message can still name the real cause.
+        firecrawl_failure: str | None = None
         try:
             pages = self._firecrawl.crawl(
                 url,
@@ -3130,9 +3133,11 @@ class ClaudeToolkit:
                 proxy=proxy,
             )
         except FirecrawlError as exc:
-            return f"Firecrawl crawl failed (HTTP {exc.status_code}): {exc}", None
+            pages, firecrawl_failure = [], f"HTTP {exc.status_code}: {exc}"
+            log.warning("firecrawl crawl of %s failed (%s) — falling back to Crawl4AI", url, firecrawl_failure)
         except requests.RequestException as exc:
-            return f"Firecrawl crawl failed (network error): {exc}", None
+            pages, firecrawl_failure = [], f"network error: {exc}"
+            log.warning("firecrawl crawl of %s failed (%s) — falling back to Crawl4AI", url, firecrawl_failure)
 
         firecrawl_bytes = content_bytes(pages)
 
@@ -3153,18 +3158,23 @@ class ClaudeToolkit:
 
         final_bytes = content_bytes(pages)
         if final_bytes == 0:
+            firecrawl_line = (
+                f"Firecrawl failed ({firecrawl_failure})"
+                if firecrawl_failure
+                else f"Firecrawl returned {firecrawl_bytes} B"
+            )
             return (
                 f"Crawl of {url} produced no content.\n"
-                f"Firecrawl returned {firecrawl_bytes} B even after retrying with "
-                f"waitFor and an anti-bot proxy, and the local Crawl4AI fallback also "
-                f"returned nothing.\n"
+                f"{firecrawl_line}, and the local Crawl4AI fallback also returned "
+                f"nothing.\n"
                 f"Likely causes: the site blocks automated clients, its content is "
                 f"rendered by JavaScript the scraper did not wait for, or your Firecrawl "
                 f"plan is rate-limited or out of credits.\n"
                 f"Next: if this is a site you subscribe to, run "
                 f"`python -m ibkr_core_mcp.scrape_fallback create-profile {url}` once. "
-                f"For IBKR documentation, append `.md` to the page URL instead of "
-                f"crawling it.",
+                f"To retry Firecrawl with anti-bot options, pass wait_for_ms=3000 and "
+                f"proxy='auto'. For IBKR documentation, append `.md` to the page URL "
+                f"instead of crawling it.",
                 None,
             )
 
@@ -3174,7 +3184,12 @@ class ClaudeToolkit:
             return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
 
         saved = len(manifest["pages"])
-        source = "Crawl4AI (Firecrawl returned nothing usable)" if root_rescued else "Firecrawl"
+        if not root_rescued:
+            source = "Firecrawl"
+        elif firecrawl_failure:
+            source = f"Crawl4AI (Firecrawl failed — {firecrawl_failure})"
+        else:
+            source = "Crawl4AI (Firecrawl returned nothing usable)"
         fallback_line = (
             f"\nCrawl4AI fallback used for {fallback_count} page(s) Firecrawl couldn't fully extract."
             if fallback_count

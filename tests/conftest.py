@@ -73,6 +73,10 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_crawl_never_reports_zero_pages_as_success",
     "test_crawl_degrades_when_crawl4ai_is_not_installed",
     "test_crawl_reports_network_failure_instead_of_raising",
+    "test_crawl_falls_back_to_crawl4ai_when_firecrawl_is_rate_limited",
+    "test_crawl_falls_back_to_crawl4ai_when_out_of_credits",
+    "test_crawl_falls_back_to_crawl4ai_on_network_error",
+    "test_crawl_no_content_message_names_the_firecrawl_failure",
 }
 
 

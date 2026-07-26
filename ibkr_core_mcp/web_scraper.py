@@ -63,7 +63,10 @@ _FIRECRAWL_MAX_BACKOFF = 30.0
 # checks in crawl() itself.
 _FIRECRAWL_MAX_NEXT_CHUNKS = 50
 
-# Minimum total markdown a crawl must yield before it is treated as a success.
+# Minimum total markdown a crawl must yield before it is treated as a success. Applied by
+# the caller (ClaudeToolkit._handle_firecrawl_crawl), not by crawl() itself: crawl()
+# reports what Firecrawl gave it, and the decision to fall back to a local scrape belongs
+# to the orchestration layer that owns the fallback.
 # Calibrated against this repo's own scrape cache (docs/audits/audit-evidence/scrapes/):
 # the largest observed failure is a 152-byte Akamai edge-block page, and the smallest
 # observed real documentation page is 12,933 bytes. 5 KB sits ~34x above the former
@@ -72,23 +75,13 @@ _FIRECRAWL_MAX_NEXT_CHUNKS = 50
 # docs/plans/2026-07-25-web-scraper-robustness-design.md section 3.1.
 _MIN_USEFUL_BYTES = 5 * 1024
 
-# Escalation options for a crawl that came back under _MIN_USEFUL_BYTES. Proven against
-# interactivebrokers.com in docs/audits/audit-evidence/scrapes/manifest.json (2026-07-02):
-# "retry with --wait-for 3000 --proxy auto succeeded after prior firecrawl-default and
-# webfetch failures". Both are documented v1 scrapeOptions fields:
-# https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post (verified 2026-07-25).
-_ESCALATION_WAIT_FOR_MS = 3000
-_ESCALATION_PROXY = "auto"
-
-# Floor for the escalated attempt's polling budget. Stealth is slower by construction —
-# waitFor adds 3s per page and proxy="auto" retries a failed basic fetch through the
-# enhanced proxy — so reusing a budget that just timed out would reproduce the timeout.
-_ESCALATION_MIN_TIMEOUT_S = 180
-
-# Firecrawl statuses where a stealth retry cannot help: a bad key, an empty credit
-# balance, and an active rate limit are account-level, not page-level. Retrying burns
-# time and money to fail identically, and in the 429 case worsens the throttling.
-_NON_ESCALATING_STATUSES = frozenset({401, 402, 429})
+# Firecrawl statuses that describe the *account* rather than the page: a bad key, an
+# empty credit balance, and an active rate limit. These propagate to the caller instead
+# of being flattened into an empty page list, so the handler can name the real cause in
+# its message before it falls back to the free local scraper. Every other failure mode
+# — a failed job, a 4xx mid-poll, an exhausted polling budget — is page-level and is
+# reported as "no content" for the caller to measure and recover from.
+_ACCOUNT_LEVEL_STATUSES = frozenset({401, 402, 429})
 
 
 def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Response:
@@ -390,14 +383,14 @@ class FirecrawlClient:
         timeout_s: int,
         scrape_options: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Run one crawl attempt, converting every recoverable failure into an empty
-        page list so the caller has something to measure.
+        """Run one crawl attempt, converting every page-level failure into an empty page
+        list so the caller has something to measure.
 
-        This is the piece that makes the recovery ladder possible. Previously a crawl
-        could end three different ways — a raised FirecrawlError on a failed job, a raw
+        This is the piece that makes recovery possible. Previously a crawl could end
+        three different ways — a raised FirecrawlError on a failed job, a raw
         requests.HTTPError mid-poll, or a silent empty return on deadline — so there was
         no single point at which "we got nothing" was decided, and therefore nowhere to
-        attach recovery. Every route now ends in a list.
+        attach a fallback. Every page-level route now ends in a list.
 
         Args:
             url: Root URL to crawl.
@@ -406,18 +399,18 @@ class FirecrawlClient:
             scrape_options: The scrapeOptions payload for this attempt.
 
         Returns:
-            The attempt's pages, or [] if it failed recoverably.
+            The attempt's pages, or [] if it failed at the page level.
 
         Raises:
-            FirecrawlError: For account-level failures only (401 bad key, 402 out of
-                credits, 429 rate limited). A slower, more expensive retry cannot fix
-                any of them, and in the 429 case would worsen the throttling — so these
-                propagate rather than consuming an escalation.
+            FirecrawlError: For account-level failures only — see
+                _ACCOUNT_LEVEL_STATUSES. These describe the account rather than the page,
+                so they propagate and let the caller name the cause instead of being
+                indistinguishable from an empty result.
         """
         try:
             return self._try_crawl(url, max_pages, timeout_s, scrape_options)
         except FirecrawlError as exc:
-            if exc.status_code in _NON_ESCALATING_STATUSES:
+            if exc.status_code in _ACCOUNT_LEVEL_STATUSES:
                 raise
             log.warning("firecrawl crawl attempt for %s failed: %s", url, exc)
             return []
@@ -604,20 +597,20 @@ class FirecrawlClient:
     ) -> list[dict[str, Any]]:
         """Crawl a site starting from url and return all pages as markdown.
 
-        Runs up to two Firecrawl attempts. The first uses cheap defaults. If it yields
-        less than _MIN_USEFUL_BYTES of markdown — whether because the site blocked us,
-        the job failed, the budget ran out, or the pages came back empty — a second
-        attempt runs with waitFor and an anti-bot proxy, options proven against
-        interactivebrokers.com (see _ESCALATION_WAIT_FOR_MS).
+        Makes exactly **one** Firecrawl attempt and returns whatever it produced, however
+        little that is. Recovery is the caller's job, not this method's: a thin or empty
+        result is the signal for ClaudeToolkit._handle_firecrawl_crawl to fall back to a
+        free local Crawl4AI scrape.
 
-        The better of the two results is returned, so the ladder is monotonic: it can
-        never hand back less than the first attempt already produced, and a thin
-        escalated result can never silently replace a good cheap one. That is what makes
-        a threshold this aggressive safe — a legitimately short page costs a wasted
-        retry, never a wrong answer.
+        One attempt rather than an automatic stealth retry, deliberately. Firecrawl's
+        Free tier allows 2 /crawl requests per minute
+        (https://docs.firecrawl.dev/rate-limits, verified 2026-07-25), so a two-attempt
+        ladder spends a whole minute's budget on a single URL and rate-limits the next
+        call. Falling straight to the local scraper is both cheaper and faster, and it is
+        the rung that actually costs nothing.
 
-        A caller that still gets nothing should fall back to a local scrape;
-        ClaudeToolkit._handle_firecrawl_crawl does exactly that with Crawl4AI.
+        Stealth is still available — pass wait_for_ms and/or proxy explicitly. It is
+        opt-in rather than an automatic second request.
 
         Args:
             url: Root URL to crawl from. Must be a public http/https URL. The caller is
@@ -626,55 +619,32 @@ class FirecrawlClient:
                 and are re-checked independently by ClaudeToolkit._validate_public_url
                 before any local fetch of them.
             max_pages: Upper bound on pages to crawl. Clamped to [1, 100].
-            timeout_s: Polling budget **per attempt**, in seconds. None derives one from
-                max_pages (see _resolve_timeout). Worst-case wall clock is therefore
-                roughly twice this value when both attempts run.
-            wait_for_ms: Advanced override for the first attempt's JS render wait. The
-                escalated attempt uses _ESCALATION_WAIT_FOR_MS unless this is set, in
-                which case the caller's value is respected on both attempts.
-            proxy: Advanced override for the first attempt's proxy mode, same handling
-                as wait_for_ms. "enhanced"/"auto" can cost up to 5 credits per page.
+            timeout_s: Polling budget in seconds. None derives one from max_pages (see
+                _resolve_timeout). This is the whole wall-clock budget — there is no
+                second attempt to double it.
+            wait_for_ms: Milliseconds to wait for JavaScript rendering before extraction.
+                Omitted from the request entirely when None.
+            proxy: "basic", "enhanced", or "auto". "enhanced"/"auto" can cost up to 5
+                credits per page. Omitted from the request entirely when None.
 
         Returns:
             Page dicts with "url", "markdown" and "metadata" keys. Empty-markdown and
             error pages are included, not filtered, so callers can see and recover from
-            them. Returns [] when both attempts came back with nothing.
+            them. Returns [] when the attempt produced nothing.
 
         Raises:
             FirecrawlError: Only for account-level failures — 401 (invalid key), 402
-                (out of credits), 429 (rate limited). Note this method no longer raises
-                when the crawl job itself reports "failed"; that case escalates and then
-                returns whatever the ladder produced, which is the point of the ladder.
+                (out of credits), 429 (rate limited). Note this method does not raise
+                when the crawl job itself reports "failed", times out, or 4xxs mid-poll;
+                those return [] so the caller can recover locally, which is the point.
         """
         max_pages = max(1, min(100, max_pages))
-        resolved_timeout = _resolve_timeout(max_pages, timeout_s)
-
-        first = self._attempt(
+        return self._attempt(
             url,
             max_pages,
-            resolved_timeout,
+            _resolve_timeout(max_pages, timeout_s),
             self._scrape_options(wait_for_ms=wait_for_ms, proxy=proxy),
         )
-        if content_bytes(first) >= _MIN_USEFUL_BYTES:
-            return first
-
-        log.warning(
-            "firecrawl crawl of %s returned %d B (under the %d B threshold) — retrying with waitFor and an anti-bot proxy",
-            url,
-            content_bytes(first),
-            _MIN_USEFUL_BYTES,
-        )
-        second = self._attempt(
-            url,
-            max_pages,
-            max(resolved_timeout, _ESCALATION_MIN_TIMEOUT_S),
-            self._scrape_options(
-                wait_for_ms=_ESCALATION_WAIT_FOR_MS if wait_for_ms is None else wait_for_ms,
-                proxy=_ESCALATION_PROXY if proxy is None else proxy,
-            ),
-        )
-        # max() returns the first maximal element, so a tie keeps the cheaper rung.
-        return max(first, second, key=content_bytes)
 
 
 class WebDocsStore:

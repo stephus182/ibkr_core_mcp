@@ -241,9 +241,10 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is a complete 517-page index. There is also an MCP server at
     `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape,
-    `FirecrawlClient.crawl()` now escalates automatically (retrying with `waitFor`/`proxy`, both
-    exposed on `crawl()` and `search()`), falls back to a local Crawl4AI scrape of the root URL,
-    and reports an explicit diagnosis instead of the old silent "saved 0 page(s)".
+    `FirecrawlClient.crawl()` makes one attempt and, whenever it yields under 5 KB of markdown
+    (including on 401/402/429 or a network error), falls back to a free local Crawl4AI scrape of
+    the root URL, reporting an explicit diagnosis instead of the old silent "saved 0 page(s)".
+    `waitFor`/`proxy` are exposed on both `crawl()` and `search()` as opt-in overrides.
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
   deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single

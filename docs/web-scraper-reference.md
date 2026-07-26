@@ -64,27 +64,35 @@ pytest tests/test_web_scraper_dev_cache_live.py -v -m integration
 ## 3. The recovery ladder
 
 A crawl of a site that fights back used to return zero pages and report it as success. It now
-escalates through three rungs in increasing cost order:
+falls back exactly once, from the paid remote scraper to the free local one:
 
 ```text
-crawl(url)
+firecrawl_crawl(url)
   │
-  ├─ Rung 1: Firecrawl, cheap defaults                      ~1 credit/page
-  │     └─ >= 5 KB of markdown? ─────────────────────────► return
-  │
-  ├─ Rung 2: Firecrawl, waitFor=3000 + proxy="auto"         up to 5 credits/page
-  │     └─ always ──────────────────────────────────────► return best-of(rung 1, rung 2)
-  │        (crawl() stops here; the handler applies the 5 KB test to that result)
-  │
-  └─ Rung 3 (handler): Crawl4AI scrapes the root URL        free
+  ├─ Rung 1: Firecrawl, one attempt                         ~1 credit/page
+  │     ├─ >= 5 KB of markdown? ────────────────────────► save to Drive, done
+  │     └─ anything else — thin, empty, job failed, timed out,
+  │        401 / 402 / 429, network down ───────────────┐
+  │                                                     │
+  └─ Rung 2: Crawl4AI scrapes the root URL locally  ◄────┘   free
         using a saved login profile if one matches
         │
-        └─ still nothing → explicit diagnosis, never "saved 0 page(s)"
+        └─ still nothing → explicit diagnosis naming the Firecrawl
+                           failure, never "saved 0 page(s)"
 ```
+
+**Why only one Firecrawl attempt.** Firecrawl's Free tier allows **2** `/crawl` requests per
+minute (<https://docs.firecrawl.dev/rate-limits>, verified 2026-07-25). An automatic stealth
+retry would spend a whole minute's budget on one URL and rate-limit the very next call — so the
+second attempt would frequently *cause* the failure it was meant to fix. The local rung is free,
+runs immediately, and needs no budget at all, so it is the better place to go.
+
+Stealth is not gone, just opt-in: pass `wait_for_ms=3000` and `proxy="auto"` when you know a host
+needs them. See section 4.
 
 ### 3.1 The one rule
 
-> **Escalate unless the result already carries 5 KB of markdown.**
+> **Fall back to the local scraper unless Firecrawl already returned 5 KB of markdown.**
 
 The decision is a single measurement — `content_bytes(pages)`, the total UTF-8 size of all
 extracted markdown — not a classification of how the attempt ended. Blocked, timed out, job
@@ -103,15 +111,17 @@ failed, and completed-empty all mean the same thing to a caller and take the sam
 
 5 KB sits ~34× above the largest observed failure and ~2.5× below the smallest observed success.
 
-**The ladder keeps the best rung, not the last.** Every rung is scored with the same function and
-the largest result wins. So a legitimately short 3 KB page will run the whole ladder and still
-measure "too small", but the output is still correct — you can never end up with less than rung 1
-produced, and a thin Crawl4AI result can never silently replace a good Firecrawl one. The cost of
-a short page is a wasted retry, never a wrong answer.
+**The fallback keeps the larger result, not the last one.** Both rungs are scored with the same
+function and Crawl4AI's result replaces Firecrawl's only if it is genuinely bigger. So a
+legitimately short 3 KB page still measures "too small" and runs the local rung, but the output
+stays correct — a thin Crawl4AI result can never silently replace a better Firecrawl one. The
+cost of a short page is one free local fetch, never a wrong answer.
 
-**Two failures skip the paid retry entirely.** HTTP 401 (bad key), 402 (out of credits) and 429
-(rate limited) are account-level. A slower, more expensive attempt cannot fix any of them, and in
-the 429 case worsens the throttling — so they raise immediately and drop to the free local rung.
+**Account-level failures fall back too.** HTTP 401 (bad key), 402 (out of credits), 429 (rate
+limited) and a dead network all mean Firecrawl is unusable right now — which is precisely when a
+free, local scraper is worth the most. The crawl does not abort; it drops to Crawl4AI and, if
+that also comes back empty, names the Firecrawl failure in the final message so you know whether
+to top up, wait, or fix a key.
 
 ### 3.2 The per-page fallback (search, and pages within a crawl)
 
@@ -140,18 +150,22 @@ shares the same profile decision.
 |---|---|---|---|
 | `url` | — | required | Public http/https only. SSRF-validated before any request. |
 | `max_pages` | 50 | clamped to [1, 100] | |
-| `timeout_s` | derived | ≥ 10 | Polling budget **per attempt**. Derived as `min(600, max(120, 6 × max_pages))` — 120s up to 20 pages, 300s at 50, 600s at 100. |
+| `timeout_s` | derived | ≥ 10 | Whole polling budget. Derived as `min(600, max(120, 6 × max_pages))` — 120s up to 20 pages, 300s at 50, 600s at 100. |
 | `force_refresh` | `false` | | Skip the Drive cache check (section 5). |
-| `wait_for_ms` | none | | Advanced. Milliseconds to wait for JS rendering. Rung 2 uses 3000 automatically. |
-| `proxy` | none | `basic`/`enhanced`/`auto` | Advanced. Rung 2 uses `auto` automatically. |
+| `wait_for_ms` | none | | Advanced, opt-in. Milliseconds to wait for JS rendering. Try `3000` on a JS-rendered site that came back empty. |
+| `proxy` | none | `basic`/`enhanced`/`auto` | Advanced, opt-in. Try `auto` on a site that blocks automated clients. |
 
 `timeout_s` is **our polling patience, not Firecrawl's timeout.** The old fixed 120s default was
 under-budgeted for its own 50-page default and could manufacture a "timed out with nothing" result
 on a site that was merely slow.
 
-**Worst-case wall clock** is roughly `2 × timeout_s` plus the Crawl4AI scrape — about 11 minutes
-at `max_pages=50` for a fully-blocked site. That depth is only reached when every rung fails. If
-you need bounded latency, pass `timeout_s` explicitly.
+**Worst-case wall clock** is `timeout_s` plus the Crawl4AI scrape — about 5½ minutes at
+`max_pages=50` for a fully-blocked site. There is no second Firecrawl attempt to double it. If
+you need tighter latency, pass `timeout_s` explicitly.
+
+Neither `wait_for_ms` nor `proxy` is ever applied automatically. When they are unset they are
+omitted from the request entirely, so a default call is byte-for-byte the request this client
+sent before these parameters existed.
 
 ### `firecrawl_search`
 
@@ -163,7 +177,7 @@ you need bounded latency, pass `timeout_s` explicitly.
 | `wait_for_ms` | none | advanced |
 | `proxy` | none | advanced |
 
-Search has no escalation ladder — it doesn't need one. Each result is graded and recovered
+Search has no root-URL fallback — it doesn't need one. Each result is graded and recovered
 individually by section 3.2, and results are typically on different domains, so a whole-query
 retry would be the wrong shape. Per-result markdown is truncated to 2,000 characters in the tool
 output; the full text is what gets saved to Drive.
@@ -179,9 +193,9 @@ output; the full text is what gets saved to Drive.
 | `proxy: "auto"` | 1 credit if basic succeeds; up to 5 if it retries through enhanced |
 | Crawl4AI (any rung 3 work) | free — it runs locally |
 
-Escalation only ever fires **after** a crawl already returned under 5 KB, so the expensive path is
-bounded by actual failures rather than by volume. A site that works costs exactly what it costs
-today.
+A crawl costs exactly one Firecrawl attempt. `enhanced`/`auto` are charged only when you ask for
+them explicitly — nothing escalates you into the expensive path automatically, and the recovery
+rung is free. A site that works costs exactly what it cost before this feature existed.
 
 Firecrawl also enforces per-plan rate limits — as low as 1 request/minute for `/crawl` on the free
 tier. The client retries 408/429/500/502/503/504 with exponential backoff plus jitter, honoring
@@ -282,7 +296,7 @@ one.
 
 | Host | Behavior | What to do |
 |---|---|---|
-| `interactivebrokers.com` | Intermittent. An Akamai edge-block (152-byte error page) was observed 2026-07-02; on 2026-07-25 rung 1 succeeded on defaults (17,346 B on `request-modify-orders`, 5,718 B on `/docs/web-api/`). Treat the block as something that comes and goes, not a permanent property. | Prefer `.md` URLs regardless — they cost no credits. If you must scrape, the ladder handles both states. |
+| `interactivebrokers.com` | Intermittent. An Akamai edge-block (152-byte error page) was observed 2026-07-02; on 2026-07-25 a plain Firecrawl attempt succeeded (17,346 B on `request-modify-orders`, 5,718 B on `/docs/web-api/`). Treat the block as something that comes and goes, not a permanent property. | Prefer `.md` URLs regardless — they cost no credits. If it does block, add `wait_for_ms=3000` + `proxy="auto"`, or let the local rung take it. |
 | `ibkrguides.com` | Works on defaults | Nothing special |
 | `docs.firecrawl.dev` | Works on defaults | Nothing special |
 | FT / WSJ / Bloomberg / Barron's | Metered paywall; stub content without a session | `create-profile` once per domain (section 6) |
@@ -294,14 +308,14 @@ one.
 | Symptom | Cause | Fix |
 |---|---|---|
 | "not available: FIRECRAWL_API_KEY is not configured" | No key in the environment | Set `FIRECRAWL_API_KEY` in the consuming project's `.env` |
-| "Crawl of … produced no content" | All three rungs failed | Check the host table. For a subscription site, `create-profile`. For IBKR docs, use `.md` URLs. |
+| "Crawl of … produced no content" | Both rungs failed; the message names the Firecrawl cause | Check the host table. For a subscription site, `create-profile`. Try `wait_for_ms=3000` + `proxy="auto"`. For IBKR docs, use `.md` URLs. |
 | Crawl returns fewer pages than expected | Polling budget exhausted, not a block | Raise `timeout_s`; partial results are returned, not discarded |
-| "Firecrawl crawl failed (HTTP 402)" | Out of credits | Top up, or rely on Crawl4AI — it's free and runs locally |
-| "Firecrawl crawl failed (HTTP 429)" | Plan rate limit | Wait. The client already retried with backoff. Free tier allows 1 `/crawl` per minute. |
+| Result says `Source: Crawl4AI (Firecrawl failed — HTTP 402…)` | Out of credits; the local rung already rescued the crawl | Top up when convenient. The content is real. |
+| `Source: Crawl4AI (Firecrawl failed — HTTP 429…)` | Plan rate limit; the local rung already rescued the crawl | Nothing. Free tier allows 2 `/crawl` per minute; the client already retried with backoff. |
 | Article is truncated on a site you subscribe to | No profile matched, or the session expired | `list-profiles` to check; re-run `create-profile` |
 | "Crawl4AI fallback unavailable" | Optional extra not installed | `pip install "ibkr_core_mcp[scraper]" && crawl4ai-setup` |
 | Same URL crawled twice returns instantly | 48h Drive cache hit — working as designed | `force_refresh=true` to re-crawl |
-| A crawl took ~11 minutes | Every rung failed on a blocked site | Pass an explicit smaller `timeout_s` |
+| A crawl took ~5-6 minutes | Firecrawl used its whole budget, then the local rung ran | Pass an explicit smaller `timeout_s` |
 
 **SSRF protection is two-layered and not optional.** `ClaudeToolkit._validate_public_url` rejects
 private, loopback and link-local hosts before any URL reaches Crawl4AI, and a Playwright-level
@@ -324,7 +338,9 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-25 | v1 `scrapeOptions` supports `waitFor`, `proxy`, `timeout`, `maxAge`, `location`, `actions`, `blockAds`, `onlyMainContent`. No v2 migration is needed to use them. <https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post> |
 | 2026-07-25 | `proxy` accepts `basic`, `enhanced` (up to 5 credits), and `auto`. |
 | 2026-07-25 | IBKR moved their Web API docs from `campus/ibkr-api-page/cpapi-v1/` to `docs/web-api/`. Old URLs return HTTP 200 but redirect and drop the anchor. |
-| 2026-07-25 | The 2026-07-02 IBKR edge-block did **not** reproduce: rung 1 on cheap defaults returned 17,346 B for `campus/trading-lessons/request-modify-orders/` and 5,718 B for `docs/web-api/`. Rung 2 was exercised against the live API by forcing the threshold high — `waitFor=3000` + `proxy="auto"` is accepted and returns content, so the recovery path is wired correctly even though nothing currently needs it. Evidence: `tests/test_web_scraper_live.py::test_crawl_interactivebrokers_returns_real_content`. |
+| 2026-07-25 | The 2026-07-02 IBKR edge-block did **not** reproduce: a default Firecrawl crawl returned 17,346 B for `campus/trading-lessons/request-modify-orders/` and 5,718 B for `docs/web-api/`. `waitFor=3000` + `proxy="auto"` was also exercised against the live API and is accepted, so the opt-in stealth path works when a host does block. Evidence: `tests/test_web_scraper_live.py::test_crawl_interactivebrokers_returns_real_content`. |
+| 2026-07-25 | `/crawl` rate limits are per plan and per minute: Free 2, Hobby 20, Standard 100, Growth 1000. This is why the crawl makes one Firecrawl attempt and then falls back locally rather than retrying. <https://docs.firecrawl.dev/rate-limits> |
+| 2026-07-25 | `example.com` yields 167 B of markdown through Firecrawl — below the 5 KB threshold, so it is a poor live-test target: it triggers the fallback on every run. `docs.firecrawl.dev/introduction` yields 14,341 B. |
 
 ---
 
@@ -345,7 +361,9 @@ client.search(query, limit=5, *, wait_for_ms=None, proxy=None, timeout_ms=None)
 
 client.crawl(url, max_pages=50, timeout_s=None, *, wait_for_ms=None, proxy=None)
 # -> list[{"url", "markdown", "metadata"}]
-# Raises FirecrawlError only for 401 / 402 / 429.
+# ONE Firecrawl attempt. Returns [] on a failed job, a 4xx mid-poll, or a timeout.
+# Raises FirecrawlError only for 401 / 402 / 429 — the handler catches those and
+# still falls back to Crawl4AI, using the exception only to name the cause.
 
 content_bytes(pages) -> int                            # total UTF-8 bytes of markdown
 
