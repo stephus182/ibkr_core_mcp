@@ -712,6 +712,29 @@ def test_create_profile_overwrites_existing_profile(monkeypatch, tmp_path):
     assert (dest / "cookies.json").exists()
 
 
+# ── list_profiles ────────────────────────────────────────────────────────────
+
+
+def test_list_profiles_returns_empty_for_missing_dir(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import list_profiles
+
+    assert list_profiles(tmp_path / "nope") == []
+
+
+def test_list_profiles_reports_each_saved_domain(tmp_path):
+    from ibkr_core_mcp.scrape_fallback import list_profiles
+
+    (tmp_path / "www.ft.com").mkdir()
+    (tmp_path / "wsj.com").mkdir()
+    (tmp_path / "stray-file.txt").write_text("not a profile")
+
+    entries = list_profiles(tmp_path)
+
+    # Alphabetical: "wsj.com" < "www.ft.com" because 's' < 'w' at index 1.
+    assert [name for name, _path, _age in entries] == ["wsj.com", "www.ft.com"]
+    assert all(age >= 0 for _name, _path, age in entries)
+
+
 # ── CLI dispatch ─────────────────────────────────────────────────────────────
 
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import threading
+import time
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -556,15 +557,40 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
     return dest
 
 
+def list_profiles(profiles_dir: Path) -> list[tuple[str, Path, float]]:
+    """Return every saved browser profile with its path and age in days.
+
+    Saved sessions expire, and until now expiry presented as a mysteriously truncated
+    article with no way to check what was saved or how old it was. Age is taken from the
+    directory's mtime, which create_profile sets when it copies the profile in.
+
+    Args:
+        profiles_dir: Root holding one profile directory per domain
+            (Config.crawl4ai_profiles_dir). A missing directory is not an error.
+
+    Returns:
+        (domain, path, age_days) tuples sorted by domain. Non-directory entries are
+        skipped. Empty list when nothing is saved.
+    """
+    if not profiles_dir.is_dir():
+        return []
+    now = time.time()
+    entries: list[tuple[str, Path, float]] = []
+    for child in sorted(profiles_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        entries.append((child.name, child, (now - child.stat().st_mtime) / 86400))
+    return entries
+
+
 def _main(argv: list[str] | None = None) -> None:
     """CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
 
     Reads Config.crawl4ai_profiles_dir from the environment (same .env-driven
     Config.from_env() used everywhere else in this package) and delegates to
-    create_profile(). Only one subcommand exists today (`create-profile`);
-    the argparse subparser structure is kept so a second subcommand (e.g.
-    listing or deleting saved profiles) can be added without a breaking CLI
-    change.
+    create_profile(). Two subcommands exist: `create-profile` and `list-profiles`.
+    The argparse subparser structure is kept so a further subcommand (e.g.
+    deleting saved profiles) can be added without a breaking CLI change.
 
     Args:
         argv: Command-line arguments excluding the program name, e.g.
@@ -582,12 +608,24 @@ def _main(argv: list[str] | None = None) -> None:
         help="Interactively log into a paywalled site once; save the session for reuse.",
     )
     create_parser.add_argument("url_or_domain")
+    subparsers.add_parser(
+        "list-profiles",
+        help="List saved login profiles and how old each session is.",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "create-profile":
         config = Config.from_env()
         dest = create_profile(args.url_or_domain, config.crawl4ai_profiles_dir)
         print(f"Profile saved to {dest}")
+    elif args.command == "list-profiles":
+        config = Config.from_env()
+        entries = list_profiles(config.crawl4ai_profiles_dir)
+        if not entries:
+            print(f"No saved profiles in {config.crawl4ai_profiles_dir}")
+            return
+        for domain, path, age_days in entries:
+            print(f"{domain:<30} {age_days:>6.1f} days  {path}")
 
 
 if __name__ == "__main__":
