@@ -52,7 +52,7 @@ server = [
     "uvicorn>=0.30",
 ]
 scraper = ["crawl4ai>=0.5.0"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "mypy>=1.8", "ruff>=0.3"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "mypy>=1.8", "ruff>=0.16"]
 
 [project.urls]
 Homepage = "https://github.com/stephus182/ibkr_core_mcp"
@@ -156,6 +156,17 @@ warn_return_any = false
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+# Markdown is documentation, not source. ruff 0.16 began formatting Python code blocks
+# embedded in .md files, which rewrites this repo's hand-aligned annotated examples (the
+# `client.crawl(...)  # -> list[...]` comment columns in docs/*-reference.md) into
+# single-space comments. That is the same class of formatting opinion already declined for
+# docstrings in the D-code ignore list below: the content is correct, and enforcing the
+# tool's preference would be churn that makes the docs harder to read.
+#
+# This also closes a local/CI drift: `ruff>=0.3` in the dev extra let CI resolve 0.16 while
+# a developer's pinned venv sat on 0.15, so `ruff format --check .` passed locally and
+# failed in CI on 36 files nobody had touched.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "S", "B", "D"]
