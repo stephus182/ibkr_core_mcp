@@ -279,6 +279,50 @@ def test_search_limit_clamped_to_10(mock_requests):
     assert payload["limit"] == 10
 
 
+def test_scrape_options_default_is_todays_request_body():
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    client = FirecrawlClient("fc-test")
+    assert client._scrape_options() == {"formats": ["markdown"]}
+
+
+def test_scrape_options_includes_wait_for_and_proxy_when_given():
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    client = FirecrawlClient("fc-test")
+    assert client._scrape_options(wait_for_ms=3000, proxy="auto", timeout_ms=60000) == {
+        "formats": ["markdown"],
+        "waitFor": 3000,
+        "proxy": "auto",
+        "timeout": 60000,
+    }
+
+
+def test_scrape_options_keeps_explicit_zero_wait_for():
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    client = FirecrawlClient("fc-test")
+    # 0 is a meaningful value ("don't wait"), not an absent one.
+    assert client._scrape_options(wait_for_ms=0) == {"formats": ["markdown"], "waitFor": 0}
+
+
+@patch("ibkr_core_mcp.web_scraper.requests")
+def test_search_passes_wait_for_and_proxy_to_api(mock_requests):
+    from ibkr_core_mcp.web_scraper import FirecrawlClient
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"data": []}
+    mock_requests.post.return_value = resp
+
+    client = FirecrawlClient("fc-test")
+    client.search("ibkr api", wait_for_ms=3000, proxy="auto")
+
+    payload = mock_requests.post.call_args[1]["json"]
+    assert payload["scrapeOptions"]["waitFor"] == 3000
+    assert payload["scrapeOptions"]["proxy"] == "auto"
+
+
 # ── FirecrawlClient.crawl ─────────────────────────────────────────────────────
 
 

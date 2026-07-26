@@ -247,7 +247,54 @@ class FirecrawlClient:
             raise FirecrawlError(f"Firecrawl service error: {resp.status_code}", resp.status_code)
         resp.raise_for_status()
 
-    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def _scrape_options(
+        self,
+        *,
+        wait_for_ms: int | None = None,
+        proxy: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Build the Firecrawl `scrapeOptions` payload shared by search() and crawl().
+
+        One builder for both endpoints so their request bodies cannot drift apart, and
+        so a future v2 migration has exactly one seam to change.
+
+        Every option is omitted when None rather than sent as null, which keeps an
+        options-free call byte-for-byte identical to the request this client sent before
+        these parameters existed.
+
+        Field reference (all confirmed present in v1 scrapeOptions):
+        https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post (verified 2026-07-25)
+
+        Args:
+            wait_for_ms: Milliseconds to wait for JavaScript rendering before extracting.
+                0 is meaningful ("don't wait") and is passed through; only None omits it.
+            proxy: One of "basic" (1 credit), "enhanced" (up to 5 credits), or "auto"
+                (basic, retried through enhanced on failure).
+            timeout_ms: Per-page scrape timeout in milliseconds, distinct from this
+                client's own polling budget.
+
+        Returns:
+            The scrapeOptions dict to embed in a /search or /crawl request body.
+        """
+        options: dict[str, Any] = {"formats": ["markdown"]}
+        if wait_for_ms is not None:
+            options["waitFor"] = wait_for_ms
+        if proxy is not None:
+            options["proxy"] = proxy
+        if timeout_ms is not None:
+            options["timeout"] = timeout_ms
+        return options
+
+    def search(
+        self,
+        query: str,
+        limit: int = 5,
+        *,
+        wait_for_ms: int | None = None,
+        proxy: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Search the web and return full page content as markdown for each result.
 
         Calls POST /v1/search with scrapeOptions.formats=["markdown"] so that
@@ -256,6 +303,11 @@ class FirecrawlClient:
         Args:
             query: Free-text search query. Must be non-empty.
             limit: Maximum number of results to return. Clamped to [1, 10].
+            wait_for_ms: Advanced override — milliseconds to wait for JavaScript
+                rendering before extraction. See _scrape_options.
+            proxy: Advanced override — "basic", "enhanced", or "auto". See
+                _scrape_options. Note "enhanced"/"auto" can cost up to 5 credits.
+            timeout_ms: Advanced override — per-page scrape timeout in milliseconds.
 
         Returns:
             List of result dicts, each containing:
@@ -282,7 +334,7 @@ class FirecrawlClient:
                 json={
                     "query": query,
                     "limit": limit,
-                    "scrapeOptions": {"formats": ["markdown"]},
+                    "scrapeOptions": self._scrape_options(wait_for_ms=wait_for_ms, proxy=proxy, timeout_ms=timeout_ms),
                 },
                 timeout=30,
             )
