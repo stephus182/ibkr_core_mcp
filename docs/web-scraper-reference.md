@@ -19,6 +19,33 @@ Do not confuse the two Crawl4AI layers. `scrape_fallback.Crawl4AIScraper` runs a
 machine; `crawl4ai_cloud.Crawl4AICloudClient` is an HTTP client for a hosted API. They share a
 vendor name and nothing else.
 
+### 1.1 Four different things are called "Crawl4AI"
+
+Searching for Crawl4AI docs returns all four. Only the first two are used here, and picking the
+wrong one sends you to an API that does not match the code in front of you. Surveyed 2026-07-28.
+
+| # | Thing | What it is | Used here? |
+|---|---|---|---|
+| 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes — rung 2**, via `scrape_fallback.py` |
+| 2 | **Crawl4AI Cloud** (`api.crawl4ai.com`) | The vendor's hosted REST API, credit-billed. Docs: `llms-full.txt` | **Yes — rung 3**, via `crawl4ai_cloud.py` |
+| 3 | **`crawl4ai-cloud-sdk`** (PyPI, 1.2.0) | The vendor's own thin Python client for #2 | No — see below |
+| 4 | **`janbuchar/crawl4ai` Apify Actor** | A community wrapper around #1, run on Apify's platform | **No — rejected, see §5.1** |
+
+They also differ in *documentation shape*, which matters under this repo's API-docs-first rule:
+
+- #1 has **no `llms.txt` or `llms-full.txt`** — both 404, and the 404 body is a 31 KB HTML page, so
+  a naive `curl` "succeeds" and hands you a navigation shell. Use
+  `docs.crawl4ai.com/complete-sdk-reference/` (one page, ~203k chars of text) or `sitemap.xml`.
+- #2 has `llms-full.txt`, and its human `/docs/...` pages are the opposite failure — a JavaScript
+  SPA that returns a 696-byte shell to `curl`.
+
+So for **both** products the browsable docs are the wrong thing to fetch, for opposite reasons.
+
+**Why not the vendor SDK (#3).** `crawl4ai_cloud.py` is ~180 lines calling a single endpoint with
+`requests`, already a dependency. Hand-rolling it is what made the no-retry-on-429 rule, the
+proxy-object handling and the credit accounting explicit and testable rather than inherited. The
+SDK is worth revisiting only if `/v1/site` job polling is ever needed.
+
 Orchestration between them lives in `claude_tools.py`. That split is deliberate: `web_scraper.py`
 never imports `scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
 
@@ -277,6 +304,38 @@ rung once per crawl and is safe, but the search-result path launches up to
 allows 2 `/crawl` per minute" is likewise a tier fact living in a comment. It becomes wrong on
 upgrade. Not changed here, but recorded so the move to paid has a checklist rather than a hunt.
 
+### 5.1 Alternatives evaluated and rejected
+
+Recorded so nobody spends an afternoon re-evaluating them. Re-check the numbers before
+reversing any of these — they are a snapshot, not a verdict for all time.
+
+**`janbuchar/crawl4ai` Apify Actor** — <https://apify.com/janbuchar/crawl4ai>. A community
+wrapper (not vendor-published) that runs the OSS library on Apify's platform, invoked with
+`apify_client` and billed per usage. **Rejected 2026-07-28 on its own published run statistics**,
+read from Apify's public API (`GET https://api.apify.com/v2/acts/janbuchar~crawl4ai`, no auth):
+
+| Metric (Apify's own `stats`) | Value |
+|---|---|
+| Public runs, last 30 days | **0 succeeded**, 26 failed, 3 aborted, 29 total |
+| Latest build | `0.0.57`, finished **2025-05-06** — over a year stale against OSS 0.9.2 |
+| Reviews | rating 3.26, from **2 reviews** |
+| Users | 787 all-time, but 25 in 90 days and 4 in the last 7 |
+| `isDeprecated` flag | `false` — so the flag tells you nothing; the run stats do |
+
+A rung whose upstream fails every public run is worse than no rung: it adds a paid dependency, a
+third credential, and latency, in exchange for a failure. It also could not sit *between* our
+rungs — it wraps the same OSS library rung 2 already runs locally and free, so at best it would
+duplicate rung 2 while costing money, and it offers nothing rung 3's managed proxies do not.
+
+Worth knowing: `isDeprecated: false` on a wrapper with a 0% success rate is exactly the sort of
+"looks configured, is dark" signal this ladder exists to avoid trusting. Judge a hosted
+dependency by its run statistics, not its status flag or star rating — 3.26 stars from two
+reviewers said nothing, and the run stats said everything.
+
+Other Apify actors wrapping Crawl4AI do have healthy success rates (e.g.
+`bikram07/web-to-markdown-crawl4ai`, 33/41 in 30 days) but have single-digit user counts and no
+vendor backing, so they trade our current dependency for a less-supported one.
+
 ---
 
 ## 6. Paywalled sites (FT, WSJ, Bloomberg)
@@ -431,6 +490,9 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-28 | Measured `POST /v1/scrape` cost: **1 credit** with `proxy` omitted, 2 with `{"mode":"datacenter"}`, 5 with `{"mode":"residential","country":"US"}`. Both planning documents assumed 5 flat and budgeted "~10 scrapes/day"; the real no-proxy ceiling on Free is ~50/day. |
 | 2026-07-28 | `proxy` as the bare string `"direct"` returns **HTTP 422** with `detail[0].loc == ["body","proxy"]` (pydantic `model_attributes_type`), not a silently-ignored value. To scrape without a proxy the field must be omitted entirely. |
 | 2026-07-28 | `https://api.crawl4ai.com/docs/skills/crawl4ai/SKILL.md` and `.../references/api-full-reference.md` both return a 696-byte HTML shell to `curl` — they are a JavaScript SPA. `llms-full.txt` (~59 KB, plain text) is the only machine-readable reference. |
+| 2026-07-28 | **`docs.crawl4ai.com` serves no `llms.txt` and no `llms-full.txt`** — both return HTTP 404 whose body is a 31 KB HTML page. A fetch that only checks for non-empty content "succeeds" and yields a navigation shell. The OSS equivalent is `complete-sdk-reference/` (one page, ~203,000 chars of text, served as ~988 KB of HTML) plus `sitemap.xml` (87 pages) as the index. Note this is the mirror image of Crawl4AI **Cloud**, where `llms-full.txt` exists and the browsable `/docs/...` pages are the JS shell — for both products, the browsable docs are the wrong thing to fetch. |
+| 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
+| 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `scrape_fallback.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
 | 2026-07-28 | The two Crawl4AI keys in this project (`ibkr_core_mcp/.env`, `claudia_ui/.env`) are **distinct** values — SHA-256 `0528d8cf…` vs `9d3b6a21…`, both 51 chars, both live, both reporting Free/50 credits. Compared by hash, not by prefix and length. One key per project is deliberate. |
 
 ---
