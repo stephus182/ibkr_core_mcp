@@ -28,23 +28,31 @@ wrong one sends you to an API that does not match the code in front of you. Surv
 |---|---|---|---|
 | 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes — rung 2**, via `scrape_fallback.py` |
 | 2 | **Crawl4AI Cloud** (`api.crawl4ai.com`) | The vendor's hosted REST API, credit-billed. Docs: `llms-full.txt` | **Yes — rung 3**, via `crawl4ai_cloud.py` |
-| 3 | **`crawl4ai-cloud-sdk`** (PyPI, 1.2.0) | The vendor's own thin Python client for #2 | No — see below |
+| 3 | **`crawl4ai-cloud-sdk`** (PyPI, 1.2.0) | The vendor's own Python client for #2 | **Adopting** — see §5.2 |
 | 4 | **`janbuchar/crawl4ai` Apify Actor** | A community wrapper around #1, run on Apify's platform | **No — rejected, see §5.1** |
 
 They also differ in *documentation shape*, which matters under this repo's API-docs-first rule:
 
-- #1 has **no `llms.txt` or `llms-full.txt`** — both 404, and the 404 body is a 31 KB HTML page, so
-  a naive `curl` "succeeds" and hands you a navigation shell. Use
-  `docs.crawl4ai.com/complete-sdk-reference/` (one page, ~203k chars of text) or `sitemap.xml`.
-- #2 has `llms-full.txt`, and its human `/docs/...` pages are the opposite failure — a JavaScript
-  SPA that returns a 696-byte shell to `curl`.
+- #1 **does publish `llms-full.txt`** — 243,158 bytes of `text/plain` at
+  <https://docs.crawl4ai.com/assets/llm.txt/txt/llms-full.txt>, mirrored in the repo under
+  `docs/md_v2/assets/llm.txt/txt/`. Beside it sit **13 modular topic files** (`simple_crawling`,
+  `config_objects`, `deep_crawling`, `deep_crawl_advanced_filters_scorers`, `extraction-llm`,
+  `extraction-no-llm`, `multi_urls_crawling`, `url_seeder`, `http_based_crawler_strategy`,
+  `docker`, `installation`, `cli`), all served as `text/plain`, plus `diagrams/` variants. These
+  are the pieces the site's "LLM Context Builder" assembles. **Prefer these over
+  `complete-sdk-reference/`**, which is the same material wrapped in ~988 KB of HTML.
+  What genuinely does not exist is an **index at the conventional root**: `/llms.txt` and
+  `/llms-full.txt` both 404, and the 404 body is a 31 KB HTML page — so a probe that only checks
+  for non-empty content "succeeds" and hands back a navigation shell.
+- #2 publishes `llms-full.txt` at its root, and its human `/docs/...` pages are the opposite
+  failure — a JavaScript SPA returning a 696-byte shell to `curl`.
 
-So for **both** products the browsable docs are the wrong thing to fetch, for opposite reasons.
-
-**Why not the vendor SDK (#3).** `crawl4ai_cloud.py` is ~180 lines calling a single endpoint with
-`requests`, already a dependency. Hand-rolling it is what made the no-retry-on-429 rule, the
-proxy-object handling and the credit accounting explicit and testable rather than inherited. The
-SDK is worth revisiting only if `/v1/site` job polling is ever needed.
+> **This section was wrong when first written, and the mistake is worth keeping.** It claimed #1
+> shipped no `llms.txt` at all. That came from probing two guessed root paths, getting 404s, and
+> concluding absence — without opening the repository, where the files are plainly visible under
+> `docs/md_v2/assets/`. A 404 at a guessed path is evidence about that path, not about the vendor.
+> **Check the source repo before concluding a vendor does not ship something**, especially when
+> the 404 body is itself a valid-looking HTML page.
 
 Orchestration between them lives in `claude_tools.py`. That split is deliberate: `web_scraper.py`
 never imports `scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
@@ -345,6 +353,34 @@ So it is a plausible cheaper middle rung, not a replacement for Cloud. Left unbu
 it adds a host to operate, and the ladder currently costs 1 credit only on pages two free rungs
 already failed.
 
+### 5.2 The vendor SDK is preferred over a hand-rolled client
+
+**Standing preference: favour the vendor's own integration.** The first cut of
+`crawl4ai_cloud.py` hand-rolled `POST /v1/scrape` on `requests`. `crawl4ai-cloud-sdk` (the
+vendor's own client, PyPI 1.2.0) is the better base, and inspection confirms it does not cost us
+any of the invariants this ladder depends on. Evaluated 2026-07-28 by reading its source, not its
+README:
+
+| Invariant we need | What the SDK does |
+|---|---|
+| **Never retry a 429** | `_client.py` raises on 429 **immediately**. The retry `continue` branches cover only 5xx, `httpx.TimeoutException` and `httpx.RequestError`. |
+| Distinguish quota from rate limit | Better than ours: splits `RateLimitError` (with `.retry_after`, `.limit`, `.remaining`) from `QuotaExceededError` (with `.quota_type`). Our single error type could not. |
+| `proxy` as an object, never `"direct"` | Native `ProxyConfig(mode, country, sticky_session)` plus a `normalize_proxy` helper; `scrape()` accepts `str | dict | ProxyConfig`. |
+| Free request-shape validation | `dry_run=True` is a first-class parameter, routed through `_dry_run_estimate`, which returns the raw quote — the same scrape/estimate split we arrived at by trial. |
+| Typed page result | `MarkdownResponse` carries `markdown`, `fit_markdown`, `metadata` and `usage` (`credits_used` / `credits_remaining`). |
+
+Two things it does **not** solve, both of which we handle rather than inherit:
+
+1. **It wraps no `/v1/usage` endpoint** — its endpoint set covers `/v1/crawl/storage` but not
+   usage. The low-balance threshold in §5 must stay relative to `plan.daily_credits`, which only
+   `/v1/usage` reports, so one small direct call is retained for that and documented as such.
+2. **`max_retries` defaults to 3**, and while 429 is exempt, a retried *timeout* could re-issue a
+   scrape the server already executed — billing the same page twice. We pass a value that
+   disables retries, for the same budget reason the 429 rule exists.
+
+Cost of adoption is near zero: `httpx`, the SDK's only substantial dependency, is already in the
+tree via `anthropic`.
+
 **There is no official Crawl4AI MCP server** for either the OSS library or Cloud — checked
 2026-07-28 against the docs sitemap (87 pages, no MCP page) and the Cloud `llms-full.txt` (no
 occurrence). Noted because this repo *is* an MCP project and the absence is otherwise easy to
@@ -504,7 +540,7 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-28 | Measured `POST /v1/scrape` cost: **1 credit** with `proxy` omitted, 2 with `{"mode":"datacenter"}`, 5 with `{"mode":"residential","country":"US"}`. Both planning documents assumed 5 flat and budgeted "~10 scrapes/day"; the real no-proxy ceiling on Free is ~50/day. |
 | 2026-07-28 | `proxy` as the bare string `"direct"` returns **HTTP 422** with `detail[0].loc == ["body","proxy"]` (pydantic `model_attributes_type`), not a silently-ignored value. To scrape without a proxy the field must be omitted entirely. |
 | 2026-07-28 | `https://api.crawl4ai.com/docs/skills/crawl4ai/SKILL.md` and `.../references/api-full-reference.md` both return a 696-byte HTML shell to `curl` — they are a JavaScript SPA. `llms-full.txt` (~59 KB, plain text) is the only machine-readable reference. |
-| 2026-07-28 | **`docs.crawl4ai.com` serves no `llms.txt` and no `llms-full.txt`** — both return HTTP 404 whose body is a 31 KB HTML page. A fetch that only checks for non-empty content "succeeds" and yields a navigation shell. The OSS equivalent is `complete-sdk-reference/` (one page, ~203,000 chars of text, served as ~988 KB of HTML) plus `sitemap.xml` (87 pages) as the index. Note this is the mirror image of Crawl4AI **Cloud**, where `llms-full.txt` exists and the browsable `/docs/...` pages are the JS shell — for both products, the browsable docs are the wrong thing to fetch. |
+| 2026-07-28 | **`docs.crawl4ai.com` DOES serve `llms-full.txt`** — 243,158 B of `text/plain` at `/assets/llm.txt/txt/llms-full.txt`, plus 13 modular topic files and `diagrams/` variants, all mirrored in the repo under `docs/md_v2/assets/llm.txt/`. What is absent is only an **index at the conventional root**: `/llms.txt` and `/llms-full.txt` 404, and the 404 body is a 31 KB HTML page, so a probe checking merely for non-empty content "succeeds" with a navigation shell. **An earlier revision of this table asserted the files did not exist at all** — inferred from those two root 404s without opening the repo. A 404 at a guessed path is evidence about the path, not the vendor. |
 | 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
 | 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `scrape_fallback.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
 | 2026-07-28 | The two Crawl4AI keys in this project (`ibkr_core_mcp/.env`, `claudia_ui/.env`) are **distinct** values — SHA-256 `0528d8cf…` vs `9d3b6a21…`, both 51 chars, both live, both reporting Free/50 credits. Compared by hash, not by prefix and length. One key per project is deliberate. |
