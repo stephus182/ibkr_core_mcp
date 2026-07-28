@@ -1,17 +1,23 @@
 # Web Scraper Reference
 
-Firecrawl (hosted, paid) for search and crawling, Crawl4AI (local, free, Playwright-based) as the
-fallback that recovers what Firecrawl can't reach. This document covers both layers, every tunable,
-the credit-cost model, paywalled-site logins, and what to do when a scrape comes back empty.
+Firecrawl (hosted, paid) for search and crawling, then two fallbacks that recover what Firecrawl
+can't reach: Crawl4AI local (free, Playwright-based) and Crawl4AI Cloud (hosted, paid, managed
+proxies). This document covers all three layers, every tunable, the credit-cost model,
+paywalled-site logins, and what to do when a scrape comes back empty.
 
 ---
 
-## 1. The two layers
+## 1. The three layers
 
 | Layer | Module | Cost | What it's good at |
 |---|---|---|---|
 | **Firecrawl** | `web_scraper.py` | Paid, per-credit | Web *search* (nothing else here provides it), fast bulk crawling, clean markdown extraction |
-| **Crawl4AI** | `scrape_fallback.py` | Free, local | Pages Firecrawl can't get: bot-blocked sites, and paywalled sites where you hold a subscription |
+| **Crawl4AI local** | `scrape_fallback.py` | Free, local | Pages Firecrawl can't get: bot-blocked sites, and paywalled sites where you hold a subscription |
+| **Crawl4AI Cloud** | `crawl4ai_cloud.py` | Paid, per-credit | The one case local can't solve: an IP-level block or challenge aimed at *this machine's* address, which managed/residential proxies defeat |
+
+Do not confuse the two Crawl4AI layers. `scrape_fallback.Crawl4AIScraper` runs a browser on this
+machine; `crawl4ai_cloud.Crawl4AICloudClient` is an HTTP client for a hosted API. They share a
+vendor name and nothing else.
 
 Orchestration between them lives in `claude_tools.py`. That split is deliberate: `web_scraper.py`
 never imports `scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
@@ -38,7 +44,9 @@ There is no single-page scrape tool. To archive one page, call `firecrawl_crawl`
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | `gdrive_web_docs_folder_id` | Overrides the `web_docs/` root | auto-created under `gdrive_folder_id` |
 | `GDRIVE_TOKEN_FILE` | `gdrive_token_file` | Drive OAuth | `~/.ibkr_core/token.json` |
 | `GDRIVE_CREDENTIALS_FILE` | `gdrive_credentials_file` | Drive OAuth | `~/.ibkr_core/credentials.json` |
-| `CRAWL4AI_PROFILES_DIR` | `crawl4ai_profiles_dir` | Paywalled-site logins | `~/.ibkr_core/crawl4ai_profiles` |
+| `CRAWL4AI_PROFILES_DIR` | `crawl4ai_profiles_dir` | Paywalled-site logins (local layer) | `~/.ibkr_core/crawl4ai_profiles` |
+| `CRAWL4AI_API_KEY` | `crawl4ai_api_key` | The Cloud rung. **Without it the rung is skipped silently** and the ladder behaves exactly as it did when it had two rungs. | — |
+| `CRAWL4AI_API_URL` | `crawl4ai_api_url` | Overriding the Cloud base URL (staging) | `https://api.crawl4ai.com` |
 
 Crawl4AI is an optional extra. Without it, the fallback layer reports itself unavailable and
 Firecrawl's result is returned as-is:
@@ -64,7 +72,7 @@ pytest tests/test_web_scraper_dev_cache_live.py -v -m integration
 ## 3. The recovery ladder
 
 A crawl of a site that fights back used to return zero pages and report it as success. It now
-falls back exactly once, from the paid remote scraper to the free local one:
+falls back twice — paid remote, then free local, then paid remote again with managed proxies:
 
 ```text
 firecrawl_crawl(url)
@@ -74,12 +82,28 @@ firecrawl_crawl(url)
   │     └─ anything else — thin, empty, job failed, timed out,
   │        401 / 402 / 429, network down ───────────────┐
   │                                                     │
-  └─ Rung 2: Crawl4AI scrapes the root URL locally  ◄────┘   free
-        using a saved login profile if one matches
+  ├─ Rung 2: Crawl4AI scrapes the root URL locally  ◄────┘   free
+  │     using a saved login profile if one matches
+  │     ├─ >= 5 KB now? ────────────────────────────────► save to Drive, done
+  │     └─ still short ─────────────────────────────────┐
+  │                                                     │
+  └─ Rung 3: Crawl4AI Cloud scrapes the root URL   ◄─────┘   1 credit (no proxy)
+        skipped silently if CRAWL4AI_API_KEY is unset
         │
-        └─ still nothing → explicit diagnosis naming the Firecrawl
+        └─ still nothing → explicit diagnosis naming EACH rung's
                            failure, never "saved 0 page(s)"
 ```
+
+**Why the paid cloud rung goes last, behind the free local one.** On the only real failure
+observed to date (2026-07-28, the IBKR campus reference), Firecrawl returned 0 pages and thinned
+another page to a nav shell, and a plain fetch 403'd — while local Crawl4AI fetched both cleanly,
+144,125 chars from the page that settled the whole symbology question. The free rung was the one
+that worked. A paid rung ahead of it would have spent credits to be overtaken by something free.
+
+The asymmetry decides it. Cloud-before-local wastes the daily budget on pages local already
+serves. Local-before-cloud costs one extra local attempt — seconds, free — before reaching the
+rung that can beat an IP block. What Cloud is *for* is the case local cannot solve: a block aimed
+at this machine's own address. That is a last resort, not a second one.
 
 **Why only one Firecrawl attempt.** Firecrawl's Free tier allows **2** `/crawl` requests per
 minute (<https://docs.firecrawl.dev/rate-limits>, verified 2026-07-25). An automatic stealth
@@ -111,8 +135,8 @@ failed, and completed-empty all mean the same thing to a caller and take the sam
 
 5 KB sits ~34× above the largest observed failure and ~2.5× below the smallest observed success.
 
-**The fallback keeps the larger result, not the last one.** Both rungs are scored with the same
-function and Crawl4AI's result replaces Firecrawl's only if it is genuinely bigger. So a
+**The fallback keeps the larger result, not the last one.** All three rungs are scored with the
+same function and a later rung's result replaces an earlier one only if it is genuinely bigger. So a
 legitimately short 3 KB page still measures "too small" and runs the local rung, but the output
 stays correct — a thin Crawl4AI result can never silently replace a better Firecrawl one. The
 cost of a short page is one free local fetch, never a wrong answer.
@@ -186,21 +210,72 @@ output; the full text is what gets saved to Drive.
 
 ## 5. Credit-cost model
 
+**Firecrawl (rung 1):**
+
 | Setting | Cost |
 |---|---|
 | `proxy` unset or `basic` | 1 credit per page |
 | `proxy: "enhanced"` | up to 5 credits per page |
 | `proxy: "auto"` | 1 credit if basic succeeds; up to 5 if it retries through enhanced |
-| Crawl4AI (any rung 3 work) | free — it runs locally |
+
+**Crawl4AI local (rung 2):** free — it runs on this machine.
+
+**Crawl4AI Cloud (rung 3)** — measured live 2026-07-28 via `dry_run` estimates, which are
+themselves free:
+
+| `proxy` | Cost per scrape |
+|---|---|
+| omitted (what the ladder sends) | **1 credit** |
+| `{"mode": "datacenter"}` | 2 credits |
+| `{"mode": "residential", "country": "US"}` | 5 credits |
 
 A crawl costs exactly one Firecrawl attempt. `enhanced`/`auto` are charged only when you ask for
-them explicitly — nothing escalates you into the expensive path automatically, and the recovery
-rung is free. A site that works costs exactly what it cost before this feature existed.
+them explicitly — nothing escalates you into the expensive path automatically, and rung 2 is free.
+A site that works costs exactly what it cost before this feature existed.
 
-Firecrawl also enforces per-plan rate limits — as low as 1 request/minute for `/crawl` on the free
+### Rate limits and plans
+
+Firecrawl enforces per-plan rate limits — as low as 1 request/minute for `/crawl` on the free
 tier. The client retries 408/429/500/502/503/504 with exponential backoff plus jitter, honoring
 `Retry-After` when present, capped at 30s and 3 attempts. Source:
 <https://docs.firecrawl.dev/api-reference/errors>
+
+Crawl4AI Cloud's plans, from `GET /v1/usage` and
+<https://api.crawl4ai.com/llms-full.txt> (both read 2026-07-28):
+
+| Plan | Requests/min | Daily credits | Concurrent |
+|---|---|---|---|
+| Free | 10 | 50 | 1 |
+| Starter | 30 | 500 | 2 |
+| Pro | 60 | 5,000 | 5 |
+
+**This account is on Free as of 2026-07-28** — 50 credits/day, so ~50 no-proxy cloud scrapes a
+day. Both scrapers are on free plans deliberately while this integration is tested, and either
+may move to paid.
+
+**No tier number above is encoded anywhere in the code, by design.** The daily allowance is read
+from `plan.daily_credits` on `/v1/usage`, the per-call remainder from `usage.credits_remaining` in
+the scrape response, and the low-balance warning fires below a *fifth of the reported allowance*
+rather than below a credit count. "Warn under 10" is right for a 50/day plan and silently useless
+on a 5,000/day one. An upgrade therefore needs no code change.
+
+Two Crawl4AI behaviours differ from Firecrawl and will cost money if you assume otherwise:
+
+- **429 means quota exhaustion, not backpressure.** `Crawl4AICloudClient` never retries — not
+  429, not 503. Retrying would spend the daily budget to fail more slowly.
+  `web_scraper._request_with_backoff` is deliberately *not* reused or parameterised; its
+  retry-on-429 is correct for Firecrawl and wrong here.
+- **`proxy` is an object, not a string.** `{"mode": ...}`, and the string `"direct"` is a hard
+  422 (verified live). To scrape without a proxy, omit the field entirely.
+
+**Serialise cloud calls.** The free plan allows 1 concurrent request. The ladder calls the cloud
+rung once per crawl and is safe, but the search-result path launches up to
+`_MAX_CONCURRENT_FALLBACKS = 5` local scrapes in parallel — if the cloud client is ever wired into
+*that* path, it must serialise first or it will 429 against itself.
+
+**Note for the eventual paid transition:** `web_scraper.py`'s comment about "Firecrawl Free
+allows 2 `/crawl` per minute" is likewise a tier fact living in a comment. It becomes wrong on
+upgrade. Not changed here, but recorded so the move to paid has a checklist rather than a hunt.
 
 ---
 
@@ -308,7 +383,12 @@ one.
 | Symptom | Cause | Fix |
 |---|---|---|
 | "not available: FIRECRAWL_API_KEY is not configured" | No key in the environment | Set `FIRECRAWL_API_KEY` in the consuming project's `.env` |
-| "Crawl of … produced no content" | Both rungs failed; the message names the Firecrawl cause | Check the host table. For a subscription site, `create-profile`. Try `wait_for_ms=3000` + `proxy="auto"`. For IBKR docs, use `.md` URLs. |
+| "Crawl of … produced no content" | Every configured rung failed; the message names each cause | Check the host table. For a subscription site, `create-profile`. Try `wait_for_ms=3000` + `proxy="auto"`. For IBKR docs, use `.md` URLs. |
+| That message says nothing about Crawl4AI Cloud | `CRAWL4AI_API_KEY` is unset, so rung 3 was skipped | Working as designed — the ladder stays silent about a rung you haven't configured. Set the key to enable it. |
+| `Source: Crawl4AI Cloud (…)` | Both Firecrawl and the local rung came up short; the cloud rung rescued it | Nothing. The line after it reports credits remaining today. |
+| Cloud rung reports HTTP 429 | Daily credit quota exhausted (**not** backpressure — this client never retries 429) | Wait for the daily reset, or upgrade the plan. Check `GET /v1/usage`. |
+| Cloud rung reports HTTP 422 | The page returned no HTML, or a malformed request | Verify the URL is crawlable. Use `Crawl4AICloudClient.estimate()` to validate a request shape for free. |
+| Log warns "only N of M daily credits remain" | Balance fell under a fifth of the plan's allowance | Informational. The threshold is relative, so it tracks a plan upgrade automatically. |
 | Crawl returns fewer pages than expected | Polling budget exhausted, not a block | Raise `timeout_s`; partial results are returned, not discarded |
 | Result says `Source: Crawl4AI (Firecrawl failed — HTTP 402…)` | Out of credits; the local rung already rescued the crawl | Top up when convenient. The content is real. |
 | `Source: Crawl4AI (Firecrawl failed — HTTP 429…)` | Plan rate limit; the local rung already rescued the crawl | Nothing. Free tier allows 2 `/crawl` per minute; the client already retried with backoff. |
@@ -341,14 +421,24 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-25 | The 2026-07-02 IBKR edge-block did **not** reproduce: a default Firecrawl crawl returned 17,346 B for `campus/trading-lessons/request-modify-orders/` and 5,718 B for `docs/web-api/`. `waitFor=3000` + `proxy="auto"` was also exercised against the live API and is accepted, so the opt-in stealth path works when a host does block. Evidence: `tests/test_web_scraper_live.py::test_crawl_interactivebrokers_returns_real_content`. |
 | 2026-07-25 | `/crawl` rate limits are per plan and per minute: Free 2, Hobby 20, Standard 100, Growth 1000. This is why the crawl makes one Firecrawl attempt and then falls back locally rather than retrying. <https://docs.firecrawl.dev/rate-limits> |
 | 2026-07-25 | `example.com` yields 167 B of markdown through Firecrawl — below the 5 KB threshold, so it is a poor live-test target: it triggers the fallback on every run. `docs.firecrawl.dev/introduction` yields 14,341 B. |
+| 2026-07-28 | Crawl4AI Cloud authenticates with `X-API-Key`, **not** `Authorization: Bearer`. Key format `sk_live_…`. |
+| 2026-07-28 | `GET /v1/usage` returns `{"plan": {"daily_credits", "rate_per_minute", "concurrent", …}, "credits": {"used_today", "remaining_today", "daily_limit"}, …}`. The vendor's own `llms-full.txt` documents a different shape for this endpoint (`crawl.credits_daily_limit`, `crawl.credits_remaining_today`) — **those keys do not exist**. The published reference is stale; the live response is the source of truth. |
+| 2026-07-28 | **No `X-RateLimit-*` response headers were present** on `/v1/usage`, though `llms-full.txt` claims "headers on every response". Quota logic is built on the response body instead. |
+| 2026-07-28 | `dry_run: true` on `POST /v1/scrape` works and is **free** — it returns a pricing quote (`credits`, `credits_exact`, `breakdown`) without executing. It is **not documented** anywhere in `llms-full.txt`; found by probing. Four dry runs left `credits.used_today` at 0. |
+| 2026-07-28 | A dry-run response body has **no `success` key and no `markdown` key**. It is a quote, not a page. This broke the first version of the client, which checked `success` unconditionally and raised on every real dry run — caught only by the live suite, because the unit test asserted against a hand-written body that had a `success` key the API never sends. Hence `estimate()` is a separate method from `scrape()`. |
+| 2026-07-28 | Measured `POST /v1/scrape` cost: **1 credit** with `proxy` omitted, 2 with `{"mode":"datacenter"}`, 5 with `{"mode":"residential","country":"US"}`. Both planning documents assumed 5 flat and budgeted "~10 scrapes/day"; the real no-proxy ceiling on Free is ~50/day. |
+| 2026-07-28 | `proxy` as the bare string `"direct"` returns **HTTP 422** with `detail[0].loc == ["body","proxy"]` (pydantic `model_attributes_type`), not a silently-ignored value. To scrape without a proxy the field must be omitted entirely. |
+| 2026-07-28 | `https://api.crawl4ai.com/docs/skills/crawl4ai/SKILL.md` and `.../references/api-full-reference.md` both return a 696-byte HTML shell to `curl` — they are a JavaScript SPA. `llms-full.txt` (~59 KB, plain text) is the only machine-readable reference. |
+| 2026-07-28 | The two Crawl4AI keys in this project (`ibkr_core_mcp/.env`, `claudia_ui/.env`) are **distinct** values — SHA-256 `0528d8cf…` vs `9d3b6a21…`, both 51 chars, both live, both reporting Free/50 credits. Compared by hash, not by prefix and length. One key per project is deliberate. |
 
 ---
 
 ## 11. API reference
 
-All types live in `ibkr_core_mcp.web_scraper` and `ibkr_core_mcp.scrape_fallback`. Note that
-`FirecrawlClient` and `WebDocsStore` are **not** re-exported from the package root — only the
-exception types `FirecrawlError` and `WebDocsStoreError` are.
+All types live in `ibkr_core_mcp.web_scraper`, `ibkr_core_mcp.scrape_fallback` and
+`ibkr_core_mcp.crawl4ai_cloud`. Note that `FirecrawlClient` and `WebDocsStore` are **not**
+re-exported from the package root — only the exception types `FirecrawlError` and
+`WebDocsStoreError` are.
 
 ```python
 from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, content_bytes
@@ -372,6 +462,31 @@ store = WebDocsStore(config)                           # no network I/O at const
 store.get_cached_crawl(url, max_age_hours=48.0)        # -> manifest dict | None
 store.save_crawl(url, pages)                           # -> manifest dict
 store.save_search(query, results)                      # -> Drive file ID
+```
+
+```python
+from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient, Crawl4AICloudError
+
+# Crawl4AI Cloud — rung 3. POST /v1/scrape only; /v1/site is not implemented.
+cloud = Crawl4AICloudClient(api_key, base_url="https://api.crawl4ai.com")  # ValueError if key empty
+
+cloud.scrape(url, *, proxy_mode=None, proxy_country=None)
+# -> {"url", "markdown", "metadata"}   — the same page dict the other rungs produce
+# NEVER retries: 429 means quota exhaustion here, not backpressure.
+# Raises Crawl4AICloudError (with .status_code) on any HTTP error, and on a 200
+# whose body reports success: false.
+# `proxy` is omitted from the request entirely when proxy_mode is None — the string
+# "direct" is a 422, not a no-op.
+
+cloud.estimate(url, *, proxy_mode=None, proxy_country=None)
+# -> the raw dry-run quote: {"credits", "credits_exact", "breakdown", ...}
+# FREE. No execution, no charge. Use it to validate a request shape without paying.
+# Note the quote body has no "success" and no "markdown" — it is not a page.
+
+cloud.usage()                                          # -> {"plan", "credits", "storage", "llm"}
+# Costs a request against the per-minute limit, but no credits.
+
+cloud.last_credits_remaining                           # float | None — set after a scrape
 ```
 
 ```python

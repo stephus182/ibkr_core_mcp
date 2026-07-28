@@ -94,7 +94,8 @@ not in the code.
 `docs.anthropic.com` now 301-redirects to `platform.claude.com` for both pages above
 (re-verified live 2026-07-14) — updated to the new canonical domain.
 
-**Web Scraping — Firecrawl + Crawl4AI fallback** (`web_scraper.py`, `scrape_fallback.py`)
+**Web Scraping — Firecrawl + Crawl4AI local + Crawl4AI Cloud** (`web_scraper.py`,
+`scrape_fallback.py`, `crawl4ai_cloud.py`)
 
 | Topic | URL |
 |---|---|
@@ -103,6 +104,23 @@ not in the code.
 | **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
 | **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
 | **Crawl4AI CHANGELOG** (confirms `BrowserProfiler`'s introduction — see below) | https://github.com/unclecode/crawl4ai/blob/main/CHANGELOG.md |
+| **Crawl4AI Cloud — complete API reference** (`crawl4ai_cloud.py`. ~59 KB of plain text and the **only** machine-readable source: the human docs under `/docs/...` are a JavaScript SPA that returns a 696-byte HTML shell to `curl`, including the two "AI reference" URLs the file itself advertises. Verified 2026-07-28) | https://api.crawl4ai.com/llms-full.txt |
+| **Crawl4AI Cloud — index** (pairs with `llms-full.txt`) | https://api.crawl4ai.com/llms.txt |
+| **Crawl4AI Cloud — migration notes for AI assistants** | https://api.crawl4ai.com/api/docs/downloads/MIGRATION.md |
+
+⚠️ **`llms-full.txt` is authoritative for endpoint shapes but was found wrong in three places
+on 2026-07-28, each confirmed by live call.** Treat it as a strong claim, not evidence:
+
+1. Its `GET /v1/usage` example documents `crawl.credits_daily_limit` /
+   `crawl.credits_remaining_today`. The live response has neither — it returns
+   `plan.daily_credits` and `credits.remaining_today`.
+2. It states "Headers on every response: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+   `X-RateLimit-Reset`." No `X-RateLimit-*` header was present on `/v1/usage`.
+3. It documents no `dry_run` parameter at all, yet `dry_run: true` on `POST /v1/scrape`
+   works, returns a pricing quote, and is free.
+
+Its § Proxy Configuration and § Error Codes, by contrast, were confirmed exactly right —
+including that the string `"direct"` is a 422.
 
 `crawl4ai>=0.5.0` is a hard floor, verified against the published wheels on PyPI
 (2026-06-30): `BrowserProfiler` does not exist in the 0.4.x series (checked 0.4.248,
