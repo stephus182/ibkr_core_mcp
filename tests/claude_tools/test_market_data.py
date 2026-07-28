@@ -77,12 +77,13 @@ def test_execute_add_indicators(toolkit):
 
 def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):
     # AAPL resolves; BADTICKER does not — output must name the skipped symbol
-    def search_side_effect(sym, sec_type):
-        if sym == "AAPL":
-            return [{"conid": 265598, "exchange": "NASDAQ"}]
+    def stocks_side_effect(syms):
+        if syms == ["AAPL"]:
+            return [{"name": "APPLE INC", "assetClass": "STK",
+                     "contracts": [{"conid": 265598, "exchange": "NASDAQ", "isUS": True}]}]
         return []
 
-    toolkit._client.search_contract.side_effect = search_side_effect
+    toolkit._client.get_stocks.side_effect = stocks_side_effect
     toolkit._client.get_market_snapshot.return_value = [{"conid": 265598, "31": "185.0"}]
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL", "BADTICKER"]})
     assert "BADTICKER" in text
@@ -91,7 +92,10 @@ def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):
 
 
 def test_execute_get_market_snapshot_invalid_conid_skipped(toolkit):
-    toolkit._client.search_contract.return_value = [{"conid": "N/A"}]
+    toolkit._client.get_stocks.return_value = [
+        {"name": "APPLE INC", "assetClass": "STK",
+         "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
+    ]
     toolkit._client.get_market_snapshot.return_value = []
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL"]})
     assert "Could not resolve" in text
@@ -123,13 +127,19 @@ def test_execute_get_market_snapshot_fut_no_contracts_found(toolkit):
 
 
 def test_execute_get_market_snapshot_exchange_filter_selects_listing(toolkit):
-    """International equities: search_contract may return multiple listings.
+    """An explicit exchange pins the listing instead of taking whatever came first.
 
-    exchange param filters to the requested venue instead of always taking [0].
+    Resolution goes through /trsrv/stocks, where `exchange` is a real field. The old
+    path filtered /iserver/secdef/search results on a key that endpoint never returns
+    (the code was `c.get("exchange")`; the exchange code lives in `description`), so
+    this filter matched nothing in production and silently fell through — a defect this
+    very test hid by mocking a field shape the API does not produce.
     """
-    toolkit._client.search_contract.return_value = [
-        {"conid": 1, "exchange": "NYSE"},
-        {"conid": 2, "exchange": "AMS"},
+    toolkit._client.get_stocks.return_value = [
+        {"name": "ASML HOLDING NV", "assetClass": "STK", "contracts": [
+            {"conid": 1, "exchange": "NYSE", "isUS": True},
+            {"conid": 2, "exchange": "AMS", "isUS": False},
+        ]}
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 2, "31": "700.0", "6509": "D"}]
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"})
@@ -137,23 +147,169 @@ def test_execute_get_market_snapshot_exchange_filter_selects_listing(toolkit):
     assert "700.0" in text
 
 
-def test_execute_get_market_snapshot_exchange_filter_no_match_falls_back(toolkit):
-    """If no listing matches the requested exchange, fall back to first result
-    rather than failing outright — better to return something resolvable."""
-    toolkit._client.search_contract.return_value = [{"conid": 1, "exchange": "NYSE"}]
-    toolkit._client.get_market_snapshot.return_value = [{"conid": 1, "31": "100.0", "6509": "R"}]
+def test_execute_get_market_snapshot_exchange_filter_no_match_asks_instead_of_substituting(toolkit):
+    """Inverted 2026-07-28. This test used to assert the opposite — "fall back to first
+    result rather than failing outright — better to return something resolvable" — which
+    is precisely the assumption that let a US ETF be priced in pesos. A listing the user
+    did not ask for is not a lesser answer than none; it is a plausible number for the
+    wrong instrument, and nothing about it looks wrong.
+
+    No price may be returned, and the message must name what does exist so the user can
+    be asked."""
+    toolkit._client.get_stocks.return_value = [
+        {"name": "GENERAL ELECTRIC", "assetClass": "STK",
+         "contracts": [{"conid": 1, "exchange": "NYSE", "isUS": True}]}
+    ]
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"})
-    toolkit._client.get_market_snapshot.assert_called_once_with([1])
+    toolkit._client.get_market_snapshot.assert_not_called()
+    assert "no listing on NONEXISTENT" in text
+    assert "NYSE" in text
+    assert "Ask the user" in text
 
 
-def test_resolve_snapshot_conid_stk_falls_back_to_con_id_key(toolkit):
-    """STK/IND/BOND resolution must apply the .get("conid") or .get("con_id")
-    fallback — some IBKR responses key it "con_id" instead of "conid"
-    (CLAUDE.md convention). This branch omitted the fallback."""
-    toolkit._client.search_contract.return_value = [{"con_id": 42, "exchange": "SMART"}]
-    conid, err = toolkit._resolve_snapshot_conid("AAPL", "STK", None)
-    assert err is None
-    assert conid == 42
+def test_resolve_snapshot_conid_ind_falls_back_to_con_id_key(toolkit):
+    """IND/BOND still resolve via /iserver/secdef/search, which needs the
+    .get("conid") or .get("con_id") fallback — some IBKR responses key it "con_id"
+    (CLAUDE.md convention).
+
+    Retargeted from STK to IND on 2026-07-28: STK now resolves via /trsrv/stocks, whose
+    documented response keys the field "conid" and never "con_id"."""
+    toolkit._client.search_contract.return_value = [{"con_id": 42, "description": "SMART"}]
+    resolved = toolkit._resolve_snapshot_conid("SPX", "IND", None)
+    assert resolved.error is None
+    assert resolved.conid == 42
+
+
+# ── Ambiguous tickers: a ticker is not a unique key ──────────────────────────
+#
+# Every fixture below is the real /trsrv/stocks response shape, captured from the live
+# gateway on 2026-07-28. IGV is the case that motivated all of this: iShares Expanded
+# Tech-Software trades on BATS in USD and on MEXI in MXN, and the SAME ticker is also an
+# unrelated Italian company. The old resolver took /iserver/secdef/search's first result,
+# which for IGV is the Mexican listing — so a US ETF was reported at an MXN price, off by
+# the USD/MXN rate. AAPL's first result happens to be NASDAQ, so the same code was right
+# by luck there, which is why this went unnoticed.
+
+IGV_LISTINGS = [
+    {"name": "ISHARES EXPANDED TECH-SOFTWA", "assetClass": "STK", "contracts": [
+        {"conid": 12658199, "exchange": "BATS", "isUS": True},
+        {"conid": 325209548, "exchange": "MEXI", "isUS": False},
+    ]},
+    {"name": "I GRANDI VIAGGI SPA", "assetClass": "STK", "contracts": [
+        {"conid": 195853874, "exchange": "BVME", "isUS": False},
+    ]},
+]
+
+
+def test_ambiguous_ticker_resolves_to_the_us_listing_not_the_first_result(toolkit):
+    """The IGV regression. A bare ticker is a US ticker by convention, so the single
+    isUS listing wins — and the Mexican one, which /iserver/secdef/search returned
+    first, must not be chosen."""
+    toolkit._client.get_stocks.return_value = IGV_LISTINGS
+    toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
+
+    resolved = toolkit._resolve_snapshot_conid("IGV", "STK", None)
+
+    assert resolved.error is None
+    assert resolved.conid == 12658199      # BATS/USD
+    assert resolved.conid != 325209548     # MEXI/MXN — the old answer
+    assert resolved.currency == "USD"
+
+
+def test_explicit_exchange_selects_the_non_us_listing(toolkit):
+    """Non-US is reachable, but only when the user names it — never by default."""
+    toolkit._client.get_stocks.return_value = IGV_LISTINGS
+    toolkit._client.get_secdef_info.return_value = [{"conid": 325209548, "currency": "MXN"}]
+
+    resolved = toolkit._resolve_snapshot_conid("IGV", "STK", "MEXI")
+
+    assert resolved.error is None
+    assert resolved.conid == 325209548
+    assert resolved.currency == "MXN"
+
+
+def test_no_us_listing_asks_instead_of_picking(toolkit):
+    """Zero US listings is a question, not a default. No conid, and the message must
+    name every candidate WITH its company, since the same ticker can be a different
+    issuer entirely."""
+    toolkit._client.get_stocks.return_value = [
+        {"name": "I GRANDI VIAGGI SPA", "assetClass": "STK", "contracts": [
+            {"conid": 195853874, "exchange": "BVME", "isUS": False},
+        ]},
+    ]
+
+    resolved = toolkit._resolve_snapshot_conid("IGV", "STK", None)
+
+    assert resolved.conid == 0
+    assert resolved.ambiguous is True
+    assert "no US listing" in resolved.error
+    assert "BVME" in resolved.error
+    assert "I GRANDI VIAGGI SPA" in resolved.error
+    assert "Ask the user" in resolved.error
+
+
+def test_several_us_listings_asks_instead_of_picking(toolkit):
+    """Two US listings is the other side of the same rule — 'default to US' does not
+    decide between two US answers, so it must ask rather than take the first."""
+    toolkit._client.get_stocks.return_value = [
+        {"name": "SOME CO", "assetClass": "STK", "contracts": [
+            {"conid": 111, "exchange": "NASDAQ", "isUS": True},
+            {"conid": 222, "exchange": "ARCA", "isUS": True},
+        ]},
+    ]
+
+    resolved = toolkit._resolve_snapshot_conid("DUP", "STK", None)
+
+    assert resolved.conid == 0
+    assert resolved.ambiguous is True
+    assert "NASDAQ" in resolved.error and "ARCA" in resolved.error
+    assert "do not report a price" in resolved.error
+
+
+def test_ambiguity_reaches_the_user_and_no_price_is_fetched(toolkit):
+    """End to end: the question must survive to the tool output, and no market-data
+    call may be made for a symbol whose listing is undetermined."""
+    toolkit._client.get_stocks.return_value = [
+        {"name": "I GRANDI VIAGGI SPA", "assetClass": "STK", "contracts": [
+            {"conid": 195853874, "exchange": "BVME", "isUS": False},
+        ]},
+    ]
+
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+
+    toolkit._client.get_market_snapshot.assert_not_called()
+    assert "no US listing" in text
+    assert "Ask the user" in text
+
+
+def test_snapshot_always_states_the_currency(toolkit):
+    """A price without its unit is not terser, it is ambiguous — the IGV failure was
+    readable as a plausible USD number."""
+    toolkit._client.get_stocks.return_value = IGV_LISTINGS
+    toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
+    toolkit._client.get_market_snapshot.return_value = [
+        {"conid": 12658199, "31": "95.0", "6509": "R"}
+    ]
+
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+
+    assert '"_currency": "USD"' in text
+
+
+def test_snapshot_says_unknown_rather_than_omitting_the_currency(toolkit):
+    """When secdef/info cannot be read the key must still be present. An absent
+    currency is indistinguishable from USD; 'UNKNOWN' is not."""
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    toolkit._client.get_stocks.return_value = IGV_LISTINGS
+    toolkit._client.get_secdef_info.side_effect = IBKRAPIError("boom")
+    toolkit._client.get_market_snapshot.return_value = [
+        {"conid": 12658199, "31": "95.0", "6509": "R"}
+    ]
+
+    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+
+    assert '"_currency": "UNKNOWN"' in text
 
 
 def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit):
@@ -231,7 +387,8 @@ def test_fetch_market_data_live_path(toolkit):
 
 def test_fetch_market_data_no_contract(toolkit):
     toolkit._cache.check.return_value = False
-    toolkit._client.search_contract.return_value = []
+    # STK resolves via /trsrv/stocks since 2026-07-28, not /iserver/secdef/search.
+    toolkit._client.get_stocks.return_value = []
     text, fig = toolkit.execute("fetch_market_data", {"symbol": "FAKE", "period": "1Y", "bar": "1d"})
     assert "Could not resolve conid" in text
 
@@ -325,8 +482,9 @@ def test_get_contract_info_happy_path(toolkit):
 
 
 def test_get_contract_info_no_contract(toolkit):
-    """Returns error when search_contract finds nothing."""
-    toolkit._client.search_contract.return_value = []
+    """Returns error when the symbol resolves to no listing."""
+    # STK resolves via /trsrv/stocks since 2026-07-28, not /iserver/secdef/search.
+    toolkit._client.get_stocks.return_value = []
     text, fig = toolkit.execute("get_contract_info", {"symbol": "FAKESYM"})
     assert fig is None
     assert "Could not resolve conid" in text

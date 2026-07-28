@@ -314,6 +314,11 @@ Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentat
 
 ### `get_stocks(symbols) -> list[dict]`
 Stock contracts for symbols. Same dict-flattening behaviour as `get_futures()`.
+Each record is one issuer — `{name, assetClass, contracts: [{conid, exchange, isUS}]}` —
+and `isUS` is the **only** US-listing signal any contract endpoint returns. This is the
+endpoint IBKR designates for resolving stock symbols into conids, and conid is assigned
+per *(product, currency)*, so a ticker alone does not identify a contract.
+See `docs/symbology-reference.md` for the resolution rule and the IGV defect it fixed.
 **Endpoint:** `GET /trsrv/stocks`
 Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/security-stocks-by-symbol
 

@@ -28,10 +28,12 @@ def test_execute_get_alerts_returns_json(toolkit):
 
 def test_execute_create_price_alert_resolves_symbol(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL", "exchange": "NASDAQ"}]
     toolkit._client.create_alert.return_value = {"orderId": 42, "alertName": "AAPL >= 200"}
     text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
-    toolkit._client.search_contract.assert_called_once_with("AAPL", "STK")
+    # STK resolves via /trsrv/stocks since 2026-07-28 (the conftest fixture supplies a
+    # single US listing, conid 265598); /iserver/secdef/search must not be consulted.
+    toolkit._client.get_stocks.assert_called_once_with(["AAPL"])
+    toolkit._client.search_contract.assert_not_called()
     toolkit._client.create_alert.assert_called_once()
     call_alert = toolkit._client.create_alert.call_args[0][1]
     assert call_alert["conditions"][0]["conid"] == 265598
@@ -71,7 +73,10 @@ def test_execute_create_price_alert_fx_resolves_via_currency_pairs(toolkit):
 
 def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.search_contract.return_value = [{"conid": "N/A", "symbol": "AAPL"}]
+    toolkit._client.get_stocks.return_value = [
+        {"name": "APPLE INC", "assetClass": "STK",
+         "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
+    ]
     text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
     assert "conid" in text.lower()
     toolkit._client.create_alert.assert_not_called()
@@ -79,7 +84,8 @@ def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
 
 def test_execute_create_price_alert_no_contract(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.search_contract.return_value = []
+    # STK resolves via /trsrv/stocks since 2026-07-28, not /iserver/secdef/search.
+    toolkit._client.get_stocks.return_value = []
     text, fig = toolkit.execute("create_price_alert", {"symbol": "FAKE", "operator": "<=", "price": 50.0})
     assert "Could not resolve conid" in text or "No" in text
     toolkit._client.create_alert.assert_not_called()

@@ -50,3 +50,6 @@ htmlcov/
 # Superpowers brainstorming sessions and internal agent plans
 .superpowers/
 docs/superpowers/
+
+# Plans are personal working documents — local + Drive, never committed (user rule 2026-07-24).
+docs/plans/

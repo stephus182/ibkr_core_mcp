@@ -24,7 +24,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
-from typing import Any
+from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -37,13 +37,37 @@ from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import BacktestError
+from ibkr_core_mcp.exceptions import BacktestError, IBKRCoreError
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.store import SQLiteStore
 
 log = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
+
+
+class _Resolved(NamedTuple):
+    """The outcome of resolving one symbol to one tradeable listing.
+
+    A NamedTuple rather than the previous `(conid, error)` pair specifically so that
+    `currency` cannot be dropped on the way to the user. Every caller now has it in hand
+    at the moment it has the conid, which is what makes "always state the currency" a
+    property of the code instead of a rule each handler has to remember.
+
+    `currency` is None only when `/iserver/secdef/info` could not be read; that means
+    *unknown*, and callers must say so rather than omit the unit. It is also None
+    whenever `error` is set, since nothing was resolved.
+    """
+
+    conid: int
+    currency: str | None
+    error: str | None
+    # True only when `error` is a QUESTION about which listing was meant, as opposed to
+    # a plain failure. The two must not be conflated: a question is the answer and has
+    # to reach the user verbatim, while a failure is a diagnostic that can be summarised
+    # alongside other symbols'.
+    ambiguous: bool = False
+
 
 # Bounds worst-case simultaneous Crawl4AI browser launches in the search-result
 # fallback loop. FirecrawlClient.search()'s own `limit` is already clamped to
@@ -1234,9 +1258,10 @@ class ClaudeToolkit:
                 None,
             )
 
-        conid, err = self._resolve_snapshot_conid(symbol, "STK", None)
-        if err:
-            return f"{err} Is IBKR connected?", None
+        resolved = self._resolve_snapshot_conid(symbol, "STK", None)
+        if resolved.error:
+            return f"{resolved.error} Is IBKR connected?", None
+        conid = resolved.conid
 
         # iserver/marketdata/history first-call behavior: IBKR may return 404 or 500
         # on the first request for a symbol while initializing the data subscription,
@@ -1898,9 +1923,10 @@ class ClaudeToolkit:
         sec_type = inputs.get("sec_type", "STK")
         currency = inputs.get("currency", "USD")
         days = inputs.get("days")
-        conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
-        if err:
-            return err, None
+        resolved = self._resolve_snapshot_conid(symbol, sec_type, None)
+        if resolved.error:
+            return resolved.error, None
+        conid = resolved.conid
         account_ids, err = self._all_account_ids()
         if err:
             return err, None
@@ -1934,9 +1960,10 @@ class ClaudeToolkit:
         """Return full contract details and trading rules for any instrument type."""
         symbol = inputs["symbol"].upper()
         sec_type = inputs.get("sec_type", "STK")
-        conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
-        if err:
-            return err, None
+        resolved = self._resolve_snapshot_conid(symbol, sec_type, None)
+        if resolved.error:
+            return resolved.error, None
+        conid = resolved.conid
         info = self._client.get_contract_info_and_rules(conid)
         return json.dumps(info, indent=2), None
 
@@ -2137,9 +2164,10 @@ class ClaudeToolkit:
             if limit_price is None:
                 return "order_type='STOP_LIMIT' requires limit_price (and stop_price).", None
 
-        conid, err = self._resolve_snapshot_conid(symbol, sec_type, None)
-        if err:
-            return err, None
+        resolved = self._resolve_snapshot_conid(symbol, sec_type, None)
+        if resolved.error:
+            return resolved.error, None
+        conid = resolved.conid
 
         account_id, err = self._first_account_id()
         if err:
@@ -2345,7 +2373,33 @@ class ClaudeToolkit:
             return f"No futures found for {', '.join(symbols)}.", None
         return json.dumps(futures, indent=2), None
 
-    def _resolve_snapshot_conid(self, sym: str, sec_type: str, exchange: str | None) -> tuple[int, str | None]:
+    def _listing_currency(self, conid: int) -> str | None:
+        """Return the currency a listing trades in, or None if it could not be read.
+
+        Every price this toolkit reports is denominated in *some* currency, and which one
+        is a property of the listing, not of the ticker: IGV is USD on BATS and MXN on
+        MEXI. A number without its unit is not a smaller answer than a number with it —
+        it is a different and possibly wrong one, and nothing about "IGV 18.60" looks
+        wrong until you know it was pesos.
+
+        Returns None rather than raising, and callers must then say *currency unknown*
+        rather than omit it. Silence is the one outcome that is not allowed: it reads as
+        "the usual currency", which is exactly the assumption this exists to remove.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#secdef-info-contract
+                (GET /iserver/secdef/info; returns a LIST, live-verified 2026-07-28 —
+                the wrapper's return annotation says dict, so both shapes are handled)
+        """
+        try:
+            info: Any = self._client.get_secdef_info(conid)
+        except IBKRCoreError:
+            return None
+        row = info[0] if isinstance(info, list) and info else info
+        if isinstance(row, dict) and row.get("currency"):
+            return str(row["currency"])
+        return None
+
+    def _resolve_snapshot_conid(self, sym: str, sec_type: str, exchange: str | None) -> _Resolved:
         """Resolve one symbol to a conid using the correct endpoint for its sec_type.
 
         The single conid-resolution implementation for the toolkit (register item 15,
@@ -2357,8 +2411,13 @@ class ClaudeToolkit:
         STK, IND, BOND — NOT FUT or CASH. Using it for those types silently returns
         wrong or empty results. This dispatches to the documented endpoint per type:
 
-        - STK/IND/BOND: /iserver/secdef/search (search_contract). If exchange is given,
-          filters results to that listing; otherwise takes the first match.
+        - STK: /trsrv/stocks (see _resolve_stock_conid) — the endpoint IBKR designates
+          for symbol→conid resolution, and the only one carrying `isUS`. Defaults to the
+          US listing and returns a question when that is not unique. It does NOT take
+          "the first match": for IGV that was the Mexican listing, priced in MXN.
+        - IND/BOND: /iserver/secdef/search (search_contract). If exchange is given,
+          filters on `description` (the exchange code — there is no `exchange` key on
+          these results) and errors when nothing matches, rather than substituting.
         - FUT: /trsrv/futures (get_futures) — returns all non-expired contracts for the
           root symbol; picks the lowest expirationDate (front month).
         - CASH: /iserver/currency/pairs (get_currency_pairs) — symbol must be 'BASE.QUOTE'
@@ -2366,7 +2425,7 @@ class ClaudeToolkit:
           'BASE.QUOTE' symbol exactly. NOT resolved via /iserver/secdef/search — CASH
           is not in that endpoint's documented secType list.
 
-        Returns (conid, None) on success or (0, error_message) on failure.
+        Returns a `_Resolved`: the conid and the currency it trades in, or an error.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
                 https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ (trsrv/futures)
@@ -2375,7 +2434,7 @@ class ClaudeToolkit:
         if sec_type == "FUT":
             futures = self._client.get_futures([sym])
             if not futures:
-                return 0, f"No futures contracts found for root symbol {sym}."
+                return _Resolved(0, None, f"No futures contracts found for root symbol {sym}.")
             try:
                 front = min(futures, key=lambda f: int(f.get("expirationDate") or 0))
             except (ValueError, TypeError):
@@ -2386,35 +2445,56 @@ class ClaudeToolkit:
             except (ValueError, TypeError):
                 conid_int = 0
             if conid_int <= 0:
-                return 0, f"Futures contract for {sym} found but conid missing."
-            return conid_int, None
+                return _Resolved(0, None, f"Futures contract for {sym} found but conid missing.")
+            return _Resolved(conid_int, self._listing_currency(conid_int), None)
 
         if sec_type == "CASH":
             if "." not in sym:
-                return 0, f"FX pair {sym} must be in 'BASE.QUOTE' format (e.g. 'EUR.USD')."
+                return _Resolved(0, None, f"FX pair {sym} must be in 'BASE.QUOTE' format (e.g. 'EUR.USD').")
             base, _, quote = sym.partition(".")
             pairs = self._client.get_currency_pairs(base)
             if not pairs:
-                return 0, f"No FX pairs found for base currency {base}."
+                return _Resolved(0, None, f"No FX pairs found for base currency {base}.")
             match = next((p for p in pairs if str(p.get("symbol", "")).upper() == sym), None)
             if not match:
-                return 0, f"FX pair {sym} not found among {base} pairs."
+                return _Resolved(0, None, f"FX pair {sym} not found among {base} pairs.")
             conid = match.get("conid")
             try:
                 conid_int = int(conid) if conid else 0
             except (ValueError, TypeError):
                 conid_int = 0
             if conid_int <= 0:
-                return 0, f"FX pair {sym} found but conid missing."
-            return conid_int, None
+                return _Resolved(0, None, f"FX pair {sym} found but conid missing.")
+            return _Resolved(conid_int, self._listing_currency(conid_int), None)
+
+        if sec_type == "STK":
+            return self._resolve_stock_conid(sym, exchange)
 
         contracts = self._client.search_contract(sym, sec_type)
         if not contracts:
-            return 0, f"Could not resolve conid for {sym} (as {sec_type})."
+            return _Resolved(0, None, f"Could not resolve conid for {sym} (as {sec_type}).")
 
         if exchange:
-            matches = [c for c in contracts if str(c.get("exchange", "")).upper() == exchange.upper()]
-            contracts = matches or contracts
+            # `description` carries the exchange code on /iserver/secdef/search results;
+            # there is NO `exchange` key (live-probed 2026-07-28: the returned keys are
+            # companyHeader, companyName, conid, description, restricted, sections,
+            # symbol). Filtering on "exchange" therefore matched nothing in production
+            # and fell through to the unfiltered list — a silently wrong listing, masked
+            # by a unit-test mock that invented the field.
+            matches = [
+                c for c in contracts
+                if str(c.get("description") or "").upper() == exchange.upper()
+            ]
+            if not matches:
+                available = ", ".join(
+                    sorted({str(c.get("description") or "?") for c in contracts})
+                )
+                return _Resolved(0, None, (
+                    f"{sym} ({sec_type}) has no listing on {exchange}. Available: "
+                    f"{available}. Ask the user which one they mean — do not substitute "
+                    f"another exchange."
+                ), ambiguous=True)
+            contracts = matches
 
         conid = contracts[0].get("conid") or contracts[0].get("con_id")
         try:
@@ -2422,8 +2502,112 @@ class ClaudeToolkit:
         except (ValueError, TypeError):
             conid_int = 0
         if conid_int <= 0:
-            return 0, f"Contract found for {sym} but conid missing."
-        return conid_int, None
+            return _Resolved(0, None, f"Contract found for {sym} but conid missing.")
+        return _Resolved(conid_int, self._listing_currency(conid_int), None)
+
+    def _resolve_stock_conid(self, sym: str, exchange: str | None) -> _Resolved:
+        """Resolve a STK symbol to one conid, or return a question instead of a guess.
+
+        A ticker is not a unique key. IBKR documents this outright: *"For a single
+        product trading in multiple markets, IB will assign distinct `conids` for each
+        combination of product and currency. For instance, AAPL stock trading in USD in
+        the United States has a different `conid` than the same AAPL stock trading in
+        MXN."* Worse, the same ticker can belong to **different companies** — live-probed
+        2026-07-28: IGV is both ISHARES EXPANDED TECH-SOFTWA and I GRANDI VIAGGI SPA;
+        VOD is both VODAFONE GROUP PLC and VODACOM GROUP LTD.
+
+        This uses `/trsrv/stocks`, which IBKR calls *"designed specifically for resolving
+        stock symbols into `conids`"* and which is the only endpoint that answers the
+        US-listing question itself, via a documented `isUS` boolean per contract.
+        `/iserver/secdef/search` — what this resolver used before — returns neither
+        `isUS` nor a currency, and its result *order* is not documented as meaningful.
+        It was being trusted anyway: `contracts[0]` for IGV is the **Mexican** listing
+        (conid 325209548, MXN), which is how a US ETF was reported at an MXN price, while
+        `contracts[0]` for AAPL happens to be NASDAQ. Right by luck, wrong by luck.
+
+        The rule, and it is deliberately not instrument-specific:
+
+        1. An explicit `exchange` wins. No listing on it is an error naming what exists —
+           never a substitution.
+        2. Otherwise prefer the US listing, since a bare ticker is a US ticker by
+           convention. Exactly one `isUS` contract resolves.
+        3. Zero or several US listings is a question, not a default. Return the
+           candidates so the caller asks the user. **Asking beats assuming**: a wrong
+           listing is a plausible number for the wrong instrument, which is worse than
+           no number because nothing about it looks wrong.
+
+        Args:
+            sym: Ticker, already upper-cased by the caller.
+            exchange: Optional exchange code (e.g. "BATS", "MEXI") that pins the listing.
+
+        Returns:
+            (conid, None) when exactly one listing is determined, else (0, question)
+            where `question` names every candidate and tells the caller to ask.
+
+        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-staging/
+                (Contracts → Equities; `GET /trsrv/stocks`, scraped 2026-07-28)
+        """
+        records = self._client.get_stocks([sym])
+        if not records:
+            return _Resolved(0, None, f"Could not resolve conid for {sym} (as STK).")
+
+        # One row per (issuer, listing). `name` is carried down so an ambiguous ticker
+        # can show WHICH company each candidate belongs to — the difference between
+        # "same ETF, other currency" and "entirely different company".
+        listings = [
+            {
+                "conid": c.get("conid"),
+                "exchange": str(c.get("exchange") or "?"),
+                "is_us": bool(c.get("isUS")),
+                "name": str(r.get("name") or "?"),
+            }
+            for r in records
+            for c in (r.get("contracts") or [])
+        ]
+        if not listings:
+            return _Resolved(0, None, f"Could not resolve conid for {sym} (as STK).")
+
+        def _pick(rows: list[dict[str, Any]]) -> _Resolved:
+            try:
+                conid_int = int(rows[0]["conid"] or 0)
+            except (ValueError, TypeError):
+                conid_int = 0
+            if conid_int <= 0:
+                return _Resolved(0, None, f"Contract found for {sym} but conid missing.")
+            return _Resolved(conid_int, self._listing_currency(conid_int), None)
+
+        def _describe(rows: list[dict[str, Any]]) -> str:
+            return "; ".join(
+                f"{r['exchange']}{' (US)' if r['is_us'] else ''} — {r['name']} — "
+                f"conid {r['conid']}"
+                for r in rows
+            )
+
+        if exchange:
+            matches = [r for r in listings if r["exchange"].upper() == exchange.upper()]
+            if not matches:
+                return _Resolved(0, None, (
+                    f"{sym} has no listing on {exchange}. Available: "
+                    f"{_describe(listings)}. Ask the user which one they mean — do not "
+                    f"substitute another exchange."
+                ), ambiguous=True)
+            return _pick(matches)
+
+        us = [r for r in listings if r["is_us"]]
+        if len(us) == 1:
+            return _pick(us)
+
+        if not us:
+            return _Resolved(0, None, (
+                f"{sym} has no US listing. Candidates: {_describe(listings)}. Ask the "
+                f"user which listing they mean and re-call with that exchange — do not "
+                f"pick one, and do not report a price until they answer."
+            ), ambiguous=True)
+        return _Resolved(0, None, (
+            f"{sym} is ambiguous: {len(us)} US listings. Candidates: {_describe(us)}. "
+            f"Ask the user which one they mean and re-call with that exchange — do not "
+            f"pick one, and do not report a price until they answer."
+        ), ambiguous=True)
 
     def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return live market data snapshot for one or more symbols.
@@ -2438,9 +2622,20 @@ class ClaudeToolkit:
 
         Price fields: 31=last, 84=bid, 86=ask, 70=high, 71=low, 82=change, 83=change%, 87=volume.
 
+          _currency     — the currency this listing trades in, or 'UNKNOWN'. Always
+                          report it with the price: the same ticker is a different
+                          currency on a different venue (IGV is USD on BATS, MXN on
+                          MEXI), so a bare number is ambiguous, not merely terse.
+
         Contract resolution is dispatched per sec_type by _resolve_snapshot_conid() —
-        STK/IND/BOND via /iserver/secdef/search, FUT via /trsrv/futures (front month),
+        STK via /trsrv/stocks (US listing by default, ambiguity returned as a question),
+        IND/BOND via /iserver/secdef/search, FUT via /trsrv/futures (front month),
         CASH via /iserver/currency/pairs with 'BASE.QUOTE' symbol format.
+
+        A symbol whose listing could not be determined is NOT silently dropped: its
+        question is returned to the caller so the user can be asked which listing they
+        meant. Reporting the other symbols while staying quiet about that one would be
+        the same defect as picking a listing at random.
 
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
                 https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
@@ -2450,16 +2645,25 @@ class ClaudeToolkit:
         exchange = inputs.get("exchange")
         conids: list[int] = []
         conid_to_sym: dict[int, str] = {}
+        conid_to_ccy: dict[int, str | None] = {}
+        ambiguous: list[str] = []
         failed: list[str] = []
         for sym in symbols:
-            conid_int, err = self._resolve_snapshot_conid(sym, sec_type, exchange)
-            if err:
+            resolved = self._resolve_snapshot_conid(sym, sec_type, exchange)
+            if resolved.error:
                 failed.append(sym)
+                if resolved.ambiguous:
+                    ambiguous.append(resolved.error)
             else:
-                conids.append(conid_int)
-                conid_to_sym[conid_int] = sym
+                conids.append(resolved.conid)
+                conid_to_sym[resolved.conid] = sym
+                conid_to_ccy[resolved.conid] = resolved.currency
         if not conids:
-            return f"Could not resolve conids for: {', '.join(symbols)}.", None
+            # The ambiguity questions ARE the answer when nothing resolved. Collapsing
+            # them into "could not resolve" would throw away the one thing the user can
+            # act on — which listing they meant.
+            head = "\n".join(ambiguous) + "\n\n" if ambiguous else ""
+            return f"{head}Could not resolve conids for: {', '.join(symbols)}.", None
 
         import time
 
@@ -2503,10 +2707,23 @@ class ClaudeToolkit:
             if first_char == "N" or (not avail and not (item.get("31") or item.get("84") or item.get("86"))):
                 no_data.append(f"{sym} (conid={cid})")
 
-            enriched.append({"_symbol": sym, "_data_status": data_status, "_quote_time": quote_time, **item})
+            # 'UNKNOWN' rather than an omitted key: a missing currency reads as "the
+            # usual one", which is the assumption that let an MXN price be reported as
+            # though it were USD. Absent is indistinguishable from USD; UNKNOWN is not.
+            ccy = conid_to_ccy.get(cid) if isinstance(cid, int) else None
+            enriched.append({
+                "_symbol": sym,
+                "_currency": ccy or "UNKNOWN",
+                "_data_status": data_status,
+                "_quote_time": quote_time,
+                **item,
+            })
 
         result = json.dumps(enriched, indent=2)
         notes = []
+        # Ambiguity first: it is a question for the user, not a diagnostic, and it must
+        # not be buried under the symbols that did resolve.
+        notes.extend(ambiguous)
         if failed:
             notes.append(f"Could not resolve conid for: {', '.join(failed)} (as {sec_type}).")
         if no_data:
@@ -2564,9 +2781,10 @@ class ClaudeToolkit:
         tif = inputs.get("tif", "GTC")
         outside_rth = inputs.get("outside_rth", False)
         repeat = inputs.get("repeat", False)
-        conid_int, err = self._resolve_snapshot_conid(symbol, sec_type, None)
-        if err:
-            return err, None
+        resolved = self._resolve_snapshot_conid(symbol, sec_type, None)
+        if resolved.error:
+            return resolved.error, None
+        conid_int = resolved.conid
         exchange = "SMART"
         name = inputs.get("name") or f"{symbol} {operator} {price}"
         alert = {

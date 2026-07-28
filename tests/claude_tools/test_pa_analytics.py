@@ -89,7 +89,8 @@ def test_get_pa_transactions_empty(toolkit):
 def test_get_pa_transactions_conid_resolution_failure(toolkit):
     """When the symbol can't be resolved to a conid, the error is returned and IBKR is never called."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
-    toolkit._client.search_contract.return_value = []
+    # STK resolves via /trsrv/stocks since 2026-07-28, not /iserver/secdef/search.
+    toolkit._client.get_stocks.return_value = []
     text, fig = toolkit.execute("get_pa_transactions", {"symbol": "BOGUS"})
     assert fig is None
     assert "BOGUS" in text
