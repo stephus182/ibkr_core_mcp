@@ -13,7 +13,7 @@ def _resp(status=200, body=None, headers=None):
     return resp
 
 
-def _client(api_key="sk_live_test", base_url="https://api.crawl4ai.com"):
+def _client(api_key="crawl4ai-fake-key-for-tests", base_url="https://api.crawl4ai.com"):
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient
 
     return Crawl4AICloudClient(api_key, base_url=base_url)
@@ -44,7 +44,7 @@ def test_scrape_authenticates_with_x_api_key_header_not_bearer(mock_requests):
     _client().scrape("https://example.com/docs")
 
     headers = mock_requests.post.call_args.kwargs["headers"]
-    assert headers["X-API-Key"] == "sk_live_test"
+    assert headers["X-API-Key"] == "crawl4ai-fake-key-for-tests"
     assert "Authorization" not in headers
 
 
@@ -246,8 +246,8 @@ def test_scrape_never_puts_the_api_key_in_an_error_message(mock_requests):
     mock_requests.post.return_value = _resp(status=401)
 
     with pytest.raises(Crawl4AICloudError) as excinfo:
-        _client(api_key="sk_live_supersecret").scrape("https://example.com/docs")
-    assert "sk_live_supersecret" not in str(excinfo.value)
+        _client(api_key="crawl4ai-fake-key-for-tests").scrape("https://example.com/docs")
+    assert "crawl4ai-fake-key-for-tests" not in str(excinfo.value)
 
 
 # ============================================================================

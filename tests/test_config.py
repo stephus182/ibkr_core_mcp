@@ -67,12 +67,12 @@ def test_firecrawl_config_defaults_to_empty(monkeypatch, tmp_path):
 
 def test_crawl4ai_cloud_config_reads_from_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("CRAWL4AI_API_KEY", "sk_live_abc123")
+    monkeypatch.setenv("CRAWL4AI_API_KEY", "crawl4ai-fake-key-for-tests")
     monkeypatch.setenv("CRAWL4AI_API_URL", "https://staging.crawl4ai.example")
     from ibkr_core_mcp.config import Config
 
     cfg = Config.from_env()
-    assert cfg.crawl4ai_api_key == "sk_live_abc123"
+    assert cfg.crawl4ai_api_key == "crawl4ai-fake-key-for-tests"
     assert cfg.crawl4ai_api_url == "https://staging.crawl4ai.example"
 
 
@@ -94,14 +94,14 @@ def test_crawl4ai_cloud_config_defaults(monkeypatch, tmp_path):
 def test_crawl4ai_api_key_never_appears_in_repr(monkeypatch, tmp_path):
     """repr(Config) must not leak the cloud key, matching firecrawl_api_key's repr=False."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("CRAWL4AI_API_KEY", "sk_live_supersecret")
+    monkeypatch.setenv("CRAWL4AI_API_KEY", "crawl4ai-fake-key-for-tests")
     from ibkr_core_mcp.config import Config
 
     cfg = Config.from_env()
     # Assert the field is actually populated first: without this the repr check below
     # passes vacuously on a Config that has no such field at all.
-    assert cfg.crawl4ai_api_key == "sk_live_supersecret"
-    assert "sk_live_supersecret" not in repr(cfg)
+    assert cfg.crawl4ai_api_key == "crawl4ai-fake-key-for-tests"
+    assert "crawl4ai-fake-key-for-tests" not in repr(cfg)
 
 
 def test_crawl4ai_profiles_dir_reads_from_env(monkeypatch):

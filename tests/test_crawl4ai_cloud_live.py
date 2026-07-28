@@ -131,7 +131,7 @@ def test_a_bad_key_is_a_401_not_a_silent_empty_page():
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient, Crawl4AICloudError
 
     with pytest.raises(Crawl4AICloudError) as excinfo:
-        Crawl4AICloudClient("sk_live_definitely_not_a_real_key").usage()
+        Crawl4AICloudClient("crawl4ai-fake-key-definitely-invalid").usage()
 
     assert excinfo.value.status_code == 401
 

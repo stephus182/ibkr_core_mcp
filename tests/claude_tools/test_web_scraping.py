@@ -811,7 +811,7 @@ def test_crawl_no_content_message_names_the_firecrawl_failure():
 _CLOUD_MARKDOWN = _REALISTIC_PARAGRAPH * 5  # distinguishable from _REALISTIC_MARKDOWN
 
 
-def _ladder_toolkit(cloud_key="sk_live_test"):
+def _ladder_toolkit(cloud_key="crawl4ai-fake-key-for-tests"):
     """Toolkit whose Firecrawl and local rungs are wired to return nothing."""
     toolkit = _make_toolkit(crawl4ai_api_key=cloud_key)
     toolkit._firecrawl = MagicMock()
@@ -924,3 +924,68 @@ def test_crawl_does_not_mention_credits_when_firecrawl_served_the_page():
     text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
 
     assert "credit" not in text.lower()
+
+
+# ~3.5 KB — real content, but under _MIN_USEFUL_BYTES, so the ladder keeps climbing.
+_SUB_THRESHOLD_MARKDOWN = _REALISTIC_PARAGRAPH * 2
+
+
+def test_crawl_reports_a_cloud_network_error_instead_of_raising():
+    """A dead network on the last rung must degrade, not escape as a traceback.
+
+    Covers the generic `except Exception` path, distinct from the typed
+    Crawl4AICloudError path: requests can raise ConnectionError/Timeout, and the ladder's
+    whole contract is that a failed rung produces a message rather than an exception.
+    """
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.side_effect = OSError("socket timed out")
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "network error" in text.lower()
+    assert "socket timed out" in text
+    assert "no content" in text.lower()
+
+
+def test_cloud_does_not_replace_a_larger_result_from_an_earlier_rung():
+    """The ladder upgrades only on strictly more content — it must never downgrade.
+
+    Firecrawl returns nothing, local returns a real but sub-threshold 3.5 KB page, so the
+    cloud rung still runs. Cloud comes back smaller. The 3.5 KB page must survive, and the
+    source must still name the local rung.
+    """
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _SUB_THRESHOLD_MARKDOWN}
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.return_value = {
+        "url": "https://example.com",
+        "markdown": _REALISTIC_PARAGRAPH,  # ~1.7 KB — genuinely worse
+        "metadata": {},
+    }
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai_cloud.scrape.assert_called_once()  # it did run — this is not a skip
+    saved_pages = toolkit._web_docs.save_crawl.call_args[0][1]
+    assert saved_pages[0]["markdown"] == _SUB_THRESHOLD_MARKDOWN
+    assert "Crawl4AI Cloud" not in text
+    assert "Crawl4AI" in text
+
+
+def test_cloud_replaces_a_smaller_result_from_an_earlier_rung():
+    """The mirror of the test above: strictly more content does win."""
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_PARAGRAPH}
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.return_value = {
+        "url": "https://example.com",
+        "markdown": _CLOUD_MARKDOWN,
+        "metadata": {},
+    }
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    saved_pages = toolkit._web_docs.save_crawl.call_args[0][1]
+    assert saved_pages[0]["markdown"] == _CLOUD_MARKDOWN
+    assert "Crawl4AI Cloud" in text

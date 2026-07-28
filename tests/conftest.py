@@ -92,6 +92,9 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_crawl_names_the_cloud_failure_rather_than_swallowing_it",
     "test_crawl_reports_remaining_credits_only_when_the_cloud_rung_fired",
     "test_crawl_does_not_mention_credits_when_firecrawl_served_the_page",
+    "test_crawl_reports_a_cloud_network_error_instead_of_raising",
+    "test_cloud_does_not_replace_a_larger_result_from_an_earlier_rung",
+    "test_cloud_replaces_a_smaller_result_from_an_earlier_rung",
 }
 
 
