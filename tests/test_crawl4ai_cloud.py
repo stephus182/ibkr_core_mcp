@@ -277,6 +277,27 @@ def test_scrape_records_credits_remaining_from_the_response_body(mock_requests):
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_never_logs_the_bodys_credits_used_field(mock_requests, caplog):
+    """usage.credits_used is not what the call actually cost.
+
+    Measured live 2026-07-28: a no-proxy scrape reported credits_used: 5.0 while the
+    /v1/usage ledger moved by exactly 1. credits_remaining agreed with the ledger; this
+    field did not. Both planning documents' "some operations cost 5 credits" budget came
+    from reading it. Log only what is true.
+    """
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# hi", "usage": {"credits_used": 5.0, "credits_remaining": 46.0}}
+    )
+
+    with caplog.at_level("INFO"):
+        _client().scrape("https://example.com/docs")
+
+    logged = " | ".join(r.getMessage() for r in caplog.records)
+    assert "46.0" in logged, "the trustworthy field must still be reported"
+    assert "5.0" not in logged, f"credits_used leaked into a log line: {logged}"
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
 def test_scrape_leaves_credits_remaining_none_when_the_body_omits_usage(mock_requests):
     mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
 

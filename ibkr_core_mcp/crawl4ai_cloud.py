@@ -184,17 +184,21 @@ class Crawl4AICloudClient:
         Reads `usage.credits_remaining` out of the scrape response, which is free — the
         alternative, a GET /v1/usage per scrape, would spend a request against the
         per-minute limit to learn what the response already said.
+
+        **`usage.credits_used` from the same block is deliberately ignored: it is wrong.**
+        Measured 2026-07-28, a no-proxy scrape of docs.firecrawl.dev/introduction reported
+        `credits_used: 5.0` while `/v1/usage` moved from 3 to 4 — a true cost of 1, which
+        the `dry_run` quote had also priced at exactly 1.0. `credits_remaining` agreed with
+        the ledger (46 of 50); `credits_used` did not. Reading that field is very likely
+        where this project's earlier "some operations cost 5 credits" budget came from.
+        Only `credits_remaining` is reported.
         """
         usage = payload.get("usage") or {}
         remaining = usage.get("credits_remaining")
         if remaining is None:
             return
         self.last_credits_remaining = float(remaining)
-        log.info(
-            "crawl4ai cloud: %s credit(s) used, %s remaining today",
-            usage.get("credits_used", "?"),
-            self.last_credits_remaining,
-        )
+        log.info("crawl4ai cloud: %s credit(s) remaining today", self.last_credits_remaining)
         allowance = self._daily_credit_allowance()
         if allowance and self.last_credits_remaining < allowance * _LOW_CREDIT_FRACTION:
             log.warning(
