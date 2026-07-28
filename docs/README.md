@@ -17,7 +17,7 @@ code changes.
 | [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) |
 | [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth` |
 | [`flex-query-reference.md`](flex-query-reference.md) | Historical Trade Data / Flex Queries (one-time setup, usage, constraints) |
-| [`mcp-server-reference.md`](mcp-server-reference.md) | MCP Server (install, stdio/SSE transports, 44 tools, 4 resources, price alerts, TradingView integration) |
+| [`mcp-server-reference.md`](mcp-server-reference.md) | MCP Server (install, stdio/SSE transports, 45 tools, 4 resources, price alerts, TradingView integration) |
 | [`ibkr-api-behaviors-reference.md`](ibkr-api-behaviors-reference.md) | Known IBKR API behaviors, verified not assumed |
 | [`external-docs-reference.md`](external-docs-reference.md) | Official documentation URLs, all external APIs |
 | [`consumers.md`](consumers.md) | Consuming projects |

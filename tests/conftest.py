@@ -86,6 +86,19 @@ _REAL_DNS_EXEMPT_TESTS = {
     # before the ladder was ever consulted.
     "test_crawl_no_content_message_names_both_rungs",
     "test_local_rung_does_not_replace_a_larger_firecrawl_result",
+    # fetch_page handler tests. Same reason again: _handle_fetch_page SSRF-validates
+    # the URL before constructing the browser, so a blocked DNS lookup turns every
+    # one of these into "Blocked: ..." and the assertions stop meaning anything.
+    # test_fetch_page_blocks_a_private_host_before_launching_a_browser is NOT listed
+    # -- it wants the rejection, and 127.0.0.1 needs no DNS to be recognised.
+    "test_fetch_page_returns_the_pages_markdown",
+    "test_fetch_page_names_the_saved_login_profile_when_one_applies",
+    "test_fetch_page_says_how_to_create_a_profile_when_none_applies",
+    "test_fetch_page_reports_crawl4ai_unavailable_without_raising",
+    "test_fetch_page_reports_an_empty_fetch_instead_of_claiming_success",
+    "test_fetch_page_reports_a_browser_failure_instead_of_raising",
+    "test_fetch_page_flags_a_thin_result_instead_of_presenting_it_as_the_page",
+    "test_fetch_page_does_not_cry_wolf_on_a_full_page",
 }
 
 

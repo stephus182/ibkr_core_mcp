@@ -1,11 +1,12 @@
 # ClaudeToolkit — Tools Reference
 
-**42 tools total** (40 core + 2 web scraper) exposed by `ClaudeToolkit.tools` and
-`ClaudeToolkit.execute()`. `ClaudeToolkit.tools` always advertises all 42 regardless of
-environment — the 2 scraper tools (`firecrawl_search`, `firecrawl_crawl`) are not conditionally
-omitted from the schema. `FIRECRAWL_API_KEY` is instead checked at call time, inside
-`execute()`: calling either scraper tool without the key set returns an error string rather
-than the tool being absent from what's offered to the model.
+**43 tools total** (40 core + 3 web scraper) exposed by `ClaudeToolkit.tools` and
+`ClaudeToolkit.execute()`. `ClaudeToolkit.tools` always advertises all 43 regardless of
+environment — the 3 scraper tools (`firecrawl_search`, `firecrawl_crawl`, `fetch_page`) are not
+conditionally omitted from the schema. Their requirements are instead checked at call time,
+inside `execute()`: calling a Firecrawl tool without `FIRECRAWL_API_KEY`, or `fetch_page` without
+the `[scraper]` extra installed, returns an error string rather than the tool being absent from
+what's offered to the model.
 
 Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`None` for chart tools (currently none — reserved for a future equity-curve chart tool).
 
@@ -775,3 +776,52 @@ retry automatically on 429/408/500/502/503/504, honoring the `Retry-After`
 header when present, else exponential backoff capped at 30s + jitter — per
 Firecrawl's own documented error-handling guidance
 (https://docs.firecrawl.dev/api-reference/errors).
+
+### `fetch_page`
+
+Fetch **one** page with a real local browser and return it as markdown. No
+Firecrawl attempt, no Drive write, no credits.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | ✅ | Page URL to fetch (public http/https only) |
+
+**Output:** the page markdown, prefixed with its byte count and a line stating
+whether a saved login profile was used for that domain — or, when nothing came
+back, an explicit "returned no content" naming the likely cause.
+
+**Thin content is flagged, not just measured.** A byte count is not a warning: a
+reply reading `# Fetched: <url>` / `(1 B)` followed by one byte still looks like a
+successful fetch of a short page. When the result fails `assess_quality` — the
+same word-count and paywall-marker signal the recovery ladder branches on, not a
+second threshold invented for this tool — the reply carries an explicit "this
+content looks incomplete … do not treat it as the full page". Measured live
+2026-07-28: `wsj.com` with no login profile returns exactly **1 B** and is
+flagged; `ft.com`'s free homepage (57,737 B) and a real docs page (11,807 B) are
+not.
+
+**When to reach for it instead of the Firecrawl tools.** `firecrawl_search`
+answers "find pages about X" and `firecrawl_crawl` answers "archive this site";
+both are the right tool for API and reference documentation. `fetch_page`
+answers "read me this page", and is the **only** route that works for a
+paywalled article: Firecrawl cannot log in, so sending a subscriber URL through
+it spends a credit to receive the subscription stub. Also the better choice for
+a JavaScript-heavy page, where a real browser beats an extraction service.
+
+**Paywalled sites** need a one-time interactive login per domain:
+
+```bash
+python -m ibkr_core_mcp.scrape_fallback create-profile https://www.wsj.com
+```
+
+You log in by hand in a visible browser; only the resulting session is stored,
+in a local directory. No password is ever seen by this package and nothing
+leaves the machine. Profile lookup broadens from the exact hostname toward the
+registrable domain, so one profile for `www.ft.com` also serves `markets.ft.com`.
+Full detail: `docs/web-scraper-reference.md` §6.
+
+**Requires the `[scraper]` extra** (`pip install "ibkr_core_mcp[scraper]"` then
+`crawl4ai-setup`). Without it the tool returns an install instruction rather
+than raising — as it does for a crashed browser or a blocked URL. The URL is
+SSRF-validated *before* the browser is constructed, since a late check would
+already have made the request.

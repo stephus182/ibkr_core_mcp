@@ -23,7 +23,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
 | `web_scraper` / `scrape_fallback` | Firecrawl web search/crawl, with an optional Crawl4AI fallback for incomplete/paywalled results |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 44 tools to any MCP client |
+| `mcp_server` | MCP server (stdio + SSE) exposing all 45 tools to any MCP client |
 
 ---
 
@@ -227,7 +227,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 
 ## MCP server
 
-Expose all 42 tools (+ 2 MCP-only alert tools = 44 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
+Expose all 43 tools (+ 2 MCP-only alert tools = 45 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
 # stdio transport (Claude Desktop / Cursor)

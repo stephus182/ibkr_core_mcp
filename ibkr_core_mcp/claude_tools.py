@@ -966,6 +966,28 @@ TOOL_DEFINITIONS = [
             "required": ["url"],
         },
     },
+    {
+        "name": "fetch_page",
+        "description": (
+            "Fetch ONE web page with a real browser and return it as markdown. "
+            "Use for JavaScript-heavy sites that come back empty or truncated, and for "
+            "paywalled sites with a saved login profile (FT, WSJ, Bloomberg) — those "
+            "return the full article instead of the subscription stub. "
+            "For API or reference documentation prefer firecrawl_search / firecrawl_crawl: "
+            "they are cheaper, cover many pages, and cache to Drive. "
+            "Needs the local browser (the [scraper] extra); reports that if it is missing."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Page URL to fetch (public http/https only)",
+                },
+            },
+            "required": ["url"],
+        },
+    },
 ]
 
 
@@ -1189,6 +1211,7 @@ class ClaudeToolkit:
             "delete_cache": self._delete_cache,
             "firecrawl_search": self._handle_firecrawl_search,
             "firecrawl_crawl": self._handle_firecrawl_crawl,
+            "fetch_page": self._handle_fetch_page,
         }
         handler = handlers.get(name)
         if not handler:
@@ -3290,6 +3313,104 @@ class ClaudeToolkit:
         if not used_fallback or not markdown:
             return []
         return [{"url": url, "markdown": markdown, "metadata": {}}]
+
+    def _profile_hint(self, url: str) -> str:
+        """One line saying whether a saved login profile applies to `url`, and how to
+        create one if not. Shared by every fetch_page outcome that has to explain a
+        thin or missing result, because "no profile" is the single most likely cause
+        on exactly the sites this tool exists for.
+        """
+        import urllib.parse
+
+        from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+
+        if _resolve_profile_dir(self._config.crawl4ai_profiles_dir, url) is not None:
+            return "Used a saved login profile for this domain."
+        domain = urllib.parse.urlparse(url).hostname or url
+        return (
+            f"No saved login profile for {domain}. If this is a paywalled site you "
+            f"subscribe to, run `python -m ibkr_core_mcp.scrape_fallback "
+            f"create-profile {domain}` once — you log in by hand, and only the "
+            f"resulting browser session is stored, locally."
+        )
+
+    def _handle_fetch_page(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Handle the fetch_page tool — one URL, straight to the local browser.
+
+        The recovery ladder in _handle_firecrawl_crawl reaches Crawl4AI only
+        *underneath* a Firecrawl attempt. That is right for archiving a site and
+        wrong for reading a single paywalled article: Firecrawl cannot log in, so
+        trying it first spends a credit to be handed a subscription stub. This
+        handler skips it entirely.
+
+        Deliberately does not persist to Drive. firecrawl_crawl is the archiving
+        tool; this one answers "read me this page" and its result is the message.
+
+        Args:
+            inputs: {"url": <public http/https page URL>}.
+
+        Returns:
+            (text, None) — the page markdown plus a profile note, or an honest
+            failure naming the cause. Never raises: an absent browser, a crashed
+            browser and an empty page are three different messages, not tracebacks.
+        """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper, Crawl4AIUnavailableError, assess_quality
+
+        url = str(inputs.get("url", "")).strip()
+        if not url:
+            return "url must be non-empty.", None
+
+        # Before the browser is constructed, not after: this tool hands a
+        # model-supplied URL to a real browser, so a late check has already made
+        # the request it was meant to prevent.
+        blocked = self._validate_public_url(url)
+        if blocked:
+            return blocked, None
+
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+
+        try:
+            page = self._crawl4ai.scrape(url)
+        except Crawl4AIUnavailableError as exc:
+            return (
+                f"Cannot fetch {url}: {exc}\n"
+                f"fetch_page needs the local browser. Install it with "
+                f'`pip install "ibkr_core_mcp[scraper]"` followed by `crawl4ai-setup`.',
+                None,
+            )
+        except Exception as exc:  # noqa: BLE001 - a dead browser must not escape as a traceback
+            log.warning("fetch_page failed for %s: %s", url, exc)
+            return f"Fetch of {url} failed: {exc}", None
+
+        markdown = page.get("markdown", "")
+        if not markdown:
+            return (
+                f"Fetch of {url} returned no content.\n"
+                f"{self._profile_hint(url)}\n"
+                f"Other likely causes: the page is rendered by JavaScript that did not "
+                f"finish, or the site blocked an automated browser.",
+                None,
+            )
+
+        # A byte count alone is not a warning. Live baseline 2026-07-28: wsj.com without a
+        # login profile returns exactly 1 B, and "# Fetched: <url> (1 B)" followed by one
+        # byte reads like a successful fetch of a short page. assess_quality is the same
+        # signal the fallback ladder already branches on — word counts and paywall markers —
+        # so this reuses the repo's existing judgment rather than inventing a second
+        # threshold that could drift away from it.
+        caution = ""
+        if assess_quality(markdown, page.get("metadata"), url) != "ok":
+            caution = (
+                "\n\nNOTE: this content looks incomplete — most likely a paywall stub, a "
+                "blocked request, or JavaScript that never finished. Do not treat it as "
+                "the full page."
+            )
+
+        return (
+            f"# Fetched: {url}\n({len(markdown.encode('utf-8'))} B)\n{self._profile_hint(url)}{caution}\n\n{markdown}",
+            None,
+        )
 
     def _handle_firecrawl_crawl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Handle the firecrawl_crawl tool.

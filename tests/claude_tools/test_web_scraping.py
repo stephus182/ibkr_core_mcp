@@ -869,3 +869,136 @@ def test_local_rung_does_not_replace_a_larger_firecrawl_result():
     saved_pages = toolkit._web_docs.save_crawl.call_args[0][1]
     assert saved_pages[0]["markdown"] == _SUB_THRESHOLD_MARKDOWN
     assert "Source: Firecrawl" in text
+
+
+# ============================================================================
+# fetch_page — the browser door
+#
+# The ladder above reaches Crawl4AI only underneath a Firecrawl call. That is the
+# right shape for archiving a site, and the wrong one for reading a single
+# paywalled article: Firecrawl cannot log in, so trying it first only spends a
+# credit to be handed a subscription stub. fetch_page goes straight to the local
+# browser for one URL.
+#
+# Every test here reaches _handle_fetch_page, which SSRF-validates the URL before
+# constructing anything — so each is named in conftest's _REAL_DNS_EXEMPT_TESTS,
+# except the one that *wants* the URL rejected.
+# ============================================================================
+
+
+def _fetch_toolkit(tmp_path=None):
+    """Toolkit with the browser mocked; no profile directory unless one is passed."""
+    toolkit = _make_toolkit()
+    if tmp_path is not None:
+        toolkit._config.crawl4ai_profiles_dir = tmp_path
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {
+        "url": "https://example.com/article",
+        "markdown": _REALISTIC_MARKDOWN,
+    }
+    return toolkit
+
+
+def test_fetch_page_returns_the_pages_markdown():
+    toolkit = _fetch_toolkit()
+
+    text, payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    assert payload is None
+    toolkit._crawl4ai.scrape.assert_called_once_with("https://example.com/article")
+    assert _REALISTIC_MARKDOWN in text
+
+
+def test_fetch_page_blocks_a_private_host_before_launching_a_browser():
+    """The SSRF guard must run first. This tool hands a model-supplied URL to a
+    real browser, so a late check would already have made the request.
+    """
+    toolkit = _fetch_toolkit()
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "http://127.0.0.1:5055/admin"})
+
+    toolkit._crawl4ai.scrape.assert_not_called()
+    assert "blocked" in text.lower()
+
+
+def test_fetch_page_names_the_saved_login_profile_when_one_applies(tmp_path):
+    (tmp_path / "example.com").mkdir()
+    toolkit = _fetch_toolkit(tmp_path)
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    assert "saved login profile" in text.lower()
+
+
+def test_fetch_page_says_how_to_create_a_profile_when_none_applies(tmp_path):
+    """A paywalled fetch without a profile returns a stub. The message has to say
+    what to do about it, or the user sees a short article and no reason why.
+    """
+    toolkit = _fetch_toolkit(tmp_path)
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://www.wsj.com/articles/x"})
+
+    assert "create-profile" in text
+    assert "wsj.com" in text
+
+
+def test_fetch_page_reports_crawl4ai_unavailable_without_raising():
+    """The [scraper] extra is optional; its absence is a message, not a traceback."""
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+
+    toolkit = _fetch_toolkit()
+    toolkit._crawl4ai.scrape.side_effect = Crawl4AIUnavailableError("crawl4ai is not installed")
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    assert "not installed" in text
+    assert "scraper" in text.lower()
+
+
+def test_fetch_page_reports_an_empty_fetch_instead_of_claiming_success():
+    """No content must never read as a successful fetch of an empty page. There is
+    no earlier rung here to fall back to, so the honest answer is "nothing, and why".
+    """
+    toolkit = _fetch_toolkit()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com/article", "markdown": ""}
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    lowered = text.lower()
+    assert "no content" in lowered
+    assert "fetched" not in lowered.split("no content")[0]
+
+
+def test_fetch_page_reports_a_browser_failure_instead_of_raising():
+    toolkit = _fetch_toolkit()
+    toolkit._crawl4ai.scrape.side_effect = OSError("browser crashed")
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    assert "browser crashed" in text
+
+
+def test_fetch_page_flags_a_thin_result_instead_of_presenting_it_as_the_page():
+    """A 1-byte body must not read as a successful fetch with a small number beside it.
+
+    Live baseline 2026-07-28: wsj.com without a login profile returns exactly 1 B.
+    A model handed "# Fetched: <url>\\n(1 B)" plus one byte can narrate having read the
+    article. The reply has to say the content looks incomplete, using the same
+    assess_quality signal the fallback ladder already trusts rather than a new
+    threshold invented here.
+    """
+    toolkit = _fetch_toolkit()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com/article", "markdown": "."}
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    assert "incomplete" in text.lower()
+
+
+def test_fetch_page_does_not_cry_wolf_on_a_full_page():
+    """The caution above must not fire on real content, or it stops meaning anything."""
+    toolkit = _fetch_toolkit()
+
+    text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
+
+    assert "incomplete" not in text.lower()

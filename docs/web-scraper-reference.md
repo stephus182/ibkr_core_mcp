@@ -33,7 +33,6 @@ wrong one sends you to an API that does not match the code in front of you. Surv
 | 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes** — `scrape_fallback.py`, behind both the ladder and `fetch_page` |
 | 2 | **Crawl4AI Cloud** (`api.crawl4ai.com`) | The vendor's hosted REST API, credit-billed | **No — built, then removed 2026-07-28. See §5.1** |
 | 3 | **`crawl4ai-cloud-sdk`** (PyPI, 1.2.0) | The vendor's own Python client for #2 | **No** — removed alongside #2 |
-
 | 4 | **`janbuchar/crawl4ai` Apify Actor** | A community wrapper around #1, run on Apify's platform | **No — rejected, see §5.1** |
 
 They also differ in *documentation shape*, which matters under this repo's API-docs-first rule:
@@ -62,15 +61,19 @@ They also differ in *documentation shape*, which matters under this repo's API-d
 Orchestration between them lives in `claude_tools.py`. That split is deliberate: `web_scraper.py`
 never imports `scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
 
-**Two tools are exposed to the model:**
+**Three tools are exposed to the model:**
 
 | Tool | Use it for |
 |---|---|
 | `firecrawl_search` | "Find me pages about X." Returns full markdown for each hit. Optionally snapshots to Drive. |
 | `firecrawl_crawl` | "Archive this site." Crawls from a root URL and always saves to Drive under `web_docs/{url-slug}/`. |
+| `fetch_page` | "Read me this page." One URL, straight to the local browser, no Firecrawl attempt and no Drive write. |
 
-There is no single-page scrape tool. To archive one page, call `firecrawl_crawl` with
-`max_pages=1`.
+`fetch_page` was added on 2026-07-28 and closes a real gap: until then the only way to read a
+single known URL was to run `firecrawl_crawl` against it, which archives a whole site to Drive to
+answer a question about one page — and which cannot open a paywall at all, because Crawl4AI was
+reachable only as a fallback *underneath* a Firecrawl call. Three successive plans tuned the
+ladder's rung order while this was the actual missing piece.
 
 ---
 
@@ -78,7 +81,7 @@ There is no single-page scrape tool. To archive one page, call `firecrawl_crawl`
 
 | Env var | Field | Required for | Default |
 |---|---|---|---|
-| `FIRECRAWL_API_KEY` | `firecrawl_api_key` | Both tools. Without it they return "not available" rather than raising. | — |
+| `FIRECRAWL_API_KEY` | `firecrawl_api_key` | `firecrawl_search` and `firecrawl_crawl`. Without it they return "not available" rather than raising. **`fetch_page` needs no key** — it is a local browser. | — |
 | `ANTHROPIC_API_KEY` | `anthropic_api_key` | The completeness judge (section 3.2) | — (required by `Config` itself) |
 | `GOOGLE_DRIVE_FOLDER_ID` | `gdrive_folder_id` | Drive persistence, unless `GDRIVE_WEB_DOCS_FOLDER_ID` is set | — |
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | `gdrive_web_docs_folder_id` | Overrides the `web_docs/` root | auto-created under `gdrive_folder_id` |
@@ -366,7 +369,11 @@ mistake for "not found yet".
 ## 6. Paywalled sites (FT, WSJ, Bloomberg)
 
 Crawl4AI can use a saved browser session, so a site you subscribe to returns full articles instead
-of the subscription stub.
+of the subscription stub. This is the capability the whole local layer exists for.
+
+**Two steps, and the first is once per site.**
+
+**1. Save the login** — interactive, needs your hands:
 
 ```bash
 python -m ibkr_core_mcp.scrape_fallback create-profile https://www.ft.com
@@ -377,6 +384,13 @@ resulting cookies and local storage are copied to `~/.ibkr_core/crawl4ai_profile
 
 **No password is ever seen or stored by this package** — only the resulting browser session.
 Nothing is transmitted anywhere; the profile is a local directory.
+
+**2. Read the article** — `fetch_page` on the URL. It goes straight to the browser, finds the
+profile by domain, and returns the full text. Do **not** route a paywalled article through
+`firecrawl_search` or `firecrawl_crawl` first: Firecrawl cannot log in, so it spends a credit to
+be handed the subscription stub, and only then falls back to the browser that could have gone
+first. The tool's reply always states whether a profile was used, so a stub is never silently
+mistaken for the article.
 
 ### Which profile applies to which URL
 
@@ -501,6 +515,8 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-25 | `/crawl` rate limits are per plan and per minute: Free 2, Hobby 20, Standard 100, Growth 1000. This is why the crawl makes one Firecrawl attempt and then falls back locally rather than retrying. <https://docs.firecrawl.dev/rate-limits> |
 | 2026-07-25 | `example.com` yields 167 B of markdown through Firecrawl — below the 5 KB threshold, so it is a poor live-test target: it triggers the fallback on every run. `docs.firecrawl.dev/introduction` yields 14,341 B. |
 | 2026-07-28 | **`docs.crawl4ai.com` DOES serve `llms-full.txt`** — 243,158 B of `text/plain` at `/assets/llm.txt/txt/llms-full.txt`, plus 13 modular topic files and `diagrams/` variants, all mirrored in the repo under `docs/md_v2/assets/llm.txt/`. What is absent is only an **index at the conventional root**: `/llms.txt` and `/llms-full.txt` 404, and the 404 body is a 31 KB HTML page, so a probe checking merely for non-empty content "succeeds" with a navigation shell. **An earlier revision of this table asserted the files did not exist at all** — inferred from those two root 404s without opening the repo. A 404 at a guessed path is evidence about the path, not the vendor. |
+| 2026-07-28 | **`fetch_page` live baseline, no login profile:** `wsj.com` returns exactly **1 B** — the browser is served nothing at all, not a teaser. `ft.com`'s free homepage returns 57,737 B and a real docs page 11,807 B. A byte count on its own therefore cannot distinguish "short page" from "blocked", which is why the reply runs `assess_quality` and flags anything that is not `ok` as incomplete. |
+| 2026-07-28 | **The paywall path had never been executed.** `~/.ibkr_core/crawl4ai_profiles` did not exist on this machine — no login profile had ever been created — while §6, the profile-lookup code, the `create-profile` CLI and the paywall markers were all present, tested and documented. A capability can be complete in every respect except having been run once. |
 | 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
 | 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `scrape_fallback.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
 | 2026-07-28 | **A consuming project can silently run stale ibkr_core_mcp code.** claudia_ui installs this package with `editable_mode=strict`, which resolves imports through a snapshotted symlink farm under `build/__editable__…/`. A module added after that install is **invisible** — a newly added `ibkr_core_mcp` module raised `ModuleNotFoundError` in ClaudIA while existing on disk here. Re-run the editable install in every consumer after adding a module, not just after adding a tool. |

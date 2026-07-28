@@ -1,6 +1,6 @@
 # MCP Server — Full Reference
 
-`ibkr_core_mcp` ships a built-in MCP server exposing 44 tools and 4 resources.
+`ibkr_core_mcp` ships a built-in MCP server exposing 45 tools and 4 resources.
 Any MCP-compatible client — Claude Desktop, a custom chatbot, a dashboard, or an
 ML pipeline — connects without requiring the `anthropic` SDK.
 
@@ -39,7 +39,7 @@ Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_conf
 ## HTTP/SSE — dashboard and chatbots
 
 ```bash
-# No live push (ibkr://pnl/live resource stays empty; all 44 tools remain fully callable)
+# No live push (ibkr://pnl/live resource stays empty; all 45 tools remain fully callable)
 python -m ibkr_core_mcp.mcp_server --transport sse --port 5174
 
 # With WebSocket live quotes and price alerts

@@ -133,7 +133,7 @@ toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg
 client   = anthropic.Anthropic()
 response = client.messages.create(
     model="claude-sonnet-4-6",
-    tools=toolkit.tools,          # 42 tools, ready to use
+    tools=toolkit.tools,          # 43 tools, ready to use
     messages=[{"role": "user", "content": "Show my open positions and run a backtest on AAPL"}],
 )
 for block in response.content:
