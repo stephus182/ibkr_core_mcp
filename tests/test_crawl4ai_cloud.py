@@ -1,22 +1,50 @@
-from unittest.mock import MagicMock, patch
+"""Unit tests for the Crawl4AI Cloud adapter.
+
+The vendor SDK builds the HTTP request, so nothing here asserts on headers, URLs or body
+shape — that is the SDK's job, verified once against the live API in
+tests/test_crawl4ai_cloud_live.py. What is tested here is *our* behaviour: what we pass the
+SDK, how we translate its exceptions, how we map its result onto the ladder's page dict, and
+the credit accounting.
+
+`crawl4ai_cloud` is the SDK package; `ibkr_core_mcp.crawl4ai_cloud` is our adapter. Patch
+targets below are fully qualified because the two names collide.
+"""
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import requests
-
-
-def _resp(status=200, body=None, headers=None):
-    """Build a mock requests.Response."""
-    resp = MagicMock()
-    resp.status_code = status
-    resp.headers = headers or {}
-    resp.json.return_value = body if body is not None else {}
-    return resp
 
 
 def _client(api_key="crawl4ai-fake-key-for-tests", base_url="https://api.crawl4ai.com"):
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient
 
     return Crawl4AICloudClient(api_key, base_url=base_url)
+
+
+def _sdk(scrape_result=None, scrape_error=None):
+    """Patch the SDK's AsyncWebCrawler; return (patcher, crawler_mock, class_mock)."""
+    crawler = MagicMock()
+    crawler.scrape = AsyncMock(return_value=scrape_result, side_effect=scrape_error)
+    crawler.close = AsyncMock()
+    cls = MagicMock(return_value=crawler)
+    return patch("crawl4ai_cloud.AsyncWebCrawler", cls), crawler, cls
+
+
+def _page(markdown="# Real content", fit_markdown=None, usage=None, error_message=None):
+    """A stand-in for the SDK's MarkdownResponse."""
+    r = MagicMock()
+    r.markdown = markdown
+    r.fit_markdown = fit_markdown
+    r.usage = usage
+    r.error_message = error_message
+    return r
+
+
+def _usage(credits_remaining=None, credits_used=None):
+    u = MagicMock()
+    u.credits_remaining = credits_remaining
+    u.credits_used = credits_used
+    return u
 
 
 # ============================================================================
@@ -31,265 +59,256 @@ def test_empty_api_key_raises_at_construction():
         Crawl4AICloudClient("")
 
 
+def test_missing_sdk_is_a_rung_failure_not_an_import_crash():
+    """The cloud rung is optional — an uninstalled SDK must degrade, not break the tool."""
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    with patch.dict("sys.modules", {"crawl4ai_cloud": None}):
+        with pytest.raises(Crawl4AICloudError, match="not installed"):
+            _client().scrape("https://example.com/docs")
+
+
 # ============================================================================
-# Request shape
+# What we pass the SDK
 # ============================================================================
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_authenticates_with_x_api_key_header_not_bearer(mock_requests):
-    """Crawl4AI Cloud uses X-API-Key; a Bearer header (Firecrawl's scheme) is a 401."""
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+def test_retries_are_disabled_so_a_timeout_cannot_double_bill_a_page():
+    """The SDK exempts 429, but a retried *timeout* can re-issue a scrape that already ran."""
+    patcher, _crawler, cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client().scrape("https://example.com/docs")
 
-    _client().scrape("https://example.com/docs")
-
-    headers = mock_requests.post.call_args.kwargs["headers"]
-    assert headers["X-API-Key"] == "crawl4ai-fake-key-for-tests"
-    assert "Authorization" not in headers
+    assert cls.call_args.kwargs["max_retries"] == 1
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_posts_to_v1_scrape_with_url_and_fit(mock_requests):
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+def test_strategy_is_pinned_because_the_sdks_own_default_is_invalid():
+    """The SDK defaults strategy="auto"; the API rejects it with 422.
 
-    _client().scrape("https://example.com/docs")
+    `scrape(strategy: str = "auto")` in crawl4ai-cloud-sdk 1.2.0 is a vendor bug — the live
+    endpoint accepts only 'browser' or 'http' (pydantic literal_error, observed 2026-07-28),
+    so every call using the SDK default 422s. We pass 'browser' explicitly, which is what
+    llms-full.txt documents as the default. Remove this only after the SDK is fixed AND a
+    live run proves it.
+    """
+    patcher, crawler, _cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client().scrape("https://example.com/docs")
 
-    assert mock_requests.post.call_args.args[0] == "https://api.crawl4ai.com/v1/scrape"
-    body = mock_requests.post.call_args.kwargs["json"]
-    assert body["url"] == "https://example.com/docs"
-    assert body["fit"] is True
-
-
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_honors_a_custom_base_url(mock_requests):
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
-
-    _client(base_url="https://staging.example/").scrape("https://example.com/docs")
-
-    assert mock_requests.post.call_args.args[0] == "https://staging.example/v1/scrape"
+    assert crawler.scrape.call_args.kwargs["strategy"] == "browser"
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_omits_proxy_entirely_when_unset(mock_requests):
-    """Passing proxy:"direct" is a 422 — the no-proxy request must omit the key."""
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+def test_estimate_pins_the_same_strategy_as_scrape():
+    """An estimate for a strategy the real call would not send is a worthless quote."""
+    patcher, crawler, _cls = _sdk(scrape_result={"credits": "1.0000"})
+    with patcher:
+        _client().estimate("https://example.com/docs")
 
-    _client().scrape("https://example.com/docs")
-
-    assert "proxy" not in mock_requests.post.call_args.kwargs["json"]
-
-
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_sends_proxy_as_an_object_when_set(mock_requests):
-    """proxy is an object here, unlike Firecrawl where it is a string."""
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
-
-    _client().scrape("https://example.com/docs", proxy_mode="residential", proxy_country="US")
-
-    assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "residential", "country": "US"}
+    assert crawler.scrape.call_args.kwargs["strategy"] == "browser"
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_omits_proxy_country_when_not_given(mock_requests):
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+def test_credentials_and_base_url_are_handed_to_the_sdk():
+    patcher, _crawler, cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client(api_key="secret-key", base_url="https://staging.example/").scrape("https://example.com/docs")
 
-    _client().scrape("https://example.com/docs", proxy_mode="datacenter")
-
-    assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "datacenter"}
-
-
-# A real dry-run response, captured live 2026-07-28. Note what it does NOT have: a
-# `success` key, or a `markdown` key. It is a pricing quote, not a page — which is why
-# estimate() is a separate method rather than a mode flag on scrape().
-_DRY_RUN_BODY = {
-    "service": "scrape",
-    "credits": "1.0000",
-    "credits_exact": True,
-    "breakdown": [{"service": "scrape", "action": "url_fetch", "credits": "1.0000"}],
-    "dry_run": True,
-    "covered_by_balance": True,
-}
+    assert cls.call_args.kwargs["api_key"] == "secret-key"
+    assert cls.call_args.kwargs["base_url"] == "https://staging.example"
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_estimate_sends_dry_run_and_returns_the_quote(mock_requests):
-    mock_requests.post.return_value = _resp(body=_DRY_RUN_BODY)
+def test_scrape_omits_proxy_entirely_when_unset():
+    """proxy="direct" is a 422 — omission is the only way to ask for no proxy."""
+    patcher, crawler, _cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client().scrape("https://example.com/docs")
 
-    quote = _client().estimate("https://example.com/docs")
-
-    assert mock_requests.post.call_args.kwargs["json"]["dry_run"] is True
-    assert quote["credits"] == "1.0000"
-
-
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_estimate_does_not_demand_a_success_key(mock_requests):
-    """The live dry-run body has no `success` field — treating its absence as failure
-    made estimate() raise on every real call. Caught by the live suite, not this one."""
-    mock_requests.post.return_value = _resp(body=_DRY_RUN_BODY)
-
-    _client().estimate("https://example.com/docs")  # must not raise
+    assert crawler.scrape.call_args.kwargs["proxy"] is None
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_estimate_carries_the_proxy_object_through(mock_requests):
-    mock_requests.post.return_value = _resp(body=_DRY_RUN_BODY)
+def test_scrape_sends_a_proxy_config_object_when_set():
+    patcher, crawler, _cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client().scrape("https://example.com/docs", proxy_mode="residential", proxy_country="US")
 
-    _client().estimate("https://example.com/docs", proxy_mode="residential", proxy_country="US")
+    proxy = crawler.scrape.call_args.kwargs["proxy"]
+    assert proxy.mode == "residential"
+    assert proxy.country == "US"
 
-    assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "residential", "country": "US"}
 
-
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_never_sends_dry_run(mock_requests):
+def test_scrape_never_asks_for_a_dry_run():
     """A scrape that quietly priced itself instead of fetching would return an empty page."""
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+    patcher, crawler, _cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client().scrape("https://example.com/docs")
 
-    _client().scrape("https://example.com/docs")
+    assert crawler.scrape.call_args.kwargs.get("dry_run") is not True
 
-    assert "dry_run" not in mock_requests.post.call_args.kwargs["json"]
+
+def test_estimate_asks_for_a_dry_run_and_returns_the_quote():
+    quote = {"credits": "1.0000", "credits_exact": True, "dry_run": True}
+    patcher, crawler, _cls = _sdk(scrape_result=quote)
+    with patcher:
+        result = _client().estimate("https://example.com/docs")
+
+    assert crawler.scrape.call_args.kwargs["dry_run"] is True
+    assert result["credits"] == "1.0000"
+
+
+def test_the_sdk_client_is_always_closed():
+    patcher, crawler, _cls = _sdk(scrape_result=_page())
+    with patcher:
+        _client().scrape("https://example.com/docs")
+
+    crawler.close.assert_awaited_once()
+
+
+def test_the_sdk_client_is_closed_even_when_the_call_fails():
+    patcher, crawler, _cls = _sdk(scrape_error=RuntimeError("boom"))
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    with patcher, pytest.raises(Crawl4AICloudError):
+        _client().scrape("https://example.com/docs")
+
+    crawler.close.assert_awaited_once()
 
 
 # ============================================================================
-# Response mapping
+# Result mapping
 # ============================================================================
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_returns_the_shared_page_dict_shape(mock_requests):
+def test_scrape_returns_the_shared_page_dict_shape():
     """The ladder and WebDocsStore.save_crawl both consume {"url","markdown","metadata"}."""
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "url": "https://example.com/docs", "markdown": "# Real content"}
-    )
-
-    page = _client().scrape("https://example.com/docs")
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(markdown="# Real content"))
+    with patcher:
+        page = _client().scrape("https://example.com/docs")
 
     assert page == {"url": "https://example.com/docs", "markdown": "# Real content", "metadata": {}}
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_falls_back_to_fit_markdown_when_markdown_is_empty(mock_requests):
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "url": "https://example.com/docs", "markdown": "", "fit_markdown": "# Pruned"}
-    )
-
-    assert _client().scrape("https://example.com/docs")["markdown"] == "# Pruned"
+def test_scrape_falls_back_to_fit_markdown_when_markdown_is_empty():
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(markdown="", fit_markdown="# Pruned"))
+    with patcher:
+        assert _client().scrape("https://example.com/docs")["markdown"] == "# Pruned"
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_uses_the_requested_url_when_the_response_omits_one(mock_requests):
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
-
-    assert _client().scrape("https://example.com/docs")["url"] == "https://example.com/docs"
-
-
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_raises_when_the_body_reports_failure(mock_requests):
-    """HTTP 200 with success:false is a real failure mode and must not look like an empty page."""
+def test_scrape_raises_when_the_response_reports_an_error():
+    """A failed scrape must not look like a successful empty page."""
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    mock_requests.post.return_value = _resp(body={"success": False, "error_message": "page returned no HTML"})
-
-    with pytest.raises(Crawl4AICloudError, match="page returned no HTML"):
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(markdown="", error_message="page returned no HTML"))
+    with patcher, pytest.raises(Crawl4AICloudError, match="page returned no HTML"):
         _client().scrape("https://example.com/docs")
 
 
 # ============================================================================
-# Error mapping — the 429 trap
+# Exception translation — the 429 distinction
 # ============================================================================
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [(401, "API key"), (402, "credit"), (429, "quota"), (422, "422"), (500, "500")],
-)
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_maps_http_errors_to_typed_error_with_status_code(mock_requests, status, expected):
+def test_quota_exhaustion_is_named_as_not_retryable():
+    """QuotaExceededError and RateLimitError are both 429 and mean opposite things."""
+    from crawl4ai_cloud import errors as sdk_errors
+
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    mock_requests.post.return_value = _resp(status=status)
-
-    with pytest.raises(Crawl4AICloudError, match=expected) as excinfo:
-        _client().scrape("https://example.com/docs")
-    assert excinfo.value.status_code == status
-
-
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_does_not_retry_a_429(mock_requests):
-    """429 is quota exhaustion here, not backpressure — retrying burns the daily budget to fail."""
-    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
-
-    mock_requests.post.return_value = _resp(status=429)
-
-    with pytest.raises(Crawl4AICloudError):
+    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.QuotaExceededError("daily cap", 429, {}, {}))
+    with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
         _client().scrape("https://example.com/docs")
 
-    assert mock_requests.post.call_count == 1
+    assert excinfo.value.status_code == 429
+    assert "not retryable" in str(excinfo.value)
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_does_not_retry_a_server_error_either(mock_requests):
-    """No retry path exists at all in this client — one call in, one result out."""
+def test_a_rate_limit_is_distinguished_from_quota_exhaustion():
+    from crawl4ai_cloud import errors as sdk_errors
+
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    mock_requests.post.return_value = _resp(status=503)
-
-    with pytest.raises(Crawl4AICloudError):
+    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.RateLimitError("rate limit", 429, {}, {}))
+    with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
         _client().scrape("https://example.com/docs")
 
-    assert mock_requests.post.call_count == 1
+    assert excinfo.value.status_code == 429
+    assert "rate limit" in str(excinfo.value).lower()
+    assert "not retryable" not in str(excinfo.value)
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_never_puts_the_api_key_in_an_error_message(mock_requests):
+def test_a_bad_key_maps_to_401():
+    from crawl4ai_cloud import errors as sdk_errors
+
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    mock_requests.post.return_value = _resp(status=401)
+    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.AuthenticationError("bad key", 401, {}, {}))
+    with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
+        _client().scrape("https://example.com/docs")
 
-    with pytest.raises(Crawl4AICloudError) as excinfo:
-        _client(api_key="crawl4ai-fake-key-for-tests").scrape("https://example.com/docs")
-    assert "crawl4ai-fake-key-for-tests" not in str(excinfo.value)
+    assert excinfo.value.status_code == 401
+
+
+def test_a_transport_error_becomes_a_typed_error_not_a_raw_exception():
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    patcher, _crawler, _cls = _sdk(scrape_error=OSError("connection reset"))
+    with patcher, pytest.raises(Crawl4AICloudError, match="connection reset"):
+        _client().scrape("https://example.com/docs")
+
+
+def test_an_error_never_leaks_the_api_key():
+    from crawl4ai_cloud import errors as sdk_errors
+
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.AuthenticationError("bad key", 401, {}, {}))
+    with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
+        _client(api_key="super-secret-value").scrape("https://example.com/docs")
+
+    assert "super-secret-value" not in str(excinfo.value)
 
 
 # ============================================================================
-# Quota surfacing
+# Credit accounting
 # ============================================================================
 
-# Live /v1/usage shape, verified 2026-07-28. Note this is NOT the shape in the vendor's
-# own llms-full.txt, which documents crawl.credits_daily_limit / crawl.credits_remaining_today
-# — those keys do not exist on the live response.
+# Live /v1/usage shape, verified 2026-07-28. NOT the shape in the vendor's own
+# llms-full.txt, which documents crawl.credits_daily_limit / crawl.credits_remaining_today —
+# those keys do not exist on the live response.
 _USAGE_BODY = {
     "plan": {"name": "free", "daily_credits": 50, "rate_per_minute": 10, "concurrent": 1},
     "credits": {"used_today": 0, "remaining_today": 50, "daily_limit": 50},
 }
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_records_credits_remaining_from_the_response_body(mock_requests):
-    """The scrape response already carries the balance — no extra call needed to read it."""
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# hi", "usage": {"credits_used": 1.0, "credits_remaining": 47.0}}
-    )
+def _usage_response(body=None, status=200):
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json.return_value = body if body is not None else _USAGE_BODY
+    return resp
 
-    client = _client()
-    assert client.last_credits_remaining is None
-    client.scrape("https://example.com/docs")
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_records_credits_remaining(mock_requests):
+    mock_requests.get.return_value = _usage_response()
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=_usage(credits_remaining=47.0)))
+    with patcher:
+        client = _client()
+        assert client.last_credits_remaining is None
+        client.scrape("https://example.com/docs")
+
     assert client.last_credits_remaining == 47.0
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_never_logs_the_bodys_credits_used_field(mock_requests, caplog):
+def test_scrape_never_logs_the_responses_credits_used_field(mock_requests, caplog):
     """usage.credits_used is not what the call actually cost.
 
-    Measured live 2026-07-28: a no-proxy scrape reported credits_used: 5.0 while the
+    Measured live 2026-07-28: a no-proxy scrape reported credits_used 5.0 while the
     /v1/usage ledger moved by exactly 1. credits_remaining agreed with the ledger; this
-    field did not. Both planning documents' "some operations cost 5 credits" budget came
-    from reading it. Log only what is true.
+    field did not, and reading it is where the earlier "5 credits a scrape" budget came from.
     """
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# hi", "usage": {"credits_used": 5.0, "credits_remaining": 46.0}}
-    )
-
-    with caplog.at_level("INFO"):
+    mock_requests.get.return_value = _usage_response()
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=_usage(credits_remaining=46.0, credits_used=5.0)))
+    with patcher, caplog.at_level("INFO"):
         _client().scrape("https://example.com/docs")
 
     logged = " | ".join(r.getMessage() for r in caplog.records)
@@ -298,36 +317,32 @@ def test_scrape_never_logs_the_bodys_credits_used_field(mock_requests, caplog):
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_leaves_credits_remaining_none_when_the_body_omits_usage(mock_requests):
-    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+def test_scrape_survives_a_response_carrying_no_usage(mock_requests):
+    mock_requests.get.return_value = _usage_response()
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=None))
+    with patcher:
+        client = _client()
+        client.scrape("https://example.com/docs")
 
-    client = _client()
-    client.scrape("https://example.com/docs")
     assert client.last_credits_remaining is None
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
 def test_low_balance_warning_is_relative_to_the_reported_allowance(mock_requests, caplog):
     """9 of 50 is under a fifth and warns; the threshold is read from the API, never hardcoded."""
-    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 9.0}}
-    )
-
-    with caplog.at_level("WARNING"):
+    mock_requests.get.return_value = _usage_response()
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=_usage(credits_remaining=9.0)))
+    with patcher, caplog.at_level("WARNING"):
         _client().scrape("https://example.com/docs")
 
-    assert any("credit" in r.message.lower() for r in caplog.records if r.levelname == "WARNING")
+    assert any("credit" in r.getMessage().lower() for r in caplog.records if r.levelname == "WARNING")
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
 def test_no_low_balance_warning_when_comfortably_above_the_threshold(mock_requests, caplog):
-    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 40.0}}
-    )
-
-    with caplog.at_level("WARNING"):
+    mock_requests.get.return_value = _usage_response()
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=_usage(credits_remaining=40.0)))
+    with patcher, caplog.at_level("WARNING"):
         _client().scrape("https://example.com/docs")
 
     assert [r for r in caplog.records if r.levelname == "WARNING"] == []
@@ -337,35 +352,30 @@ def test_no_low_balance_warning_when_comfortably_above_the_threshold(mock_reques
 def test_a_large_plan_warns_at_a_balance_an_absolute_threshold_would_ignore(mock_requests, caplog):
     """500 of 5000/day is under a fifth and must warn.
 
-    This is the test that fails if anyone reintroduces a hardcoded "warn under 10":
-    500 sails past any small absolute floor while being genuinely low for this plan.
-    It is the *upgrade* direction — the one §2b of the plan exists to protect.
+    This is the test that fails if anyone reintroduces a hardcoded "warn under 10": 500 sails
+    past any small absolute floor while being genuinely low for this plan. It is the upgrade
+    direction, which the no-hardcoded-tier rule exists to protect.
     """
-    mock_requests.get.return_value = _resp(
-        body={"plan": {"name": "pro", "daily_credits": 5000}, "credits": {"daily_limit": 5000}}
+    mock_requests.get.return_value = _usage_response(
+        {"plan": {"name": "pro", "daily_credits": 5000}, "credits": {"daily_limit": 5000}}
     )
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 500.0}}
-    )
-
-    with caplog.at_level("WARNING"):
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=_usage(credits_remaining=500.0)))
+    with patcher, caplog.at_level("WARNING"):
         _client().scrape("https://example.com/docs")
 
-    assert any("credit" in r.message.lower() for r in caplog.records if r.levelname == "WARNING")
+    assert any("credit" in r.getMessage().lower() for r in caplog.records if r.levelname == "WARNING")
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_allowance_is_fetched_once_and_reused_across_scrapes(mock_requests):
-    """/v1/usage costs a request against a per-minute limit — poll it once per client, not per scrape."""
-    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 9.0}}
-    )
-
-    client = _client()
-    client.scrape("https://example.com/a")
-    client.scrape("https://example.com/b")
-    client.scrape("https://example.com/c")
+def test_the_allowance_is_looked_up_once_and_reused(mock_requests):
+    """/v1/usage costs a request against a per-minute limit — poll it once, not per scrape."""
+    mock_requests.get.return_value = _usage_response()
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(usage=_usage(credits_remaining=9.0)))
+    with patcher:
+        client = _client()
+        client.scrape("https://example.com/a")
+        client.scrape("https://example.com/b")
+        client.scrape("https://example.com/c")
 
     assert mock_requests.get.call_count == 1
 
@@ -373,22 +383,32 @@ def test_allowance_is_fetched_once_and_reused_across_scrapes(mock_requests):
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
 def test_a_failing_usage_lookup_never_breaks_a_successful_scrape(mock_requests):
     """Quota reporting is a nicety; losing it must not lose the page the ladder just rescued."""
-    mock_requests.get.side_effect = requests.RequestException("usage endpoint down")
-    mock_requests.post.return_value = _resp(
-        body={"success": True, "markdown": "# Real content", "usage": {"credits_remaining": 1.0}}
-    )
+    mock_requests.get.side_effect = OSError("usage endpoint down")
+    patcher, _crawler, _cls = _sdk(scrape_result=_page(markdown="# Real", usage=_usage(credits_remaining=1.0)))
+    with patcher:
+        page = _client().scrape("https://example.com/docs")
 
-    page = _client().scrape("https://example.com/docs")
-
-    assert page["markdown"] == "# Real content"
+    assert page["markdown"] == "# Real"
 
 
 @patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_usage_returns_the_parsed_plan_and_credit_blocks(mock_requests):
-    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
+def test_usage_reads_the_v1_usage_endpoint_the_sdk_does_not_wrap(mock_requests):
+    """The SDK covers /v1/crawl/storage but no usage endpoint, so this stays a direct call."""
+    mock_requests.get.return_value = _usage_response()
 
     usage = _client().usage()
 
     assert mock_requests.get.call_args.args[0] == "https://api.crawl4ai.com/v1/usage"
     assert usage["plan"]["daily_credits"] == 50
     assert usage["credits"]["remaining_today"] == 50
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_usage_raises_a_typed_error_on_an_http_failure(mock_requests):
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    mock_requests.get.return_value = _usage_response(status=401)
+
+    with pytest.raises(Crawl4AICloudError) as excinfo:
+        _client().usage()
+    assert excinfo.value.status_code == 401
