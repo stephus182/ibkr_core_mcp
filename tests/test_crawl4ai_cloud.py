@@ -10,6 +10,8 @@ the credit accounting.
 targets below are fully qualified because the two names collide.
 """
 
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,13 +23,63 @@ def _client(api_key="crawl4ai-fake-key-for-tests", base_url="https://api.crawl4a
     return Crawl4AICloudClient(api_key, base_url=base_url)
 
 
+# The SDK lives in the optional [scraper] extra, which CI does not install (it runs
+# `pip install -e ".[dev,server]"`). So these tests inject a fake `crawl4ai_cloud` module
+# rather than importing the real one — the same approach tests/test_scrape_fallback.py takes
+# for the optional local `crawl4ai` package. It also keeps the suite independent of the SDK's
+# version, which matters because our adapter deliberately pins around one of its defaults.
+
+
+class _FakeCloudError(Exception):
+    def __init__(self, message="", status_code=None, *_args):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class _FakeAuthenticationError(_FakeCloudError):
+    pass
+
+
+class _FakeRateLimitError(_FakeCloudError):
+    pass
+
+
+class _FakeQuotaExceededError(_FakeCloudError):
+    quota_type = "daily"
+
+
+class _FakeProxyConfig:
+    def __init__(self, mode=None, country=None):
+        self.mode = mode
+        self.country = country
+
+
+def _fake_sdk_module(crawler):
+    # setattr rather than attribute assignment, matching _install_fake_crawl4ai in
+    # tests/test_scrape_fallback.py: ModuleType has no static attributes, so plain
+    # assignment is a mypy attr-defined error.
+    errors = types.ModuleType("crawl4ai_cloud.errors")
+    setattr(errors, "CloudError", _FakeCloudError)  # noqa: B010
+    setattr(errors, "AuthenticationError", _FakeAuthenticationError)  # noqa: B010
+    setattr(errors, "RateLimitError", _FakeRateLimitError)  # noqa: B010
+    setattr(errors, "QuotaExceededError", _FakeQuotaExceededError)  # noqa: B010
+
+    module = types.ModuleType("crawl4ai_cloud")
+    crawler_cls = MagicMock(return_value=crawler)
+    setattr(module, "AsyncWebCrawler", crawler_cls)  # noqa: B010
+    setattr(module, "ProxyConfig", _FakeProxyConfig)  # noqa: B010
+    setattr(module, "errors", errors)  # noqa: B010
+    return module, errors, crawler_cls
+
+
 def _sdk(scrape_result=None, scrape_error=None):
-    """Patch the SDK's AsyncWebCrawler; return (patcher, crawler_mock, class_mock)."""
+    """Install a fake SDK; return (context_manager, crawler_mock, AsyncWebCrawler_mock)."""
     crawler = MagicMock()
     crawler.scrape = AsyncMock(return_value=scrape_result, side_effect=scrape_error)
     crawler.close = AsyncMock()
-    cls = MagicMock(return_value=crawler)
-    return patch("crawl4ai_cloud.AsyncWebCrawler", cls), crawler, cls
+    module, errors, crawler_cls = _fake_sdk_module(crawler)
+    cm = patch.dict(sys.modules, {"crawl4ai_cloud": module, "crawl4ai_cloud.errors": errors})
+    return cm, crawler, crawler_cls
 
 
 def _page(markdown="# Real content", fit_markdown=None, usage=None, error_message=None):
@@ -208,11 +260,9 @@ def test_scrape_raises_when_the_response_reports_an_error():
 
 def test_quota_exhaustion_is_named_as_not_retryable():
     """QuotaExceededError and RateLimitError are both 429 and mean opposite things."""
-    from crawl4ai_cloud import errors as sdk_errors
-
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.QuotaExceededError("daily cap", 429, {}, {}))
+    patcher, _crawler, _cls = _sdk(scrape_error=_FakeQuotaExceededError("daily cap", 429, {}, {}))
     with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
         _client().scrape("https://example.com/docs")
 
@@ -221,11 +271,9 @@ def test_quota_exhaustion_is_named_as_not_retryable():
 
 
 def test_a_rate_limit_is_distinguished_from_quota_exhaustion():
-    from crawl4ai_cloud import errors as sdk_errors
-
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.RateLimitError("rate limit", 429, {}, {}))
+    patcher, _crawler, _cls = _sdk(scrape_error=_FakeRateLimitError("rate limit", 429, {}, {}))
     with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
         _client().scrape("https://example.com/docs")
 
@@ -235,11 +283,9 @@ def test_a_rate_limit_is_distinguished_from_quota_exhaustion():
 
 
 def test_a_bad_key_maps_to_401():
-    from crawl4ai_cloud import errors as sdk_errors
-
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.AuthenticationError("bad key", 401, {}, {}))
+    patcher, _crawler, _cls = _sdk(scrape_error=_FakeAuthenticationError("bad key", 401, {}, {}))
     with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
         _client().scrape("https://example.com/docs")
 
@@ -255,11 +301,9 @@ def test_a_transport_error_becomes_a_typed_error_not_a_raw_exception():
 
 
 def test_an_error_never_leaks_the_api_key():
-    from crawl4ai_cloud import errors as sdk_errors
-
     from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
 
-    patcher, _crawler, _cls = _sdk(scrape_error=sdk_errors.AuthenticationError("bad key", 401, {}, {}))
+    patcher, _crawler, _cls = _sdk(scrape_error=_FakeAuthenticationError("bad key", 401, {}, {}))
     with patcher, pytest.raises(Crawl4AICloudError) as excinfo:
         _client(api_key="super-secret-value").scrape("https://example.com/docs")
 
