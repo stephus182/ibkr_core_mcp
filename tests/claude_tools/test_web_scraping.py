@@ -938,8 +938,11 @@ def test_fetch_page_says_how_to_create_a_profile_when_none_applies(tmp_path):
 
     text, _payload = toolkit.execute("fetch_page", {"url": "https://www.wsj.com/articles/x"})
 
-    assert "create-profile" in text
-    assert "wsj.com" in text
+    # The whole command, not "create-profile" and "wsj.com" as two loose substrings:
+    # the hint is only useful if it names the right domain in the right place, and a
+    # bare `"wsj.com" in text` would also pass on a hint pointing somewhere else.
+    # (It also reads as naive URL-substring sanitization to CodeQL, which flagged it.)
+    assert "create-profile www.wsj.com" in text
 
 
 def test_fetch_page_reports_crawl4ai_unavailable_without_raising():
