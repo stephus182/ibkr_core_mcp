@@ -118,7 +118,21 @@ repo** is fine — it's gitignored and never committed. Only 4 vars are needed (
 (reuse an already-authenticated token to skip interactive OAuth). Verify with
 `pytest tests/test_web_scraper_dev_cache_live.py -v -m integration`.
 
-Never commit `.env` or any GDrive OAuth credential/token file (e.g. `credentials_ibkr_core_mcp.json`, `token_ibkr_core_mcp.json`).
+**Web scraper env vars** (all optional; each disables a feature rather than raising):
+
+| Var | Effect if unset |
+|---|---|
+| `FIRECRAWL_API_KEY` | `firecrawl_search`/`firecrawl_crawl` report "not configured" |
+| `CRAWL4AI_PROFILES_DIR` | Defaults to `~/.ibkr_core/crawl4ai_profiles` (paywalled-site logins) |
+| `CRAWL4AI_API_KEY` | The Cloud rung (rung 3) is **skipped silently**; the ladder behaves exactly as it did with two rungs |
+| `CRAWL4AI_API_URL` | Defaults to `https://api.crawl4ai.com` |
+
+Note `CRAWL4AI_PROFILES_DIR` configures the *local* scraper and `CRAWL4AI_API_KEY` the
+*hosted* one — same vendor, unrelated settings. Each project keeps its **own distinct**
+Crawl4AI key; that is deliberate, not duplication. Compare secrets by hash if you ever need
+to know whether two match — never by prefix and length.
+
+Never commit `.env` or any GDrive OAuth credential/token file (e.g. `credentials_ibkr_core_mcp.json`, `token_ibkr_core_mcp.json`). Never print an API key in logs, errors or test output.
 
 ---
 
@@ -142,8 +156,9 @@ ibkr_core_mcp/
 ├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
 ├── order_confirm.py      # Gate 2: visual order confirmation dialog (tkinter/AppKit)
 ├── streaming.py          # IBKRWebSocket — live quotes, execution/P&L push; AlertManager
-├── web_scraper.py        # FirecrawlClient + WebDocsStore — search/crawl, Drive snapshots
-├── scrape_fallback.py    # Crawl4AI fallback + SSRF guard for web scraping
+├── web_scraper.py        # FirecrawlClient + WebDocsStore — search/crawl, Drive snapshots (ladder rung 1)
+├── scrape_fallback.py    # Crawl4AI LOCAL fallback (Playwright) + SSRF guard (ladder rung 2)
+├── crawl4ai_cloud.py     # Crawl4AICloudClient — hosted Crawl4AI REST API (ladder rung 3, paid)
 ├── pinescript.py         # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py       # Token-bucket rate limiter + exponential backoff on 429
 ├── config.py             # Config dataclass loaded from environment variables
@@ -240,11 +255,16 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
     is a complete 517-page index. There is also an MCP server at
     `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
-    cost no Firecrawl credits and cannot be edge-blocked. If you do scrape,
-    `FirecrawlClient.crawl()` makes one attempt and, whenever it yields under 5 KB of markdown
-    (including on 401/402/429 or a network error), falls back to a free local Crawl4AI scrape of
-    the root URL, reporting an explicit diagnosis instead of the old silent "saved 0 page(s)".
-    `waitFor`/`proxy` are exposed on both `crawl()` and `search()` as opt-in overrides.
+    cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
+    is three rungs: `FirecrawlClient.crawl()` makes one attempt and, whenever the result is under
+    5 KB of markdown (including on 401/402/429 or a network error), falls back to a **free local**
+    Crawl4AI scrape of the root URL; if that is still short it falls back again to **Crawl4AI
+    Cloud** (1 credit, skipped silently when `CRAWL4AI_API_KEY` is unset). Each rung keeps the
+    larger result, and a crawl that ends empty reports an explicit diagnosis naming every rung
+    instead of the old silent "saved 0 page(s)". `waitFor`/`proxy` are exposed on both `crawl()`
+    and `search()` as opt-in overrides. The paid cloud rung goes **last, behind the free local
+    one** — putting it second would spend credits on pages local already serves. Full detail:
+    `docs/web-scraper-reference.md`.
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
   deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single

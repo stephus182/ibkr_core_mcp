@@ -47,7 +47,13 @@ dependencies = [
 
 [project.optional-dependencies]
 server = [
-    "mcp>=1.0",
+    # Upper bound is load-bearing, not caution. MCP SDK 2.0.0 removed the Server.list_tools
+    # and Server.call_tool decorators mcp_server.py registers its handlers with, and renamed
+    # Tool.inputSchema -> input_schema and Resource.mimeType -> mime_type. Verified against a
+    # clean install of mcp==2.0.0 on 2026-07-28: both Server attributes are simply absent, so
+    # mcp_server.py raises at registration time — this is a runtime break, not a typing one.
+    # Remove the cap only together with a port of mcp_server.py to the 2.x API.
+    "mcp>=1.0,<2",
     "starlette>=0.40",
     "uvicorn>=0.30",
 ]
