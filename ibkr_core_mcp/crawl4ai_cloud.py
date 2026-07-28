@@ -32,6 +32,12 @@ log = logging.getLogger(__name__)
 # Firecrawl and the local scraper have already failed, on pages that are hard to fetch.
 _TIMEOUT_S = 90
 
+# Warn when the remaining daily balance falls below this fraction of the plan's own
+# reported allowance. A *fraction*, deliberately, not a credit count: "warn under 10" is
+# right for a 50/day plan and silently useless the day the account moves to 5000/day.
+# Nothing in this module may hard-code a tier's numbers — they are read from the API.
+_LOW_CREDIT_FRACTION = 0.2
+
 # Crawl4AI Cloud's documented error codes (https://api.crawl4ai.com/llms-full.txt § Error
 # Codes, verified 2026-07-28), mapped to messages that name the cause rather than echoing a
 # bare number. 402 is absent from the vendor's table — this API signals an exhausted budget
@@ -116,6 +122,87 @@ class Crawl4AICloudClient:
             "X-API-Key": api_key,
             "Content-Type": "application/json",
         }
+        # Credits left after this client's most recent successful scrape, read straight
+        # out of that response body. None until one has run. The ladder reports it in the
+        # tool output, but only when this rung actually fired.
+        self.last_credits_remaining: float | None = None
+        self._daily_allowance: float | None = None
+        self._allowance_looked_up = False
+
+    def usage(self) -> dict[str, Any]:
+        """Return the account's current plan, credit, storage and LLM-token usage.
+
+        Calls GET /v1/usage, which costs a request against the per-minute rate limit but
+        **no credits** (verified live 2026-07-28: four dry runs and three usage calls left
+        `credits.used_today` at 0).
+
+        Returns:
+            The parsed response body. The live shape is
+            `{"plan": {"name", "daily_credits", "rate_per_minute", "concurrent", ...},
+              "credits": {"used_today", "remaining_today", "daily_limit"},
+              "storage": {...}, "llm": {...}}`.
+
+            This is **not** the shape in the vendor's own llms-full.txt, which documents
+            `crawl.credits_daily_limit` / `crawl.credits_remaining_today`. Those keys are
+            absent from the live response; the reference is stale. Live wins.
+
+        Raises:
+            Crawl4AICloudError: On any HTTP error status.
+        """
+        resp = requests.get(f"{self._base_url}/v1/usage", headers=self._headers, timeout=_TIMEOUT_S)
+        self._raise_for_status(resp)
+        body: dict[str, Any] = resp.json()
+        return body
+
+    def _daily_credit_allowance(self) -> float | None:
+        """Return the plan's daily credit allowance, looked up at most once per client.
+
+        The scrape response carries the remaining balance but not the allowance it should
+        be judged against, so one GET /v1/usage is unavoidable to make the low-balance
+        threshold relative. It is cached rather than polled per scrape: repeating it would
+        spend a request against a per-minute limit to learn what does not change during a
+        session.
+
+        Returns None when the lookup fails or reports no allowance, which suppresses the
+        low-balance warning rather than guessing a number.
+        """
+        if self._allowance_looked_up:
+            return self._daily_allowance
+        self._allowance_looked_up = True
+        try:
+            body = self.usage()
+        except Exception as exc:  # noqa: BLE001 - a best-effort nicety, never fatal
+            log.debug("crawl4ai cloud: usage lookup failed (%s) — low-balance warnings disabled", exc)
+            return None
+        allowance = body.get("plan", {}).get("daily_credits") or body.get("credits", {}).get("daily_limit")
+        self._daily_allowance = float(allowance) if allowance else None
+        return self._daily_allowance
+
+    def _record_usage(self, payload: dict[str, Any]) -> None:
+        """Log this scrape's credit cost and warn when the balance is proportionally low.
+
+        Reads `usage.credits_remaining` out of the scrape response, which is free — the
+        alternative, a GET /v1/usage per scrape, would spend a request against the
+        per-minute limit to learn what the response already said.
+        """
+        usage = payload.get("usage") or {}
+        remaining = usage.get("credits_remaining")
+        if remaining is None:
+            return
+        self.last_credits_remaining = float(remaining)
+        log.info(
+            "crawl4ai cloud: %s credit(s) used, %s remaining today",
+            usage.get("credits_used", "?"),
+            self.last_credits_remaining,
+        )
+        allowance = self._daily_credit_allowance()
+        if allowance and self.last_credits_remaining < allowance * _LOW_CREDIT_FRACTION:
+            log.warning(
+                "crawl4ai cloud: only %s of %s daily credits remain (under %.0f%% of the plan allowance)",
+                self.last_credits_remaining,
+                allowance,
+                _LOW_CREDIT_FRACTION * 100,
+            )
 
     def _raise_for_status(self, resp: requests.Response) -> None:
         """Translate a Crawl4AI HTTP error into Crawl4AICloudError with its status code.
@@ -189,6 +276,8 @@ class Crawl4AICloudClient:
         if not payload.get("success", False):
             reason = payload.get("error_message") or "Crawl4AI reported an unsuccessful scrape"
             raise Crawl4AICloudError(reason)
+
+        self._record_usage(payload)
 
         # `markdown` is the full extraction; `fit_markdown` is the PruningContentFilter
         # output requested by `fit: true`. Prefer the full one — the ladder's only decision

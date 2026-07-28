@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 
 def _resp(status=200, body=None, headers=None):
@@ -205,3 +206,126 @@ def test_scrape_never_puts_the_api_key_in_an_error_message(mock_requests):
     with pytest.raises(Crawl4AICloudError) as excinfo:
         _client(api_key="sk_live_supersecret").scrape("https://example.com/docs")
     assert "sk_live_supersecret" not in str(excinfo.value)
+
+
+# ============================================================================
+# Quota surfacing
+# ============================================================================
+
+# Live /v1/usage shape, verified 2026-07-28. Note this is NOT the shape in the vendor's
+# own llms-full.txt, which documents crawl.credits_daily_limit / crawl.credits_remaining_today
+# — those keys do not exist on the live response.
+_USAGE_BODY = {
+    "plan": {"name": "free", "daily_credits": 50, "rate_per_minute": 10, "concurrent": 1},
+    "credits": {"used_today": 0, "remaining_today": 50, "daily_limit": 50},
+}
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_records_credits_remaining_from_the_response_body(mock_requests):
+    """The scrape response already carries the balance — no extra call needed to read it."""
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# hi", "usage": {"credits_used": 1.0, "credits_remaining": 47.0}}
+    )
+
+    client = _client()
+    assert client.last_credits_remaining is None
+    client.scrape("https://example.com/docs")
+    assert client.last_credits_remaining == 47.0
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_leaves_credits_remaining_none_when_the_body_omits_usage(mock_requests):
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    client = _client()
+    client.scrape("https://example.com/docs")
+    assert client.last_credits_remaining is None
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_low_balance_warning_is_relative_to_the_reported_allowance(mock_requests, caplog):
+    """9 of 50 is under a fifth and warns; the threshold is read from the API, never hardcoded."""
+    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 9.0}}
+    )
+
+    with caplog.at_level("WARNING"):
+        _client().scrape("https://example.com/docs")
+
+    assert any("credit" in r.message.lower() for r in caplog.records if r.levelname == "WARNING")
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_no_low_balance_warning_when_comfortably_above_the_threshold(mock_requests, caplog):
+    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 40.0}}
+    )
+
+    with caplog.at_level("WARNING"):
+        _client().scrape("https://example.com/docs")
+
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_a_large_plan_warns_at_a_balance_an_absolute_threshold_would_ignore(mock_requests, caplog):
+    """500 of 5000/day is under a fifth and must warn.
+
+    This is the test that fails if anyone reintroduces a hardcoded "warn under 10":
+    500 sails past any small absolute floor while being genuinely low for this plan.
+    It is the *upgrade* direction — the one §2b of the plan exists to protect.
+    """
+    mock_requests.get.return_value = _resp(
+        body={"plan": {"name": "pro", "daily_credits": 5000}, "credits": {"daily_limit": 5000}}
+    )
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 500.0}}
+    )
+
+    with caplog.at_level("WARNING"):
+        _client().scrape("https://example.com/docs")
+
+    assert any("credit" in r.message.lower() for r in caplog.records if r.levelname == "WARNING")
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_allowance_is_fetched_once_and_reused_across_scrapes(mock_requests):
+    """/v1/usage costs a request against a per-minute limit — poll it once per client, not per scrape."""
+    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# hi", "usage": {"credits_remaining": 9.0}}
+    )
+
+    client = _client()
+    client.scrape("https://example.com/a")
+    client.scrape("https://example.com/b")
+    client.scrape("https://example.com/c")
+
+    assert mock_requests.get.call_count == 1
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_a_failing_usage_lookup_never_breaks_a_successful_scrape(mock_requests):
+    """Quota reporting is a nicety; losing it must not lose the page the ladder just rescued."""
+    mock_requests.get.side_effect = requests.RequestException("usage endpoint down")
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "markdown": "# Real content", "usage": {"credits_remaining": 1.0}}
+    )
+
+    page = _client().scrape("https://example.com/docs")
+
+    assert page["markdown"] == "# Real content"
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_usage_returns_the_parsed_plan_and_credit_blocks(mock_requests):
+    mock_requests.get.return_value = _resp(body=_USAGE_BODY)
+
+    usage = _client().usage()
+
+    assert mock_requests.get.call_args.args[0] == "https://api.crawl4ai.com/v1/usage"
+    assert usage["plan"]["daily_credits"] == 50
+    assert usage["credits"]["remaining_today"] == 50
