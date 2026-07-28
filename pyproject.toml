@@ -57,11 +57,10 @@ server = [
     "starlette>=0.40",
     "uvicorn>=0.30",
 ]
-# Both scraper fallback rungs. `crawl4ai` is the local Playwright crawler (rung 2);
-# `crawl4ai-cloud-sdk` is the vendor's own client for the hosted API (rung 3). They are
-# unrelated packages that share a vendor name. The SDK's only substantial dependency,
-# httpx, is already in the tree via anthropic.
-scraper = ["crawl4ai>=0.5.0", "crawl4ai-cloud-sdk>=1.2"]
+# The local Playwright crawler behind the scraper's fallback rung and the fetch_page
+# tool. Heavy (it pulls Playwright and browser binaries), so it stays optional — every
+# code path that uses it degrades to a message when it is absent.
+scraper = ["crawl4ai>=0.5.0"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "mypy>=1.8", "ruff>=0.16"]
 
 [project.urls]

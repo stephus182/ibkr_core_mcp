@@ -124,13 +124,10 @@ repo** is fine — it's gitignored and never committed. Only 4 vars are needed (
 |---|---|
 | `FIRECRAWL_API_KEY` | `firecrawl_search`/`firecrawl_crawl` report "not configured" |
 | `CRAWL4AI_PROFILES_DIR` | Defaults to `~/.ibkr_core/crawl4ai_profiles` (paywalled-site logins) |
-| `CRAWL4AI_API_KEY` | The Cloud rung (rung 3) is **skipped silently**; the ladder behaves exactly as it did with two rungs |
-| `CRAWL4AI_API_URL` | Defaults to `https://api.crawl4ai.com` |
 
-Note `CRAWL4AI_PROFILES_DIR` configures the *local* scraper and `CRAWL4AI_API_KEY` the
-*hosted* one — same vendor, unrelated settings. Each project keeps its **own distinct**
-Crawl4AI key; that is deliberate, not duplication. Compare secrets by hash if you ever need
-to know whether two match — never by prefix and length.
+`CRAWL4AI_PROFILES_DIR` is the **only** Crawl4AI setting. A `CRAWL4AI_API_KEY` /
+`CRAWL4AI_API_URL` pair configured a hosted rung that was removed on 2026-07-28 (§5.1 of
+`docs/web-scraper-reference.md`); either variable is now simply ignored.
 
 Never commit `.env` or any GDrive OAuth credential/token file (e.g. `credentials_ibkr_core_mcp.json`, `token_ibkr_core_mcp.json`). Never print an API key in logs, errors or test output.
 
@@ -157,8 +154,7 @@ ibkr_core_mcp/
 ├── order_confirm.py      # Gate 2: visual order confirmation dialog (tkinter/AppKit)
 ├── streaming.py          # IBKRWebSocket — live quotes, execution/P&L push; AlertManager
 ├── web_scraper.py        # FirecrawlClient + WebDocsStore — search/crawl, Drive snapshots (ladder rung 1)
-├── scrape_fallback.py    # Crawl4AI LOCAL fallback (Playwright) + SSRF guard (ladder rung 2)
-├── crawl4ai_cloud.py     # Crawl4AICloudClient — hosted Crawl4AI REST API (ladder rung 3, paid)
+├── scrape_fallback.py    # Crawl4AI local browser (Playwright) + SSRF guard (ladder rung 2)
 ├── pinescript.py         # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py       # Token-bucket rate limiter + exponential backoff on 429
 ├── config.py             # Config dataclass loaded from environment variables
@@ -256,14 +252,12 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is a complete 517-page index. There is also an MCP server at
     `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
-    is three rungs: `FirecrawlClient.crawl()` makes one attempt and, whenever the result is under
+    is two rungs: `FirecrawlClient.crawl()` makes one attempt and, whenever the result is under
     5 KB of markdown (including on 401/402/429 or a network error), falls back to a **free local**
-    Crawl4AI scrape of the root URL; if that is still short it falls back again to **Crawl4AI
-    Cloud** (1 credit, skipped silently when `CRAWL4AI_API_KEY` is unset). Each rung keeps the
-    larger result, and a crawl that ends empty reports an explicit diagnosis naming every rung
-    instead of the old silent "saved 0 page(s)". `waitFor`/`proxy` are exposed on both `crawl()`
-    and `search()` as opt-in overrides. The paid cloud rung goes **last, behind the free local
-    one** — putting it second would spend credits on pages local already serves. Full detail:
+    Crawl4AI scrape of the root URL. The rescue keeps the result only if it is strictly larger, so
+    it can never shrink what Firecrawl returned, and a crawl that ends empty reports an explicit
+    diagnosis naming every rung instead of the old silent "saved 0 page(s)". `waitFor`/`proxy` are
+    exposed on both `crawl()` and `search()` as opt-in overrides. Full detail:
     `docs/web-scraper-reference.md`.
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one

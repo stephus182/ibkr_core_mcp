@@ -1127,7 +1127,6 @@ class ClaudeToolkit:
         # but not safe if ClaudeToolkit is ever driven by a genuinely multi-threaded
         # host app. Add a lock if that becomes a real usage pattern.
         self._crawl4ai: Any = None
-        self._crawl4ai_cloud: Any = None
 
     @property
     def client(self) -> IBKRClient:
@@ -3292,55 +3291,6 @@ class ClaudeToolkit:
             return []
         return [{"url": url, "markdown": markdown, "metadata": {}}]
 
-    def _crawl4ai_cloud_scrape(self, url: str) -> tuple[list[dict[str, Any]], str | None]:
-        """Fetch a crawl's root URL via Crawl4AI Cloud — the ladder's third and last rung.
-
-        Runs only after both Firecrawl and the *local* Crawl4AI scraper have failed to
-        produce useful content. That order is deliberate: this rung costs credits and the
-        local one is free, and on the only real failure observed to date (2026-07-28, the
-        IBKR campus reference) local was the rung that worked. Putting a paid rung ahead
-        of a free one spends the daily budget to be overtaken by something free.
-
-        What this rung is actually for is the case local cannot solve — an IP-level block
-        or a challenge aimed at this machine's own address, which managed and residential
-        proxies exist to defeat. That is a last resort, not a second one.
-
-        Skipped silently when no key is configured, so the ladder keeps behaving exactly
-        as it did before this rung existed for anyone without a Crawl4AI account.
-
-        Args:
-            url: The crawl's root URL, already SSRF-validated by the caller.
-
-        Returns:
-            (pages, failure) — a single-page list shaped like Firecrawl's own output, or
-            [] when the rung is unconfigured, failed, or produced nothing. `failure` is a
-            human-readable reason when the rung ran and failed, else None, so the caller's
-            diagnosis can name this rung's cause rather than reporting a bare "no content".
-        """
-        if not self._config.crawl4ai_api_key:
-            return [], None
-
-        from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient, Crawl4AICloudError
-
-        if self._crawl4ai_cloud is None:
-            self._crawl4ai_cloud = Crawl4AICloudClient(
-                self._config.crawl4ai_api_key,
-                base_url=self._config.crawl4ai_api_url,
-            )
-
-        try:
-            page = self._crawl4ai_cloud.scrape(url)
-        except Crawl4AICloudError as exc:
-            log.warning("crawl4ai cloud scrape of %s failed: %s", url, exc)
-            return [], str(exc)
-        except Exception as exc:  # noqa: BLE001 - a dead network must not raise out of a fallback
-            log.warning("crawl4ai cloud scrape of %s failed: %s", url, exc)
-            return [], f"network error: {exc}"
-
-        if not page.get("markdown"):
-            return [], None
-        return [page], None
-
     def _handle_firecrawl_crawl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Handle the firecrawl_crawl tool.
 
@@ -3439,16 +3389,6 @@ class ClaudeToolkit:
                 pages = root_pages
                 root_rescued = True
 
-        # Rung 3: the hosted Crawl4AI API, reached only when the free local rung also came
-        # up short. See _crawl4ai_cloud_scrape for why the paid rung goes last.
-        cloud_rescued = False
-        cloud_failure: str | None = None
-        if content_bytes(pages) < _MIN_USEFUL_BYTES:
-            cloud_pages, cloud_failure = self._crawl4ai_cloud_scrape(url)
-            if content_bytes(cloud_pages) > content_bytes(pages):
-                pages = cloud_pages
-                cloud_rescued, root_rescued = True, False
-
         final_bytes = content_bytes(pages)
         if final_bytes == 0:
             firecrawl_line = (
@@ -3456,19 +3396,10 @@ class ClaudeToolkit:
                 if firecrawl_failure
                 else f"Firecrawl returned {firecrawl_bytes} B"
             )
-            # Stays silent about the cloud rung when it is unconfigured, so a user without
-            # a Crawl4AI account sees exactly the message this tool produced before the
-            # rung existed rather than being told about a feature they have not set up.
-            if not self._config.crawl4ai_api_key:
-                cloud_clause = ""
-            elif cloud_failure:
-                cloud_clause = f", and Crawl4AI Cloud failed ({cloud_failure})"
-            else:
-                cloud_clause = ", and Crawl4AI Cloud also returned nothing"
             return (
                 f"Crawl of {url} produced no content.\n"
-                f"{firecrawl_line}, the local Crawl4AI fallback also returned "
-                f"nothing{cloud_clause}.\n"
+                f"{firecrawl_line}, and the local Crawl4AI fallback also returned "
+                f"nothing.\n"
                 f"Likely causes: the site blocks automated clients, its content is "
                 f"rendered by JavaScript the scraper did not wait for, or your Firecrawl "
                 f"plan is rate-limited or out of credits.\n"
@@ -3489,24 +3420,12 @@ class ClaudeToolkit:
         why_firecrawl = (
             f"Firecrawl failed — {firecrawl_failure}" if firecrawl_failure else "Firecrawl returned nothing usable"
         )
-        if cloud_rescued:
-            source = f"Crawl4AI Cloud ({why_firecrawl}; local Crawl4AI also came up short)"
-        elif root_rescued:
-            source = f"Crawl4AI ({why_firecrawl})"
-        else:
-            source = "Firecrawl"
+        source = f"Crawl4AI ({why_firecrawl})" if root_rescued else "Firecrawl"
         fallback_line = (
             f"\nCrawl4AI fallback used for {fallback_count} page(s) Firecrawl couldn't fully extract."
             if fallback_count
             else ""
         )
-        # Reported only when the cloud rung actually fired — a crawl Firecrawl served
-        # spent no credits and mentioning a balance there is noise.
-        credits_line = ""
-        if cloud_rescued and self._crawl4ai_cloud is not None:
-            remaining = getattr(self._crawl4ai_cloud, "last_credits_remaining", None)
-            if remaining is not None:
-                credits_line = f"\nCrawl4AI Cloud credits remaining today: {remaining}"
         return (
             f"Crawl complete: saved {saved} page(s) ({final_bytes} B) from {url} to Drive.\n"
             f"Source: {source}\n"
@@ -3514,7 +3433,6 @@ class ClaudeToolkit:
             f"Pages: "
             + ", ".join(p["url"] for p in manifest["pages"][:10])
             + ("..." if saved > 10 else "")
-            + fallback_line
-            + credits_line,
+            + fallback_line,
             None,
         )

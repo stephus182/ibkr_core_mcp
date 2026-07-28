@@ -77,24 +77,15 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_crawl_falls_back_to_crawl4ai_when_out_of_credits",
     "test_crawl_falls_back_to_crawl4ai_on_network_error",
     "test_crawl_no_content_message_names_the_firecrawl_failure",
-    # Rung 3 (Crawl4AI Cloud) handler tests, for the same reason as every other
+    # The "never downgrade" ladder tests, for the same reason as every other
     # _handle_firecrawl_crawl test above: the root URL is SSRF-validated before any
     # rung runs, so blocked DNS returns "Invalid URL: ..." and no ladder executes.
-    # test_crawl_does_not_reach_cloud_when_the_free_local_rung_rescued_it and
-    # test_crawl_skips_the_cloud_rung_silently_when_no_key_is_configured need it for
-    # the subtler reason documented above: both assert scrape.assert_not_called(),
-    # which passes for the wrong reason when the root was rejected before the ladder
-    # was ever consulted.
-    "test_crawl_falls_back_to_cloud_when_firecrawl_and_local_both_fail",
-    "test_crawl_does_not_reach_cloud_when_the_free_local_rung_rescued_it",
-    "test_crawl_skips_the_cloud_rung_silently_when_no_key_is_configured",
-    "test_crawl_no_content_message_names_every_rung_that_failed",
-    "test_crawl_names_the_cloud_failure_rather_than_swallowing_it",
-    "test_crawl_reports_remaining_credits_only_when_the_cloud_rung_fired",
-    "test_crawl_does_not_mention_credits_when_firecrawl_served_the_page",
-    "test_crawl_reports_a_cloud_network_error_instead_of_raising",
-    "test_cloud_does_not_replace_a_larger_result_from_an_earlier_rung",
-    "test_cloud_replaces_a_smaller_result_from_an_earlier_rung",
+    # test_local_rung_does_not_replace_a_larger_firecrawl_result needs it for the
+    # subtler reason documented above: its scrape.assert_called_once() would fail,
+    # and its content assertion would pass vacuously, if the root were rejected
+    # before the ladder was ever consulted.
+    "test_crawl_no_content_message_names_both_rungs",
+    "test_local_rung_does_not_replace_a_larger_firecrawl_result",
 }
 
 

@@ -94,38 +94,28 @@ not in the code.
 `docs.anthropic.com` now 301-redirects to `platform.claude.com` for both pages above
 (re-verified live 2026-07-14) — updated to the new canonical domain.
 
-**Web Scraping — Firecrawl + Crawl4AI local + Crawl4AI Cloud** (`web_scraper.py`,
-`scrape_fallback.py`, `crawl4ai_cloud.py`)
+**Web Scraping — Firecrawl + Crawl4AI local** (`web_scraper.py`, `scrape_fallback.py`)
 
 | Topic | URL |
 |---|---|
 | **Firecrawl API reference — v1** (search/crawl endpoints — `web_scraper.py`'s `BASE_URL` is `https://api.firecrawl.dev/v1`; it only calls `POST /v1/search` and `POST /v1/crawl` + `GET /v1/crawl/{id}`, never `/v1/scrape`. The bare `docs.firecrawl.dev/api-reference/endpoint/...` paths now render **v2** docs — use the `/v1/...`-prefixed paths below, re-verified live 2026-07-14, to match what this repo actually targets) | https://docs.firecrawl.dev/v1/api-reference/endpoint/search , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-get |
 | **Crawl4AI docs — home** (OSS library, our rung 2; no built-in confidence score on the Firecrawl side — confirmed 2026-06-30. Site is labelled **v0.9.x**, matching PyPI 0.9.2) | https://docs.crawl4ai.com/ |
-| **Crawl4AI — complete SDK reference** (the OSS analogue of the Cloud's `llms-full.txt`: one page, ~203,000 characters of text. **Start here** for any OSS-library question. Note it is served as ~988 KB of HTML, not plain text — strip tags before feeding it to anything) | https://docs.crawl4ai.com/complete-sdk-reference/ |
-| **Crawl4AI — docs sitemap** (the machine-readable index: 87 pages. `docs.crawl4ai.com` has **no `llms.txt` and no `llms-full.txt`** — both 404, and the 404 body is a 31 KB HTML page, so a naive fetch "succeeds" with garbage. Verified 2026-07-28) | https://docs.crawl4ai.com/sitemap.xml |
+| **Crawl4AI — `llms-full.txt`** (243,158 B of `text/plain`. **Start here** for any OSS-library question. The same directory holds 13 modular topic files — `simple_crawling`, `config_objects`, `deep_crawling`, `extraction-llm`, `extraction-no-llm`, `docker`, `installation`, `cli`, `url_seeder`, `multi_urls_crawling`, `http_based_crawler_strategy`, `deep_crawl_advanced_filters_scorers` — plus `diagrams/` variants; mirrored in the repo under `docs/md_v2/assets/llm.txt/`) | https://docs.crawl4ai.com/assets/llm.txt/txt/llms-full.txt |
+| **Crawl4AI — complete SDK reference** (same material as `llms-full.txt` but served as ~988 KB of HTML, not plain text — prefer the file above) | https://docs.crawl4ai.com/complete-sdk-reference/ |
+| **Crawl4AI — docs sitemap** (the machine-readable index: 87 pages) | https://docs.crawl4ai.com/sitemap.xml |
 | **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
 | **Crawl4AI anti-bot / fallback, undetected browser, proxy & security** (directly relevant to rung 2's job — beating blocks locally before the paid rung is reached) | https://docs.crawl4ai.com/advanced/ |
 | **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
 | **Crawl4AI CHANGELOG** (confirms `BrowserProfiler`'s introduction — see below) | https://github.com/unclecode/crawl4ai/blob/main/CHANGELOG.md |
 | **Crawl4AI migration guides** (webscraping-strategy, and table extraction v0.7.3. **Neither affects this repo** — `scrape_fallback.py` uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`, none of the migrated APIs. Checked 2026-07-28 so a future reader need not re-check) | https://docs.crawl4ai.com/migration/webscraping-strategy-migration/ , https://docs.crawl4ai.com/migration/table_extraction_v073/ |
-| **`crawl4ai-cloud-sdk` on PyPI** (1.2.0, 2026-06-28 — the vendor's own client for the Cloud API. **Being adopted** in place of the hand-rolled client: it raises on 429 without retrying (verified in `_client.py` — only 5xx, timeouts and network errors are retried), splits `RateLimitError` from `QuotaExceededError`, and supports `fit`, `proxy` as str/dict/`ProxyConfig`, `bypass_cache` and `dry_run` natively. Note it wraps no `/v1/usage` endpoint — see §5.2 of the web-scraper reference) | https://pypi.org/project/crawl4ai-cloud-sdk/ |
-| **Crawl4AI Cloud — complete API reference** (`crawl4ai_cloud.py`. ~59 KB of plain text and the **only** machine-readable source: the human docs under `/docs/...` are a JavaScript SPA that returns a 696-byte HTML shell to `curl`, including the two "AI reference" URLs the file itself advertises. Verified 2026-07-28) | https://api.crawl4ai.com/llms-full.txt |
-| **Crawl4AI Cloud — index** (pairs with `llms-full.txt`) | https://api.crawl4ai.com/llms.txt |
-| **Crawl4AI Cloud — migration notes for AI assistants** | https://api.crawl4ai.com/api/docs/downloads/MIGRATION.md |
 
-⚠️ **`llms-full.txt` is authoritative for endpoint shapes but was found wrong in three places
-on 2026-07-28, each confirmed by live call.** Treat it as a strong claim, not evidence:
-
-1. Its `GET /v1/usage` example documents `crawl.credits_daily_limit` /
-   `crawl.credits_remaining_today`. The live response has neither — it returns
-   `plan.daily_credits` and `credits.remaining_today`.
-2. It states "Headers on every response: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
-   `X-RateLimit-Reset`." No `X-RateLimit-*` header was present on `/v1/usage`.
-3. It documents no `dry_run` parameter at all, yet `dry_run: true` on `POST /v1/scrape`
-   works, returns a pricing quote, and is free.
-
-Its § Proxy Configuration and § Error Codes, by contrast, were confirmed exactly right —
-including that the string `"direct"` is a 422.
+⚠️ **Four products share the name "Crawl4AI".** Only the first is used here: the **OSS
+library** (PyPI `crawl4ai`, rung 2 and `fetch_page`). The others are **Crawl4AI Cloud**
+(`api.crawl4ai.com`, a hosted credit-billed REST API), **`crawl4ai-cloud-sdk`** (PyPI, the
+vendor's client for it), and the **`janbuchar/crawl4ai` Apify Actor**. Cloud was built and
+then removed on 2026-07-28 — see §5.1 of `docs/web-scraper-reference.md` for why, and for
+the API facts learned before it went, which are recorded there rather than here because
+nothing in this repo calls that API any more.
 
 `crawl4ai>=0.5.0` is a hard floor, verified against the published wheels on PyPI
 (2026-06-30): `BrowserProfiler` does not exist in the 0.4.x series (checked 0.4.248,
