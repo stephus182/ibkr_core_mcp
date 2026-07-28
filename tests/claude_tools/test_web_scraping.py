@@ -39,7 +39,15 @@ _REALISTIC_MARKDOWN = _REALISTIC_PARAGRAPH * 4
 
 
 def _make_toolkit():
-    """Return a ClaudeToolkit with all dependencies mocked."""
+    """Return a ClaudeToolkit with all dependencies mocked.
+
+    `crawl4ai_profiles_dir` is pinned to a path that cannot exist. Config's default
+    is the developer's real `~/.ibkr_core/crawl4ai_profiles`, so without this every
+    profile-dependent assertion in this file would silently depend on whether the
+    machine running the suite happens to have a saved login for the domain under
+    test — and would start behaving differently the day someone creates one. Tests
+    that need a profile to be found override this with `tmp_path`.
+    """
     from pathlib import Path
 
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
@@ -53,6 +61,7 @@ def _make_toolkit():
         gdrive_token_file=Path("/tmp/token.json"),
         gdrive_credentials_file=Path("/tmp/creds.json"),
         firecrawl_api_key="fc-test",
+        crawl4ai_profiles_dir=Path("/nonexistent/crawl4ai-profiles-for-tests"),
     )
     toolkit = ClaudeToolkit(
         client=MagicMock(),
@@ -887,7 +896,9 @@ def test_local_rung_does_not_replace_a_larger_firecrawl_result():
 
 
 def _fetch_toolkit(tmp_path=None):
-    """Toolkit with the browser mocked; no profile directory unless one is passed."""
+    """Toolkit with the browser mocked. Pass `tmp_path` to control profile lookup;
+    without it `_make_toolkit`'s nonexistent-path default means no profile is found.
+    """
     toolkit = _make_toolkit()
     if tmp_path is not None:
         toolkit._config.crawl4ai_profiles_dir = tmp_path

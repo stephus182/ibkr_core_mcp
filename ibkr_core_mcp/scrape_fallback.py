@@ -1,21 +1,30 @@
-"""Firecrawl → Crawl4AI fallback for ibkr_core_mcp's web scraping tools.
+"""The local Crawl4AI browser for ibkr_core_mcp's web scraping tools.
 
-Firecrawl (web_scraper.py) is the default scraper. This module decides when its
-result looks incomplete (blocked, empty, or paywalled) and, when so, falls back
-to Crawl4AI — an open-source, Playwright-based crawler that supports reusing a
-locally saved browser login profile for paywalled sites the user already
-subscribes to. `crawl4ai` is an optional dependency (`pip install
-ibkr_core_mcp[scraper]`) and is only imported when the fallback actually runs.
+Crawl4AI is an open-source, Playwright-based crawler that can reuse a locally
+saved browser login profile, so a paywalled site the user subscribes to returns
+the full article instead of the subscription stub. `crawl4ai` is an optional
+dependency (`pip install ibkr_core_mcp[scraper]`) and is only imported when a
+scrape actually runs.
+
+`claude_tools.py` reaches this module two ways, and the distinction matters:
+
+  * **As a fallback** — Firecrawl (`web_scraper.py`) runs first for `firecrawl_search`
+    and `firecrawl_crawl`; `assess_quality` decides when its result looks incomplete
+    (blocked, empty, or paywalled) and the browser recovers what it can.
+  * **As the direct route** — the `fetch_page` tool calls `Crawl4AIScraper.scrape()`
+    for a single URL with no Firecrawl attempt at all. That is the only route that
+    works for a paywalled article, since Firecrawl cannot log in.
 
 Provides:
   Quality                  — "ok" / "ambiguous" / "fallback" classification type
   Crawl4AIUnavailableError — raised when the optional `crawl4ai` dependency is missing
-  assess_quality           — classify a Firecrawl result as ok/ambiguous/fallback
+  assess_quality           — classify a scrape result as ok/ambiguous/fallback
   judge_completeness_llm   — one cheap Claude call to resolve "ambiguous" cases
   Crawl4AIScraper          — fetches a single URL via Crawl4AI, reusing a saved
                               login profile for the URL's domain if one exists
   create_profile           — one-time interactive login; saves a browser profile
                               for Crawl4AIScraper to reuse later
+  list_profiles            — the saved profiles, with each one's age in days
 
 Source: https://docs.crawl4ai.com/ (Crawl4AI, verified against the published
 PyPI wheel for crawl4ai==0.5.0 and crawl4ai==0.9.0 on 2026-06-30 — see the
@@ -180,7 +189,7 @@ def _run_async(coro: Coroutine[Any, Any, Any]) -> Any:
 
 
 def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> Quality:
-    """Classify a Firecrawl markdown result as "ok", "ambiguous", or "fallback".
+    """Classify a scraped markdown result as "ok", "ambiguous", or "fallback".
 
     "fallback" (skip the LLM judge, go straight to Crawl4AI):
       - metadata reports an HTTP error status (>= 400) or an "error" value
@@ -193,9 +202,17 @@ def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> 
 
     "ok" otherwise.
 
+    Two callers, and they supply different amounts of evidence. The fallback paths
+    pass Firecrawl's own page dict, so the HTTP-status branch above is live. The
+    `fetch_page` tool passes None, because `Crawl4AIScraper.scrape()` returns
+    {"url", "markdown"} and carries no status — there, only the word-count and
+    paywall-marker checks apply. Both are honest uses; the second is simply
+    working from less.
+
     Args:
-        markdown: The markdown content returned by Firecrawl for this page/result.
-        metadata: The Firecrawl "metadata" dict for this page/result, or None.
+        markdown: The markdown content scraped for this page/result.
+        metadata: The scraper's "metadata" dict for this page/result, or None when
+             the scraper does not report one (see above).
         url: Source URL, included for future logging/telemetry — not currently
              used in the classification itself.
     """

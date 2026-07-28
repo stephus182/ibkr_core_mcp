@@ -1,9 +1,9 @@
-"""ClaudeToolkit — the Anthropic tool layer over the rest of the package (42 tools).
+"""ClaudeToolkit — the Anthropic tool layer over the rest of the package (43 tools).
 
 `TOOL_DEFINITIONS` holds the JSON schemas Claude sees; `ClaudeToolkit` holds the
 matching handlers and `execute()` dispatches between them. The pair is deliberately
 portable: `mcp_server.py` reuses both to expose the same capabilities over MCP
-(adding two alert tools, for 44), so a tool added here is available to both hosts.
+(adding two alert tools, for 45), so a tool added here is available to both hosts.
 
 `execute()` returns `tuple[str, None]`. The second slot once carried a figure and
 was tightened when `plotly` was removed — this package returns data, never figures;
@@ -3129,17 +3129,12 @@ class ClaudeToolkit:
         Returns:
             (final_markdown, note, used_fallback) -- see _finalize_fallback_result.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-
         needs_fallback, md_if_not, note_if_not = self._assess_fallback_need(url, markdown, metadata)
         if not needs_fallback:
             return md_if_not, note_if_not, False
 
-        if self._crawl4ai is None:
-            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
-
         try:
-            result = self._crawl4ai.scrape(url)
+            result = self._get_crawl4ai().scrape(url)
         except Exception as exc:
             return self._finalize_fallback_result(url, markdown, exc)
         return self._finalize_fallback_result(url, markdown, result)
@@ -3168,8 +3163,6 @@ class ClaudeToolkit:
         """
         import urllib.parse
 
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-
         candidates: list[tuple[dict[str, Any], str]] = []
         for page in pages:
             url = page.get("url", "")
@@ -3184,13 +3177,10 @@ class ClaudeToolkit:
         if not candidates:
             return 0
 
-        if self._crawl4ai is None:
-            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
-
         urls = [p.get("url", "") for p, _ in candidates]
         root_domain = urllib.parse.urlparse(root_url).hostname or ""
         try:
-            outcomes = self._crawl4ai.scrape_batch(urls, profile_domain=root_domain)
+            outcomes = self._get_crawl4ai().scrape_batch(urls, profile_domain=root_domain)
         except Exception as exc:
             # A whole-batch failure (e.g. Crawl4AIUnavailableError, raised
             # before any URL is attempted) must degrade the same way a
@@ -3213,7 +3203,6 @@ class ClaudeToolkit:
         Lazily initializes FirecrawlClient on first call. Returns a no-key message
         if FIRECRAWL_API_KEY is not configured. Optionally saves a Drive snapshot.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
         from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
 
         if not self._config.firecrawl_api_key:
@@ -3248,8 +3237,12 @@ class ClaudeToolkit:
         # config to reuse here -- instead fetch fallbacks concurrently
         # (bounded) so independent per-domain browser launches overlap
         # instead of queuing sequentially behind each other.
-        if self._crawl4ai is None:
-            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+        #
+        # Built here, on this thread, before the pool fans out. _get_crawl4ai's
+        # `if is None` is unguarded by a lock (see the note in __init__), and this is
+        # the one genuinely multi-threaded path in the class — without this line, N
+        # workers race to construct N scrapers and the last write wins.
+        self._get_crawl4ai()
         with ThreadPoolExecutor(max_workers=min(_MAX_CONCURRENT_FALLBACKS, len(results))) as executor:
             fallback_results = list(
                 executor.map(
@@ -3298,14 +3291,9 @@ class ClaudeToolkit:
             A single-page list shaped like Firecrawl's own output so it flows into
             save_crawl unchanged, or [] when Crawl4AI produced nothing or is unavailable.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-
-        if self._crawl4ai is None:
-            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
-
         outcome: dict[str, str] | Exception
         try:
-            outcome = self._crawl4ai.scrape(url)
+            outcome = self._get_crawl4ai().scrape(url)
         except Exception as exc:
             outcome = exc
 
@@ -3314,11 +3302,28 @@ class ClaudeToolkit:
             return []
         return [{"url": url, "markdown": markdown, "metadata": {}}]
 
+    def _get_crawl4ai(self) -> Any:
+        """Return the lazily-built Crawl4AIScraper, constructing it on first use.
+
+        Five call sites shared this two-line idiom verbatim (both fallback paths, the
+        search-result path, the crawl root rescue, and fetch_page). Constructing it
+        lazily matters: `Crawl4AIScraper.__init__` is cheap, but importing it is not
+        free and the `[scraper]` extra is optional, so a host that never scrapes never
+        pays for it. See the `_crawl4ai` note in `__init__` for the threading caveat.
+        """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+
+        if self._crawl4ai is None:
+            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
+        return self._crawl4ai
+
     def _profile_hint(self, url: str) -> str:
-        """One line saying whether a saved login profile applies to `url`, and how to
-        create one if not. Shared by every fetch_page outcome that has to explain a
-        thin or missing result, because "no profile" is the single most likely cause
-        on exactly the sites this tool exists for.
+        """Return one line on whether a saved login profile applies to `url`.
+
+        Names the `create-profile` command for that exact domain when none does.
+        Shared by every fetch_page outcome that has to explain a thin or missing
+        result, because "no profile" is the single most likely cause on exactly the
+        sites that tool exists for.
         """
         import urllib.parse
 
@@ -3354,7 +3359,7 @@ class ClaudeToolkit:
             failure naming the cause. Never raises: an absent browser, a crashed
             browser and an empty page are three different messages, not tracebacks.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper, Crawl4AIUnavailableError, assess_quality
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, assess_quality
 
         url = str(inputs.get("url", "")).strip()
         if not url:
@@ -3367,11 +3372,8 @@ class ClaudeToolkit:
         if blocked:
             return blocked, None
 
-        if self._crawl4ai is None:
-            self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
-
         try:
-            page = self._crawl4ai.scrape(url)
+            page = self._get_crawl4ai().scrape(url)
         except Crawl4AIUnavailableError as exc:
             return (
                 f"Cannot fetch {url}: {exc}\n"
@@ -3379,7 +3381,9 @@ class ClaudeToolkit:
                 f'`pip install "ibkr_core_mcp[scraper]"` followed by `crawl4ai-setup`.',
                 None,
             )
-        except Exception as exc:  # noqa: BLE001 - a dead browser must not escape as a traceback
+        except Exception as exc:
+            # Broad by intent: a crashed browser, a navigation timeout or a dead network
+            # must reach the model as a message it can act on, not a traceback.
             log.warning("fetch_page failed for %s: %s", url, exc)
             return f"Fetch of {url} failed: {exc}", None
 
@@ -3399,12 +3403,18 @@ class ClaudeToolkit:
         # signal the fallback ladder already branches on — word counts and paywall markers —
         # so this reuses the repo's existing judgment rather than inventing a second
         # threshold that could drift away from it.
+        #
+        # metadata is None, not omitted by oversight: Crawl4AIScraper.scrape() returns
+        # {"url", "markdown"} and nothing else, so there is no HTTP status here for
+        # assess_quality's status_code >= 400 branch to read. Only its word-count and
+        # paywall-marker checks apply on this path.
         caution = ""
-        if assess_quality(markdown, page.get("metadata"), url) != "ok":
+        if assess_quality(markdown, None, url) != "ok":
             caution = (
-                "\n\nNOTE: this content looks incomplete — most likely a paywall stub, a "
-                "blocked request, or JavaScript that never finished. Do not treat it as "
-                "the full page."
+                "\n\nNOTE: this content may be incomplete — a paywall stub, a blocked "
+                "request, JavaScript that never finished, or simply a genuinely short "
+                "page. Check it against what was asked for before treating it as the "
+                "whole article."
             )
 
         return (
