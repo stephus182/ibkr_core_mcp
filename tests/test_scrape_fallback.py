@@ -1,4 +1,5 @@
 import asyncio
+import io
 import sys
 import types
 from pathlib import Path
@@ -779,6 +780,69 @@ def test_list_profiles_reports_each_saved_domain(tmp_path):
 # ── CLI dispatch ─────────────────────────────────────────────────────────────
 
 
+class _FakeTTY:
+    """stdin stand-in that reports itself as a terminal. Under pytest the real
+    stdin is captured and `isatty()` is False, which is the condition the CLI now
+    refuses on — so every create-profile CLI test has to say which it is."""
+
+    def isatty(self):
+        return True
+
+
+def test_cli_create_profile_does_not_require_an_anthropic_key(monkeypatch, tmp_path):
+    """Saving a browser login has nothing to do with Anthropic.
+
+    `_main` resolved its profiles directory via `Config.from_env()`, which raises
+    ConfigError("ANTHROPIC_API_KEY is required but not set"). So the documented
+    create-profile command failed outright for anyone without an unrelated LLM key
+    exported — with an error naming a key the operation never uses.
+
+    test_cli_create_profile_calls_create_profile_with_config_dir below hid this for
+    as long as it existed, by setting ANTHROPIC_API_KEY rather than asking why a
+    browser-login command needed one.
+    """
+    import ibkr_core_mcp.scrape_fallback as sf
+
+    captured = {}
+
+    def fake_create_profile(url_or_domain, profiles_dir):
+        captured["profiles_dir"] = profiles_dir
+        return profiles_dir / "example.com"
+
+    monkeypatch.setattr(sf, "create_profile", fake_create_profile)
+    monkeypatch.setattr(sys, "stdin", _FakeTTY())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CRAWL4AI_PROFILES_DIR", str(tmp_path / "profiles"))
+
+    sf._main(["create-profile", "https://example.com/login"])
+
+    assert captured["profiles_dir"] == tmp_path / "profiles"
+
+
+def test_cli_create_profile_refuses_without_a_terminal(monkeypatch, tmp_path):
+    """Refusing beats silently saving a profile with no login in it.
+
+    Crawl4AI's keyboard listener needs a TTY. Without one, `_listen_unix` fails on
+    termios, the fallback listener's `input()` raises EOFError, and EOF is treated
+    as the user pressing 'q' — so the profile saves *immediately*, before any login
+    happens. The result is a directory that looks like a valid profile, makes
+    fetch_page report "Used a saved login profile", and still returns the paywall
+    stub. A loud refusal is the only safe behaviour.
+    """
+    import ibkr_core_mcp.scrape_fallback as sf
+
+    called = []
+    monkeypatch.setattr(sf, "create_profile", lambda u, d: called.append(u))
+    monkeypatch.setattr(sys, "stdin", io.StringIO())  # isatty() -> False
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("CRAWL4AI_PROFILES_DIR", str(tmp_path / "profiles"))
+
+    with pytest.raises(SystemExit):
+        sf._main(["create-profile", "https://example.com/login"])
+
+    assert called == [], "create_profile must not run without an interactive terminal"
+
+
 def test_cli_create_profile_calls_create_profile_with_config_dir(monkeypatch):
     import ibkr_core_mcp.scrape_fallback as sf
 
@@ -790,7 +854,7 @@ def test_cli_create_profile_calls_create_profile_with_config_dir(monkeypatch):
         return profiles_dir / "example.com"
 
     monkeypatch.setattr(sf, "create_profile", fake_create_profile)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(sys, "stdin", _FakeTTY())
     monkeypatch.setenv("CRAWL4AI_PROFILES_DIR", "/tmp/cli-profiles")
 
     sf._main(["create-profile", "https://example.com/login"])

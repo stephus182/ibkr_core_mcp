@@ -19,6 +19,32 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+_DEFAULT_CRAWL4AI_PROFILES_DIR = "~/.ibkr_core/crawl4ai_profiles"
+
+
+def crawl4ai_profiles_dir_from_env(dotenv_path: str | None = None) -> Path:
+    """Resolve the saved-browser-profile root **without** building a full `Config`.
+
+    `Config.from_env()` raises when `ANTHROPIC_API_KEY` is unset, which is right for
+    application startup and wrong for the two profile CLIs: creating or listing a
+    saved browser login needs nothing from Anthropic, and routing them through
+    `from_env()` made `create-profile` fail with "ANTHROPIC_API_KEY is required but
+    not set" — an error naming a key the operation never uses. (Observed 2026-07-28
+    on the first real run.)
+
+    Reads the same `.env` and the same `CRAWL4AI_PROFILES_DIR` variable as
+    `Config.crawl4ai_profiles_dir`, and shares its default, so the two can never
+    disagree about where profiles live.
+
+    Args:
+        dotenv_path: Optional explicit `.env` to load, matching `Config.from_env()`.
+
+    Returns:
+        The profiles root, with `~` expanded. The directory is not created here.
+    """
+    load_dotenv(dotenv_path, override=False)
+    return Path(os.environ.get("CRAWL4AI_PROFILES_DIR", _DEFAULT_CRAWL4AI_PROFILES_DIR)).expanduser()
+
 
 @dataclass
 class Config:
@@ -58,7 +84,7 @@ class Config:
     # Local directory holding Crawl4AI browser profiles (saved logins for paywalled
     # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.scrape_fallback
     # create-profile <url>`.
-    crawl4ai_profiles_dir: Path = field(default_factory=lambda: Path("~/.ibkr_core/crawl4ai_profiles").expanduser())
+    crawl4ai_profiles_dir: Path = field(default_factory=lambda: crawl4ai_profiles_dir_from_env())
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
@@ -106,7 +132,5 @@ class Config:
             gdrive_account_folder_id=os.environ.get("GDRIVE_ACCOUNT_FOLDER_ID", ""),
             firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
             gdrive_web_docs_folder_id=os.environ.get("GDRIVE_WEB_DOCS_FOLDER_ID", ""),
-            crawl4ai_profiles_dir=Path(
-                os.environ.get("CRAWL4AI_PROFILES_DIR", "~/.ibkr_core/crawl4ai_profiles")
-            ).expanduser(),
+            crawl4ai_profiles_dir=crawl4ai_profiles_dir_from_env(dotenv_path),
         )

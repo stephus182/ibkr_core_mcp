@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import sys
 import threading
 import time
 from collections.abc import Coroutine
@@ -624,11 +625,22 @@ def list_profiles(profiles_dir: Path) -> list[tuple[str, Path, float]]:
 def _main(argv: list[str] | None = None) -> None:
     """CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
 
-    Reads Config.crawl4ai_profiles_dir from the environment (same .env-driven
-    Config.from_env() used everywhere else in this package) and delegates to
-    create_profile(). Two subcommands exist: `create-profile` and `list-profiles`.
-    The argparse subparser structure is kept so a further subcommand (e.g.
-    deleting saved profiles) can be added without a breaking CLI change.
+    Resolves the profiles root with `config.crawl4ai_profiles_dir_from_env()` rather
+    than `Config.from_env()`: both subcommands are browser-only and need nothing
+    from Anthropic, and `from_env()` would fail them with "ANTHROPIC_API_KEY is
+    required but not set" — an error naming a key neither operation uses.
+
+    `create-profile` additionally requires an interactive terminal, and refuses
+    without one. Crawl4AI's keyboard listener falls back to `input()` when there is
+    no TTY, `input()` raises EOFError immediately, and EOF is treated as the user
+    pressing 'q' — which saves a profile containing no login at all. That profile
+    then looks valid to `_resolve_profile_dir`, so `fetch_page` reports "Used a
+    saved login profile" while returning the paywall stub. Failing loudly is the
+    only safe option.
+
+    Two subcommands exist: `create-profile` and `list-profiles`. The argparse
+    subparser structure is kept so a further subcommand (e.g. deleting saved
+    profiles) can be added without a breaking CLI change.
 
     Args:
         argv: Command-line arguments excluding the program name, e.g.
@@ -637,7 +649,7 @@ def _main(argv: list[str] | None = None) -> None:
     """
     import argparse
 
-    from ibkr_core_mcp.config import Config
+    from ibkr_core_mcp.config import crawl4ai_profiles_dir_from_env
 
     parser = argparse.ArgumentParser(prog="python -m ibkr_core_mcp.scrape_fallback")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -652,15 +664,22 @@ def _main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
+    profiles_dir = crawl4ai_profiles_dir_from_env()
+
     if args.command == "create-profile":
-        config = Config.from_env()
-        dest = create_profile(args.url_or_domain, config.crawl4ai_profiles_dir)
+        if not sys.stdin.isatty():
+            parser.error(
+                "create-profile needs an interactive terminal — you log in by hand, then "
+                "press 'q'. Without a TTY, Crawl4AI's input fallback reads EOF, treats it "
+                "as 'q' immediately, and saves a profile with no login in it. Run this "
+                "command directly in a terminal, not through a pipe, script or task runner."
+            )
+        dest = create_profile(args.url_or_domain, profiles_dir)
         print(f"Profile saved to {dest}")
     elif args.command == "list-profiles":
-        config = Config.from_env()
-        entries = list_profiles(config.crawl4ai_profiles_dir)
+        entries = list_profiles(profiles_dir)
         if not entries:
-            print(f"No saved profiles in {config.crawl4ai_profiles_dir}")
+            print(f"No saved profiles in {profiles_dir}")
             return
         for domain, path, age_days in entries:
             print(f"{domain:<30} {age_days:>6.1f} days  {path}")
