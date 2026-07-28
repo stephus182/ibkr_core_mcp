@@ -103,10 +103,22 @@ round trip; the alternative costs a decision made on a price from another countr
 
 - `/trsrv/stocks` is **STK only**. IND and BOND still resolve via `/iserver/secdef/search`
   (now filtering on `description`, and erroring rather than substituting).
-- **`get_secdef()` is broken**: `/trsrv/secdef` is a **POST** endpoint (IBKR's own rate-limit
-  table lists `/trsv/secdef | POST | 200 conids/request`) and the wrapper issues a GET, so it
-  returns nothing. Currency is therefore read one conid at a time via
-  `/iserver/secdef/info`. Fixing `get_secdef` would allow batching. Not done here — it is a
-  separate defect with its own blast radius.
-- Currency costs one extra call per resolved conid. Acceptable for correctness; revisit if
-  a batch path appears.
+- **`get_secdef()` was broken — but not for the reason first recorded here.** Corrected
+  2026-07-28. The original note claimed `/trsrv/secdef` is a POST endpoint called with GET,
+  inferred from the *Additional Usage Limits* table (`/trsv/secdef | POST | 200
+  conids/request` — note IBKR's own path typo). **That inference was wrong.** The endpoint
+  reference documents `GET /trsrv/secdef?conids=…` and shows `requests.get(...)`. A
+  usage-limits table is not a method specification.
+
+  The actual defect was the **response shape**: the body is `{"secdef": [ … ]}`, an object
+  wrapping the array, and the wrapper returned `data if isinstance(data, list) else []` —
+  so every call silently returned `[]`. Identical in shape and cause to the
+  `get_currency_pairs` defect fixed 2026-06-30. Fixed by unwrapping the `secdef` key.
+
+  Source: <https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id>
+
+- **Currency is still read one conid at a time** via `/iserver/secdef/info`. Now that
+  `get_secdef` works, it is the batch path — one call for up to 200 conids, returning
+  `currency`, `listingExchange`, `countryCode`, `isUS` and `name` together. Switching the
+  resolver to it is a straightforward follow-up, deliberately left until the fix can be
+  live-verified: it rests on documentation alone, because the gateway was offline.

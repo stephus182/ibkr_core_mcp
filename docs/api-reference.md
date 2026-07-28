@@ -235,8 +235,12 @@ Security definition info (type, symbol, currency, exchange, listing exchange).
 Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-sec-def-information-by-conid
 
 ### `get_secdef(conids) -> list[dict]`
-Batch security definitions for multiple conids. Returns `[]` if response is not a list.
-**Endpoint:** `GET /trsrv/secdef`
+Batch security definitions for up to 200 conids. The response is an **object** wrapping the
+array — `{"secdef": [...]}` — and this method unwraps it; reading the body as a bare list
+returned `[]` on every call until 2026-07-28 (same defect shape as `get_currency_pairs`).
+Each record carries `currency`, `listingExchange`, `countryCode`, `isUS`, `name`,
+`assetClass` — the batch source for facts `/iserver/secdef/info` returns one conid at a time.
+**Endpoint:** `GET /trsrv/secdef?conids=<comma-separated>`
 Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id
 
 ---

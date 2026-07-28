@@ -642,12 +642,36 @@ class IBKRClient:
         return self._get("/trsrv/secdef/schedule", params)
 
     def get_secdef(self, conids: list[int]) -> list[dict[str, Any]]:
-        """Batch security definitions for multiple conids. Returns [] if response is not a list.
+        """Batch security definitions for up to 200 conids: [{conid, currency, ...}, ...].
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-conid-contract
-        Endpoint: GET /trsrv/secdef
+        The response is an OBJECT wrapping the array — ``{"secdef": [{...}, {...}]}`` —
+        not a bare list. Corrected 2026-07-28: this method previously returned
+        ``data if isinstance(data, list) else []``, so it discarded every result and
+        returned ``[]`` on every call, silently. Identical in shape and cause to the
+        ``get_currency_pairs`` defect fixed 2026-06-30; both endpoints key their array
+        under a name, and both were read as if the array were the whole body.
+
+        A bare list is still accepted, since the only cost is tolerating a response IBKR
+        does not currently document and the alternative is another silent empty.
+
+        Each record carries ``currency``, ``listingExchange``, ``countryCode``, ``isUS``,
+        ``name``, ``assetClass`` and more — the same facts
+        ``/iserver/secdef/info`` returns one conid at a time. This is the batch path for
+        them (200 conids/request per IBKR's usage limits), so prefer it over a loop.
+
+        Not live-verified: the gateway was offline when this was written, so the fix
+        rests on the endpoint documentation alone. `tests/test_client_live.py` covers it
+        when a gateway is available.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id
+                (scraped 2026-07-28: "Returns a list of security definitions for the
+                given conids `GET /trsrv/secdef`", Response Object "secdef: array")
+        Endpoint: GET /trsrv/secdef?conids=<comma-separated>
         """
         data = self._get("/trsrv/secdef", {"conids": ",".join(str(c) for c in conids)})
+        if isinstance(data, dict):
+            rows = data.get("secdef")
+            return rows if isinstance(rows, list) else []
         return data if isinstance(data, list) else []
 
     def get_currency_pairs(self, currency: str) -> list[dict[str, Any]]:

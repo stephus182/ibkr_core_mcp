@@ -833,6 +833,71 @@ def test_get_currency_pairs_returns_empty_on_unexpected_type(client):
     assert result == []
 
 
+# ── get_secdef: the array is under a key, not the whole body ─────────────────
+
+
+def test_get_secdef_unwraps_the_secdef_key(client):
+    """IBKR /trsrv/secdef returns {"secdef": [...]}, not a bare array.
+
+    Regression for a silent total failure: the old body was
+    `data if isinstance(data, list) else []`, so every call returned [] — the same
+    defect, in the same shape, as test_get_currency_pairs_handles_dict_response above.
+    A method that always returns empty looks exactly like an instrument with no data.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id
+    """
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "secdef": [
+            {"conid": 12658199, "currency": "USD", "listingExchange": "BATS", "isUS": True},
+            {"conid": 325209548, "currency": "MXN", "listingExchange": "MEXI", "isUS": False},
+        ],
+    }
+    with patch.object(client._session, "get", return_value=mock_resp) as mock_get:
+        result = client.get_secdef([12658199, 325209548])
+
+    assert len(result) == 2
+    assert {r["currency"] for r in result} == {"USD", "MXN"}
+    called_url = mock_get.call_args[0][0]
+    assert "/trsrv/secdef" in called_url
+
+
+def test_get_secdef_uses_get_with_comma_separated_conids(client):
+    """GET with ?conids=, per the endpoint reference. The Additional Usage Limits table
+    lists a POST row for `/trsv/secdef` (note IBKR's own path typo); the endpoint page
+    documents GET and shows `requests.get(...)`. The endpoint page is the authority —
+    a limits table is not a method specification."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"secdef": []}
+    with patch.object(client._session, "get", return_value=mock_resp) as mock_get:
+        client.get_secdef([1, 2, 3])
+
+    assert mock_get.call_args.kwargs["params"] == {"conids": "1,2,3"}
+
+
+def test_get_secdef_returns_empty_on_unexpected_shapes(client):
+    """A missing or non-list `secdef` key, and a non-dict body, all yield []."""
+    for payload in ({"secdef": "nope"}, {}, "unexpected", None):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = payload
+        with patch.object(client._session, "get", return_value=mock_resp):
+            assert client.get_secdef([1]) == [], payload
+
+
+def test_get_secdef_still_accepts_a_bare_list(client):
+    """Tolerated deliberately: the only cost is accepting an undocumented shape, and the
+    alternative failure mode is another silent empty."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = [{"conid": 265598, "currency": "USD"}]
+    with patch.object(client._session, "get", return_value=mock_resp):
+        result = client.get_secdef([265598])
+    assert result == [{"conid": 265598, "currency": "USD"}]
+
+
 # ── get_live_orders filtering ─────────────────────────────────────────────────
 
 
