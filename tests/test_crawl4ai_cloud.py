@@ -98,13 +98,55 @@ def test_scrape_omits_proxy_country_when_not_given(mock_requests):
     assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "datacenter"}
 
 
-@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
-def test_scrape_sends_dry_run_when_asked(mock_requests):
-    mock_requests.post.return_value = _resp(body={"success": True, "dry_run": True, "credits": "1.0000"})
+# A real dry-run response, captured live 2026-07-28. Note what it does NOT have: a
+# `success` key, or a `markdown` key. It is a pricing quote, not a page — which is why
+# estimate() is a separate method rather than a mode flag on scrape().
+_DRY_RUN_BODY = {
+    "service": "scrape",
+    "credits": "1.0000",
+    "credits_exact": True,
+    "breakdown": [{"service": "scrape", "action": "url_fetch", "credits": "1.0000"}],
+    "dry_run": True,
+    "covered_by_balance": True,
+}
 
-    _client().scrape("https://example.com/docs", dry_run=True)
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_estimate_sends_dry_run_and_returns_the_quote(mock_requests):
+    mock_requests.post.return_value = _resp(body=_DRY_RUN_BODY)
+
+    quote = _client().estimate("https://example.com/docs")
 
     assert mock_requests.post.call_args.kwargs["json"]["dry_run"] is True
+    assert quote["credits"] == "1.0000"
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_estimate_does_not_demand_a_success_key(mock_requests):
+    """The live dry-run body has no `success` field — treating its absence as failure
+    made estimate() raise on every real call. Caught by the live suite, not this one."""
+    mock_requests.post.return_value = _resp(body=_DRY_RUN_BODY)
+
+    _client().estimate("https://example.com/docs")  # must not raise
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_estimate_carries_the_proxy_object_through(mock_requests):
+    mock_requests.post.return_value = _resp(body=_DRY_RUN_BODY)
+
+    _client().estimate("https://example.com/docs", proxy_mode="residential", proxy_country="US")
+
+    assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "residential", "country": "US"}
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_never_sends_dry_run(mock_requests):
+    """A scrape that quietly priced itself instead of fetching would return an empty page."""
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client().scrape("https://example.com/docs")
+
+    assert "dry_run" not in mock_requests.post.call_args.kwargs["json"]
 
 
 # ============================================================================

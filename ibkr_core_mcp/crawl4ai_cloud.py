@@ -218,13 +218,74 @@ class Crawl4AICloudClient:
         detail = _ERROR_MESSAGES.get(resp.status_code, f"Crawl4AI request failed: HTTP {resp.status_code}")
         raise Crawl4AICloudError(f"{detail} (HTTP {resp.status_code})", resp.status_code)
 
+    def _scrape_body(self, url: str, proxy_mode: str | None, proxy_country: str | None) -> dict[str, Any]:
+        """Build the POST /v1/scrape request body shared by scrape() and estimate().
+
+        One builder for both so a priced request and an executed one cannot drift apart —
+        an estimate for a body the real call would not send is worthless.
+
+        `proxy` is omitted entirely when proxy_mode is None. It is an *object* here, unlike
+        Firecrawl where it is a string, and the string "direct" is a hard 422 rather than a
+        no-op (verified live 2026-07-28).
+        """
+        body: dict[str, Any] = {"url": url, "fit": True}
+        if proxy_mode is not None:
+            proxy: dict[str, Any] = {"mode": proxy_mode}
+            if proxy_country is not None:
+                proxy["country"] = proxy_country
+            body["proxy"] = proxy
+        return body
+
+    def estimate(
+        self,
+        url: str,
+        *,
+        proxy_mode: str | None = None,
+        proxy_country: str | None = None,
+    ) -> dict[str, Any]:
+        """Price a scrape without executing it, using the API's dry-run mode.
+
+        A separate method rather than a flag on scrape(), because the response is a
+        different kind of thing: a quote, with no `success` field and no `markdown`. The
+        first draft of this client made dry_run a scrape() parameter and checked
+        `success` unconditionally, so every real dry run raised — a mistake the unit tests
+        could not catch, because they asserted against a fabricated body that had a
+        `success` key the live API never sends.
+
+        `dry_run` is absent from the vendor's llms-full.txt but live-verified working, and
+        free: four dry runs on 2026-07-28 left `credits.used_today` at 0.
+
+        Args:
+            url: The page that would be fetched.
+            proxy_mode: See scrape(). Included because it changes the price — as of
+                2026-07-28 a scrape costs 1 credit with no proxy, 2 with datacenter and 5
+                with residential.
+            proxy_country: See scrape().
+
+        Returns:
+            The raw quote body, including `credits` (a decimal string), `credits_exact`
+            and a per-action `breakdown`.
+
+        Raises:
+            Crawl4AICloudError: On any HTTP error status — including the 422 a malformed
+                request earns, which is the point of calling this.
+        """
+        resp = requests.post(
+            f"{self._base_url}/v1/scrape",
+            headers=self._headers,
+            json={**self._scrape_body(url, proxy_mode, proxy_country), "dry_run": True},
+            timeout=_TIMEOUT_S,
+        )
+        self._raise_for_status(resp)
+        quote: dict[str, Any] = resp.json()
+        return quote
+
     def scrape(
         self,
         url: str,
         *,
         proxy_mode: str | None = None,
         proxy_country: str | None = None,
-        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Fetch one URL via POST /v1/scrape and return it as a ladder page dict.
 
@@ -239,10 +300,6 @@ class Crawl4AICloudClient:
                 with residential.
             proxy_country: ISO 2-letter code for geo-targeting, e.g. "US". Only sent
                 alongside proxy_mode.
-            dry_run: Validate and price the request without executing or charging it.
-                Returns a page with empty markdown — useful only for proving a request is
-                well-formed. Undocumented in the vendor reference but live-verified
-                working and free on 2026-07-28.
 
         Returns:
             A page dict shaped `{"url", "markdown", "metadata"}` — the same shape
@@ -255,19 +312,10 @@ class Crawl4AICloudClient:
             requests.RequestException: On a network-level failure, left to the caller to
                 catch — the ladder already treats a dead network the same as a failed rung.
         """
-        body: dict[str, Any] = {"url": url, "fit": True}
-        if proxy_mode is not None:
-            proxy: dict[str, Any] = {"mode": proxy_mode}
-            if proxy_country is not None:
-                proxy["country"] = proxy_country
-            body["proxy"] = proxy
-        if dry_run:
-            body["dry_run"] = True
-
         resp = requests.post(
             f"{self._base_url}/v1/scrape",
             headers=self._headers,
-            json=body,
+            json=self._scrape_body(url, proxy_mode, proxy_country),
             timeout=_TIMEOUT_S,
         )
         self._raise_for_status(resp)
