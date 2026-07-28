@@ -2481,19 +2481,19 @@ class ClaudeToolkit:
             # symbol). Filtering on "exchange" therefore matched nothing in production
             # and fell through to the unfiltered list — a silently wrong listing, masked
             # by a unit-test mock that invented the field.
-            matches = [
-                c for c in contracts
-                if str(c.get("description") or "").upper() == exchange.upper()
-            ]
+            matches = [c for c in contracts if str(c.get("description") or "").upper() == exchange.upper()]
             if not matches:
-                available = ", ".join(
-                    sorted({str(c.get("description") or "?") for c in contracts})
+                available = ", ".join(sorted({str(c.get("description") or "?") for c in contracts}))
+                return _Resolved(
+                    0,
+                    None,
+                    (
+                        f"{sym} ({sec_type}) has no listing on {exchange}. Available: "
+                        f"{available}. Ask the user which one they mean — do not substitute "
+                        f"another exchange."
+                    ),
+                    ambiguous=True,
                 )
-                return _Resolved(0, None, (
-                    f"{sym} ({sec_type}) has no listing on {exchange}. Available: "
-                    f"{available}. Ask the user which one they mean — do not substitute "
-                    f"another exchange."
-                ), ambiguous=True)
             contracts = matches
 
         conid = contracts[0].get("conid") or contracts[0].get("con_id")
@@ -2578,19 +2578,22 @@ class ClaudeToolkit:
 
         def _describe(rows: list[dict[str, Any]]) -> str:
             return "; ".join(
-                f"{r['exchange']}{' (US)' if r['is_us'] else ''} — {r['name']} — "
-                f"conid {r['conid']}"
-                for r in rows
+                f"{r['exchange']}{' (US)' if r['is_us'] else ''} — {r['name']} — conid {r['conid']}" for r in rows
             )
 
         if exchange:
             matches = [r for r in listings if r["exchange"].upper() == exchange.upper()]
             if not matches:
-                return _Resolved(0, None, (
-                    f"{sym} has no listing on {exchange}. Available: "
-                    f"{_describe(listings)}. Ask the user which one they mean — do not "
-                    f"substitute another exchange."
-                ), ambiguous=True)
+                return _Resolved(
+                    0,
+                    None,
+                    (
+                        f"{sym} has no listing on {exchange}. Available: "
+                        f"{_describe(listings)}. Ask the user which one they mean — do not "
+                        f"substitute another exchange."
+                    ),
+                    ambiguous=True,
+                )
             return _pick(matches)
 
         us = [r for r in listings if r["is_us"]]
@@ -2598,16 +2601,26 @@ class ClaudeToolkit:
             return _pick(us)
 
         if not us:
-            return _Resolved(0, None, (
-                f"{sym} has no US listing. Candidates: {_describe(listings)}. Ask the "
-                f"user which listing they mean and re-call with that exchange — do not "
+            return _Resolved(
+                0,
+                None,
+                (
+                    f"{sym} has no US listing. Candidates: {_describe(listings)}. Ask the "
+                    f"user which listing they mean and re-call with that exchange — do not "
+                    f"pick one, and do not report a price until they answer."
+                ),
+                ambiguous=True,
+            )
+        return _Resolved(
+            0,
+            None,
+            (
+                f"{sym} is ambiguous: {len(us)} US listings. Candidates: {_describe(us)}. "
+                f"Ask the user which one they mean and re-call with that exchange — do not "
                 f"pick one, and do not report a price until they answer."
-            ), ambiguous=True)
-        return _Resolved(0, None, (
-            f"{sym} is ambiguous: {len(us)} US listings. Candidates: {_describe(us)}. "
-            f"Ask the user which one they mean and re-call with that exchange — do not "
-            f"pick one, and do not report a price until they answer."
-        ), ambiguous=True)
+            ),
+            ambiguous=True,
+        )
 
     def _get_market_snapshot(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return live market data snapshot for one or more symbols.
@@ -2711,13 +2724,15 @@ class ClaudeToolkit:
             # usual one", which is the assumption that let an MXN price be reported as
             # though it were USD. Absent is indistinguishable from USD; UNKNOWN is not.
             ccy = conid_to_ccy.get(cid) if isinstance(cid, int) else None
-            enriched.append({
-                "_symbol": sym,
-                "_currency": ccy or "UNKNOWN",
-                "_data_status": data_status,
-                "_quote_time": quote_time,
-                **item,
-            })
+            enriched.append(
+                {
+                    "_symbol": sym,
+                    "_currency": ccy or "UNKNOWN",
+                    "_data_status": data_status,
+                    "_quote_time": quote_time,
+                    **item,
+                }
+            )
 
         result = json.dumps(enriched, indent=2)
         notes = []

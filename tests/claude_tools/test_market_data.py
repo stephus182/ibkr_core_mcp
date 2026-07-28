@@ -79,8 +79,13 @@ def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):
     # AAPL resolves; BADTICKER does not — output must name the skipped symbol
     def stocks_side_effect(syms):
         if syms == ["AAPL"]:
-            return [{"name": "APPLE INC", "assetClass": "STK",
-                     "contracts": [{"conid": 265598, "exchange": "NASDAQ", "isUS": True}]}]
+            return [
+                {
+                    "name": "APPLE INC",
+                    "assetClass": "STK",
+                    "contracts": [{"conid": 265598, "exchange": "NASDAQ", "isUS": True}],
+                }
+            ]
         return []
 
     toolkit._client.get_stocks.side_effect = stocks_side_effect
@@ -93,8 +98,7 @@ def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):
 
 def test_execute_get_market_snapshot_invalid_conid_skipped(toolkit):
     toolkit._client.get_stocks.return_value = [
-        {"name": "APPLE INC", "assetClass": "STK",
-         "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
+        {"name": "APPLE INC", "assetClass": "STK", "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
     ]
     toolkit._client.get_market_snapshot.return_value = []
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL"]})
@@ -136,10 +140,14 @@ def test_execute_get_market_snapshot_exchange_filter_selects_listing(toolkit):
     very test hid by mocking a field shape the API does not produce.
     """
     toolkit._client.get_stocks.return_value = [
-        {"name": "ASML HOLDING NV", "assetClass": "STK", "contracts": [
-            {"conid": 1, "exchange": "NYSE", "isUS": True},
-            {"conid": 2, "exchange": "AMS", "isUS": False},
-        ]}
+        {
+            "name": "ASML HOLDING NV",
+            "assetClass": "STK",
+            "contracts": [
+                {"conid": 1, "exchange": "NYSE", "isUS": True},
+                {"conid": 2, "exchange": "AMS", "isUS": False},
+            ],
+        }
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 2, "31": "700.0", "6509": "D"}]
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"})
@@ -157,8 +165,7 @@ def test_execute_get_market_snapshot_exchange_filter_no_match_asks_instead_of_su
     No price may be returned, and the message must name what does exist so the user can
     be asked."""
     toolkit._client.get_stocks.return_value = [
-        {"name": "GENERAL ELECTRIC", "assetClass": "STK",
-         "contracts": [{"conid": 1, "exchange": "NYSE", "isUS": True}]}
+        {"name": "GENERAL ELECTRIC", "assetClass": "STK", "contracts": [{"conid": 1, "exchange": "NYSE", "isUS": True}]}
     ]
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"})
     toolkit._client.get_market_snapshot.assert_not_called()
@@ -191,13 +198,21 @@ def test_resolve_snapshot_conid_ind_falls_back_to_con_id_key(toolkit):
 # by luck there, which is why this went unnoticed.
 
 IGV_LISTINGS = [
-    {"name": "ISHARES EXPANDED TECH-SOFTWA", "assetClass": "STK", "contracts": [
-        {"conid": 12658199, "exchange": "BATS", "isUS": True},
-        {"conid": 325209548, "exchange": "MEXI", "isUS": False},
-    ]},
-    {"name": "I GRANDI VIAGGI SPA", "assetClass": "STK", "contracts": [
-        {"conid": 195853874, "exchange": "BVME", "isUS": False},
-    ]},
+    {
+        "name": "ISHARES EXPANDED TECH-SOFTWA",
+        "assetClass": "STK",
+        "contracts": [
+            {"conid": 12658199, "exchange": "BATS", "isUS": True},
+            {"conid": 325209548, "exchange": "MEXI", "isUS": False},
+        ],
+    },
+    {
+        "name": "I GRANDI VIAGGI SPA",
+        "assetClass": "STK",
+        "contracts": [
+            {"conid": 195853874, "exchange": "BVME", "isUS": False},
+        ],
+    },
 ]
 
 
@@ -211,8 +226,8 @@ def test_ambiguous_ticker_resolves_to_the_us_listing_not_the_first_result(toolki
     resolved = toolkit._resolve_snapshot_conid("IGV", "STK", None)
 
     assert resolved.error is None
-    assert resolved.conid == 12658199      # BATS/USD
-    assert resolved.conid != 325209548     # MEXI/MXN — the old answer
+    assert resolved.conid == 12658199  # BATS/USD
+    assert resolved.conid != 325209548  # MEXI/MXN — the old answer
     assert resolved.currency == "USD"
 
 
@@ -233,9 +248,13 @@ def test_no_us_listing_asks_instead_of_picking(toolkit):
     name every candidate WITH its company, since the same ticker can be a different
     issuer entirely."""
     toolkit._client.get_stocks.return_value = [
-        {"name": "I GRANDI VIAGGI SPA", "assetClass": "STK", "contracts": [
-            {"conid": 195853874, "exchange": "BVME", "isUS": False},
-        ]},
+        {
+            "name": "I GRANDI VIAGGI SPA",
+            "assetClass": "STK",
+            "contracts": [
+                {"conid": 195853874, "exchange": "BVME", "isUS": False},
+            ],
+        },
     ]
 
     resolved = toolkit._resolve_snapshot_conid("IGV", "STK", None)
@@ -252,10 +271,14 @@ def test_several_us_listings_asks_instead_of_picking(toolkit):
     """Two US listings is the other side of the same rule — 'default to US' does not
     decide between two US answers, so it must ask rather than take the first."""
     toolkit._client.get_stocks.return_value = [
-        {"name": "SOME CO", "assetClass": "STK", "contracts": [
-            {"conid": 111, "exchange": "NASDAQ", "isUS": True},
-            {"conid": 222, "exchange": "ARCA", "isUS": True},
-        ]},
+        {
+            "name": "SOME CO",
+            "assetClass": "STK",
+            "contracts": [
+                {"conid": 111, "exchange": "NASDAQ", "isUS": True},
+                {"conid": 222, "exchange": "ARCA", "isUS": True},
+            ],
+        },
     ]
 
     resolved = toolkit._resolve_snapshot_conid("DUP", "STK", None)
@@ -270,9 +293,13 @@ def test_ambiguity_reaches_the_user_and_no_price_is_fetched(toolkit):
     """End to end: the question must survive to the tool output, and no market-data
     call may be made for a symbol whose listing is undetermined."""
     toolkit._client.get_stocks.return_value = [
-        {"name": "I GRANDI VIAGGI SPA", "assetClass": "STK", "contracts": [
-            {"conid": 195853874, "exchange": "BVME", "isUS": False},
-        ]},
+        {
+            "name": "I GRANDI VIAGGI SPA",
+            "assetClass": "STK",
+            "contracts": [
+                {"conid": 195853874, "exchange": "BVME", "isUS": False},
+            ],
+        },
     ]
 
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
@@ -287,9 +314,7 @@ def test_snapshot_always_states_the_currency(toolkit):
     readable as a plausible USD number."""
     toolkit._client.get_stocks.return_value = IGV_LISTINGS
     toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
-    toolkit._client.get_market_snapshot.return_value = [
-        {"conid": 12658199, "31": "95.0", "6509": "R"}
-    ]
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 12658199, "31": "95.0", "6509": "R"}]
 
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
 
@@ -303,9 +328,7 @@ def test_snapshot_says_unknown_rather_than_omitting_the_currency(toolkit):
 
     toolkit._client.get_stocks.return_value = IGV_LISTINGS
     toolkit._client.get_secdef_info.side_effect = IBKRAPIError("boom")
-    toolkit._client.get_market_snapshot.return_value = [
-        {"conid": 12658199, "31": "95.0", "6509": "R"}
-    ]
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 12658199, "31": "95.0", "6509": "R"}]
 
     text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
 

@@ -74,8 +74,7 @@ def test_execute_create_price_alert_fx_resolves_via_currency_pairs(toolkit):
 def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.get_stocks.return_value = [
-        {"name": "APPLE INC", "assetClass": "STK",
-         "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
+        {"name": "APPLE INC", "assetClass": "STK", "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
     ]
     text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
     assert "conid" in text.lower()
