@@ -336,6 +336,20 @@ Other Apify actors wrapping Crawl4AI do have healthy success rates (e.g.
 `bikram07/web-to-markdown-crawl4ai`, 33/41 in 30 days) but have single-digit user counts and no
 vendor backing, so they trade our current dependency for a less-supported one.
 
+**Self-hosting the OSS crawler — not evaluated, but the obvious free alternative to rung 3.**
+Crawl4AI documents a self-hosting path (<https://docs.crawl4ai.com/core/self-hosting/>). Running
+the OSS library on a remote box would give the *different IP* that is most of why rung 3 exists,
+without per-credit billing. What it would **not** give is managed **residential** proxy rotation,
+which is the part that beats a determined block — a single rented IP is itself easily blocked.
+So it is a plausible cheaper middle rung, not a replacement for Cloud. Left unbuilt deliberately:
+it adds a host to operate, and the ladder currently costs 1 credit only on pages two free rungs
+already failed.
+
+**There is no official Crawl4AI MCP server** for either the OSS library or Cloud — checked
+2026-07-28 against the docs sitemap (87 pages, no MCP page) and the Cloud `llms-full.txt` (no
+occurrence). Noted because this repo *is* an MCP project and the absence is otherwise easy to
+mistake for "not found yet".
+
 ---
 
 ## 6. Paywalled sites (FT, WSJ, Bloomberg)
