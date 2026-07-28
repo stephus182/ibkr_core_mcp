@@ -664,6 +664,47 @@ def _install_fake_browser_profiler(monkeypatch, tmp_path, domain: str = "example
     return created_at
 
 
+def test_create_profile_runs_the_coroutine_on_the_main_thread(monkeypatch, tmp_path):
+    """crawl4ai's BrowserProfiler installs a SIGINT handler so Ctrl-C can close the
+    browser cleanly, and signal.signal() raises anywhere but the main thread.
+
+    create_profile() originally routed through _run_async(), which runs the coroutine
+    in a worker thread — correct for scraping (it can be called from inside a running
+    event loop) and fatal here. The create-profile CLI therefore failed on every
+    invocation while the three mocked tests below stayed green, because
+    _install_fake_browser_profiler's fake installs no handler. Live failure, first
+    real run 2026-07-28:
+
+        ValueError: signal only works in main thread of the main interpreter
+
+    This fake does what the vendor does, so the test fails for the real reason.
+    """
+    import signal
+    import threading
+
+    created_at = tmp_path / "crawl4ai-default-profiles" / "example.com"
+    created_at.mkdir(parents=True)
+    (created_at / "cookies.json").write_text("{}")
+
+    class SignalInstallingProfiler:
+        async def create_profile(self, profile_name):
+            previous = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, signal.SIG_DFL)  # ValueError off the main thread
+            signal.signal(signal.SIGINT, previous if previous is not None else signal.SIG_DFL)
+            assert threading.current_thread() is threading.main_thread()
+            return str(created_at)
+
+    fake_module = types.ModuleType("crawl4ai")
+    setattr(fake_module, "BrowserProfiler", SignalInstallingProfiler)  # noqa: B010
+    monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
+
+    from ibkr_core_mcp.scrape_fallback import create_profile
+
+    dest = create_profile("https://example.com/login", tmp_path / "profiles")
+
+    assert (dest / "cookies.json").exists()
+
+
 def test_create_profile_raises_when_not_installed(monkeypatch, tmp_path):
     from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, create_profile
 

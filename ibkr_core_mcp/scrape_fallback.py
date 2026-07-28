@@ -542,6 +542,16 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
 
     Source: https://docs.crawl4ai.com/advanced/identity-based-crawling/
 
+    **Must be called from the main thread**, and deliberately does NOT use
+    `_run_async()`. BrowserProfiler.create_profile() installs a SIGINT handler so
+    Ctrl-C closes the browser cleanly, and `signal.signal()` raises
+    "signal only works in main thread of the main interpreter" anywhere else.
+    `_run_async` exists to survive being called from inside a running event loop
+    (mcp_server.py's async dispatch), which it does by handing the coroutine to a
+    worker thread — correct for scraping, fatal here. This is an interactive CLI
+    operation with exactly one caller (`_main`), so a plain `asyncio.run()` on the
+    calling thread is both sufficient and the only thing that works.
+
     Args:
         url_or_domain: A URL (e.g. "https://www.wsj.com/login") or bare domain
                         (e.g. "www.wsj.com"). Only the hostname is used.
@@ -553,7 +563,18 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
 
     Raises:
         Crawl4AIUnavailableError: If `crawl4ai` is not installed.
+        RuntimeError: If called off the main thread, or from inside a running event
+            loop — both are unsupported for the signal-handler reason above, and
+            failing with an explanation beats failing inside the vendor's traceback.
     """
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError(
+            "create_profile() must run on the main thread: Crawl4AI's BrowserProfiler "
+            "installs a SIGINT handler, and signal handlers cannot be installed from a "
+            "worker thread. Run it from the CLI: "
+            "`python -m ibkr_core_mcp.scrape_fallback create-profile <url>`."
+        )
+
     try:
         from crawl4ai import BrowserProfiler
     except ImportError as exc:
@@ -564,7 +585,7 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
 
     domain = _safe_domain(url_or_domain)
     profiler = BrowserProfiler()
-    created_path = Path(_run_async(profiler.create_profile(profile_name=domain)))
+    created_path = Path(asyncio.run(profiler.create_profile(profile_name=domain)))
 
     profiles_dir.mkdir(parents=True, exist_ok=True)
     dest = profiles_dir / domain
