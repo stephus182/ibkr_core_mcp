@@ -38,8 +38,12 @@ _REALISTIC_MARKDOWN = _REALISTIC_PARAGRAPH * 4
 # ============================================================================
 
 
-def _make_toolkit():
-    """Return a ClaudeToolkit with all dependencies mocked."""
+def _make_toolkit(crawl4ai_api_key=""):
+    """Return a ClaudeToolkit with all dependencies mocked.
+
+    crawl4ai_api_key defaults to "" — the cloud rung unconfigured — so every test
+    written before that rung existed still exercises the two-rung ladder unchanged.
+    """
     from pathlib import Path
 
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
@@ -53,6 +57,7 @@ def _make_toolkit():
         gdrive_token_file=Path("/tmp/token.json"),
         gdrive_credentials_file=Path("/tmp/creds.json"),
         firecrawl_api_key="fc-test",
+        crawl4ai_api_key=crawl4ai_api_key,
     )
     toolkit = ClaudeToolkit(
         client=MagicMock(),
@@ -785,3 +790,137 @@ def test_crawl_no_content_message_names_the_firecrawl_failure():
     assert "no content" in text.lower()
     assert "429" in text
     toolkit._web_docs.save_crawl.assert_not_called()
+
+
+# ============================================================================
+# Recovery ladder rung 3 — Crawl4AI Cloud
+#
+# Order is Firecrawl -> LOCAL Crawl4AI -> Crawl4AI CLOUD, deliberately. The cloud
+# rung costs credits and the local one is free, and on the only real failure
+# observed to date (2026-07-28, the IBKR campus reference) local was the rung that
+# worked. A paid rung ahead of it would have spent credits to be overtaken by
+# something free.
+#
+# Every test here reaches _handle_firecrawl_crawl, which SSRF-validates the root
+# URL before any rung runs — so each one is named in conftest's
+# _REAL_DNS_EXEMPT_TESTS. Without that, a blocked DNS lookup short-circuits the
+# whole tool into "Invalid URL: ..." and the assertions below pass or fail for
+# reasons that have nothing to do with the ladder.
+# ============================================================================
+
+_CLOUD_MARKDOWN = _REALISTIC_PARAGRAPH * 5  # distinguishable from _REALISTIC_MARKDOWN
+
+
+def _ladder_toolkit(cloud_key="sk_live_test"):
+    """Toolkit whose Firecrawl and local rungs are wired to return nothing."""
+    toolkit = _make_toolkit(crawl4ai_api_key=cloud_key)
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = []
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-28T00:00:00+00:00",
+        "pages": [{"url": "https://example.com", "file_id": "f1"}],
+    }
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": ""}
+    return toolkit
+
+
+def test_crawl_falls_back_to_cloud_when_firecrawl_and_local_both_fail():
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.return_value = {
+        "url": "https://example.com",
+        "markdown": _CLOUD_MARKDOWN,
+        "metadata": {},
+    }
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai_cloud.scrape.assert_called_once_with("https://example.com")
+    saved_pages = toolkit._web_docs.save_crawl.call_args[0][1]
+    assert saved_pages[0]["markdown"] == _CLOUD_MARKDOWN
+    assert "Crawl4AI Cloud" in text
+
+
+def test_crawl_does_not_reach_cloud_when_the_free_local_rung_rescued_it():
+    """The paid rung must never run on a page the free one already served."""
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
+    toolkit._crawl4ai_cloud = MagicMock()
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai_cloud.scrape.assert_not_called()
+    assert "Crawl4AI Cloud" not in text
+
+
+def test_crawl_skips_the_cloud_rung_silently_when_no_key_is_configured():
+    """With no key the ladder must behave exactly as it did before this rung existed."""
+    toolkit = _ladder_toolkit(cloud_key="")
+    toolkit._crawl4ai_cloud = MagicMock()
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    toolkit._crawl4ai_cloud.scrape.assert_not_called()
+    assert "Crawl4AI Cloud" not in text
+    assert "not configured" not in text.lower()
+    assert "no content" in text.lower()
+
+
+def test_crawl_no_content_message_names_every_rung_that_failed():
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.return_value = {"url": "https://example.com", "markdown": ""}
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "saved 0 page(s)" not in text
+    lowered = text.lower()
+    assert "firecrawl" in lowered
+    assert "local crawl4ai" in lowered
+    assert "cloud" in lowered
+
+
+def test_crawl_names_the_cloud_failure_rather_than_swallowing_it():
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.side_effect = Crawl4AICloudError(
+        "Crawl4AI rate or daily quota limit exceeded (HTTP 429)", 429
+    )
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "429" in text
+
+
+def test_crawl_reports_remaining_credits_only_when_the_cloud_rung_fired():
+    toolkit = _ladder_toolkit()
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.scrape.return_value = {
+        "url": "https://example.com",
+        "markdown": _CLOUD_MARKDOWN,
+        "metadata": {},
+    }
+    toolkit._crawl4ai_cloud.last_credits_remaining = 46.0
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "46" in text and "credit" in text.lower()
+
+
+def test_crawl_does_not_mention_credits_when_firecrawl_served_the_page():
+    toolkit = _ladder_toolkit()
+    toolkit._firecrawl.crawl.return_value = [
+        {"url": "https://example.com/a", "markdown": _REALISTIC_MARKDOWN, "metadata": {}}
+    ]
+    toolkit._crawl4ai_cloud = MagicMock()
+    toolkit._crawl4ai_cloud.last_credits_remaining = 46.0
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "credit" not in text.lower()
