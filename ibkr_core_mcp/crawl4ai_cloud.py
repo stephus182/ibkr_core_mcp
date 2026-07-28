@@ -1,0 +1,199 @@
+"""Crawl4AI Cloud REST client — the web scraper's third and last recovery rung.
+
+Peer to `web_scraper.FirecrawlClient`, deliberately in its own module: `web_scraper.py`
+is Firecrawl-protocol-and-Drive-persistence only, and `scrape_fallback.py` is about the
+*local* Playwright scraper and its SSRF guard. A remote HTTP client belongs in neither.
+
+Do not confuse `Crawl4AICloudClient` (here, hosted, costs credits) with
+`scrape_fallback.Crawl4AIScraper` (local, free, runs a browser on this machine). They
+share a vendor name and nothing else.
+
+Only `POST /v1/scrape` is implemented — exact parity with what the local rung does today:
+fetch one URL, return one page. `/v1/site` recursive crawling would add async job
+submission, polling and per-URL result fetching, and the ladder does not need it.
+
+Source of truth: https://api.crawl4ai.com/llms-full.txt (the human docs at /docs/... are a
+JavaScript SPA and return an HTML shell to curl). Every fact below was verified by live
+call on 2026-07-28; where the vendor reference and the live API disagreed, the live API
+won and the disagreement is noted at the point of use.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import requests
+
+log = logging.getLogger(__name__)
+
+# Per-request HTTP timeout. Not a plan/tier value — it bounds how long a single scrape may
+# block the recovery ladder, and is generous because this rung only ever runs after both
+# Firecrawl and the local scraper have already failed, on pages that are hard to fetch.
+_TIMEOUT_S = 90
+
+# Crawl4AI Cloud's documented error codes (https://api.crawl4ai.com/llms-full.txt § Error
+# Codes, verified 2026-07-28), mapped to messages that name the cause rather than echoing a
+# bare number. 402 is absent from the vendor's table — this API signals an exhausted budget
+# with 429, not 402 — but is mapped anyway so a future billing change cannot surface as an
+# unexplained generic error.
+_ERROR_MESSAGES = {
+    400: "invalid request parameters",
+    401: "invalid or missing Crawl4AI API key",
+    402: "Crawl4AI account is out of credits",
+    403: "Crawl4AI plan does not allow this operation",
+    422: "Crawl4AI could not process the page (it may have returned no HTML)",
+    429: "Crawl4AI rate or daily quota limit exceeded",
+    503: "no Crawl4AI workers available",
+    504: "Crawl4AI request timed out",
+}
+
+
+class Crawl4AICloudError(Exception):
+    """Raised when the Crawl4AI Cloud API returns an error response or a failed body.
+
+    Mirrors `FirecrawlError`'s shape but is deliberately a distinct type: a Firecrawl
+    exception raised by a Crawl4AI call would send the next reader to the wrong module.
+
+    Attributes:
+        message: Human-readable description of the failure.
+        status_code: HTTP status from the API, or None when the request failed before
+            any response arrived (e.g. a network timeout) or the body itself reported
+            failure under an HTTP 200.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        """Record the message and, when one was received, the HTTP status.
+
+        Args:
+            message: Human-readable description of the failure.
+            status_code: HTTP status from Crawl4AI Cloud, or None when no response
+                arrived or the failure was reported in the body of a 200.
+        """
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class Crawl4AICloudClient:
+    """Thin wrapper around the Crawl4AI Cloud REST API (https://api.crawl4ai.com).
+
+    Authentication is the `X-API-Key` header — **not** `Authorization: Bearer`, which is
+    Firecrawl's scheme and returns 401 here. Key format is `sk_live_…`.
+
+    **This client never retries.** Crawl4AI returns 429 for daily-quota exhaustion, so the
+    retry-on-429 policy in `web_scraper._request_with_backoff` — correct for Firecrawl,
+    which documents 429 as retryable backpressure — would spend the entire daily budget
+    to fail three times as slowly. One call in, one result out. That helper is deliberately
+    left untouched rather than parameterised: it serves the rung that runs most, and a
+    change there risks a live regression in Firecrawl for the benefit of this one.
+
+    **Callers must serialise scrapes.** The free plan allows 1 concurrent request (as of
+    2026-07-28), so parallel calls 429 against each other. The recovery ladder calls this
+    once per crawl and is safe; anything that fans out — `_MAX_CONCURRENT_FALLBACKS` in
+    `claude_tools.py` launches up to 5 local scrapes at once — must not reuse this client
+    without serialising first. Serialising costs nothing on a paid plan.
+
+    Args:
+        api_key: Crawl4AI Cloud API key (`sk_live_…`). Must be non-empty.
+        base_url: API root, overridable for staging. Trailing slashes are stripped.
+    """
+
+    def __init__(self, api_key: str, *, base_url: str = "https://api.crawl4ai.com") -> None:
+        """Store the API key and build the X-API-Key auth headers.
+
+        Args:
+            api_key: Crawl4AI Cloud API key (`sk_live_…`).
+            base_url: API root, overridable for staging.
+
+        Raises:
+            ValueError: If `api_key` is empty. Checked here so a missing key surfaces at
+                construction rather than as a confusing 401 later.
+        """
+        if not api_key:
+            raise ValueError("api_key must be non-empty")
+        self._base_url = base_url.rstrip("/")
+        self._headers = {
+            "X-API-Key": api_key,
+            "Content-Type": "application/json",
+        }
+
+    def _raise_for_status(self, resp: requests.Response) -> None:
+        """Translate a Crawl4AI HTTP error into Crawl4AICloudError with its status code.
+
+        Every HTTP failure leaves this client as a Crawl4AICloudError, never as a raw
+        requests.HTTPError, so the ladder catches one exception type and can read
+        `status_code` to name the cause in its diagnosis.
+
+        The API key is never interpolated into the message.
+        """
+        if resp.status_code < 400:
+            return
+        detail = _ERROR_MESSAGES.get(resp.status_code, f"Crawl4AI request failed: HTTP {resp.status_code}")
+        raise Crawl4AICloudError(f"{detail} (HTTP {resp.status_code})", resp.status_code)
+
+    def scrape(
+        self,
+        url: str,
+        *,
+        proxy_mode: str | None = None,
+        proxy_country: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch one URL via POST /v1/scrape and return it as a ladder page dict.
+
+        Args:
+            url: The page to fetch. SSRF validation is the caller's job — the recovery
+                ladder validates the crawl root before any rung runs.
+            proxy_mode: One of "datacenter", "residential" or "auto". **Omitted from the
+                request entirely when None.** Unlike Firecrawl, `proxy` here is an object,
+                and sending the string "direct" is a hard 422 (verified live 2026-07-28:
+                pydantic `model_attributes_type`). Costs rise with the mode — as of
+                2026-07-28 a scrape is 1 credit with no proxy, 2 with datacenter and 5
+                with residential.
+            proxy_country: ISO 2-letter code for geo-targeting, e.g. "US". Only sent
+                alongside proxy_mode.
+            dry_run: Validate and price the request without executing or charging it.
+                Returns a page with empty markdown — useful only for proving a request is
+                well-formed. Undocumented in the vendor reference but live-verified
+                working and free on 2026-07-28.
+
+        Returns:
+            A page dict shaped `{"url", "markdown", "metadata"}` — the same shape
+            Firecrawl's crawl() and the local rung produce, so it flows into
+            `WebDocsStore.save_crawl` unchanged.
+
+        Raises:
+            Crawl4AICloudError: On any HTTP error status, or on an HTTP 200 whose body
+                reports `success: false`.
+            requests.RequestException: On a network-level failure, left to the caller to
+                catch — the ladder already treats a dead network the same as a failed rung.
+        """
+        body: dict[str, Any] = {"url": url, "fit": True}
+        if proxy_mode is not None:
+            proxy: dict[str, Any] = {"mode": proxy_mode}
+            if proxy_country is not None:
+                proxy["country"] = proxy_country
+            body["proxy"] = proxy
+        if dry_run:
+            body["dry_run"] = True
+
+        resp = requests.post(
+            f"{self._base_url}/v1/scrape",
+            headers=self._headers,
+            json=body,
+            timeout=_TIMEOUT_S,
+        )
+        self._raise_for_status(resp)
+
+        payload = resp.json()
+        if not payload.get("success", False):
+            reason = payload.get("error_message") or "Crawl4AI reported an unsuccessful scrape"
+            raise Crawl4AICloudError(reason)
+
+        # `markdown` is the full extraction; `fit_markdown` is the PruningContentFilter
+        # output requested by `fit: true`. Prefer the full one — the ladder's only decision
+        # is "is there enough content?", and pruning a page down to a nav shell is the very
+        # failure that sent the crawl to this rung. fit_markdown is the fallback for the
+        # case where the filter kept something the raw extraction did not.
+        markdown = payload.get("markdown") or payload.get("fit_markdown") or ""
+        return {"url": payload.get("url") or url, "markdown": markdown, "metadata": {}}

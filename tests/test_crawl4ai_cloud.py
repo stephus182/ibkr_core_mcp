@@ -1,0 +1,207 @@
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def _resp(status=200, body=None, headers=None):
+    """Build a mock requests.Response."""
+    resp = MagicMock()
+    resp.status_code = status
+    resp.headers = headers or {}
+    resp.json.return_value = body if body is not None else {}
+    return resp
+
+
+def _client(api_key="sk_live_test", base_url="https://api.crawl4ai.com"):
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient
+
+    return Crawl4AICloudClient(api_key, base_url=base_url)
+
+
+# ============================================================================
+# Construction
+# ============================================================================
+
+
+def test_empty_api_key_raises_at_construction():
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudClient
+
+    with pytest.raises(ValueError, match="api_key"):
+        Crawl4AICloudClient("")
+
+
+# ============================================================================
+# Request shape
+# ============================================================================
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_authenticates_with_x_api_key_header_not_bearer(mock_requests):
+    """Crawl4AI Cloud uses X-API-Key; a Bearer header (Firecrawl's scheme) is a 401."""
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client().scrape("https://example.com/docs")
+
+    headers = mock_requests.post.call_args.kwargs["headers"]
+    assert headers["X-API-Key"] == "sk_live_test"
+    assert "Authorization" not in headers
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_posts_to_v1_scrape_with_url_and_fit(mock_requests):
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client().scrape("https://example.com/docs")
+
+    assert mock_requests.post.call_args.args[0] == "https://api.crawl4ai.com/v1/scrape"
+    body = mock_requests.post.call_args.kwargs["json"]
+    assert body["url"] == "https://example.com/docs"
+    assert body["fit"] is True
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_honors_a_custom_base_url(mock_requests):
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client(base_url="https://staging.example/").scrape("https://example.com/docs")
+
+    assert mock_requests.post.call_args.args[0] == "https://staging.example/v1/scrape"
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_omits_proxy_entirely_when_unset(mock_requests):
+    """Passing proxy:"direct" is a 422 — the no-proxy request must omit the key."""
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client().scrape("https://example.com/docs")
+
+    assert "proxy" not in mock_requests.post.call_args.kwargs["json"]
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_sends_proxy_as_an_object_when_set(mock_requests):
+    """proxy is an object here, unlike Firecrawl where it is a string."""
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client().scrape("https://example.com/docs", proxy_mode="residential", proxy_country="US")
+
+    assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "residential", "country": "US"}
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_omits_proxy_country_when_not_given(mock_requests):
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    _client().scrape("https://example.com/docs", proxy_mode="datacenter")
+
+    assert mock_requests.post.call_args.kwargs["json"]["proxy"] == {"mode": "datacenter"}
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_sends_dry_run_when_asked(mock_requests):
+    mock_requests.post.return_value = _resp(body={"success": True, "dry_run": True, "credits": "1.0000"})
+
+    _client().scrape("https://example.com/docs", dry_run=True)
+
+    assert mock_requests.post.call_args.kwargs["json"]["dry_run"] is True
+
+
+# ============================================================================
+# Response mapping
+# ============================================================================
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_returns_the_shared_page_dict_shape(mock_requests):
+    """The ladder and WebDocsStore.save_crawl both consume {"url","markdown","metadata"}."""
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "url": "https://example.com/docs", "markdown": "# Real content"}
+    )
+
+    page = _client().scrape("https://example.com/docs")
+
+    assert page == {"url": "https://example.com/docs", "markdown": "# Real content", "metadata": {}}
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_falls_back_to_fit_markdown_when_markdown_is_empty(mock_requests):
+    mock_requests.post.return_value = _resp(
+        body={"success": True, "url": "https://example.com/docs", "markdown": "", "fit_markdown": "# Pruned"}
+    )
+
+    assert _client().scrape("https://example.com/docs")["markdown"] == "# Pruned"
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_uses_the_requested_url_when_the_response_omits_one(mock_requests):
+    mock_requests.post.return_value = _resp(body={"success": True, "markdown": "# hi"})
+
+    assert _client().scrape("https://example.com/docs")["url"] == "https://example.com/docs"
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_raises_when_the_body_reports_failure(mock_requests):
+    """HTTP 200 with success:false is a real failure mode and must not look like an empty page."""
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    mock_requests.post.return_value = _resp(body={"success": False, "error_message": "page returned no HTML"})
+
+    with pytest.raises(Crawl4AICloudError, match="page returned no HTML"):
+        _client().scrape("https://example.com/docs")
+
+
+# ============================================================================
+# Error mapping — the 429 trap
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(401, "API key"), (402, "credit"), (429, "quota"), (422, "422"), (500, "500")],
+)
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_maps_http_errors_to_typed_error_with_status_code(mock_requests, status, expected):
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    mock_requests.post.return_value = _resp(status=status)
+
+    with pytest.raises(Crawl4AICloudError, match=expected) as excinfo:
+        _client().scrape("https://example.com/docs")
+    assert excinfo.value.status_code == status
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_does_not_retry_a_429(mock_requests):
+    """429 is quota exhaustion here, not backpressure — retrying burns the daily budget to fail."""
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    mock_requests.post.return_value = _resp(status=429)
+
+    with pytest.raises(Crawl4AICloudError):
+        _client().scrape("https://example.com/docs")
+
+    assert mock_requests.post.call_count == 1
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_does_not_retry_a_server_error_either(mock_requests):
+    """No retry path exists at all in this client — one call in, one result out."""
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    mock_requests.post.return_value = _resp(status=503)
+
+    with pytest.raises(Crawl4AICloudError):
+        _client().scrape("https://example.com/docs")
+
+    assert mock_requests.post.call_count == 1
+
+
+@patch("ibkr_core_mcp.crawl4ai_cloud.requests")
+def test_scrape_never_puts_the_api_key_in_an_error_message(mock_requests):
+    from ibkr_core_mcp.crawl4ai_cloud import Crawl4AICloudError
+
+    mock_requests.post.return_value = _resp(status=401)
+
+    with pytest.raises(Crawl4AICloudError) as excinfo:
+        _client(api_key="sk_live_supersecret").scrape("https://example.com/docs")
+    assert "sk_live_supersecret" not in str(excinfo.value)
