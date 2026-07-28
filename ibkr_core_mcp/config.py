@@ -59,6 +59,13 @@ class Config:
     # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.scrape_fallback
     # create-profile <url>`.
     crawl4ai_profiles_dir: Path = field(default_factory=lambda: Path("~/.ibkr_core/crawl4ai_profiles").expanduser())
+    # Crawl4AI Cloud REST API key (sk_live_...). Distinct from crawl4ai_profiles_dir, which
+    # configures the *local* Playwright scraper. If empty, the web-scraper recovery ladder
+    # simply stops after its local rung, exactly as it did before this rung existed.
+    crawl4ai_api_key: str = field(default="", repr=False)
+    # Crawl4AI Cloud base URL. Overridable for staging; the vendor names this variable
+    # CRAWL4AI_API_URL (https://api.crawl4ai.com/llms-full.txt, verified 2026-07-28).
+    crawl4ai_api_url: str = "https://api.crawl4ai.com"
 
     @classmethod
     def from_env(cls, dotenv_path: str | None = None) -> Config:
@@ -79,6 +86,8 @@ class Config:
           FIRECRAWL_API_KEY          → firecrawl_api_key       (optional; enables web scraper)
           GDRIVE_WEB_DOCS_FOLDER_ID  → gdrive_web_docs_folder_id (optional; auto-created as web_docs/)
           CRAWL4AI_PROFILES_DIR      → crawl4ai_profiles_dir   (default: ~/.ibkr_core/crawl4ai_profiles)
+          CRAWL4AI_API_KEY           → crawl4ai_api_key        (optional; enables the cloud scraper rung)
+          CRAWL4AI_API_URL           → crawl4ai_api_url        (default: https://api.crawl4ai.com)
 
         Raises ConfigError if ANTHROPIC_API_KEY is not set.
         """
@@ -109,4 +118,6 @@ class Config:
             crawl4ai_profiles_dir=Path(
                 os.environ.get("CRAWL4AI_PROFILES_DIR", "~/.ibkr_core/crawl4ai_profiles")
             ).expanduser(),
+            crawl4ai_api_key=os.environ.get("CRAWL4AI_API_KEY", ""),
+            crawl4ai_api_url=os.environ.get("CRAWL4AI_API_URL", "https://api.crawl4ai.com"),
         )
