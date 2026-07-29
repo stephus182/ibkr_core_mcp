@@ -117,8 +117,32 @@ round trip; the alternative costs a decision made on a price from another countr
 
   Source: <https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id>
 
+  **Live-verified 2026-07-28** against an authenticated gateway, first call:
+  `get_secdef([12658199, 325209548, 195853874])` returned **3 rows, not `[]`**, the raw body
+  really is `{"secdef": [ … ]}` rather than a bare list, and the currencies came back
+  **USD / MXN / EUR** exactly as predicted, with `isUS`, `listingExchange`, `countryCode`
+  and `name` all present. The documentation-only fix is now executed, not merely read.
+
 - **Currency is still read one conid at a time** via `/iserver/secdef/info`. Now that
-  `get_secdef` works, it is the batch path — one call for up to 200 conids, returning
-  `currency`, `listingExchange`, `countryCode`, `isUS` and `name` together. Switching the
-  resolver to it is a straightforward follow-up, deliberately left until the fix can be
-  live-verified: it rests on documentation alone, because the gateway was offline.
+  `get_secdef` is live-verified, it is the batch path — one call for up to 200 conids,
+  returning `currency`, `listingExchange`, `countryCode`, `isUS` and `name` together.
+  Switching the resolver to it is a straightforward follow-up; the blocker (an unexecuted
+  fix) is cleared as of 2026-07-28.
+
+- **A ticker's listings can be different companies, and this is live-proven, not
+  hypothetical.** The same `get_secdef` call returned conid `195853874` (BVME) as
+  **I GRANDI VIAGGI SPA** — an Italian travel operator — under the ticker `IGV`, alongside
+  the iShares ETF on BATS and MEXI. Any resolution path that picks a listing without asking
+  can therefore price the wrong *issuer*, not merely the wrong venue or currency.
+
+- **OPEN (found live 2026-07-28): the resolver no longer guesses, but the model does.**
+  Asked "What's BMW trading at?" with no exchange, ClaudIA called
+  `get_market_snapshot{exchange: "ETR"}`, received the correct ambiguity refusal —
+  enumerating IBIS and TSE and stating *"Ask the user which one they mean — do not
+  substitute another exchange"* — and then **issued a second call with
+  `exchange: "IBIS"` and reported a price the user never asked for**. The ambiguity
+  question is being consumed as a hint rather than surfaced to the user, which relocates
+  the original regression from the resolver into the agent layer. Benign in that instance
+  (IBIS is BMW's primary listing) but combined with the IGV/BVME collision above it is the
+  path to silently pricing a different company. Recorded in claudia_ui's
+  `docs/project-status.md` § Live Test Log, 2026-07-28.
