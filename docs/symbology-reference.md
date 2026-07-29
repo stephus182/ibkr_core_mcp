@@ -135,14 +135,35 @@ round trip; the alternative costs a decision made on a price from another countr
   the iShares ETF on BATS and MEXI. Any resolution path that picks a listing without asking
   can therefore price the wrong *issuer*, not merely the wrong venue or currency.
 
-- **OPEN (found live 2026-07-28): the resolver no longer guesses, but the model does.**
-  Asked "What's BMW trading at?" with no exchange, ClaudIA called
-  `get_market_snapshot{exchange: "ETR"}`, received the correct ambiguity refusal —
-  enumerating IBIS and TSE and stating *"Ask the user which one they mean — do not
-  substitute another exchange"* — and then **issued a second call with
-  `exchange: "IBIS"` and reported a price the user never asked for**. The ambiguity
-  question is being consumed as a hint rather than surfaced to the user, which relocates
-  the original regression from the resolver into the agent layer. Benign in that instance
-  (IBIS is BMW's primary listing) but combined with the IGV/BVME collision above it is the
-  path to silently pricing a different company. Recorded in claudia_ui's
-  `docs/project-status.md` § Live Test Log, 2026-07-28.
+- **FIXED 2026-07-28 — two live defects, one root cause: the model is told only what the
+  tool *description* says.** `tools` returns `TOOL_DEFINITIONS` verbatim and nothing
+  appends `__doc__`, so a rule written in a handler docstring never reaches Claude. The
+  description named `_data_status` and `_quote_time` and said *"Always report both"* — and
+  ClaudIA reported both in every single answer. `_currency` appeared nowhere in it, only in
+  the docstring. Both live failures followed from that one omission:
+
+  1. **Currency went unnamed for USD.** Foreign listings were always spelled out
+     ("MXN 1,603.98", "€59.54") because the venue made the currency salient; USD was
+     rendered as a bare `$91.42`. `$` is written by USD, MXN, CAD, AUD, HKD and SGD alike,
+     so the one case the IGV regression is about was the one case the unit was omitted.
+  2. **The resolver stopped guessing, so the agent started.** Asked "What's BMW trading
+     at?" with no exchange, ClaudIA called `get_market_snapshot{exchange: "ETR"}`, received
+     the correct ambiguity refusal listing IBIS and TSE with *"Ask the user which one they
+     mean — do not substitute another exchange"*, and then **issued a second call with
+     `exchange: "IBIS"` and priced a listing the user never chose**. The question was being
+     consumed as a hint instead of surfaced.
+
+  The description now names `_currency` as one of three fields to always report, requires
+  the **ISO code** and forbids a bare `$`, states that without `exchange` the US listing is
+  selected, and directs that the ambiguity question be **put to the user rather than
+  answered by re-calling with an exchange of the model's own choosing** — citing IGV
+  (iShares ETF on BATS, I Grandi Viaggi SpA on BVME) as why choosing can price the wrong
+  issuer. Three description tests pin all of it, including the removal of the stale
+  "Without exchange, the first result is used" claim.
+
+  **Live-verified after the change** (fresh process — a stale one had already produced one
+  false failure this session): `IGV` → *"Last: **USD 91.71**"* plus an unprompted
+  issuer-collision warning; `VOD` → *"Last: **USD 16.38**"*, so the ISO rule generalises
+  rather than keying on IGV; `BMW` → **one** tool call, **no price**, and *"I need you to
+  pick the listing… IBIS (Xetra) — conid 14094, trades in EUR; TSE (Tokyo) — conid
+  758555570, trades in JPY. Which one do you want?"*

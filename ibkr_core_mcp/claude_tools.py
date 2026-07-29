@@ -648,13 +648,27 @@ TOOL_DEFINITIONS = [
         "description": (
             "Get market data snapshot for one or more symbols: last price, bid, ask, "
             "high, low, change, change%, and volume. Each quote includes _data_status "
-            "('Live (Real-Time)' when subscribed, 'Delayed (15–20 min)' when not) and "
-            "_quote_time (timestamp in ET). Always report both to the user.\n\n"
+            "('Live (Real-Time)' when subscribed, 'Delayed (15–20 min)' when not), "
+            "_quote_time (timestamp in ET), and _currency (the ISO code this listing "
+            "trades in, or 'UNKNOWN'). Always report all three to the user.\n\n"
+            "Name the currency by its ISO code — 'USD 91.42' or '$91.42 USD' — never a "
+            "bare '$91.42'. '$' is not a currency: USD, MXN, CAD, AUD, HKD and SGD all "
+            "write prices with it, so a bare symbol is ambiguous rather than merely terse. "
+            "This applies to USD exactly as much as to any other currency, and most of all "
+            "there: the same ticker trades in different currencies on different venues "
+            "(IGV is USD on BATS but MXN on MEXI), and a peso price reads as a perfectly "
+            "plausible dollar one.\n\n"
             "Resolution by sec_type:\n"
             "- STK (default): equities and ETFs. For international listings, pass exchange "
             "  to select the right venue (e.g. exchange='AMS' for ASML on Euronext Amsterdam, "
             "  exchange='ETR' for SAP on Xetra, exchange='TSE' for Toyota on Tokyo SE, "
-            "  exchange='HKEX' for HSBC on HK). Without exchange, the first result is used.\n"
+            "  exchange='HKEX' for HSBC on HK). Without exchange the US listing is selected. "
+            "  When there is no US listing, or the requested exchange has none, the tool "
+            "  returns the candidate listings with their company names and asks which is "
+            "  meant. Put that question to the user; do NOT answer it yourself by re-calling "
+            "  with an exchange of your own choosing. Listings under one ticker can be "
+            "  different companies (IGV is the iShares ETF on BATS and I Grandi Viaggi SpA "
+            "  on BVME), so choosing for the user can price the wrong issuer.\n"
             "- IND: indices (SPX, NDX, DAX, FTSE, N225). Use exchange for non-US indices.\n"
             "- FUT: futures by root symbol. Front-month contract is selected automatically "
             "  from /trsrv/futures (e.g. ES, NQ, CL, GC, ZC, ZN, 6E). Do NOT pass expiry "
@@ -2659,9 +2673,20 @@ class ClaudeToolkit:
         Price fields: 31=last, 84=bid, 86=ask, 70=high, 71=low, 82=change, 83=change%, 87=volume.
 
           _currency     — the currency this listing trades in, or 'UNKNOWN'. Always
-                          report it with the price: the same ticker is a different
-                          currency on a different venue (IGV is USD on BATS, MXN on
-                          MEXI), so a bare number is ambiguous, not merely terse.
+                          report it with the price, as an ISO code and never as a bare
+                          '$': the same ticker is a different currency on a different
+                          venue (IGV is USD on BATS, MXN on MEXI), and USD, MXN, CAD,
+                          AUD, HKD and SGD all write prices with '$', so a bare symbol
+                          is ambiguous, not merely terse.
+
+                          The instruction that reaches the model is the one in this
+                          tool's TOOL_DEFINITIONS "description" — this docstring does
+                          not (`tools` returns TOOL_DEFINITIONS verbatim; nothing
+                          appends __doc__). Live 2026-07-28: the description named
+                          _data_status and _quote_time and said "always report both",
+                          and ClaudIA reported both every time while rendering price as
+                          a bare '$91.42'. Keep the two in step — a rule that lives only
+                          here is a rule the model never sees.
 
         Contract resolution is dispatched per sec_type by _resolve_snapshot_conid() —
         STK via /trsrv/stocks (US listing by default, ambiguity returned as a question),

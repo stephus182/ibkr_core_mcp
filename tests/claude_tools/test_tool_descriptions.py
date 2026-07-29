@@ -78,3 +78,35 @@ def test_scraper_tools_expose_wait_for_and_proxy(toolkit):
         assert name not in required
         assert "wait_for_ms" not in required
         assert "proxy" not in required
+
+
+def _snapshot_description(toolkit) -> str:
+    return next(t for t in toolkit.tools if t["name"] == "get_market_snapshot")["description"]
+
+
+def test_snapshot_description_instructs_reporting_the_currency(toolkit):
+    """The model only reports what the *description* asks for — docstrings never reach it.
+
+    Live 2026-07-28: the description said "Always report both" of _data_status and
+    _quote_time and ClaudIA reported both in every answer, while _currency went
+    unmentioned in the description and was rendered as a bare '$91.42'. The field being
+    present in the JSON is necessary and demonstrably not sufficient.
+    """
+    description = _snapshot_description(toolkit)
+    assert "_currency" in description
+
+
+def test_snapshot_description_forbids_a_bare_currency_symbol(toolkit):
+    """'$' is not a currency. It is USD, MXN, CAD, AUD, HKD and SGD at once — and the
+    regression this guards is precisely IGV priced in pesos reading as dollars."""
+    description = _snapshot_description(toolkit)
+    assert "ISO" in description
+    assert "MXN" in description
+    assert "$" in description
+
+
+def test_snapshot_description_does_not_promise_first_result_is_used(toolkit):
+    """Stale since the isUS resolver landed: without `exchange` the US listing is
+    selected, or an ambiguity question is returned — never 'the first result'."""
+    description = _snapshot_description(toolkit)
+    assert "first result is used" not in description
