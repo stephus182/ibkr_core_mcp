@@ -1,5 +1,17 @@
 # Web Scraper Reference
 
+> **Status: closed 2026-07-30.** The scraper is finished and verified; treat further work as a
+> new project with its own justification, not as continuation. Closing state: 44 toolkit tools,
+> **790 unit + 19 live tests green**, `ruff check` + `ruff format` + `mypy` clean.
+>
+> One capability remains **designed but not demonstrated**: reading a paywalled article
+> end-to-end (§6). It needs the account holder to run `create-profile` on **FT** by hand — WSJ
+> is impossible at any price (DataDome, HTTP 401, 1 byte, with or without a login). That is the
+> only open item, and it needs hands rather than code.
+>
+> **Before changing anything here, read §10.** Every defect this subsystem ever had was found by
+> running a tool, never by a test failing. A green unit suite is not evidence.
+
 **Four tools, one job each, and no fallback between them.** Anything that takes a URL goes
 to the free local browser (Crawl4AI). Firecrawl is kept for exactly one thing the browser
 cannot do: search the web when you have no URL yet. This document covers all four tools,
@@ -387,8 +399,9 @@ sounds like a degradation, and on this evidence it is the opposite.
 | `interactivebrokers.com/docs/web-api/` | 5,515 B in 13.2 s, 1 credit | **8,786 B in 1.3 s, free** | local wins on size and speed |
 
 Local reliability the same day: **4/4 targets fetched** (the two above plus `example.com` and
-`ibkrguides.com`), 0.5–1.5 s each, and 3/3 in 2.4 s through one shared `scrape_batch` session
-(0.8 s per page). `example.com` returned 166 B locally against Firecrawl's recorded 167 B —
+`ibkrguides.com`), 0.5–1.5 s each, and 3/3 in 2.4 s (0.8 s per page) through one shared browser
+session — measured via a `scrape_batch` helper that has since been removed, `crawl_site` now
+owning multi-page work. `example.com` returned 166 B locally against Firecrawl's recorded 167 B —
 near-identical, confirming that page is genuinely tiny rather than blocked.
 
 Read the timings carefully: the Firecrawl column is **this client's** wall clock, which includes
@@ -660,6 +673,7 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-30 | **The local rung beats the paid rung on documentation hosts, on size and speed.** Same URLs, minutes apart: `docs.firecrawl.dev/introduction` 14,341 B / 16.8 s via Firecrawl vs **17,364 B / 1.2 s** local; `interactivebrokers.com/docs/web-api/` 5,515 B / 13.2 s vs **8,786 B / 1.3 s**. Local fetched 4/4 targets that day (0.5–1.5 s each; 0.8 s per page batched). Firecrawl's timings include this client's own 5 s poll cadence; the byte counts have no such caveat. This is the evidence for "falling back is not a downside" — §5.2. |
 | 2026-07-30 | **The root rescue was discarding Firecrawl's pages.** `pages = root_pages` honored the ladder's byte-level promise while breaking it page-wise: a crawl of three complete ~1.5 KB doc pages measures under the 5 KB bar, so a larger root scrape replaced all three with one. Now merged by URL, larger markdown winning per URL (`_merge_pages`). Found by re-reading the invariant against the code that was supposed to implement it, not by any failing test. |
 | 2026-07-30 | **The two engines agree on the `url` key, so the merge really does dedupe.** A unit test cannot establish this — both sides are invented. Run live against `example.com`: Firecrawl's page key (from `metadata.sourceURL`) and Crawl4AI's (the requested URL) were both exactly `'https://example.com'`, so `_merge_pages` returned **1** page, not 2. Firecrawl's 167 B also beat local's 166 B and was kept, exercising "larger markdown wins" on real data. Had the keys differed by so much as a trailing slash, every root rescue would have archived the root page twice. |
+| 2026-07-30 | **Closing verification.** Full review of code, docstrings and every doc, then the whole gate: `ruff check` + `ruff format` + `mypy` clean, **790 unit tests**, **19 live tests** in 38 s across five suites. Tool counts corrected in 9 places (they had drifted to 42/43/45 against a real 44 toolkit / 46 MCP), and README, SECURITY.md, `api-usage-examples.md` and `test-coverage.md` were still describing the deleted ladder — including SECURITY.md documenting its SSRF mitigation in terms of three functions that no longer exist. **The mitigation itself was never weakened; only its call sites moved.** |
 | 2026-07-30 | **The live Drive tests demanded a var the code does not need, and so never ran.** Their fixture required `GOOGLE_DRIVE_FOLDER_ID` — the one var this repo's documented standalone-dev `.env` deliberately omits — while `WebDocsStore` is happy with *either* that or `GDRIVE_WEB_DOCS_FOLDER_ID`. Root cause: the test re-implemented the store's folder lookup (query for `web_docs` under the root) instead of calling `_get_web_docs_folder_id()`, and the duplicate needed more than the original. Both tests therefore skipped on every default run, silently, because **a skip is not a failure**. Fixed by requiring only what the code requires and resolving the folder through the store. **19/19 live now pass on this repo's own `.env` with no special setup**, and both roots still work. |
 | 2026-07-30 | **Full live suite green with credits restored: 19 passed, 0 skipped for credit reasons.** `test_web_tools_live.py` 11/11 in 32 s (the 402 skip now a pass), `test_web_scraper_live.py` 4/4, `test_crawl4ai_live.py` 1/1, `test_web_scraper_dev_cache_live.py` 1/1, `test_web_scraper_drive_live.py` 2/2. **Total cost: 17 Firecrawl credits.** The browser tools spent nothing. The Drive pair needs `GOOGLE_DRIVE_FOLDER_ID`, which this repo's standalone-dev `.env` deliberately omits — pass it explicitly to run them. |
 | 2026-07-30 | **`test_crawl_site_saves_pages_to_drive` had never once executed.** Repointed earlier the same day from the deleted `firecrawl_crawl`, it stayed skipped — first on a missing `GOOGLE_DRIVE_FOLDER_ID`, then on the 402 — so the rewrite was unverified for hours while looking fine. Run properly it passes. **A repointed test is a new test: it has not run until you have watched it run.** |

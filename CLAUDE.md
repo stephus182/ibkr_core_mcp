@@ -171,7 +171,7 @@ ibkr_core_mcp/
 ├── indicators.py         # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py          # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
 ├── claude_tools.py       # Claude tool definitions + handlers (44 tools, portable)
-├── mcp_server.py         # MCP server (stdio + SSE transports) — 45 tools, 4 resources
+├── mcp_server.py         # MCP server (stdio + SSE transports) — 46 tools, 4 resources
 ├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
 ├── order_confirm.py      # Gate 2: visual order confirmation dialog (tkinter/AppKit)
 ├── streaming.py          # IBKRWebSocket — live quotes, execution/P&L push; AlertManager
@@ -329,7 +329,7 @@ not `@import`s, so they don't load into every session's context automatically.
   control, modify/cancel, GTC quarter-end auto-cancel behavior): `docs/order-management-examples.md`
 - Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`: `docs/gateway-auth-reference.md`
 - Historical Trade Data / Flex Queries (one-time setup, usage, constraints): `docs/flex-query-reference.md`
-- MCP Server (install, stdio/SSE transports, 45 tools, 4 resources, price alerts, TradingView integration): `docs/mcp-server-reference.md`
+- MCP Server (install, stdio/SSE transports, 46 tools, 4 resources, price alerts, TradingView integration): `docs/mcp-server-reference.md`
 - Known IBKR API behaviors, verified not assumed: `docs/ibkr-api-behaviors-reference.md`
 - Official documentation URLs, all external APIs: `docs/external-docs-reference.md`
 - Web scraper (Firecrawl + Crawl4AI, recovery ladder, paywalled-site login profiles,

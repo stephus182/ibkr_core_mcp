@@ -1,8 +1,8 @@
 # Test Coverage — ibkr_core_mcp
 
-**740 unit tests · 85 integration tests (825 total) · 83% line coverage (non-integration)**
+**790 unit tests · 92 integration tests (882 total) · 83% line coverage (non-integration)**
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
-Counts and coverage below regenerated 2026-07-16 via
+Counts and coverage below regenerated 2026-07-30 via
 `pytest -m "not integration" --cov=ibkr_core_mcp --cov-report=term-missing`; re-run that command
 after any significant test or source addition rather than hand-editing these numbers.
 
@@ -27,7 +27,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 
 | Module | Coverage | Uncovered lines | Reason |
 |---|---|---|---|
-| `local_browser.py` | 97% | 121–122, 468, 557 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`); `scrape()`'s re-raise of a per-URL `arun()` exception via `scrape_batch()` — existing tests only cover the whole-batch `Crawl4AIUnavailableError` case, not a single URL failing inside an otherwise-successful `scrape()` call; `if __name__ == "__main__"` CLI entrypoint |
+| `local_browser.py` | 95% | 137–138, 510, 599, 739, 846–852, 856 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`), and interactive `create_profile` / CLI paths that need a real TTY and a real browser — covered live, not by unit tests. |
 | `models.py` | 99% | 147 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
 | `human_auth.py` | 96% | 14 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 92% | 273–275, 303–308, 312–317, 321–323, 334–337, 528–529, 543 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
@@ -35,7 +35,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `__init__.py` | 92% | 57–58 | Optional-dependency import guard (module absent from environment) |
 | `auth.py` | 90% | 54, 78, 86–87 | `browser_cookie3` import and cookie-apply path — requires a real installed browser's cookie store |
 | `pinescript.py` | 90% | 141–142, 230, 232, 234, 237 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe-inference edge cases for sub-1-minute and multi-day intervals |
-| `web_scraper.py` | 90% | 90–91, 370–375, 377–381, 448–461, 488, 629–630, 659–660, 713–714 | `crawl()`'s pagination-cursor bail-out branches (repeated-cursor guard, chunk cap, mid-pagination timeout — added with the "next"-cursor fix) and retry-backoff delay math, none deterministically triggerable without a live multi-page/rate-limited crawl; Google Drive OAuth token refresh/write and other live-Drive branches (folder creation, index/search-snapshot write failures) — require real OAuth credentials |
+| `web_scraper.py` | 90% | 89–90, 230, 391–403, 430, 565–566, 587–588, 638–639 | Retry-After parse fallback, a 4xx branch in `_raise_for_status`, and Drive error paths in `WebDocsStore` (upload/manifest failures). The old `crawl()` pagination branches are gone with the method itself (2026-07-30). |
 
 ---
 

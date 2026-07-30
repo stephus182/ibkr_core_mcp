@@ -129,7 +129,7 @@ reply_order()   ──► require_touch_id() ──► reply_dialog()   ──�
 | Price alerts (local) | `create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert`, `get_alerts` |
 | Analytics & backtest | `add_indicators`, `run_backtest`, `generate_pinescript`, `get_analytics` |
 | PA reporting | `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` |
-| Web scraping | `firecrawl_search`, `firecrawl_crawl` |
+| Web scraping | `firecrawl_search`, `search_site`, `crawl_site`, `fetch_page` |
 
 `sync_flex_trades` writes to the local SQLite store and GDrive cache, not to IBKR. Order placement must go through `IBKRClient` directly, which enforces both gates.
 
@@ -371,11 +371,25 @@ if not url.startswith(_ALLOWED_URL_PREFIX):
 
 This directly addresses the [SSRF attack class](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#server-side-request-forgery-ssrf) described in the MCP security guide, where attacker-controlled metadata is used to redirect HTTP requests to internal or credential-harvesting endpoints.
 
-### SSRF Prevention (Web Scraping — Crawl4AI Fallback)
+### SSRF Prevention (Web Scraping — the local browser)
 
-`firecrawl_search` and `firecrawl_crawl` can fall back from Firecrawl (a remote scraping API — never a local network risk, since Firecrawl's own servers do the fetching) to Crawl4AI, an optional dependency that launches a **local** headless Chromium browser via Playwright to fetch a URL directly from the host machine. This is a materially different risk profile: the URL being fetched can originate from Firecrawl-discovered crawl sub-pages (redirects, internal links) or from search results — both attacker-influenceable, external content — rather than only from a URL the operator explicitly typed in.
+Three of the four web tools — `fetch_page`, `crawl_site` and `search_site` — drive a **local**
+headless Chromium via Playwright, fetching directly from the host machine. That is a materially
+different risk profile from `firecrawl_search`, where a remote API does the fetching and no
+local network is reachable at all.
 
-Mitigation — `ClaudeToolkit._validate_public_url` (`claude_tools.py`) is called before **every** URL that can reach a local Crawl4AI fetch, not only the top-level `firecrawl_crawl` root:
+The exposure is not only the URL the operator typed. `crawl_site` follows same-host links it
+discovers as it goes, and `search_site` resolves a domain the model supplied — attacker-
+influenceable inputs that nobody pre-approved.
+
+> **Restructured 2026-07-30.** This section previously described the guard as sitting inside a
+> Firecrawl→Crawl4AI *fallback* ladder (`_assess_fallback_need`, `_apply_crawl4ai_fallback_batch`,
+> `_scrape_with_fallback`). That ladder and all three functions were deleted when the browser
+> became the primary engine. **The two layers below are unchanged and were never weakened** —
+> only the call sites moved.
+
+Mitigation — `ClaudeToolkit._validate_public_url` (`claude_tools.py`) is called before **every**
+URL or host that can reach the local browser:
 
 ```python
 def _validate_public_url(self, url: str) -> str | None:
@@ -384,7 +398,18 @@ def _validate_public_url(self, url: str) -> str | None:
     # (including decimal/hex-encoded IP literals, e.g. http://2130706433/).
 ```
 
-This guard runs inside `ClaudeToolkit._assess_fallback_need` — called directly by `_apply_crawl4ai_fallback_batch` for per-page URLs from `firecrawl_crawl`'s crawl results (before any URL is added to a shared `Crawl4AIScraper.scrape_batch()` call), and via `_scrape_with_fallback` for per-result URLs from `firecrawl_search` (before each `Crawl4AIScraper.scrape()` call) — in addition to the crawl root URL validated up front by `_handle_firecrawl_crawl`.
+Three call sites, one per browser-driving tool, each **before** the browser is constructed —
+a late check has already made the request it was meant to prevent:
+
+| Handler | What is validated |
+|---|---|
+| `_handle_fetch_page` | the page URL |
+| `_handle_crawl_site` | the crawl root URL |
+| `_handle_search_site` | the domain, as `https://{domain}/` |
+
+Covered by `test_web_tools_live.py::test_private_hosts_are_refused_before_any_request`,
+parametrized across all three, which asserts the refusal happens with `crawl4ai` absent as well
+— rejection must not depend on the browser being installed.
 
 **Defense in depth — two independent SSRF layers, not one.** A single validate-then-fetch check has a structural gap: it resolves DNS once, in one process, and the actual browser fetch happens moments later, in a different process, with its own independent DNS resolution — vulnerable to DNS rebinding (attacker serves a public IP at validation time, a private IP at fetch time via TTL=0) and to redirect-based bypass (a URL that passes validation responds with a redirect to a private address, which is never re-checked). This was identified during the 2026-07-01 audit and closed with a second, independent layer rather than left as an accepted gap:
 
@@ -490,7 +515,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Sandbox escape via file I/O | Safe `SimpleNamespace` wrappers for `pd`/`np` | Custom `_write_guard` blocks namespace mutation |
 | Sandbox DoS (infinite loop / large allocation) | 10-second execution timeout | 4,096-character code length cap |
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
-| SSRF via web scraping fallback (Crawl4AI local browser fetch) | `_validate_public_url` blocks private/loopback/link-local/reserved hosts before a browser is launched, applied to every URL reaching `Crawl4AIScraper.scrape()`/`scrape_batch()` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level, closing the DNS-rebinding and redirect-bypass gaps a pre-fetch check alone can't. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
+| SSRF via the local browser (`fetch_page` / `crawl_site` / `search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved hosts before a browser is launched, applied to every URL reaching `Crawl4AIScraper.scrape()`/`scrape_batch()` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level, closing the DNS-rebinding and redirect-bypass gaps a pre-fetch check alone can't. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
 | Credential exposure in logs | `repr=False` on `anthropic_api_key`, `flex_token` | Credentials loaded from env vars only, never hardcoded |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |

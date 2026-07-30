@@ -133,7 +133,7 @@ toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), SQLiteStore(cfg), cfg
 client   = anthropic.Anthropic()
 response = client.messages.create(
     model="claude-sonnet-4-6",
-    tools=toolkit.tools,          # 43 tools, ready to use
+    tools=toolkit.tools,          # 44 tools, ready to use
     messages=[{"role": "user", "content": "Show my open positions and run a backtest on AAPL"}],
 )
 for block in response.content:
@@ -145,13 +145,13 @@ Note: `fig` is currently always `None` — reserved for a future chart-returning
 
 Note: `ClaudeToolkit` exposes no order-write tools. Order placement must go through `IBKRClient` directly, which enforces the fingerprint gates.
 
-**Layering exception:** `local_browser.judge_completeness_llm()` (used by the
-`firecrawl_search`/`firecrawl_crawl` handlers) is the one place `ibkr_core_mcp` calls
-the Anthropic API directly with `config.anthropic_api_key`, rather than only handing
-`ClaudeToolkit.tools` to a host app's own client. This was a deliberate, scoped
-choice (a single cheap Haiku completeness check) — don't treat it as precedent for
-adding more direct API calls elsewhere without the same scrutiny; a host app's own
-token-usage tracking won't see this call's cost.
+**No layering exception any more.** `local_browser.judge_completeness_llm()` used to be the
+one place `ibkr_core_mcp` called the Anthropic API directly with `config.anthropic_api_key`
+rather than only handing `ClaudeToolkit.tools` to a host app — a call a host's own token
+accounting could not see. It arbitrated between two scraper engines; the second engine was
+removed on 2026-07-30, so the call has no job and is deleted. **`ClaudeToolkit` is now the only
+layer that talks to the Anthropic API, with no exceptions.** Adding one back requires that no
+other design works, not merely that the call is cheap.
 
 ## PineScript Generation
 

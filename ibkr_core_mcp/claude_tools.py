@@ -1,4 +1,4 @@
-"""ClaudeToolkit — the Anthropic tool layer over the rest of the package (43 tools).
+"""ClaudeToolkit — the Anthropic tool layer over the rest of the package (44 tools).
 
 `TOOL_DEFINITIONS` holds the JSON schemas Claude sees; `ClaudeToolkit` holds the
 matching handlers and `execute()` dispatches between them. The pair is deliberately

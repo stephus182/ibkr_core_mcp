@@ -22,8 +22,8 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
-| `web_scraper` / `local_browser` | Firecrawl web search/crawl, with an optional Crawl4AI fallback for incomplete/paywalled results |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 45 tools to any MCP client |
+| `web_scraper` / `local_browser` | Whole-web search (Firecrawl) + the local Crawl4AI browser for anything with a URL, and the `web_docs/` Drive archive |
+| `mcp_server` | MCP server (stdio + SSE) exposing all 46 tools to any MCP client |
 
 ---
 
@@ -64,7 +64,7 @@ This library is built on official documented APIs. Any contribution touching API
 | Google Drive API v3 | https://developers.google.com/drive/api/reference/rest/v3 |
 | macOS LocalAuthentication | https://developer.apple.com/documentation/localauthentication |
 | Firecrawl API | https://docs.firecrawl.dev/api-reference/endpoint/scrape |
-| Crawl4AI (optional fallback) | https://docs.crawl4ai.com/ |
+| Crawl4AI (local browser) | https://docs.crawl4ai.com/ |
 
 Full details and per-file API ownership are in [`CLAUDE.md`](CLAUDE.md#conventions).
 
@@ -220,14 +220,16 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `run_backtest` | Sandboxed RestrictedPython strategy backtester |
 | `generate_pinescript` | Generate PineScript v5 strategy/indicator |
 | `get_analytics` | Sharpe, Sortino, Calmar, CAGR, max drawdown |
-| `firecrawl_search` | Web search with full markdown content per result; optional Drive snapshot |
-| `firecrawl_crawl` | Bulk documentation/site crawl, saved to Google Drive; reuses a cached crawl <48h old |
+| `firecrawl_search` | Search the **whole web** — a query with no site in mind. Returns ranked URLs + snippets |
+| `search_site` | Search **one site** — domain + query, BM25-ranked. Free (local browser + public sitemaps) |
+| `crawl_site` | Archive a site to Google Drive under `web_docs/`; reuses a cached crawl <48h old. Free |
+| `fetch_page` | Read **one page** as markdown, incl. paywalled sites with a saved login. Free |
 
 ---
 
 ## MCP server
 
-Expose all 43 tools (+ 2 MCP-only alert tools = 45 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
+Expose all 44 tools (+ 2 MCP-only alert tools = 46 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
 # stdio transport (Claude Desktop / Cursor)
@@ -287,26 +289,66 @@ Strategy code runs in a `RestrictedPython` sandbox — no file system or network
 
 ## Web Scraping
 
-`firecrawl_search` and `firecrawl_crawl` use [Firecrawl](https://firecrawl.dev) as the default scraper — full markdown extraction, JS-rendered pages, no local browser. Results are optionally saved to Google Drive under `web_docs/`.
+**Four tools, one job each, and no fallback between them.** Anything that takes a URL goes to a
+free local browser ([Crawl4AI](https://docs.crawl4ai.com/), Playwright-based, no API key).
+[Firecrawl](https://firecrawl.dev) is kept for the one thing the browser cannot do: search the
+web when you have no URL yet.
 
-When Firecrawl's result looks incomplete — blocked, empty, or paywalled (WSJ, Bloomberg, FT, and similar metered news sites) — the tools automatically fall back to [Crawl4AI](https://docs.crawl4ai.com/), an open-source, Playwright-based scraper with no API key. Detection uses Firecrawl's own error signals plus word-count/paywall-keyword heuristics; ambiguous cases get one cheap Claude Haiku completeness check before falling back, so clean results never pay for the extra call.
+| Tool | Engine | Cost | Job |
+|---|---|---|---|
+| `firecrawl_search` | Firecrawl | ~1 credit | Find pages **anywhere** |
+| `search_site` | Crawl4AI | free | Find pages **on one site**, BM25-ranked |
+| `crawl_site` | Crawl4AI | free | **Archive a site** to Drive `web_docs/{url-slug}/` |
+| `fetch_page` | Crawl4AI | free | **Read one page** as markdown |
 
-`firecrawl_crawl` checks Drive for an existing manifest before calling Firecrawl at all — if one less than 48h old already exists for that URL, it's returned directly with zero Firecrawl requests (`force_refresh: true` bypasses this). The 48h window is informed by (not identical to) Firecrawl's own `scrapeOptions.maxAge` cache default on its v2 API (172800000ms) — the v1 API this package actually calls defaults that same parameter to `0`/disabled, so 48h is this package's own deliberate choice for reference-doc content, using Firecrawl's v2 number as an externally-validated reference point rather than an arbitrary one. All Firecrawl requests also retry automatically on 429/408/5xx with backoff honoring the `Retry-After` header, per Firecrawl's documented error-handling guidance.
+The first two *find* and return URLs; the last two *read*. Neither finder returns page text —
+follow one with `fetch_page`.
+
+**Why the local browser is the default and not the fallback.** Until 2026-07-30 this was a
+two-rung ladder: Firecrawl first, Crawl4AI only as a rescue. Measured on the same URLs minutes
+apart, that was backwards — local returned **17,364 B in 1.2 s** where Firecrawl returned
+**14,341 B in 16.8 s**, and **8,786 B in 1.3 s** against **5,515 B in 13.2 s**. Bigger, ~10×
+faster, free. The ladder and ~900 lines of arbitration went with it. Counter-case worth knowing:
+hosts with real anti-bot protection refuse the local browser outright (`wsj.com` → HTTP 401 and
+1 byte, and no saved login changes that).
+
+`crawl_site` checks Drive for an existing manifest before opening a browser — if one under 48h
+old exists for that URL it is returned directly, fetching nothing (`force_refresh: true`
+bypasses). The 48h window is this package's own choice for reference-doc content, informed by
+Firecrawl's v2 `scrapeOptions.maxAge` default (172,800,000 ms) as an externally-validated
+reference point; the v1 API this package calls defaults that same parameter to `0`.
 
 ```bash
-# Enable the fallback (optional — base install works fine without it)
+# The three browser tools need this extra (base install works without it)
 pip install "ibkr_core_mcp[scraper]"
 crawl4ai-setup   # installs Playwright/Chromium, one-time
 ```
 
-For paywalled sites you already subscribe to, Crawl4AI can reuse a saved browser login — no credentials are ever stored by `ibkr_core_mcp`:
+For paywalled sites you already subscribe to, Crawl4AI can reuse a saved browser login — no
+credentials are ever stored by `ibkr_core_mcp`, only the resulting browser session:
 
 ```bash
-# One-time interactive login; opens a real browser window
-python -m ibkr_core_mcp.local_browser create-profile https://www.wsj.com
+# One-time interactive login; opens a real browser window. Needs a TTY.
+python -m ibkr_core_mcp.local_browser create-profile https://www.ft.com
 ```
 
-The saved session lives under `CRAWL4AI_PROFILES_DIR` (default `~/.ibkr_core/crawl4ai_profiles/<domain>/`) and is reused automatically on future scrapes of that domain. Every URL that can reach a local Crawl4AI fetch — including Firecrawl-discovered sub-pages and search-result URLs — is validated against an SSRF guard first; see [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback) for the full mitigation.
+The session lives under `CRAWL4AI_PROFILES_DIR` (default
+`~/.ibkr_core/crawl4ai_profiles/<domain>/`) and is reused automatically on later scrapes of that
+domain. Every URL reaching the local browser is SSRF-validated first, and a second
+Playwright-level guard re-checks every navigation, redirect and subresource — see
+[SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback).
+
+**Live tests are mandatory for this subsystem**, because every defect in it was found by running
+a tool rather than by a test failing:
+
+```bash
+set -a; source ./.env; set +a
+pytest tests/test_web_tools_live.py -v -m integration     # 11 tests, ~30s
+```
+
+Full detail, including the credit model and per-host notes:
+[`docs/web-scraper-reference.md`](docs/web-scraper-reference.md).
+
 
 ---
 
@@ -326,7 +368,7 @@ Copy `.env.example` to `.env` and fill in:
 | `GDRIVE_CREDENTIALS_FILE` | for GDrive | OAuth2 credentials path |
 | `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token |
 | `IBKR_FLEX_QUERY_ID` | for Flex sync | Flex query ID |
-| `FIRECRAWL_API_KEY` | for web scraping | Firecrawl API key. If unset, `firecrawl_search`/`firecrawl_crawl` return a "not available" message rather than raising |
+| `FIRECRAWL_API_KEY` | for whole-web search only | Firecrawl API key. If unset, only `firecrawl_search` returns a "not available" message rather than raising |
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | optional | Explicit Drive folder for scraped docs/search snapshots. If unset, auto-created as `web_docs/` inside `GOOGLE_DRIVE_FOLDER_ID` |
 | `CRAWL4AI_PROFILES_DIR` | optional | Saved Crawl4AI login profiles for paywalled sites (default: `~/.ibkr_core/crawl4ai_profiles`) |
 
@@ -361,7 +403,7 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 
 `GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts.
 
-**Web scraping (`firecrawl_search`/`firecrawl_crawl`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback).
+**Web scraping (`search_site`, `crawl_site`, `fetch_page`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback).
 
 See [SECURITY.md](SECURITY.md) for the full security model.
 

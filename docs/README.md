@@ -12,12 +12,12 @@ code changes.
 | --- | --- |
 | [`api-reference.md`](api-reference.md) | Full reference for all `IBKRClient` methods — request/response shapes, exceptions raised |
 | [`symbology-reference.md`](symbology-reference.md) | How a ticker becomes a contract — why `/trsrv/stocks` + `isUS`, why a ticker is not a unique key, and the ask-don't-guess rule (the IGV/MXN defect) |
-| [`tools-reference.md`](tools-reference.md) | Full reference for all 42 `ClaudeToolkit` tools (40 core + 2 web scraper) — parameters, output shapes |
+| [`tools-reference.md`](tools-reference.md) | Full reference for all 44 `ClaudeToolkit` tools (40 core + 4 web) — parameters, output shapes |
 | [`api-usage-examples.md`](api-usage-examples.md) | Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting, Portfolio Analytics, Claude AI Tool Layer, PineScript Generation) |
 | [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) |
 | [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth` |
 | [`flex-query-reference.md`](flex-query-reference.md) | Historical Trade Data / Flex Queries (one-time setup, usage, constraints) |
-| [`mcp-server-reference.md`](mcp-server-reference.md) | MCP Server (install, stdio/SSE transports, 45 tools, 4 resources, price alerts, TradingView integration) |
+| [`mcp-server-reference.md`](mcp-server-reference.md) | MCP Server (install, stdio/SSE transports, 46 tools, 4 resources, price alerts, TradingView integration) |
 | [`ibkr-api-behaviors-reference.md`](ibkr-api-behaviors-reference.md) | Known IBKR API behaviors, verified not assumed |
 | [`external-docs-reference.md`](external-docs-reference.md) | Official documentation URLs, all external APIs |
 | [`consumers.md`](consumers.md) | Consuming projects |
