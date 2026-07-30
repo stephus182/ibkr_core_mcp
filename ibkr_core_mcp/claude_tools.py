@@ -1023,6 +1023,47 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "search_site",
+        "description": (
+            "Search WITHIN one website: give a domain and a query, get back that site's "
+            "most relevant page URLs, ranked. Free — it reads the site's sitemap and the "
+            "public Common Crawl index, and uses no API key and no credits. "
+            "Use it when you know WHICH site holds the answer but not which page: "
+            "'find the deep-crawling page on docs.crawl4ai.com'. "
+            "It returns URLs and titles, not page text — follow it with fetch_page on the "
+            "result you want to read. "
+            "For a query with no site in mind, use firecrawl_search instead; this tool "
+            "cannot see beyond the one domain you name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "description": "Bare hostname to search, e.g. 'docs.crawl4ai.com' (no scheme, no path)",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "What to look for on that site. Must be non-empty.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max matches to return (1-50, default 10)",
+                    "default": 10,
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["sitemap", "cc", "sitemap+cc"],
+                    "description": (
+                        "Where to discover URLs. 'sitemap' is fastest and official, 'cc' is the "
+                        "Common Crawl index, 'sitemap+cc' (default) is the most complete."
+                    ),
+                },
+            },
+            "required": ["domain", "query"],
+        },
+    },
+    {
         "name": "fetch_page",
         "description": (
             "Fetch ONE web page with a real browser and return it as markdown. "
@@ -1270,6 +1311,7 @@ class ClaudeToolkit:
             "delete_cache": self._delete_cache,
             "firecrawl_search": self._handle_firecrawl_search,
             "firecrawl_crawl": self._handle_firecrawl_crawl,
+            "search_site": self._handle_search_site,
             "fetch_page": self._handle_fetch_page,
         }
         handler = handlers.get(name)
@@ -3408,6 +3450,77 @@ class ClaudeToolkit:
             f"create-profile {domain}` once — you log in by hand, and only the "
             f"resulting browser session is stored, locally."
         )
+
+    def _handle_search_site(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Handle the search_site tool — BM25-ranked page discovery within one domain.
+
+        Finds; does not read. The reply is a ranked URL list, and `fetch_page` is what
+        turns a chosen result into text. Keeping those separate is the whole reason the
+        two-engine ladder could be removed: one tool per responsibility, nothing to
+        arbitrate.
+
+        Costs nothing — sitemaps and the Common Crawl index are public, so no key is
+        checked and no credit is spent.
+
+        Args:
+            inputs: {"domain", "query", optional "limit", optional "source"}.
+
+        Returns:
+            (text, None) — a ranked list, or an honest message naming why there is none.
+            Never raises: a missing browser package, an unreachable sitemap and a query
+            that simply matched nothing are three different messages.
+        """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, search_site
+
+        domain = str(inputs.get("domain", "")).strip()
+        query = str(inputs.get("query", "")).strip()
+        if not domain:
+            return "domain must be non-empty.", None
+        if not query:
+            return "query must be non-empty.", None
+
+        # Same SSRF guard as every other externally-sourced host in this class. The
+        # seeder fetches this domain's sitemap over the network, so a model-supplied
+        # "localhost" must be rejected here, before any request is made.
+        blocked = self._validate_public_url(f"https://{domain}/")
+        if blocked:
+            return blocked, None
+
+        limit = int(inputs.get("limit", 10))
+        source = inputs.get("source") or "sitemap+cc"
+
+        try:
+            matches = search_site(domain, query, limit=limit, source=source)
+        except Crawl4AIUnavailableError as exc:
+            return (
+                f"Cannot search {domain}: {exc}\n"
+                f"search_site needs the local browser package. Install it with "
+                f'`pip install "ibkr_core_mcp[scraper]"` followed by `crawl4ai-setup`.',
+                None,
+            )
+        except Exception as exc:
+            # Broad by intent, matching _handle_fetch_page: an unreachable sitemap or a
+            # Common Crawl outage must reach the model as something it can act on.
+            log.warning("search_site failed for %s (%r): %s", domain, query, exc)
+            return f"Search of {domain} failed: {exc}", None
+
+        if not matches:
+            return (
+                f"No pages on {domain} matched {query!r}.\n"
+                f"The site was reachable and its pages were read and scored — none of them "
+                f"is about that. This is a real answer, not a failure: do not retry the same "
+                f"query, and do not treat any page on this site as the source. "
+                f"Try different wording, source='sitemap+cc' for wider coverage, or "
+                f"firecrawl_search to look beyond this one domain.",
+                None,
+            )
+
+        lines = [f"## {len(matches)} match(es) on {domain} for: {query}\n"]
+        for i, m in enumerate(matches, 1):
+            lines.append(f"{i}. **{m['title'] or '(no title)'}** — score {m['score']:.3f}")
+            lines.append(f"   {m['url']}")
+        lines.append("\nUse fetch_page on whichever URL you want to read.")
+        return "\n".join(lines), None
 
     def _handle_fetch_page(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Handle the fetch_page tool — one URL, straight to the local browser.

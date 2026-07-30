@@ -61,6 +61,17 @@ _JUDGE_MAX_MARKDOWN_CHARS = 3000
 _MIN_WORDS_FALLBACK = 40
 _MIN_WORDS_CONFIDENT = 200
 
+# How many URLs search_site() asks the seeder to discover before ranking. The caller's
+# own `limit` applies to *matches* after BM25 scoring, so this has to be much larger:
+# scoring is sparse (4 of 87 above zero on the live 2026-07-30 run), and a cap applied
+# before ranking would silently truncate the candidate pool rather than the answer.
+_SEED_MAX_URLS = 1000
+
+# The score BM25 assigns to every page when the query shares no terms with any of them.
+# Not a tuning knob — it is the observed neutral value, and the flat distribution at it
+# is how "nothing matched" is detected. See _is_no_information_plateau.
+_NEUTRAL_BM25_SCORE = 0.5
+
 # Common phrasing on metered/hard paywalls (WSJ, Bloomberg, FT, Barron's, etc.)
 # that signals a page is showing a subscription stub rather than full content.
 _PAYWALL_MARKERS = (
@@ -525,6 +536,142 @@ class Crawl4AIScraper:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+def _is_no_information_plateau(scores: list[float]) -> bool:
+    """True when BM25's scores carry no ranking information and must not be presented
+    as matches.
+
+    **Found by running the tool, not by testing it.** The first live invocation of
+    `search_site` answered the deliberate nonsense query "zzzq nonexistent topic xyzzy"
+    with ten confidently-ranked pages — the Privacy Policy, the Contributing Guide, the
+    home page — every one at exactly 0.500. The unit tests missed it because they mocked
+    a non-match as 0.0, which is what a reasonable person assumes BM25 returns. The real
+    scorer does something else, and the mock was weaker than the dependency yet again.
+
+    Measured on docs.crawl4ai.com, 2026-07-30, 87 URLs per run:
+
+    | query | max | distinct scores |
+    |---|---|---|
+    | "deep crawling strategy" | 1.000 | 4 (peak, three 0.4s, 82 zeros) |
+    | "save a browser login profile for a paywalled site" | 1.000 | 5 |
+    | "zzzq nonexistent topic xyzzy" | 0.500 | **1** — all 87 identical |
+    | "qqqqq wwwww eeeee rrrrr" | 0.500 | **1** — all 87 identical |
+
+    With any term overlap the best page normalises to 1.0 and non-matches fall to 0.0.
+    With none, every page gets the same neutral 0.5. So the signature of "nothing
+    matched" is a completely flat distribution at or below neutral — not a low score.
+
+    The vendor's own `SeedingConfig(score_threshold=...)` cannot express this: 0.51
+    correctly empties the nonsense query but also discards the genuine 0.400 and 0.389
+    hits from "deep crawling strategy". A threshold answers "how good is this page?";
+    the question here is "did the ranking learn anything at all?"
+
+    Args:
+        scores: Every numeric relevance score in the result set.
+
+    Returns:
+        True if the caller should treat the whole set as "nothing matched". False for an
+        empty list (there is nothing to present either way) and for any set showing real
+        differentiation. A lone page scoring above neutral is a genuine hit and survives.
+    """
+    if not scores:
+        return False
+    distinct = {round(s, 6) for s in scores}
+    return len(distinct) == 1 and distinct.pop() <= _NEUTRAL_BM25_SCORE
+
+
+def search_site(domain: str, query: str, limit: int = 10, source: str = "sitemap+cc") -> list[dict[str, Any]]:
+    """Find the pages on one site that match `query`, ranked by BM25 relevance.
+
+    This is *site* search, not web search: `AsyncUrlSeeder` discovers URLs from the
+    domain's sitemap and/or the Common Crawl index and scores them against the query.
+    It cannot find pages on any other host — passing a query with no domain has no
+    meaning here. Whole-web search is `firecrawl_search`, and remains the one job only
+    Firecrawl can do.
+
+    Costs nothing and touches no API key: sitemaps and the CC index are public.
+
+    **`extract_head=True` is forced, not a default.** Verified live 2026-07-30 against
+    `docs.crawl4ai.com`: with it, 87 of 87 URLs carry a `relevance_score` and
+    `"save a browser login profile for a paywalled site"` ranks
+    `/advanced/undetected-browser/` first at 1.000. Without it, **zero** URLs are scored
+    and the list comes back in arbitrary sitemap order. The vendor's own documented
+    example omits the flag (https://docs.crawl4ai.com/assets/llm.txt/txt/url_seeder.txt),
+    so copying that example produces something that looks like ranked search and is not.
+    Head extraction is what BM25 scores against; without it there is no text to score.
+
+    Args:
+        domain: Bare hostname, e.g. "docs.crawl4ai.com". The caller is responsible for
+            SSRF validation (ClaudeToolkit._validate_public_url) before calling.
+        query: Free-text query. Must be non-empty — an empty query would return the
+            sitemap in arbitrary order while presenting itself as a search result.
+        limit: Maximum matches to return. Clamped to [1, 50].
+        source: "sitemap" (fast, official), "cc" (Common Crawl), or "sitemap+cc".
+            Measured on docs.crawl4ai.com: sitemap 87 URLs/5.0 s, sitemap+cc 90/5.9 s.
+
+    Returns:
+        Up to `limit` dicts of {"url", "title", "score"}, highest score first.
+        **Only pages that actually matched** (score > 0) are returned: BM25 is sparse —
+        the same run scored just 4 of 87 URLs above zero — so returning the tail would
+        pad a real answer with pages the query did not match. An empty list means
+        nothing on that site matched, which is a usable answer.
+
+    Raises:
+        Crawl4AIUnavailableError: If `crawl4ai` is not installed.
+        ValueError: If `domain` or `query` is blank.
+    """
+    domain = (domain or "").strip()
+    query = (query or "").strip()
+    if not domain:
+        raise ValueError("domain must be non-empty")
+    if not query:
+        raise ValueError("query must be non-empty")
+    limit = max(1, min(50, limit))
+
+    try:
+        from crawl4ai import AsyncUrlSeeder, SeedingConfig
+    except ImportError as exc:
+        raise Crawl4AIUnavailableError(
+            "Crawl4AI is not installed. Install with "
+            "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
+        ) from exc
+
+    async def _seed() -> list[dict[str, Any]]:
+        config = SeedingConfig(
+            source=source,
+            query=query,
+            scoring_method="bm25",
+            extract_head=True,  # mandatory — see docstring
+            max_urls=_SEED_MAX_URLS,
+        )
+        async with AsyncUrlSeeder() as seeder:
+            # The vendor ships no type information, so this is Any at the boundary;
+            # naming the shape here is the one place it gets asserted.
+            seeded: list[dict[str, Any]] = await seeder.urls(domain, config)
+            return seeded
+
+    raw: list[dict[str, Any]] = _run_async(_seed())
+
+    scores = [e["relevance_score"] for e in raw if isinstance(e.get("relevance_score"), (int, float))]
+    if _is_no_information_plateau(scores):
+        return []
+
+    matches: list[dict[str, Any]] = []
+    for entry in raw:
+        score = entry.get("relevance_score")
+        if not isinstance(score, (int, float)) or score <= 0:
+            continue
+        head = entry.get("head_data") or {}
+        matches.append(
+            {
+                "url": entry.get("url", ""),
+                "title": (head.get("title") or "").strip(),
+                "score": float(score),
+            }
+        )
+    matches.sort(key=lambda m: m["score"], reverse=True)
+    return matches[:limit]
 
 
 def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:

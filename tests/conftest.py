@@ -104,6 +104,14 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_fetch_page_reports_a_browser_failure_instead_of_raising",
     "test_fetch_page_flags_a_thin_result_instead_of_presenting_it_as_the_page",
     "test_fetch_page_does_not_cry_wolf_on_a_full_page",
+    # search_site handler tests: _handle_search_site SSRF-validates the domain before
+    # the seeder runs, so blocked DNS turns each of these into "Blocked: ..." and the
+    # assertions stop meaning anything. test_search_site_blocks_a_private_domain... is
+    # NOT listed -- it wants the rejection, and localhost needs no DNS to be caught.
+    "test_search_site_ranks_and_points_at_fetch_page",
+    "test_search_site_says_nothing_matched_rather_than_returning_an_empty_list",
+    "test_search_site_reports_a_missing_package_without_raising",
+    "test_search_site_needs_no_firecrawl_key",
 }
 
 

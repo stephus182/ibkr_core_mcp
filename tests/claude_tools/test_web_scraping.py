@@ -1112,3 +1112,69 @@ def test_fetch_page_does_not_cry_wolf_on_a_full_page():
     text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
 
     assert "incomplete" not in text.lower()
+
+
+# ============================================================================
+# search_site — find pages within one domain (Crawl4AI seeder, no Firecrawl)
+# ============================================================================
+
+
+def test_search_site_blocks_a_private_domain_before_any_lookup():
+    """The seeder fetches the named host's sitemap over the network, so a
+    model-supplied private host has to be refused here, not after the request."""
+    toolkit = _make_toolkit()
+    text, _ = toolkit.execute("search_site", {"domain": "localhost", "query": "secrets"})
+    assert text.startswith("Blocked:")
+
+
+def test_search_site_ranks_and_points_at_fetch_page():
+    toolkit = _make_toolkit()
+    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+        mock_search.return_value = [
+            {"url": "https://docs.x.dev/deep", "title": "Deep Crawling", "score": 1.0},
+            {"url": "https://docs.x.dev/multi", "title": "Multi URL", "score": 0.4},
+        ]
+        text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "deep crawling"})
+
+    assert "Deep Crawling" in text
+    assert "https://docs.x.dev/deep" in text
+    assert "1.000" in text
+    # search finds, fetch_page reads — the reply must say so, since that split is
+    # what replaced the old two-engine ladder.
+    assert "fetch_page" in text
+
+
+def test_search_site_says_nothing_matched_rather_than_returning_an_empty_list():
+    """Zero matches is a real answer ("the site has no such page"), not a failure,
+    and must not read as a broken tool."""
+    toolkit = _make_toolkit()
+    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+        mock_search.return_value = []
+        text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "nonexistent topic"})
+
+    assert "No pages on docs.x.dev matched" in text
+    assert "reachable" in text
+
+
+def test_search_site_reports_a_missing_package_without_raising():
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+
+    toolkit = _make_toolkit()
+    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+        mock_search.side_effect = Crawl4AIUnavailableError("not installed")
+        text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "q"})
+
+    assert "ibkr_core_mcp[scraper]" in text
+
+
+def test_search_site_needs_no_firecrawl_key():
+    """It reads public sitemaps. A missing FIRECRAWL_API_KEY must not disable it —
+    that would recreate the coupling this whole refactor removes."""
+    toolkit = _make_toolkit()
+    toolkit._config.firecrawl_api_key = ""
+    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+        mock_search.return_value = [{"url": "https://docs.x.dev/a", "title": "A", "score": 1.0}]
+        text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "q"})
+
+    assert "FIRECRAWL_API_KEY" not in text
+    assert "https://docs.x.dev/a" in text

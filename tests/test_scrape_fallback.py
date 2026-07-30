@@ -861,3 +861,195 @@ def test_cli_create_profile_calls_create_profile_with_config_dir(monkeypatch):
 
     assert captured["url_or_domain"] == "https://example.com/login"
     assert str(captured["profiles_dir"]) == "/tmp/cli-profiles"
+
+
+# ── search_site (Crawl4AI URL seeder + BM25) ─────────────────────────────────
+
+
+def _install_fake_seeder(monkeypatch, entries: list[dict[str, Any]]):
+    """Inject a fake `crawl4ai` exposing AsyncUrlSeeder/SeedingConfig.
+
+    Returns the list that captures every SeedingConfig(**kwargs) call, so a test can
+    assert on what was actually asked of the seeder — `extract_head=True` above all,
+    since without it the live API scores nothing and returns sitemap order (verified
+    2026-07-30).
+    """
+    captured: list[dict[str, Any]] = []
+
+    class FakeSeedingConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            captured.append(kwargs)
+
+    class FakeAsyncUrlSeeder:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def urls(self, domain, config):
+            captured[-1]["_domain"] = domain
+            return entries
+
+    fake_module = types.ModuleType("crawl4ai")
+    setattr(fake_module, "AsyncUrlSeeder", FakeAsyncUrlSeeder)  # noqa: B010
+    setattr(fake_module, "SeedingConfig", FakeSeedingConfig)  # noqa: B010
+    monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
+    return captured
+
+
+def _entry(url, score, title=None):
+    return {
+        "url": url,
+        "relevance_score": score,
+        "head_data": {"title": title} if title else {},
+    }
+
+
+def test_search_site_forces_extract_head(monkeypatch):
+    """The single most important assertion in this file's newest section.
+
+    Measured live 2026-07-30 against docs.crawl4ai.com: with extract_head=True, 87 of 87
+    URLs carry a relevance_score; with it False, **zero** do and the list is sitemap
+    order. The vendor's own documented example omits the flag, so a future "simplify the
+    config" edit that drops it would produce something that still returns URLs, still
+    looks ranked, and silently is not.
+    """
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    captured = _install_fake_seeder(monkeypatch, [_entry("https://x.dev/a", 1.0)])
+    search_site("x.dev", "some query")
+
+    assert captured[0]["extract_head"] is True
+    assert captured[0]["scoring_method"] == "bm25"
+    assert captured[0]["query"] == "some query"
+    assert captured[0]["_domain"] == "x.dev"
+
+
+def test_search_site_drops_zero_scored_pages(monkeypatch):
+    """BM25 is sparse — 4 of 87 URLs scored above zero on the live run. Returning the
+    tail would pad a real answer with pages the query never matched."""
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(
+        monkeypatch,
+        [
+            _entry("https://x.dev/hit", 0.9),
+            _entry("https://x.dev/miss", 0.0),
+            _entry("https://x.dev/unscored", None),
+        ],
+    )
+    results = search_site("x.dev", "q")
+
+    assert [r["url"] for r in results] == ["https://x.dev/hit"]
+
+
+def test_search_site_returns_nothing_when_every_page_scores_the_same(monkeypatch):
+    """The defect the first LIVE run found, and that no mock had caught.
+
+    A nonsense query does not score 0.0 — BM25 hands every page an identical neutral
+    0.5, and the tool presented ten confidently-ranked irrelevant pages (Privacy Policy,
+    Contributing Guide, home page) as matches. Measured on docs.crawl4ai.com: two
+    nonsense queries each produced 87 URLs at exactly 0.5 with ONE distinct score, while
+    two real queries peaked at 1.0 with 4-5 distinct scores.
+
+    The old test mocked a miss as 0.0, which is what one assumes and not what happens.
+    These fixtures use the values the real scorer returns.
+    """
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(monkeypatch, [_entry(f"https://x.dev/{i}", 0.5) for i in range(87)])
+
+    assert search_site("x.dev", "zzzq nonexistent topic xyzzy") == []
+
+
+def test_search_site_keeps_a_lone_page_that_scored_above_neutral(monkeypatch):
+    """A flat distribution only means "no information" when it sits at or below the
+    neutral score. One page scoring 1.0 is a genuine hit, not a plateau — the
+    no-information guard must not swallow it."""
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(monkeypatch, [_entry("https://x.dev/only", 1.0, title="The One Page")])
+    results = search_site("x.dev", "q")
+
+    assert [r["url"] for r in results] == ["https://x.dev/only"]
+
+
+def test_search_site_keeps_real_hits_a_blunt_threshold_would_discard(monkeypatch):
+    """Live "deep crawling strategy" scored 1.0 then three pages at 0.400 and one at
+    0.389 — all genuine. The vendor's own score_threshold=0.51 empties the nonsense
+    query but also throws these away, which is why the plateau check is used instead."""
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(
+        monkeypatch,
+        [
+            _entry("https://x.dev/deep", 1.0),
+            _entry("https://x.dev/multi", 0.4),
+            _entry("https://x.dev/adaptive", 0.4),
+            _entry("https://x.dev/identity", 0.389),
+            *[_entry(f"https://x.dev/miss{i}", 0.0) for i in range(82)],
+        ],
+    )
+    results = search_site("x.dev", "deep crawling strategy")
+
+    assert len(results) == 4
+    assert results[0]["url"] == "https://x.dev/deep"
+    assert results[-1]["score"] == pytest.approx(0.389)
+
+
+def test_search_site_ranks_highest_score_first(monkeypatch):
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(
+        monkeypatch,
+        [_entry("https://x.dev/low", 0.2), _entry("https://x.dev/top", 1.0), _entry("https://x.dev/mid", 0.5)],
+    )
+    results = search_site("x.dev", "q")
+
+    assert [r["url"] for r in results] == ["https://x.dev/top", "https://x.dev/mid", "https://x.dev/low"]
+
+
+def test_search_site_extracts_the_title_from_head_data(monkeypatch):
+    """head_data is a dict (verified live), not a JSON string — reading it as text
+    would put a repr in front of the user."""
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(monkeypatch, [_entry("https://x.dev/a", 1.0, title="Deep Crawling - Docs")])
+    assert search_site("x.dev", "q")[0]["title"] == "Deep Crawling - Docs"
+
+
+def test_search_site_clamps_limit_and_applies_it_after_ranking(monkeypatch):
+    """The limit bounds the ANSWER, not the candidate pool: _SEED_MAX_URLS is what the
+    seeder is asked for, so a small limit cannot truncate the pool before scoring."""
+    from ibkr_core_mcp.scrape_fallback import _SEED_MAX_URLS, search_site
+
+    captured = _install_fake_seeder(
+        monkeypatch, [_entry(f"https://x.dev/{i}", 1.0 - i / 100) for i in range(30)]
+    )
+    results = search_site("x.dev", "q", limit=3)
+
+    assert len(results) == 3
+    assert results[0]["url"] == "https://x.dev/0"
+    assert captured[0]["max_urls"] == _SEED_MAX_URLS
+
+
+def test_search_site_rejects_a_blank_query(monkeypatch):
+    """An empty query would return the sitemap in arbitrary order while presenting
+    itself as a search result — the exact shape of a silent wrong answer."""
+    from ibkr_core_mcp.scrape_fallback import search_site
+
+    _install_fake_seeder(monkeypatch, [])
+    with pytest.raises(ValueError, match="query must be non-empty"):
+        search_site("x.dev", "   ")
+    with pytest.raises(ValueError, match="domain must be non-empty"):
+        search_site("  ", "q")
+
+
+def test_search_site_raises_when_crawl4ai_is_not_installed(monkeypatch):
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, search_site
+
+    monkeypatch.setitem(sys.modules, "crawl4ai", None)
+    with pytest.raises(Crawl4AIUnavailableError, match="ibkr_core_mcp\\[scraper\\]"):
+        search_site("x.dev", "q")
