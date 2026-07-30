@@ -538,6 +538,100 @@ class Crawl4AIScraper:
         return outcome
 
 
+def crawl_site(
+    url: str,
+    profiles_dir: Path,
+    max_pages: int = 25,
+    max_depth: int = 2,
+) -> list[dict[str, Any]]:
+    """Crawl a site from `url` with the local browser and return its pages.
+
+    The free replacement for the Firecrawl crawl rung. Breadth-first from the root,
+    following only same-host links, using a saved login profile when one matches the
+    domain — so a subscription site can be archived, which the paid rung could never do.
+
+    Output is shaped exactly like Firecrawl's page list ({"url", "markdown", "metadata"})
+    so it flows into `WebDocsStore.save_crawl` unchanged. That store never knew which
+    engine produced its input, which is what makes this substitution a drop-in.
+
+    **The root URL is returned twice by the strategy** — once at depth 0 and again at
+    depth 1, byte-identical (observed live 2026-07-30: `docs.crawl4ai.com/` twice at
+    14,030 B in a 6-page crawl). Deduplicated here, largest markdown per URL winning.
+    Without it `save_crawl` writes one file but appends two manifest entries, and the
+    reply claims a page count the archive does not contain.
+
+    Args:
+        url: Root URL. The caller is responsible for SSRF validation before calling;
+            a second, independent Playwright-level guard is installed here for the
+            links the crawl discovers on its own, which no pre-check can see.
+        profiles_dir: Root holding one saved login profile per domain.
+        max_pages: Upper bound on pages fetched. Clamped to [1, 100]. Measured ~1.2 s
+            per page, so 25 is roughly 30 s.
+        max_depth: How many link-hops from the root. Clamped to [0, 5]. 0 fetches only
+            the root.
+
+    Returns:
+        Page dicts with "url", "markdown" and "metadata" (carrying the crawl `depth`),
+        deduplicated by URL and with empty pages dropped, so a reported count always
+        equals what was archived.
+
+    Raises:
+        Crawl4AIUnavailableError: If `crawl4ai` is not installed.
+        ValueError: If `url` is blank.
+    """
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("url must be non-empty")
+    max_pages = max(1, min(100, max_pages))
+    max_depth = max(0, min(5, max_depth))
+
+    try:
+        from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+        from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+    except ImportError as exc:
+        raise Crawl4AIUnavailableError(
+            "Crawl4AI is not installed. Install with "
+            "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
+        ) from exc
+
+    profile_dir = _resolve_profile_dir(profiles_dir, url)
+    if profile_dir is not None:
+        browser_config = BrowserConfig(headless=True, use_managed_browser=True, user_data_dir=str(profile_dir))
+    else:
+        browser_config = BrowserConfig(headless=True)
+
+    async def _crawl() -> list[Any]:
+        # include_external=False keeps every hop on the root's host. Verified live: a
+        # 6-page crawl of docs.crawl4ai.com touched exactly one hostname. It is also a
+        # safety property, not just a scoping one — it is what stops a hostile page from
+        # walking the crawler onto another host entirely.
+        strategy = BFSDeepCrawlStrategy(max_depth=max_depth, max_pages=max_pages, include_external=False)
+        run_config = CrawlerRunConfig(deep_crawl_strategy=strategy, stream=False, verbose=False)
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            crawler.crawler_strategy.set_hook("on_page_context_created", _install_ssrf_guard)
+            results: list[Any] = await crawler.arun(url, config=run_config)
+            return results
+
+    results = _run_async(_crawl())
+
+    by_url: dict[str, dict[str, Any]] = {}
+    for result in results:
+        markdown = result.markdown.raw_markdown if getattr(result, "markdown", None) else ""
+        if not markdown:
+            continue
+        page_url = getattr(result, "url", "") or ""
+        metadata = getattr(result, "metadata", None) or {}
+        existing = by_url.get(page_url)
+        if existing is not None and len(existing["markdown"].encode("utf-8")) >= len(markdown.encode("utf-8")):
+            continue
+        by_url[page_url] = {
+            "url": page_url,
+            "markdown": markdown,
+            "metadata": {"depth": metadata.get("depth")},
+        }
+    return list(by_url.values())
+
+
 def _is_no_information_plateau(scores: list[float]) -> bool:
     """True when BM25's scores carry no ranking information and must not be presented
     as matches.

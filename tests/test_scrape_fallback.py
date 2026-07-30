@@ -1053,3 +1053,164 @@ def test_search_site_raises_when_crawl4ai_is_not_installed(monkeypatch):
     monkeypatch.setitem(sys.modules, "crawl4ai", None)
     with pytest.raises(Crawl4AIUnavailableError, match="ibkr_core_mcp\\[scraper\\]"):
         search_site("x.dev", "q")
+
+
+# ── crawl_site (Crawl4AI deep crawl, the free replacement for firecrawl_crawl) ──
+
+
+class _FakeDeepResult:
+    def __init__(self, url, raw_markdown, depth=0):
+        self.url = url
+        self.markdown = MagicMock(raw_markdown=raw_markdown) if raw_markdown is not None else None
+        self.metadata = {"depth": depth}
+
+
+def _install_fake_deep_crawler(monkeypatch, results: list[Any]):
+    """Fake `crawl4ai` exposing the deep-crawl surface. Returns (captured_browser_kwargs,
+    captured_strategy_kwargs, installed_hooks) so tests can assert on domain confinement,
+    the page cap, and that the SSRF guard was installed."""
+    browser_kwargs: list[dict[str, Any]] = []
+    strategy_kwargs: list[dict[str, Any]] = []
+    installed_hooks: dict[str, object] = {}
+
+    class FakeBrowserConfig:
+        def __init__(self, **kwargs):
+            browser_kwargs.append(kwargs)
+
+    class FakeCrawlerRunConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeBFS:
+        def __init__(self, **kwargs):
+            strategy_kwargs.append(kwargs)
+
+    class FakeStrategy:
+        def set_hook(self, hook_type, hook):
+            installed_hooks[hook_type] = hook
+
+    class FakeAsyncWebCrawler:
+        def __init__(self, config=None):
+            self.crawler_strategy = FakeStrategy()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def arun(self, url, config=None):
+            return results
+
+    fake = types.ModuleType("crawl4ai")
+    setattr(fake, "AsyncWebCrawler", FakeAsyncWebCrawler)  # noqa: B010
+    setattr(fake, "BrowserConfig", FakeBrowserConfig)  # noqa: B010
+    setattr(fake, "CrawlerRunConfig", FakeCrawlerRunConfig)  # noqa: B010
+    fake_deep = types.ModuleType("crawl4ai.deep_crawling")
+    setattr(fake_deep, "BFSDeepCrawlStrategy", FakeBFS)  # noqa: B010
+    monkeypatch.setitem(sys.modules, "crawl4ai", fake)
+    monkeypatch.setitem(sys.modules, "crawl4ai.deep_crawling", fake_deep)
+    return browser_kwargs, strategy_kwargs, installed_hooks
+
+
+def test_crawl_site_deduplicates_the_root_url(monkeypatch, tmp_path):
+    """The strategy returns the root TWICE — depth 0 and depth 1, byte-identical
+    (observed live: docs.crawl4ai.com/ twice at 14,030 B in a 6-page crawl).
+
+    Left in, save_crawl writes one file but appends two manifest entries, so the reply
+    claims a page count the archive does not contain. Found by probing the real API
+    before writing the function, not by a test failing afterwards.
+    """
+    from ibkr_core_mcp.scrape_fallback import crawl_site
+
+    _install_fake_deep_crawler(
+        monkeypatch,
+        [
+            _FakeDeepResult("https://d.dev/", "root content", depth=0),
+            _FakeDeepResult("https://d.dev/", "root content", depth=1),
+            _FakeDeepResult("https://d.dev/a", "page a", depth=1),
+        ],
+    )
+    pages = crawl_site("https://d.dev/", tmp_path)
+
+    assert [p["url"] for p in pages] == ["https://d.dev/", "https://d.dev/a"]
+
+
+def test_crawl_site_keeps_the_larger_copy_of_a_duplicated_url(monkeypatch, tmp_path):
+    from ibkr_core_mcp.scrape_fallback import crawl_site
+
+    _install_fake_deep_crawler(
+        monkeypatch,
+        [
+            _FakeDeepResult("https://d.dev/x", "short", depth=0),
+            _FakeDeepResult("https://d.dev/x", "much longer content here", depth=1),
+        ],
+    )
+    pages = crawl_site("https://d.dev/", tmp_path)
+
+    assert len(pages) == 1
+    assert pages[0]["markdown"] == "much longer content here"
+
+
+def test_crawl_site_confines_the_crawl_to_one_host_and_caps_pages(monkeypatch, tmp_path):
+    """include_external=False is a safety property, not just scoping: it is what stops a
+    hostile page walking the crawler onto another host."""
+    from ibkr_core_mcp.scrape_fallback import crawl_site
+
+    _, strategy_kwargs, hooks = _install_fake_deep_crawler(
+        monkeypatch, [_FakeDeepResult("https://d.dev/", "c")]
+    )
+    crawl_site("https://d.dev/", tmp_path, max_pages=7, max_depth=3)
+
+    assert strategy_kwargs[0]["include_external"] is False
+    assert strategy_kwargs[0]["max_pages"] == 7
+    assert strategy_kwargs[0]["max_depth"] == 3
+    # The per-request SSRF guard matters most here: a deep crawl follows links nobody
+    # pre-validated, because nobody knew they existed.
+    assert "on_page_context_created" in hooks
+
+
+def test_crawl_site_clamps_absurd_bounds(monkeypatch, tmp_path):
+    from ibkr_core_mcp.scrape_fallback import crawl_site
+
+    _, strategy_kwargs, _ = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
+    crawl_site("https://d.dev/", tmp_path, max_pages=99999, max_depth=99)
+
+    assert strategy_kwargs[0]["max_pages"] == 100
+    assert strategy_kwargs[0]["max_depth"] == 5
+
+
+def test_crawl_site_drops_empty_pages_so_the_count_is_honest(monkeypatch, tmp_path):
+    from ibkr_core_mcp.scrape_fallback import crawl_site
+
+    _install_fake_deep_crawler(
+        monkeypatch,
+        [
+            _FakeDeepResult("https://d.dev/good", "real content"),
+            _FakeDeepResult("https://d.dev/empty", ""),
+            _FakeDeepResult("https://d.dev/none", None),
+        ],
+    )
+    pages = crawl_site("https://d.dev/", tmp_path)
+
+    assert [p["url"] for p in pages] == ["https://d.dev/good"]
+
+
+def test_crawl_site_uses_a_saved_login_profile_when_one_matches(monkeypatch, tmp_path):
+    """Archiving a subscription site is something the paid rung could never do."""
+    from ibkr_core_mcp.scrape_fallback import crawl_site
+
+    (tmp_path / "d.dev").mkdir()
+    browser_kwargs, _, _ = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
+    crawl_site("https://d.dev/", tmp_path)
+
+    assert browser_kwargs[0]["use_managed_browser"] is True
+    assert browser_kwargs[0]["user_data_dir"].endswith("d.dev")
+
+
+def test_crawl_site_raises_when_crawl4ai_is_not_installed(monkeypatch, tmp_path):
+    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, crawl_site
+
+    monkeypatch.setitem(sys.modules, "crawl4ai", None)
+    with pytest.raises(Crawl4AIUnavailableError, match="ibkr_core_mcp\\[scraper\\]"):
+        crawl_site("https://d.dev/", tmp_path)

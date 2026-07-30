@@ -112,6 +112,14 @@ _REAL_DNS_EXEMPT_TESTS = {
     "test_search_site_says_nothing_matched_rather_than_returning_an_empty_list",
     "test_search_site_reports_a_missing_package_without_raising",
     "test_search_site_needs_no_firecrawl_key",
+    # crawl_site handler tests: the root URL is SSRF-validated before the browser runs,
+    # so blocked DNS turns each into "Blocked: ..." and the assertions stop meaning
+    # anything. test_crawl_site_blocks_a_private_url... is NOT listed: it wants the
+    # rejection, and 127.0.0.1 needs no DNS to be recognised.
+    "test_crawl_site_refuses_to_archive_an_error_page_as_content",
+    "test_crawl_site_still_archives_a_genuinely_short_page",
+    "test_crawl_site_needs_no_firecrawl_key",
+    "test_crawl_site_uses_the_48h_drive_cache",
 }
 
 

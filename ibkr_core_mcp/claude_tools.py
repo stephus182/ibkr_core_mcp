@@ -1023,6 +1023,42 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "crawl_site",
+        "description": (
+            "Archive a website to Drive: crawl from a root URL with a real browser and "
+            "save every page under web_docs/{url-slug}/. Free — the local browser, no "
+            "credits. Use for capturing reference documentation you want to keep. "
+            "Works on sites behind a login when a profile has been saved for that domain. "
+            "Reuses a Drive copy less than 48h old unless force_refresh is true. "
+            "To read ONE page use fetch_page; to find which page you want use search_site."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Root URL to crawl from (public http/https only)",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "description": "Maximum pages to fetch (1-100, default 25). Roughly 1.2s per page.",
+                    "default": 25,
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Link-hops from the root (0-5, default 2). 0 fetches only the root page.",
+                    "default": 2,
+                },
+                "force_refresh": {
+                    "type": "boolean",
+                    "description": "Re-crawl even if a Drive copy under 48h old exists (default false)",
+                    "default": False,
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    {
         "name": "search_site",
         "description": (
             "Search WITHIN one website: give a domain and a query, get back that site's "
@@ -1311,6 +1347,7 @@ class ClaudeToolkit:
             "delete_cache": self._delete_cache,
             "firecrawl_search": self._handle_firecrawl_search,
             "firecrawl_crawl": self._handle_firecrawl_crawl,
+            "crawl_site": self._handle_crawl_site,
             "search_site": self._handle_search_site,
             "fetch_page": self._handle_fetch_page,
         }
@@ -3449,6 +3486,119 @@ class ClaudeToolkit:
             f"subscribe to, run `python -m ibkr_core_mcp.scrape_fallback "
             f"create-profile {domain}` once — you log in by hand, and only the "
             f"resulting browser session is stored, locally."
+        )
+
+    def _handle_crawl_site(self, inputs: dict[str, Any]) -> tuple[str, Any]:
+        """Handle the crawl_site tool — archive a site to Drive with the local browser.
+
+        The free replacement for `firecrawl_crawl`. Same Drive layout, same 48h manifest
+        cache, same `WebDocsStore` — that store never knew which engine produced its
+        pages, which is what makes the substitution a drop-in rather than a migration.
+
+        Needs no Firecrawl key. It can also archive a site behind a login, which the paid
+        rung could not do at all.
+
+        Args:
+            inputs: {"url", optional "max_pages", "max_depth", "force_refresh"}.
+
+        Returns:
+            (text, None) — a save summary, a cache-hit notice, or an honest failure.
+        """
+        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, crawl_site
+        from ibkr_core_mcp.web_scraper import WebDocsStore, content_bytes
+
+        url = str(inputs.get("url", "")).strip()
+        if not url:
+            return "url must be non-empty.", None
+
+        blocked = self._validate_public_url(url)
+        if blocked:
+            return blocked, None
+
+        max_pages = int(inputs.get("max_pages", 25))
+        max_depth = int(inputs.get("max_depth", 2))
+        force_refresh = bool(inputs.get("force_refresh", False))
+
+        if self._web_docs is None:
+            self._web_docs = WebDocsStore(self._config)
+
+        if not force_refresh:
+            cached = self._web_docs.get_cached_crawl(url)
+            if cached is not None:
+                saved = len(cached["pages"])
+                return (
+                    f"Using cached crawl of {url} from Drive — nothing was re-fetched.\n"
+                    f"Crawled at: {cached['crawled_at']}\n"
+                    f"Saved {saved} page(s). Pass force_refresh=true to re-crawl.\n"
+                    f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10]) + ("..." if saved > 10 else ""),
+                    None,
+                )
+
+        try:
+            pages = crawl_site(url, self._config.crawl4ai_profiles_dir, max_pages=max_pages, max_depth=max_depth)
+        except Crawl4AIUnavailableError as exc:
+            return (
+                f"Cannot crawl {url}: {exc}\n"
+                f'Install the local browser with `pip install "ibkr_core_mcp[scraper]"` '
+                f"followed by `crawl4ai-setup`.",
+                None,
+            )
+        except Exception as exc:
+            log.warning("crawl_site failed for %s: %s", url, exc)
+            return f"Crawl of {url} failed: {exc}", None
+
+        if not pages:
+            return (
+                f"Crawl of {url} produced no content.\n"
+                f"{self._profile_hint(url)}\n"
+                f"Likely causes: the site blocks automated browsers (a 1 B result at HTTP 401 "
+                f"is anti-bot, and no login profile changes that), its content is rendered by "
+                f"JavaScript that did not finish, or the root URL has no followable links.",
+                None,
+            )
+
+        # A page count is not evidence of content, and an error page is still a page.
+        # Live 2026-07-30: crawling `docs.crawl4ai.com/core/` returned exactly one 44-byte
+        # page — nginx's "403 Forbidden" — and this handler reported "Crawl complete: saved
+        # 1 page(s)" while filing that error page into the research archive. Same trap as
+        # the old "saved 0 page(s)" success and fetch_page's "(1 B)" reply, third instance.
+        #
+        # assess_quality is the signal the rest of this codebase already branches on, so
+        # this reuses it rather than inventing a threshold that could drift from it. Only
+        # an all-"fallback" verdict refuses: "ambiguous" covers genuinely short pages, and
+        # discarding those would be its own kind of wrong.
+        from ibkr_core_mcp.scrape_fallback import assess_quality
+
+        if all(assess_quality(p["markdown"], None, p["url"]) == "fallback" for p in pages):
+            biggest = max(pages, key=lambda p: len(p["markdown"].encode("utf-8")))
+            snippet = " ".join(biggest["markdown"].split())[:120]
+            return (
+                f"Crawl of {url} fetched {len(pages)} page(s) but none of them is content "
+                f"({content_bytes(pages)} B in total). **Nothing was saved to Drive** — "
+                f"filing an error page into the archive would poison later research.\n"
+                f'Largest page begins: "{snippet}"\n'
+                f"{self._profile_hint(url)}\n"
+                f"Usually this is an HTTP error page (a 403 on a directory path is common — "
+                f"try a real page URL, not a path prefix), a login wall, anti-bot protection, "
+                f"or JavaScript that never finished.",
+                None,
+            )
+
+        try:
+            manifest = self._web_docs.save_crawl(url, pages)
+        except Exception as exc:
+            return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
+
+        saved = len(manifest["pages"])
+        return (
+            f"Crawl complete: saved {saved} page(s) ({content_bytes(pages)} B) from {url} to Drive.\n"
+            f"Source: Crawl4AI (local browser, no credits spent)\n"
+            f"{self._profile_hint(url)}\n"
+            f"Crawled at: {manifest['crawled_at']}\n"
+            f"Pages: "
+            + ", ".join(p["url"] for p in manifest["pages"][:10])
+            + ("..." if saved > 10 else ""),
+            None,
         )
 
     def _handle_search_site(self, inputs: dict[str, Any]) -> tuple[str, Any]:

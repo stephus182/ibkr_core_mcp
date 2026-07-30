@@ -1178,3 +1178,95 @@ def test_search_site_needs_no_firecrawl_key():
 
     assert "FIRECRAWL_API_KEY" not in text
     assert "https://docs.x.dev/a" in text
+
+
+# ============================================================================
+# crawl_site — archive a site with the local browser (no Firecrawl, no credits)
+# ============================================================================
+
+
+def test_crawl_site_refuses_to_archive_an_error_page_as_content():
+    """The defect the first LIVE crawl_site run produced, and no unit test predicted.
+
+    Crawling `docs.crawl4ai.com/core/` returned exactly one 44-byte page — nginx's
+    "403 Forbidden" — and the handler answered "Crawl complete: saved 1 page(s)" while
+    filing that error page into the research archive. A page count is not evidence of
+    content, and an error page is still a page.
+
+    Third instance of this trap in this codebase: "saved 0 page(s)" reported as success,
+    fetch_page's "(1 B)" reading like a short page, and now this.
+    """
+    toolkit = _make_toolkit()
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+        mock_crawl.return_value = [
+            {"url": "https://d.dev/core/", "markdown": "# 403 Forbidden\n* * *\nnginx/1.24.0 (Ubuntu)\n", "metadata": {}}
+        ]
+        text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/core/"})
+
+    assert "Nothing was saved to Drive" in text
+    assert "403 Forbidden" in text  # the reply shows WHY, not just that it refused
+    toolkit._web_docs.save_crawl.assert_not_called()
+
+
+def test_crawl_site_still_archives_a_genuinely_short_page():
+    """Refusing on an all-"fallback" verdict must not also discard real but brief pages —
+    assess_quality's "ambiguous" band exists precisely for those."""
+    toolkit = _make_toolkit()
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://d.dev/",
+        "crawled_at": "2026-07-30T00:00:00+00:00",
+        "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
+    }
+    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+        mock_crawl.return_value = [
+            {"url": "https://d.dev/", "markdown": _REALISTIC_PARAGRAPH[:1600], "metadata": {}}
+        ]
+        text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
+
+    assert "Crawl complete: saved 1 page(s)" in text
+    toolkit._web_docs.save_crawl.assert_called_once()
+
+
+def test_crawl_site_needs_no_firecrawl_key():
+    """crawl_site replaces firecrawl_crawl precisely so archiving stops depending on a
+    paid key. A missing one must not disable it."""
+    toolkit = _make_toolkit()
+    toolkit._config.firecrawl_api_key = ""
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://d.dev/",
+        "crawled_at": "2026-07-30T00:00:00+00:00",
+        "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
+    }
+    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+        mock_crawl.return_value = [{"url": "https://d.dev/", "markdown": _REALISTIC_MARKDOWN, "metadata": {}}]
+        text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
+
+    assert "FIRECRAWL_API_KEY" not in text
+    assert "no credits spent" in text
+
+
+def test_crawl_site_blocks_a_private_url_before_launching_a_browser():
+    toolkit = _make_toolkit()
+    text, _ = toolkit.execute("crawl_site", {"url": "http://127.0.0.1:5055/admin"})
+    assert text.startswith("Blocked:")
+
+
+def test_crawl_site_uses_the_48h_drive_cache():
+    toolkit = _make_toolkit()
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = {
+        "url": "https://d.dev/",
+        "crawled_at": "2026-07-30T00:00:00+00:00",
+        "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
+    }
+    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+        text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
+        mock_crawl.assert_not_called()
+
+    assert "cached crawl" in text
