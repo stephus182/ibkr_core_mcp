@@ -60,16 +60,6 @@ def test_crawl4ai_scraper_real_browser_scrape(crawl4ai_available, tmp_path):
     assert "Example Domain" in result["markdown"]
 
 
-@pytest.mark.integration
-def test_scrape_with_fallback_triggers_real_crawl4ai_on_empty_firecrawl_result(crawl4ai_available, toolkit):
-    """Empty Firecrawl markdown makes assess_quality() return "fallback",
-    which skips the LLM judge entirely and routes straight to the real
-    Crawl4AIScraper — proving the full wiring, not just the isolated unit."""
-    markdown, note, used_fallback = toolkit._scrape_with_fallback("https://example.com", "", {})
-
-    assert "Example Domain" in markdown
-    assert "Crawl4AI fallback" in note
-    assert used_fallback is True
 
 
 @pytest.mark.integration
@@ -108,14 +98,3 @@ def test_scrape_batch_reuses_one_real_browser_across_two_real_urls(crawl4ai_avai
         assert "Example Domain" in outcome["markdown"]
 
 
-@pytest.mark.integration
-def test_scrape_with_fallback_blocks_private_host_before_any_browser_launch(toolkit):
-    """The Python-level SSRF guard (_validate_public_url) must reject a
-    private-host URL before Crawl4AI is even imported — this must hold
-    whether or not the optional `crawl4ai` dependency is installed, so this
-    test intentionally does not depend on the crawl4ai_available fixture."""
-    markdown, note, used_fallback = toolkit._scrape_with_fallback("http://127.0.0.1:9/", "", {})
-
-    assert markdown == ""
-    assert "Blocked" in note
-    assert used_fallback is False

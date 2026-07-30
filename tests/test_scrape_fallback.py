@@ -4,7 +4,7 @@ import sys
 import types
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -129,43 +129,10 @@ def _mock_anthropic_reply(text: str) -> MagicMock:
     return client
 
 
-@patch("ibkr_core_mcp.scrape_fallback.anthropic")
-def test_judge_completeness_llm_true_when_complete(mock_anthropic):
-    from ibkr_core_mcp.scrape_fallback import judge_completeness_llm
-
-    mock_client = _mock_anthropic_reply("COMPLETE")
-    mock_anthropic.Anthropic.return_value = mock_client
-
-    cfg = _make_config()
-    assert judge_completeness_llm(cfg, "https://example.com/article", "full article text") is True
-    mock_anthropic.Anthropic.assert_called_once_with(api_key="sk-test")
 
 
-@patch("ibkr_core_mcp.scrape_fallback.anthropic")
-def test_judge_completeness_llm_false_when_incomplete(mock_anthropic):
-    from ibkr_core_mcp.scrape_fallback import judge_completeness_llm
-
-    mock_client = _mock_anthropic_reply("INCOMPLETE")
-    mock_anthropic.Anthropic.return_value = mock_client
-
-    cfg = _make_config()
-    assert judge_completeness_llm(cfg, "https://example.com/article", "Subscribe now...") is False
 
 
-@patch("ibkr_core_mcp.scrape_fallback.anthropic")
-def test_judge_completeness_llm_includes_url_and_markdown_in_prompt(mock_anthropic):
-    from ibkr_core_mcp.scrape_fallback import judge_completeness_llm
-
-    mock_client = _mock_anthropic_reply("COMPLETE")
-    mock_anthropic.Anthropic.return_value = mock_client
-
-    cfg = _make_config()
-    judge_completeness_llm(cfg, "https://example.com/paywalled", "some snippet text")
-
-    call_kwargs = mock_client.messages.create.call_args[1]
-    prompt_text = call_kwargs["messages"][0]["content"]
-    assert "https://example.com/paywalled" in prompt_text
-    assert "some snippet text" in prompt_text
 
 
 # ── _run_async ───────────────────────────────────────────────────────────────

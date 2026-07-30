@@ -66,18 +66,38 @@ def test_no_tool_claims_execution_capability(toolkit):
             )
 
 
-def test_scraper_tools_expose_wait_for_and_proxy(toolkit):
-    for name in ("firecrawl_search", "firecrawl_crawl"):
-        tool = next(t for t in toolkit.tools if t["name"] == name)
-        schema = tool["input_schema"]
-        props = schema.get("properties", {})
-        required = schema.get("required", [])
-        assert "wait_for_ms" in props
-        assert "proxy" in props
-        assert props["proxy"]["enum"] == ["basic", "enhanced", "auto"]
-        assert name not in required
-        assert "wait_for_ms" not in required
-        assert "proxy" not in required
+def test_firecrawl_search_exposes_wait_for_and_proxy(toolkit):
+    """Was a loop over firecrawl_search AND firecrawl_crawl. The crawl tool was removed
+    on 2026-07-30 — crawl_site does that job locally and free — so only search remains,
+    and these anti-bot overrides only ever applied to a Firecrawl request anyway."""
+    tool = next(t for t in toolkit.tools if t["name"] == "firecrawl_search")
+    schema = tool["input_schema"]
+    props = schema.get("properties", {})
+    required = schema.get("required", [])
+    assert "wait_for_ms" in props
+    assert "proxy" in props
+    assert props["proxy"]["enum"] == ["basic", "enhanced", "auto"]
+    assert "wait_for_ms" not in required
+    assert "proxy" not in required
+
+
+def test_the_crawl_and_search_tools_route_by_capability(toolkit):
+    """The whole point of the 2026-07-30 refactor: one tool per job, and the model has to
+    be able to tell them apart from their descriptions alone.
+
+    firecrawl_search is the only whole-web search; search_site is domain-scoped and free;
+    crawl_site archives; fetch_page reads one page. If two of these ever start describing
+    themselves the same way, the model will pick the wrong one and the ladder we deleted
+    will effectively come back as a routing bug.
+    """
+    names = {t["name"] for t in toolkit.tools}
+    assert {"firecrawl_search", "search_site", "crawl_site", "fetch_page"} <= names
+    assert "firecrawl_crawl" not in names, "the paid crawl rung was removed; crawl_site replaces it"
+
+    by_name = {t["name"]: t["description"] for t in toolkit.tools}
+    assert "fetch_page" in by_name["search_site"], "search_site must hand off to fetch_page"
+    assert "firecrawl_search" in by_name["search_site"], "search_site must name the whole-web alternative"
+    assert "search_site" in by_name["crawl_site"], "crawl_site must point at the finder"
 
 
 def _snapshot_description(toolkit) -> str:

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
@@ -69,51 +68,7 @@ class _Resolved(NamedTuple):
     ambiguous: bool = False
 
 
-# Bounds worst-case simultaneous Crawl4AI browser launches in the search-result
-# fallback loop. FirecrawlClient.search()'s own `limit` is already clamped to
-# [1, 10] (see web_scraper.py), so this caps concurrent launches to half that.
-_MAX_CONCURRENT_FALLBACKS = 5
 
-
-def _merge_pages(pages: list[dict[str, Any]], extra: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Combine two page lists so the result can only ever contain more content
-    than either input — the rule that makes the crawl ladder's local rung free
-    of any downside.
-
-    The root rescue in _handle_firecrawl_crawl used to assign `pages = root_pages`,
-    which held the ladder's byte-level promise ("never shrink what Firecrawl
-    returned") while quietly breaking it page-wise: a crawl of three genuinely
-    complete but individually small doc pages measures under the 5 KB bar, so a
-    larger root scrape replaced all three with one. Real archived content was lost
-    to a rescue that was supposed to add.
-
-    Merging removes the trade-off entirely. There is no longer a case where taking
-    the local rung costs anything, so it no longer has to be withheld unless it
-    wins outright.
-
-    Args:
-        pages: The existing page list (Firecrawl's, already fallback-processed).
-            Order is preserved and these entries come first.
-        extra: Pages to add (the local rung's root scrape).
-
-    Returns:
-        A new list holding every distinct URL from both. When a URL appears in
-        both, the entry with the larger markdown wins — so re-fetching a page
-        Firecrawl already had upgrades it rather than duplicating or thinning it.
-    """
-    merged = list(pages)
-    by_url = {page.get("url", ""): i for i, page in enumerate(merged)}
-    for page in extra:
-        url = page.get("url", "")
-        index = by_url.get(url)
-        if index is None:
-            by_url[url] = len(merged)
-            merged.append(page)
-        elif len((page.get("markdown") or "").encode("utf-8")) > len(
-            (merged[index].get("markdown") or "").encode("utf-8")
-        ):
-            merged[index] = page
-    return merged
 
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
@@ -964,65 +919,6 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "firecrawl_crawl",
-        "description": (
-            "Crawl an entire website starting from a URL and save all pages to Drive "
-            "under web_docs/{url-slug}/. Returns a summary of pages saved. "
-            "Crawls are asynchronous — Firecrawl polls until done or timeout. "
-            "Use for archiving IBKR documentation or other reference sites. "
-            "Requires FIRECRAWL_API_KEY to be set."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "Root URL to crawl from (public http/https only)",
-                },
-                "max_pages": {
-                    "type": "integer",
-                    "description": "Maximum pages to crawl (1-100, default 50)",
-                    "default": 50,
-                },
-                "timeout_s": {
-                    "type": "integer",
-                    "description": (
-                        "Max seconds to wait for the crawl. Default scales with max_pages "
-                        "(6s per page, clamped to 120-600s). Only one Firecrawl attempt is "
-                        "made, so this is the whole budget."
-                    ),
-                },
-                "force_refresh": {
-                    "type": "boolean",
-                    "description": (
-                        "Re-crawl even if a Drive manifest for this URL already exists and "
-                        "is fresh (default false — reuses the cached manifest and makes zero "
-                        "Firecrawl requests if one is less than 48h old)"
-                    ),
-                    "default": False,
-                },
-                "wait_for_ms": {
-                    "type": "integer",
-                    "description": (
-                        "Advanced: milliseconds to wait for JavaScript rendering before "
-                        "extracting. Try 3000 on a site whose content arrives via JavaScript "
-                        "and came back empty. Omitted from the request when unset."
-                    ),
-                },
-                "proxy": {
-                    "type": "string",
-                    "enum": ["basic", "enhanced", "auto"],
-                    "description": (
-                        "Advanced: Firecrawl proxy mode. 'basic' costs 1 credit, 'enhanced' "
-                        "up to 5, 'auto' retries with enhanced only if basic fails. Try 'auto' "
-                        "on a site that blocks automated clients. Omitted when unset."
-                    ),
-                },
-            },
-            "required": ["url"],
-        },
-    },
-    {
         "name": "crawl_site",
         "description": (
             "Archive a website to Drive: crawl from a root URL with a real browser and "
@@ -1346,7 +1242,6 @@ class ClaudeToolkit:
             "get_order_status": self._get_order_status,
             "delete_cache": self._delete_cache,
             "firecrawl_search": self._handle_firecrawl_search,
-            "firecrawl_crawl": self._handle_firecrawl_crawl,
             "crawl_site": self._handle_crawl_site,
             "search_site": self._handle_search_site,
             "fetch_page": self._handle_fetch_page,
@@ -3142,215 +3037,19 @@ class ClaudeToolkit:
             return f"Invalid URL: {exc}"
         return None
 
-    def _assess_fallback_need(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[bool, str, str]:
-        """Decide whether `url` needs a Crawl4AI fallback fetch, without
-        performing it -- the "decide" half of _scrape_with_fallback, split out
-        so the crawl-path batch loop (_apply_crawl4ai_fallback_batch) can
-        classify every page up front before opening a single shared browser.
 
-        assess_quality decides "ok" / "ambiguous" / "fallback" from Firecrawl's
-        own signals plus cheap heuristics. "ambiguous" results get one extra
-        Claude call (judge_completeness_llm) before deciding whether to fall
-        back -- this keeps the common case (clean results) free of any extra
-        API call. A transient judge failure fails safe (keeps Firecrawl's
-        content) rather than escalating to the slower Crawl4AI path.
 
-        Args:
-            url: Source URL for this result/page. Validated against
-                 _validate_public_url as the last check before returning
-                 needs_fallback=True -- this can't be skipped even though
-                 firecrawl_crawl already validates its own root URL, since
-                 this url may be a Firecrawl-discovered sub-page or search
-                 result rather than the one the caller explicitly validated.
-            markdown: Firecrawl's markdown for this result/page (may be empty).
-            metadata: Firecrawl's per-result/per-page "metadata" dict, or None.
 
-        Returns:
-            (needs_fallback, markdown_if_not_needed, note_if_not_needed). When
-            needs_fallback is True, the other two fields are "" -- the caller
-            is responsible for actually fetching (via Crawl4AIScraper) and
-            turning the outcome into a final result via
-            _finalize_fallback_result. When needs_fallback is False, the
-            caller should use markdown_if_not_needed/note_if_not_needed
-            directly and must not call Crawl4AI at all for this URL.
-        """
-        from ibkr_core_mcp.scrape_fallback import assess_quality, judge_completeness_llm
-
-        quality = assess_quality(markdown, metadata, url)
-        if quality == "ok":
-            return False, markdown, ""
-
-        if quality == "ambiguous":
-            try:
-                if judge_completeness_llm(self._config, url, markdown):
-                    return False, markdown, ""
-            except Exception as exc:
-                log.warning("judge_completeness_llm failed for %s: %s", url, exc)
-                return (
-                    False,
-                    markdown,
-                    "(Note: completeness check failed — showing Firecrawl's result as-is)",
-                )
-
-        blocked = self._validate_public_url(url)
-        if blocked:
-            return False, markdown, f"(Crawl4AI fallback skipped: {blocked})"
-
-        return True, "", ""
-
-    def _finalize_fallback_result(
-        self, url: str, original_markdown: str, outcome: dict[str, str] | Exception
-    ) -> tuple[str, str, bool]:
-        """Turn a Crawl4AI fetch outcome into (final_markdown, note, used_fallback)
-        -- the "after the fetch" half of _scrape_with_fallback, split out so
-        both the single-URL path (_scrape_with_fallback) and the batch path
-        (_apply_crawl4ai_fallback_batch, via Crawl4AIScraper.scrape_batch) can
-        share the exact same note wording and exception-type handling.
-
-        Args:
-            url: The URL that was fetched (used only to compute the
-                 saved-profile note below).
-            original_markdown: Firecrawl's original markdown for this URL,
-                 used as the fallback value whenever Crawl4AI's outcome isn't
-                 usable.
-            outcome: Either the successful {"url": ..., "markdown": ...}
-                 result dict Crawl4AIScraper.scrape()/scrape_batch() produce,
-                 or the Exception that was raised/collected while fetching
-                 this URL.
-
-        Returns:
-            (final_markdown, note, used_fallback) -- used_fallback is True
-            only when Crawl4AI's content actually replaced Firecrawl's.
-        """
-        import urllib.parse
-
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
-
-        if isinstance(outcome, Crawl4AIUnavailableError):
-            return original_markdown, f"(Crawl4AI fallback unavailable: {outcome})", False
-        if isinstance(outcome, Exception):
-            log.warning("Crawl4AI fallback failed for %s: %s", url, outcome)
-            return (
-                original_markdown,
-                "(Crawl4AI fallback failed — showing Firecrawl's partial result)",
-                False,
-            )
-
-        fallback_markdown = outcome.get("markdown", "")
-        if not fallback_markdown:
-            return (
-                original_markdown,
-                "(Crawl4AI fallback returned no content — showing Firecrawl's partial result)",
-                False,
-            )
-
-        from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
-
-        domain = urllib.parse.urlparse(url).hostname or ""
-        if _resolve_profile_dir(self._config.crawl4ai_profiles_dir, url) is not None:
-            note = "(fetched via Crawl4AI fallback using a saved login profile)"
-        else:
-            note = (
-                f"(fetched via Crawl4AI fallback — no saved login profile for {domain}; "
-                f"if this is a paywalled site you subscribe to, run "
-                f"`python -m ibkr_core_mcp.scrape_fallback create-profile {domain}` once)"
-            )
-        return fallback_markdown, note, True
-
-    def _scrape_with_fallback(self, url: str, markdown: str, metadata: dict[str, Any] | None) -> tuple[str, str, bool]:
-        """Return (final_markdown, note, used_fallback) for a single Firecrawl
-        result/page, falling back to Crawl4AI when Firecrawl's content looks
-        incomplete (blocked, empty, or paywalled).
-
-        Composes _assess_fallback_need (decide) and _finalize_fallback_result
-        (turn a fetch outcome into the final tuple) around a single
-        Crawl4AIScraper.scrape() call. Used directly by the search path
-        (_handle_firecrawl_search), where each result is typically a
-        different domain, so batching across results isn't valid -- see
-        _apply_crawl4ai_fallback_batch for the crawl path's batched
-        equivalent.
-
-        Args:
-            url: Source URL for this result/page.
-            markdown: Firecrawl's markdown for this result/page (may be empty).
-            metadata: Firecrawl's per-result/per-page "metadata" dict, or None.
-
-        Returns:
-            (final_markdown, note, used_fallback) -- see _finalize_fallback_result.
-        """
-        needs_fallback, md_if_not, note_if_not = self._assess_fallback_need(url, markdown, metadata)
-        if not needs_fallback:
-            return md_if_not, note_if_not, False
-
-        try:
-            result = self._get_crawl4ai().scrape(url)
-        except Exception as exc:
-            return self._finalize_fallback_result(url, markdown, exc)
-        return self._finalize_fallback_result(url, markdown, result)
-
-    def _apply_crawl4ai_fallback_batch(self, root_url: str, pages: list[dict[str, Any]]) -> int:
-        """Apply Crawl4AI fallback to every page in `pages` that needs it,
-        mutating each page's "markdown" key in place. Used only by
-        _handle_firecrawl_crawl.
-
-        Batches every fallback-needing page into ONE
-        Crawl4AIScraper.scrape_batch() call (one shared browser) instead of
-        one browser launch per page -- safe because Firecrawl's crawl() only
-        returns pages within the same site as root_url, so every page here
-        shares the same saved-profile decision.
-
-        Args:
-            root_url: The crawl's original root URL -- used only to determine
-                the shared profile domain passed to scrape_batch().
-            pages: Firecrawl's page list for this crawl (each a dict with at
-                least "url", "markdown", "metadata" keys).
-
-        Returns:
-            Count of pages where Crawl4AI's content actually replaced
-            Firecrawl's (mirrors _scrape_with_fallback's used_fallback,
-            summed across pages).
-        """
-        import urllib.parse
-
-        candidates: list[tuple[dict[str, Any], str]] = []
-        for page in pages:
-            url = page.get("url", "")
-            needs_fallback, md_if_not, _note_if_not = self._assess_fallback_need(
-                url, page.get("markdown", ""), page.get("metadata")
-            )
-            if needs_fallback:
-                candidates.append((page, page.get("markdown", "")))
-            else:
-                page["markdown"] = md_if_not
-
-        if not candidates:
-            return 0
-
-        urls = [p.get("url", "") for p, _ in candidates]
-        root_domain = urllib.parse.urlparse(root_url).hostname or ""
-        try:
-            outcomes = self._get_crawl4ai().scrape_batch(urls, profile_domain=root_domain)
-        except Exception as exc:
-            # A whole-batch failure (e.g. Crawl4AIUnavailableError, raised
-            # before any URL is attempted) must degrade the same way a
-            # per-URL failure would -- not crash the entire crawl.
-            outcomes = {u: exc for u in urls}
-
-        fallback_count = 0
-        for page, original_markdown in candidates:
-            url = page.get("url", "")
-            outcome = outcomes.get(url, RuntimeError(f"Crawl4AI batch returned no result for {url}"))
-            final_markdown, _note, used_fallback = self._finalize_fallback_result(url, original_markdown, outcome)
-            page["markdown"] = final_markdown
-            if used_fallback:
-                fallback_count += 1
-        return fallback_count
 
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Handle the firecrawl_search tool.
+        """Handle the firecrawl_search tool — the one job only Firecrawl can do.
 
-        Lazily initializes FirecrawlClient on first call. Returns a no-key message
-        if FIRECRAWL_API_KEY is not configured. Optionally saves a Drive snapshot.
+        Whole-web search: a query with no site in mind. `search_site` covers the
+        domain-scoped case for free, and `AsyncUrlSeeder` cannot see past one host, so
+        this is the sole remaining reason the Firecrawl dependency exists.
+
+        Returns where to look, not what is there. `fetch_page` reads a chosen result —
+        with a real browser, which measures better than Firecrawl's extraction anyway.
         """
         from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
 
@@ -3381,35 +3080,21 @@ class ClaudeToolkit:
         if not results:
             return f"No results found for: {query}", None
 
-        # Search results are typically different domains each, so unlike the
-        # crawl path's shared-browser batch, there's no valid single browser
-        # config to reuse here -- instead fetch fallbacks concurrently
-        # (bounded) so independent per-domain browser launches overlap
-        # instead of queuing sequentially behind each other.
-        #
-        # Built here, on this thread, before the pool fans out. _get_crawl4ai's
-        # `if is None` is unguarded by a lock (see the note in __init__), and this is
-        # the one genuinely multi-threaded path in the class — without this line, N
-        # workers race to construct N scrapers and the last write wins.
-        self._get_crawl4ai()
-        with ThreadPoolExecutor(max_workers=min(_MAX_CONCURRENT_FALLBACKS, len(results))) as executor:
-            fallback_results = list(
-                executor.map(
-                    lambda r: self._scrape_with_fallback(r.get("url", ""), r.get("markdown", ""), r.get("metadata")),
-                    results,
-                )
-            )
-
+        # It finds; it does not read. Until 2026-07-30 this fanned out up to five
+        # concurrent Crawl4AI browsers to re-fetch every result, because Firecrawl's
+        # own extraction was the only thing standing between the model and the page.
+        # fetch_page is now that route, and a far better one, so search returns what a
+        # search should return: where to look. One responsibility per tool is what let
+        # the whole two-engine ladder be deleted.
         lines = [f"## Search results for: {query}\n"]
-        for i, (r, (md, note, _used)) in enumerate(zip(results, fallback_results, strict=True), 1):
-            r["markdown"] = md
+        for i, r in enumerate(results, 1):
             lines.append(f"### {i}. {r.get('title', '(no title)')}")
             lines.append(f"**URL:** {r.get('url', '')}\n")
-            if md:
-                lines.append(md[:2000])  # truncate very long pages
-            if note:
-                lines.append(note)
+            snippet = " ".join((r.get("markdown") or "").split())[:400]
+            if snippet:
+                lines.append(f"{snippet}…")
             lines.append("")
+        lines.append("Use fetch_page on whichever URL you want to read in full.")
 
         drive_note = ""
         if save_to_drive:
@@ -3424,32 +3109,6 @@ class ClaudeToolkit:
 
         return "\n".join(lines) + drive_note, None
 
-    def _crawl4ai_root_scrape(self, url: str) -> list[dict[str, Any]]:
-        """Fetch a crawl's root URL locally with Crawl4AI as the ladder's last rung.
-
-        The per-page fallback (_apply_crawl4ai_fallback_batch) iterates over Firecrawl's
-        page list, so it cannot recover a crawl that produced no pages at all — the exact
-        failure this closes. Fetching the root at least yields the landing page, and does
-        it locally and free, which is also the right move when Firecrawl is rate-limited
-        or out of credits.
-
-        Args:
-            url: The crawl's root URL, already SSRF-validated by the caller.
-
-        Returns:
-            A single-page list shaped like Firecrawl's own output so it flows into
-            save_crawl unchanged, or [] when Crawl4AI produced nothing or is unavailable.
-        """
-        outcome: dict[str, str] | Exception
-        try:
-            outcome = self._get_crawl4ai().scrape(url)
-        except Exception as exc:
-            outcome = exc
-
-        markdown, _note, used_fallback = self._finalize_fallback_result(url, "", outcome)
-        if not used_fallback or not markdown:
-            return []
-        return [{"url": url, "markdown": markdown, "metadata": {}}]
 
     def _get_crawl4ai(self) -> Any:
         """Return the lazily-built Crawl4AIScraper, constructing it on first use.
@@ -3755,156 +3414,3 @@ class ClaudeToolkit:
             None,
         )
 
-    def _handle_firecrawl_crawl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Handle the firecrawl_crawl tool.
-
-        Validates the URL with an SSRF guard before passing to Firecrawl. Lazily
-        initializes FirecrawlClient and WebDocsStore on first call. Always saves
-        results to Drive (crawl is a bulk operation — Drive storage is the point).
-
-        Checks Drive for an existing, fresh (< 48h) manifest for this URL before
-        calling Firecrawl at all — unless force_refresh is set. Without this, every
-        call re-fetches from Firecrawl regardless of whether the same URL was just
-        crawled, which cascades into Firecrawl's own per-minute rate limit on any
-        multi-URL job that re-runs (e.g. periodically re-verifying a fixed list of
-        reference doc URLs) — see WebDocsStore.get_cached_crawl's docstring for
-        the 48h default's rationale.
-        """
-        from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError, WebDocsStore
-
-        if not self._config.firecrawl_api_key:
-            return (
-                "firecrawl_crawl is not available: FIRECRAWL_API_KEY is not configured. "
-                "Set it in .env to enable web crawling.",
-                None,
-            )
-
-        url = inputs.get("url", "").strip()
-        if not url:
-            return "url must be non-empty.", None
-
-        blocked = self._validate_public_url(url)
-        if blocked:
-            return blocked, None
-
-        max_pages = int(inputs.get("max_pages", 50))
-        timeout_s_raw = inputs.get("timeout_s")
-        timeout_s = int(timeout_s_raw) if timeout_s_raw is not None else None
-        wait_for_raw = inputs.get("wait_for_ms")
-        wait_for_ms = int(wait_for_raw) if wait_for_raw is not None else None
-        proxy = inputs.get("proxy") or None
-        force_refresh = bool(inputs.get("force_refresh", False))
-
-        if self._firecrawl is None:
-            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key)
-        if self._web_docs is None:
-            self._web_docs = WebDocsStore(self._config)
-
-        if not force_refresh:
-            cached = self._web_docs.get_cached_crawl(url)
-            if cached is not None:
-                saved = len(cached["pages"])
-                return (
-                    f"Using cached crawl of {url} from Drive — no Firecrawl request made.\n"
-                    f"Crawled at: {cached['crawled_at']}\n"
-                    f"Saved {saved} page(s). Pass force_refresh=true to re-crawl.\n"
-                    f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10]) + ("..." if saved > 10 else ""),
-                    None,
-                )
-
-        import requests
-
-        from ibkr_core_mcp.web_scraper import _MIN_USEFUL_BYTES, content_bytes
-
-        # An account-level Firecrawl failure is not the end of the call. 401/402/429 and a
-        # dead network are precisely when the free, local Crawl4AI rung is worth the most —
-        # returning here would skip the fallback exactly when Firecrawl cannot be used at
-        # all. The error is kept so the final message can still name the real cause.
-        firecrawl_failure: str | None = None
-        try:
-            pages = self._firecrawl.crawl(
-                url,
-                max_pages=max_pages,
-                timeout_s=timeout_s,
-                wait_for_ms=wait_for_ms,
-                proxy=proxy,
-            )
-        except FirecrawlError as exc:
-            pages, firecrawl_failure = [], f"HTTP {exc.status_code}: {exc}"
-            log.warning("firecrawl crawl of %s failed (%s) — falling back to Crawl4AI", url, firecrawl_failure)
-        except requests.RequestException as exc:
-            pages, firecrawl_failure = [], f"network error: {exc}"
-            log.warning("firecrawl crawl of %s failed (%s) — falling back to Crawl4AI", url, firecrawl_failure)
-
-        firecrawl_bytes = content_bytes(pages)
-
-        # Every fallback-needing page in this crawl shares one Crawl4AI browser session
-        # instead of one launch per page -- see _apply_crawl4ai_fallback_batch's
-        # docstring for why that is safe.
-        fallback_count = self._apply_crawl4ai_fallback_batch(url, pages)
-
-        # Measured after the batch pass, which mutates page["markdown"] in place: testing
-        # a value captured before it ran would fire a redundant root scrape on a crawl
-        # the per-page fallback just rescued.
-        root_rescued = False
-        if content_bytes(pages) < _MIN_USEFUL_BYTES:
-            root_pages = self._crawl4ai_root_scrape(url)
-            if content_bytes(root_pages) > 0:
-                pages = _merge_pages(pages, root_pages)
-                root_rescued = True
-
-        final_bytes = content_bytes(pages)
-        if final_bytes == 0:
-            firecrawl_line = (
-                f"Firecrawl failed ({firecrawl_failure})"
-                if firecrawl_failure
-                else f"Firecrawl returned {firecrawl_bytes} B"
-            )
-            return (
-                f"Crawl of {url} produced no content.\n"
-                f"{firecrawl_line}, and the local Crawl4AI fallback also returned "
-                f"nothing.\n"
-                f"Likely causes: the site blocks automated clients, its content is "
-                f"rendered by JavaScript the scraper did not wait for, or your Firecrawl "
-                f"plan is rate-limited or out of credits.\n"
-                f"Next: if this is a site you subscribe to, run "
-                f"`python -m ibkr_core_mcp.scrape_fallback create-profile {url}` once. "
-                f"To retry Firecrawl with anti-bot options, pass wait_for_ms=3000 and "
-                f"proxy='auto'. For IBKR documentation, append `.md` to the page URL "
-                f"instead of crawling it.",
-                None,
-            )
-
-        try:
-            manifest = self._web_docs.save_crawl(url, pages)
-        except Exception as exc:
-            return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
-
-        saved = len(manifest["pages"])
-        why_firecrawl = (
-            f"Firecrawl failed — {firecrawl_failure}" if firecrawl_failure else "Firecrawl returned nothing usable"
-        )
-        # Three honest cases, because the rescue now merges rather than replaces: the
-        # local rung can add its root page to a crawl Firecrawl also contributed to, and
-        # reporting that as plain "Crawl4AI" would credit one rung for the other's pages.
-        if not root_rescued:
-            source = "Firecrawl"
-        elif firecrawl_bytes:
-            source = "Firecrawl + Crawl4AI (local rung added the root page)"
-        else:
-            source = f"Crawl4AI ({why_firecrawl})"
-        fallback_line = (
-            f"\nCrawl4AI fallback used for {fallback_count} page(s) Firecrawl couldn't fully extract."
-            if fallback_count
-            else ""
-        )
-        return (
-            f"Crawl complete: saved {saved} page(s) ({final_bytes} B) from {url} to Drive.\n"
-            f"Source: {source}\n"
-            f"Crawled at: {manifest['crawled_at']}\n"
-            f"Pages: "
-            + ", ".join(p["url"] for p in manifest["pages"][:10])
-            + ("..." if saved > 10 else "")
-            + fallback_line,
-            None,
-        )

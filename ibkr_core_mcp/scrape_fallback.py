@@ -1,4 +1,4 @@
-"""The local Crawl4AI browser for ibkr_core_mcp's web scraping tools.
+"""The local Crawl4AI browser — every ibkr_core_mcp web tool that takes a URL.
 
 Crawl4AI is an open-source, Playwright-based crawler that can reuse a locally
 saved browser login profile, so a paywalled site the user subscribes to returns
@@ -6,24 +6,30 @@ the full article instead of the subscription stub. `crawl4ai` is an optional
 dependency (`pip install ibkr_core_mcp[scraper]`) and is only imported when a
 scrape actually runs.
 
-`claude_tools.py` reaches this module two ways, and the distinction matters:
+**This module is no longer a fallback.** Until 2026-07-30 it sat underneath
+Firecrawl, reachable only when a paid attempt came back thin, and a two-engine
+ladder decided between them. Live measurement retired that arrangement: on the
+same URLs minutes apart the local browser returned *more* content in a *tenth*
+of the time, for free (`docs/web-scraper-reference.md` §5.2). So the split is now
+by capability rather than by cost:
 
-  * **As a fallback** — Firecrawl (`web_scraper.py`) runs first for `firecrawl_search`
-    and `firecrawl_crawl`; `assess_quality` decides when its result looks incomplete
-    (blocked, empty, or paywalled) and the browser recovers what it can.
-  * **As the direct route** — the `fetch_page` tool calls `Crawl4AIScraper.scrape()`
-    for a single URL with no Firecrawl attempt at all. That is the only route that
-    works for a paywalled article, since Firecrawl cannot log in.
+  * **Anything with a URL comes here** — `fetch_page` (one page), `crawl_site`
+    (archive a site), `search_site` (find pages within one site).
+  * **Firecrawl keeps only whole-web search**, the one thing this module cannot
+    do: `AsyncUrlSeeder` is domain-scoped by construction.
+
+Nothing falls back to anything, so there is no merge, no arbitration, and no LLM
+judge. The file name is kept for import stability; "fallback" is history.
 
 Provides:
   Quality                  — "ok" / "ambiguous" / "fallback" classification type
   Crawl4AIUnavailableError — raised when the optional `crawl4ai` dependency is missing
-  assess_quality           — classify a scrape result as ok/ambiguous/fallback
-  judge_completeness_llm   — one cheap Claude call to resolve "ambiguous" cases
-  Crawl4AIScraper          — fetches a single URL via Crawl4AI, reusing a saved
-                              login profile for the URL's domain if one exists
+  assess_quality           — is this markdown real content, or a stub/error page?
+  Crawl4AIScraper          — fetches a single URL, reusing a saved login profile
+                              for the URL's domain if one exists
+  crawl_site               — breadth-first same-host crawl, for archiving to Drive
+  search_site              — BM25-ranked page discovery within one domain
   create_profile           — one-time interactive login; saves a browser profile
-                              for Crawl4AIScraper to reuse later
   list_profiles            — the saved profiles, with each one's age in days
 
 Source: https://docs.crawl4ai.com/ (Crawl4AI, verified against the published
@@ -40,20 +46,10 @@ import threading
 import time
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
-import anthropic
-
-if TYPE_CHECKING:
-    from ibkr_core_mcp.config import Config
-
 Quality = Literal["ok", "ambiguous", "fallback"]
-
-# Cheap, fast model for the binary completeness check — not the main conversation model.
-# Model catalogue: see the claude-api skill / https://platform.claude.com/docs/en/docs/about-claude/models
-_JUDGE_MODEL = "claude-haiku-4-5-20251001"
-_JUDGE_MAX_MARKDOWN_CHARS = 3000
 
 # assess_quality() thresholds — see its docstring for the classification rules
 # these feed into. Real short pages exist, so length alone is never a hard
@@ -247,40 +243,6 @@ def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> 
     return "ok"
 
 
-def judge_completeness_llm(config: Config, url: str, markdown: str) -> bool:
-    """Ask Claude whether a scraped page looks complete or truncated/paywalled/blocked.
-
-    Only called for assess_quality's "ambiguous" verdict — the confident "ok" and
-    "fallback" cases never reach here, so this cheap Haiku call only fires on the
-    minority of borderline results.
-
-    Args:
-        config: Provides anthropic_api_key (already required by Config).
-        url: Source URL, included in the prompt for context.
-        markdown: The scraped markdown to judge. Truncated to the first
-                  _JUDGE_MAX_MARKDOWN_CHARS characters to keep the call cheap.
-
-    Returns:
-        True if Claude's reply contains "COMPLETE" (and not "INCOMPLETE"),
-        False otherwise.
-    """
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-    snippet = markdown[:_JUDGE_MAX_MARKDOWN_CHARS]
-    prompt = (
-        f"Below is scraped content from {url}.\n\n"
-        f"---\n{snippet}\n---\n\n"
-        "Does this look like the complete page content, or does it look "
-        "truncated, paywalled, or blocked (e.g. a login wall, a subscription "
-        "prompt, or a Cloudflare/error page)? "
-        "Reply with exactly one word: COMPLETE or INCOMPLETE."
-    )
-    response = client.messages.create(
-        model=_JUDGE_MODEL,
-        max_tokens=10,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    reply = getattr(response.content[0], "text", "").strip().upper()
-    return "INCOMPLETE" not in reply
 
 
 def _safe_domain(url_or_domain: str) -> str:

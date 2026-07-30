@@ -46,20 +46,9 @@ def mock_config(tmp_path, tmp_db):
 # for the wrong reason (root rejected, not "root ok, sub-page correctly
 # rejected"), silently defeating the point of the test.
 _REAL_DNS_EXEMPT_TESTS = {
-    "test_firecrawl_crawl_saves_pages_to_drive",
     "test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai",
-    "test_scrape_with_fallback_uses_crawl4ai_when_quality_is_fallback",
-    "test_scrape_with_fallback_ambiguous_and_llm_says_incomplete_falls_back",
-    "test_scrape_with_fallback_crawl4ai_unavailable_returns_original_with_note",
-    "test_scrape_with_fallback_notes_missing_login_profile",
-    "test_scrape_with_fallback_notes_saved_login_profile_used",
-    "test_firecrawl_search_applies_fallback_when_result_incomplete",
     "test_validate_public_url_allows_public_https",
-    "test_firecrawl_crawl_applies_fallback_per_page",
     "test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable",
-    "test_firecrawl_crawl_batch_maps_outcomes_to_correct_pages",
-    "test_firecrawl_crawl_uses_cached_manifest_and_skips_firecrawl",
-    "test_firecrawl_crawl_force_refresh_bypasses_cache",
     # The recovery-ladder handler tests, for the same reason as
     # test_firecrawl_crawl_saves_pages_to_drive above: _handle_firecrawl_crawl
     # validates the root URL before anything else, so a DNS block short-circuits
@@ -68,15 +57,7 @@ _REAL_DNS_EXEMPT_TESTS = {
     # the subtler reason documented above for the blocked-subpage test: with DNS
     # blocked its scrape.assert_not_called() passes because the root was rejected,
     # not because Firecrawl's content made the root scrape unnecessary.
-    "test_crawl_falls_back_to_crawl4ai_root_when_firecrawl_returns_nothing",
     "test_crawl_does_not_root_scrape_when_firecrawl_returned_content",
-    "test_crawl_never_reports_zero_pages_as_success",
-    "test_crawl_degrades_when_crawl4ai_is_not_installed",
-    "test_crawl_reports_network_failure_instead_of_raising",
-    "test_crawl_falls_back_to_crawl4ai_when_firecrawl_is_rate_limited",
-    "test_crawl_falls_back_to_crawl4ai_when_out_of_credits",
-    "test_crawl_falls_back_to_crawl4ai_on_network_error",
-    "test_crawl_no_content_message_names_the_firecrawl_failure",
     # The "never downgrade" ladder tests, for the same reason as every other
     # _handle_firecrawl_crawl test above: the root URL is SSRF-validated before any
     # rung runs, so blocked DNS returns "Invalid URL: ..." and no ladder executes.
@@ -84,13 +65,8 @@ _REAL_DNS_EXEMPT_TESTS = {
     # subtler reason documented above: its scrape.assert_called_once() would fail,
     # and its content assertion would pass vacuously, if the root were rejected
     # before the ladder was ever consulted.
-    "test_crawl_no_content_message_names_both_rungs",
-    "test_local_rung_does_not_replace_a_larger_firecrawl_result",
-    "test_source_line_credits_crawl4ai_alone_when_firecrawl_gave_nothing",
     # Same again: both assert on what save_crawl received, which is reached only if
     # the root URL survives validation and the whole ladder actually runs.
-    "test_root_rescue_keeps_firecrawls_pages_instead_of_replacing_them",
-    "test_root_rescue_prefers_the_larger_markdown_for_a_duplicated_url",
     # fetch_page handler tests. Same reason again: _handle_fetch_page SSRF-validates
     # the URL before constructing the browser, so a blocked DNS lookup turns every
     # one of these into "Blocked: ..." and the assertions stop meaning anything.
