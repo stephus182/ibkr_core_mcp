@@ -2,7 +2,6 @@ import asyncio
 import io
 import sys
 import types
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -12,25 +11,25 @@ import pytest
 
 
 def test_is_private_host_blocks_localhost():
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     assert is_private_host("localhost") is True
 
 
 def test_is_private_host_blocks_loopback_ip():
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     assert is_private_host("127.0.0.1") is True
 
 
 def test_is_private_host_blocks_link_local():
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     assert is_private_host("169.254.169.254") is True
 
 
 def test_is_private_host_blocks_private_ip_literal():
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     assert is_private_host("192.168.1.1") is True
 
@@ -38,7 +37,7 @@ def test_is_private_host_blocks_private_ip_literal():
 def test_is_private_host_allows_public_hostname(monkeypatch):
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     def _fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
@@ -51,7 +50,7 @@ def test_is_private_host_blocks_hostname_resolving_to_private_ip(monkeypatch):
     """The DNS-rebinding-relevant case: hostname resolves to a private IP."""
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     def _fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
@@ -64,7 +63,7 @@ def test_is_private_host_unresolvable_hostname_not_blocked(monkeypatch):
     """Unresolvable hostnames aren't a private-IP bypass — let the fetch fail naturally."""
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     def _raise(_h, *args, **kwargs):
         raise socket.gaierror("unresolvable")
@@ -79,7 +78,7 @@ def test_is_private_host_blocks_aaaa_only_hostname_resolving_to_loopback(monkeyp
     fail open here. See docs/audits/security-audit-2026-07-11.md H-4."""
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     def _fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", 0, 0, 0))]
@@ -92,7 +91,7 @@ def test_is_private_host_allows_aaaa_only_hostname_resolving_to_public_ipv6(monk
     """A genuinely public IPv6-only hostname must still be allowed through."""
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import is_private_host
+    from ibkr_core_mcp.local_browser import is_private_host
 
     def _fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:2800:220:1:248:1893:25c8:1946", 0, 0, 0))]
@@ -101,39 +100,11 @@ def test_is_private_host_allows_aaaa_only_hostname_resolving_to_public_ipv6(monk
     assert is_private_host("public-ipv6-only.example") is False
 
 
-def _make_config(**overrides: Any):
-    from ibkr_core_mcp.config import Config
-
-    defaults: dict[str, Any] = dict(
-        gateway_url="http://localhost",
-        anthropic_api_key="sk-test",
-        gdrive_folder_id="root-id",
-        sqlite_path=Path("/tmp/store.db"),
-        gdrive_token_file=Path("/tmp/token.json"),
-        gdrive_credentials_file=Path("/tmp/creds.json"),
-    )
-    defaults.update(overrides)
-    return Config(**defaults)
-
-
-# ── judge_completeness_llm ───────────────────────────────────────────────────
-
-
-def _mock_anthropic_reply(text: str) -> MagicMock:
-    client = MagicMock()
-    block = MagicMock()
-    block.text = text
-    response = MagicMock()
-    response.content = [block]
-    client.messages.create.return_value = response
-    return client
-
-
 # ── _run_async ───────────────────────────────────────────────────────────────
 
 
 def test_run_async_returns_coroutine_result_from_plain_sync_context():
-    from ibkr_core_mcp.scrape_fallback import _run_async
+    from ibkr_core_mcp.local_browser import _run_async
 
     async def coro():
         return "done"
@@ -146,7 +117,7 @@ def test_run_async_works_when_called_from_a_running_event_loop():
     is called synchronously from inside mcp_server.py's async handle_call_tool,
     which runs inside asyncio.run(). A plain asyncio.run() inside _run_async would
     raise 'cannot be called from a running event loop' in that case."""
-    from ibkr_core_mcp.scrape_fallback import _run_async
+    from ibkr_core_mcp.local_browser import _run_async
 
     async def inner_coro():
         return "inner-done"
@@ -159,7 +130,7 @@ def test_run_async_works_when_called_from_a_running_event_loop():
 
 
 def test_run_async_propagates_exceptions():
-    from ibkr_core_mcp.scrape_fallback import _run_async
+    from ibkr_core_mcp.local_browser import _run_async
 
     async def failing_coro():
         raise ValueError("boom")
@@ -176,19 +147,19 @@ def _long_markdown(word_count: int) -> str:
 
 
 def test_assess_quality_empty_markdown_is_fallback():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     assert assess_quality("", None, "https://example.com") == "fallback"
 
 
 def test_assess_quality_very_short_markdown_is_fallback():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     assert assess_quality(_long_markdown(10), None, "https://example.com") == "fallback"
 
 
 def test_assess_quality_metadata_error_status_is_fallback():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     markdown = _long_markdown(500)
     metadata = {"statusCode": 403}
@@ -196,7 +167,7 @@ def test_assess_quality_metadata_error_status_is_fallback():
 
 
 def test_assess_quality_metadata_error_field_is_fallback():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     markdown = _long_markdown(500)
     metadata = {"statusCode": 200, "error": "blocked by Cloudflare"}
@@ -204,21 +175,21 @@ def test_assess_quality_metadata_error_field_is_fallback():
 
 
 def test_assess_quality_paywall_keyword_is_ambiguous():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     markdown = _long_markdown(500) + "\n\nSubscribe to continue reading this article."
     assert assess_quality(markdown, None, "https://example.com") == "ambiguous"
 
 
 def test_assess_quality_borderline_length_is_ambiguous():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     # Between the hard-fallback floor and the confident-ok ceiling.
     assert assess_quality(_long_markdown(100), None, "https://example.com") == "ambiguous"
 
 
 def test_assess_quality_long_clean_markdown_is_ok():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     markdown = _long_markdown(500)
     metadata = {"statusCode": 200}
@@ -226,7 +197,7 @@ def test_assess_quality_long_clean_markdown_is_ok():
 
 
 def test_assess_quality_handles_none_metadata():
-    from ibkr_core_mcp.scrape_fallback import assess_quality
+    from ibkr_core_mcp.local_browser import assess_quality
 
     markdown = _long_markdown(500)
     assert assess_quality(markdown, None, "https://example.com") == "ok"
@@ -254,7 +225,7 @@ class _FakeRequest:
 
 @pytest.mark.asyncio
 async def test_reject_private_requests_aborts_private_host():
-    from ibkr_core_mcp.scrape_fallback import _reject_private_requests
+    from ibkr_core_mcp.local_browser import _reject_private_requests
 
     route = _FakeRoute()
     await _reject_private_requests(route, _FakeRequest("http://127.0.0.1:5055/v1/api/x"))
@@ -269,7 +240,7 @@ async def test_reject_private_requests_aborts_dns_rebound_host(monkeypatch):
     own resolution, not the earlier Python-level pre-check's resolution."""
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import _reject_private_requests
+    from ibkr_core_mcp.local_browser import _reject_private_requests
 
     def _fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
@@ -285,7 +256,7 @@ async def test_reject_private_requests_aborts_dns_rebound_host(monkeypatch):
 async def test_reject_private_requests_continues_public_host(monkeypatch):
     import socket
 
-    from ibkr_core_mcp.scrape_fallback import _reject_private_requests
+    from ibkr_core_mcp.local_browser import _reject_private_requests
 
     def _fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
@@ -301,13 +272,13 @@ async def test_reject_private_requests_continues_public_host(monkeypatch):
 
 
 def test_safe_domain_extracts_hostname_from_url():
-    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    from ibkr_core_mcp.local_browser import _safe_domain
 
     assert _safe_domain("https://www.wsj.com/login") == "www.wsj.com"
 
 
 def test_safe_domain_accepts_bare_domain():
-    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    from ibkr_core_mcp.local_browser import _safe_domain
 
     assert _safe_domain("www.wsj.com") == "www.wsj.com"
 
@@ -317,21 +288,21 @@ def test_safe_domain_rejects_dotdot_traversal():
     profiles_dir's parent directory (e.g. ~/.ibkr_core), so a hostname of '..'
     must never reach the path-join, regardless of whether upstream URL
     validation happens to also reject it as an invalid hostname today."""
-    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    from ibkr_core_mcp.local_browser import _safe_domain
 
     with pytest.raises(ValueError, match="Invalid domain"):
         _safe_domain("https://../evil/")
 
 
 def test_safe_domain_rejects_path_separator():
-    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    from ibkr_core_mcp.local_browser import _safe_domain
 
     with pytest.raises(ValueError, match="Invalid domain"):
         _safe_domain("evil/../../etc")
 
 
 def test_safe_domain_rejects_empty():
-    from ibkr_core_mcp.scrape_fallback import _safe_domain
+    from ibkr_core_mcp.local_browser import _safe_domain
 
     with pytest.raises(ValueError, match="Invalid domain"):
         _safe_domain("")
@@ -341,7 +312,7 @@ def test_safe_domain_rejects_empty():
 
 
 def test_resolve_profile_dir_prefers_exact_host(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+    from ibkr_core_mcp.local_browser import _resolve_profile_dir
 
     (tmp_path / "markets.ft.com").mkdir()
     (tmp_path / "ft.com").mkdir()
@@ -350,7 +321,7 @@ def test_resolve_profile_dir_prefers_exact_host(tmp_path):
 
 
 def test_resolve_profile_dir_strips_www(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+    from ibkr_core_mcp.local_browser import _resolve_profile_dir
 
     (tmp_path / "ft.com").mkdir()
 
@@ -358,7 +329,7 @@ def test_resolve_profile_dir_strips_www(tmp_path):
 
 
 def test_resolve_profile_dir_finds_parent_domain_for_subdomain(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+    from ibkr_core_mcp.local_browser import _resolve_profile_dir
 
     (tmp_path / "wsj.com").mkdir()
 
@@ -366,7 +337,7 @@ def test_resolve_profile_dir_finds_parent_domain_for_subdomain(tmp_path):
 
 
 def test_resolve_profile_dir_stops_at_two_labels(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+    from ibkr_core_mcp.local_browser import _resolve_profile_dir
 
     # A bare-TLD directory must never be matched — stripping stops while two labels remain.
     (tmp_path / "com").mkdir()
@@ -375,7 +346,7 @@ def test_resolve_profile_dir_stops_at_two_labels(tmp_path):
 
 
 def test_resolve_profile_dir_returns_none_when_nothing_matches(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+    from ibkr_core_mcp.local_browser import _resolve_profile_dir
 
     assert _resolve_profile_dir(tmp_path, "https://www.ft.com/x") is None
 
@@ -426,7 +397,7 @@ def _install_fake_crawl4ai(monkeypatch, raw_markdown: str = "fetched via crawl4a
 
 
 def test_crawl4ai_scraper_raises_when_not_installed(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper, Crawl4AIUnavailableError
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper, Crawl4AIUnavailableError
 
     monkeypatch.setitem(sys.modules, "crawl4ai", None)  # simulates "not installed"
 
@@ -436,7 +407,7 @@ def test_crawl4ai_scraper_raises_when_not_installed(monkeypatch, tmp_path):
 
 
 def test_crawl4ai_scraper_returns_markdown_and_url(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper
 
     _install_fake_crawl4ai(monkeypatch, raw_markdown="the full article text")
 
@@ -446,7 +417,7 @@ def test_crawl4ai_scraper_returns_markdown_and_url(monkeypatch, tmp_path):
 
 
 def test_crawl4ai_scraper_uses_saved_profile_when_present(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper
 
     captured, _hooks = _install_fake_crawl4ai(monkeypatch)
 
@@ -461,7 +432,7 @@ def test_crawl4ai_scraper_uses_saved_profile_when_present(monkeypatch, tmp_path)
 
 
 def test_crawl4ai_scraper_no_profile_when_absent(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper
 
     captured, _hooks = _install_fake_crawl4ai(monkeypatch)
 
@@ -476,7 +447,7 @@ def test_crawl4ai_scraper_installs_ssrf_request_guard_hook(monkeypatch, tmp_path
     """Regression guard for the DNS-rebinding / redirect SSRF gaps: every scrape
     must install a per-request guard on the Playwright page, not just rely on
     the earlier Python-level URL pre-check."""
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper
 
     _captured, hooks = _install_fake_crawl4ai(monkeypatch)
 
@@ -491,7 +462,7 @@ async def test_installed_ssrf_hook_registers_reject_private_requests_route(monke
     """The installed hook must, when given a page, register
     _reject_private_requests (or equivalent) as the route handler for every
     request the page makes, not just the initial navigation URL."""
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper, _reject_private_requests
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper, _reject_private_requests
 
     _captured, hooks = _install_fake_crawl4ai(monkeypatch)
 
@@ -512,96 +483,6 @@ async def test_installed_ssrf_hook_registers_reject_private_requests_route(monke
     pattern, handler = page.routed[0]
     assert pattern == "**/*"
     assert handler is _reject_private_requests
-
-
-def _install_fake_crawl4ai_tracking(monkeypatch, markdown_by_url=None, fail_urls=frozenset()):
-    """Separate fake-crawl4ai installer used only by scrape_batch tests below:
-    tracks how many AsyncWebCrawler instances get constructed (proving reuse
-    across multiple arun() calls within one scrape_batch() call) and which
-    URLs were actually passed to arun(), in call order. Kept independent from
-    _install_fake_crawl4ai above rather than changing that helper's return
-    shape, since 5 existing tests depend on its exact 2-tuple return.
-    """
-    construction_count = {"value": 0}
-    arun_urls: list[str] = []
-
-    class FakeCrawlerStrategy:
-        def set_hook(self, hook_type, hook):
-            pass
-
-    class FakeAsyncWebCrawler:
-        def __init__(self, config=None):
-            self.config = config
-            self.crawler_strategy = FakeCrawlerStrategy()
-            construction_count["value"] += 1
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc_info):
-            return False
-
-        async def arun(self, url):
-            arun_urls.append(url)
-            if url in fail_urls:
-                raise RuntimeError("fake crawl4ai failure")
-            content = (markdown_by_url or {}).get(url, f"content for {url}")
-            return _FakeCrawlResult(content)
-
-    class FakeBrowserConfig:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_module = types.ModuleType("crawl4ai")
-    setattr(fake_module, "AsyncWebCrawler", FakeAsyncWebCrawler)  # noqa: B010 -- ModuleType has no static attrs; setattr keeps mypy happy too
-    setattr(fake_module, "BrowserConfig", FakeBrowserConfig)  # noqa: B010
-    monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
-    return construction_count, arun_urls
-
-
-def test_scrape_batch_reuses_one_browser_across_all_urls(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-
-    construction_count, arun_urls = _install_fake_crawl4ai_tracking(monkeypatch)
-
-    scraper = Crawl4AIScraper(tmp_path)
-    urls = ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
-    outcomes = scraper.scrape_batch(urls, profile_domain="https://example.com")
-
-    assert construction_count["value"] == 1
-    assert arun_urls == urls
-    for url in urls:
-        assert outcomes[url] == {"url": url, "markdown": f"content for {url}"}
-
-
-def test_scrape_batch_isolates_one_url_failure_from_the_rest(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-
-    construction_count, _arun_urls = _install_fake_crawl4ai_tracking(
-        monkeypatch, fail_urls=frozenset({"https://example.com/b"})
-    )
-
-    scraper = Crawl4AIScraper(tmp_path)
-    urls = ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
-    outcomes = scraper.scrape_batch(urls, profile_domain="https://example.com")
-
-    assert construction_count["value"] == 1  # browser stayed open despite the failure
-    assert outcomes["https://example.com/a"] == {
-        "url": "https://example.com/a",
-        "markdown": "content for https://example.com/a",
-    }
-    assert isinstance(outcomes["https://example.com/b"], RuntimeError)
-    assert outcomes["https://example.com/c"] == {
-        "url": "https://example.com/c",
-        "markdown": "content for https://example.com/c",
-    }
-
-
-def test_scrape_batch_empty_urls_returns_empty_dict_without_importing_crawl4ai(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
-
-    scraper = Crawl4AIScraper(tmp_path)
-    assert scraper.scrape_batch([], profile_domain="https://example.com") == {}
 
 
 # ── create_profile (interactive login → saved profile) ────────────────────────
@@ -660,7 +541,7 @@ def test_create_profile_runs_the_coroutine_on_the_main_thread(monkeypatch, tmp_p
     setattr(fake_module, "BrowserProfiler", SignalInstallingProfiler)  # noqa: B010
     monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
 
-    from ibkr_core_mcp.scrape_fallback import create_profile
+    from ibkr_core_mcp.local_browser import create_profile
 
     dest = create_profile("https://example.com/login", tmp_path / "profiles")
 
@@ -668,7 +549,7 @@ def test_create_profile_runs_the_coroutine_on_the_main_thread(monkeypatch, tmp_p
 
 
 def test_create_profile_raises_when_not_installed(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, create_profile
+    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, create_profile
 
     monkeypatch.setitem(sys.modules, "crawl4ai", None)
 
@@ -677,7 +558,7 @@ def test_create_profile_raises_when_not_installed(monkeypatch, tmp_path):
 
 
 def test_create_profile_copies_into_profiles_dir_by_domain(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import create_profile
+    from ibkr_core_mcp.local_browser import create_profile
 
     _install_fake_browser_profiler(monkeypatch, tmp_path, domain="example.com")
 
@@ -689,7 +570,7 @@ def test_create_profile_copies_into_profiles_dir_by_domain(monkeypatch, tmp_path
 
 
 def test_create_profile_accepts_bare_domain(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import create_profile
+    from ibkr_core_mcp.local_browser import create_profile
 
     _install_fake_browser_profiler(monkeypatch, tmp_path, domain="example.com")
 
@@ -700,7 +581,7 @@ def test_create_profile_accepts_bare_domain(monkeypatch, tmp_path):
 
 
 def test_create_profile_overwrites_existing_profile(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import create_profile
+    from ibkr_core_mcp.local_browser import create_profile
 
     _install_fake_browser_profiler(monkeypatch, tmp_path, domain="example.com")
 
@@ -719,13 +600,13 @@ def test_create_profile_overwrites_existing_profile(monkeypatch, tmp_path):
 
 
 def test_list_profiles_returns_empty_for_missing_dir(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import list_profiles
+    from ibkr_core_mcp.local_browser import list_profiles
 
     assert list_profiles(tmp_path / "nope") == []
 
 
 def test_list_profiles_reports_each_saved_domain(tmp_path):
-    from ibkr_core_mcp.scrape_fallback import list_profiles
+    from ibkr_core_mcp.local_browser import list_profiles
 
     (tmp_path / "www.ft.com").mkdir()
     (tmp_path / "wsj.com").mkdir()
@@ -762,7 +643,7 @@ def test_cli_create_profile_does_not_require_an_anthropic_key(monkeypatch, tmp_p
     as long as it existed, by setting ANTHROPIC_API_KEY rather than asking why a
     browser-login command needed one.
     """
-    import ibkr_core_mcp.scrape_fallback as sf
+    import ibkr_core_mcp.local_browser as sf
 
     captured = {}
 
@@ -790,7 +671,7 @@ def test_cli_create_profile_refuses_without_a_terminal(monkeypatch, tmp_path):
     fetch_page report "Used a saved login profile", and still returns the paywall
     stub. A loud refusal is the only safe behaviour.
     """
-    import ibkr_core_mcp.scrape_fallback as sf
+    import ibkr_core_mcp.local_browser as sf
 
     called = []
     monkeypatch.setattr(sf, "create_profile", lambda u, d: called.append(u))
@@ -805,7 +686,7 @@ def test_cli_create_profile_refuses_without_a_terminal(monkeypatch, tmp_path):
 
 
 def test_cli_create_profile_calls_create_profile_with_config_dir(monkeypatch):
-    import ibkr_core_mcp.scrape_fallback as sf
+    import ibkr_core_mcp.local_browser as sf
 
     captured = {}
 
@@ -877,7 +758,7 @@ def test_search_site_forces_extract_head(monkeypatch):
     config" edit that drops it would produce something that still returns URLs, still
     looks ranked, and silently is not.
     """
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     captured = _install_fake_seeder(monkeypatch, [_entry("https://x.dev/a", 1.0)])
     search_site("x.dev", "some query")
@@ -891,7 +772,7 @@ def test_search_site_forces_extract_head(monkeypatch):
 def test_search_site_drops_zero_scored_pages(monkeypatch):
     """BM25 is sparse — 4 of 87 URLs scored above zero on the live run. Returning the
     tail would pad a real answer with pages the query never matched."""
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(
         monkeypatch,
@@ -918,7 +799,7 @@ def test_search_site_returns_nothing_when_every_page_scores_the_same(monkeypatch
     The old test mocked a miss as 0.0, which is what one assumes and not what happens.
     These fixtures use the values the real scorer returns.
     """
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(monkeypatch, [_entry(f"https://x.dev/{i}", 0.5) for i in range(87)])
 
@@ -929,7 +810,7 @@ def test_search_site_keeps_a_lone_page_that_scored_above_neutral(monkeypatch):
     """A flat distribution only means "no information" when it sits at or below the
     neutral score. One page scoring 1.0 is a genuine hit, not a plateau — the
     no-information guard must not swallow it."""
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(monkeypatch, [_entry("https://x.dev/only", 1.0, title="The One Page")])
     results = search_site("x.dev", "q")
@@ -941,7 +822,7 @@ def test_search_site_keeps_real_hits_a_blunt_threshold_would_discard(monkeypatch
     """Live "deep crawling strategy" scored 1.0 then three pages at 0.400 and one at
     0.389 — all genuine. The vendor's own score_threshold=0.51 empties the nonsense
     query but also throws these away, which is why the plateau check is used instead."""
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(
         monkeypatch,
@@ -961,7 +842,7 @@ def test_search_site_keeps_real_hits_a_blunt_threshold_would_discard(monkeypatch
 
 
 def test_search_site_ranks_highest_score_first(monkeypatch):
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(
         monkeypatch,
@@ -975,7 +856,7 @@ def test_search_site_ranks_highest_score_first(monkeypatch):
 def test_search_site_extracts_the_title_from_head_data(monkeypatch):
     """head_data is a dict (verified live), not a JSON string — reading it as text
     would put a repr in front of the user."""
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(monkeypatch, [_entry("https://x.dev/a", 1.0, title="Deep Crawling - Docs")])
     assert search_site("x.dev", "q")[0]["title"] == "Deep Crawling - Docs"
@@ -984,7 +865,7 @@ def test_search_site_extracts_the_title_from_head_data(monkeypatch):
 def test_search_site_clamps_limit_and_applies_it_after_ranking(monkeypatch):
     """The limit bounds the ANSWER, not the candidate pool: _SEED_MAX_URLS is what the
     seeder is asked for, so a small limit cannot truncate the pool before scoring."""
-    from ibkr_core_mcp.scrape_fallback import _SEED_MAX_URLS, search_site
+    from ibkr_core_mcp.local_browser import _SEED_MAX_URLS, search_site
 
     captured = _install_fake_seeder(monkeypatch, [_entry(f"https://x.dev/{i}", 1.0 - i / 100) for i in range(30)])
     results = search_site("x.dev", "q", limit=3)
@@ -997,7 +878,7 @@ def test_search_site_clamps_limit_and_applies_it_after_ranking(monkeypatch):
 def test_search_site_rejects_a_blank_query(monkeypatch):
     """An empty query would return the sitemap in arbitrary order while presenting
     itself as a search result — the exact shape of a silent wrong answer."""
-    from ibkr_core_mcp.scrape_fallback import search_site
+    from ibkr_core_mcp.local_browser import search_site
 
     _install_fake_seeder(monkeypatch, [])
     with pytest.raises(ValueError, match="query must be non-empty"):
@@ -1007,7 +888,7 @@ def test_search_site_rejects_a_blank_query(monkeypatch):
 
 
 def test_search_site_raises_when_crawl4ai_is_not_installed(monkeypatch):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, search_site
+    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, search_site
 
     monkeypatch.setitem(sys.modules, "crawl4ai", None)
     with pytest.raises(Crawl4AIUnavailableError, match="ibkr_core_mcp\\[scraper\\]"):
@@ -1080,7 +961,7 @@ def test_crawl_site_deduplicates_the_root_url(monkeypatch, tmp_path):
     claims a page count the archive does not contain. Found by probing the real API
     before writing the function, not by a test failing afterwards.
     """
-    from ibkr_core_mcp.scrape_fallback import crawl_site
+    from ibkr_core_mcp.local_browser import crawl_site
 
     _install_fake_deep_crawler(
         monkeypatch,
@@ -1096,7 +977,7 @@ def test_crawl_site_deduplicates_the_root_url(monkeypatch, tmp_path):
 
 
 def test_crawl_site_keeps_the_larger_copy_of_a_duplicated_url(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import crawl_site
+    from ibkr_core_mcp.local_browser import crawl_site
 
     _install_fake_deep_crawler(
         monkeypatch,
@@ -1114,7 +995,7 @@ def test_crawl_site_keeps_the_larger_copy_of_a_duplicated_url(monkeypatch, tmp_p
 def test_crawl_site_confines_the_crawl_to_one_host_and_caps_pages(monkeypatch, tmp_path):
     """include_external=False is a safety property, not just scoping: it is what stops a
     hostile page walking the crawler onto another host."""
-    from ibkr_core_mcp.scrape_fallback import crawl_site
+    from ibkr_core_mcp.local_browser import crawl_site
 
     _, strategy_kwargs, hooks = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
     crawl_site("https://d.dev/", tmp_path, max_pages=7, max_depth=3)
@@ -1128,7 +1009,7 @@ def test_crawl_site_confines_the_crawl_to_one_host_and_caps_pages(monkeypatch, t
 
 
 def test_crawl_site_clamps_absurd_bounds(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import crawl_site
+    from ibkr_core_mcp.local_browser import crawl_site
 
     _, strategy_kwargs, _ = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
     crawl_site("https://d.dev/", tmp_path, max_pages=99999, max_depth=99)
@@ -1138,7 +1019,7 @@ def test_crawl_site_clamps_absurd_bounds(monkeypatch, tmp_path):
 
 
 def test_crawl_site_drops_empty_pages_so_the_count_is_honest(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import crawl_site
+    from ibkr_core_mcp.local_browser import crawl_site
 
     _install_fake_deep_crawler(
         monkeypatch,
@@ -1155,7 +1036,7 @@ def test_crawl_site_drops_empty_pages_so_the_count_is_honest(monkeypatch, tmp_pa
 
 def test_crawl_site_uses_a_saved_login_profile_when_one_matches(monkeypatch, tmp_path):
     """Archiving a subscription site is something the paid rung could never do."""
-    from ibkr_core_mcp.scrape_fallback import crawl_site
+    from ibkr_core_mcp.local_browser import crawl_site
 
     (tmp_path / "d.dev").mkdir()
     browser_kwargs, _, _ = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
@@ -1166,7 +1047,7 @@ def test_crawl_site_uses_a_saved_login_profile_when_one_matches(monkeypatch, tmp
 
 
 def test_crawl_site_raises_when_crawl4ai_is_not_installed(monkeypatch, tmp_path):
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, crawl_site
+    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, crawl_site
 
     monkeypatch.setitem(sys.modules, "crawl4ai", None)
     with pytest.raises(Crawl4AIUnavailableError, match="ibkr_core_mcp\\[scraper\\]"):

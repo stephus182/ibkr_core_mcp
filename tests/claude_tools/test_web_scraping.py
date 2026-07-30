@@ -29,8 +29,8 @@ _REALISTIC_PARAGRAPH = (
     "operation alongside its required parameters and expected response shape."
 )
 
-# Repeated to ~7 KB so it clears web_scraper._MIN_USEFUL_BYTES, matching the size of a
-# real documentation page (12.9-91.9 KB in docs/audits/audit-evidence/scrapes/).
+# ~7 KB, matching a real documentation page (12.9-91.9 KB in
+# docs/audits/audit-evidence/scrapes/). Grades "ok" under assess_quality.
 _REALISTIC_MARKDOWN = _REALISTIC_PARAGRAPH * 4
 
 # ============================================================================
@@ -145,7 +145,7 @@ def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
 
 
 # ============================================================================
-# Crawl4AI fallback wiring (_scrape_with_fallback + handler integration)
+# Per-result quality assessment wiring
 # ============================================================================
 
 
@@ -169,7 +169,7 @@ def test_validate_public_url_allows_public_https():
 
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
-@patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
+@patch("ibkr_core_mcp.local_browser.Crawl4AIScraper")
 def test_firecrawl_search_never_fetches_blocked_result_url_via_crawl4ai(mock_c4a_cls, mock_fc_cls):
     """A search result pointing at a private/internal address (e.g. a manipulated
     or attacker-influenced search result) must not trigger a local Crawl4AI fetch
@@ -192,7 +192,7 @@ def test_firecrawl_search_never_fetches_blocked_result_url_via_crawl4ai(mock_c4a
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.web_scraper.WebDocsStore")
-@patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
+@patch("ibkr_core_mcp.local_browser.Crawl4AIScraper")
 def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
     """A crawled sub-page URL that resolves to a private address (e.g. Firecrawl
     followed a redirect/internal link off the validated root) must not reach
@@ -218,12 +218,12 @@ def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(mock_c4a
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.web_scraper.WebDocsStore")
-@patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
+@patch("ibkr_core_mcp.local_browser.Crawl4AIScraper")
 def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
     """A page whose fallback attempt fails/is skipped/is unavailable must not be
     counted in the 'Crawl4AI fallback used for N page(s)' summary — that count
     must reflect only pages where Crawl4AI actually replaced the content."""
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError
 
     toolkit = _make_toolkit()
     mock_fc = MagicMock()
@@ -302,7 +302,7 @@ def _blocked_firecrawl_toolkit(exc):
 # ============================================================================
 
 # ~3.5 KB — real prose (over assess_quality's 200-word confidence bar, so no per-page
-# fallback fires) but under web_scraper._MIN_USEFUL_BYTES, so the root rescue still runs.
+# fallback fires\).
 _SUB_THRESHOLD_MARKDOWN = _REALISTIC_PARAGRAPH * 2
 
 
@@ -401,7 +401,7 @@ def test_fetch_page_says_how_to_create_a_profile_when_none_applies(tmp_path):
 
 def test_fetch_page_reports_crawl4ai_unavailable_without_raising():
     """The [scraper] extra is optional; its absence is a message, not a traceback."""
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError
 
     toolkit = _fetch_toolkit()
     toolkit._crawl4ai.scrape.side_effect = Crawl4AIUnavailableError("crawl4ai is not installed")
@@ -476,7 +476,7 @@ def test_search_site_blocks_a_private_domain_before_any_lookup():
 
 def test_search_site_ranks_and_points_at_fetch_page():
     toolkit = _make_toolkit()
-    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
         mock_search.return_value = [
             {"url": "https://docs.x.dev/deep", "title": "Deep Crawling", "score": 1.0},
             {"url": "https://docs.x.dev/multi", "title": "Multi URL", "score": 0.4},
@@ -495,7 +495,7 @@ def test_search_site_says_nothing_matched_rather_than_returning_an_empty_list():
     """Zero matches is a real answer ("the site has no such page"), not a failure,
     and must not read as a broken tool."""
     toolkit = _make_toolkit()
-    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
         mock_search.return_value = []
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "nonexistent topic"})
 
@@ -504,10 +504,10 @@ def test_search_site_says_nothing_matched_rather_than_returning_an_empty_list():
 
 
 def test_search_site_reports_a_missing_package_without_raising():
-    from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError
+    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError
 
     toolkit = _make_toolkit()
-    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
         mock_search.side_effect = Crawl4AIUnavailableError("not installed")
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "q"})
 
@@ -519,7 +519,7 @@ def test_search_site_needs_no_firecrawl_key():
     that would recreate the coupling this whole refactor removes."""
     toolkit = _make_toolkit()
     toolkit._config.firecrawl_api_key = ""
-    with patch("ibkr_core_mcp.scrape_fallback.search_site") as mock_search:
+    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
         mock_search.return_value = [{"url": "https://docs.x.dev/a", "title": "A", "score": 1.0}]
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "q"})
 
@@ -546,7 +546,7 @@ def test_crawl_site_refuses_to_archive_an_error_page_as_content():
     toolkit = _make_toolkit()
     toolkit._web_docs = MagicMock()
     toolkit._web_docs.get_cached_crawl.return_value = None
-    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+    with patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl:
         mock_crawl.return_value = [
             {
                 "url": "https://d.dev/core/",
@@ -572,7 +572,7 @@ def test_crawl_site_still_archives_a_genuinely_short_page():
         "crawled_at": "2026-07-30T00:00:00+00:00",
         "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
     }
-    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+    with patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl:
         mock_crawl.return_value = [{"url": "https://d.dev/", "markdown": _REALISTIC_PARAGRAPH[:1600], "metadata": {}}]
         text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
 
@@ -592,7 +592,7 @@ def test_crawl_site_needs_no_firecrawl_key():
         "crawled_at": "2026-07-30T00:00:00+00:00",
         "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
     }
-    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+    with patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl:
         mock_crawl.return_value = [{"url": "https://d.dev/", "markdown": _REALISTIC_MARKDOWN, "metadata": {}}]
         text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
 
@@ -614,7 +614,7 @@ def test_crawl_site_uses_the_48h_drive_cache():
         "crawled_at": "2026-07-30T00:00:00+00:00",
         "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
     }
-    with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
+    with patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl:
         text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
         mock_crawl.assert_not_called()
 

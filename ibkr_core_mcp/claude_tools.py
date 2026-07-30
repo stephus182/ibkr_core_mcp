@@ -9,9 +9,11 @@ portable: `mcp_server.py` reuses both to expose the same capabilities over MCP
 was tightened when `plotly` was removed — this package returns data, never figures;
 rendering belongs to the consuming UI. See `docs/python-package-landscape.md`.
 
-This is also the only layer meant to talk to the Anthropic API from a host app, so
-that a host's token accounting sees every call. The single sanctioned exception is
-`scrape_fallback.judge_completeness_llm`.
+This is also the only layer that talks to the Anthropic API from a host app, so that a
+host's token accounting sees every call — with **no exceptions** as of 2026-07-30. There
+was one (`judge_completeness_llm`, arbitrating between two scraper engines); deleting the
+second engine deleted the need for it. Adding another requires that no other design works,
+not merely that the call is cheap.
 
 Adding a tool: see the checklist in `CLAUDE.md`. Use `_first_account_id()` /
 `_all_account_ids()` rather than inlining `get_accounts()` — they centralise the
@@ -2348,7 +2350,7 @@ class ClaudeToolkit:
             import requests
 
             from ibkr_core_mcp.auth import BrowserCookieAuth
-            from ibkr_core_mcp.scrape_fallback import _run_async
+            from ibkr_core_mcp.local_browser import _run_async
             from ibkr_core_mcp.streaming import IBKRWebSocket
 
             async def _touch() -> None:
@@ -2994,21 +2996,19 @@ class ClaudeToolkit:
 
         Shared by every code path that can trigger a *local* fetch of an
         externally-sourced URL: the firecrawl_crawl root URL, and — critically —
-        every per-page/per-result URL passed to _assess_fallback_need (called by
-        both _scrape_with_fallback for the search path and
-        _apply_crawl4ai_fallback_batch for the crawl path), since those
-        can originate from Firecrawl's own crawl (redirects/internal links) or from
-        search results (which are external, attacker-influenceable content) rather
-        than from a URL the caller explicitly typed in.
+        every URL that reaches the local browser: `crawl_site`'s root, `fetch_page`'s
+        URL, and `search_site`'s domain. All three can be model-supplied rather than
+        typed by the user, and a deep crawl additionally follows links discovered on
+        the page — which is why the browser-level guard exists on top of this one.
 
         Handles standard hostnames, IPv4/IPv6 literals, and decimal/hex-encoded IPs
         (e.g. http://2130706433/ = 127.0.0.1) by resolving before checking.
 
         This is one of two independent SSRF layers — see is_private_host's
-        docstring in scrape_fallback.py for why a Python-level pre-check alone
+        docstring in local_browser.py for why a Python-level pre-check alone
         (this method) cannot fully close a DNS-rebinding or redirect-based
         bypass, and how the second layer (a Playwright-level per-request guard
-        installed in Crawl4AIScraper.scrape/scrape_batch) closes it.
+        installed by Crawl4AIScraper.scrape and crawl_site) closes it.
 
         Args:
             url: Candidate URL to validate before any local fetch.
@@ -3019,7 +3019,7 @@ class ClaudeToolkit:
         """
         import urllib.parse
 
-        from ibkr_core_mcp.scrape_fallback import is_private_host
+        from ibkr_core_mcp.local_browser import is_private_host
 
         try:
             parsed = urllib.parse.urlparse(url)
@@ -3111,7 +3111,7 @@ class ClaudeToolkit:
         free and the `[scraper]` extra is optional, so a host that never scrapes never
         pays for it. See the `_crawl4ai` note in `__init__` for the threading caveat.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIScraper
+        from ibkr_core_mcp.local_browser import Crawl4AIScraper
 
         if self._crawl4ai is None:
             self._crawl4ai = Crawl4AIScraper(self._config.crawl4ai_profiles_dir)
@@ -3127,14 +3127,14 @@ class ClaudeToolkit:
         """
         import urllib.parse
 
-        from ibkr_core_mcp.scrape_fallback import _resolve_profile_dir
+        from ibkr_core_mcp.local_browser import _resolve_profile_dir
 
         if _resolve_profile_dir(self._config.crawl4ai_profiles_dir, url) is not None:
             return "Used a saved login profile for this domain."
         domain = urllib.parse.urlparse(url).hostname or url
         return (
             f"No saved login profile for {domain}. If this is a paywalled site you "
-            f"subscribe to, run `python -m ibkr_core_mcp.scrape_fallback "
+            f"subscribe to, run `python -m ibkr_core_mcp.local_browser "
             f"create-profile {domain}` once — you log in by hand, and only the "
             f"resulting browser session is stored, locally."
         )
@@ -3155,7 +3155,7 @@ class ClaudeToolkit:
         Returns:
             (text, None) — a save summary, a cache-hit notice, or an honest failure.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, crawl_site
+        from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, crawl_site
         from ibkr_core_mcp.web_scraper import WebDocsStore, content_bytes
 
         url = str(inputs.get("url", "")).strip()
@@ -3218,7 +3218,7 @@ class ClaudeToolkit:
         # this reuses it rather than inventing a threshold that could drift from it. Only
         # an all-"fallback" verdict refuses: "ambiguous" covers genuinely short pages, and
         # discarding those would be its own kind of wrong.
-        from ibkr_core_mcp.scrape_fallback import assess_quality
+        from ibkr_core_mcp.local_browser import assess_quality
 
         if all(assess_quality(p["markdown"], None, p["url"]) == "fallback" for p in pages):
             biggest = max(pages, key=lambda p: len(p["markdown"].encode("utf-8")))
@@ -3269,7 +3269,7 @@ class ClaudeToolkit:
             Never raises: a missing browser package, an unreachable sitemap and a query
             that simply matched nothing are three different messages.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, search_site
+        from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, search_site
 
         domain = str(inputs.get("domain", "")).strip()
         query = str(inputs.get("query", "")).strip()
@@ -3324,14 +3324,12 @@ class ClaudeToolkit:
     def _handle_fetch_page(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Handle the fetch_page tool — one URL, straight to the local browser.
 
-        The recovery ladder in _handle_firecrawl_crawl reaches Crawl4AI only
-        *underneath* a Firecrawl attempt. That is right for archiving a site and
-        wrong for reading a single paywalled article: Firecrawl cannot log in, so
-        trying it first spends a credit to be handed a subscription stub. This
-        handler skips it entirely.
+        The one tool for "read me this page". Goes straight to the local browser: no
+        Firecrawl attempt, so no credit is spent being handed a subscription stub by a
+        service that cannot log in, and a saved profile actually applies.
 
-        Deliberately does not persist to Drive. firecrawl_crawl is the archiving
-        tool; this one answers "read me this page" and its result is the message.
+        Deliberately does not persist to Drive. `crawl_site` is the archiving tool;
+        this one's result *is* the message.
 
         Args:
             inputs: {"url": <public http/https page URL>}.
@@ -3341,7 +3339,7 @@ class ClaudeToolkit:
             failure naming the cause. Never raises: an absent browser, a crashed
             browser and an empty page are three different messages, not tracebacks.
         """
-        from ibkr_core_mcp.scrape_fallback import Crawl4AIUnavailableError, assess_quality
+        from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, assess_quality
 
         url = str(inputs.get("url", "")).strip()
         if not url:

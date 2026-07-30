@@ -8,7 +8,7 @@ mocking. Covers:
 Run with real API keys exported (not committed anywhere):
     export FIRECRAWL_API_KEY=fc-...
     export ANTHROPIC_API_KEY=sk-ant-...   # only needed if a result is ambiguous
-                                          # enough to trigger judge_completeness_llm
+
     pytest tests/test_web_scraper_live.py -v -m integration
 
 All tests are skipped automatically when FIRECRAWL_API_KEY is not set.
@@ -50,6 +50,19 @@ def firecrawl_key() -> str:
     return key
 
 
+def _skip_if_account_cannot_serve(text: str) -> None:
+    """Skip — loudly, naming the cause — when Firecrawl refuses for account reasons.
+
+    HTTP 402 (out of credits) and 429 (rate limited) describe the ACCOUNT, not the code
+    under test, so failing on them reports a defect that does not exist. Skipping with the
+    real message keeps the cause visible in the skip reason instead of hiding it behind a
+    green run. Hit for real on 2026-07-30, when a day of live scraper work exhausted the
+    free tier mid-suite.
+    """
+    if "HTTP 402" in text or "HTTP 429" in text:
+        pytest.skip(f"Firecrawl account cannot serve this request right now: {text.strip()}")
+
+
 @pytest.fixture(scope="module")
 def live_config(firecrawl_key, tmp_path_factory):
     from ibkr_core_mcp.config import Config
@@ -82,10 +95,18 @@ def toolkit(live_config):
 
 @pytest.mark.integration
 def test_firecrawl_client_search_real_query(firecrawl_key):
-    from ibkr_core_mcp.web_scraper import FirecrawlClient
+    from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
 
     client = FirecrawlClient(firecrawl_key)
-    results = client.search("Interactive Brokers Client Portal API", limit=1)
+    try:
+        results = client.search("Interactive Brokers Client Portal API", limit=1)
+    except FirecrawlError as exc:
+        # The client RAISES for account-level statuses rather than returning text, so the
+        # string-based guard used elsewhere cannot see this one. Same reasoning: 402/429
+        # describe the account, not the code. See _skip_if_account_cannot_serve.
+        if exc.status_code in (402, 429):
+            pytest.skip(f"Firecrawl account cannot serve this request right now: {exc}")
+        raise
 
     assert len(results) >= 1
     result = results[0]
@@ -116,6 +137,7 @@ def test_toolkit_firecrawl_search_end_to_end(toolkit):
         {"query": "Interactive Brokers Client Portal API", "limit": 1},
     )
     assert fig is None
+    _skip_if_account_cannot_serve(text)
     assert "Search results for" in text
     assert "http" in text
 

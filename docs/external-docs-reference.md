@@ -94,7 +94,7 @@ not in the code.
 `docs.anthropic.com` now 301-redirects to `platform.claude.com` for both pages above
 (re-verified live 2026-07-14) — updated to the new canonical domain.
 
-**Web Scraping — Firecrawl + Crawl4AI local** (`web_scraper.py`, `scrape_fallback.py`)
+**Web Scraping — Firecrawl + Crawl4AI local** (`web_scraper.py`, `local_browser.py`)
 
 | Topic | URL |
 |---|---|
@@ -107,7 +107,7 @@ not in the code.
 | **Crawl4AI anti-bot / fallback, undetected browser, proxy & security** (directly relevant to rung 2's job — beating blocks locally before the paid rung is reached) | https://docs.crawl4ai.com/advanced/ |
 | **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
 | **Crawl4AI CHANGELOG** (confirms `BrowserProfiler`'s introduction — see below) | https://github.com/unclecode/crawl4ai/blob/main/CHANGELOG.md |
-| **Crawl4AI migration guides** (webscraping-strategy, and table extraction v0.7.3. **Neither affects this repo** — `scrape_fallback.py` uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`, none of the migrated APIs. Checked 2026-07-28 so a future reader need not re-check) | https://docs.crawl4ai.com/migration/webscraping-strategy-migration/ , https://docs.crawl4ai.com/migration/table_extraction_v073/ |
+| **Crawl4AI migration guides** (webscraping-strategy, and table extraction v0.7.3. **Neither affects this repo** — `local_browser.py` uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`, none of the migrated APIs. Checked 2026-07-28 so a future reader need not re-check) | https://docs.crawl4ai.com/migration/webscraping-strategy-migration/ , https://docs.crawl4ai.com/migration/table_extraction_v073/ |
 
 ⚠️ **Four products share the name "Crawl4AI".** Only the first is used here: the **OSS
 library** (PyPI `crawl4ai`, rung 2 and `fetch_page`). The others are **Crawl4AI Cloud**

@@ -22,7 +22,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
-| `web_scraper` / `scrape_fallback` | Firecrawl web search/crawl, with an optional Crawl4AI fallback for incomplete/paywalled results |
+| `web_scraper` / `local_browser` | Firecrawl web search/crawl, with an optional Crawl4AI fallback for incomplete/paywalled results |
 | `mcp_server` | MCP server (stdio + SSE) exposing all 45 tools to any MCP client |
 
 ---
@@ -303,7 +303,7 @@ For paywalled sites you already subscribe to, Crawl4AI can reuse a saved browser
 
 ```bash
 # One-time interactive login; opens a real browser window
-python -m ibkr_core_mcp.scrape_fallback create-profile https://www.wsj.com
+python -m ibkr_core_mcp.local_browser create-profile https://www.wsj.com
 ```
 
 The saved session lives under `CRAWL4AI_PROFILES_DIR` (default `~/.ibkr_core/crawl4ai_profiles/<domain>/`) and is reused automatically on future scrapes of that domain. Every URL that can reach a local Crawl4AI fetch — including Firecrawl-discovered sub-pages and search-result URLs — is validated against an SSRF guard first; see [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback) for the full mitigation.

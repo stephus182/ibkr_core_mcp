@@ -145,7 +145,7 @@ Note: `fig` is currently always `None` — reserved for a future chart-returning
 
 Note: `ClaudeToolkit` exposes no order-write tools. Order placement must go through `IBKRClient` directly, which enforces the fingerprint gates.
 
-**Layering exception:** `scrape_fallback.judge_completeness_llm()` (used by the
+**Layering exception:** `local_browser.judge_completeness_llm()` (used by the
 `firecrawl_search`/`firecrawl_crawl` handlers) is the one place `ibkr_core_mcp` calls
 the Anthropic API directly with `config.anthropic_api_key`, rather than only handing
 `ClaudeToolkit.tools` to a host app's own client. This was a deliberate, scoped

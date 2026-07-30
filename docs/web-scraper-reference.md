@@ -58,7 +58,7 @@ wrong one sends you to an API that does not match the code in front of you. Surv
 
 | # | Thing | What it is | Used here? |
 |---|---|---|---|
-| 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes** — `scrape_fallback.py`, behind `fetch_page`, `crawl_site` and `search_site` |
+| 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes** — `local_browser.py`, behind `fetch_page`, `crawl_site` and `search_site` |
 | 2 | **Crawl4AI Cloud** (`api.crawl4ai.com`) | The vendor's hosted REST API, credit-billed | **No — built, then removed 2026-07-28. See §5.1** |
 | 3 | **`crawl4ai-cloud-sdk`** (PyPI, 1.2.0) | The vendor's own Python client for #2 | **No** — removed alongside #2 |
 | 4 | **`janbuchar/crawl4ai` Apify Actor** | A community wrapper around #1, run on Apify's platform | **No — rejected, see §5.1** |
@@ -87,7 +87,7 @@ They also differ in *documentation shape*, which matters under this repo's API-d
 > the 404 body is itself a valid-looking HTML page.
 
 Handlers live in `claude_tools.py`. The split is deliberate: `web_scraper.py` never imports
-`scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
+`local_browser.py`, so the Firecrawl client stays a pure protocol wrapper.
 
 `fetch_page` was added on 2026-07-28 and closed a real gap: until then the only way to read a
 single known URL was to run a whole site crawl at it, and nothing could open a paywall, because
@@ -338,7 +338,7 @@ Three things killed it:
 2. **It could not serve the primary requirement at all.** The reason this repo needs Crawl4AI is
    paywalled sites (§6). Cloud has a `POST /v1/profiles` endpoint, but using it means uploading a
    logged-in WSJ or FT session to a third party — and the vendor's own SDK does not even wrap it.
-   `scrape_fallback.py` already does the same thing locally, for free, with no key and nothing
+   `local_browser.py` already does the same thing locally, for free, with no key and nothing
    leaving the machine.
 3. **The plan that built it argued against itself.** Its own §2 established that local was the
    rung that worked, then concluded "put Cloud last" instead of asking whether Cloud was needed —
@@ -425,7 +425,7 @@ of the subscription stub. This is the capability the whole local layer exists fo
 > browser with **HTTP 401, DataDome captcha, 1 B of markdown** — identically in all four
 > combinations tested: headless or visible window, with the saved profile or without it. The
 > block lands on the *automated browser*, before any cookie is consulted, so the login is never
-> the deciding factor. An earlier note in §10 read WSJ's 1 B as "no login profile"; that
+> the deciding factor. An earlier note in §11 read WSJ's 1 B as "no login profile"; that
 > diagnosis was wrong, and the profile that has since been created did not move the number.
 >
 > **FT is reachable** — `ft.com` returns 59,455 B, HTTP 200, headless, with no profile at all. So
@@ -443,7 +443,7 @@ of the subscription stub. This is the capability the whole local layer exists fo
 **1. Save the login** — interactive, needs your hands:
 
 ```bash
-python -m ibkr_core_mcp.scrape_fallback create-profile https://www.ft.com
+python -m ibkr_core_mcp.local_browser create-profile https://www.ft.com
 ```
 
 This opens a **real, visible browser**. Log in by hand, then confirm in the terminal. The
@@ -476,7 +476,7 @@ create that profile under its exact hostname.
 ### Checking what you have
 
 ```bash
-python -m ibkr_core_mcp.scrape_fallback list-profiles
+python -m ibkr_core_mcp.local_browser list-profiles
 ```
 
 Prints each saved domain, its path, and how many days old the session is. Sessions expire; when
@@ -566,7 +566,75 @@ silent skip.
 
 ---
 
-## 10. Verified behaviors
+## 10. Live testing — mandatory, and how to run it
+
+**A green unit suite is not evidence that these tools work.** Every defect in the
+2026-07-30 rewrite was found by running a tool, never by a test failing: four in one
+session, each behind a passing suite. Before that, `create_profile` shipped with three
+green tests having never once been executed, and broke on its first real invocation for
+three independent reasons. Mocks here have repeatedly been weaker than the dependency they
+stand in for — a fake seeder scores a miss 0.0, the real one scores it 0.5.
+
+So the rule for this subsystem is: **any change to a web tool requires a live run before
+it is called done, and the run is recorded in §11.**
+
+### The suite
+
+```bash
+pytest tests/test_web_tools_live.py -v -m integration
+```
+
+11 tests, ~28 s, and every one is a regression guard for a defect a live run found — the
+docstring names which. Read the docstring before concluding a failing test is wrong.
+
+| Requirement | Gates | Cost |
+|---|---|---|
+| `[scraper]` extra + `crawl4ai-setup` | the 10 browser tests | free |
+| `FIRECRAWL_API_KEY` | 1 whole-web search test | ~1 credit |
+
+Each requirement skips independently rather than failing, so a machine without a Firecrawl
+key still gets 10 of 11.
+
+**An exhausted quota is not a test failure.** HTTP 402 (out of credits) and 429 (rate
+limited) describe the account, so the affected tests skip with the real message in the skip
+reason rather than reporting a defect that does not exist — loud, never swallowed. This
+fired for real on 2026-07-30. The three browser tools are unaffected by any of it: free is
+free.
+
+### What it covers, and why each one exists
+
+| Test | The defect it guards |
+|---|---|
+| `search_site_ranks_the_right_page_first` | `extract_head=True` is mandatory — without it **zero** URLs are scored and the list is sitemap order, while still looking ranked. **The vendor's own example omits the flag.** |
+| `search_site_reports_no_match_instead_of_ranking_noise` | BM25 scores a non-match **0.5, not 0.0**. A nonsense query once returned ten confidently-ranked pages: Privacy Policy, Contributing Guide, home page. |
+| `search_site_needs_no_firecrawl_key` | Free site search is why the paid crawl rung could go. A key requirement creeping back would silently undo that. |
+| `fetch_page_returns_real_content_without_crying_wolf` | A guard that fires on everything is as useless as one that never fires. |
+| `fetch_page_flags_an_anti_bot_stub_rather_than_presenting_it` | `wsj.com` returns 1 B at HTTP 401; `(1 B)` reads like a short page unless something says otherwise. |
+| `crawl_site_refuses_to_archive_an_error_page` | A 44-byte nginx 403 was archived while the reply said "Crawl complete: saved 1 page(s)". |
+| `crawl_site_archives_a_real_page_and_does_not_duplicate_the_root` | The deep-crawl strategy returns the root **twice**, depth 0 and depth 1; undeduplicated the manifest claims a page count the archive lacks. |
+| `firecrawl_search_reaches_hosts_search_site_never_could` | The entire justification for keeping the Firecrawl dependency. |
+| `private_hosts_are_refused_before_any_request` ×3 | Every URL-taking tool must refuse a private host *before* the request it is meant to prevent. |
+
+### Sibling suites
+
+| File | Scope |
+|---|---|
+| `tests/test_web_tools_live.py` | **the four tools end to end — start here** |
+| `tests/test_local_browser.py` | browser internals, crawl4ai mocked |
+| `tests/test_crawl4ai_live.py` | one real Playwright round-trip |
+| `tests/test_web_scraper_live.py` | the Firecrawl client directly |
+| `tests/test_web_scraper_drive_live.py` | real Drive persistence |
+
+### Choosing a target
+
+**Not `example.com`.** It yields ~166 B, which correctly grades `fallback`, so it is a bad
+probe for anything but the too-thin path — it would make a working tool look broken.
+`docs.crawl4ai.com` is used throughout: small sitemap, static content, tolerant of
+automation. `docs.crawl4ai.com/core/` is deliberately kept as the 403 fixture.
+
+---
+
+## 11. Verified behaviors
 
 Each entry was observed, not assumed. Evidence lives in
 `docs/audits/audit-evidence/scrapes/manifest.json` unless noted.
@@ -592,6 +660,8 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-30 | **The local rung beats the paid rung on documentation hosts, on size and speed.** Same URLs, minutes apart: `docs.firecrawl.dev/introduction` 14,341 B / 16.8 s via Firecrawl vs **17,364 B / 1.2 s** local; `interactivebrokers.com/docs/web-api/` 5,515 B / 13.2 s vs **8,786 B / 1.3 s**. Local fetched 4/4 targets that day (0.5–1.5 s each; 0.8 s per page batched). Firecrawl's timings include this client's own 5 s poll cadence; the byte counts have no such caveat. This is the evidence for "falling back is not a downside" — §5.2. |
 | 2026-07-30 | **The root rescue was discarding Firecrawl's pages.** `pages = root_pages` honored the ladder's byte-level promise while breaking it page-wise: a crawl of three complete ~1.5 KB doc pages measures under the 5 KB bar, so a larger root scrape replaced all three with one. Now merged by URL, larger markdown winning per URL (`_merge_pages`). Found by re-reading the invariant against the code that was supposed to implement it, not by any failing test. |
 | 2026-07-30 | **The two engines agree on the `url` key, so the merge really does dedupe.** A unit test cannot establish this — both sides are invented. Run live against `example.com`: Firecrawl's page key (from `metadata.sourceURL`) and Crawl4AI's (the requested URL) were both exactly `'https://example.com'`, so `_merge_pages` returned **1** page, not 2. Firecrawl's 167 B also beat local's 166 B and was kept, exercising "larger markdown wins" on real data. Had the keys differed by so much as a trailing slash, every root rescue would have archived the root page twice. |
+| 2026-07-30 | **The Firecrawl free tier ran dry mid-session (HTTP 402), and the live suite is what found it.** A day of scraper work exhausted the credits. Four live tests across three files were failing as though the code had regressed. 402 and 429 describe the *account*, not the code under test, so all four now **skip with the real message in the skip reason** — loud, never swallowed into a green run. Note the client *raises* `FirecrawlError` for account statuses rather than returning text, so a string-based guard cannot see that path and it needed its own handler. **The three browser tools were unaffected: free is free.** |
+| 2026-07-30 | **Live acceptance suite run: 10 passed, 1 skipped in 27 s** (the skip being the 402 above) (`pytest tests/test_web_tools_live.py -m integration`), covering all four tools through `ClaudeToolkit.execute()` — ranking, the no-match plateau, the anti-bot flag, the 403 refusal, root deduplication, whole-web reach, and SSRF refusal on all three URL-taking tools. This is the run that promoted the session's throwaway verification scripts into committed, repeatable tests. |
 | 2026-07-30 | **Crawl4AI searches a site natively, and free.** `AsyncUrlSeeder` + BM25 on `docs.crawl4ai.com`: "deep crawling strategy" ranked `/core/deep-crawling/` first at 1.000; "save a browser login profile for a paywalled site" ranked `/advanced/undetected-browser/` first at 1.000. 87 URLs from the sitemap in 5.0 s, 90 in 5.9 s with `sitemap+cc`. This is what made `search_site` possible and Firecrawl's crawl half redundant. It is **domain-scoped by construction** (`urls(domain, config)`), so it can search *a* site but never *the web* — which is the entire reason `firecrawl_search` survives. |
 | 2026-07-30 | **`extract_head=True` is mandatory for BM25, and the vendor's example omits it.** With it, 87 of 87 URLs carry a `relevance_score`. Without it, **zero** do and the list is sitemap order. Head extraction is what BM25 scores against. Copying the documented example verbatim produces something that looks like ranked search and is not. Pinned by `test_search_site_forces_extract_head`. |
 | 2026-07-30 | **A non-matching BM25 query scores 0.5, not 0.0.** The first live `search_site` run answered "zzzq nonexistent topic xyzzy" with ten confidently-ranked pages — Privacy Policy, Contributing Guide, home page — every one at exactly 0.500. Two nonsense queries each produced 87 URLs at 0.5 with **one** distinct score; two real queries peaked at 1.0 with 4–5 distinct scores. So "nothing matched" is a *flat distribution*, not a low score. The unit tests had mocked a miss as 0.0 — **a mock weaker than its dependency**, the same failure mode that let `create_profile` ship having never run. |
@@ -600,15 +670,15 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-30 | **The Retry-After cap was a doc error, not a code error.** This reference said the client honors `Retry-After` "capped at 30s"; Firecrawl's published snippet applies `min(2 ** attempt, 30)` to the *exponential branch only* and says of the header "wait **at least** that long". The code matched the vendor all along. Caught only because the vendor page was re-fetched before editing the code to match the sentence — the standing rule works in this direction too. |
 | 2026-07-28 | **The paywall path had never been executed.** `~/.ibkr_core/crawl4ai_profiles` did not exist on this machine — no login profile had ever been created — while §6, the profile-lookup code, the `create-profile` CLI and the paywall markers were all present, tested and documented. A capability can be complete in every respect except having been run once. |
 | 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
-| 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `scrape_fallback.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
+| 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `local_browser.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
 | 2026-07-28 | **A consuming project can silently run stale ibkr_core_mcp code.** claudia_ui installs this package with `editable_mode=strict`, which resolves imports through a snapshotted symlink farm under `build/__editable__…/`. A module added after that install is **invisible** — a newly added `ibkr_core_mcp` module raised `ModuleNotFoundError` in ClaudIA while existing on disk here. Re-run the editable install in every consumer after adding a module, not just after adding a tool. |
 | 2026-07-28 | **The `[scraper]` extra was not installed in claudia_ui**, so inside ClaudIA the fallback rung was dark: detection worked, recovery dead-ended, and nothing said so. Fixed the same day by installing `crawl4ai` + Playwright there. A capability can be fully coded, fully tested and fully documented and still be unreachable in the app that needs it — check the consumer, not just the library. |
 
 ---
 
-## 11. API reference
+## 12. API reference
 
-All types live in `ibkr_core_mcp.web_scraper` and `ibkr_core_mcp.scrape_fallback`. Note that
+All types live in `ibkr_core_mcp.web_scraper` and `ibkr_core_mcp.local_browser`. Note that
 `FirecrawlClient` and `WebDocsStore` are **not** re-exported from the package root — only the
 exception types `FirecrawlError` and `WebDocsStoreError` are.
 
@@ -619,7 +689,7 @@ from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, content_byt
 client = FirecrawlClient(api_key)                      # ValueError if key is empty
 client.search(query, limit=5, *, wait_for_ms=None, proxy=None, timeout_ms=None)
 # -> list[{"url", "title", "markdown", "metadata"}]
-# `.crawl()` was REMOVED 2026-07-30 — use scrape_fallback.crawl_site().
+# `.crawl()` was REMOVED 2026-07-30 — use local_browser.crawl_site().
 
 content_bytes(pages) -> int                            # total UTF-8 bytes of markdown
 
@@ -631,7 +701,7 @@ store.save_search(query, results)                      # -> Drive file ID
 ```
 
 ```python
-from ibkr_core_mcp.scrape_fallback import (
+from ibkr_core_mcp.local_browser import (
     Crawl4AIScraper, Crawl4AIUnavailableError, assess_quality, crawl_site, create_profile,
     list_profiles, search_site,
 )

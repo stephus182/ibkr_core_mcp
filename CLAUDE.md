@@ -49,7 +49,19 @@ pytest tests/claude_tools/ -m "not integration"          # same, explicit
 pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
+
+# Web tools — a LIVE run is mandatory before calling any scraper change done.
+# 11 tests, ~28s. Skips cleanly without the [scraper] extra or a Firecrawl key.
+pytest tests/test_web_tools_live.py -v -m integration
 ```
+
+**The web scraper does not get to be "done" on a green unit suite.** Every defect in the
+2026-07-30 rewrite was found by running a tool, never by a test failing — four in one
+session, each behind a passing suite; and before that `create_profile` shipped with three
+green tests having never been executed, then broke on its first real run for three separate
+reasons. The mocks were weaker than the dependency each time (a fake seeder scores a miss
+0.0; the real one scores it 0.5). Run the live suite and record the result in
+`docs/web-scraper-reference.md` §11. Full procedure: §10 of that file.
 
 ## Linting & Type Checking
 
@@ -154,7 +166,7 @@ ibkr_core_mcp/
 ├── order_confirm.py      # Gate 2: visual order confirmation dialog (tkinter/AppKit)
 ├── streaming.py          # IBKRWebSocket — live quotes, execution/P&L push; AlertManager
 ├── web_scraper.py        # FirecrawlClient + WebDocsStore — search/crawl, Drive snapshots (ladder rung 1)
-├── scrape_fallback.py    # Crawl4AI local browser (Playwright) + SSRF guard (ladder rung 2)
+├── local_browser.py    # Crawl4AI local browser (Playwright) + SSRF guard (ladder rung 2)
 ├── pinescript.py         # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py       # Token-bucket rate limiter + exponential backoff on 429
 ├── config.py             # Config dataclass loaded from environment variables
@@ -274,7 +286,7 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     `assess_quality` signal. Each was found by running the tool, never by a passing test.
 
 - **ClaudeToolkit is the only layer that talks to the Anthropic API** in host apps — with no
-  exceptions as of 2026-07-30. There was one (`scrape_fallback.judge_completeness_llm`, a
+  exceptions as of 2026-07-30. There was one (`local_browser.judge_completeness_llm`, a
   cheap Haiku call arbitrating between two scraper engines) and it is deleted, not merely
   better-guarded: with one engine per job there is nothing for a model to arbitrate. A host
   app's own token accounting cannot see a call made here, which is why the bar for adding

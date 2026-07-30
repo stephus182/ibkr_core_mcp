@@ -119,6 +119,10 @@ def test_firecrawl_search_saves_to_drive_from_dev_env(toolkit, drive_service):
     )
     assert fig is None
     assert "not configured" not in text
+    # 402/429 describe the account, not this code path — skip loudly rather than report a
+    # defect that does not exist. Hit for real on 2026-07-30 when the free tier ran dry.
+    if "HTTP 402" in text or "HTTP 429" in text:
+        pytest.skip(f"Firecrawl account cannot serve this request right now: {text.strip()}")
     match = re.search(r"file ID: ([^)]+)\)", text)
     assert match, f"No Drive file ID found in response: {text}"
     file_id = match.group(1)

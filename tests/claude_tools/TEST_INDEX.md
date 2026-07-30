@@ -35,7 +35,8 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 43 tools. See
 | `test_alerts.py` | get_alerts, create_price_alert, delete_alert, activate_alert, modify_price_alert | `alerts` | 15 |
 | `test_pa_analytics.py` | get_analytics, get_pa_periods, get_pa_performance, get_pa_transactions | `pa_analytics` | 12 |
 | `test_backtest_pinescript.py` | run_backtest, generate_pinescript | `backtest_pinescript` | 8 |
-| `test_web_scraping.py` | firecrawl_search, firecrawl_crawl, `_scrape_with_fallback`, `_apply_crawl4ai_fallback_batch`, `_validate_public_url` | `web_scraping` | 27 |
+| `test_web_scraping.py` | firecrawl_search, search_site, crawl_site, fetch_page, `_validate_public_url` | `web_scraping` | 27 |
+| `../test_web_tools_live.py` | **LIVE** acceptance for firecrawl_search / search_site / crawl_site / fetch_page. Mandatory before any scraper change is called done — see `docs/web-scraper-reference.md` §10 |
 | `test_errors.py` | `_safe_error` (parametrized, 13 cases) | `errors` | 13 |
 
 ## Running targeted subsets
@@ -67,7 +68,7 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
   `test_web_scraping.py` are exempted, by name, from the `_no_real_io`
   guardrail's socket block. Their purpose is exercising the real SSRF/DNS
   validation path (`ClaudeToolkit._validate_public_url` ->
-  `scrape_fallback.is_private_host` -> `socket.gethostbyname`) against a real
+  `local_browser.is_private_host` -> `socket.gethostbyname`) against a real
   public hostname (`example.com`/`wsj.com`) — mocking DNS away would weaken
   coverage of that security-critical logic, so they keep making a real (fast)
   DNS lookup instead. `test_firecrawl_crawl_saves_pages_to_drive` is on that

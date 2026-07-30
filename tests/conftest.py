@@ -23,7 +23,7 @@ def mock_config(tmp_path, tmp_db):
 
 
 # These tests' entire purpose is exercising the real SSRF/DNS validation path
-# (ClaudeToolkit._validate_public_url -> scrape_fallback.is_private_host ->
+# (ClaudeToolkit._validate_public_url -> local_browser.is_private_host ->
 # socket.gethostbyname) against a real public hostname (example.com/wsj.com).
 # Discovered while adding _no_real_io below: unrelated to the 3 sleep/network
 # bugs that fixture was built to catch (see docs/2026-07-08-claude-tools-test-reorg-design.md),

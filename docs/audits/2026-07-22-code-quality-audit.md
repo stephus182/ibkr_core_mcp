@@ -103,7 +103,7 @@ disallow_untyped_calls = false
 | `tests/test_streaming.py` | 26 | Root-cause fix — `isinstance` narrowing at 7 sites |
 | `tests/test_order_confirm.py` | 16 | Root-cause fix — patch the stdlib singleton directly, not via module re-export (11); local dict → 2 typed variables (5) |
 | `tests/test_backtest.py` | 11 | Root-cause fix — import exceptions from `ibkr_core_mcp.exceptions` (9); documented `# type: ignore[misc,valid-type]`, dynamic base class (1); patch `threading` directly (1, same pattern as `test_order_confirm.py`) |
-| `tests/test_scrape_fallback.py` | 8 | `setattr(...)  # noqa: B010`, faked `ModuleType` (5); 2 explicit type annotations; 1 `list[dict]` → `list[dict[str, object]]` |
+| `tests/test_local_browser.py` | 8 | `setattr(...)  # noqa: B010`, faked `ModuleType` (5); 2 explicit type annotations; 1 `list[dict]` → `list[dict[str, object]]` |
 | `tests/test_web_scraper.py` | 4 | Root-cause fix in **production** code — `web_scraper.py` return-type precision, see below |
 | `tests/test_crawl4ai_live.py` | 2 | Documented `# type: ignore[misc,valid-type]`, same dynamic-base-class pattern |
 | `tests/test_client.py` | 2 | Explicit type annotations on 2 local test dict literals (non-order-execution paths) |
@@ -135,7 +135,7 @@ disallow_untyped_calls = false
   stdlib module singletons, patching the test file's own `import sys` (etc.) reference
   patches the exact same object the production module sees — zero behavior change, and it
   removes an antipattern rather than suppressing it.
-- **`tests/test_scrape_fallback.py` (5 of 8)** — three test helpers built a fake `crawl4ai`
+- **`tests/test_local_browser.py` (5 of 8)** — three test helpers built a fake `crawl4ai`
   module via `types.ModuleType("crawl4ai")` then set `fake_module.AsyncWebCrawler = ...`.
   A plain `ModuleType` has no such static attribute. Ruff's `B010` (no-op `setattr`) and
   mypy's `attr-defined` disagree on the right shape here — `setattr()` is the only form

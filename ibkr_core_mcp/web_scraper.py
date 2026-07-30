@@ -4,7 +4,7 @@ Two independent halves that have never shared a line of code:
 
   * **`FirecrawlClient`** — one endpoint, POST /v1/search. Firecrawl's sole
     remaining job here, and the only thing the local browser genuinely cannot do:
-    find pages when you have no URL. `AsyncUrlSeeder` (`scrape_fallback.py`) is
+    find pages when you have no URL. `AsyncUrlSeeder` (`local_browser.py`) is
     domain-scoped by construction, so it can search *a* site but never *the web*.
   * **`WebDocsStore`** — the `web_docs/` Google Drive archive. Engine-agnostic:
     it takes a list of `{"url", "markdown"}` dicts and never knew who produced
@@ -162,7 +162,7 @@ def content_bytes(pages: list[dict[str, Any]]) -> int:
     undercounted.
 
     Args:
-        pages: Page dicts as produced by `scrape_fallback.crawl_site()`. A missing or
+        pages: Page dicts as produced by `local_browser.crawl_site()`. A missing or
             None "markdown" key contributes zero rather than raising.
 
     Returns:

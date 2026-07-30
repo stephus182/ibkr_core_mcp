@@ -27,7 +27,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 
 | Module | Coverage | Uncovered lines | Reason |
 |---|---|---|---|
-| `scrape_fallback.py` | 97% | 121–122, 468, 557 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`); `scrape()`'s re-raise of a per-URL `arun()` exception via `scrape_batch()` — existing tests only cover the whole-batch `Crawl4AIUnavailableError` case, not a single URL failing inside an otherwise-successful `scrape()` call; `if __name__ == "__main__"` CLI entrypoint |
+| `local_browser.py` | 97% | 121–122, 468, 557 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`); `scrape()`'s re-raise of a per-URL `arun()` exception via `scrape_batch()` — existing tests only cover the whole-batch `Crawl4AIUnavailableError` case, not a single URL failing inside an otherwise-successful `scrape()` call; `if __name__ == "__main__"` CLI entrypoint |
 | `models.py` | 99% | 147 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
 | `human_auth.py` | 96% | 14 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 92% | 273–275, 303–308, 312–317, 321–323, 334–337, 528–529, 543 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |

@@ -74,7 +74,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [1.1.0] — 2026-07-12
 
 ### Added
-- Crawl4AI fallback (`scrape_fallback.py`) for incomplete/paywalled Firecrawl results, gated by an LLM completeness check
+- Crawl4AI fallback (`local_browser.py`) for incomplete/paywalled Firecrawl results, gated by an LLM completeness check
 - WebSocket `str` (trades) and `spl` (P&L) topics added to `IBKRWebSocket`
 - `IBKRClient.place_order_and_confirm()` / `modify_order_and_confirm()` — loop Gate 1 (Touch ID) + Gate 2 (dialog showing the real IBKR reply text) across a chained-reply sequence until a terminal order state is reached
 - `cancel_order()` gained an optional `order_details` param so Gate 2's cancel dialog shows full order details instead of just the order ID

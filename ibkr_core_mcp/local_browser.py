@@ -88,9 +88,9 @@ def is_private_host(host: str) -> bool:
     Shared by two independent SSRF layers so they can't silently drift apart:
       1. ClaudeToolkit._validate_public_url — the Python-level pre-check run
          before any URL reaches Crawl4AI at all.
-      2. The Playwright-level per-request guard installed in
-         Crawl4AIScraper.scrape_batch() (see _reject_private_requests below;
-         scrape() delegates to scrape_batch() for a single URL), which
+      2. The Playwright-level per-request guard installed on every browser this
+         module opens — `Crawl4AIScraper.scrape()` and `crawl_site()` both register
+         it (see _reject_private_requests below) — which
          re-checks every request Chromium actually makes (initial navigation,
          redirects, and subresources) at the moment it's about to be sent —
          closing the DNS-rebinding and redirect-based gaps that layer 1 alone
@@ -197,32 +197,45 @@ def _run_async(coro: Coroutine[Any, Any, Any]) -> Any:
 
 
 def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> Quality:
-    """Classify a scraped markdown result as "ok", "ambiguous", or "fallback".
+    """Is this markdown real content, a stub, or too close to call?
 
-    "fallback" (skip the LLM judge, go straight to Crawl4AI):
-      - metadata reports an HTTP error status (>= 400) or an "error" value
-      - markdown has fewer than ~40 words (effectively empty)
+    The repo's single answer to "did I actually get the page?", and the reason no
+    scraper tool can report the *shape* of success while holding nothing.
 
-    "ambiguous" (send to judge_completeness_llm before deciding):
-      - a known paywall keyword phrase is present in the markdown
-      - word count is in the borderline band (~40-200 words) — real short pages
-        exist, so length alone isn't a confident signal either way
+    | Verdict | Meaning | Trigger |
+    |---|---|---|
+    | `"fallback"` | Not content | HTTP status >= 400 or an `error` in metadata, **or** under ~40 words |
+    | `"ambiguous"` | Might be a stub | A known paywall phrase, **or** ~40-200 words |
+    | `"ok"` | Content | everything else |
 
-    "ok" otherwise.
+    **The verdict name `"fallback"` is historical.** It once meant "escalate to the
+    Crawl4AI rung", and the value is kept because it is persisted in nothing and
+    renaming it would churn every caller for no behavioural gain — but read it as
+    "unusable". There is no rung to escalate to: this now decides whether a tool
+    should *say so*, not which engine to try next.
 
-    Two callers, and they supply different amounts of evidence. The fallback paths
-    pass Firecrawl's own page dict, so the HTTP-status branch above is live. The
-    `fetch_page` tool passes None, because `Crawl4AIScraper.scrape()` returns
-    {"url", "markdown"} and carries no status — there, only the word-count and
-    paywall-marker checks apply. Both are honest uses; the second is simply
-    working from less.
+    Three callers, supplying different amounts of evidence:
+
+      * `crawl_site` — refuses to archive when **every** page grades `"fallback"`.
+        `"ambiguous"` is deliberately not enough: real short pages exist, and
+        discarding them would be its own kind of wrong.
+      * `fetch_page` — flags anything not `"ok"` as possibly incomplete.
+      * `firecrawl_search` — passes Firecrawl's own page dict, so the HTTP-status
+        branch is live there and only there.
+
+    `fetch_page` and `crawl_site` pass `metadata=None` because the local browser
+    returns `{"url", "markdown"}` and carries no HTTP status. That is working from
+    less, not working wrongly — the word-count and paywall-marker checks still apply,
+    and they are what catch a 44-byte 403 or a 1-byte anti-bot stub.
 
     Args:
         markdown: The markdown content scraped for this page/result.
-        metadata: The scraper's "metadata" dict for this page/result, or None when
-             the scraper does not report one (see above).
-        url: Source URL, included for future logging/telemetry — not currently
-             used in the classification itself.
+        metadata: The scraper's "metadata" dict, or None when it reports none.
+        url: Source URL, accepted for logging/telemetry — not used in the
+             classification itself.
+
+    Returns:
+        One of `"ok"`, `"ambiguous"`, `"fallback"`.
     """
     metadata = metadata or {}
     status_code = metadata.get("statusCode")
@@ -353,18 +366,21 @@ async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
 
 
 class Crawl4AIScraper:
-    """Fallback scraper using Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
-    open-source crawler with no API key. Used only when Firecrawl's result looks
-    incomplete (see assess_quality / judge_completeness_llm).
+    """Single-page scraper on Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
+    open-source crawler needing no API key. Backs the `fetch_page` tool.
+
+    Not a fallback: it is the primary and only route for reading one page. It was
+    reachable only underneath a Firecrawl attempt until 2026-07-30, which is precisely
+    why no paywalled article could ever be opened.
 
     If a browser profile exists for the target URL's domain under `profiles_dir`
-    (created via `python -m ibkr_core_mcp.scrape_fallback create-profile <url>`,
+    (created via `python -m ibkr_core_mcp.local_browser create-profile <url>`,
     which runs Crawl4AI's BrowserProfiler for a one-time interactive login), the
     scrape reuses that saved login session. Otherwise it scrapes anonymously —
     which will still be incomplete for hard paywalls, and that's expected.
 
-    `crawl4ai` is imported lazily inside scrape() so the base ibkr_core_mcp
-    package never requires it.
+    `crawl4ai` is imported lazily inside scrape() so the base ibkr_core_mcp package never
+    requires the optional `[scraper]` extra.
 
     Source (BrowserConfig / managed-browser profile reuse, and the
     on_page_context_created hook used for the SSRF request guard):
@@ -393,47 +409,37 @@ class Crawl4AIScraper:
         """
         self._profiles_dir = profiles_dir
 
-    def scrape_batch(self, urls: list[str], profile_domain: str) -> dict[str, dict[str, str] | Exception]:
-        """Scrape multiple URLs using ONE shared Crawl4AI browser session instead
-        of launching a fresh Chromium per URL.
+    def scrape(self, url: str) -> dict[str, str]:
+        """Fetch one URL in a headless browser and return its markdown.
 
-        Safe only when every URL in `urls` shares the same saved-profile
-        decision -- true for pages within a single Firecrawl crawl() call,
-        since Firecrawl's crawl() only returns pages within the same site as
-        its root URL. Callers pass that root's domain as `profile_domain`,
-        not each individual page's own domain.
+        Uses the saved login profile for the URL's domain when one exists (see
+        `_resolve_profile_dir`), otherwise browses anonymously — which still returns the
+        stub on a hard paywall, as expected.
 
-        Installs the same Playwright-level SSRF guard (_reject_private_requests)
-        as scrape() used to, once per session rather than once per URL -- it
-        re-checks every request (navigation, redirects, subresources) the
-        shared browser makes across the whole batch.
+        Installs the Playwright-level SSRF guard on the browser context, so every request
+        Chromium actually makes — the navigation, each redirect hop, and every subresource
+        — is re-checked at the moment it is sent. That is the second of two independent
+        layers; see `is_private_host`.
+
+        This was a one-URL wrapper around a `scrape_batch()` that shared a single browser
+        across many URLs. That batching existed solely for the deleted per-page fallback
+        loop, which re-fetched every thin page of a Firecrawl crawl; multi-page crawling is
+        `crawl_site`'s job now and it does its own session management. Nothing called
+        `scrape_batch` with more than one URL, so it was folded back in here on 2026-07-30.
 
         Args:
-            urls: URLs to fetch. Empty list returns {} without importing
-                crawl4ai or launching a browser.
-            profile_domain: Domain used to decide whether a saved login
-                profile applies (profiles_dir/profile_domain). Pass the
-                crawl's root domain -- all pages in one crawl share this
-                decision by construction (see above).
+            url: The URL to fetch. The caller is responsible for SSRF-validating it first
+                (`ClaudeToolkit._validate_public_url`); the guard installed here covers
+                what that pre-check cannot see.
 
         Returns:
-            Dict keyed by each input URL. Each value is either a
-            {"url": ..., "markdown": ...} result dict (same shape scrape()
-            returns) or the Exception raised while fetching that specific
-            URL -- one URL failing does not abort the rest of the batch or
-            close the shared browser early.
+            {"url": url, "markdown": <raw markdown, or "" if the page had none>}
 
         Raises:
-            Crawl4AIUnavailableError: If `crawl4ai` is not installed. Raised
-                before the browser is launched, before any URL is attempted --
-                an install-time problem, not a per-URL one. Callers that want
-                per-page graceful degradation (rather than the whole batch
-                failing) must catch this around the scrape_batch() call
-                itself, not expect it inside the returned dict.
+            Crawl4AIUnavailableError: If `crawl4ai` is not installed.
+            Exception: Whatever Playwright raised for this URL (e.g. a navigation
+                timeout) propagates — a single-URL caller expects a return or a raise.
         """
-        if not urls:
-            return {}
-
         try:
             from crawl4ai import AsyncWebCrawler, BrowserConfig
         except ImportError as exc:
@@ -442,60 +448,20 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        profile_dir = _resolve_profile_dir(self._profiles_dir, profile_domain)
+        profile_dir = _resolve_profile_dir(self._profiles_dir, url)
         if profile_dir is not None:
-            browser_config = BrowserConfig(
-                headless=True,
-                use_managed_browser=True,
-                user_data_dir=str(profile_dir),
-            )
+            browser_config = BrowserConfig(headless=True, use_managed_browser=True, user_data_dir=str(profile_dir))
         else:
             browser_config = BrowserConfig(headless=True)
 
-        async def _scrape_all() -> dict[str, dict[str, str] | Exception]:
-            outcomes: dict[str, dict[str, str] | Exception] = {}
+        async def _scrape_one() -> dict[str, str]:
             async with AsyncWebCrawler(config=browser_config) as crawler:
                 crawler.crawler_strategy.set_hook("on_page_context_created", _install_ssrf_guard)
-                for u in urls:
-                    try:
-                        result = await crawler.arun(url=u)
-                        markdown = result.markdown.raw_markdown if result.markdown else ""
-                        outcomes[u] = {"url": u, "markdown": markdown}
-                    except Exception as exc:
-                        # Isolate one URL's failure from the rest of the batch --
-                        # the caller inspects each outcome's type to decide how
-                        # to degrade, matching scrape()'s single-URL contract.
-                        outcomes[u] = exc
-            return outcomes
+                result = await crawler.arun(url=url)
+                markdown = result.markdown.raw_markdown if result.markdown else ""
+                return {"url": url, "markdown": markdown}
 
-        return _run_async(_scrape_all())  # type: ignore[no-any-return]
-
-    def scrape(self, url: str) -> dict[str, str]:
-        """Scrape a single URL with Crawl4AI.
-
-        A 1-URL call to scrape_batch() -- see that method's docstring for the
-        full behavior (browser lifecycle, SSRF guard, profile resolution).
-        This method exists for callers that only ever need one URL at a time
-        (e.g. the search-result fallback path, where each result is typically
-        a different domain and batching wouldn't be valid anyway).
-
-        Args:
-            url: The URL to fetch.
-
-        Returns:
-            {"url": url, "markdown": <raw_markdown or "" if the page had none>}
-
-        Raises:
-            Crawl4AIUnavailableError: If `crawl4ai` is not installed.
-            Exception: Whatever scrape_batch() caught for this URL specifically
-                (e.g. a Playwright navigation error) is re-raised here, since a
-                single-URL caller expects scrape() to either return or raise,
-                not receive an outcome dict.
-        """
-        outcome = self.scrape_batch([url], profile_domain=url)[url]
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
+        return _run_async(_scrape_one())  # type: ignore[no-any-return]
 
 
 def crawl_site(
@@ -774,7 +740,7 @@ def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:
             "create_profile() must run on the main thread: Crawl4AI's BrowserProfiler "
             "installs a SIGINT handler, and signal handlers cannot be installed from a "
             "worker thread. Run it from the CLI: "
-            "`python -m ibkr_core_mcp.scrape_fallback create-profile <url>`."
+            "`python -m ibkr_core_mcp.local_browser create-profile <url>`."
         )
 
     try:
@@ -824,7 +790,7 @@ def list_profiles(profiles_dir: Path) -> list[tuple[str, Path, float]]:
 
 
 def _main(argv: list[str] | None = None) -> None:
-    """CLI entry point: `python -m ibkr_core_mcp.scrape_fallback create-profile <url-or-domain>`.
+    """CLI entry point: `python -m ibkr_core_mcp.local_browser create-profile <url-or-domain>`.
 
     Resolves the profiles root with `config.crawl4ai_profiles_dir_from_env()` rather
     than `Config.from_env()`: both subcommands are browser-only and need nothing
@@ -852,7 +818,7 @@ def _main(argv: list[str] | None = None) -> None:
 
     from ibkr_core_mcp.config import crawl4ai_profiles_dir_from_env
 
-    parser = argparse.ArgumentParser(prog="python -m ibkr_core_mcp.scrape_fallback")
+    parser = argparse.ArgumentParser(prog="python -m ibkr_core_mcp.local_browser")
     subparsers = parser.add_subparsers(dest="command", required=True)
     create_parser = subparsers.add_parser(
         "create-profile",

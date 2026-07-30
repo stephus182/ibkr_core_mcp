@@ -844,7 +844,7 @@ extraction service for a URL you already hold.
 **Paywalled sites** need a one-time interactive login per domain:
 
 ```bash
-python -m ibkr_core_mcp.scrape_fallback create-profile https://www.wsj.com
+python -m ibkr_core_mcp.local_browser create-profile https://www.wsj.com
 ```
 
 You log in by hand in a visible browser; only the resulting session is stored,

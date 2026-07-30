@@ -106,17 +106,28 @@ def test_firecrawl_search_saves_snapshot_to_drive(toolkit, drive_service):
 
 
 @pytest.mark.integration
-def test_firecrawl_crawl_saves_pages_to_drive(toolkit, drive_service, live_config):
+def test_crawl_site_saves_pages_to_drive(toolkit, drive_service, live_config):
+    """Was `test_firecrawl_crawl_saves_pages_to_drive`. That tool was deleted on
+    2026-07-30 and this test kept passing CI for free because it is integration-marked
+    and therefore skipped by default — a test for a tool that no longer exists, invisible
+    until someone ran the live suite.
+
+    `example.com` is deliberately NOT the target any more: it yields ~166 B, which now
+    correctly grades "fallback", so `crawl_site` refuses to archive it and the test would
+    fail for the right reason. Uses a real documentation page instead.
+    """
     from ibkr_core_mcp.web_scraper import _slugify
 
+    url = "https://docs.crawl4ai.com/core/quickstart/"
     text, fig = toolkit.execute(
-        "firecrawl_crawl",
-        {"url": "https://example.com", "max_pages": 1, "timeout_s": 60},
+        "crawl_site",
+        {"url": url, "max_pages": 1, "max_depth": 0, "force_refresh": True},
     )
     assert fig is None
-    assert "Crawl complete" in text
+    assert "Crawl complete" in text, text
+    assert "no credits spent" in text, "crawl_site must report that it cost nothing"
 
-    slug = _slugify("https://example.com")
+    slug = _slugify(url)
 
     web_docs_q = (
         "name='web_docs' and mimeType='application/vnd.google-apps.folder'"

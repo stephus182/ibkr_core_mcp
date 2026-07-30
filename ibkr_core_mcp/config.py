@@ -82,7 +82,7 @@ class Config:
     # gdrive_folder_id if empty.
     gdrive_web_docs_folder_id: str = ""
     # Local directory holding Crawl4AI browser profiles (saved logins for paywalled
-    # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.scrape_fallback
+    # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.local_browser
     # create-profile <url>`.
     crawl4ai_profiles_dir: Path = field(default_factory=lambda: crawl4ai_profiles_dir_from_env())
 

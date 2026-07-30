@@ -69,7 +69,7 @@ raise Exception(leak)
 
 ---
 
-**H-4 — SSRF guard resolves hostnames via IPv4-only `socket.gethostbyname`, fails open on AAAA-only hosts (`scrape_fallback.py:106`)**
+**H-4 — SSRF guard resolves hostnames via IPv4-only `socket.gethostbyname`, fails open on AAAA-only hosts (`local_browser.py:106`)**
 
 `is_private_host()` resolves non-literal hostnames with `socket.gethostbyname(host)`, which only queries IPv4 `A` records. An AAAA-only hostname pointing at an internal IPv6 address (e.g. `::1`) raises `socket.gaierror`, caught and treated as "unresolvable, therefore safe" — but the host **is** resolvable, just not via this IPv4-restricted method, and the actual fetch (headless Chromium, standard dual-stack resolution) will succeed over IPv6. This single function backs both documented SSRF layers (`ClaudeToolkit._validate_public_url` and `scrape_fallback._reject_private_requests`), so both share the identical blind spot — confirmed no IP-pinning exists between the Python-level guard and the actual browser fetch. `_handle_firecrawl_search` feeds externally-sourced URLs into this exact path. Every existing SSRF-guard test mocks `socket.gethostbyname` only; one test explicitly asserts the current fail-open behavior as correct.
 
