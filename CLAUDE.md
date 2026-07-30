@@ -108,8 +108,8 @@ GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json
 GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 ```
 
-**Standalone dev exception:** with no `.env` here, `firecrawl_search`/`firecrawl_crawl`
-correctly report "not configured" and never touch Drive — by design, not a bug, since
+**Standalone dev exception:** with no `.env` here, `firecrawl_search` correctly reports
+"not configured" and never touches Drive — by design, not a bug, since
 `Config.from_env()` reads empty strings. To exercise Drive caching while developing
 ibkr_core_mcp in isolation (not inside a consuming project), a local `.env` **in this
 repo** is fine — it's gitignored and never committed. Only 4 vars are needed (no
@@ -122,7 +122,7 @@ repo** is fine — it's gitignored and never committed. Only 4 vars are needed (
 
 | Var | Effect if unset |
 |---|---|
-| `FIRECRAWL_API_KEY` | `firecrawl_search`/`firecrawl_crawl` report "not configured" |
+| `FIRECRAWL_API_KEY` | `firecrawl_search` reports "not configured". The other three web tools are unaffected — they need no key. |
 | `CRAWL4AI_PROFILES_DIR` | Defaults to `~/.ibkr_core/crawl4ai_profiles` (paywalled-site logins) |
 
 `CRAWL4AI_PROFILES_DIR` is the **only** Crawl4AI setting. A `CRAWL4AI_API_KEY` /
@@ -148,7 +148,7 @@ ibkr_core_mcp/
 ├── backtest.py           # RestrictedPython sandbox executor
 ├── indicators.py         # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py          # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
-├── claude_tools.py       # Claude tool definitions + handlers (43 tools, portable)
+├── claude_tools.py       # Claude tool definitions + handlers (44 tools, portable)
 ├── mcp_server.py         # MCP server (stdio + SSE transports) — 45 tools, 4 resources
 ├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
 ├── order_confirm.py      # Gate 2: visual order confirmation dialog (tkinter/AppKit)
@@ -252,25 +252,33 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is a complete 517-page index. There is also an MCP server at
     `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
-    is two rungs: `FirecrawlClient.crawl()` makes one attempt and, whenever the result is under
-    5 KB of markdown (including on 401/402/429 or a network error), falls back to a **free local**
-    Crawl4AI scrape of the root URL. The rescue **merges** its page into Firecrawl's list rather
-    than replacing it (larger markdown wins per URL), so it can only ever add content, and a crawl
-    that ends empty reports an explicit diagnosis naming every rung instead of the old silent
-    "saved 0 page(s)". `waitFor`/`proxy` are exposed on both `crawl()` and `search()` as opt-in
-    overrides. Full detail: `docs/web-scraper-reference.md`.
+    is gone: as of 2026-07-30 there are **four web tools, one job each, and no fallback
+    between them**. Anything with a URL goes to the free local browser — `fetch_page` (one
+    page), `crawl_site` (archive a site to Drive), `search_site` (find pages on one site,
+    BM25-ranked). Firecrawl keeps exactly one job, `firecrawl_search`, because whole-web
+    search is the only thing the browser cannot do (`AsyncUrlSeeder` is domain-scoped by
+    construction). Full detail: `docs/web-scraper-reference.md`.
 
-    **Falling back is not a degradation — it is usually an upgrade.** Measured 2026-07-30 on the
-    same URLs minutes apart: local Crawl4AI returned 17,364 B in 1.2 s where Firecrawl returned
-    14,341 B in 16.8 s, and 8,786 B in 1.3 s where Firecrawl returned 5,515 B in 13.2 s — bigger,
-    faster, and free. Firecrawl still uniquely provides *search* and multi-page breadth.
-    Counter-case: hosts with real anti-bot protection refuse the local browser outright
-    (`wsj.com` → HTTP 401 / 1 B via DataDome, and **no saved login profile changes that**).
+    **Why the ladder went.** It ran the paid engine first and fell back to the free one.
+    Measured on the same URLs minutes apart, that was backwards: local returned 17,364 B in
+    1.2 s where Firecrawl returned 14,341 B in 16.8 s, and 8,786 B in 1.3 s against 5,515 B
+    in 13.2 s — bigger, ~10x faster, free. ~900 lines of arbitration went with it. Counter-case
+    worth keeping: hosts with real anti-bot protection refuse the local browser outright
+    (`wsj.com` -> HTTP 401 / 1 B via DataDome, and **no saved login profile changes that**).
 
-- **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
-  deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single
-  cheap Haiku completeness check). Don't treat it as precedent for adding another direct API
-  call without the same scrutiny; a host app's own token-usage tracking won't see it. Detail:
+    **With no fallback to catch a bad result, each tool must be honest about its own output**
+    — and three separate live runs proved that is not automatic. A crawl reported "saved 1
+    page(s)" for a 44-byte nginx 403; a site search returned ten confidently-ranked pages for
+    a nonsense query because BM25 scores a non-match 0.5, not 0.0; a byte count read like a
+    short page when it was an anti-bot stub. All three now refuse or flag, via the shared
+    `assess_quality` signal. Each was found by running the tool, never by a passing test.
+
+- **ClaudeToolkit is the only layer that talks to the Anthropic API** in host apps — with no
+  exceptions as of 2026-07-30. There was one (`scrape_fallback.judge_completeness_llm`, a
+  cheap Haiku call arbitrating between two scraper engines) and it is deleted, not merely
+  better-guarded: with one engine per job there is nothing for a model to arbitrate. A host
+  app's own token accounting cannot see a call made here, which is why the bar for adding
+  another is "no other design works", not "it is cheap". Detail:
   `docs/api-usage-examples.md`
 
 ---

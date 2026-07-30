@@ -279,12 +279,6 @@ def test_search_limit_clamped_to_10(mock_requests):
     assert payload["limit"] == 10
 
 
-
-
-
-
-
-
 def test_scrape_options_default_is_todays_request_body():
     from ibkr_core_mcp.web_scraper import FirecrawlClient
 
@@ -346,24 +340,6 @@ def test_search_402_raises_out_of_credits(mock_requests):
 # ── FirecrawlClient.crawl ─────────────────────────────────────────────────────
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ── FirecrawlClient.crawl — single attempt, no automatic retry ────────────────
 
 
@@ -384,18 +360,6 @@ def _crawl_responses(mock_requests, mock_time, poll_payloads):
         poll.json.return_value = payload
         polls.append(poll)
     mock_requests.get.side_effect = polls
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ── WebDocsStore — Drive service and folder helpers ───────────────────────────

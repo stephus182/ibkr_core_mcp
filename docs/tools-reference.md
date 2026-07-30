@@ -1,12 +1,12 @@
 # ClaudeToolkit — Tools Reference
 
-**43 tools total** (40 core + 3 web scraper) exposed by `ClaudeToolkit.tools` and
-`ClaudeToolkit.execute()`. `ClaudeToolkit.tools` always advertises all 43 regardless of
-environment — the 3 scraper tools (`firecrawl_search`, `firecrawl_crawl`, `fetch_page`) are not
-conditionally omitted from the schema. Their requirements are instead checked at call time,
-inside `execute()`: calling a Firecrawl tool without `FIRECRAWL_API_KEY`, or `fetch_page` without
-the `[scraper]` extra installed, returns an error string rather than the tool being absent from
-what's offered to the model.
+**44 tools total** (40 core + 4 web) exposed by `ClaudeToolkit.tools` and
+`ClaudeToolkit.execute()`. `ClaudeToolkit.tools` always advertises all 44 regardless of
+environment — the 4 web tools (`firecrawl_search`, `search_site`, `crawl_site`, `fetch_page`)
+are not conditionally omitted from the schema. Their requirements are instead checked at call
+time, inside `execute()`: `firecrawl_search` without `FIRECRAWL_API_KEY`, or any of the three
+browser tools without the `[scraper]` extra installed, returns an error string rather than the
+tool being absent from what's offered to the model.
 
 Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`None` for chart tools (currently none — reserved for a future equity-curve chart tool).
 
@@ -708,15 +708,31 @@ Run an IBKR market scanner.
 
 ---
 
-## Web Scraper (optional)
+## Web tools (optional)
 
-These two tools are available only when `FIRECRAWL_API_KEY` is set. They use the
-Firecrawl API to search the web and crawl documentation sites, saving results to
-Google Drive `web_docs/`.
+**Four tools, one job each, no fallback between them** (restructured 2026-07-30). Only
+`firecrawl_search` needs `FIRECRAWL_API_KEY`; the other three are a local browser and public
+sitemaps, and cost nothing. The three browser tools need the `[scraper]` extra.
+
+| Tool | Engine | Job |
+|---|---|---|
+| `firecrawl_search` | Firecrawl | Find pages **anywhere** — the only whole-web search |
+| `search_site` | Crawl4AI | Find pages **on one site**, BM25-ranked |
+| `crawl_site` | Crawl4AI | **Archive a site** to Drive `web_docs/{url-slug}/` |
+| `fetch_page` | Crawl4AI | **Read one page** as markdown |
+
+The first two *find* and return URLs; the last two *read*. Neither finder returns page text —
+follow one with `fetch_page`. Rationale and the measurements behind it:
+`docs/web-scraper-reference.md` §1.1.
 
 ### `firecrawl_search`
-Search the web and return full page content as markdown. Use for research, news, or
-fetching technical documentation. Optionally saves a snapshot to Drive.
+Search **the whole web** — a query with no site in mind. The one job only Firecrawl can do:
+Crawl4AI's seeder is domain-scoped by construction, so it can search *a* site but never *the
+web*. Optionally saves a snapshot to Drive.
+
+Returns URLs, titles and a ~400-character snippet — **not** full page text. Until 2026-07-30 it
+re-fetched every result through up to five concurrent local browsers; `fetch_page` is that route
+now, and measures better.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -726,60 +742,65 @@ fetching technical documentation. Optionally saves a snapshot to Drive.
 | `wait_for_ms` | integer | — | Advanced. Milliseconds to wait for JavaScript rendering before extraction. Omitted from the request entirely when unset |
 | `proxy` | string | — | Advanced. `basic` (1 credit), `enhanced` (up to 5), or `auto` (basic, retried through enhanced on failure). Omitted when unset |
 
-**Output:** Search results with URL, title, and full markdown content.
+**Output:** Ranked results with URL, title and a short snippet, ending with a pointer to `fetch_page`.
 
 ---
 
-### `firecrawl_crawl`
-Crawl an entire website starting from a URL and save all pages to Drive under
-`web_docs/{url-slug}/`. Crawls are asynchronous — polls until done or timeout.
-Use for archiving IBKR documentation or other reference sites.
+### `search_site`
 
-**Caches reads:** if a Drive manifest for this exact URL already exists and is
-less than 48h old, the cached manifest is returned directly and Firecrawl is
-never called (0 requests, 0 credits). 48h is informed by Firecrawl's own
-`scrapeOptions.maxAge` cache default on its **v2** API (172800000ms) — the
-**v1** API this package actually calls (`BASE_URL = .../v1`) defaults that
-same parameter to `0`/disabled, so this isn't literally Firecrawl's own
-default for what we call, just a deliberate choice using their v2 number as
-a reference point for reference-doc content, not an arbitrary one. Pass
-`force_refresh: true` to always re-crawl.
+Find the pages on **one** site that match a query, BM25-ranked against each page's extracted
+`<head>`. Free — public sitemaps plus the Common Crawl index, no key, no credits. Returns URLs
+and titles, not page text.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `url` | string | ✅ | Root URL to crawl from (public http/https only) |
-| `max_pages` | integer | — | Maximum pages to crawl (1–100, default 50) |
-| `timeout_s` | integer | — | Max seconds to wait. Default is derived from `max_pages` as `min(600, max(120, 6 × max_pages))` — 120s up to 20 pages, 300s at 50, 600s at 100. Only one Firecrawl attempt is made, so this is the whole budget |
-| `force_refresh` | boolean | — | Re-crawl even if a fresh (<48h) cached manifest exists (default `false`) |
-| `wait_for_ms` | integer | — | Advanced, opt-in. Milliseconds to wait for JavaScript rendering. Try `3000` on a JS-rendered site that came back empty. Omitted from the request when unset |
-| `proxy` | string | — | Advanced, opt-in. `basic` / `enhanced` / `auto`. Try `auto` on a site that blocks automated clients. Omitted when unset |
+| `domain` | string | ✅ | Bare hostname, e.g. `docs.crawl4ai.com` — no scheme, no path |
+| `query` | string | ✅ | What to look for on that site |
+| `limit` | integer | — | Max matches (1–50, default 10). Bounds the *answer*, not the candidate pool |
+| `source` | string | — | `sitemap` / `cc` / `sitemap+cc` (default) |
 
-**Output:** Summary of pages saved to Drive with byte count, source (`Firecrawl`,
-`Crawl4AI (…)`, or `Firecrawl + Crawl4AI (local rung added the root page)` when both
-contributed), paths and page count; or a "Using cached crawl..." message with zero
-Firecrawl requests if a fresh manifest was already on Drive.
+**A nonsense query returns nothing, and that is the point.** BM25 does not score a non-match
+0.0 — it gives *every* page an identical neutral 0.5. The first live run answered "zzzq
+nonexistent topic xyzzy" with ten confidently-ranked pages (Privacy Policy, Contributing Guide,
+home page). "Nothing matched" is a completely flat distribution, not a low score, and that is
+what the tool now detects. Measured: real queries peak at 1.000 with 4–5 distinct scores;
+nonsense queries produce 87 URLs at exactly 0.500 with one.
 
-**Recovery — a two-rung ladder.** Exactly one Firecrawl attempt is made. If it
-yields under 5 KB of markdown — for any reason, including a blocked site, a failed
-job, an exhausted budget, empty pages, or an account-level failure (401/402/429)
-or network error — the handler scrapes the root URL **locally** with Crawl4AI,
-free, and **merges** that page into Firecrawl's list rather than replacing it.
-Same URL from both rungs: the larger markdown wins. So a rescue can only ever add
-content, never remove a page Firecrawl already extracted (fixed 2026-07-30 — the
-previous replace-if-larger rule discarded real pages whenever the root scrape
-happened to outweigh several small ones combined).
+**Output:** A ranked list with scores and titles, or an explicit "no pages matched" that tells
+the model not to retry the same query or treat any page on the site as the source.
 
-Firecrawl is not retried: the Free tier allows only 2 `/crawl` requests per minute,
-so a second attempt would rate-limit the next call. Pass `wait_for_ms` / `proxy`
-explicitly when a host is known to need them. A crawl that ends with no content
-returns a diagnosis naming **each** rung's failure, never "saved 0 page(s)".
-Full detail: `docs/web-scraper-reference.md`.
+---
 
-**Retry behavior:** all Firecrawl HTTP requests (job start + status polling)
-retry automatically on 429/408/500/502/503/504, honoring the `Retry-After`
-header when present, else exponential backoff capped at 30s + jitter — per
-Firecrawl's own documented error-handling guidance
-(https://docs.firecrawl.dev/api-reference/errors).
+### `crawl_site`
+
+Archive a site to Drive with the local browser: breadth-first from a root URL, same-host only,
+into `web_docs/{url-slug}/`. Free. Replaced `firecrawl_crawl` on 2026-07-30 — same
+`WebDocsStore`, same Drive layout, same 48h manifest cache, because that store never knew which
+engine produced its pages. It also archives sites behind a login, which the paid rung could not
+do at all.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | ✅ | Root URL (public http/https). SSRF-validated before the browser starts |
+| `max_pages` | integer | — | 1–100, default 25. ~1.2 s per page |
+| `max_depth` | integer | — | 0–5, default 2. Link-hops from the root; 0 fetches only the root |
+| `force_refresh` | boolean | — | Skip the 48h Drive cache (default `false`) |
+
+**A page count is not evidence of content.** Crawling `docs.crawl4ai.com/core/` returned one
+44-byte page — nginx's `403 Forbidden`, because that path is a directory prefix — and an earlier
+build reported "Crawl complete: saved 1 page(s)" while filing the error into the archive.
+Nothing is saved when every page grades `fallback`, and the reply quotes the offending text. Use
+a real page URL, not a path prefix.
+
+Every hop stays on the root's host (`include_external=False`) — a safety property, not just
+scoping: it stops a hostile page walking the crawler onto another host. The Playwright
+per-request SSRF guard is installed as well, and matters most here, because a deep crawl follows
+links nobody could pre-validate.
+
+**Output:** Pages saved, byte count, whether a login profile was used, and the Drive manifest
+timestamp — or a cache-hit notice that fetched nothing.
+
+---
 
 ### `fetch_page`
 
@@ -811,13 +832,14 @@ The block precedes authentication. `ft.com` by contrast answers 59,455 B at HTTP
 200 with no profile at all. Read a 1 B / 401 result as "this host refuses
 automation", not as "the login expired". Detail: `docs/web-scraper-reference.md` §6.
 
-**When to reach for it instead of the Firecrawl tools.** `firecrawl_search`
-answers "find pages about X" and `firecrawl_crawl` answers "archive this site";
-both are the right tool for API and reference documentation. `fetch_page`
-answers "read me this page", and is the **only** route that works for a
-paywalled article: Firecrawl cannot log in, so sending a subscriber URL through
-it spends a credit to receive the subscription stub. Also the better choice for
-a JavaScript-heavy page, where a real browser beats an extraction service.
+**When to reach for it.** `firecrawl_search` answers "find pages about X
+anywhere", `search_site` answers "which page on this site", and `crawl_site`
+answers "archive this site". `fetch_page` answers "read me this page" — it is
+where the other three hand off, and the **only** route that works for a
+paywalled article, since Firecrawl cannot log in. Measured 2026-07-30, it also
+beats Firecrawl's extraction on ordinary documentation: 17,364 B in 1.2 s
+against 14,341 B in 16.8 s on the same URL. There is no reason to prefer a paid
+extraction service for a URL you already hold.
 
 **Paywalled sites** need a one-time interactive login per domain:
 

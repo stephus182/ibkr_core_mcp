@@ -60,8 +60,6 @@ def test_crawl4ai_scraper_real_browser_scrape(crawl4ai_available, tmp_path):
     assert "Example Domain" in result["markdown"]
 
 
-
-
 @pytest.mark.integration
 def test_scrape_batch_reuses_one_real_browser_across_two_real_urls(crawl4ai_available, tmp_path):
     """Crawl4AIScraper.scrape_batch() against two real, stable, static pages --
@@ -96,5 +94,3 @@ def test_scrape_batch_reuses_one_real_browser_across_two_real_urls(crawl4ai_avai
         assert not isinstance(outcome, Exception), f"{url} failed: {outcome}"
         assert outcome["url"] == url
         assert "Example Domain" in outcome["markdown"]
-
-

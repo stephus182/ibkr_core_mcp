@@ -94,8 +94,6 @@ def test_firecrawl_client_search_real_query(firecrawl_key):
     assert isinstance(result["metadata"], dict)
 
 
-
-
 @pytest.mark.integration
 def test_firecrawl_client_invalid_key_raises():
     from ibkr_core_mcp.web_scraper import FirecrawlClient, FirecrawlError
@@ -127,5 +125,3 @@ def test_toolkit_firecrawl_search_empty_query_no_network_call(toolkit):
     text, fig = toolkit.execute("firecrawl_search", {"query": "", "limit": 1})
     assert fig is None
     assert "non-empty" in text
-
-

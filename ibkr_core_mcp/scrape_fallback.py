@@ -243,8 +243,6 @@ def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> 
     return "ok"
 
 
-
-
 def _safe_domain(url_or_domain: str) -> str:
     """Extract a filesystem-safe domain string from a URL or bare domain, for use
     as a `profiles_dir` subdirectory name (`profiles_dir / domain`).

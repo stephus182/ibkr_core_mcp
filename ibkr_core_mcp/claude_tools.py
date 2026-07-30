@@ -68,9 +68,6 @@ class _Resolved(NamedTuple):
     ambiguous: bool = False
 
 
-
-
-
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
 # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
 _MD_AVAILABILITY: dict[str, str] = {
@@ -3037,10 +3034,6 @@ class ClaudeToolkit:
             return f"Invalid URL: {exc}"
         return None
 
-
-
-
-
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Handle the firecrawl_search tool — the one job only Firecrawl can do.
 
@@ -3108,7 +3101,6 @@ class ClaudeToolkit:
                 drive_note = "\n\n*Note: Drive snapshot failed — results shown above.*"
 
         return "\n".join(lines) + drive_note, None
-
 
     def _get_crawl4ai(self) -> Any:
         """Return the lazily-built Crawl4AIScraper, constructing it on first use.
@@ -3254,9 +3246,7 @@ class ClaudeToolkit:
             f"Source: Crawl4AI (local browser, no credits spent)\n"
             f"{self._profile_hint(url)}\n"
             f"Crawled at: {manifest['crawled_at']}\n"
-            f"Pages: "
-            + ", ".join(p["url"] for p in manifest["pages"][:10])
-            + ("..." if saved > 10 else ""),
+            f"Pages: " + ", ".join(p["url"] for p in manifest["pages"][:10]) + ("..." if saved > 10 else ""),
             None,
         )
 
@@ -3413,4 +3403,3 @@ class ClaudeToolkit:
             f"# Fetched: {url}\n({len(markdown.encode('utf-8'))} B)\n{self._profile_hint(url)}{caution}\n\n{markdown}",
             None,
         )
-

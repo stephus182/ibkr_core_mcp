@@ -124,18 +124,6 @@ def test_firecrawl_search_saves_to_drive_when_requested(mock_wds_cls, mock_fc_cl
     assert "file-id-123" in result or "Drive" in result
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
     toolkit = _make_toolkit()
     toolkit._firecrawl = MagicMock()
@@ -156,16 +144,6 @@ def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
     toolkit._crawl4ai.scrape.assert_not_called()
 
 
-
-
-
-
-
-
-
-
-
-
 # ============================================================================
 # Crawl4AI fallback wiring (_scrape_with_fallback + handler integration)
 # ============================================================================
@@ -173,22 +151,6 @@ def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
 
 def _long_markdown(word_count: int) -> str:
     return " ".join(["word"] * word_count)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_validate_public_url_blocks_localhost():
@@ -204,10 +166,6 @@ def test_validate_public_url_blocks_link_local():
 def test_validate_public_url_allows_public_https():
     toolkit = _make_toolkit()
     assert toolkit._validate_public_url("https://example.com/article") is None
-
-
-
-
 
 
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
@@ -258,8 +216,6 @@ def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(mock_c4a
     mock_c4a_cls.return_value.scrape_batch.assert_not_called()
 
 
-
-
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.web_scraper.WebDocsStore")
 @patch("ibkr_core_mcp.scrape_fallback.Crawl4AIScraper")
@@ -290,10 +246,6 @@ def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(mock_c4a_
     result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
     assert fig is None
     assert "Crawl4AI fallback used" not in result
-
-
-
-
 
 
 # ============================================================================
@@ -333,14 +285,6 @@ def _blocked_firecrawl_toolkit(exc):
     return toolkit
 
 
-
-
-
-
-
-
-
-
 # ============================================================================
 # Recovery ladder — the "never downgrade" invariant
 #
@@ -377,12 +321,6 @@ def _ladder_toolkit():
     toolkit._crawl4ai = MagicMock()
     toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": ""}
     return toolkit
-
-
-
-
-
-
 
 
 # ============================================================================
@@ -610,7 +548,11 @@ def test_crawl_site_refuses_to_archive_an_error_page_as_content():
     toolkit._web_docs.get_cached_crawl.return_value = None
     with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
         mock_crawl.return_value = [
-            {"url": "https://d.dev/core/", "markdown": "# 403 Forbidden\n* * *\nnginx/1.24.0 (Ubuntu)\n", "metadata": {}}
+            {
+                "url": "https://d.dev/core/",
+                "markdown": "# 403 Forbidden\n* * *\nnginx/1.24.0 (Ubuntu)\n",
+                "metadata": {},
+            }
         ]
         text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/core/"})
 
@@ -631,9 +573,7 @@ def test_crawl_site_still_archives_a_genuinely_short_page():
         "pages": [{"url": "https://d.dev/", "file_id": "f1"}],
     }
     with patch("ibkr_core_mcp.scrape_fallback.crawl_site") as mock_crawl:
-        mock_crawl.return_value = [
-            {"url": "https://d.dev/", "markdown": _REALISTIC_PARAGRAPH[:1600], "metadata": {}}
-        ]
+        mock_crawl.return_value = [{"url": "https://d.dev/", "markdown": _REALISTIC_PARAGRAPH[:1600], "metadata": {}}]
         text, _ = toolkit.execute("crawl_site", {"url": "https://d.dev/"})
 
     assert "Crawl complete: saved 1 page(s)" in text

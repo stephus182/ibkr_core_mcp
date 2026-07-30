@@ -129,12 +129,6 @@ def _mock_anthropic_reply(text: str) -> MagicMock:
     return client
 
 
-
-
-
-
-
-
 # ── _run_async ───────────────────────────────────────────────────────────────
 
 
@@ -992,9 +986,7 @@ def test_search_site_clamps_limit_and_applies_it_after_ranking(monkeypatch):
     seeder is asked for, so a small limit cannot truncate the pool before scoring."""
     from ibkr_core_mcp.scrape_fallback import _SEED_MAX_URLS, search_site
 
-    captured = _install_fake_seeder(
-        monkeypatch, [_entry(f"https://x.dev/{i}", 1.0 - i / 100) for i in range(30)]
-    )
+    captured = _install_fake_seeder(monkeypatch, [_entry(f"https://x.dev/{i}", 1.0 - i / 100) for i in range(30)])
     results = search_site("x.dev", "q", limit=3)
 
     assert len(results) == 3
@@ -1124,9 +1116,7 @@ def test_crawl_site_confines_the_crawl_to_one_host_and_caps_pages(monkeypatch, t
     hostile page walking the crawler onto another host."""
     from ibkr_core_mcp.scrape_fallback import crawl_site
 
-    _, strategy_kwargs, hooks = _install_fake_deep_crawler(
-        monkeypatch, [_FakeDeepResult("https://d.dev/", "c")]
-    )
+    _, strategy_kwargs, hooks = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
     crawl_site("https://d.dev/", tmp_path, max_pages=7, max_depth=3)
 
     assert strategy_kwargs[0]["include_external"] is False

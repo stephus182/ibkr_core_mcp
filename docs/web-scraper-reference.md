@@ -1,36 +1,64 @@
 # Web Scraper Reference
 
-Two engines, split by what they are good at. **Firecrawl** (hosted, paid) does search and bulk
-crawling — API and reference documentation is its home ground. **Crawl4AI local** (free, a real
-Playwright browser on this machine) does complex JavaScript-heavy sites and paywalled sites you
-subscribe to. This document covers both layers, every tunable, the credit-cost model,
-paywalled-site logins, and what to do when a scrape comes back empty.
+**Four tools, one job each, and no fallback between them.** Anything that takes a URL goes
+to the free local browser (Crawl4AI). Firecrawl is kept for exactly one thing the browser
+cannot do: search the web when you have no URL yet. This document covers all four tools,
+every tunable, the credit model, paywalled-site logins, and what to do when a scrape comes
+back empty.
 
 ---
 
-## 1. The two layers
+## 1. The four tools
 
-| Layer | Module | Cost | What it's good at |
+| Tool | Engine | Cost | Job |
 |---|---|---|---|
-| **Firecrawl** | `web_scraper.py` | Paid, per-credit | Web *search* (nothing else here provides it), fast bulk crawling, clean markdown extraction |
-| **Crawl4AI local** | `scrape_fallback.py` | Free, local | Pages Firecrawl can't get: JavaScript-heavy sites, bot-blocked sites, and paywalled sites where you hold a subscription |
+| `firecrawl_search` | Firecrawl | ~1 credit | **Find pages anywhere.** A query with no site in mind. The only whole-web search. |
+| `search_site` | Crawl4AI | free | **Find pages on one site.** Domain + query, BM25-ranked. |
+| `crawl_site` | Crawl4AI | free | **Archive a site** to Drive under `web_docs/{url-slug}/`. |
+| `fetch_page` | Crawl4AI | free | **Read one page** as markdown. Opens paywalled sites with a saved login. |
 
-They meet in two places, and the distinction matters:
+Read that table as a pipeline: the first two *find*, the last two *read*. `search_site` and
+`firecrawl_search` both end by telling you to call `fetch_page` on whichever result you
+want — because none of the finders returns page text, deliberately.
 
-- **As a ladder** — `firecrawl_search` and `firecrawl_crawl` try Firecrawl first and fall back to
-  Crawl4AI when the result looks thin (§3).
-- **As a door** — `fetch_page` goes straight to the browser for a single URL, with no Firecrawl
-  attempt at all. That is the right route for a paywalled article: Firecrawl cannot log in, so
-  trying it first only spends a credit to be told about a subscription wall.
+### 1.1 Why there is no longer a ladder
 
-### 1.1 Four different things are called "Crawl4AI"
+Until 2026-07-30 this was a two-rung recovery ladder: Firecrawl ran first, and Crawl4AI was
+reachable only *underneath* it when a paid result came back thin. About 900 lines existed to
+arbitrate between them — `_merge_pages`, `_assess_fallback_need`, `_scrape_with_fallback`,
+`_apply_crawl4ai_fallback_batch`, `_crawl4ai_root_scrape`, and an LLM judge that spent a
+Haiku call deciding whether a page looked complete.
+
+All of it is gone, because the premise was wrong. **The "fallback" was never the weaker
+engine** (§5.2): on the same URLs minutes apart, local returned 17,364 B in 1.2 s where
+Firecrawl returned 14,341 B in 16.8 s, and 8,786 B in 1.3 s against 5,515 B in 13.2 s.
+Bigger, ~10× faster, free. A ladder that tries the slower, costlier, thinner engine first
+and falls back to the better one is upside down.
+
+Once each tool has one job, there is nothing to fall back *from*. The consequences are worth
+naming because they are the whole return on this refactor:
+
+- **No arbitration code.** Nothing decides between engines because nothing competes.
+- **No LLM call anywhere in the scraper.** `judge_completeness_llm` was the single documented
+  exception to "ClaudeToolkit is the only layer that talks to Anthropic" (`CLAUDE.md`), and
+  it was invisible to a host app's own token accounting. It is not better-guarded now; it
+  does not exist.
+- **`WebDocsStore` never noticed.** It takes `{"url", "markdown"}` dicts and never knew which
+  engine produced them, so `crawl_site` replaced `firecrawl_crawl` beneath it as a drop-in.
+  Same Drive layout, same 48h manifest cache, same slug-collision handling.
+
+What this cost: whole-web search still needs Firecrawl, so the dependency and its key remain.
+That is ~167 lines — `search()` is a single POST with no polling and no pagination, which is
+why keeping it was nearly free while deleting the crawl half saved ~330.
+
+### 1.2 Four different things are called "Crawl4AI"
 
 Searching for Crawl4AI docs returns all four. Only the first is used here, and picking the
 wrong one sends you to an API that does not match the code in front of you. Surveyed 2026-07-28.
 
 | # | Thing | What it is | Used here? |
 |---|---|---|---|
-| 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes** — `scrape_fallback.py`, behind both the ladder and `fetch_page` |
+| 1 | **`crawl4ai` OSS library** (PyPI, 0.9.2 as of 2026-07-15) | Playwright-based crawler that runs locally. Docs: `docs.crawl4ai.com` (v0.9.x) | **Yes** — `scrape_fallback.py`, behind `fetch_page`, `crawl_site` and `search_site` |
 | 2 | **Crawl4AI Cloud** (`api.crawl4ai.com`) | The vendor's hosted REST API, credit-billed | **No — built, then removed 2026-07-28. See §5.1** |
 | 3 | **`crawl4ai-cloud-sdk`** (PyPI, 1.2.0) | The vendor's own Python client for #2 | **No** — removed alongside #2 |
 | 4 | **`janbuchar/crawl4ai` Apify Actor** | A community wrapper around #1, run on Apify's platform | **No — rejected, see §5.1** |
@@ -58,22 +86,15 @@ They also differ in *documentation shape*, which matters under this repo's API-d
 > **Check the source repo before concluding a vendor does not ship something**, especially when
 > the 404 body is itself a valid-looking HTML page.
 
-Orchestration between them lives in `claude_tools.py`. That split is deliberate: `web_scraper.py`
-never imports `scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
+Handlers live in `claude_tools.py`. The split is deliberate: `web_scraper.py` never imports
+`scrape_fallback.py`, so the Firecrawl client stays a pure protocol wrapper.
 
-**Three tools are exposed to the model:**
-
-| Tool | Use it for |
-|---|---|
-| `firecrawl_search` | "Find me pages about X." Returns full markdown for each hit. Optionally snapshots to Drive. |
-| `firecrawl_crawl` | "Archive this site." Crawls from a root URL and always saves to Drive under `web_docs/{url-slug}/`. |
-| `fetch_page` | "Read me this page." One URL, straight to the local browser, no Firecrawl attempt and no Drive write. |
-
-`fetch_page` was added on 2026-07-28 and closes a real gap: until then the only way to read a
-single known URL was to run `firecrawl_crawl` against it, which archives a whole site to Drive to
-answer a question about one page — and which cannot open a paywall at all, because Crawl4AI was
-reachable only as a fallback *underneath* a Firecrawl call. Three successive plans tuned the
-ladder's rung order while this was the actual missing piece.
+`fetch_page` was added on 2026-07-28 and closed a real gap: until then the only way to read a
+single known URL was to run a whole site crawl at it, and nothing could open a paywall, because
+the browser was reachable only *underneath* a Firecrawl call. Three successive plans tuned the
+ladder's rung order while a missing entry point was the actual problem. `search_site` and
+`crawl_site` (2026-07-30) finished the job by giving the browser the other two entry points, at
+which point the ladder had nothing left to do.
 
 ---
 
@@ -81,8 +102,8 @@ ladder's rung order while this was the actual missing piece.
 
 | Env var | Field | Required for | Default |
 |---|---|---|---|
-| `FIRECRAWL_API_KEY` | `firecrawl_api_key` | `firecrawl_search` and `firecrawl_crawl`. Without it they return "not available" rather than raising. **`fetch_page` needs no key** — it is a local browser. | — |
-| `ANTHROPIC_API_KEY` | `anthropic_api_key` | The completeness judge (section 3.2) | — (required by `Config` itself) |
+| `FIRECRAWL_API_KEY` | `firecrawl_api_key` | **`firecrawl_search` only.** Without it that one tool reports "not available" rather than raising. `fetch_page`, `crawl_site` and `search_site` need no key at all — they are a local browser and public sitemaps. | — |
+| `ANTHROPIC_API_KEY` | `anthropic_api_key` | **Nothing in the scraper.** The completeness judge that used it was deleted 2026-07-30 (§1.1). Still required by `Config` itself. | — |
 | `GOOGLE_DRIVE_FOLDER_ID` | `gdrive_folder_id` | Drive persistence, unless `GDRIVE_WEB_DOCS_FOLDER_ID` is set | — |
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | `gdrive_web_docs_folder_id` | Overrides the `web_docs/` root | auto-created under `gdrive_folder_id` |
 | `GDRIVE_TOKEN_FILE` | `gdrive_token_file` | Drive OAuth | `~/.ibkr_core/token.json` |
@@ -114,143 +135,102 @@ pytest tests/test_web_scraper_dev_cache_live.py -v -m integration
 
 ---
 
-## 3. The recovery ladder
+---
 
-A crawl of a site that fights back used to return zero pages and report it as success. It now
-falls back once — paid remote, then free local:
+## 3. How each tool behaves when things go wrong
 
-```text
-firecrawl_crawl(url)
-  │
-  ├─ Rung 1: Firecrawl, one attempt                         ~1 credit/page
-  │     ├─ >= 5 KB of markdown? ────────────────────────► save to Drive, done
-  │     └─ anything else — thin, empty, job failed, timed out,
-  │        401 / 402 / 429, network down ───────────────┐
-  │                                                     │
-  └─ Rung 2: Crawl4AI scrapes the root URL locally  ◄────┘   free
-        using a saved login profile if one matches
-        │
-        ├─ got content? ────────────────────────────────► MERGE into rung 1's pages,
-        │                                                  save the union to Drive
-        └─ nothing at all → explicit diagnosis naming EACH rung's
-                            failure, never "saved 0 page(s)"
-```
+There is no recovery ladder to catch a bad result any more, so every tool has to be honest
+about its own output. That honesty is the replacement for the fallback, and it is enforced
+in three places by the same `assess_quality` signal.
 
-**The rescue only ever adds.** Rung 2's page is merged into rung 1's list rather than replacing
-it, so no outcome of the local rung can remove anything Firecrawl already extracted. When both
-rungs return the same URL, the larger markdown wins — re-fetching a page Firecrawl already had
-upgrades that page instead of duplicating or thinning it.
+### 3.1 A page count is not evidence of content
 
-> **This used to be `pages = root_pages`, and it lost real content.** The old rule was "replace
-> if strictly larger", which honored the promise bytewise and broke it page-wise: three
-> genuinely complete doc pages of ~1.5 KB each measure under the 5 KB bar, so a larger root
-> scrape discarded all three and archived one. Fixed 2026-07-30 (`_merge_pages` in
-> `claude_tools.py`); regression tests
-> `test_root_rescue_keeps_firecrawls_pages_instead_of_replacing_them` and
-> `test_local_rung_does_not_replace_a_larger_firecrawl_result`.
+**`crawl_site` refuses to archive pages that are not content.** Live 2026-07-30: crawling
+`docs.crawl4ai.com/core/` returned exactly one 44-byte page — nginx's `403 Forbidden`,
+because that path is a directory prefix rather than a page — and an earlier build of the
+handler reported *"Crawl complete: saved 1 page(s)"* while filing the error into the research
+archive. Nothing is saved when every page grades `fallback`, and the reply quotes the
+offending text so the cause is visible.
 
-Because merging cannot cost anything, rung 2 no longer has to win outright to be used — it runs
-whenever rung 1 came in under the bar, and whatever it finds is kept. The `Source:` line names
-both rungs when both contributed (`Firecrawl + Crawl4AI (local rung added the root page)`) and
-one rung when only one did.
+Only an **all-`fallback`** verdict refuses. `assess_quality`'s `ambiguous` band exists for
+genuinely short pages, and discarding those would be its own kind of wrong.
 
-**Why the free local rung is the last one.** On the only real failure observed to date
-(2026-07-28, the IBKR campus reference), Firecrawl returned 0 pages and thinned another page to a
-nav shell, and a plain fetch 403'd — while local Crawl4AI fetched both cleanly, 144,125 chars from
-the page that settled the whole symbology question. A paid, proxied third rung was built on
-2026-07-28 for the case local supposedly could not solve, and removed the same day: local had
-already beaten the only block on record, so the rung addressed a failure mode never once observed.
-See §5.1.
+> This was the third instance of one trap in this codebase: `saved 0 page(s)` reported as
+> success, `fetch_page`'s `(1 B)` reading like a short page, and now a 403 archived as a
+> document. Each time, the tool reported the *shape* of success while holding nothing.
+> Assume a fourth is waiting somewhere.
 
-**Why only one Firecrawl attempt.** Firecrawl's Free tier allows **2** `/crawl` requests per
-minute (<https://docs.firecrawl.dev/rate-limits>, verified 2026-07-25). An automatic stealth
-retry would spend a whole minute's budget on one URL and rate-limit the very next call — so the
-second attempt would frequently *cause* the failure it was meant to fix. The local rung is free,
-runs immediately, and needs no budget at all, so it is the better place to go.
+### 3.2 A ranked list is not evidence of relevance
 
-Stealth is not gone, just opt-in: pass `wait_for_ms=3000` and `proxy="auto"` when you know a host
-needs them. See section 4.
+**`search_site` returns nothing rather than pad an answer.** BM25 does not score a
+non-matching page 0.0 — it gives *every* page an identical neutral 0.5. The first live run
+answered the nonsense query `"zzzq nonexistent topic xyzzy"` with ten confidently-ranked
+pages: the Privacy Policy, the Contributing Guide, the home page. Measured signature, 87 URLs
+per run on `docs.crawl4ai.com`:
 
-### 3.1 The one rule
-
-> **Fall back to the local scraper unless Firecrawl already returned 5 KB of markdown.**
-
-The decision is a single measurement — `content_bytes(pages)`, the total UTF-8 size of all
-extracted markdown — not a classification of how the attempt ended. Blocked, timed out, job
-failed, and completed-empty all mean the same thing to a caller and take the same path.
-
-**Why 5 KB.** Measured from this repo's own scrape cache in
-`docs/audits/audit-evidence/scrapes/`:
-
-| Artifact | Bytes | Reality |
+| query | max score | distinct scores |
 |---|---|---|
-| IBKR Akamai edge-block page | 152 | failure |
-| `firecrawl-crawl-get-endpoint.md` | 12,933 | good content |
-| `flex3error.htm` | 16,891 | good content |
-| `flex3.htm` | 20,898 | good content |
-| IBKR `request-modify-orders` | 91,918 | good content |
+| "deep crawling strategy" | 1.000 | 4 — one peak, three 0.400s, 82 zeros |
+| "save a browser login profile for a paywalled site" | 1.000 | 5 |
+| "zzzq nonexistent topic xyzzy" | **0.500** | **1** — all 87 identical |
+| "qqqqq wwwww eeeee rrrrr" | **0.500** | **1** — all 87 identical |
 
-5 KB sits ~34× above the largest observed failure and ~2.5× below the smallest observed success.
+With any term overlap the best page normalises to 1.0 and misses fall to 0.0. With none,
+everything sits at neutral. So "nothing matched" is a *completely flat* distribution, not a
+low score — and the vendor's own `score_threshold` cannot express that: 0.51 empties the
+nonsense query but also discards the genuine 0.400 and 0.389 hits from a real one.
 
-**A short page costs one free local fetch, never a wrong answer.** A legitimately short 3 KB page
-still measures "too small" and runs the local rung — but since the rescue merges (above), a thin
-Crawl4AI result cannot replace a better Firecrawl one, and a good one is simply added. The
-threshold decides *whether to look further*, not *what to keep*.
+**`extract_head=True` is mandatory, not a default.** Without it, zero URLs are scored and the
+list comes back in arbitrary sitemap order. The vendor's documented example omits the flag,
+so copying it yields something that looks like ranked search and is not. Pinned by
+`test_search_site_forces_extract_head`.
 
-**Measured cost of looking further (2026-07-30, this machine):** a local fetch is **0.5–1.5 s**
-per URL, or **0.8 s** per page through the crawl path's shared browser session. Against a
-`timeout_s` budget of 120–600 s, taking the local rung adds well under 1% to worst-case wall
-clock. This is the number behind "the fallback has no downside" — see §5.2.
+### 3.3 A byte count is not a warning
 
-**Account-level failures fall back too.** HTTP 401 (bad key), 402 (out of credits), 429 (rate
-limited) and a dead network all mean Firecrawl is unusable right now — which is precisely when a
-free, local scraper is worth the most. The crawl does not abort; it drops to Crawl4AI and, if
-that also comes back empty, names the Firecrawl failure in the final message so you know whether
-to top up, wait, or fix a key.
-
-### 3.2 The per-page fallback (search, and pages within a crawl)
-
-Separately from the ladder, every individual page is graded by `assess_quality()`:
-
-| Verdict | Trigger | Action |
-|---|---|---|
-| `fallback` | Metadata reports HTTP ≥ 400 or an error, **or** fewer than 40 words | Straight to Crawl4AI |
-| `ambiguous` | A known paywall phrase is present, **or** 40–200 words | One cheap Haiku call (`judge_completeness_llm`) decides |
-| `ok` | Everything else | Keep Firecrawl's content, no extra API call |
-
-The judge only fires on the borderline band, so clean results cost nothing extra. A transient
-judge failure fails safe — it keeps Firecrawl's content rather than escalating.
-
-For a crawl, every fallback-needing page shares **one** Crawl4AI browser session rather than one
-launch per page. That is safe because Firecrawl's crawl stays within one site, so every page
-shares the same profile decision.
+**`fetch_page` flags anything that fails `assess_quality`.** `wsj.com` returns exactly 1 B,
+and `# Fetched: <url>` / `(1 B)` reads like a successful fetch of a short page. The reply
+carries an explicit "this content looks incomplete" instead. See §6 for why WSJ specifically
+can never be fixed by a login.
 
 ---
 
 ## 4. Every tunable
 
-### `firecrawl_crawl`
+### `crawl_site`
 
 | Parameter | Default | Range | Notes |
 |---|---|---|---|
-| `url` | — | required | Public http/https only. SSRF-validated before any request. |
-| `max_pages` | 50 | clamped to [1, 100] | |
-| `timeout_s` | derived | ≥ 10 | Whole polling budget. Derived as `min(600, max(120, 6 × max_pages))` — 120s up to 20 pages, 300s at 50, 600s at 100. |
-| `force_refresh` | `false` | | Skip the Drive cache check (section 5). |
-| `wait_for_ms` | none | | Advanced, opt-in. Milliseconds to wait for JS rendering. Try `3000` on a JS-rendered site that came back empty. |
-| `proxy` | none | `basic`/`enhanced`/`auto` | Advanced, opt-in. Try `auto` on a site that blocks automated clients. |
+| `url` | — | required | Public http/https only. SSRF-validated before the browser starts. Use a real page URL, not a directory prefix — `/core/` 403s where `/core/quickstart/` works. |
+| `max_pages` | 25 | [1, 100] | ~1.2 s per page measured, so 25 ≈ 30 s. |
+| `max_depth` | 2 | [0, 5] | Link-hops from the root. 0 fetches only the root. |
+| `force_refresh` | `false` | | Skip the 48h Drive manifest cache (§7). |
 
-`timeout_s` is **our polling patience, not Firecrawl's timeout.** The old fixed 120s default was
-under-budgeted for its own 50-page default and could manufacture a "timed out with nothing" result
-on a site that was merely slow.
+Every hop stays on the root's host (`include_external=False`). That is a safety property, not
+just scoping — it is what stops a hostile page walking the crawler onto another host. The
+Playwright per-request SSRF guard is installed as well, and matters most here, because a deep
+crawl follows links nobody could have pre-validated.
 
-**Worst-case wall clock** is `timeout_s` plus the Crawl4AI scrape — about 5½ minutes at
-`max_pages=50` for a fully-blocked site. There is no second Firecrawl attempt to double it. If
-you need tighter latency, pass `timeout_s` explicitly.
+### `search_site`
 
-Neither `wait_for_ms` nor `proxy` is ever applied automatically. When they are unset they are
-omitted from the request entirely, so a default call is byte-for-byte the request this client
-sent before these parameters existed.
+| Parameter | Default | Range |
+|---|---|---|
+| `domain` | — | required, bare hostname — no scheme, no path |
+| `query` | — | required, non-empty |
+| `limit` | 10 | [1, 50] — bounds the *answer*, not the candidate pool |
+| `source` | `sitemap+cc` | `sitemap` (fast, official) / `cc` (Common Crawl) / `sitemap+cc` |
+
+Measured on `docs.crawl4ai.com`: `sitemap` 87 URLs in 5.0 s, `sitemap+cc` 90 in 5.9 s. The
+seeder is asked for up to 1,000 URLs regardless of `limit`, because scoring is sparse and a
+cap applied *before* ranking would truncate the candidate pool rather than the answer.
+
+### `fetch_page`
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `url` | — | required. Public http/https only, SSRF-validated before the browser is constructed. |
+
+No Drive write, deliberately: `crawl_site` is the archiving tool, and this one answers "read
+me this page" where the result *is* the message.
 
 ### `firecrawl_search`
 
@@ -258,20 +238,17 @@ sent before these parameters existed.
 |---|---|---|
 | `query` | — | required, non-empty |
 | `limit` | 5 | clamped to [1, 10] |
-| `save_to_drive` | `false` | |
-| `wait_for_ms` | none | advanced |
-| `proxy` | none | advanced |
+| `save_to_drive` | `false` | snapshot to `web_docs/searches/` |
+| `wait_for_ms` | none | advanced, opt-in |
+| `proxy` | none | advanced, opt-in — `basic` / `enhanced` / `auto` |
 
-Search has no root-URL fallback — it doesn't need one. Each result is graded and recovered
-individually by section 3.2, and results are typically on different domains, so a whole-query
-retry would be the wrong shape. Per-result markdown is truncated to 2,000 characters in the tool
-output; the full text is what gets saved to Drive.
-
----
+It returns URLs, titles and a ~400-character snippet — **not** full page text. Until
+2026-07-30 it fanned out up to five concurrent local browsers to re-fetch every result;
+`fetch_page` is that route now, and a better one.
 
 ## 5. Credit-cost model
 
-**Firecrawl (rung 1):**
+**Firecrawl — `firecrawl_search` only:**
 
 | Setting | Cost |
 |---|---|
@@ -279,10 +256,10 @@ output; the full text is what gets saved to Drive.
 | `proxy: "enhanced"` | up to 5 credits per page |
 | `proxy: "auto"` | 1 credit if basic succeeds; up to 5 if it retries through enhanced |
 
-**Crawl4AI local (rung 2, and every `fetch_page` call):** free — it runs on this machine.
+**Crawl4AI local — `fetch_page`, `crawl_site`, `search_site`:** free. It runs on this machine, so there is no quota, no key and no per-page cost.
 
 A crawl costs exactly one Firecrawl attempt. `enhanced`/`auto` are charged only when you ask for
-them explicitly — nothing escalates you into the expensive path automatically, and rung 2 is free.
+them explicitly — nothing escalates you into the expensive path automatically.
 A site that works costs exactly what it cost before this feature existed.
 
 ### Rate limits and plans
@@ -335,7 +312,7 @@ read from Apify's public API (`GET https://api.apify.com/v2/acts/janbuchar~crawl
 
 A rung whose upstream fails every public run is worse than no rung: it adds a paid dependency, a
 third credential, and latency, in exchange for a failure. It also could not sit *between* our
-rungs — it wraps the same OSS library rung 2 already runs locally and free, so at best it would
+rungs — it wraps the same OSS library this repo already runs locally and free, so at best it would
 duplicate the local rung while costing money.
 
 Worth knowing: `isDeprecated: false` on a wrapper with a 0% success rate is exactly the sort of
@@ -477,10 +454,9 @@ Nothing is transmitted anywhere; the profile is a local directory.
 
 **2. Read the article** — `fetch_page` on the URL. It goes straight to the browser, finds the
 profile by domain, and returns the full text. Do **not** route a paywalled article through
-`firecrawl_search` or `firecrawl_crawl` first: Firecrawl cannot log in, so it spends a credit to
-be handed the subscription stub, and only then falls back to the browser that could have gone
-first. The tool's reply always states whether a profile was used, so a stub is never silently
-mistaken for the article.
+`firecrawl_search` first: Firecrawl cannot log in, so it spends a credit to be handed the
+subscription stub. `fetch_page` and `crawl_site` both use the saved profile, and both state
+whether one was found, so a stub is never silently mistaken for the article.
 
 ### Which profile applies to which URL
 
@@ -511,7 +487,7 @@ that domain.
 
 ## 7. Drive cache layout
 
-`firecrawl_crawl` always persists. `firecrawl_search` persists only when `save_to_drive=true`.
+`crawl_site` always persists. `firecrawl_search` persists only when `save_to_drive=true`. `fetch_page` and `search_site` never write to Drive.
 
 ```text
 <gdrive_folder_id>/
@@ -523,9 +499,9 @@ that domain.
       <YYYYMMDDTHHMMSSZ>-<query-slug>.md
 ```
 
-**Crawls are cached for 48 hours.** Before calling Firecrawl at all, `firecrawl_crawl` checks
+**Crawls are cached for 48 hours.** Before opening a browser at all, `crawl_site` checks
 Drive for an existing manifest for that URL. If one exists and is under 48h old, it returns the
-cached result and makes **zero** Firecrawl requests. Pass `force_refresh=true` to override.
+cached result and fetches nothing. Pass `force_refresh=true` to override.
 
 The 48h figure is this repo's own choice, using Firecrawl's v2 `maxAge` default (172,800,000 ms)
 as an externally-validated reference point for "how fresh is fresh enough" for reference
@@ -572,17 +548,15 @@ one.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| "not available: FIRECRAWL_API_KEY is not configured" | No key in the environment | Set `FIRECRAWL_API_KEY` in the consuming project's `.env` |
-| "Crawl of … produced no content" | Every configured rung failed; the message names each cause | Check the host table. For a subscription site, `create-profile`. Try `wait_for_ms=3000` + `proxy="auto"`. For IBKR docs, use `.md` URLs. |
-| Crawl returns fewer pages than expected | Polling budget exhausted, not a block | Raise `timeout_s`; partial results are returned, not discarded |
-| Result says `Source: Crawl4AI (Firecrawl failed — HTTP 402…)` | Out of credits; the local rung already rescued the crawl | Top up when convenient. The content is real. |
-| `Source: Crawl4AI (Firecrawl failed — HTTP 429…)` | Plan rate limit; the local rung already rescued the crawl | Nothing. Free tier allows 2 `/crawl` per minute; the client already retried with backoff. |
-| `Source: Firecrawl + Crawl4AI (local rung added the root page)` | Firecrawl came in under 5 KB, so the local rung ran and its root page was merged in. Both rungs' content is present | Nothing — this is the ladder working. Firecrawl's pages were kept, not replaced. |
-| Page returns exactly **1 B** and `http=401` | Anti-bot protection (DataDome on WSJ) refusing the automated browser. **A login profile does not help** — the block precedes authentication | No fix from this side. See §6. Use a host that permits automation, or read that article by hand. |
+| "firecrawl_search is not available: FIRECRAWL_API_KEY is not configured" | No key in the environment | Set `FIRECRAWL_API_KEY`. Only `firecrawl_search` needs it — the other three tools work without one. |
+| "Crawl of … fetched N page(s) but none of them is content" | Every page graded `fallback`. **Nothing was saved** — the reply quotes the offending text | Read the quote. A `403 Forbidden` usually means you gave a directory prefix; use a real page URL. Otherwise anti-bot, a login wall, or unfinished JS. |
+| "No pages on … matched" | The site was reachable and scored; nothing on it is about that query. A real answer, not a failure | Different wording, or `source="sitemap+cc"`. Use `firecrawl_search` to look beyond the one domain. |
+| `search_site` returns fewer results than `limit` | BM25 is sparse — typically 4 of 87 URLs score above zero | Working as intended. The tail would be pages the query never matched. |
+| Page returns exactly **1 B** at `http=401` | Anti-bot (DataDome on WSJ) refusing the automated browser. **A login profile does not help** — the block precedes authentication | No fix from this side. See §6. |
 | Article is truncated on a site you subscribe to | No profile matched, or the session expired — but rule out anti-bot first (row above) | `list-profiles` to check; re-run `create-profile` |
-| "Crawl4AI fallback unavailable" | Optional extra not installed | `pip install "ibkr_core_mcp[scraper]" && crawl4ai-setup` |
+| "needs the local browser" / "Crawl4AI is not installed" | Optional extra absent | `pip install "ibkr_core_mcp[scraper]" && crawl4ai-setup` |
 | Same URL crawled twice returns instantly | 48h Drive cache hit — working as designed | `force_refresh=true` to re-crawl |
-| A crawl took ~5-6 minutes | Firecrawl used its whole budget, then the local rung ran | Pass an explicit smaller `timeout_s` |
+| A crawl is slower than expected | ~1.2 s per page, and `max_depth` multiplies the page count | Lower `max_pages` or `max_depth`. There is no polling budget to raise any more — nothing waits on a remote job. |
 
 **SSRF protection is two-layered and not optional.** `ClaudeToolkit._validate_public_url` rejects
 private, loopback and link-local hosts before any URL reaches Crawl4AI, and a Playwright-level
@@ -618,7 +592,12 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-30 | **The local rung beats the paid rung on documentation hosts, on size and speed.** Same URLs, minutes apart: `docs.firecrawl.dev/introduction` 14,341 B / 16.8 s via Firecrawl vs **17,364 B / 1.2 s** local; `interactivebrokers.com/docs/web-api/` 5,515 B / 13.2 s vs **8,786 B / 1.3 s**. Local fetched 4/4 targets that day (0.5–1.5 s each; 0.8 s per page batched). Firecrawl's timings include this client's own 5 s poll cadence; the byte counts have no such caveat. This is the evidence for "falling back is not a downside" — §5.2. |
 | 2026-07-30 | **The root rescue was discarding Firecrawl's pages.** `pages = root_pages` honored the ladder's byte-level promise while breaking it page-wise: a crawl of three complete ~1.5 KB doc pages measures under the 5 KB bar, so a larger root scrape replaced all three with one. Now merged by URL, larger markdown winning per URL (`_merge_pages`). Found by re-reading the invariant against the code that was supposed to implement it, not by any failing test. |
 | 2026-07-30 | **The two engines agree on the `url` key, so the merge really does dedupe.** A unit test cannot establish this — both sides are invented. Run live against `example.com`: Firecrawl's page key (from `metadata.sourceURL`) and Crawl4AI's (the requested URL) were both exactly `'https://example.com'`, so `_merge_pages` returned **1** page, not 2. Firecrawl's 167 B also beat local's 166 B and was kept, exercising "larger markdown wins" on real data. Had the keys differed by so much as a trailing slash, every root rescue would have archived the root page twice. |
-| 2026-07-30 | **The `Retry-After` cap was a doc error, not a code error.** This reference said the client honors `Retry-After` "capped at 30s"; Firecrawl's published snippet applies `min(2 ** attempt, 30)` to the *exponential branch only* and says of the header "wait **at least** that long". The code matched the vendor all along. Caught only because the vendor page was re-fetched before editing the code to match the sentence — the standing rule works in this direction too. |
+| 2026-07-30 | **Crawl4AI searches a site natively, and free.** `AsyncUrlSeeder` + BM25 on `docs.crawl4ai.com`: "deep crawling strategy" ranked `/core/deep-crawling/` first at 1.000; "save a browser login profile for a paywalled site" ranked `/advanced/undetected-browser/` first at 1.000. 87 URLs from the sitemap in 5.0 s, 90 in 5.9 s with `sitemap+cc`. This is what made `search_site` possible and Firecrawl's crawl half redundant. It is **domain-scoped by construction** (`urls(domain, config)`), so it can search *a* site but never *the web* — which is the entire reason `firecrawl_search` survives. |
+| 2026-07-30 | **`extract_head=True` is mandatory for BM25, and the vendor's example omits it.** With it, 87 of 87 URLs carry a `relevance_score`. Without it, **zero** do and the list is sitemap order. Head extraction is what BM25 scores against. Copying the documented example verbatim produces something that looks like ranked search and is not. Pinned by `test_search_site_forces_extract_head`. |
+| 2026-07-30 | **A non-matching BM25 query scores 0.5, not 0.0.** The first live `search_site` run answered "zzzq nonexistent topic xyzzy" with ten confidently-ranked pages — Privacy Policy, Contributing Guide, home page — every one at exactly 0.500. Two nonsense queries each produced 87 URLs at 0.5 with **one** distinct score; two real queries peaked at 1.0 with 4–5 distinct scores. So "nothing matched" is a *flat distribution*, not a low score. The unit tests had mocked a miss as 0.0 — **a mock weaker than its dependency**, the same failure mode that let `create_profile` ship having never run. |
+| 2026-07-30 | **The deep-crawl strategy returns the root URL twice**, at depth 0 and depth 1, byte-identical (`docs.crawl4ai.com/` twice at 14,030 B in a 6-page crawl). Fed straight to `save_crawl` that writes one file but appends two manifest entries, so the reply claims a page count the archive does not contain. Found by probing the real API *before* writing `crawl_site`, not by a test failing after. `include_external=False` was confirmed in the same run: 6 pages, exactly one hostname. |
+| 2026-07-30 | **An error page is still a page.** Crawling `docs.crawl4ai.com/core/` returned one 44-byte page — nginx's `403 Forbidden`, because that path is a directory prefix — and the handler reported "Crawl complete: saved 1 page(s)" while filing it into the research archive. Third instance of this trap here, after "saved 0 page(s)" as success and `fetch_page`'s "(1 B)". `crawl_site` now refuses to save when every page grades `fallback`, and quotes the offending text. |
+| 2026-07-30 | **The Retry-After cap was a doc error, not a code error.** This reference said the client honors `Retry-After` "capped at 30s"; Firecrawl's published snippet applies `min(2 ** attempt, 30)` to the *exponential branch only* and says of the header "wait **at least** that long". The code matched the vendor all along. Caught only because the vendor page was re-fetched before editing the code to match the sentence — the standing rule works in this direction too. |
 | 2026-07-28 | **The paywall path had never been executed.** `~/.ibkr_core/crawl4ai_profiles` did not exist on this machine — no login profile had ever been created — while §6, the profile-lookup code, the `create-profile` CLI and the paywall markers were all present, tested and documented. A capability can be complete in every respect except having been run once. |
 | 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
 | 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `scrape_fallback.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
@@ -636,21 +615,15 @@ exception types `FirecrawlError` and `WebDocsStoreError` are.
 ```python
 from ibkr_core_mcp.web_scraper import FirecrawlClient, WebDocsStore, content_bytes
 
-# Firecrawl
+# Whole-web search — the only Firecrawl surface that still exists.
 client = FirecrawlClient(api_key)                      # ValueError if key is empty
-
 client.search(query, limit=5, *, wait_for_ms=None, proxy=None, timeout_ms=None)
 # -> list[{"url", "title", "markdown", "metadata"}]
-
-client.crawl(url, max_pages=50, timeout_s=None, *, wait_for_ms=None, proxy=None)
-# -> list[{"url", "markdown", "metadata"}]
-# ONE Firecrawl attempt. Returns [] on a failed job, a 4xx mid-poll, or a timeout.
-# Raises FirecrawlError only for 401 / 402 / 429 — the handler catches those and
-# still falls back to Crawl4AI, using the exception only to name the cause.
+# `.crawl()` was REMOVED 2026-07-30 — use scrape_fallback.crawl_site().
 
 content_bytes(pages) -> int                            # total UTF-8 bytes of markdown
 
-# Drive persistence
+# Drive persistence — engine-agnostic; it never knew who produced its pages.
 store = WebDocsStore(config)                           # no network I/O at construction
 store.get_cached_crawl(url, max_age_hours=48.0)        # -> manifest dict | None
 store.save_crawl(url, pages)                           # -> manifest dict
@@ -659,18 +632,27 @@ store.save_search(query, results)                      # -> Drive file ID
 
 ```python
 from ibkr_core_mcp.scrape_fallback import (
-    Crawl4AIScraper, Crawl4AIUnavailableError, assess_quality, create_profile, list_profiles,
+    Crawl4AIScraper, Crawl4AIUnavailableError, assess_quality, crawl_site, create_profile,
+    list_profiles, search_site,
 )
 
-scraper = Crawl4AIScraper(profiles_dir)
-scraper.scrape(url)                                    # -> {"url", "markdown"}
-scraper.scrape_batch(urls, profile_domain=domain)      # -> {url: result | Exception}
+# One page.
+Crawl4AIScraper(profiles_dir).scrape(url)              # -> {"url", "markdown"}
+
+# A whole site, shaped for save_crawl(). Same-host only; root deduplicated.
+crawl_site(url, profiles_dir, max_pages=25, max_depth=2)
+# -> list[{"url", "markdown", "metadata": {"depth": int}}]
+
+# Pages within one site, BM25-ranked. [] means nothing matched, which is an answer.
+search_site(domain, query, limit=10, source="sitemap+cc")
+# -> list[{"url", "title", "score"}]
 
 assess_quality(markdown, metadata, url)                # -> "ok" | "ambiguous" | "fallback"
-create_profile(url_or_domain, profiles_dir)            # -> Path (interactive)
+create_profile(url_or_domain, profiles_dir)            # -> Path (interactive, needs a TTY)
 list_profiles(profiles_dir)                            # -> [(domain, path, age_days)]
 ```
 
+`judge_completeness_llm` was removed 2026-07-30 — the scraper makes no Anthropic API call.
+
 **Related:** `docs/tools-reference.md` (tool schemas), `docs/external-docs-reference.md` (official
-URLs for every external API), `docs/plans/2026-07-25-web-scraper-robustness-design.md` (why the
-ladder is shaped this way).
+URLs for every external API).
