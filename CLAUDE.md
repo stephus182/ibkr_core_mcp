@@ -127,8 +127,18 @@ ibkr_core_mcp in isolation (not inside a consuming project), a local `.env` **in
 repo** is fine — it's gitignored and never committed. Only 4 vars are needed (no
 `GOOGLE_DRIVE_FOLDER_ID` required): `FIRECRAWL_API_KEY`, `GDRIVE_WEB_DOCS_FOLDER_ID`
 (an existing `web_docs/` folder ID), `GDRIVE_TOKEN_FILE`, `GDRIVE_CREDENTIALS_FILE`
-(reuse an already-authenticated token to skip interactive OAuth). Verify with
-`pytest tests/test_web_scraper_dev_cache_live.py -v -m integration`.
+(reuse an already-authenticated token to skip interactive OAuth). Verify with:
+
+```bash
+set -a; source ./.env; set +a
+pytest tests/test_web_scraper_dev_cache_live.py tests/test_web_scraper_drive_live.py -v -m integration
+```
+
+Those four vars are enough for **every** live scraper test, `GOOGLE_DRIVE_FOLDER_ID`
+included-by-omission: `WebDocsStore` accepts either root. It did not used to be — the
+Drive live fixture demanded `GOOGLE_DRIVE_FOLDER_ID` specifically, so both of its tests
+skipped on every default run here, silently, and a rewritten test went unverified for
+hours (2026-07-30). If you add a live test, require only what the code requires.
 
 **Web scraper env vars** (all optional; each disables a feature rather than raising):
 
