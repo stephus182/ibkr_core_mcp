@@ -859,8 +859,10 @@ class WebDocsStore:
                 filename = f"{base_slug}-{suffix}.md"
                 suffix += 1
             claimed_filenames[filename] = page_url
-            content_bytes = md.encode("utf-8")
-            media = MediaIoBaseUpload(io.BytesIO(content_bytes), mimetype="text/markdown", resumable=False)
+            # Not named content_bytes: that is a module-level function in this file
+            # (the ladder's sizing signal), and shadowing it here reads as a call site.
+            md_bytes = md.encode("utf-8")
+            media = MediaIoBaseUpload(io.BytesIO(md_bytes), mimetype="text/markdown", resumable=False)
             # Check if file already exists
             q = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
             existing = svc.files().list(q=q, fields="files(id)").execute().get("files", [])

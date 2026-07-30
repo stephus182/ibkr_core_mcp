@@ -74,6 +74,48 @@ class _Resolved(NamedTuple):
 # [1, 10] (see web_scraper.py), so this caps concurrent launches to half that.
 _MAX_CONCURRENT_FALLBACKS = 5
 
+
+def _merge_pages(pages: list[dict[str, Any]], extra: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Combine two page lists so the result can only ever contain more content
+    than either input — the rule that makes the crawl ladder's local rung free
+    of any downside.
+
+    The root rescue in _handle_firecrawl_crawl used to assign `pages = root_pages`,
+    which held the ladder's byte-level promise ("never shrink what Firecrawl
+    returned") while quietly breaking it page-wise: a crawl of three genuinely
+    complete but individually small doc pages measures under the 5 KB bar, so a
+    larger root scrape replaced all three with one. Real archived content was lost
+    to a rescue that was supposed to add.
+
+    Merging removes the trade-off entirely. There is no longer a case where taking
+    the local rung costs anything, so it no longer has to be withheld unless it
+    wins outright.
+
+    Args:
+        pages: The existing page list (Firecrawl's, already fallback-processed).
+            Order is preserved and these entries come first.
+        extra: Pages to add (the local rung's root scrape).
+
+    Returns:
+        A new list holding every distinct URL from both. When a URL appears in
+        both, the entry with the larger markdown wins — so re-fetching a page
+        Firecrawl already had upgrades it rather than duplicating or thinning it.
+    """
+    merged = list(pages)
+    by_url = {page.get("url", ""): i for i, page in enumerate(merged)}
+    for page in extra:
+        url = page.get("url", "")
+        index = by_url.get(url)
+        if index is None:
+            by_url[url] = len(merged)
+            merged.append(page)
+        elif len((page.get("markdown") or "").encode("utf-8")) > len(
+            (merged[index].get("markdown") or "").encode("utf-8")
+        ):
+            merged[index] = page
+    return merged
+
+
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
 # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
 _MD_AVAILABILITY: dict[str, str] = {
@@ -985,10 +1027,13 @@ TOOL_DEFINITIONS = [
         "description": (
             "Fetch ONE web page with a real browser and return it as markdown. "
             "Use for JavaScript-heavy sites that come back empty or truncated, and for "
-            "paywalled sites with a saved login profile (FT, WSJ, Bloomberg) — those "
+            "paywalled sites where a login profile has been saved for that domain — those "
             "return the full article instead of the subscription stub. "
+            "Some publishers (wsj.com confirmed) block automated browsers outright and "
+            "return about 1 byte no matter what; a saved login does not change that, so "
+            "report the block rather than retrying or claiming the page was read. "
             "For API or reference documentation prefer firecrawl_search / firecrawl_crawl: "
-            "they are cheaper, cover many pages, and cache to Drive. "
+            "they cover many pages and cache to Drive. "
             "Needs the local browser (the [scraper] extra); reports that if it is missing."
         ),
         "input_schema": {
@@ -3541,8 +3586,8 @@ class ClaudeToolkit:
         root_rescued = False
         if content_bytes(pages) < _MIN_USEFUL_BYTES:
             root_pages = self._crawl4ai_root_scrape(url)
-            if content_bytes(root_pages) > content_bytes(pages):
-                pages = root_pages
+            if content_bytes(root_pages) > 0:
+                pages = _merge_pages(pages, root_pages)
                 root_rescued = True
 
         final_bytes = content_bytes(pages)
@@ -3576,7 +3621,15 @@ class ClaudeToolkit:
         why_firecrawl = (
             f"Firecrawl failed — {firecrawl_failure}" if firecrawl_failure else "Firecrawl returned nothing usable"
         )
-        source = f"Crawl4AI ({why_firecrawl})" if root_rescued else "Firecrawl"
+        # Three honest cases, because the rescue now merges rather than replaces: the
+        # local rung can add its root page to a crawl Firecrawl also contributed to, and
+        # reporting that as plain "Crawl4AI" would credit one rung for the other's pages.
+        if not root_rescued:
+            source = "Firecrawl"
+        elif firecrawl_bytes:
+            source = "Firecrawl + Crawl4AI (local rung added the root page)"
+        else:
+            source = f"Crawl4AI ({why_firecrawl})"
         fallback_line = (
             f"\nCrawl4AI fallback used for {fallback_count} page(s) Firecrawl couldn't fully extract."
             if fallback_count

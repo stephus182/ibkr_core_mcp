@@ -86,6 +86,11 @@ _REAL_DNS_EXEMPT_TESTS = {
     # before the ladder was ever consulted.
     "test_crawl_no_content_message_names_both_rungs",
     "test_local_rung_does_not_replace_a_larger_firecrawl_result",
+    "test_source_line_credits_crawl4ai_alone_when_firecrawl_gave_nothing",
+    # Same again: both assert on what save_crawl received, which is reached only if
+    # the root URL survives validation and the whole ladder actually runs.
+    "test_root_rescue_keeps_firecrawls_pages_instead_of_replacing_them",
+    "test_root_rescue_prefers_the_larger_markdown_for_a_duplicated_url",
     # fetch_page handler tests. Same reason again: _handle_fetch_page SSRF-validates
     # the URL before constructing the browser, so a blocked DNS lookup turns every
     # one of these into "Blocked: ..." and the assertions stop meaning anything.

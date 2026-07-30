@@ -254,11 +254,18 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
     is two rungs: `FirecrawlClient.crawl()` makes one attempt and, whenever the result is under
     5 KB of markdown (including on 401/402/429 or a network error), falls back to a **free local**
-    Crawl4AI scrape of the root URL. The rescue keeps the result only if it is strictly larger, so
-    it can never shrink what Firecrawl returned, and a crawl that ends empty reports an explicit
-    diagnosis naming every rung instead of the old silent "saved 0 page(s)". `waitFor`/`proxy` are
-    exposed on both `crawl()` and `search()` as opt-in overrides. Full detail:
-    `docs/web-scraper-reference.md`.
+    Crawl4AI scrape of the root URL. The rescue **merges** its page into Firecrawl's list rather
+    than replacing it (larger markdown wins per URL), so it can only ever add content, and a crawl
+    that ends empty reports an explicit diagnosis naming every rung instead of the old silent
+    "saved 0 page(s)". `waitFor`/`proxy` are exposed on both `crawl()` and `search()` as opt-in
+    overrides. Full detail: `docs/web-scraper-reference.md`.
+
+    **Falling back is not a degradation — it is usually an upgrade.** Measured 2026-07-30 on the
+    same URLs minutes apart: local Crawl4AI returned 17,364 B in 1.2 s where Firecrawl returned
+    14,341 B in 16.8 s, and 8,786 B in 1.3 s where Firecrawl returned 5,515 B in 13.2 s — bigger,
+    faster, and free. Firecrawl still uniquely provides *search* and multi-page breadth.
+    Counter-case: hosts with real anti-bot protection refuse the local browser outright
+    (`wsj.com` → HTTP 401 / 1 B via DataDome, and **no saved login profile changes that**).
 
 - **ClaudeToolkit is the only layer meant to talk to the Anthropic API** in host apps — one
   deliberate, scoped exception exists (`scrape_fallback.judge_completeness_llm`, a single

@@ -130,14 +130,29 @@ firecrawl_crawl(url)
   └─ Rung 2: Crawl4AI scrapes the root URL locally  ◄────┘   free
         using a saved login profile if one matches
         │
-        ├─ strictly more content than rung 1? ──────────► keep it, save to Drive
-        ├─ less? ───────────────────────────────────────► keep rung 1's result
+        ├─ got content? ────────────────────────────────► MERGE into rung 1's pages,
+        │                                                  save the union to Drive
         └─ nothing at all → explicit diagnosis naming EACH rung's
                             failure, never "saved 0 page(s)"
 ```
 
-**The rescue only ever upgrades.** It replaces the previous rung's result solely when it is
-strictly larger, so a fallback can never shrink what Firecrawl already returned.
+**The rescue only ever adds.** Rung 2's page is merged into rung 1's list rather than replacing
+it, so no outcome of the local rung can remove anything Firecrawl already extracted. When both
+rungs return the same URL, the larger markdown wins — re-fetching a page Firecrawl already had
+upgrades that page instead of duplicating or thinning it.
+
+> **This used to be `pages = root_pages`, and it lost real content.** The old rule was "replace
+> if strictly larger", which honored the promise bytewise and broke it page-wise: three
+> genuinely complete doc pages of ~1.5 KB each measure under the 5 KB bar, so a larger root
+> scrape discarded all three and archived one. Fixed 2026-07-30 (`_merge_pages` in
+> `claude_tools.py`); regression tests
+> `test_root_rescue_keeps_firecrawls_pages_instead_of_replacing_them` and
+> `test_local_rung_does_not_replace_a_larger_firecrawl_result`.
+
+Because merging cannot cost anything, rung 2 no longer has to win outright to be used — it runs
+whenever rung 1 came in under the bar, and whatever it finds is kept. The `Source:` line names
+both rungs when both contributed (`Firecrawl + Crawl4AI (local rung added the root page)`) and
+one rung when only one did.
 
 **Why the free local rung is the last one.** On the only real failure observed to date
 (2026-07-28, the IBKR campus reference), Firecrawl returned 0 pages and thinned another page to a
@@ -177,11 +192,15 @@ failed, and completed-empty all mean the same thing to a caller and take the sam
 
 5 KB sits ~34× above the largest observed failure and ~2.5× below the smallest observed success.
 
-**The fallback keeps the larger result, not the last one.** Both rungs are scored with the
-same function and the later rung's result replaces the earlier one only if it is genuinely bigger. So a
-legitimately short 3 KB page still measures "too small" and runs the local rung, but the output
-stays correct — a thin Crawl4AI result can never silently replace a better Firecrawl one. The
-cost of a short page is one free local fetch, never a wrong answer.
+**A short page costs one free local fetch, never a wrong answer.** A legitimately short 3 KB page
+still measures "too small" and runs the local rung — but since the rescue merges (above), a thin
+Crawl4AI result cannot replace a better Firecrawl one, and a good one is simply added. The
+threshold decides *whether to look further*, not *what to keep*.
+
+**Measured cost of looking further (2026-07-30, this machine):** a local fetch is **0.5–1.5 s**
+per URL, or **0.8 s** per page through the crawl path's shared browser session. Against a
+`timeout_s` budget of 120–600 s, taking the local rung adds well under 1% to worst-case wall
+clock. This is the number behind "the fallback has no downside" — see §5.2.
 
 **Account-level failures fall back too.** HTTP 401 (bad key), 402 (out of credits), 429 (rate
 limited) and a dead network all mean Firecrawl is unusable right now — which is precisely when a
@@ -269,9 +288,24 @@ A site that works costs exactly what it cost before this feature existed.
 ### Rate limits and plans
 
 Firecrawl enforces per-plan rate limits — as low as 1 request/minute for `/crawl` on the free
-tier. The client retries 408/429/500/502/503/504 with exponential backoff plus jitter, honoring
-`Retry-After` when present, capped at 30s and 3 attempts. Source:
-<https://docs.firecrawl.dev/api-reference/errors>
+tier. The client retries 408/429/500/502/503/504 up to 3 times, matching the vendor's own
+published snippet exactly. **The 30s cap applies to the exponential branch only, not to
+`Retry-After`:**
+
+```python
+delay = float(retry_after) if retry_after else min(2 ** attempt, 30) + random.random()
+```
+
+When the server sends `Retry-After`, that value is honored in full — Firecrawl's wording is
+"wait **at least** that long", so capping it would retry early and earn a second 429. Rate limits
+are measured per minute, so the realistic ceiling is ~60s per retry. Source:
+<https://docs.firecrawl.dev/api-reference/errors> and <https://docs.firecrawl.dev/rate-limits>,
+both re-verified 2026-07-30.
+
+> An earlier revision of this line read "honoring `Retry-After` when present, capped at 30s and
+> 3 attempts", which reads as though the cap covers both branches. It does not, and the code was
+> right — the doc was wrong. Caught on 2026-07-30 only because the vendor page was re-fetched
+> before "fixing" the code to match this sentence.
 
 Crawl4AI local has no rate limit and no quota — it is a browser on this machine. The
 search-result path launches up to `_MAX_CONCURRENT_FALLBACKS = 5` local scrapes in parallel; the
@@ -364,12 +398,68 @@ lost to a block, there is nothing here to solve — revisit only if one is obser
 occurrence). Noted because this repo *is* an MCP project and the absence is otherwise easy to
 mistake for "not found yet".
 
+### 5.2 Head-to-head: is falling back to Crawl4AI a downside?
+
+**No. Measured 2026-07-30, both rungs run against the same URLs within minutes of each other.**
+The question is worth settling with numbers because "we had to fall back to the free thing"
+sounds like a degradation, and on this evidence it is the opposite.
+
+| URL | Firecrawl | local Crawl4AI | verdict |
+|---|---|---|---|
+| `docs.firecrawl.dev/introduction` | 14,341 B in 16.8 s, 1 credit | **17,364 B in 1.2 s, free** | local wins on size and speed |
+| `interactivebrokers.com/docs/web-api/` | 5,515 B in 13.2 s, 1 credit | **8,786 B in 1.3 s, free** | local wins on size and speed |
+
+Local reliability the same day: **4/4 targets fetched** (the two above plus `example.com` and
+`ibkrguides.com`), 0.5–1.5 s each, and 3/3 in 2.4 s through one shared `scrape_batch` session
+(0.8 s per page). `example.com` returned 166 B locally against Firecrawl's recorded 167 B —
+near-identical, confirming that page is genuinely tiny rather than blocked.
+
+Read the timings carefully: the Firecrawl column is **this client's** wall clock, which includes
+its own 5 s polling cadence (`_try_crawl` sleeps 5 s before the first poll), not the vendor's raw
+service time. The size comparison carries no such caveat.
+
+**So the pivot costs nothing and usually gains.** What Firecrawl still uniquely provides is
+*search* — finding pages when you have no URL — and breadth, crawling a whole site from one root.
+For a URL you already hold, the local rung is the better instrument, which is exactly why
+`fetch_page` exists as a door rather than only as a fallback (§1).
+
+The one honest caveat: these are documentation hosts. A site with serious anti-bot protection can
+refuse the local browser outright — see §6, where WSJ does exactly that.
+
 ---
 
 ## 6. Paywalled sites (FT, WSJ, Bloomberg)
 
 Crawl4AI can use a saved browser session, so a site you subscribe to returns full articles instead
 of the subscription stub. This is the capability the whole local layer exists for.
+
+> ### ⚠ Status: the mechanism works; the capability is **still unproven end-to-end**
+>
+> Read this before relying on it. Verified 2026-07-30:
+>
+> | Step | State |
+> |---|---|
+> | Save a profile (`create-profile`) | ✅ works — a real WSJ profile exists, 331 cookies incl. `DJSESSION` |
+> | Find the right profile for a URL (`_resolve_profile_dir`) | ✅ works — resolves `www.wsj.com` correctly |
+> | Hand that session to a scrape | ✅ works — the browser launches against the saved `user_data_dir` |
+> | **Get a paywalled article back** | ❌ **never once observed** |
+>
+> **WSJ cannot be the proof, and no profile will change that.** `wsj.com` answers this machine's
+> browser with **HTTP 401, DataDome captcha, 1 B of markdown** — identically in all four
+> combinations tested: headless or visible window, with the saved profile or without it. The
+> block lands on the *automated browser*, before any cookie is consulted, so the login is never
+> the deciding factor. An earlier note in §10 read WSJ's 1 B as "no login profile"; that
+> diagnosis was wrong, and the profile that has since been created did not move the number.
+>
+> **FT is reachable** — `ft.com` returns 59,455 B, HTTP 200, headless, with no profile at all. So
+> the browser is not the problem in general; DataDome specifically is. FT is therefore the
+> realistic candidate for proving the paywall path, and doing so needs the account holder to run
+> `create-profile https://www.ft.com` by hand and then open a subscriber-only article.
+>
+> Until that run happens, treat "reads paywalled articles" as **designed and wired, not
+> demonstrated**. The tool output itself is honest about this: a 1 B DataDome stub trips
+> `assess_quality` and `fetch_page` prints its incompleteness NOTE, so a stub is never presented
+> as the article.
 
 **Two steps, and the first is once per site.**
 
@@ -472,7 +562,9 @@ one.
 | `interactivebrokers.com` | Intermittent. An Akamai edge-block (152-byte error page) was observed 2026-07-02; on 2026-07-25 a plain Firecrawl attempt succeeded (17,346 B on `request-modify-orders`, 5,718 B on `/docs/web-api/`). Treat the block as something that comes and goes, not a permanent property. | Prefer `.md` URLs regardless — they cost no credits. If it does block, add `wait_for_ms=3000` + `proxy="auto"`, or let the local rung take it. |
 | `ibkrguides.com` | Works on defaults | Nothing special |
 | `docs.firecrawl.dev` | Works on defaults | Nothing special |
-| FT / WSJ / Bloomberg / Barron's | Metered paywall; stub content without a session | `create-profile` once per domain (section 6) |
+| `wsj.com` | **Blocked outright.** DataDome answers the automated browser with HTTP 401 and 1 B, headless or not, with or without a saved login (2026-07-30). | Nothing works from here. Do not create a profile expecting it to help — one exists and does not. |
+| `ft.com` | Reachable. 59,455 B at HTTP 200 headless, no profile (2026-07-30). Free content only — subscriber articles untested. | `create-profile` once (section 6) if you subscribe. This is the host to prove the paywall path on. |
+| Bloomberg / Barron's | Metered paywall; not tested against the local browser | Assume WSJ-like anti-bot until measured. Check for HTTP 401 / ~1 B before blaming the profile. |
 
 ---
 
@@ -485,7 +577,9 @@ one.
 | Crawl returns fewer pages than expected | Polling budget exhausted, not a block | Raise `timeout_s`; partial results are returned, not discarded |
 | Result says `Source: Crawl4AI (Firecrawl failed — HTTP 402…)` | Out of credits; the local rung already rescued the crawl | Top up when convenient. The content is real. |
 | `Source: Crawl4AI (Firecrawl failed — HTTP 429…)` | Plan rate limit; the local rung already rescued the crawl | Nothing. Free tier allows 2 `/crawl` per minute; the client already retried with backoff. |
-| Article is truncated on a site you subscribe to | No profile matched, or the session expired | `list-profiles` to check; re-run `create-profile` |
+| `Source: Firecrawl + Crawl4AI (local rung added the root page)` | Firecrawl came in under 5 KB, so the local rung ran and its root page was merged in. Both rungs' content is present | Nothing — this is the ladder working. Firecrawl's pages were kept, not replaced. |
+| Page returns exactly **1 B** and `http=401` | Anti-bot protection (DataDome on WSJ) refusing the automated browser. **A login profile does not help** — the block precedes authentication | No fix from this side. See §6. Use a host that permits automation, or read that article by hand. |
+| Article is truncated on a site you subscribe to | No profile matched, or the session expired — but rule out anti-bot first (row above) | `list-profiles` to check; re-run `create-profile` |
 | "Crawl4AI fallback unavailable" | Optional extra not installed | `pip install "ibkr_core_mcp[scraper]" && crawl4ai-setup` |
 | Same URL crawled twice returns instantly | 48h Drive cache hit — working as designed | `force_refresh=true` to re-crawl |
 | A crawl took ~5-6 minutes | Firecrawl used its whole budget, then the local rung ran | Pass an explicit smaller `timeout_s` |
@@ -518,7 +612,13 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-28 | **`create-profile` demanded an unrelated Anthropic key.** `_main` built a full `Config.from_env()` just to read `crawl4ai_profiles_dir`, and `from_env()` raises when `ANTHROPIC_API_KEY` is unset — so saving a browser login failed with an error naming a key the operation never uses. The CLI test hid it by *setting* the key rather than asking why it was needed. Both profile subcommands now use `config.crawl4ai_profiles_dir_from_env()`, which shares the same variable and default but requires nothing else. |
 | 2026-07-28 | **`create-profile` without a TTY silently saves an empty profile.** Crawl4AI's keyboard listener needs a terminal; without one `_listen_unix` fails on termios, the fallback's `input()` raises EOFError, and EOF is treated as the user pressing 'q' — so the profile saves before any login happens. The result passes `_resolve_profile_dir`, so `fetch_page` reports "Used a saved login profile" while returning the paywall stub. The CLI now refuses without `sys.stdin.isatty()`. **Never run it through a pipe, script or task runner.** |
 | 2026-07-28 | **`create_profile()` must run on the main thread, and had never been run at all.** It routed through `_run_async()`, which hands the coroutine to a worker thread so scraping can survive being called from inside a running event loop. But `BrowserProfiler.create_profile()` installs SIGINT and SIGTERM handlers, and `signal.signal()` raises `ValueError: signal only works in main thread of the main interpreter` anywhere else — so the `create-profile` CLI failed on **every** invocation, while three mocked tests stayed green because their fake profiler installs no handler. Now uses `asyncio.run()` with an explicit main-thread guard. **Found on the first real run, by a human typing the documented command.** |
-| 2026-07-28 | **`fetch_page` live baseline, no login profile:** `wsj.com` returns exactly **1 B** — the browser is served nothing at all, not a teaser. `ft.com`'s free homepage returns 57,737 B and a real docs page 11,807 B. A byte count on its own therefore cannot distinguish "short page" from "blocked", which is why the reply runs `assess_quality` and flags anything that is not `ok` as incomplete. |
+| 2026-07-28 | **`fetch_page` live baseline, no login profile:** `wsj.com` returns exactly **1 B** — the browser is served nothing at all, not a teaser. `ft.com`'s free homepage returns 57,737 B and a real docs page 11,807 B. A byte count on its own therefore cannot distinguish "short page" from "blocked", which is why the reply runs `assess_quality` and flags anything that is not `ok` as incomplete. *(The stated cause was wrong — see the 2026-07-30 entry below. The measurement was right.)* |
+| 2026-07-30 | **WSJ's 1 B is DataDome, not a missing login.** With a real saved profile now in place (331 cookies including `DJSESSION`), `wsj.com` still returns **1 B and HTTP 401, "Blocked by anti-bot protection: DataDome captcha"** — identically across all four combinations: headless + profile, visible window + profile, visible + no profile, headless + no profile. The block lands on the automated browser before any cookie is read, so no profile can move it. The 2026-07-28 entry above attributed the same 1 B to "no login profile"; creating one falsified that. **A plausible cause that matches the symptom is still a guess until the other variable is changed.** |
+| 2026-07-30 | **FT is reachable, WSJ is not** — `ft.com` returns 59,455 B at HTTP 200 headless with no profile at all (consistent with 57,737 B on 2026-07-28). So the local browser is not broadly blocked; DataDome specifically blocks it. FT is the realistic candidate for finally proving the paywall path end-to-end. |
+| 2026-07-30 | **The local rung beats the paid rung on documentation hosts, on size and speed.** Same URLs, minutes apart: `docs.firecrawl.dev/introduction` 14,341 B / 16.8 s via Firecrawl vs **17,364 B / 1.2 s** local; `interactivebrokers.com/docs/web-api/` 5,515 B / 13.2 s vs **8,786 B / 1.3 s**. Local fetched 4/4 targets that day (0.5–1.5 s each; 0.8 s per page batched). Firecrawl's timings include this client's own 5 s poll cadence; the byte counts have no such caveat. This is the evidence for "falling back is not a downside" — §5.2. |
+| 2026-07-30 | **The root rescue was discarding Firecrawl's pages.** `pages = root_pages` honored the ladder's byte-level promise while breaking it page-wise: a crawl of three complete ~1.5 KB doc pages measures under the 5 KB bar, so a larger root scrape replaced all three with one. Now merged by URL, larger markdown winning per URL (`_merge_pages`). Found by re-reading the invariant against the code that was supposed to implement it, not by any failing test. |
+| 2026-07-30 | **The two engines agree on the `url` key, so the merge really does dedupe.** A unit test cannot establish this — both sides are invented. Run live against `example.com`: Firecrawl's page key (from `metadata.sourceURL`) and Crawl4AI's (the requested URL) were both exactly `'https://example.com'`, so `_merge_pages` returned **1** page, not 2. Firecrawl's 167 B also beat local's 166 B and was kept, exercising "larger markdown wins" on real data. Had the keys differed by so much as a trailing slash, every root rescue would have archived the root page twice. |
+| 2026-07-30 | **The `Retry-After` cap was a doc error, not a code error.** This reference said the client honors `Retry-After` "capped at 30s"; Firecrawl's published snippet applies `min(2 ** attempt, 30)` to the *exponential branch only* and says of the header "wait **at least** that long". The code matched the vendor all along. Caught only because the vendor page was re-fetched before editing the code to match the sentence — the standing rule works in this direction too. |
 | 2026-07-28 | **The paywall path had never been executed.** `~/.ibkr_core/crawl4ai_profiles` did not exist on this machine — no login profile had ever been created — while §6, the profile-lookup code, the `create-profile` CLI and the paywall markers were all present, tested and documented. A capability can be complete in every respect except having been run once. |
 | 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
 | 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `scrape_fallback.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |

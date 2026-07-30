@@ -273,6 +273,79 @@ def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
     toolkit._crawl4ai.scrape.assert_not_called()
 
 
+def test_root_rescue_keeps_firecrawls_pages_instead_of_replacing_them():
+    """The root rescue must ADD the root page, never discard the pages Firecrawl
+    already extracted.
+
+    The ladder's documented invariant is that a fallback "can never shrink what
+    Firecrawl already returned". That held bytewise but not page-wise: the rescue
+    used to do `pages = root_pages`, so a crawl whose pages were individually real
+    but collectively under the 5 KB bar lost every one of them the moment the root
+    scrape measured larger. Three real doc pages archived to Drive became one.
+    """
+    toolkit = _make_toolkit()
+    # Three genuinely real pages: 223 words each, so assess_quality grades every one
+    # "ok" and no judge call fires, yet 4,638 B in total stays under the 5 KB bar that
+    # arms the root rescue. That is the exact shape this test is about — pages that
+    # are individually complete but collectively small.
+    thin_but_real = _REALISTIC_PARAGRAPH[:1600]
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = [
+        {"url": f"https://example.com/{name}", "markdown": thin_but_real, "metadata": {}}
+        for name in ("guide", "reference", "faq")
+    ]
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-30T00:00:00+00:00",
+        "pages": [],
+    }
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
+    # Every page reads as complete, so the per-page batch pass leaves them untouched
+    # and only the whole-crawl root rescue is under test here.
+    toolkit._crawl4ai.scrape_batch.return_value = {}
+
+    toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    saved = {p["url"]: p["markdown"] for p in toolkit._web_docs.save_crawl.call_args[0][1]}
+    for name in ("guide", "reference", "faq"):
+        assert saved.get(f"https://example.com/{name}") == thin_but_real, (
+            f"root rescue dropped Firecrawl's real page /{name}; saved {sorted(saved)}"
+        )
+    assert saved.get("https://example.com") == _REALISTIC_MARKDOWN, "root rescue's own page was not added"
+
+
+def test_root_rescue_prefers_the_larger_markdown_for_a_duplicated_url():
+    """Firecrawl's page list normally includes the root URL itself. When the rescue
+    re-fetches that same URL, one entry must survive — the bigger one — not two
+    entries for one URL, and never the thinner of the two."""
+    toolkit = _make_toolkit()
+    toolkit._firecrawl = MagicMock()
+    toolkit._firecrawl.crawl.return_value = [
+        {"url": "https://example.com", "markdown": "stub", "metadata": {}},
+    ]
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.return_value = None
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": "https://example.com",
+        "crawled_at": "2026-07-30T00:00:00+00:00",
+        "pages": [],
+    }
+    toolkit._crawl4ai = MagicMock()
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
+    toolkit._crawl4ai.scrape_batch.return_value = {
+        "https://example.com": {"url": "https://example.com", "markdown": "stub"}
+    }
+
+    toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    saved = toolkit._web_docs.save_crawl.call_args[0][1]
+    assert [p["url"] for p in saved] == ["https://example.com"], f"URL duplicated in the archive: {saved}"
+    assert saved[0]["markdown"] == _REALISTIC_MARKDOWN
+
+
 def test_crawl_never_reports_zero_pages_as_success():
     toolkit = _make_toolkit()
     toolkit._firecrawl = MagicMock()
@@ -852,16 +925,22 @@ def test_crawl_no_content_message_names_both_rungs():
 
 
 def test_local_rung_does_not_replace_a_larger_firecrawl_result():
-    """The ladder upgrades only on strictly more content — it must never downgrade.
+    """The ladder must never downgrade — a smaller local result cannot displace a
+    bigger Firecrawl one.
 
     Firecrawl returns a real but sub-threshold 3.5 KB page, so the root rescue still
-    runs; local comes back smaller. Firecrawl's page must survive and the source must
-    still name Firecrawl.
+    runs; local comes back smaller, on a different URL. Firecrawl's page must survive
+    intact.
 
-    This guards `if content_bytes(root_pages) > content_bytes(pages)` in
-    _handle_firecrawl_crawl. test_crawl_does_not_root_scrape_when_firecrawl_returned_content
-    covers the neighbouring case — content *over* the threshold, where the rescue is
-    skipped outright — and would stay green if the comparison here were flipped.
+    Since the rescue merges rather than replaces (see _merge_pages), the local page is
+    additionally *kept* here rather than discarded — it is new content on a URL
+    Firecrawl never returned, and adding it cannot make the archive worse. The
+    invariant under test is that nothing Firecrawl produced is lost or overwritten,
+    not that the local rung is suppressed.
+
+    test_crawl_does_not_root_scrape_when_firecrawl_returned_content covers the
+    neighbouring case — content *over* the threshold, where the rescue is skipped
+    outright.
     """
     toolkit = _ladder_toolkit()
     toolkit._firecrawl.crawl.return_value = [
@@ -869,15 +948,32 @@ def test_local_rung_does_not_replace_a_larger_firecrawl_result():
     ]
     toolkit._crawl4ai.scrape.return_value = {
         "url": "https://example.com",
-        "markdown": _REALISTIC_PARAGRAPH,  # ~1.7 KB — genuinely worse
+        "markdown": _REALISTIC_PARAGRAPH,  # ~1.7 KB — smaller than Firecrawl's page
     }
 
     text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
 
     toolkit._crawl4ai.scrape.assert_called_once()  # it did run — this is not a skip
-    saved_pages = toolkit._web_docs.save_crawl.call_args[0][1]
-    assert saved_pages[0]["markdown"] == _SUB_THRESHOLD_MARKDOWN
-    assert "Source: Firecrawl" in text
+    saved = {p["url"]: p["markdown"] for p in toolkit._web_docs.save_crawl.call_args[0][1]}
+    assert saved["https://example.com/a"] == _SUB_THRESHOLD_MARKDOWN, "the smaller local result displaced Firecrawl's"
+    assert saved["https://example.com"] == _REALISTIC_PARAGRAPH, "the local rung's new page was dropped"
+    # Exact line, not a substring: "Source: Firecrawl" is a prefix of the composite
+    # label, so `in text` would pass here even if the crawl credited only one rung.
+    assert "\nSource: Firecrawl + Crawl4AI (local rung added the root page)\n" in text
+
+
+def test_source_line_credits_crawl4ai_alone_when_firecrawl_gave_nothing():
+    """The composite label must not appear when only one rung produced anything —
+    a crawl Firecrawl contributed zero bytes to is a Crawl4AI result, and saying
+    "Firecrawl + Crawl4AI" would credit a rung that returned nothing."""
+    toolkit = _ladder_toolkit()
+    toolkit._firecrawl.crawl.return_value = []
+    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
+
+    text, _payload = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
+
+    assert "Source: Crawl4AI (Firecrawl returned nothing usable)" in text
+    assert "Firecrawl + Crawl4AI" not in text
 
 
 # ============================================================================

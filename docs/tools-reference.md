@@ -754,16 +754,20 @@ a reference point for reference-doc content, not an arbitrary one. Pass
 | `wait_for_ms` | integer | — | Advanced, opt-in. Milliseconds to wait for JavaScript rendering. Try `3000` on a JS-rendered site that came back empty. Omitted from the request when unset |
 | `proxy` | string | — | Advanced, opt-in. `basic` / `enhanced` / `auto`. Try `auto` on a site that blocks automated clients. Omitted when unset |
 
-**Output:** Summary of pages saved to Drive with byte count, source (Firecrawl or
-Crawl4AI), paths and page count; or a "Using cached crawl..." message with zero
+**Output:** Summary of pages saved to Drive with byte count, source (`Firecrawl`,
+`Crawl4AI (…)`, or `Firecrawl + Crawl4AI (local rung added the root page)` when both
+contributed), paths and page count; or a "Using cached crawl..." message with zero
 Firecrawl requests if a fresh manifest was already on Drive.
 
 **Recovery — a two-rung ladder.** Exactly one Firecrawl attempt is made. If it
 yields under 5 KB of markdown — for any reason, including a blocked site, a failed
 job, an exhausted budget, empty pages, or an account-level failure (401/402/429)
 or network error — the handler scrapes the root URL **locally** with Crawl4AI,
-free, and keeps whichever result is larger. It upgrades only on strictly more
-content, so a rescue can never shrink what an earlier rung already returned.
+free, and **merges** that page into Firecrawl's list rather than replacing it.
+Same URL from both rungs: the larger markdown wins. So a rescue can only ever add
+content, never remove a page Firecrawl already extracted (fixed 2026-07-30 — the
+previous replace-if-larger rule discarded real pages whenever the root scrape
+happened to outweigh several small ones combined).
 
 Firecrawl is not retried: the Free tier allows only 2 `/crawl` requests per minute,
 so a second attempt would rate-limit the next call. Pass `wait_for_ms` / `proxy`
@@ -796,9 +800,16 @@ successful fetch of a short page. When the result fails `assess_quality` — the
 same word-count and paywall-marker signal the recovery ladder branches on, not a
 second threshold invented for this tool — the reply carries an explicit "this
 content looks incomplete … do not treat it as the full page". Measured live
-2026-07-28: `wsj.com` with no login profile returns exactly **1 B** and is
-flagged; `ft.com`'s free homepage (57,737 B) and a real docs page (11,807 B) are
-not.
+2026-07-28: `wsj.com` returns exactly **1 B** and is flagged; `ft.com`'s free
+homepage (57,737 B) and a real docs page (11,807 B) are not.
+
+**Some publishers block the browser outright, and no login fixes it.** Re-measured
+2026-07-30 with a real WSJ profile in place (331 cookies, `DJSESSION` among them):
+`wsj.com` still returns 1 B at **HTTP 401, "Blocked by anti-bot protection:
+DataDome captcha"** — the same headless or visible, with the profile or without.
+The block precedes authentication. `ft.com` by contrast answers 59,455 B at HTTP
+200 with no profile at all. Read a 1 B / 401 result as "this host refuses
+automation", not as "the login expired". Detail: `docs/web-scraper-reference.md` §6.
 
 **When to reach for it instead of the Firecrawl tools.** `firecrawl_search`
 answers "find pages about X" and `firecrawl_crawl` answers "archive this site";
