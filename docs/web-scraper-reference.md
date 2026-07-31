@@ -14,6 +14,10 @@
 > **Before changing anything here, read §10.** Every defect this subsystem ever had was found by
 > running a tool, never by a test failing. A green unit suite is not evidence.
 
+**Approaching a host you have not scraped before?** Read `web-scraping-methodology.md` first —
+the four-way matrix, what each failure shape actually looks like, and where this project stops
+on the anti-bot ladder. This document covers the tools; that one covers the method.
+
 **Four tools, one job each, and no fallback between them.** Anything that takes a URL goes
 to the free local browser (Crawl4AI). Firecrawl is kept for exactly one thing the browser
 cannot do: search the web when you have no URL yet. This document covers all four tools,
@@ -602,7 +606,7 @@ one.
 | `interactivebrokers.com` | Intermittent. An Akamai edge-block (152-byte error page) was observed 2026-07-02; on 2026-07-25 a plain Firecrawl attempt succeeded (17,346 B on `request-modify-orders`, 5,718 B on `/docs/web-api/`). Treat the block as something that comes and goes, not a permanent property. | Prefer `.md` URLs regardless — they cost no credits. If it does block, add `wait_for_ms=3000` + `proxy="auto"`, or let the local rung take it. |
 | `ibkrguides.com` | Works on defaults | Nothing special |
 | `docs.firecrawl.dev` | Works on defaults | Nothing special |
-| `wsj.com` | **Blocked outright.** DataDome answers the automated browser with HTTP 401 and 1 B, headless or not, with or without a saved login (2026-07-30). | Nothing works from here. Do not create a profile expecting it to help — one exists and does not. |
+| `wsj.com` | **Blocked outright.** DataDome answers the automated browser with HTTP 401 and 1 B, headless or not, with or without a saved login (2026-07-30). | Detect and report; do not retry. Do not create a profile expecting it to help — one exists and does not. **Nothing *we are willing to do* works from here** — Crawl4AI ships an undetected-browser mode naming DataDome explicitly, untried by choice. See `web-scraping-methodology.md` §3: this is a scope decision, not a technical impossibility, and the two must not be conflated. |
 | `ft.com` | **Paywall proven defeated (2026-07-30)** — a subscriber-only article returned in full, 35,394 B, with a saved profile in a *visible* browser. Anonymous gets the barrier page (25,238 B); profiled-but-headless gets a "Security Verification" challenge (1,213 B). | `create-profile ft.com` once (§6). Nothing else to configure — `_browser_config` runs profiled fetches visible automatically. |
 | Bloomberg / Barron's | Metered paywall; not tested against the local browser | Assume WSJ-like anti-bot until measured. Check for HTTP 401 / ~1 B before blaming the profile. |
 

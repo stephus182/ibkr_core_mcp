@@ -18,6 +18,8 @@ code changes.
 | [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth` |
 | [`flex-query-reference.md`](flex-query-reference.md) | Historical Trade Data / Flex Queries (one-time setup, usage, constraints) |
 | [`mcp-server-reference.md`](mcp-server-reference.md) | MCP Server (install, stdio/SSE transports, 46 tools, 4 resources, price alerts, TradingView integration) |
+| [`web-scraper-reference.md`](web-scraper-reference.md) | The 4 web tools — tunables, credit model, paywalled-site logins, per-host quirks, troubleshooting, live-test log |
+| [`web-scraping-methodology.md`](web-scraping-methodology.md) | **How to approach a host you haven't scraped before** — the four-way matrix, what each failure shape looks like, where we stop on the anti-bot ladder |
 | [`ibkr-api-behaviors-reference.md`](ibkr-api-behaviors-reference.md) | Known IBKR API behaviors, verified not assumed |
 | [`external-docs-reference.md`](external-docs-reference.md) | Official documentation URLs, all external APIs |
 | [`consumers.md`](consumers.md) | Consuming projects |

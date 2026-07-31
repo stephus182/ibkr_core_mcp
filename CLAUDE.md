@@ -334,5 +334,7 @@ not `@import`s, so they don't load into every session's context automatically.
 - Official documentation URLs, all external APIs: `docs/external-docs-reference.md`
 - Web scraper (Firecrawl + Crawl4AI, recovery ladder, paywalled-site login profiles,
   per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
+- Scraping *method* — approaching an unfamiliar host, the four-way matrix, reading a blocked
+  page, and where we stop on the anti-bot ladder: `docs/web-scraping-methodology.md`
 - Consuming projects: `docs/consumers.md`
 - Charting/quant/stats package landscape (what we have vs. gaps vs. duplicative-of-existing-code): `docs/python-package-landscape.md`
