@@ -2,7 +2,7 @@
 
 > **Status: closed 2026-07-30.** The scraper is finished and verified; treat further work as a
 > new project with its own justification, not as continuation. Closing state: 44 toolkit tools,
-> **790 unit + 19 live tests green**, `ruff check` + `ruff format` + `mypy` clean.
+> **797 unit + 11 live web tests green**, `ruff check` + `ruff format` + `mypy` clean.
 >
 > **The last open item closed 2026-07-30: reading a paywalled article end-to-end is now
 > demonstrated** (§6) — a subscriber-only FT article returned in full, 35,394 B. It required one
@@ -452,6 +452,14 @@ of the subscription stub. This is the capability the whole local layer exists fo
 > Cost: a profiled fetch opens a real window and needs a display, so it cannot run over a bare
 > SSH session. Anonymous fetches are unaffected and stay headless.
 >
+> **Profiled fetches are also serialised per profile**, for a second and unrelated reason: a
+> profile is a real Chrome `user_data_dir` guarded by a `SingletonLock`, and only one browser
+> may hold it. Measured 2026-07-30 before the fix — two simultaneous profiled fetches of the
+> same article returned **0 B and 0 B**, neither raising, while the same pair run anonymously
+> returned 25,242 B and 25,293 B. `_profile_in_use` turns that collision into a wait: after the
+> fix the same pair returned 35,416 B (7.7 s) and 30,881 B (13.9 s). Anonymous fetches take no
+> lock and stay genuinely parallel. A wait longer than 180 s raises rather than hanging.
+>
 > **WSJ remains impossible, and no profile or window will change that.** Re-verified with the
 > exact configuration that beat FT — visible browser, saved profile — `wsj.com` still answers
 > **HTTP 401, DataDome captcha, 1 B**, holding a valid `DJSESSION`. FT's block was *downstream*
@@ -612,6 +620,7 @@ one.
 | Page is a **"Security Verification"** / challenge page on a site you subscribe to | The profile's bot-management cookies are being replayed from a browser that doesn't match the one that minted them | `_browser_config` should already be running profiled fetches visible. If this appears, check nothing has forced `headless=True` back on for the profiled branch. |
 | Article is truncated on a site you subscribe to | No profile matched, or the session expired — but rule out anti-bot first (rows above) | `list-profiles` to check the name *and* the age. A profile named `www.example.com` does not serve `example.com` — see §6. Re-run `create-profile <registrable-domain>` |
 | A profiled fetch fails with no display / on a headless host | Profiled fetches launch a real browser window by design | Expected. Run it where there's a display; anonymous fetches are unaffected. |
+| A profiled fetch takes much longer than ~10 s, or raises "Another browser session has been using the login profile…" | Another fetch or crawl holds that profile. Only one Chrome may open a `user_data_dir`, so they are serialised | Working as intended — it is waiting, not stuck. The 180 s timeout only fires if the other session is genuinely wedged; kill any stray `Google Chrome for Testing` process holding that profile. |
 | "needs the local browser" / "Crawl4AI is not installed" | Optional extra absent | `pip install "ibkr_core_mcp[scraper]" && crawl4ai-setup` |
 | Same URL crawled twice returns instantly | 48h Drive cache hit — working as designed | `force_refresh=true` to re-crawl |
 | A crawl is slower than expected | ~1.2 s per page, and `max_depth` multiplies the page count | Lower `max_pages` or `max_depth`. There is no polling budget to raise any more — nothing waits on a remote job. |
@@ -736,6 +745,8 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-28 | **A consuming project can silently run stale ibkr_core_mcp code.** claudia_ui installs this package with `editable_mode=strict`, which resolves imports through a snapshotted symlink farm under `build/__editable__…/`. A module added after that install is **invisible** — a newly added `ibkr_core_mcp` module raised `ModuleNotFoundError` in ClaudIA while existing on disk here. Re-run the editable install in every consumer after adding a module, not just after adding a tool. |
 | 2026-07-30 | **The paywall path works, and headless was the only thing stopping it.** A subscriber-only ft.com article, one variable changed per run: headless+anonymous → 25,238 B barrier page; headless+profile → 1,213 B "Security Verification" challenge (persistent over retries); **visible+profile → 35,394 B, the full article** (headline, byline, 9,677 B of body ending in the author's email and copyright line, zero barrier markers). A profile's `__cf_bm` bot-management cookies are minted by the visible browser `create-profile` opens; replaying them from `--headless=new` is a fingerprint mismatch. **A profiled headless fetch is strictly worse than no profile at all** — it trades the barrier page for a bot challenge. Fixed in `_browser_config`; pinned by tests in both `scrape()` and `crawl_site()`. |
 | 2026-07-30 | **WSJ is still impossible with the configuration that beat FT.** Visible browser + saved profile (valid `DJSESSION`) → still HTTP 401, DataDome captcha, 1 B. FT's block was downstream of authentication and fixable; WSJ's is upstream of it. The two failures looked identical from the outside and are not the same thing — generalising WSJ's to "paywalls are blocked" is what left FT untested for two days. |
+| 2026-07-30 | **Two concurrent profiled fetches of one domain both returned 0 B, and neither raised.** A profile is a real Chrome `user_data_dir` guarded by a `SingletonLock`; the second browser loses the race. The same pair run anonymously returned 25,242 B and 25,293 B, so the contention is the shared directory, not the site. `assess_quality("")` grades `fallback` and `fetch_page` gates on `!= "ok"`, so the caller *was* told the content looked incomplete — but every cause the NOTE offers (paywall stub, blocked request, unfinished JS) is wrong, and a plain retry would have worked. **Honest-but-misattributed is still a wrong answer.** Fixed by `_profile_in_use`, which serialises per profile: the same pair now returns 35,416 B (7.7 s) and 30,881 B (13.9 s). Predates the visible-browser fix — the lock is on `user_data_dir`, nothing to do with `headless` — but was unreachable while profiled fetches were being challenged anyway. |
+| 2026-07-30 | **The `[scraper]` extra was fixed in the environment on 2026-07-28 and never in the setup instructions.** claudia_ui's CLAUDE.md step 3 still read `pip install -e "../ibkr_core_mcp"` with no extra, so every clean setup since would have reintroduced the exact defect already logged below — all four web tools dark, failing only at tool-call time because each import is lazy. Corrected 2026-07-30, and the corrected command was executed to prove it resolves. **Fixing the environment is not fixing the bug; the instructions are what the next install actually runs.** |
 | 2026-07-30 | **§6 documented the profile-naming rule backwards, and its own setup command followed the wrong one.** Broadening applies to the URL being fetched, not the profile name: a `www.ft.com` directory matches only `www.ft.com` (`ft.com/x` and `markets.ft.com/x` both resolve to None), while a bare `ft.com` directory matches all three. The doc claimed the reverse and told users to run `create-profile https://www.ft.com`, so a bare `ft.com/...` article would have silently fallen back to an anonymous fetch. Found by executing `_resolve_profile_dir` against both layouts rather than reading the paragraph. |
 | 2026-07-28 | **The `[scraper]` extra was not installed in claudia_ui**, so inside ClaudIA the fallback rung was dark: detection worked, recovery dead-ended, and nothing said so. Fixed the same day by installing `crawl4ai` + Playwright there. A capability can be fully coded, fully tested and fully documented and still be unreachable in the app that needs it — check the consumer, not just the library. |
 

@@ -453,6 +453,105 @@ def test_crawl4ai_scraper_no_profile_when_absent(monkeypatch, tmp_path):
     assert captured[0]["headless"] is True
 
 
+def test_two_fetches_of_one_profile_do_not_run_at_the_same_time(monkeypatch, tmp_path):
+    """Live 2026-07-30: two simultaneous profiled fetches of the same ft.com article returned
+    0 B and 0 B — they collide on Chrome's SingletonLock, and neither raises. The same pair run
+    anonymously returned 25,242 B and 25,293 B, so the contention is the shared user_data_dir.
+
+    Asserts overlap directly rather than timing: the second caller must not be inside the
+    browser session while the first still is.
+    """
+    import threading
+
+    from ibkr_core_mcp.local_browser import Crawl4AIScraper
+
+    inside = 0
+    max_concurrent = 0
+    counter_guard = threading.Lock()
+
+    def _install_concurrency_tracking_crawl4ai():
+        """A fake whose browser session is slow enough that two unserialised callers would
+        demonstrably overlap. Nothing about the lock is faked — the real scrape() takes it."""
+
+        class FakeBrowserConfig:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeCrawlerStrategy:
+            def set_hook(self, hook_type, hook):
+                pass
+
+        class FakeAsyncWebCrawler:
+            def __init__(self, config=None):
+                self.crawler_strategy = FakeCrawlerStrategy()
+
+            async def __aenter__(self):
+                nonlocal inside, max_concurrent
+                with counter_guard:
+                    inside += 1
+                    max_concurrent = max(max_concurrent, inside)
+                return self
+
+            async def __aexit__(self, *exc_info):
+                nonlocal inside
+                with counter_guard:
+                    inside -= 1
+                return False
+
+            async def arun(self, url):
+                await asyncio.sleep(0.05)  # hold the session open long enough to overlap
+                return _FakeCrawlResult("article")
+
+        fake_module = types.ModuleType("crawl4ai")
+        setattr(fake_module, "AsyncWebCrawler", FakeAsyncWebCrawler)  # noqa: B010
+        setattr(fake_module, "BrowserConfig", FakeBrowserConfig)  # noqa: B010
+        monkeypatch.setitem(sys.modules, "crawl4ai", fake_module)
+
+    _install_concurrency_tracking_crawl4ai()
+    (tmp_path / "example.com").mkdir()
+
+    scraper = Crawl4AIScraper(tmp_path)
+    threads = [threading.Thread(target=scraper.scrape, args=("https://example.com/a",)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert max_concurrent == 1, f"{max_concurrent} browser sessions shared one profile — this is the 0 B bug"
+
+
+def test_anonymous_fetches_take_no_lock_and_stay_parallel(monkeypatch, tmp_path):
+    """The serialisation cost must be paid only where Chrome forces it. Anonymous fetches get a
+    throwaway profile directory each, share nothing, and were measured running genuinely in
+    parallel — locking them would be a pure latency tax.
+    """
+    from ibkr_core_mcp.local_browser import _profile_in_use
+
+    # No profile -> the context manager is a no-op, so it is re-entrant by construction.
+    with _profile_in_use(None), _profile_in_use(None):
+        pass  # would deadlock if anonymous fetches took a lock
+
+
+def test_profile_lock_is_per_profile_not_global(tmp_path):
+    """Two different subscription sites must not queue behind each other."""
+    from ibkr_core_mcp.local_browser import _profile_in_use
+
+    with _profile_in_use(tmp_path / "ft.com"), _profile_in_use(tmp_path / "economist.com"):
+        pass  # a single global lock would deadlock here
+
+
+def test_profile_lock_is_released_when_the_fetch_raises(tmp_path):
+    """A crashed browser session must not strand the profile until the process dies."""
+    from ibkr_core_mcp.local_browser import _profile_in_use
+
+    with pytest.raises(RuntimeError):
+        with _profile_in_use(tmp_path / "ft.com"):
+            raise RuntimeError("browser died")
+
+    with _profile_in_use(tmp_path / "ft.com"):
+        pass  # re-acquirable, so the finally: released it
+
+
 def test_crawl4ai_scraper_installs_ssrf_request_guard_hook(monkeypatch, tmp_path):
     """Regression guard for the DNS-rebinding / redirect SSRF gaps: every scrape
     must install a per-request guard on the Playwright page, not just rely on

@@ -6,6 +6,19 @@ the full article instead of the subscription stub. `crawl4ai` is an optional
 dependency (`pip install ibkr_core_mcp[scraper]`) and is only imported when a
 scrape actually runs.
 
+**Two rules govern every profiled fetch, and both are load-bearing** (see
+`_browser_config` and `_profile_in_use` for the measurements behind them):
+
+  1. It runs in a **visible** browser. A profile's bot-management cookies are
+     minted by the visible browser `create_profile()` opens, and replaying them
+     headless is a fingerprint mismatch the site challenges — so a profiled
+     headless fetch is strictly *worse* than no profile at all.
+  2. It is **serialised per profile**. A profile is a real Chrome `user_data_dir`
+     and only one browser may hold it; two concurrent fetches of one domain
+     otherwise both return 0 B without raising.
+
+Anonymous fetches are subject to neither: they stay headless and run in parallel.
+
 **This module is no longer a fallback.** Until 2026-07-30 it sat underneath
 Firecrawl, reachable only when a paid attempt came back thin, and a two-engine
 ladder decided between them. Live measurement retired that arrangement: on the
@@ -44,7 +57,8 @@ import shutil
 import sys
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -365,6 +379,70 @@ async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
     await page.route("**/*", _reject_private_requests)
 
 
+_PROFILE_LOCKS: dict[str, threading.Lock] = {}
+_PROFILE_LOCKS_GUARD = threading.Lock()
+
+# How long a profiled fetch waits for another one on the same profile to finish. Generous
+# because the thing being waited on is a whole browser session — a profiled `crawl_site`
+# of 25 pages runs ~30 s — and because timing out is the worse outcome: the caller gets an
+# error where waiting would have produced the article.
+_PROFILE_LOCK_TIMEOUT_S = 180.0
+
+
+@contextmanager
+def _profile_in_use(profile_dir: Path | None) -> Iterator[None]:
+    """Hold an exclusive claim on a login profile for the duration of one browser session.
+
+    **Chrome already enforces this; the lock only changes how it fails.** A profile is a real
+    Chrome `user_data_dir`, guarded by a `SingletonLock` file, so two browsers cannot share
+    one. Without this, a second concurrent fetch of the same domain loses the race and
+    returns **0 B** — measured 2026-07-30: two simultaneous profiled fetches of the same
+    ft.com article returned 0 B and 0 B, while the same pair run anonymously returned
+    25,242 B and 25,293 B. Neither raised. `assess_quality("")` grades `fallback`, so
+    `fetch_page` does append its incompleteness NOTE — the caller is told *something* is
+    wrong, but the stated causes (paywall stub, blocked request, unfinished JS) are all
+    wrong, and a plain retry would have worked.
+
+    Serialising turns that into a wait. Anonymous fetches take no lock: they get a throwaway
+    profile directory each, share nothing, and genuinely run in parallel — verified above.
+
+    The bug predates the visible-browser fix; the lock is on `user_data_dir` and has nothing
+    to do with `headless`. It was simply unreachable while profiled fetches were being
+    challenged anyway, which is what made the whole profiled path look broken instead of
+    contended.
+
+    Args:
+        profile_dir: The saved profile this session will open, or None for an anonymous
+            fetch, in which case this is a no-op and nothing is serialised.
+
+    Yields:
+        Nothing — the claim is held for the body of the `with` block.
+
+    Raises:
+        TimeoutError: If another session holds the same profile for longer than
+            `_PROFILE_LOCK_TIMEOUT_S`. Failing loudly beats returning the 0 B this exists
+            to prevent.
+    """
+    if profile_dir is None:
+        yield
+        return
+
+    key = str(profile_dir)
+    with _PROFILE_LOCKS_GUARD:
+        lock = _PROFILE_LOCKS.setdefault(key, threading.Lock())
+
+    if not lock.acquire(timeout=_PROFILE_LOCK_TIMEOUT_S):
+        raise TimeoutError(
+            f"Another browser session has been using the login profile {key} for over "
+            f"{_PROFILE_LOCK_TIMEOUT_S:.0f}s. Only one browser can open a Chrome profile at a "
+            "time, so this fetch cannot start. Retry once the other one finishes."
+        )
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def _browser_config(browser_config_cls: Any, profile_dir: Path | None) -> Any:
     """Build the Crawl4AI `BrowserConfig` for a fetch: headless when anonymous, **visible
     when a saved login profile is in play**.
@@ -503,7 +581,8 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        browser_config = _browser_config(BrowserConfig, _resolve_profile_dir(self._profiles_dir, url))
+        profile_dir = _resolve_profile_dir(self._profiles_dir, url)
+        browser_config = _browser_config(BrowserConfig, profile_dir)
 
         async def _scrape_one() -> dict[str, str]:
             async with AsyncWebCrawler(config=browser_config) as crawler:
@@ -512,7 +591,8 @@ class Crawl4AIScraper:
                 markdown = result.markdown.raw_markdown if result.markdown else ""
                 return {"url": url, "markdown": markdown}
 
-        return _run_async(_scrape_one())  # type: ignore[no-any-return]
+        with _profile_in_use(profile_dir):
+            return _run_async(_scrape_one())  # type: ignore[no-any-return]
 
 
 def crawl_site(
@@ -571,7 +651,8 @@ def crawl_site(
             "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
         ) from exc
 
-    browser_config = _browser_config(BrowserConfig, _resolve_profile_dir(profiles_dir, url))
+    profile_dir = _resolve_profile_dir(profiles_dir, url)
+    browser_config = _browser_config(BrowserConfig, profile_dir)
 
     async def _crawl() -> list[Any]:
         # include_external=False keeps every hop on the root's host. Verified live: a
@@ -585,7 +666,8 @@ def crawl_site(
             results: list[Any] = await crawler.arun(url, config=run_config)
             return results
 
-    results = _run_async(_crawl())
+    with _profile_in_use(profile_dir):
+        results = _run_async(_crawl())
 
     by_url: dict[str, dict[str, Any]] = {}
     for result in results:
@@ -658,6 +740,15 @@ def search_site(domain: str, query: str, limit: int = 10, source: str = "sitemap
     Firecrawl can do.
 
     Costs nothing and touches no API key: sitemaps and the CC index are public.
+
+    **A saved login profile never applies here, by design.** Unlike `Crawl4AIScraper.scrape`
+    and `crawl_site`, this builds no `BrowserConfig` at all — `AsyncUrlSeeder` does its own
+    fetching, so `extract_head` reads every page's `<head>` anonymously even on a domain with
+    a profile saved. That is the right trade: titles and meta descriptions sit outside the
+    paywall on every site tested, so a login buys nothing for *ranking*, and taking the
+    profile lock here would serialise discovery behind whatever fetch is running. The login
+    matters when you read the page, which is `fetch_page`'s job — so on a subscription site
+    the flow is `search_site` to rank anonymously, then `fetch_page` to read with the profile.
 
     **`extract_head=True` is forced, not a default.** Verified live 2026-07-30 against
     `docs.crawl4ai.com`: with it, 87 of 87 URLs carry a `relevance_score` and
