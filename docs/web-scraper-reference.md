@@ -4,10 +4,12 @@
 > new project with its own justification, not as continuation. Closing state: 44 toolkit tools,
 > **790 unit + 19 live tests green**, `ruff check` + `ruff format` + `mypy` clean.
 >
-> One capability remains **designed but not demonstrated**: reading a paywalled article
-> end-to-end (§6). It needs the account holder to run `create-profile` on **FT** by hand — WSJ
-> is impossible at any price (DataDome, HTTP 401, 1 byte, with or without a login). That is the
-> only open item, and it needs hands rather than code.
+> **The last open item closed 2026-07-30: reading a paywalled article end-to-end is now
+> demonstrated** (§6) — a subscriber-only FT article returned in full, 35,394 B. It required one
+> code change: profiled fetches must run in a *visible* browser, because a profile's
+> bot-management cookies are minted by one and a headless replay is a fingerprint mismatch. WSJ
+> remains impossible at any price (DataDome, HTTP 401, 1 byte, with or without a login, headless
+> or visible) — that block is upstream of authentication and nothing here reaches it.
 >
 > **Before changing anything here, read §10.** Every defect this subsystem ever had was found by
 > running a tool, never by a test failing. A green unit suite is not evidence.
@@ -423,44 +425,71 @@ refuse the local browser outright — see §6, where WSJ does exactly that.
 Crawl4AI can use a saved browser session, so a site you subscribe to returns full articles instead
 of the subscription stub. This is the capability the whole local layer exists for.
 
-> ### ⚠ Status: the mechanism works; the capability is **still unproven end-to-end**
+> ### ✅ Status: **proven end-to-end on ft.com, 2026-07-30**
 >
-> Read this before relying on it. Verified 2026-07-30:
+> A subscriber-only FT article was returned in full — headline, byline, 9,677 B of body through
+> to the author's email and the copyright line, with zero barrier-page markers. This is the first
+> time the capability has been demonstrated rather than merely wired.
 >
-> | Step | State |
-> |---|---|
-> | Save a profile (`create-profile`) | ✅ works — a real WSJ profile exists, 331 cookies incl. `DJSESSION` |
-> | Find the right profile for a URL (`_resolve_profile_dir`) | ✅ works — resolves `www.wsj.com` correctly |
-> | Hand that session to a scrape | ✅ works — the browser launches against the saved `user_data_dir` |
-> | **Get a paywalled article back** | ❌ **never once observed** |
+> **A profiled fetch must run in a visible browser.** That is the whole finding. Same article,
+> one variable changed at a time:
 >
-> **WSJ cannot be the proof, and no profile will change that.** `wsj.com` answers this machine's
-> browser with **HTTP 401, DataDome captcha, 1 B of markdown** — identically in all four
-> combinations tested: headless or visible window, with the saved profile or without it. The
-> block lands on the *automated browser*, before any cookie is consulted, so the login is never
-> the deciding factor. An earlier note in §11 read WSJ's 1 B as "no login profile"; that
-> diagnosis was wrong, and the profile that has since been created did not move the number.
+> | headless | profile | bytes | what came back |
+> |---|---|---|---|
+> | `True` | no | 25,238 | FT paywall barrier page — "Try unlimited access", $75/mo offers. No article. |
+> | `True` | yes | 1,213 | FT **"Security Verification"** bot challenge. Persistent across retries. |
+> | **`False`** | **yes** | **35,394** | **The full article.** ✅ |
 >
-> **FT is reachable** — `ft.com` returns 59,455 B, HTTP 200, headless, with no profile at all. So
-> the browser is not the problem in general; DataDome specifically is. FT is therefore the
-> realistic candidate for proving the paywall path, and doing so needs the account holder to run
-> `create-profile https://www.ft.com` by hand and then open a subscriber-only article.
+> A saved profile carries short-lived bot-management cookies minted by the visible browser
+> `create-profile` opens — FT's jar holds 15 `__cf_bm` (Cloudflare Bot Management) entries beside
+> `FTSession_s` and `ft-access-decision-policy`. Replaying them from `--headless=new` is a
+> fingerprint mismatch, and FT challenges it. Note the middle row: **a profiled headless fetch is
+> strictly worse than no profile at all**, trading the barrier page for a bot challenge. That is
+> why `_browser_config` makes this unconditional rather than a caller option, and why
+> `tests/test_local_browser.py` pins `headless is False` for profiled fetches in both `scrape()`
+> and `crawl_site()`.
 >
-> Until that run happens, treat "reads paywalled articles" as **designed and wired, not
-> demonstrated**. The tool output itself is honest about this: a 1 B DataDome stub trips
-> `assess_quality` and `fetch_page` prints its incompleteness NOTE, so a stub is never presented
-> as the article.
+> Cost: a profiled fetch opens a real window and needs a display, so it cannot run over a bare
+> SSH session. Anonymous fetches are unaffected and stay headless.
+>
+> **WSJ remains impossible, and no profile or window will change that.** Re-verified with the
+> exact configuration that beat FT — visible browser, saved profile — `wsj.com` still answers
+> **HTTP 401, DataDome captcha, 1 B**, holding a valid `DJSESSION`. FT's block was *downstream*
+> of authentication (a cookie/fingerprint mismatch, fixable); WSJ's is *upstream* of it (the
+> automated browser refused at the edge, before any cookie is read). Getting past that means
+> defeating the automation detection itself, which is out of scope here. The sanctioned route for
+> programmatic Dow Jones content is a Factiva / content-API licence.
+>
+> An earlier note in §11 read WSJ's 1 B as "no login profile"; that diagnosis was wrong, and the
+> profile since created did not move the number. The same shape of error then hid the FT result
+> for two days: WSJ's failure was generalised to "paywalls are blocked", so the four-way matrix
+> that had been run against WSJ was never run against FT. **Running it is what found this.**
 
 **Two steps, and the first is once per site.**
 
 **1. Save the login** — interactive, needs your hands:
 
 ```bash
-python -m ibkr_core_mcp.local_browser create-profile https://www.ft.com
+python -m ibkr_core_mcp.local_browser create-profile ft.com
 ```
+
+**Pass the bare registrable domain, not a `www.` URL.** The argument is used for nothing but
+naming the profile directory, and the name decides how widely the profile matches — see
+"Which profile applies to which URL" below. `ft.com` covers `www.ft.com`, `ft.com` and
+`markets.ft.com`; `https://www.ft.com` covers only `www.ft.com`.
 
 This opens a **real, visible browser**. Log in by hand, then confirm in the terminal. The
 resulting cookies and local storage are copied to `~/.ibkr_core/crawl4ai_profiles/<domain>/`.
+
+Three things that cost a live session on 2026-07-30, all avoidable:
+
+- **The browser opens blank.** The URL is never handed to Chrome — navigate to the site yourself.
+- **Closing the window is not enough.** On macOS the app keeps running, so the wait never
+  releases. Press `q` in the terminal, or quit the browser app properly (`Cmd+Q`). Both save;
+  the wait loop releases on a `q` keypress *or* the browser process exiting.
+- **`q` only registers in the terminal that has focus.** The listener reads one raw character
+  from that process's stdin. Typing `q` in another pane or window does nothing, and the run
+  simply sits there looking hung.
 
 **No password is ever seen or stored by this package** — only the resulting browser session.
 Nothing is transmitted anywhere; the profile is a local directory.
@@ -479,9 +508,23 @@ Lookup tries the most specific candidate first and broadens toward the registrab
 2. the hostname without a leading `www.` — `ft.com`
 3. progressively broader parents, while at least two labels remain — `markets.ft.com` → `ft.com`
 
-So one profile created for `www.ft.com` serves `ft.com`, `markets.ft.com`, and any other
-subdomain. Matching only ever broadens; a profile for `ft.com` is never used for an unrelated
-host. Stopping at two labels means a directory named after a bare TLD can never match.
+Matching only ever broadens *toward* the registrable domain, never toward a sibling host, so a
+profile is never used for an unrelated host. Stopping at two labels means a directory named after
+a bare TLD can never match.
+
+**The direction matters, and it is the opposite of what this section claimed until 2026-07-30.**
+Broadening happens on the *URL being fetched*, not on the profile name, so a narrowly-named
+profile does not serve its parent domain (verified by execution, not by reading):
+
+| profile directory | `www.ft.com/x` | `ft.com/x` | `markets.ft.com/x` |
+|---|---|---|---|
+| `www.ft.com` | ✅ | ❌ none | ❌ none |
+| **`ft.com`** | ✅ | ✅ | ✅ |
+
+So name the directory after the **registrable domain**. The old text asserted the reverse — that
+a `www.ft.com` profile serves `ft.com` — and §6's setup command created exactly that narrower
+profile, meaning a bare `ft.com/...` article would have silently fallen back to an anonymous
+fetch and returned the barrier page.
 
 Multi-part suffixes (`ft.co.uk`) stop at `co.uk`, which will simply never match a saved profile —
 create that profile under its exact hostname.
@@ -552,7 +595,7 @@ one.
 | `ibkrguides.com` | Works on defaults | Nothing special |
 | `docs.firecrawl.dev` | Works on defaults | Nothing special |
 | `wsj.com` | **Blocked outright.** DataDome answers the automated browser with HTTP 401 and 1 B, headless or not, with or without a saved login (2026-07-30). | Nothing works from here. Do not create a profile expecting it to help — one exists and does not. |
-| `ft.com` | Reachable. 59,455 B at HTTP 200 headless, no profile (2026-07-30). Free content only — subscriber articles untested. | `create-profile` once (section 6) if you subscribe. This is the host to prove the paywall path on. |
+| `ft.com` | **Paywall proven defeated (2026-07-30)** — a subscriber-only article returned in full, 35,394 B, with a saved profile in a *visible* browser. Anonymous gets the barrier page (25,238 B); profiled-but-headless gets a "Security Verification" challenge (1,213 B). | `create-profile ft.com` once (§6). Nothing else to configure — `_browser_config` runs profiled fetches visible automatically. |
 | Bloomberg / Barron's | Metered paywall; not tested against the local browser | Assume WSJ-like anti-bot until measured. Check for HTTP 401 / ~1 B before blaming the profile. |
 
 ---
@@ -566,7 +609,9 @@ one.
 | "No pages on … matched" | The site was reachable and scored; nothing on it is about that query. A real answer, not a failure | Different wording, or `source="sitemap+cc"`. Use `firecrawl_search` to look beyond the one domain. |
 | `search_site` returns fewer results than `limit` | BM25 is sparse — typically 4 of 87 URLs score above zero | Working as intended. The tail would be pages the query never matched. |
 | Page returns exactly **1 B** at `http=401` | Anti-bot (DataDome on WSJ) refusing the automated browser. **A login profile does not help** — the block precedes authentication | No fix from this side. See §6. |
-| Article is truncated on a site you subscribe to | No profile matched, or the session expired — but rule out anti-bot first (row above) | `list-profiles` to check; re-run `create-profile` |
+| Page is a **"Security Verification"** / challenge page on a site you subscribe to | The profile's bot-management cookies are being replayed from a browser that doesn't match the one that minted them | `_browser_config` should already be running profiled fetches visible. If this appears, check nothing has forced `headless=True` back on for the profiled branch. |
+| Article is truncated on a site you subscribe to | No profile matched, or the session expired — but rule out anti-bot first (rows above) | `list-profiles` to check the name *and* the age. A profile named `www.example.com` does not serve `example.com` — see §6. Re-run `create-profile <registrable-domain>` |
+| A profiled fetch fails with no display / on a headless host | Profiled fetches launch a real browser window by design | Expected. Run it where there's a display; anonymous fetches are unaffected. |
 | "needs the local browser" / "Crawl4AI is not installed" | Optional extra absent | `pip install "ibkr_core_mcp[scraper]" && crawl4ai-setup` |
 | Same URL crawled twice returns instantly | 48h Drive cache hit — working as designed | `force_refresh=true` to re-crawl |
 | A crawl is slower than expected | ~1.2 s per page, and `max_depth` multiplies the page count | Lower `max_pages` or `max_depth`. There is no polling budget to raise any more — nothing waits on a remote job. |
@@ -689,6 +734,9 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-28 | The `janbuchar/crawl4ai` Apify Actor had **0 successful public runs out of 29 in 30 days** (26 failed, 3 aborted) with a latest build from 2025-05-06, per Apify's own public API. Its `isDeprecated` flag is nonetheless `false`, and its 3.26 rating comes from 2 reviews. Rejected as a rung — see §5.1. Judge a hosted dependency by run statistics, not status flags or stars. |
 | 2026-07-28 | `crawl4ai` OSS is at 0.9.2 and this repo's `crawl4ai>=0.5.0` floor is still correct: the two published migration guides (webscraping-strategy, table extraction v0.7.3) touch APIs `local_browser.py` does not use — it uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`. Checked so it need not be re-checked. |
 | 2026-07-28 | **A consuming project can silently run stale ibkr_core_mcp code.** claudia_ui installs this package with `editable_mode=strict`, which resolves imports through a snapshotted symlink farm under `build/__editable__…/`. A module added after that install is **invisible** — a newly added `ibkr_core_mcp` module raised `ModuleNotFoundError` in ClaudIA while existing on disk here. Re-run the editable install in every consumer after adding a module, not just after adding a tool. |
+| 2026-07-30 | **The paywall path works, and headless was the only thing stopping it.** A subscriber-only ft.com article, one variable changed per run: headless+anonymous → 25,238 B barrier page; headless+profile → 1,213 B "Security Verification" challenge (persistent over retries); **visible+profile → 35,394 B, the full article** (headline, byline, 9,677 B of body ending in the author's email and copyright line, zero barrier markers). A profile's `__cf_bm` bot-management cookies are minted by the visible browser `create-profile` opens; replaying them from `--headless=new` is a fingerprint mismatch. **A profiled headless fetch is strictly worse than no profile at all** — it trades the barrier page for a bot challenge. Fixed in `_browser_config`; pinned by tests in both `scrape()` and `crawl_site()`. |
+| 2026-07-30 | **WSJ is still impossible with the configuration that beat FT.** Visible browser + saved profile (valid `DJSESSION`) → still HTTP 401, DataDome captcha, 1 B. FT's block was downstream of authentication and fixable; WSJ's is upstream of it. The two failures looked identical from the outside and are not the same thing — generalising WSJ's to "paywalls are blocked" is what left FT untested for two days. |
+| 2026-07-30 | **§6 documented the profile-naming rule backwards, and its own setup command followed the wrong one.** Broadening applies to the URL being fetched, not the profile name: a `www.ft.com` directory matches only `www.ft.com` (`ft.com/x` and `markets.ft.com/x` both resolve to None), while a bare `ft.com` directory matches all three. The doc claimed the reverse and told users to run `create-profile https://www.ft.com`, so a bare `ft.com/...` article would have silently fallen back to an anonymous fetch. Found by executing `_resolve_profile_dir` against both layouts rather than reading the paragraph. |
 | 2026-07-28 | **The `[scraper]` extra was not installed in claudia_ui**, so inside ClaudIA the fallback rung was dark: detection worked, recovery dead-ended, and nothing said so. Fixed the same day by installing `crawl4ai` + Playwright there. A capability can be fully coded, fully tested and fully documented and still be unreachable in the app that needs it — check the consumer, not just the library. |
 
 ---

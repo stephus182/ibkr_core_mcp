@@ -365,6 +365,57 @@ async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
     await page.route("**/*", _reject_private_requests)
 
 
+def _browser_config(browser_config_cls: Any, profile_dir: Path | None) -> Any:
+    """Build the Crawl4AI `BrowserConfig` for a fetch: headless when anonymous, **visible
+    when a saved login profile is in play**.
+
+    That asymmetry is not a preference, it is what makes a profile work at all. A saved
+    profile carries short-lived bot-management cookies minted by the visible browser
+    `create_profile()` opened — FT's jar holds 15 `__cf_bm` (Cloudflare Bot Management)
+    entries alongside `FTSession_s`. Replaying those from `--headless=new` presents a
+    browser fingerprint that does not match the one they were issued to, and the site
+    treats the mismatch as exactly what it looks like.
+
+    Live-proven on ft.com 2026-07-30, same article, one variable changed at a time:
+
+    | headless | profile | result                                          |
+    |----------|---------|-------------------------------------------------|
+    | True     | no      | 25,238 B — FT paywall barrier page, no article   |
+    | True     | yes     |  1,213 B — FT "Security Verification" challenge  |
+    | False    | yes     | 35,394 B — **the full article**                  |
+
+    So a profiled headless fetch is strictly worse than no profile at all: it trades the
+    barrier page for a bot challenge. There is no configuration in which it is the right
+    choice, which is why this is unconditional rather than a caller option.
+
+    Anonymous fetches stay headless. They have no cookies to be inconsistent with, and
+    headless is faster and needs no display.
+
+    **Requires a display for profiled fetches.** `headless=False` launches a real window,
+    so a profiled scrape cannot run over a bare SSH session or on a headless host. That is
+    an accepted cost: ClaudIA runs on the user's desktop, and the alternative is a profile
+    feature that silently never works. Anonymous scrapes are unaffected.
+
+    This does nothing for a site that blocks the automated browser *before* authentication
+    — wsj.com still answers DataDome's HTTP 401 and 1 B here, visible and profiled
+    (re-verified 2026-07-30). The fix addresses a cookie/fingerprint mismatch, not edge
+    bot-blocking. See `docs/web-scraper-reference.md` § Live Test Log.
+
+    Args:
+        browser_config_cls: Crawl4AI's `BrowserConfig`, passed in rather than imported
+            here so the callers keep their lazy import and their single
+            `Crawl4AIUnavailableError` path.
+        profile_dir: The saved profile for this URL's domain (`_resolve_profile_dir`),
+            or None to browse anonymously.
+
+    Returns:
+        A configured `BrowserConfig`.
+    """
+    if profile_dir is not None:
+        return browser_config_cls(headless=False, use_managed_browser=True, user_data_dir=str(profile_dir))
+    return browser_config_cls(headless=True)
+
+
 class Crawl4AIScraper:
     """Single-page scraper on Crawl4AI (https://docs.crawl4ai.com/) — a Playwright-based,
     open-source crawler needing no API key. Backs the `fetch_page` tool.
@@ -410,11 +461,15 @@ class Crawl4AIScraper:
         self._profiles_dir = profiles_dir
 
     def scrape(self, url: str) -> dict[str, str]:
-        """Fetch one URL in a headless browser and return its markdown.
+        """Fetch one URL in a local browser and return its markdown.
 
         Uses the saved login profile for the URL's domain when one exists (see
         `_resolve_profile_dir`), otherwise browses anonymously — which still returns the
         stub on a hard paywall, as expected.
+
+        **A profiled fetch opens a visible browser window; an anonymous one stays
+        headless.** That is required for the profile to work at all, not a preference —
+        `_browser_config` carries the live evidence and the display requirement.
 
         Installs the Playwright-level SSRF guard on the browser context, so every request
         Chromium actually makes — the navigation, each redirect hop, and every subresource
@@ -448,11 +503,7 @@ class Crawl4AIScraper:
                 "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
             ) from exc
 
-        profile_dir = _resolve_profile_dir(self._profiles_dir, url)
-        if profile_dir is not None:
-            browser_config = BrowserConfig(headless=True, use_managed_browser=True, user_data_dir=str(profile_dir))
-        else:
-            browser_config = BrowserConfig(headless=True)
+        browser_config = _browser_config(BrowserConfig, _resolve_profile_dir(self._profiles_dir, url))
 
         async def _scrape_one() -> dict[str, str]:
             async with AsyncWebCrawler(config=browser_config) as crawler:
@@ -520,11 +571,7 @@ def crawl_site(
             "`pip install ibkr_core_mcp[scraper]` and then run `crawl4ai-setup`."
         ) from exc
 
-    profile_dir = _resolve_profile_dir(profiles_dir, url)
-    if profile_dir is not None:
-        browser_config = BrowserConfig(headless=True, use_managed_browser=True, user_data_dir=str(profile_dir))
-    else:
-        browser_config = BrowserConfig(headless=True)
+    browser_config = _browser_config(BrowserConfig, _resolve_profile_dir(profiles_dir, url))
 
     async def _crawl() -> list[Any]:
         # include_external=False keeps every hop on the root's host. Verified live: a

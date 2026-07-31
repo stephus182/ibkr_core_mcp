@@ -429,6 +429,13 @@ def test_crawl4ai_scraper_uses_saved_profile_when_present(monkeypatch, tmp_path)
 
     assert captured[0]["use_managed_browser"] is True
     assert captured[0]["user_data_dir"] == str(profile_dir)
+    # Profiled fetches MUST be visible. A profile's bot-management cookies (`__cf_bm`)
+    # are minted by the visible browser create_profile() opens; replaying them from
+    # --headless=new is a fingerprint mismatch the site challenges. Live-proven on
+    # ft.com 2026-07-30: headless+profile returned a 1,213 B "Security Verification"
+    # page where visible+profile returned the full 35,394 B article. Flipping this
+    # back to True makes every paywalled fetch fail while still looking configured.
+    assert captured[0]["headless"] is False
 
 
 def test_crawl4ai_scraper_no_profile_when_absent(monkeypatch, tmp_path):
@@ -441,6 +448,9 @@ def test_crawl4ai_scraper_no_profile_when_absent(monkeypatch, tmp_path):
 
     assert not captured[0].get("use_managed_browser")
     assert "user_data_dir" not in captured[0]
+    # Anonymous fetches have no cookies to be inconsistent with, so they stay headless —
+    # faster, and no display needed.
+    assert captured[0]["headless"] is True
 
 
 def test_crawl4ai_scraper_installs_ssrf_request_guard_hook(monkeypatch, tmp_path):
@@ -1044,6 +1054,20 @@ def test_crawl_site_uses_a_saved_login_profile_when_one_matches(monkeypatch, tmp
 
     assert browser_kwargs[0]["use_managed_browser"] is True
     assert browser_kwargs[0]["user_data_dir"].endswith("d.dev")
+    # Same rule as the single-page fetch: a profiled crawl must be visible or every page
+    # it archives is a bot challenge. See _browser_config for the ft.com evidence.
+    assert browser_kwargs[0]["headless"] is False
+
+
+def test_crawl_site_stays_headless_without_a_profile(monkeypatch, tmp_path):
+    """The visible-browser cost is paid only where it buys something."""
+    from ibkr_core_mcp.local_browser import crawl_site
+
+    browser_kwargs, _, _ = _install_fake_deep_crawler(monkeypatch, [_FakeDeepResult("https://d.dev/", "c")])
+    crawl_site("https://d.dev/", tmp_path)  # tmp_path/d.dev does not exist
+
+    assert not browser_kwargs[0].get("use_managed_browser")
+    assert browser_kwargs[0]["headless"] is True
 
 
 def test_crawl_site_raises_when_crawl4ai_is_not_installed(monkeypatch, tmp_path):
