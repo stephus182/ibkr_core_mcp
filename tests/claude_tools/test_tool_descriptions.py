@@ -100,6 +100,41 @@ def test_the_crawl_and_search_tools_route_by_capability(toolkit):
     assert "search_site" in by_name["crawl_site"], "crawl_site must point at the finder"
 
 
+# Tools that existed once and were deleted. A description may never send the model to one:
+# it is not in the tools array, so the call cannot be made, and the model has no way to learn
+# that from the text it was given.
+_REMOVED_TOOLS = ("firecrawl_crawl", "judge_completeness_llm")
+
+
+def test_no_description_routes_the_model_to_a_deleted_tool(toolkit):
+    """`test_the_crawl_and_search_tools_route_by_capability` already asserts the deleted tools
+    are absent from the *names*. That is what let this slip: `firecrawl_crawl` was removed from
+    the array on 2026-07-30 while `fetch_page`'s description kept saying "For API or reference
+    documentation prefer firecrawl_search / firecrawl_crawl", found 2026-07-30 by reading what
+    the model actually receives.
+
+    Descriptions are the only tool guidance the model ever sees — a rule in a Python docstring
+    reaches nobody. So a dangling cross-reference is a live routing defect, not a typo.
+    """
+    for tool in toolkit.tools:
+        for removed in _REMOVED_TOOLS:
+            assert removed not in tool["description"], (
+                f"{tool['name']}'s description points the model at '{removed}', which no longer exists"
+            )
+
+
+def test_fetch_page_names_a_challenge_page_as_a_block(toolkit):
+    """A captcha/"Security Verification" interstitial is a block, and the failure mode is that
+    it does not look like one: it returns a plausible page rather than an error, so the model
+    retries or reports the challenge text as the article. wsj.com's 1 B case was already
+    called out; ft.com's challenge (observed 2026-07-30 when a profile was replayed headless)
+    is the same class and needed saying too.
+    """
+    description = next(t for t in toolkit.tools if t["name"] == "fetch_page")["description"]
+    assert "Security Verification" in description or "captcha" in description.lower()
+    assert "do not retry" in description.lower() or "rather than retrying" in description.lower()
+
+
 def _snapshot_description(toolkit) -> str:
     return next(t for t in toolkit.tools if t["name"] == "get_market_snapshot")["description"]
 

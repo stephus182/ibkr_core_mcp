@@ -1004,8 +1004,10 @@ TOOL_DEFINITIONS = [
             "Some publishers (wsj.com confirmed) block automated browsers outright and "
             "return about 1 byte no matter what; a saved login does not change that, so "
             "report the block rather than retrying or claiming the page was read. "
-            "For API or reference documentation prefer firecrawl_search / firecrawl_crawl: "
-            "they cover many pages and cache to Drive. "
+            "A page that comes back as a 'Security Verification' or captcha challenge is "
+            "that same kind of block — report it, do not retry. "
+            "To archive a whole site use crawl_site; to find pages when you have no URL yet "
+            "use search_site (one domain) or firecrawl_search (the whole web). "
             "Needs the local browser (the [scraper] extra); reports that if it is missing."
         ),
         "input_schema": {
