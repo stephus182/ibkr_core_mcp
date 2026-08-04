@@ -521,9 +521,20 @@ class FlexQueryClient:
                 skipped.append(str(exc))
                 continue
 
-            # tradePnl is IBKR's realized P&L for this execution (account currency).
+            # fifoPnlRealized is IBKR's realised P&L for this execution, already net of
+            # the wash-sale adjustment — verified against IBKR's own SymbolSummary totals
+            # in 20 of 20 archived statements and against its annual statements 6/6 years.
+            #
+            # `tradePnl` was read here first for months. It does not exist in the XML at
+            # all (all 85 <Trade> attributes are enumerated in docs/flex-xml-structure-audit.md),
+            # so the lookup always fell through to fifoPnlRealized — dead code with a
+            # comment that asserted the wrong field was authoritative. Removed 2026-08-04.
+            #
+            # NB for consumers: realised P&L is the sum over ALL trades, with no
+            # openCloseIndicator filter — some opening trades legitimately realise.
+            # See docs/flex-query-reference.md § How to compute realised P&L.
             # assetCategory: STK, FUT, OPT, BOND, CASH, etc.
-            raw_pnl = trade_el.get("tradePnl") or trade_el.get("fifoPnlRealized")
+            raw_pnl = trade_el.get("fifoPnlRealized")
             trades.append(
                 {
                     "execution_id": execution_id,

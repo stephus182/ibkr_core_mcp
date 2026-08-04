@@ -16,7 +16,8 @@ code changes.
 | [`api-usage-examples.md`](api-usage-examples.md) | Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting, Portfolio Analytics, Claude AI Tool Layer, PineScript Generation) |
 | [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) |
 | [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth` |
-| [`flex-query-reference.md`](flex-query-reference.md) | Historical Trade Data / Flex Queries (one-time setup, usage, constraints) |
+| [`flex-query-reference.md`](flex-query-reference.md) | Historical Trade Data / Flex Queries — setup, complete-capture import, **realised-P&L semantics settled against IBKR** (no open/close filter; `Trade == Lot + WashSale`) |
+| [`flex-xml-structure-audit.md`](flex-xml-structure-audit.md) | **Generated** — every element and attribute IBKR emits, with types and cardinality. Regenerate with `scripts/audit_flex_xml.py`; values are redacted by allowlist |
 | [`mcp-server-reference.md`](mcp-server-reference.md) | MCP Server (install, stdio/SSE transports, 46 tools, 4 resources, price alerts, TradingView integration) |
 | [`web-scraper-reference.md`](web-scraper-reference.md) | The 4 web tools — tunables, credit model, paywalled-site logins, per-host quirks, troubleshooting, live-test log |
 | [`web-scraping-methodology.md`](web-scraping-methodology.md) | **How to approach a host you haven't scraped before** — the four-way matrix, what each failure shape looks like, where we stop on the anti-bot ladder |
