@@ -123,6 +123,31 @@ never a parser bug.
 `<Lot>` remains worth storing: it carries `openDateTime` and `holdingPeriodDateTime`, which
 is where holding-period and short-vs-long-term analysis has to come from.
 
+### Calendar-year totals vs IBKR annual statements
+
+Per-statement agreement does not by itself prove that bucketing by **calendar year**
+reproduces IBKR's annual figure: an annual statement runs *first trading day → last trading
+day*, not Jan 1 → Dec 31, so a trade could in principle sit outside every annual window and
+be counted by us but not by IBKR.
+
+Checked directly against the archived annual statements (2026-08-04) — every year
+reconciles, and **no trading day in six years falls outside an annual window**:
+
+| Year | IBKR statement window | IBKR annual total | Our `substr(trade_date,1,4)` bucket |
+|---|---|---:|---:|
+| 2020 | 20200102 – 20201231 | 180.84 | 180.84 |
+| 2021 | 20210104 – 20211231 | 1,419.25 | 1,419.25 |
+| 2022 | 20220103 – 20221230 | 10,333.51 | 10,333.51 |
+| 2023 | 20230102 – 20231229 | 3,806.15 | 3,806.15 |
+| 2024 | 20240101 – 20241231 | 5,635.16 | 5,635.16 |
+| 2025 | 20250101 – 20251231 | −11,032.50 | −11,032.50 |
+
+2026 is year-to-date (−8,767.40 through 2026-08-04); no annual statement exists for it yet.
+
+`scripts/audit_flex_dataset.py` re-runs this as checks **17c** and **17d**. Annual statements
+are identified from their dates (same calendar year, opening in the first week, closing in
+the last), not from filenames, so the check keeps working as new years are archived.
+
 `<Trade>`, `<Lot>`, `<Order>`, `<WashSale>`, `<SymbolSummary>` and `<AssetSummary>` are the
 **same 85-attribute shape** distinguished by `levelOfDetail`, and are siblings under
 `<Trades>` — `<Lot>` is *not* nested inside `<Trade>`. `Lot.transactionID` identifies the

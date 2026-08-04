@@ -344,6 +344,58 @@ def run_gate(db_path: Path, src: Path) -> int:
     ):
         print(f"      {r['yr']}  {r['v']:>14,.2f} USD")
 
+    # 17c. Calendar-year totals against IBKR's own ANNUAL statements.
+    #
+    # The per-statement checks prove agreement inside a statement window; they do not
+    # prove that bucketing by calendar year reproduces IBKR's annual figure, because a
+    # statement window and a calendar year are not the same boundary. An annual statement
+    # runs first trading day → last trading day, so a trade on Jan 1 or Dec 31 could in
+    # principle fall outside every annual window and be reported by us but not by IBKR.
+    #
+    # Measured 2026-08-04: no such trade exists in six years of history, and all six
+    # annual totals reconcile exactly. This check keeps that true.
+    annual = []
+    for report in q(
+        "SELECT DISTINCT stmt_from_date f, stmt_to_date t FROM flex_trade "
+        "WHERE source='flex' AND stmt_from_date IS NOT NULL"
+    ):
+        f, t = report["f"], report["t"]
+        # An annual statement: same calendar year, opening in the first week, closing in
+        # the last. Derived from the dates rather than from filenames.
+        if f[:4] == t[:4] and f[4:] <= "0107" and t[4:] >= "1224":
+            annual.append((f[:4], f, t))
+    for year, f, t in sorted(annual):
+        ibkr = q(
+            "SELECT COALESCE(SUM(fifo_pnl_realized),0) v FROM flex_symbol_summary "
+            "WHERE stmt_from_date=? AND stmt_to_date=?",
+            (f, t),
+        ).fetchone()["v"]
+        ours = q(
+            "SELECT COALESCE(SUM(fifo_pnl_realized),0) v FROM flex_trade "
+            "WHERE source='flex' AND substr(trade_date,1,4)=?",
+            (year,),
+        ).fetchone()["v"]
+        gate.check(
+            f"17c. calendar {year} == IBKR annual statement",
+            abs(ibkr - ours) < 0.01,
+            f"IBKR {ibkr:,.2f} vs ours {ours:,.2f}",
+        )
+
+    if annual:
+        covered = " OR ".join("(trade_date BETWEEN ? AND ?)" for _ in annual)
+        params = [x for _, f, t in annual for x in (f, t)]
+        latest = max(t for _, _, t in annual)
+        orphans = q(
+            f"SELECT COUNT(DISTINCT trade_date) c FROM flex_trade WHERE source='flex' "
+            f"AND trade_date IS NOT NULL AND trade_date <= '{latest}' AND NOT ({covered})",
+            params,
+        ).fetchone()["c"]
+        gate.check(
+            "17d. no trading day falls outside every annual statement window",
+            orphans == 0,
+            f"{orphans} orphaned trading date(s)",
+        )
+
     gate.check(
         "17. realised P&L reconciles: trades == lots + wash-sale disallowed",
         abs(realised - (lots_pnl + wash_pnl)) < 0.01,
