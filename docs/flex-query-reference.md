@@ -82,11 +82,46 @@ rather than discarding it — the import fails loudly and names the attribute.
 
 | Field | Meaning |
 |---|---|
-| `fifoPnlRealized` | Realised P/L. Agrees with the closed lots for FUT/OPT/FUND. **Not for STK** — IBKR reports `0` on multi-lot equity closes and puts the figure on the `CLOSED_LOT` rows. |
-| `mtmPnl` | Mark-to-market P/L — a distinct column in IBKR's own Trades report, not interchangeable with realised. |
+| `fifoPnlRealized` on `<Trade>` | **Realised P/L. This is the authoritative figure.** Net of the wash-sale adjustment, exactly as IBKR reports it. |
+| `fifoPnlRealized` on `<Lot>` | Tax-lot detail **before** the wash-sale adjustment. Summing it overstates losses. Not a substitute for the above. |
+| `fifoPnlRealized` on `<WashSale>` | The disallowed loss that IBKR adds back. |
+| `mtmPnl` | Mark-to-market P/L — a **different accounting methodology**, not a different view of the same number. Opening and closing transactions are not matched; commissions are not netted. |
 | `tradePnl` | **Does not exist in the XML.** A parser reading it always fell through to `fifoPnlRealized`. |
-| `openCloseIndicator` | `O` / `C` / `C;O` (a position flip) / empty (forex). `C;O` must not read as a plain close. |
-| `notes` | Semicolon-delimited statement codes — see `flex_import.STATEMENT_CODES`. `L` = *ordered by IB (margin violation)*. |
+| `openCloseIndicator` | `O` / `C` / `C;O` (a position flip) / empty (forex). **Do not filter realised P&L on it** — see below. |
+| `notes` | Semicolon-delimited statement codes — see `flex_import.STATEMENT_CODES`. `L` = *ordered by IB (margin violation)*, `ST`/`LT` = short/long-term P/L. |
+
+### How to compute realised P&L (settled 2026-08-04)
+
+```sql
+SELECT SUM(fifo_pnl_realized) FROM flex_trade WHERE source='flex';
+```
+
+**No open/close filter.** Verified against IBKR's own `SymbolSummary` totals in **20 of 20**
+archived statements, to the cent.
+
+Two traps, both of which this project fell into before measuring:
+
+1. **Filtering on `openCloseIndicator LIKE '%C%'` is wrong.** Some *opening* trades carry
+   realised P&L — a buy that closes a short and opens a long is flagged `O`. One 2025
+   statement differs by exactly the 1,071.75 held on two such rows.
+2. **`<Lot>` is not "the fuller record".** It is pre-wash-sale detail. The exact
+   relationship, holding in all 20 statements and on the deduplicated database:
+
+   ```
+   Trade.fifoPnlRealized  ==  Lot.fifoPnlRealized  +  WashSale.fifoPnlRealized
+   ```
+
+   which is IBKR's documented behaviour: *"For wash sales, the Realized P/L column will
+   contain the net realized amount, including loss disallowed."*
+   ([trades_realizedsummary.htm](https://www.ibkrguides.com/reportingreference/reportguide/trades_realizedsummary.htm))
+
+This also explains the symptom that started the whole rebuild — equity closes reporting
+**exactly 0.00 realised P&L**. Those positions were re-bought inside 30 days, so the entire
+loss was disallowed as a wash sale. Correct tax accounting, faithfully reported by IBKR;
+never a parser bug.
+
+`<Lot>` remains worth storing: it carries `openDateTime` and `holdingPeriodDateTime`, which
+is where holding-period and short-vs-long-term analysis has to come from.
 
 `<Trade>`, `<Lot>`, `<Order>`, `<WashSale>`, `<SymbolSummary>` and `<AssetSummary>` are the
 **same 85-attribute shape** distinguished by `levelOfDetail`, and are siblings under

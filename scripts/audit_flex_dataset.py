@@ -279,16 +279,6 @@ def run_gate(db_path: Path, src: Path) -> int:
             bad_raw += 1
     gate.check("14. raw_attrs has all 85 keys on every trade", bad_raw == 0, f"{bad_raw} incomplete")
 
-    # 17. Execution-level vs closed-lot realised P&L, by asset class.
-    #
-    # NOT a pass/fail gate. These are two different IBKR quantities and deciding which is
-    # authoritative is a P&L-semantics question, not a capture question. This job is to
-    # capture both faithfully; the numbers below are reported so the P&L review has them.
-    #
-    # What the archive shows: for FUT/OPT/FUND the two agree exactly. For STK they do not —
-    # IBKR reports fifoPnlRealized = 0 on some multi-lot equity closes and puts the real
-    # figure on the CLOSED_LOT rows instead. That is the original "equity realised P&L is
-    # always 0.00" symptom, and it is IBKR's reporting model, not a parser bug.
     print("\n── Live Client-Portal rows ─────────────────────────────────────────")
 
     # Live rows legitimately coexist with Flex rows: a fill seen intraday is stored
@@ -315,28 +305,50 @@ def run_gate(db_path: Path, src: Path) -> int:
     untimed = q("SELECT COUNT(*) c FROM flex_trade WHERE source='live' AND date_time_iso IS NULL").fetchone()["c"]
     gate.check("21. every live row parsed its timestamp", untimed == 0, f"{untimed} unparsed")
 
-    print("\n── P&L reconciliation (reported, not gated) ────────────────────────")
-    exec_pnl = {
-        r["asset_category"]: r["p"]
-        for r in q(
-            "SELECT asset_category, SUM(fifo_pnl_realized) p FROM flex_trade "
-            "WHERE source='flex' AND open_close_indicator LIKE '%C%' GROUP BY 1"
-        )
-    }
-    lot_pnl = {
-        r["asset_category"]: r["p"]
-        for r in q("SELECT asset_category, SUM(fifo_pnl_realized) p FROM flex_lot GROUP BY 1")
-    }
-    for ac in sorted(set(exec_pnl) | set(lot_pnl), key=lambda a: a or ""):
-        left, right = exec_pnl.get(ac) or 0.0, lot_pnl.get(ac) or 0.0
-        flag = "  <-- differs" if abs(right - left) >= 0.01 else ""
-        print(f"    {ac or '?':<6} executions {left:>14,.2f}   closed lots {right:>14,.2f}{flag}")
+    print("\n── Realised P&L ────────────────────────────────────────────────────")
 
-    zero_closes = q(
-        "SELECT COUNT(*) c FROM flex_trade WHERE source='flex' AND open_close_indicator LIKE '%C%' AND fifo_pnl_realized = 0"
-    ).fetchone()["c"]
-    print(f"    closing executions reporting exactly 0 realised P&L: {zero_closes}")
-    print("    → flex_lot is the fuller record for equities; see docs/flex-query-reference.md")
+    # SETTLED 2026-08-04 against IBKR's own documentation and its own reported totals.
+    #
+    #   Realised P&L = SUM(Trade.fifoPnlRealized) over ALL trades — no open/close filter.
+    #
+    # Verified: that sum equals IBKR's own SymbolSummary figure in 20 of 20 archived
+    # statements, to the cent. Two things this corrects, both of which were asserted the
+    # other way earlier in this work:
+    #
+    #  * Filtering on openCloseIndicator is WRONG. Some opening trades legitimately carry
+    #    realised P&L (a buy that closes a short and opens a long is flagged 'O'). The 2025
+    #    statement differs by exactly the 1,071.75 held on two such rows.
+    #  * flex_lot is NOT "the fuller record for equities". It is the tax-lot detail
+    #    *before* the wash-sale adjustment, and summing it overstates losses.
+    #
+    # The relationship, exact in all 20 statements and on the deduplicated database:
+    #
+    #   Trade.fifoPnlRealized == Lot.fifoPnlRealized + WashSale.fifoPnlRealized
+    #
+    # which is IBKR's documented behaviour: "For wash sales, the Realized P/L column will
+    # contain the net realized amount, including loss disallowed."
+    # https://www.ibkrguides.com/reportingreference/reportguide/trades_realizedsummary.htm
+    #
+    # This also explains the original symptom. Equity closes reporting exactly 0.00 were
+    # positions re-bought inside 30 days, so the whole loss was disallowed. Correct tax
+    # accounting, faithfully reported — never a parser bug.
+    realised = q("SELECT SUM(fifo_pnl_realized) v FROM flex_trade WHERE source='flex'").fetchone()["v"] or 0.0
+    lots_pnl = q("SELECT SUM(fifo_pnl_realized) v FROM flex_lot").fetchone()["v"] or 0.0
+    wash_pnl = q("SELECT SUM(fifo_pnl_realized) v FROM flex_wash_sale").fetchone()["v"] or 0.0
+    print(f"    realised (all Flex trades) {realised:>14,.2f} USD   <- the figure to report")
+    print(f"    closed lots, pre-wash-sale {lots_pnl:>14,.2f} USD")
+    print(f"    wash-sale loss disallowed  {wash_pnl:>14,.2f} USD")
+    for r in q(
+        "SELECT substr(trade_date,1,4) yr, ROUND(SUM(fifo_pnl_realized),2) v FROM flex_trade "
+        "WHERE source='flex' AND trade_date IS NOT NULL GROUP BY 1 ORDER BY 1"
+    ):
+        print(f"      {r['yr']}  {r['v']:>14,.2f} USD")
+
+    gate.check(
+        "17. realised P&L reconciles: trades == lots + wash-sale disallowed",
+        abs(realised - (lots_pnl + wash_pnl)) < 0.01,
+        f"{realised:,.2f} vs {lots_pnl + wash_pnl:,.2f}",
+    )
 
     # 17b. Capture check that IS a gate: every closed lot must be stored with a P&L value.
     lots_missing = q("SELECT COUNT(*) c FROM flex_lot WHERE fifo_pnl_realized IS NULL").fetchone()["c"]

@@ -287,3 +287,49 @@ def test_live_rows_do_not_guess_a_trading_day():
     assert row["date_time_iso"] == "2026-06-01T09:30:01"
     assert row["trade_date"] is None
     assert row["trade_date_iso"] is None
+
+
+# ── realised P&L semantics — settled 2026-08-04 against IBKR's own totals ────────
+
+
+def test_realised_pnl_must_not_be_filtered_on_open_close_indicator():
+    """Some OPENING trades legitimately carry realised P&L.
+
+    A buy that closes a short and opens a long is flagged `O` and still realises. One
+    2025 statement differs from IBKR's own SymbolSummary by exactly the 1,071.75 held on
+    two such rows, which is how the wrong filter was caught. Realised P&L is the sum over
+    ALL trades.
+    """
+    xml = _statement(
+        _trade(tradeID="1", ibExecID="e1", openCloseIndicator="C", fifoPnlRealized="-100")
+        + _trade(tradeID="2", ibExecID="e2", openCloseIndicator="O", fifoPnlRealized="857.40")
+    )
+    rows = parse_statement(xml, "s.xml").rows["Trade"]
+    all_trades = sum(r["fifo_pnl_realized"] for r in rows)
+    closes_only = sum(r["fifo_pnl_realized"] for r in rows if "C" in (r["open_close_indicator"] or ""))
+    assert all_trades == pytest.approx(757.40), "realised P&L is the sum over ALL trades"
+    assert closes_only == pytest.approx(-100.0)
+    assert all_trades != closes_only, "the open/close filter changes the answer — do not use it"
+
+
+def test_trade_lot_washsale_relationship_survives_the_pipeline():
+    """Trade.fifoPnlRealized == Lot.fifoPnlRealized + WashSale.fifoPnlRealized.
+
+    IBKR: "For wash sales, the Realized P/L column will contain the net realized amount,
+    including loss disallowed." Holds in all 20 archived statements and on the
+    deduplicated database. `flex_lot` is therefore tax-lot detail *before* the wash-sale
+    adjustment — summing it as realised P&L overstates losses, which is the opposite of
+    what this project believed before measuring it.
+    """
+    xml = _statement(
+        _trade(tradeID="1", ibExecID="e1", openCloseIndicator="C", fifoPnlRealized="0")
+        + _element("Lot", symbol="TEST", quantity="-25", fifoPnlRealized="-8112.89", notes="ST")
+        + _element("WashSale", symbol="TEST", quantity="-25", fifoPnlRealized="8112.89")
+    )
+    parsed = parse_statement(xml, "s.xml")
+    S = lambda tag: sum(  # noqa: E731
+        r["fifo_pnl_realized"] for r in parsed.rows.get(tag, []) if r["fifo_pnl_realized"] is not None
+    )
+    assert S("Trade") == pytest.approx(S("Lot") + S("WashSale"))
+    # An equity close reporting exactly 0.00 is a fully-disallowed wash sale, not a bug.
+    assert S("Trade") == pytest.approx(0.0)
