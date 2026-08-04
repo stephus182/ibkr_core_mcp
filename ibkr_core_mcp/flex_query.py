@@ -205,7 +205,39 @@ class FlexQueryClient:
         xml_text = Path(xml_path).read_text(encoding="utf-8", errors="replace")
         trades = self._parse_trades(xml_text)
         self._store.upsert_trades(trades)
+        self._store_full_statement(xml_text, Path(xml_path).name)
         return trades
+
+    def _store_full_statement(self, xml_text: str, src_file: str) -> dict[str, int]:
+        """Store every element of the statement into the generated flex_* tables.
+
+        Runs alongside the legacy `trades` upsert rather than replacing it: the legacy
+        table is still what `get_trades`, `check_flex_coverage` and ClaudIA's opening
+        status read, and swapping those over is a separate change with its own tests.
+
+        Deliberately non-fatal. The legacy upsert has already committed by the time this
+        runs, and a schema-drift failure here (IBKR adding an attribute) must not turn a
+        successful trade sync into a failed one — it is logged loudly instead, which is
+        the signal to re-run `scripts/audit_flex_xml.py`.
+        """
+        from .flex_import import FlexImportError, parse_statement
+
+        try:
+            parsed = parse_statement(xml_text, src_file)
+            written = self._store.upsert_flex_statement(parsed)
+            log.info(
+                "flex archive: stored %d rows across %d element types from %s",
+                sum(written.values()),
+                len(written),
+                src_file,
+            )
+            return written
+        except FlexImportError as exc:
+            log.error("flex archive: %s not stored in flex_* tables: %s", src_file, exc)
+            return {}
+        except Exception as exc:  # noqa: BLE001 - never fail a completed trade sync
+            log.error("flex archive: unexpected failure storing %s: %s", src_file, exc, exc_info=True)
+            return {}
 
     def sync_archive_from_drive(self) -> dict[str, Any]:
         """Download all XML files from account_data/ on Drive and import them into SQLite.
@@ -269,6 +301,7 @@ class FlexQueryClient:
         xml_text = self._get_statement(url, ref_code)
         trades = self._parse_trades(xml_text)
         self._store.upsert_trades(trades)
+        self._store_full_statement(xml_text, f"flex_{account_id}_{ref_code}.xml")
         try:
             self._archive_and_log(xml_text, account_id, ref_code)
         except Exception as exc:

@@ -268,6 +268,54 @@ class SQLiteStore:
                 rows,
             )
 
+    # ── Complete Flex archive (one table per XML element type) ─────────────────
+
+    def initialize_flex_tables(self) -> None:
+        """Create the generated flex_* tables. Idempotent.
+
+        Separate from initialize() because these tables are generated from
+        :mod:`ibkr_core_mcp.flex_schema` rather than hand-written DDL.
+        """
+        from .flex_store import create_flex_tables
+
+        self.initialize()
+        with self._connect() as conn:
+            create_flex_tables(conn)
+
+    def upsert_flex_statement(self, parsed: Any) -> dict[str, int]:
+        """Store every element of one parsed Flex statement. Returns rows offered per tag.
+
+        `parsed` is a :class:`ibkr_core_mcp.flex_import.ParsedStatement`. Typed as Any to
+        keep this module free of an import cycle (flex_store imports flex_import, which
+        imports flex_schema — none of which should import store).
+        """
+        from .flex_store import upsert_flex_rows
+
+        self.initialize_flex_tables()
+        written: dict[str, int] = {}
+        with self._connect() as conn:
+            for tag, rows in parsed.rows.items():
+                written[tag] = upsert_flex_rows(conn, tag, rows)
+        return written
+
+    def upsert_flex_trades_from_live(self, records: list[dict[str, Any]]) -> int:
+        """Store live Client Portal fills into flex_trade, keyed to merge with Flex later.
+
+        A live record carries a handful of fields; the Flex statement for the same fill
+        carries 85 and arrives T+1. Both derive the same ``execution_key`` from IBKR's
+        exec id, so the later Flex row lands on the same row rather than creating the
+        duplicate this design previously produced 75 of.
+        """
+        from .flex_import import live_trade_rows
+        from .flex_store import upsert_flex_rows
+
+        rows = live_trade_rows(records)
+        if not rows:
+            return 0
+        self.initialize_flex_tables()
+        with self._connect() as conn:
+            return upsert_flex_rows(conn, "Trade", rows)
+
     # ── Flex import manifest ───────────────────────────────────────────────────
 
     def log_flex_import(

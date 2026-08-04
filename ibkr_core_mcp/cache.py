@@ -368,37 +368,140 @@ class GDriveCache:
     def download_account_files(self, extension: str = ".xml") -> list[tuple[str, bytes]]:
         """List and download all files with the given extension from account_data/.
 
-        Returns list of (filename, content_bytes), ordered by filename.
+        Searches **subfolders too**. account_data/ is organised as:
+
+            account_data/                 automated Flex syncs land here (flex_U*.xml)
+            account_data/Flex_Archive/    historical statements pulled by hand
+
+        This method was non-recursive until 2026-08-04, which meant that moving the
+        historical statements into a subfolder would have made them invisible to
+        sync_archive_from_drive() and verify_flex_import() with no error — the whole
+        pre-2026 trade history would simply have stopped being importable. Recursing
+        keeps the read path independent of how the folder is arranged.
+
+        Returns list of (filename, content_bytes), ordered by filename. Filenames are
+        bare (no folder prefix); a duplicate name in two folders is returned twice.
         """
         svc = self._get_service()
-        folder_id = self._resolve_account_folder()
-        file_list = (
-            svc.files()
-            .list(
-                q=f"'{folder_id}' in parents and trashed=false",
-                fields="files(id,name)",
-                orderBy="name",
-            )
-            .execute()
-            .get("files", [])
-        )
         results = []
-        for f in file_list:
-            if not f["name"].lower().endswith(extension):
-                continue
+        for meta in self.list_account_files(extension):
             buf = io.BytesIO()
-            downloader = MediaIoBaseDownload(buf, svc.files().get_media(fileId=f["id"]))
+            downloader = MediaIoBaseDownload(buf, svc.files().get_media(fileId=meta["id"]))
             done = False
             while not done:
                 _, done = downloader.next_chunk()
-            results.append((f["name"], buf.getvalue()))
+            results.append((meta["name"], buf.getvalue()))
         return results
 
+    def account_folder_ids(self) -> list[str]:
+        """Return account_data/'s folder id plus every folder beneath it, breadth-first.
+
+        Anything enumerating account files must go through this rather than querying
+        account_data/ directly. The historical Flex statements live in
+        account_data/Flex_Archive/, so a single-level query silently returns only the
+        automated syncs — which is exactly the bug this method was extracted to prevent
+        recurring in a second call site.
+        """
+        svc = self._get_service()
+        root_id = self._resolve_account_folder()
+        folder_ids: list[str] = [root_id]
+        pending = [root_id]
+        while pending:
+            parent = pending.pop()
+            subfolders = (
+                svc.files()
+                .list(
+                    q=(f"'{parent}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'"),
+                    fields="files(id)",
+                    pageSize=1000,
+                )
+                .execute()
+                .get("files", [])
+            )
+            for folder in subfolders:
+                folder_ids.append(folder["id"])
+                pending.append(folder["id"])
+        return folder_ids
+
+    def list_account_files(self, extension: str = ".xml") -> list[dict[str, Any]]:
+        """Metadata for every matching file under account_data/, subfolders included.
+
+        Each entry carries id / name / size / modifiedTime. Sorted by name.
+        """
+        svc = self._get_service()
+        entries: list[dict[str, Any]] = []
+        for folder_id in self.account_folder_ids():
+            for f in (
+                svc.files()
+                .list(
+                    q=f"'{folder_id}' in parents and trashed=false",
+                    fields="files(id,name,size,modifiedTime)",
+                    orderBy="name",
+                    pageSize=1000,
+                )
+                .execute()
+                .get("files", [])
+            ):
+                if f["name"].lower().endswith(extension):
+                    entries.append(f)
+        return sorted(entries, key=lambda f: str(f["name"]))
+
     def upload_account_file(self, local_path: str | Path, filename: str) -> None:
-        """Upload a local file to account_data/ on Drive, replacing any existing file of the same name."""
+        """Upload a local file to account_data/ on Drive, replacing any existing file of the same name.
+
+        For SQLite databases use :meth:`upload_account_sqlite` instead — a raw byte read of
+        a live WAL-mode database is not a valid backup (see that method).
+        """
         from pathlib import Path as _Path
 
         self.upload_account_file_bytes(_Path(local_path).read_bytes(), filename)
+
+    def upload_account_sqlite(self, local_path: str | Path, filename: str) -> None:
+        """Upload a consistent snapshot of a SQLite database to account_data/ on Drive.
+
+        Reading a live SQLite file with `read_bytes()` is wrong in two ways, and store.db
+        runs in WAL mode:
+
+        1. **Stale.** Recent commits live in ``<db>-wal`` until a checkpoint. A raw read of
+           the main file alone can omit them entirely — the Drive copy silently lags.
+        2. **Torn.** Another connection can checkpoint mid-read, so the bytes need not
+           correspond to any single point in time.
+
+        sqlite3's online backup API copies a consistent snapshot — main file plus committed
+        WAL pages — even while other connections are active. This mirrors what
+        ``claudia_ui``'s GDriveSync.upload_db already does for claudia.db; store.db was
+        being uploaded raw, which was survivable at 176 KB and is not at 50 MB.
+
+        Source: https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup
+        """
+        import logging
+        import sqlite3
+        import tempfile
+        from pathlib import Path as _Path
+
+        source = _Path(local_path)
+        if not source.exists():
+            logging.getLogger(__name__).warning("upload_account_sqlite: %s not found — nothing to upload", source)
+            return
+
+        handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            dir=source.parent, suffix=".upload.tmp", delete=False
+        )
+        handle.close()
+        snapshot = _Path(handle.name)
+        try:
+            src = sqlite3.connect(str(source))
+            try:
+                dst = sqlite3.connect(str(snapshot))
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+            self.upload_account_file_bytes(snapshot.read_bytes(), filename, mimetype="application/x-sqlite3")
+        finally:
+            snapshot.unlink(missing_ok=True)
 
     def upload_account_file_bytes(self, data: bytes, filename: str, mimetype: str = "application/octet-stream") -> None:
         """Upload raw bytes to account_data/ on Drive, replacing any existing file of the same name."""

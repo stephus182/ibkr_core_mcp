@@ -1497,6 +1497,13 @@ class ClaudeToolkit:
             except Exception as exc:
                 log.warning("_get_trades: store upsert failed: %s", exc)
                 upsert_note = "\n⚠ Trade history could not be saved to local store."
+            # Also record into flex_trade, keyed on IBKR's exec id so the T+1 Flex
+            # statement for the same fill merges onto this row instead of creating a
+            # second one. Non-fatal: the legacy upsert above has already succeeded.
+            try:
+                self._store.upsert_flex_trades_from_live(parsed)
+            except Exception as exc:
+                log.warning("_get_trades: flex_trade live upsert failed: %s", exc)
         skip_note = f" ({skipped} record(s) skipped — missing required fields)" if skipped else ""
 
         if not trades:
@@ -2268,7 +2275,7 @@ class ClaudeToolkit:
         """Return real-time account/model-partition P&L (daily + unrealized), not per-position.
 
         GET /iserver/account/pnl/partitioned returns ONE summary row per account/model
-        partition (e.g. "U1675699.Core") — rowType, dpl (daily), nl (net liquidity),
+        partition (e.g. "U1234567.Core") — rowType, dpl (daily), nl (net liquidity),
         upl (unrealized), el (excess liquidity), mv (margin value). There is no
         per-position/conid breakdown in this endpoint at all, despite an earlier
         version of this docstring claiming one; for per-position detail use
