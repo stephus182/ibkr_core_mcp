@@ -770,3 +770,74 @@ def test_without_a_flex_dataset_staleness_keeps_the_old_whole_table_behaviour(st
 
     cov = store.get_trade_date_coverage()
     assert cov["stale"] is True  # 30 days behind, by either reading
+
+
+# ── Security: the store and its WAL sidecars must not be world-readable ──────────────────
+#
+# Found by the claudia_ui security audit 2026-08-05: the live ~/.ibkr_core/store.db was
+# 0644 — 53 MB holding every trade this account has ever made. sqlite3.connect() creates
+# the file with 0666 & ~umask and nothing had ever narrowed it.
+
+
+def test_database_file_is_not_world_readable(store):
+    """The trade store is account data — 0600, not the umask default."""
+    import stat as stat_mod
+    from pathlib import Path
+
+    mode = stat_mod.S_IMODE(Path(store._db_path).stat().st_mode)
+    assert mode == 0o600, f"store.db is {oct(mode)}, expected 0o600"
+
+
+def test_wal_sidecars_are_not_world_readable(store):
+    """The WAL carries committed-but-uncheckpointed rows — same content, same rule.
+
+    Securing only the main file would leave the most recent writes readable.
+    """
+    import stat as stat_mod
+    from pathlib import Path
+
+    store.log_entry("test", note="force a write so the WAL is populated")
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(store._db_path + suffix)
+        if not sidecar.exists():
+            continue
+        mode = stat_mod.S_IMODE(sidecar.stat().st_mode)
+        assert mode == 0o600, f"{sidecar.name} is {oct(mode)}, expected 0o600"
+
+
+def test_permission_repair_is_self_healing(store):
+    """A file already on disk at 0644 must be corrected on the next connection.
+
+    This is the property that matters in practice: every existing install has a 0644
+    database, so a fix that only applied at creation time would never reach any of them.
+    """
+    import stat as stat_mod
+    from pathlib import Path
+
+    db = Path(store._db_path)
+    db.chmod(0o644)
+    store.log_entry("test", note="reconnect")
+    assert stat_mod.S_IMODE(db.stat().st_mode) == 0o600, "pre-existing 0644 was not repaired"
+
+
+def test_parent_directory_is_owner_only(store, mock_config):
+    """~/.ibkr_core holds the trade store, the Flex archive and the Drive OAuth token.
+
+    Asserted on an **existing** 0755 directory, not just a freshly created one. The
+    create-time `mkdir(mode=0o700)` is the easy half and a temp-dir fixture exercises it
+    for free; the half that mattered on the live install was the pre-existing directory,
+    which had been 0755 since long before anyone considered its mode. A test that only
+    covered the create path would have passed against the unfixed code.
+    """
+    import stat as stat_mod
+    from pathlib import Path
+
+    from ibkr_core_mcp.store import SQLiteStore
+
+    parent = Path(store._db_path).parent
+    parent.chmod(0o755)
+
+    SQLiteStore(mock_config)  # constructing again must repair it
+
+    mode = stat_mod.S_IMODE(parent.stat().st_mode)
+    assert mode == 0o700, f"store directory is {oct(mode)}, expected 0o700"

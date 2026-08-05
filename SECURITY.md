@@ -495,7 +495,27 @@ The stdlib parser does not resolve external entities (no XXE) but does process e
 
 ### SQLite Store
 
-Trades, signals, backtest results, and position snapshots are stored in a local SQLite database. No encryption at rest is applied — OS filesystem permissions are the primary control. The database file should be stored in a user-owned directory (e.g., `~/.ibkr_core/`) with `0o600` permissions.
+Trades, signals, backtest results, and position snapshots are stored in a local SQLite database. No encryption at rest is applied — **OS filesystem permissions are the primary control**, which makes them a control this package must enforce rather than recommend.
+
+Until 2026-08-05 this section read *"should be stored in a user-owned directory with `0o600` permissions"* and nothing implemented it. The live store was `0644` — 53 MB holding every trade the account had ever made, readable by any user on the machine. It was found by the `claudia_ui` security audit, not by this package. A documented control with no enforcement is the failure mode being fixed here, not the file mode itself.
+
+`SQLiteStore` now holds the permissions itself:
+
+| Path | Mode | Where |
+|---|---|---|
+| `~/.ibkr_core/` (the `sqlite_path` parent) | `0700` | `__init__` — `mkdir(mode=0o700)` for the create case, plus an explicit `_restrict` for the far more common existing-directory case |
+| `store.db` | `0600` | `_connect()` |
+| `store.db-wal`, `store.db-shm` | `0600` | `_connect()` |
+
+Three properties are deliberate and should not be "simplified" away:
+
+- **The WAL sidecars are in scope.** `store.db-wal` holds committed transactions that have not been checkpointed, so it carries the same content as the database. Securing the main file alone would leave the most recent writes readable.
+- **The repair is self-healing, not create-time-only.** `sqlite3.connect()` creates the database with `0666 & ~umask`, and neither `mkdir(mode=…)` nor an `O_CREAT` mode affects a path that already exists. Every install predating this code has a `0644` database and a `0755` directory, so a create-time fix would reach none of them. This is why the chmod lives in `_connect()` and runs unconditionally.
+- **It never raises.** A failed chmod logs a warning and continues. Refusing to open the database because a permission repair failed would trade a confidentiality gap for an availability outage; a read that would have succeeded at `0644` still succeeds. It is logged rather than swallowed, because a chmod that silently never lands is indistinguishable from a control that was never written.
+
+The mode is compared before chmod'ing, so the steady state is three `stat` calls per connection and no syscall churn.
+
+Guarded by four tests in `tests/test_store.py` (`test_database_file_is_not_world_readable`, `test_wal_sidecars_are_not_world_readable`, `test_permission_repair_is_self_healing`, `test_parent_directory_is_owner_only`). The last two assert against a path deliberately set back to `0644`/`0755` first — the create path is the easy half and a temp-dir fixture exercises it for free, so a test that only covered creation would have passed against the unfixed code. It was written that way first, and did.
 
 ### Google Drive Parquet Cache
 
@@ -519,6 +539,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
 | Credential exposure in logs | `repr=False` on `anthropic_api_key`, `flex_token` | Credentials loaded from env vars only, never hardcoded |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |
+| Trade store readable by other users | `SQLiteStore._connect()` holds `store.db` and both WAL sidecars at `0600` on every connection — self-healing, so installs created before 2026-08-05 are repaired rather than left at `0644` | `__init__` holds the `~/.ibkr_core/` parent at `0700`, covering the Flex XML archive and the Drive OAuth token in the same directory |
 | XML bomb DoS | `defusedxml` blocks entity expansion | Flex polling bounded to 5 retries |
 | SQL injection | Parameterized queries throughout `store.py` | LLM input validated before reaching query construction |
 | Unauthenticated session on cookie failure | `warnings.warn` on extraction error (not silent) | `browser_cookie3` access restricted to allowlisted browser names |

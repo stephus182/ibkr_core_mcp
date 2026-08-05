@@ -12,7 +12,9 @@ recomputed only when the date rolls over.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,9 +23,32 @@ import pandas as pd
 
 from ibkr_core_mcp.config import Config
 
+log = logging.getLogger(__name__)
+
 # Process-level cache for market calendar context.
 # Key: (date_str, tuple(exchange_codes)) — recomputed only when the date changes.
 _market_calendar_cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+
+
+def _restrict(path: Path, mode: int) -> None:
+    """Narrow `path` to `mode` if it exists and differs. Never raises.
+
+    A permissions repair must not be able to take the store down — a read that would
+    have succeeded at 0644 still succeeds, and refusing to open the database because a
+    chmod failed would trade a confidentiality gap for an availability outage. It is
+    logged rather than swallowed, because a chmod that silently never lands is
+    indistinguishable from a control that was never written.
+
+    The existence check is not a race guard; it is what keeps the WAL sidecars optional
+    (they do not exist before the first connection, and `-shm` never exists in the
+    single-process case).
+    """
+    try:
+        if path.exists() and stat.S_IMODE(path.stat().st_mode) != mode:
+            path.chmod(mode)
+    except OSError as exc:
+        log.warning("Could not restrict %s to %o: %s", path, mode, exc)
+
 
 # SQL that reads a trade date out of `trades.time` regardless of which writer produced it.
 # Flex writes ISO (2026-08-04T14:21:42); the live CP API and streaming paths write IBKR's
@@ -132,23 +157,56 @@ class SQLiteStore:
     """
 
     def __init__(self, config: Config) -> None:
-        """Resolve the database path and ensure its parent directory exists.
+        """Resolve the database path and ensure its parent directory exists, mode 0700.
 
         Creating the directory here (rather than at first query) means a fresh
         checkout with a default `~/.ibkr_core/` path works without manual setup.
         The database file and schema are created by `initialize()`.
 
+        `mkdir(mode=...)` applies only to a directory this call actually creates, and it
+        is masked by the umask besides — so the existing-directory case is corrected
+        explicitly below. That distinction is the whole finding: the live
+        `~/.ibkr_core/` was `0755` because it had been created long before anyone thought
+        about its mode, and a create-time-only fix would have left it that way forever.
+        The directory holds the trade store, the Flex XML archive and the Drive OAuth
+        token, so 0700 is the floor.
+
         Args:
             config: Supplies `sqlite_path`.
         """
         self._db_path = str(config.sqlite_path)
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        parent = Path(self._db_path).parent
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _restrict(parent, 0o700)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        self._restrict_db_permissions()
         return conn
+
+    def _restrict_db_permissions(self) -> None:
+        """Hold the database and both WAL sidecars at 0600. Never raises.
+
+        `sqlite3.connect()` creates the database with `0666 & ~umask` — 0644 in practice,
+        i.e. every trade this account has ever made, world-readable. It was exactly that
+        on the live store — a multi-year, tens-of-megabytes trade history — until the
+        2026-08-05 claudia_ui security audit measured it.
+
+        **`-wal` and `-shm` are not incidental.** The WAL holds committed transactions
+        that have not been checkpointed yet, so it carries the same content as the
+        database and is created by SQLite with the same permissive default. Securing the
+        main file alone would leave the most recent writes readable.
+
+        Called from `_connect()` rather than `initialize()` because the sidecars do not
+        exist until a connection opens, and because this must be **self-healing**: the
+        files already on disk predate this code, so a create-time-only fix would never
+        reach them. The mode is compared before chmod'ing, so the steady-state cost is
+        three `stat` calls per connection and no syscall churn.
+        """
+        for suffix in ("", "-wal", "-shm"):
+            _restrict(Path(self._db_path + suffix), 0o600)
 
     def initialize(self) -> None:
         """Create all tables if they don't exist."""
