@@ -432,3 +432,110 @@ def test_successful_result_wins_race_against_watchdog(ohlcv, monkeypatch):
         "a strategy that completed and was fully received must return its real "
         "result, not be discarded because the watchdog also fired moments later"
     )
+
+
+# ---------------------------------------------------------------------------
+# Trade segmentation — num_trades, win_rate, expectancy, profit_factor
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-08-05 on a real 20/50 SMA crossover over SPY 1D/2y, and reported to the
+# user through ClaudIA before anyone noticed the labels were wrong:
+#
+#   reported "Trades: 7"       -> actually 4 round trips (7 counted signal TRANSITIONS,
+#                                 so every round trip was counted twice, plus the entry
+#                                 of a position still open at the end)
+#   reported "Win Rate: 56.2%" -> actually 50.0% per trade (2 of 4). 56.2% was the share
+#                                 of BARS IN POSITION that closed up — a different
+#                                 quantity that happens to land in the same range
+#
+# The two tell opposite stories. Per-trade P&L was -0.16%, -4.14%, +16.75%, +9.53%: a 50%
+# hit rate with a profit factor of 6.12, which is a large-winner trend strategy. "56.2%
+# win rate over 7 trades" reads like a coin flip with an edge. Both numbers were
+# plausible, which is why nothing caught them.
+#
+# `expectancy` and `profit_factor` are added here because the account's PRINCIPLES require
+# them on every backtest; ClaudIA correctly reported them as missing rather than
+# fabricating them, and this is the other half of that fix.
+
+
+def _run(ohlcv, code):
+    from ibkr_core_mcp.backtest import run_backtest
+
+    return run_backtest(code, ohlcv, strategy_name="t", symbol="T")
+
+
+def test_one_round_trip_counts_as_one_trade(ohlcv):
+    """Enter, hold, exit. Two signal transitions, one trade."""
+    code = "df['signal'] = 0\ndf.iloc[5:15, df.columns.get_loc('signal')] = 1"
+    r = _run(ohlcv, code)
+    assert r.num_trades == 1
+
+
+def test_two_separate_entries_count_as_two_trades(ohlcv):
+    code = (
+        "df['signal'] = 0\n"
+        "df.iloc[5:15, df.columns.get_loc('signal')] = 1\n"
+        "df.iloc[25:35, df.columns.get_loc('signal')] = 1"
+    )
+    r = _run(ohlcv, code)
+    assert r.num_trades == 2
+
+
+def test_a_reversal_without_going_flat_is_two_trades(ohlcv):
+    """long -> short with no flat bar between closes one position and opens another.
+    Splitting only on a return to zero would count this as one."""
+    code = (
+        "df['signal'] = 0\n"
+        "df.iloc[5:15, df.columns.get_loc('signal')] = 1\n"
+        "df.iloc[15:25, df.columns.get_loc('signal')] = -1"
+    )
+    r = _run(ohlcv, code)
+    assert r.num_trades == 2
+
+
+def test_a_position_still_open_at_the_end_is_counted(ohlcv):
+    """It is a real position with real P&L; dropping it would flatter or flatten the
+    result depending on which way it is running."""
+    code = "df['signal'] = 0\ndf.iloc[-10:, df.columns.get_loc('signal')] = 1"
+    r = _run(ohlcv, code)
+    assert r.num_trades == 1
+
+
+def test_win_rate_is_per_trade_not_per_bar(ohlcv):
+    """A single trade is either a winner or a loser — never a fraction — however many
+    up and down bars it spanned."""
+    code = "df['signal'] = 0\ndf.iloc[5:25, df.columns.get_loc('signal')] = 1"
+    r = _run(ohlcv, code)
+    assert r.num_trades == 1
+    assert r.win_rate in (0.0, 1.0), f"per-bar leakage: {r.win_rate}"
+
+
+def test_expectancy_is_the_mean_result_per_trade(ohlcv):
+    code = "df['signal'] = 0\ndf.iloc[5:15, df.columns.get_loc('signal')] = 1"
+    r = _run(ohlcv, code)
+    assert r.expectancy == pytest.approx(r.total_return, rel=0.05, abs=1e-6)
+
+
+def test_profit_factor_is_none_when_nothing_lost(ohlcv):
+    """Gross loss of zero makes the ratio undefined. None says so; a large float would
+    read as a measured edge, and inf would propagate into JSON as a non-value."""
+    code = "df['signal'] = 0\ndf.iloc[5:15, df.columns.get_loc('signal')] = 1"
+    r = _run(ohlcv, code)
+    if r.win_rate == 1.0:
+        assert r.profit_factor is None
+
+
+def test_flat_strategy_reports_no_trade_metrics(ohlcv):
+    r = _run(ohlcv, "df['signal'] = 0")
+    assert r.num_trades == 0
+    assert r.win_rate == 0.0
+    assert r.expectancy == 0.0
+    assert r.profit_factor is None
+
+
+def test_to_dict_carries_the_principles_metrics(ohlcv):
+    """They exist to be reported. A metric computed and dropped before the tool result
+    is the same as not having it."""
+    code = "df['signal'] = 0\ndf.iloc[5:15, df.columns.get_loc('signal')] = 1"
+    d = _run(ohlcv, code).to_dict()
+    assert "expectancy" in d and "profit_factor" in d

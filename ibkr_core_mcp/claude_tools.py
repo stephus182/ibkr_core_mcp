@@ -2139,8 +2139,10 @@ class ClaudeToolkit:
             f"  Sharpe Ratio:  {result.sharpe:.2f}",
             f"  Sortino Ratio: {result.sortino:.2f}",
             f"  Max Drawdown:  {result.max_drawdown:.1%}",
-            f"  Num Trades:    {result.num_trades}",
-            f"  Win Rate:      {result.win_rate:.1%}",
+            f"  Round Trips:   {result.num_trades}",
+            f"  Win Rate:      {result.win_rate:.1%} (per trade)",
+            f"  Expectancy:    {result.expectancy:+.2%} per trade",
+            f"  Profit Factor: {'n/a — no losing trade' if result.profit_factor is None else f'{result.profit_factor:.2f}'}",
         ]
         return "\n".join(lines), None
 

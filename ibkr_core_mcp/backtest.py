@@ -115,6 +115,8 @@ class BacktestResult:
     max_drawdown: float
     num_trades: int
     win_rate: float
+    expectancy: float = 0.0
+    profit_factor: float | None = None
     equity_curve: pd.Series = field(default_factory=pd.Series)
 
     def to_dict(self) -> dict[str, Any]:
@@ -132,6 +134,8 @@ class BacktestResult:
             "max_drawdown": self.max_drawdown,
             "num_trades": self.num_trades,
             "win_rate": self.win_rate,
+            "expectancy": self.expectancy,
+            "profit_factor": self.profit_factor,
         }
 
 
@@ -315,6 +319,33 @@ def run_backtest(
     return _compute_metrics(result_df, strategy_name=strategy_name, symbol=symbol)
 
 
+def _segment_trades(sig: pd.Series, strategy_returns: pd.Series) -> list[float]:
+    """Per-trade P&L, one entry per position actually held.
+
+    A trade is a maximal run of bars carrying the **same non-zero signal**. Splitting on
+    the signal *value* rather than on a return to flat is what makes a reversal
+    (long → short with no flat bar between) two trades instead of one — it closes a
+    position and opens an opposite one, which is two results.
+
+    A position still open on the final bar is included. It is a real position with real
+    P&L; dropping it would flatter or flatten the result depending purely on which way it
+    happened to be running.
+    """
+    trades: list[float] = []
+    start: int | None = None
+    values = sig.to_numpy()
+    for i in range(len(values)):
+        changed = start is not None and values[i] != values[start]
+        if changed:
+            trades.append(float((1 + strategy_returns.iloc[start:i]).prod() - 1))
+            start = i if values[i] != 0 else None
+        elif start is None and values[i] != 0:
+            start = i
+    if start is not None:
+        trades.append(float((1 + strategy_returns.iloc[start:]).prod() - 1))
+    return trades
+
+
 def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> BacktestResult:
     sig = df["signal"].fillna(0).shift(1).fillna(0)  # trade on next bar open
     price_returns = df["close"].pct_change().fillna(0)
@@ -322,11 +353,24 @@ def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> Backt
 
     equity = (1 + strategy_returns).cumprod()
 
-    signal_changes = (sig.diff().abs() > 0).sum()
-    num_trades = int(signal_changes)
-
-    active = strategy_returns[sig != 0]
-    wr = float((active > 0).sum() / len(active)) if len(active) > 0 else 0.0
+    # Trade-level metrics, all from one segmentation (2026-08-05).
+    #
+    # `num_trades` counted signal TRANSITIONS and `win_rate` measured the share of BARS in
+    # position that closed up. Both were reported under labels meaning something else, and
+    # both were plausible enough to survive: a real 20/50 SMA run over SPY reported
+    # "7 trades, 56.2% win rate" for what was 4 round trips at a 50% hit rate. Those tell
+    # opposite stories — the truth was two tiny losses and two large winners, a profit
+    # factor of 6.12, which is only visible once trades are segmented as trades.
+    trade_pnl = _segment_trades(sig, strategy_returns)
+    num_trades = len(trade_pnl)
+    wins = [p for p in trade_pnl if p > 0]
+    losses = [p for p in trade_pnl if p <= 0]
+    wr = float(len(wins) / num_trades) if num_trades else 0.0
+    expectancy = float(sum(trade_pnl) / num_trades) if num_trades else 0.0
+    gross_loss = abs(sum(losses))
+    # None, not inf: a strategy that never lost has an undefined ratio, and any number
+    # here would be read as a measured edge.
+    profit_factor = float(sum(wins) / gross_loss) if gross_loss > 0 else None
 
     total_return = float(equity.iloc[-1] - 1) if len(equity) > 0 else 0.0
 
@@ -340,6 +384,8 @@ def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> Backt
             max_drawdown=0.0,
             num_trades=0,
             win_rate=0.0,
+            expectancy=0.0,
+            profit_factor=None,
             equity_curve=equity,
         )
 
@@ -352,5 +398,7 @@ def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> Backt
         max_drawdown=_analytics.max_drawdown(strategy_returns),
         num_trades=num_trades,
         win_rate=wr,
+        expectancy=expectancy,
+        profit_factor=profit_factor,
         equity_curve=equity,
     )
