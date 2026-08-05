@@ -25,6 +25,32 @@ from ibkr_core_mcp.config import Config
 # Key: (date_str, tuple(exchange_codes)) — recomputed only when the date changes.
 _market_calendar_cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
 
+# SQL that reads a trade date out of `trades.time` regardless of which writer produced it.
+# Flex writes ISO (2026-08-04T14:21:42); the live CP API and streaming paths write IBKR's
+# compact 20260804-14:21:42. Kept as one constant so the date range, the gap scan and any
+# future reader cannot drift into understanding different subsets of the same table.
+_TRADE_DATE_SQL = """
+    CASE
+        WHEN time LIKE '____-__-__%' THEN substr(time, 1, 10)
+        WHEN time LIKE '________-%'  THEN
+            substr(time, 1, 4) || '-' || substr(time, 5, 2) || '-' || substr(time, 7, 2)
+    END
+"""
+
+
+def _iso_trade_time(value: Any) -> Any:
+    """IBKR's compact `YYYYMMDD-HH:MM:SS` as ISO `YYYY-MM-DDTHH:MM:SS`.
+
+    Anything already ISO, or not a string, or not matching the compact shape, is returned
+    untouched — this normalises a known format, it does not guess at unknown ones. A
+    timestamp we cannot parse is left exactly as the API gave it rather than coerced into
+    something plausible.
+    """
+    if not isinstance(value, str) or len(value) < 9 or value[8] != "-" or not value[:8].isdigit():
+        return value
+    return f"{value[:4]}-{value[4:6]}-{value[6:8]}T{value[9:]}"
+
+
 # Static CME Globex product schedule.
 # Futures are NOT securities — most trade ~23h/day with a 1h maintenance break.
 # All times are CT (Chicago Time). IBKR routes all CME products via Globex (electronic).
@@ -239,7 +265,20 @@ class SQLiteStore:
             """)
 
     def upsert_trades(self, trades: list[dict[str, Any]]) -> None:
-        """Insert or update trades by execution_id."""
+        """Insert or update trades by execution_id.
+
+        `time` is normalised to ISO on the way in. Three paths write this table and two
+        of them disagreed about the format: `flex_query` writes ISO
+        (`2026-08-04T14:21:42`) while the live CP API path and the streaming path write
+        IBKR's compact `20260804-14:21:42`. Because the ON CONFLICT clause below
+        deliberately does not update `time` — the first observation of a fill is the
+        authoritative one — a row captured live kept the compact form permanently.
+
+        Measured on the live store 2026-08-05: 38 of 1,206 rows (3%). They were invisible
+        to `get_trade_date_coverage`, which matched on the ISO shape, so the newest date
+        it could report was 2026-08-04 while the table already held 2026-08-05. Normalising
+        here means the read side no longer has to know that two formats ever existed.
+        """
         self.initialize()
         # Ensure new optional columns exist in every row — older callers omit them
         rows = [
@@ -247,6 +286,7 @@ class SQLiteStore:
                 "asset_class": "",
                 "realized_pnl": None,
                 **t,
+                "time": _iso_trade_time(t.get("time")),
             }
             for t in trades
         ]
@@ -400,6 +440,21 @@ class SQLiteStore:
             rows = conn.execute("SELECT execution_id FROM trades").fetchall()
         return {r["execution_id"] for r in rows}
 
+    @staticmethod
+    def _settled_newest_date(conn: sqlite3.Connection) -> str | None:
+        """Newest **settled** trade date — `flex_trade` rows sourced from a statement.
+
+        None when there is no Flex dataset to ask (an older store, or one that has never
+        synced), which sends the caller back to the whole-table answer. Deliberately
+        excludes `source='live'`: those are the fills whose statement has not arrived, and
+        counting them would mark the store current precisely when a pull is due.
+        """
+        try:
+            row = conn.execute("SELECT MAX(trade_date_iso) FROM flex_trade WHERE source = 'flex'").fetchone()
+        except sqlite3.DatabaseError:
+            return None  # table absent — store predates the Flex dataset
+        return str(row[0]) if row and row[0] else None
+
     def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
         """Return trade activity distribution from the trades table.
 
@@ -410,14 +465,41 @@ class SQLiteStore:
         - Data values are never validated or modified: IBKR is the authoritative source.
         - To verify import completeness against source XMLs, use verify_flex_import.
 
-        Returns: oldest, newest, total_trades, gaps.
+        **The report and the staleness flag answer two different questions, and since
+        2026-08-05 they read two different things.**
+
+        The *report* (oldest / newest / total / gaps) covers **every** row, whichever
+        writer produced it. It used to match on the ISO shape alone, which silently
+        excluded rows written by the live CP API and streaming paths in IBKR's compact
+        format — 38 of 1,206 on the live store, so the newest date it could report was
+        2026-08-04 while the table already held 2026-08-05. The sharp consequence was not
+        the missing day: a window containing *only* live-captured trades would appear as a
+        45+ day hole and be reported as inactivity, and ClaudIA's system prompt tells it
+        that date gaps are verified inactivity. A fabricated gap would have been passed to
+        the user as fact.
+
+        The *staleness* flag deliberately still tracks **settled Flex data only**, read
+        from `flex_trade` where that table exists. It decides whether to pull a statement,
+        and Flex is T+1 — so today's live fill is precisely the trade whose settled record
+        has *not* arrived. Letting it mark the store "current" would suppress the very pull
+        that brings the settled figures. Where `flex_trade` is absent (a store predating
+        the Flex dataset) it falls back to the ISO-format rows in `trades`, which is what
+        the Flex importer writes and therefore the same question asked of older data.
+
+        Returns: oldest, newest, total_trades, gaps, days_since_newest, last_trading_day,
+        stale.
         """
         self.initialize()
         with self._connect() as conn:
+            # S608: the only interpolation is `_TRADE_DATE_SQL`, a module-level constant
+            # of literal SQL — no caller input reaches this string. Kept as a constant
+            # rather than inlined so the date range, the gap scan and any future reader
+            # cannot drift into understanding different subsets of the same table.
             rows = conn.execute(
-                "SELECT DISTINCT substr(time, 1, 10) as d FROM trades WHERE time LIKE '____-__-__%' ORDER BY d"
+                f"SELECT DISTINCT {_TRADE_DATE_SQL} AS d FROM trades WHERE d IS NOT NULL ORDER BY d"  # noqa: S608
             ).fetchall()
             total = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+            settled_newest = self._settled_newest_date(conn)
 
         if not rows:
             return {"oldest": None, "newest": None, "total_trades": 0, "gaps": []}
@@ -445,6 +527,9 @@ class SQLiteStore:
 
         newest = dates[-1]
         days_since_newest = (date.today() - newest).days
+        # Staleness asks about SETTLED data only (see the docstring). Falling back to the
+        # report's own newest keeps the old behaviour for stores with no Flex dataset.
+        settled = date.fromisoformat(settled_newest) if settled_newest else newest
 
         try:
             import exchange_calendars as ec
@@ -455,11 +540,11 @@ class SQLiteStore:
             # Flex publishes yesterday's trades today — newest == yesterday is always normal.
             # Only flag stale when data is 2+ trading days behind (genuine gap, not Flex lag).
             penultimate_trading_day = _cal.previous_close(Timestamp(last_trading_day.isoformat(), tz="UTC")).date()
-            stale = newest < penultimate_trading_day
+            stale = settled < penultimate_trading_day
         except Exception:
             # Fallback: stale if missing more than 2 calendar days (covers weekends)
             last_trading_day = None
-            stale = days_since_newest > 2
+            stale = (date.today() - settled).days > 2
 
         return {
             "oldest": dates[0].isoformat(),

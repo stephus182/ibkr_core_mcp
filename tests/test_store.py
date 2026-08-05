@@ -653,3 +653,120 @@ def test_parse_stream_execution_output_matches_upsert_trades_shape(store):
     assert len(result) == 1
     assert result[0]["execution_id"] == "E1"
     assert result[0]["side"] == "BUY"
+
+
+# ---------------------------------------------------------------------------
+# Two timestamp formats in one table (found live 2026-08-05)
+# ---------------------------------------------------------------------------
+#
+# `trades` is written by two paths that disagree about the format of `time`:
+# flex_query writes ISO (`2026-08-04T14:21:42`), while the live CP API path
+# (claude_tools) and the streaming path write IBKR's compact `20260804-14:21:42`.
+# `upsert_trades`'s ON CONFLICT deliberately does not update `time`, so a row captured
+# live keeps the compact form permanently.
+#
+# The coverage query filtered on `time LIKE '____-__-__%'` and therefore could not see
+# them at all: measured on the live store, 38 of 1,206 rows (3%) were invisible, and the
+# newest date it could report was 2026-08-04 while the table already held 2026-08-05.
+#
+# Two separate questions, split deliberately (user's call, 2026-08-05):
+#   * the ACTIVITY REPORT (dates, gaps, totals) must see every row, or a window holding
+#     only live-captured trades reads as "no trading" — a fabricated gap;
+#   * STALENESS must keep tracking settled Flex data only, because it decides whether to
+#     pull a statement. Letting a live fill mark the store "current" would suppress the
+#     very pull that brings the settled figures.
+
+
+def _live_trade(eid: str, compact: str) -> dict[str, object]:
+    """A row as the live CP API path writes it — IBKR's compact stamp, no ISO."""
+    return {
+        "execution_id": eid,
+        "symbol": "ES",
+        "side": "BUY",
+        "size": 1,
+        "price": 100,
+        "time": compact,
+        "commission": 1,
+        "account": "",
+    }
+
+
+def test_coverage_sees_compact_timestamps_too(store):
+    """The regression: 3% of the live store was invisible to its own activity report."""
+    store.upsert_trades([_trade("E1", "2026-01-05")])
+    store.upsert_trades([_live_trade("E2", "20260210-14:21:42")])
+
+    cov = store.get_trade_date_coverage()
+    assert cov["total_trades"] == 2
+    assert cov["oldest"] == "2026-01-05"
+    assert cov["newest"] == "2026-02-10", "the compact-stamped row must count"
+
+
+def test_a_window_of_only_live_trades_is_not_reported_as_a_gap(store):
+    """The sharp consequence. ClaudIA is told date gaps are verified inactivity, so a gap
+    manufactured by a timestamp format would be reported to the user as 'no trading'."""
+    store.upsert_trades([_trade("E1", "2026-01-01")])
+    store.upsert_trades(
+        [
+            _live_trade("E2", "20260210-10:00:00"),  # mid-window, live-captured only
+            _live_trade("E3", "20260320-10:00:00"),
+        ]
+    )
+    store.upsert_trades([_trade("E4", "2026-05-01")])
+
+    cov = store.get_trade_date_coverage()
+    assert cov["gaps"] == [], f"live-only activity fabricated a gap: {cov['gaps']}"
+
+
+def test_upsert_normalises_the_compact_stamp_on_write(store):
+    """One format in the table going forward — the read side should not have to care."""
+    store.upsert_trades([_live_trade("E1", "20260804-14:21:42")])
+
+    with store._connect() as conn:
+        stored = conn.execute("SELECT time FROM trades WHERE execution_id='E1'").fetchone()[0]
+    assert stored.startswith("2026-08-04"), f"not normalised: {stored!r}"
+
+
+def test_staleness_still_tracks_settled_flex_data_not_live_fills(store):
+    """A live fill must NOT mark the store current.
+
+    Staleness decides whether to pull a Flex statement. Flex is T+1, so today's live fill
+    is precisely the trade whose settled record has not arrived — treating it as "up to
+    date" would suppress tomorrow's pull and strand the statement figures.
+
+    Written against the production shape: a store WITH the Flex dataset, which is the only
+    configuration that can tell settled rows from live ones. `trades` carries no provenance
+    column, and since the compact stamp is now normalised on write, the timestamp format no
+    longer distinguishes them either.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    today = datetime.now(UTC).date()
+    settled_day = today - timedelta(days=30)
+
+    store.initialize_flex_tables()
+    with store._connect() as conn:
+        conn.execute(
+            "INSERT INTO flex_trade (row_uid, execution_key, source, trade_date_iso) VALUES (?, ?, 'flex', ?)",
+            ("U1", "K1", settled_day.isoformat()),
+        )
+    store.upsert_trades([_trade("OLD", settled_day.isoformat())])
+    store.upsert_trades([_live_trade("LIVE", today.strftime("%Y%m%d-10:00:00"))])
+
+    cov = store.get_trade_date_coverage()
+    assert cov["newest"] == today.isoformat(), "the report still shows the live fill"
+    assert cov["stale"] is True, "a live fill must not suppress the Flex pull"
+
+
+def test_without_a_flex_dataset_staleness_keeps_the_old_whole_table_behaviour(store):
+    """No `flex_trade` table means no way to tell settled from live — `trades` has no
+    provenance column. Rather than guess, the pre-2026-08-05 semantics are kept and the
+    docstring says so; stores in that state predate live capture anyway.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    today = datetime.now(UTC).date()
+    store.upsert_trades([_trade("OLD", (today - timedelta(days=30)).isoformat())])
+
+    cov = store.get_trade_date_coverage()
+    assert cov["stale"] is True  # 30 days behind, by either reading
