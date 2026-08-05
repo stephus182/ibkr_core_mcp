@@ -354,21 +354,62 @@ class IBKRClient:
         bar: str = "1d",
         outside_rth: bool = False,
     ) -> dict[str, Any]:
-        """Fetch OHLCV bars with automatic pagination for requests exceeding 1000 data points.
+        """Fetch OHLCV bars, assembling several requests when one cannot hold the span.
 
-        Wraps get_market_history() and chunks large requests using the startTime parameter,
-        walking backwards from today in calendar-day windows sized to stay safely under
-        the 1000-point limit. Results are merged, sorted by timestamp, and deduplicated.
+        A single request is capped at ~1000 data points, so a long lookback has to be
+        pulled in chunks and merged. Results are merged, sorted by timestamp and
+        deduplicated. This is the primary entry point for ClaudeToolkit.fetch_market_data().
 
-        This is the primary entry point for ClaudeToolkit.fetch_market_data().
+        ## `startTime` is the END of the window, not the start
+
+        The parameter that makes chunking work is also the one that is easy to read
+        backwards. IBKR's OpenAPI spec (https://api.ibkr.com/gw/api/v3/api-docs) defines it
+        as "a fixed UTC date-time reference point for the historical data request, **from
+        which the specified period extends**" — and `direction` decides which way:
+
+          -1  "data will begin away from the start time, ending at the current time/startTime"
+           1  "begins at the start time, moving towards the current time"
+
+        Measured against the live gateway 2026-08-05, conid 756733 (SPY), anchor
+        `20231109-00:00:00`, `period=100d`:
+
+          direction omitted  ->  99 pts, 2023-06-20 -> 2023-11-07
+          direction=-1       ->  99 pts, 2023-06-20 -> 2023-11-07   (identical)
+          direction=1        ->  {"error": "Chart data unavailable"}
+
+        So the window **ends** at the anchor, the default is backwards, and the documented
+        forward direction does not work on this endpoint even though `startTime` is
+        supplied — exactly the condition the spec says it requires. `direction=-1` is now
+        sent explicitly: relying on an undocumented default means a change at IBKR silently
+        reverses every paged request.
+
+        **This method read the parameter as the start until 2026-08-05.** Each chunk was
+        therefore requested a full chunk-width too early and the newest chunk was never
+        fetched at all. The failure was silent and plausible: SPY `5y`/`1w` returned 291
+        well-formed weekly bars covering 2018-04-19 → 2023-10-30, while the raw endpoint
+        returned 2021-08-09 → 2026-08-03. Nothing errored; the data was simply 1,010 days
+        stale, and any analysis run on it would have been confidently wrong. It affected
+        every request wider than one chunk — `3y`/`5y` on most bars, and `1y`/`2y` on `1h`.
+
+        The newest chunk sends **no** `startTime`: "If omitted, the current time is used".
+        Measured the same day on SPY `30d`/`1d` — omitted reached 2026-08-05, an explicit
+        timestamp of that same moment reached 08-04, and midnight-today reached 08-03. Only
+        the omitted form returns today's bar.
 
         Chunk sizes by bar (targeting 80% of the 1000-point limit):
           1d  → 1000-calendar-day chunks  (~690 trading days each)
           1w  → 1000-calendar-day chunks  (~142 trading weeks each)
-          1h  → 197-calendar-day chunks   (~128 trading days × 6.5h each)
+          1h  → 246-calendar-day chunks   (~160 trading days × 6.5h each)
           1m  → 1000-calendar-day chunks  (~33 months each)
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
+        **The assembled span is a floor, not an exact match.** IBKR sizes each chunk's
+        response by its own bar alignment, so the union can reach further back than asked:
+        measured 2026-08-05, SPY `5y`/`1w` returned 316 bars spanning 6.0 years and
+        `3y`/`1w` returned 209 spanning 4.0. Callers get *at least* the requested period,
+        ending at the present. Trimming to an exact window is deliberately not done here —
+        silently discarding real bars a caller may want is the worse failure, and the
+        DataFrame carries its own index for anyone who needs a precise slice.
+
         Endpoint: GET /iserver/marketdata/history
         """
         from datetime import datetime, timedelta
@@ -387,17 +428,23 @@ class IBKRClient:
 
         while offset < total:
             n = min(chunk_days, total - offset)
-            chunk_start = now - timedelta(days=offset + n)
-            result = self._get(
-                "/iserver/marketdata/history",
-                {
-                    "conid": conid,
-                    "period": f"{n}d",
-                    "bar": bar,
-                    "outsideRth": str(outside_rth).lower(),
-                    "startTime": chunk_start.strftime("%Y%m%d-00:00:00"),
-                },
-            )
+            params: dict[str, Any] = {
+                "conid": conid,
+                "period": f"{n}d",
+                "bar": bar,
+                "outsideRth": str(outside_rth).lower(),
+            }
+            if offset:
+                # `startTime` is the END of the window (see the method docstring), so the
+                # anchor is where this chunk stops, not where it starts.
+                params["startTime"] = (now - timedelta(days=offset)).strftime("%Y%m%d-%H:%M:%S")
+                params["direction"] = -1
+            # offset == 0 sends NO startTime: "If omitted, the current time is used"
+            # (IBKR's OpenAPI spec). Measured 2026-08-05 on SPY 30d/1d — omitted reached
+            # 2026-08-05, an explicit timestamp of the same moment reached 08-04, and
+            # midnight-today reached 08-03. Only the omitted form returns today's bar,
+            # and on a trading surface today is the bar that matters most.
+            result = self._get("/iserver/marketdata/history", params)
             if result:
                 if not envelope:
                     envelope = {k: v for k, v in result.items() if k != "data"}

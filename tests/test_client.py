@@ -1177,3 +1177,95 @@ def test_get_pa_periods_raw_posts_account_ids(client):
     assert raw == payload
     assert mock_post.call_args[0][0] == "/pa/allperiods"
     assert mock_post.call_args[0][1] == {"acctIds": ["U1"]}
+
+
+# ── get_market_history_paged — the startTime anchor (live-measured 2026-08-05) ──
+#
+# `startTime` is the END of the returned window, not the start. IBKR's own OpenAPI spec
+# (https://api.ibkr.com/gw/api/v3/api-docs) calls it "a fixed UTC date-time reference point
+# ... from which the specified period extends", and measurement settles which way it
+# extends: anchored at 20231109 with period=100d, the endpoint returned 2023-06-20 →
+# 2023-11-07 with `direction` omitted AND with `direction=-1`, identically. `direction=1`
+# — documented as supported whenever startTime is included — returned
+# {"error": "Chart data unavailable"}.
+#
+# The pagination read it as the start, so every chunk was requested a full chunk-width too
+# early and the most recent chunk was never fetched at all. Measured against the live
+# gateway: SPY 5y/1w returned 2018-04-19 → 2023-10-30 while the raw endpoint returned
+# 2021-08-09 → 2026-08-03. Silent: the caller got 291 plausible weekly bars ending 1,010
+# days ago and nothing said so.
+
+
+def _paged_calls(client, period, bar, monkeypatch_now=None):
+    """Run the paged fetch against a stub and return the params of each request."""
+    calls = []
+
+    def _fake_get(path, params=None):
+        calls.append(params or {})
+        return {"data": [{"t": 1_000 * len(calls), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]}
+
+    with patch.object(client, "_get", side_effect=_fake_get):
+        client.get_market_history_paginated(265598, period=period, bar=bar)
+    return calls
+
+
+def test_paged_newest_chunk_omits_starttime_so_it_reaches_today(client):
+    """The regression that mattered: the newest chunk must reach today.
+
+    Anchoring it a chunk-width back (the old behaviour) dropped the most recent chunk
+    entirely and shifted every later one by the same amount. Omitting `startTime` is what
+    reaches today — measured 2026-08-05 on SPY 30d/1d, omitted returned through 08-05
+    while an explicit timestamp of the same moment returned only through 08-04.
+    """
+    calls = _paged_calls(client, "5y", "1d")
+
+    assert len(calls) > 1, "5y/1d must paginate, or this test proves nothing"
+    assert "startTime" not in calls[0]
+    assert "direction" not in calls[0]
+
+
+def test_paged_chunks_tile_backwards_without_gaps(client):
+    """Each anchor is the end of its own window and the start of the previous one, so the
+    windows abut. A gap here is missing bars in the middle of a chart; an overlap is
+    wasted requests against a rate-limited endpoint."""
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    calls = _paged_calls(client, "5y", "1d")
+    widths = [int(c["period"].rstrip("d")) for c in calls]
+
+    # chunk 0 ends at "now" (no anchor sent); chunk i>0 ends where chunk i-1 began
+    expected_offset = 0
+    for i, params in enumerate(calls):
+        if i:
+            anchor = datetime.strptime(params["startTime"], "%Y%m%d-%H:%M:%S")
+            drift = abs((now - timedelta(days=expected_offset) - anchor).total_seconds())
+            assert drift < 120, f"chunk {i} anchored {drift / 86400:.2f}d from where chunk {i - 1} began"
+        expected_offset += widths[i]
+
+
+def test_paged_requests_state_the_direction_explicitly(client):
+    """`direction` defaults to backwards *by measurement*, not by documentation — the
+    spec's own wording implies the opposite, and `direction=1` errors outright. Stating
+    -1 means a change to IBKR's default cannot silently reverse every paged request."""
+    calls = _paged_calls(client, "5y", "1d")
+    anchored = [c for c in calls if "startTime" in c]
+    assert anchored, "nothing to check"
+    assert all(str(c.get("direction")) == "-1" for c in anchored)
+
+
+def test_paged_covers_the_whole_requested_span(client):
+    """The sum of the chunk widths must reach back the full period."""
+    calls = _paged_calls(client, "5y", "1d")
+    covered = sum(int(c["period"].rstrip("d")) for c in calls)
+    assert covered >= 5 * 365 - 2, f"5y requested, only {covered}d covered"
+
+
+def test_paged_single_chunk_requests_are_not_paginated(client):
+    """A period inside one chunk must go through the plain call — no startTime, no
+    direction, so the untouched fast path stays untouched."""
+    with patch.object(client, "get_market_history", return_value={"data": []}) as plain:
+        with patch.object(client, "_get") as paged:
+            client.get_market_history_paginated(265598, period="6m", bar="1d")
+    plain.assert_called_once()
+    paged.assert_not_called()
