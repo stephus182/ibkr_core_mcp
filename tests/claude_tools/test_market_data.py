@@ -3,8 +3,6 @@ from unittest.mock import patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import IBKRCoreError
-
 pytestmark = pytest.mark.market_data
 
 
@@ -434,59 +432,12 @@ def test_fetch_market_data_empty_data(toolkit):
 # ============================================================================
 
 
-def test_search_contract_happy_path(toolkit):
-    """Returns JSON-formatted contract list."""
-    toolkit._client.search_contract.return_value = [
-        {"conid": 265598, "symbol": "AAPL", "secType": "STK", "exchange": "NASDAQ"},
-    ]
-    text, fig = toolkit.execute("search_contract", {"symbol": "aapl"})
-    assert fig is None
-    assert "265598" in text
-    assert "AAPL" in text
-
-
-def test_search_contract_default_sec_type(toolkit):
-    """sec_type defaults to STK when omitted."""
-    toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit.execute("search_contract", {"symbol": "AAPL"})
-    toolkit._client.search_contract.assert_called_once_with("AAPL", "STK")
-
-
-def test_search_contract_no_results(toolkit):
-    """Returns 'no contracts found' message when IBKR returns empty list."""
-    toolkit._client.search_contract.return_value = []
-    text, fig = toolkit.execute("search_contract", {"symbol": "XYZ99"})
-    assert fig is None
-    assert "No contracts found" in text
-    assert "XYZ99" in text
-
-
-# ── US-listing ordering (_us_listings_first) ────────────────────────────────
-#
-# The live IGV shape, measured 2026-08-05: /iserver/secdef/search returns the MEXICAN
-# listing first and the US one second, and its order is not documented as meaningful.
-
-# `sections` is carried because the live rows carry it and the code keys on it: a fixture
-# without it would be easier to satisfy than the real response, which is how a mock keeps a
-# broken path green.
-_IGV_MEXI = {
-    "conid": "325209548",
-    "companyName": "ISHARES EXPANDED TECH-SOFTWA",
-    "symbol": "IGV",
-    "description": "MEXI",
-    "sections": [{"secType": "STK", "exchange": "MEXI;"}],
-}
-_IGV_BATS = {
-    "conid": "12658199",
-    "companyName": "ISHARES EXPANDED TECH-SOFTWA",
-    "symbol": "IGV",
-    "description": "BATS",
-    "sections": [{"secType": "STK"}],
-}
-
-
 def _igv_stocks(us_conids=(12658199,)):
-    """A /trsrv/stocks response marking the given conids as US listings."""
+    """A /trsrv/stocks response for IGV: the US/BATS listing plus the Mexican one.
+
+    The live shape, measured 2026-08-05. `isUS` is the field that makes this endpoint —
+    and not /iserver/secdef/search — able to answer which listing was meant.
+    """
     return [
         {
             "name": "ISHARES EXPANDED TECH-SOFTWA",
@@ -499,100 +450,113 @@ def _igv_stocks(us_conids=(12658199,)):
     ]
 
 
-def test_search_contract_puts_the_us_listing_first(toolkit):
-    """The whole point: a bare ticker is a US ticker, so the US row must lead.
+def test_search_contract_resolves_stk_to_exactly_one_listing(toolkit):
+    """One contract, with its currency — not a list to choose from.
 
-    Guards the defect measured live — contracts[0] for IGV was the Mexican listing, and
-    the tool description invited the model to use it to discover a conid for an order.
+    The tool's description tells the model to use it to discover conids, so returning
+    several is the ambiguity, not a service. Currency is included because `_Resolved`
+    carries it; /iserver/secdef/search has no currency field at all, so the shape this
+    replaced could not have stated one.
     """
-    toolkit._client.search_contract.return_value = [_IGV_MEXI, _IGV_BATS]
     toolkit._client.get_stocks.return_value = _igv_stocks()
+    with patch.object(toolkit, "_listing_currency", return_value="USD"):
+        payload = json.loads(toolkit.execute("search_contract", {"symbol": "igv"})[0])
 
-    text, _ = toolkit.execute("search_contract", {"symbol": "IGV"})
-    rows = json.loads(text)
-
-    assert [r["conid"] for r in rows] == ["12658199", "325209548"]
-    assert rows[0]["_is_us"] is True and rows[1]["_is_us"] is False
-
-
-def test_search_contract_leaves_non_stk_alone(toolkit):
-    """/trsrv/stocks is stocks-only — IND/BOND must not pay for a lookup that cannot apply."""
-    toolkit._client.search_contract.return_value = [{"conid": "416904", "symbol": "SPX"}]
-    toolkit.execute("search_contract", {"symbol": "SPX", "sec_type": "IND"})
-    toolkit._client.get_stocks.assert_not_called()
-
-
-def test_search_contract_returns_every_listing_when_the_us_check_fails(toolkit):
-    """A search that still returns all listings beats one that raises on enrichment."""
-    toolkit._client.search_contract.return_value = [_IGV_MEXI, _IGV_BATS]
-    toolkit._client.get_stocks.side_effect = IBKRCoreError("trsrv down")
-
-    rows = json.loads(toolkit.execute("search_contract", {"symbol": "IGV"})[0])
-
-    assert [r["conid"] for r in rows] == ["325209548", "12658199"]  # untouched order
-    assert not any("_is_us" in r for r in rows), "unchecked rows must not be tagged"
-
-
-def test_search_contract_tags_all_rows_or_none(toolkit):
-    """Partial knowledge is worse than none: an untagged row under tagged ones reads as
-    'checked, not US'. One unknown conid must leave the whole response alone."""
-    toolkit._client.search_contract.return_value = [
-        _IGV_MEXI,
-        _IGV_BATS,
-        # A genuine STK listing /trsrv/stocks does not know — not a bond aggregate.
-        {"conid": "999", "symbol": "IGV", "description": "LSE", "sections": [{"secType": "STK"}]},
-    ]
-    toolkit._client.get_stocks.return_value = _igv_stocks()
-
-    rows = json.loads(toolkit.execute("search_contract", {"symbol": "IGV"})[0])
-
-    assert not any("_is_us" in r for r in rows)
-    assert [r["conid"] for r in rows] == ["325209548", "12658199", "999"]
-
-
-def test_search_contract_ignores_the_bond_aggregate_row(toolkit):
-    """A STK search returns non-stock rows, and they must not veto the whole enrichment.
-
-    Measured live 2026-08-05: AAPL and VOD each come back with a "Corporate Fixed Income"
-    row (conid 2147483647, null symbol, BOND-only section). /trsrv/stocks does not know it
-    because it is not a stock, so the all-or-nothing rule fired on the two most ordinary
-    tickers there are and the US ordering silently did nothing for them.
-    """
-    bond_row = {
-        "conid": "2147483647",
-        "companyHeader": "Corporate Fixed Income",
-        "symbol": None,
-        "bondid": 4,
-        "sections": [{"secType": "BOND"}],
+    assert payload == {
+        "symbol": "IGV",
+        "sec_type": "STK",
+        "conid": 12658199,
+        "currency": "USD",
+        "exchange": "US listing (default)",
     }
-    stk = dict(_IGV_BATS, sections=[{"secType": "STK"}])
-    mexi = dict(_IGV_MEXI, sections=[{"secType": "STK", "exchange": "MEXI;"}])
-    toolkit._client.search_contract.return_value = [mexi, bond_row, stk]
+
+
+def test_search_contract_does_not_use_secdef_search_for_stk(toolkit):
+    """Delegation is the point: one definition of 'which listing', not two that drift.
+
+    /iserver/secdef/search returns neither isUS nor a currency and its order is
+    undocumented — contracts[0] for IGV is the Mexican listing.
+    """
     toolkit._client.get_stocks.return_value = _igv_stocks()
-
-    rows = json.loads(toolkit.execute("search_contract", {"symbol": "IGV"})[0])
-
-    assert [r["conid"] for r in rows] == ["12658199", "325209548", "2147483647"]
-    assert rows[0]["_is_us"] is True and rows[1]["_is_us"] is False
-    assert "_is_us" not in rows[2], "a bond row cannot answer a stock-listing question"
+    with patch.object(toolkit, "_listing_currency", return_value="USD"):
+        toolkit.execute("search_contract", {"symbol": "IGV"})
+    toolkit._client.search_contract.assert_not_called()
 
 
-def test_search_contract_keeps_ibkrs_own_order_within_a_group(toolkit):
-    """The sort is stable on purpose. IBKR's ordering is undocumented, so inventing a
-    secondary key would swap one unfounded order for another."""
-    us_a = {"conid": "111", "symbol": "X", "description": "NASDAQ"}
-    us_b = {"conid": "222", "symbol": "X", "description": "ARCA"}
-    toolkit._client.search_contract.return_value = [us_a, us_b]
+def test_search_contract_asks_instead_of_ranking_when_ambiguous(toolkit):
+    """Two US listings is a question. The reply must carry NO conid to lift.
+
+    Ranking the candidates US-first was tried and rejected: it still left the pick to the
+    model, so correctness depended on it reading a flag rather than on the code.
+    """
     toolkit._client.get_stocks.return_value = [
         {
-            "name": "X CO",
+            "name": "AMBIG CO",
             "assetClass": "STK",
-            "contracts": [{"conid": 111, "isUS": True}, {"conid": 222, "isUS": True}],
+            "contracts": [
+                {"conid": 111, "exchange": "NASDAQ", "isUS": True},
+                {"conid": 222, "exchange": "ARCA", "isUS": True},
+            ],
         }
     ]
+    text, fig = toolkit.execute("search_contract", {"symbol": "AMB"})
 
-    rows = json.loads(toolkit.execute("search_contract", {"symbol": "X"})[0])
-    assert [r["conid"] for r in rows] == ["111", "222"]
+    assert fig is None
+    assert "ambiguous" in text.lower() and "Ask the user" in text
+    assert "NASDAQ" in text and "ARCA" in text, "candidates must be named"
+    assert not text.lstrip().startswith("{"), "a question is prose, not a liftable payload"
+
+
+def test_search_contract_asks_when_there_is_no_us_listing(toolkit):
+    """A foreign-only ticker must never be silently resolved to its foreign listing."""
+    toolkit._client.get_stocks.return_value = [
+        {
+            "name": "I GRANDI VIAGGI SPA",
+            "assetClass": "STK",
+            "contracts": [{"conid": 195853874, "exchange": "BVME", "isUS": False}],
+        }
+    ]
+    text, _ = toolkit.execute("search_contract", {"symbol": "IGV"})
+
+    assert "no US listing" in text
+    assert "BVME" in text and "Ask the user" in text
+
+
+def test_search_contract_exchange_pins_a_named_listing(toolkit):
+    """The answer to the tool's own question: re-call naming the market."""
+    toolkit._client.get_stocks.return_value = _igv_stocks()
+    with patch.object(toolkit, "_listing_currency", return_value="MXN"):
+        payload = json.loads(toolkit.execute("search_contract", {"symbol": "IGV", "exchange": "MEXI"})[0])
+
+    assert payload["conid"] == 325209548
+    assert payload["currency"] == "MXN", "a non-US listing must still state its currency"
+    assert payload["exchange"] == "MEXI"
+
+
+def test_search_contract_states_unknown_currency_rather_than_omitting_it(toolkit):
+    """A missing unit reads as 'the usual currency', which is the assumption to remove."""
+    toolkit._client.get_stocks.return_value = _igv_stocks()
+    with patch.object(toolkit, "_listing_currency", return_value=None):
+        payload = json.loads(toolkit.execute("search_contract", {"symbol": "IGV"})[0])
+    assert payload["currency"] == "UNKNOWN"
+
+
+def test_search_contract_ind_still_returns_raw_matches(toolkit):
+    """/trsrv/stocks is stocks-only, so IND/BOND keep the unranked passthrough."""
+    toolkit._client.search_contract.return_value = [{"conid": "416904", "symbol": "SPX"}]
+    rows = json.loads(toolkit.execute("search_contract", {"symbol": "SPX", "sec_type": "IND"})[0])
+    toolkit._client.search_contract.assert_called_once_with("SPX", "IND")
+    toolkit._client.get_stocks.assert_not_called()
+    assert rows[0]["conid"] == "416904"
+
+
+def test_search_contract_ind_no_results(toolkit):
+    """Returns 'no contracts found' when IBKR returns an empty list."""
+    toolkit._client.search_contract.return_value = []
+    text, fig = toolkit.execute("search_contract", {"symbol": "XYZ99", "sec_type": "IND"})
+    assert fig is None
+    assert "No contracts found" in text
+    assert "XYZ99" in text
 
 
 # ============================================================================
