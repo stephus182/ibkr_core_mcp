@@ -39,7 +39,30 @@ from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-_DOCKER_DIR = Path(__file__).parent  # Dockerfile and scripts live here
+_DOCKER_DIR = Path(__file__).resolve().parent
+"""The Docker build context — **resolved through symlinks, and that is load-bearing.**
+
+`Path(__file__).parent` was wrong under the install this project mandates. A strict
+editable install (`--config-settings editable_mode=strict`, required for mypy — see
+claudia_ui/CLAUDE.md) puts a symlink farm at
+`build/__editable__…/ibkr_core_mcp/gateway/`, so `__file__` lives there and its parent is
+that farm. Every entry in it, `Dockerfile` included, is a symlink to an absolute path
+outside the directory.
+
+**Docker does not follow a symlink that leaves the build context.** It tars the context
+and hands it to the daemon, which sees an unresolvable link. Measured 2026-08-06:
+
+    context = build/__editable__…/ibkr_core_mcp/gateway
+      -> ERROR: failed to read dockerfile: open Dockerfile: no such file or directory
+    context = ibkr_core_mcp/gateway            (this, after .resolve())
+      -> #1 transferring dockerfile: 811B done
+
+So `build_image()` could not run at all in a normal development environment. It went
+unnoticed because `start()` only builds when the image is absent, and the image had been
+present since 2026-07-22 — which also meant the in-container tickler removed from
+`run_gateway.sh` on 2026-08-06 could never take effect. Two defects, one cause: nothing
+ever rebuilt, and nothing could have.
+"""
 
 
 class GatewayManager:
@@ -281,6 +304,23 @@ class GatewayManager:
         timeout: int,
         poll_interval: int,
     ) -> bool:
+        """Call `check` every `poll_interval` seconds until it is true or time runs out.
+
+        Shared by `wait_for_gateway` and `wait_for_auth` so the two cannot drift in how
+        they time out or what they log. Returns True the moment `check` succeeds, False
+        if the deadline passes — never raises, because both callers treat "not ready yet"
+        as an ordinary answer they have to branch on rather than an error.
+
+        Args:
+            check: The condition, polled repeatedly. Must not raise.
+            ready_msg: Logged at INFO when `check` first returns true.
+            timeout_msg: Logged at WARNING when the deadline passes.
+            timeout: Total seconds to wait.
+            poll_interval: Seconds slept between attempts.
+
+        Returns:
+            Whether `check` became true within `timeout`.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if check():

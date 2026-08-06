@@ -1,5 +1,6 @@
 #!/bin/bash
-# Start the IBKR gateway then the keepalive tickler.
+# Container entry point: start the IBKR gateway and wait for it to answer.
+# It starts NOTHING else — in particular no tickler; see the note below.
 
 cd /app/api_gateway
 sh bin/run.sh root/conf.yaml &
