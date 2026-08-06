@@ -213,11 +213,23 @@ class GatewayManager:
     def is_gateway_reachable(self) -> bool:
         """True if the Java process is accepting HTTP (not necessarily authenticated).
 
+        Uses **GET**, not POST, since 2026-08-06. The endpoint is documented as
+        "pings the server to prevent the session from ending", so a POST here is a
+        session-affecting write dressed as a health check — and this method is called in
+        a polling loop by `wait_for_gateway`. Merely asking "is it up?" therefore renewed
+        the keepalive timer, which is exactly the traffic the suspend flag exists to stop
+        during a login or a recovery.
+
+        HTTP 401 still counts as reachable, and deliberately: it means the gateway is
+        answering and holds no authenticated session — the best possible moment to log in.
+        Treating it as "down" told a user "start it first" about a gateway that was
+        running perfectly (measured 2026-08-05).
+
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
-        Endpoint: POST /tickle
+        Endpoint: GET /tickle
         """
         try:
-            resp = requests.post(
+            resp = requests.get(
                 f"{self._api_url}/tickle",
                 verify=False,
                 timeout=3,
@@ -342,7 +354,21 @@ class GatewayManager:
             return True
 
         print("▶ Starting IBKR gateway container...")
-        self.start()
+        # Start ONLY when nothing is running. `start()` removes any existing container,
+        # which destroys whatever session it held — and until 2026-08-06 that ran on every
+        # launch where the gateway was not already authenticated, throwing away sessions
+        # that a pre-flight would have found perfectly usable and forcing a fresh 2FA.
+        #
+        # A container that is absent or stopped cannot hold a session (it lives in the
+        # Java process), so recreating one is free. A RUNNING container is left alone.
+        #
+        # NOTE: claudia_ui no longer calls this method at all — it goes through
+        # claudia.gateway_session, which owns the sequencing and pre-flights first. This
+        # guard exists so the CLI path here cannot destroy a session either.
+        if not self.is_running():
+            self.start()
+        else:
+            print("  ✔ Container already running — leaving it alone.")
 
         print("▶ Waiting for gateway to be reachable...")
         if not self.wait_for_gateway():

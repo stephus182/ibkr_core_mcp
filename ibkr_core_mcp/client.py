@@ -959,10 +959,31 @@ class IBKRClient:
         the only REST source that can contain same-day executions (Flex is T+1 and
         never contains today). Exposed to the LLM as `get_trades(source='live')`.
 
-        ## ?days parameter (officially documented, re-verified 2026-07-02)
-        Specify the number of days to receive executions for, up to a maximum of 7 days.
-        If unspecified, only the current day is returned. We always pass days=7 for
-        maximum lookback. The docs also advise calling this endpoint once per session.
+        ## ?days parameter — corrected 2026-08-06 against the official page
+        IBKR's reference says: "Returns a list of trades for the currently selected
+        account for current day and six previous days", and its own example passes
+        `days=3`. It documents **no maximum**
+        (https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/trades.md).
+
+        Two claims previously stated here were wrong and are corrected rather than
+        quietly deleted, because both were repeated downstream:
+
+        * "up to a maximum of 7 days" — **not documented.** A `days=30` request was
+          accepted and returned rows on 2026-08-06, though every fill it returned fell
+          inside seven days anyway, so that observation does not establish whether a
+          wider window is honoured. 7 is what we ask for, not a known ceiling.
+        * "If unspecified, only the current day is returned" — **contradicted**, by the
+          sentence quoted above and by measurement: a no-parameter call returned the same
+          23 rows as `days=30` on 2026-08-06.
+
+        Oddity worth knowing: `days=1` and `days=2` returned **zero** rows on a day that
+        had fills, while wider requests returned them. A narrow request is not a reliable
+        way to ask "did anything trade today".
+
+        ⚠ **The docs advise calling this endpoint once per session**, and the CP rate
+        limit table allows 1 request per 5 seconds. Callers on a timer must not poll it
+        unconditionally — `claudia/dashboard_poller.py` refetches only when the ledger's
+        `realizedpnl` moves, which happens if and only if a position closed.
 
         ## Origin coverage — verified live 2026-07-06
         The official reference documents only "trades for the currently selected

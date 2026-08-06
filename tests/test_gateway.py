@@ -254,21 +254,47 @@ class TestIsRunning:
 
 
 class TestIsGatewayReachable:
-    def test_returns_true_on_200(self) -> None:
+    """The health probe must not renew the session it is asking about.
+
+    Changed from POST to GET on 2026-08-06. `/tickle` is documented as "pings the server
+    to prevent the session from ending", so a POST here was a session-affecting write
+    dressed as a health check — and `wait_for_gateway` calls it in a polling loop, so
+    merely asking "is it up?" renewed the keepalive timer. That is precisely the traffic
+    the host-side suspend flag exists to stop during a login or a recovery.
+    """
+
+    def test_uses_get_not_post(self) -> None:
+        """The regression guard: a POST here writes to the session."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        with patch("requests.post", return_value=mock_resp):
+        with patch("requests.get", return_value=mock_resp) as get, patch("requests.post") as post:
+            assert GatewayManager().is_gateway_reachable() is True
+        get.assert_called_once()
+        post.assert_not_called()
+
+    def test_returns_true_on_200(self) -> None:
+        """The ordinary healthy case."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        with patch("requests.get", return_value=mock_resp):
             assert GatewayManager().is_gateway_reachable() is True
 
-    def test_returns_true_on_any_http_response(self) -> None:
+    def test_returns_true_on_401(self) -> None:
+        """401 is the gateway ANSWERING, not failing.
+
+        It means the process is alive and holds no authenticated session — the best
+        moment to log in. Treating it as down told a user "start it first" about a
+        gateway that was running perfectly (measured 2026-08-05).
+        """
         mock_resp = MagicMock()
-        mock_resp.status_code = 401  # gateway up but session not auth'd
-        with patch("requests.post", return_value=mock_resp):
+        mock_resp.status_code = 401
+        with patch("requests.get", return_value=mock_resp):
             assert GatewayManager().is_gateway_reachable() is True
 
     def test_returns_false_on_connection_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A refused connection is the one real "not reachable", and is logged at DEBUG."""
         with (
-            patch("requests.post", side_effect=requests.ConnectionError()),
+            patch("requests.get", side_effect=requests.ConnectionError()),
             caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
         ):
             assert GatewayManager().is_gateway_reachable() is False
@@ -278,8 +304,9 @@ class TestIsGatewayReachable:
         assert warning_records == []
 
     def test_returns_false_and_warns_on_unexpected_exception(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An unexpected exception type is worth a WARNING, unlike a refused connection."""
         with (
-            patch("requests.post", side_effect=ValueError("boom")),
+            patch("requests.get", side_effect=ValueError("boom")),
             caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
         ):
             assert GatewayManager().is_gateway_reachable() is False
