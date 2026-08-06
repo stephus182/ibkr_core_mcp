@@ -1,3 +1,26 @@
+<!--
+ARCHIVED EVIDENCE — THIS PAGE NO LONGER EXISTS AT THIS ADDRESS.
+
+Captured 2026-07-02 from
+  https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+which IBKR retired on/before 2026-07-25. That URL still returns HTTP 200: it
+redirects to the new site's Introduction page and silently drops the #anchor, so
+a link checker reports success while the reader lands somewhere else entirely.
+
+The live documentation is now at:
+  https://ibkrcampus.com/docs/web-api/            (append .md to any page for markdown)
+  https://ibkrcampus.com/docs/web-api/llms.txt    (complete index)
+
+Every cpapi-v1 URL BELOW is part of the captured page and is deliberately left as
+scraped — rewriting them would falsify what was actually retrieved on that date.
+They are historical text, not citations. Nothing in this file should be followed
+or cited; go to the live pages above instead. All 118 real citations elsewhere in
+this repo were repointed on 2026-08-05 against the index, and each target was
+checked to be a real page (the site answers 200 for URLs that do not exist, so
+"it resolves" is not evidence — "# Page Not Found" is absent, and the URL appears
+in llms.txt).
+-->
+
 [**NEW** Interactive Options Course](https://ibkrcampus.com/campus/trading-lessons/interactive-learning/#/)
 
 - [IBKR Home](https://www.interactivebrokers.com/mkt/?src=campus35a&url=%2Fen%2Fhome.php)

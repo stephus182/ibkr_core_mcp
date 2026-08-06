@@ -58,7 +58,7 @@ def test_preview_order_mkt_no_price(toolkit):
 def test_preview_order_stp_maps_stop_price_to_price(toolkit):
     """STP orders carry the trigger in `price` — CP API place-order spec:
     "For STP|TRAIL this is the stop price."
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order"""
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_order_preview.return_value = {"commission": "1.00"}
@@ -81,7 +81,7 @@ def test_preview_order_stp_maps_stop_price_to_price(toolkit):
 def test_preview_order_stop_limit_maps_limit_to_price_and_stop_to_aux(toolkit):
     """STOP_LIMIT requires both: price = limit price, auxPrice = stop price.
     Spec: "You must specify both price and auxPrice for STOP_LIMIT|TRAILLMT orders."
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order"""
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_order_preview.return_value = {"commission": "1.00"}

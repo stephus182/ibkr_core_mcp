@@ -39,7 +39,7 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     Falls back to osascript if the AppKit subprocess fails; tkinter on non-macOS.
     Futures notional uses the _multiplier display field: price × qty × multiplier.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
     """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     company_name = order.get("_companyName", order.get("companyName", ""))

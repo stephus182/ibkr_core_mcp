@@ -58,7 +58,7 @@ def with_retry(
       /portfolio/subaccounts         GET   1 req/5 secs
       /sso/validate                  GET   1 req/min
       /tickle                        GET   1 req/sec
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#rate-limiting
+    Source: https://ibkrcampus.com/docs/web-api/v1/pacing-limitations.md
 
     Historical data pacing rules (from TWS API docs, verified 2026-06-26):
     - No identical requests within 15 seconds

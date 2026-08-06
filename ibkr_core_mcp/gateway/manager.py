@@ -213,7 +213,7 @@ class GatewayManager:
     def is_gateway_reachable(self) -> bool:
         """True if the Java process is accepting HTTP (not necessarily authenticated).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
         Endpoint: POST /tickle
         """
         try:
@@ -233,7 +233,7 @@ class GatewayManager:
     def is_authenticated(self) -> bool:
         """True if the gateway holds an active authenticated IBKR session.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
         Endpoint: GET /iserver/auth/status
         """
         try:

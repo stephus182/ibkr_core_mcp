@@ -15,8 +15,8 @@ def test_slugify_strips_scheme_and_lowercases():
 def test_slugify_ibkr_campus_url():
     from ibkr_core_mcp.web_scraper import _slugify
 
-    result = _slugify("https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/")
-    assert result == "www-interactivebrokers-com-campus-ibkr-api-page-cpapi-v1"
+    result = _slugify("https://ibkrcampus.com/docs/web-api/v1/endpoints/introduction.md")
+    assert result == "ibkrcampus-com-docs-web-api-v1-endpoints-introduction-md"
 
 
 def test_slugify_truncates_to_100_chars():

@@ -52,13 +52,13 @@ _ORDER_ID_RE = re.compile(r"^[0-9]+$")
 # "a12b34c5-d678-9e012f-3456-7a890b12cd3e" — hex + hyphens, non-standard
 # UUID grouping (not 8-4-4-4-12), so match on charset/length, not exact
 # segment structure. Source: docs/audits/audit-evidence/scrapes/cpapi-v1.md
-# (https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply)
+# (https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md)
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
 # ---------------------------------------------------------------------------
 # Market history pagination helpers
 # /iserver/marketdata/history is capped at 1000 data points per request.
-# Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
 # ---------------------------------------------------------------------------
 
 _PERIOD_RE = re.compile(r"^(\d+)(min|h|d|w|m|y)$", re.IGNORECASE)
@@ -156,7 +156,7 @@ class IBKRClient:
     All endpoints connect only to localhost. Any non-localhost gateway URL raises
     ConfigError at construction time.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/introduction.md
     All docs pages are fully public (no login required). Endpoint behavior
     is verified against official documentation per the "Docs First" rule.
     """
@@ -219,7 +219,7 @@ class IBKRClient:
         test confirming POST behaves identically — see get_auth_status() for the same
         discrepancy on a code path with no production callers.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-status
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
         """
         # /iserver/auth/status returns authenticated=false on the very first request of a new
         # gateway session (IBKR quirk) even when the user is fully logged in.
@@ -250,7 +250,7 @@ class IBKRClient:
         method, since no live test has been run to confirm POST is required. This method
         itself has no callers elsewhere in the codebase as of 2026-06-30.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-status
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
         Endpoint: GET /iserver/auth/status (see Note above)
         """
         return self._get("/iserver/auth/status")
@@ -261,7 +261,7 @@ class IBKRClient:
         Call every few minutes during idle periods. ConnectivityChecker calls this
         every 60s as a side effect of its /tickle poll, preventing IBKR auto-logout.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#tickle
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
         Endpoint: POST /tickle
         """
         try:
@@ -285,7 +285,7 @@ class IBKRClient:
         has not recently logged in. Do NOT call proactively — it terminates any
         active authenticated session, including fresh logins.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#reauthenticate
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/re-authenticate-the-brokerage-session-deprecated.md
         Endpoint: POST /iserver/reauthenticate (Deprecated)
         """
         return self._post("/iserver/reauthenticate")
@@ -293,7 +293,7 @@ class IBKRClient:
     def validate_sso(self) -> dict[str, Any]:
         """Validate the SSO token. Used after initial login to confirm the session is active.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sso-validate
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/validate-sso.md
         Endpoint: GET /sso/validate
         """
         return self._get("/sso/validate")
@@ -339,7 +339,7 @@ class IBKRClient:
         For requests that may exceed 1000 data points, use get_market_history_paginated()
         which chunks the request automatically using the startTime parameter.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#hist-md
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
         Endpoint: GET /iserver/marketdata/history
         """
         return self._get(
@@ -494,7 +494,7 @@ class IBKRClient:
 
         Limits: max 100 conids per request, max 50 fields per request.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
         Changelog: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
         Endpoint: GET /iserver/marketdata/snapshot
         """
@@ -507,7 +507,7 @@ class IBKRClient:
     def unsubscribe_market_data(self, conid: int) -> dict[str, Any]:
         """Unsubscribe a specific contract from streaming market data.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-unsubscribe-single
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/unsubscribe-single.md
         Endpoint: POST /iserver/marketdata/unsubscribe
         """
         return self._post("/iserver/marketdata/unsubscribe", {"conid": conid})
@@ -515,7 +515,7 @@ class IBKRClient:
     def unsubscribe_all_market_data(self) -> dict[str, Any]:
         """Cancel all active streaming market data subscriptions.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-unsubscribe-all
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/unsubscribe-all.md
         Endpoint: GET /iserver/marketdata/unsubscribeall
         """
         return self._get("/iserver/marketdata/unsubscribeall")
@@ -555,7 +555,7 @@ class IBKRClient:
     def get_contract_info(self, conid: int) -> dict[str, Any]:
         """Full contract metadata: exchange, currency, primary exchange, trading class, multiplier.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#info-conid-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id.md
         Endpoint: GET /iserver/contract/{conid}/info
         """
         return self._get(f"/iserver/contract/{conid}/info")
@@ -563,7 +563,7 @@ class IBKRClient:
     def get_contract_info_and_rules(self, conid: int) -> dict[str, Any]:
         """Contract info plus trading rules (min tick, valid order types, etc.).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#info-rules-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/find-all-info-and-rules-for-a-given-contract.md
         Endpoint: GET /iserver/contract/{conid}/info-and-rules
         """
         return self._get(f"/iserver/contract/{conid}/info-and-rules")
@@ -571,7 +571,7 @@ class IBKRClient:
     def get_contract_algos(self, conid: int) -> list[dict[str, Any]]:
         """Available algorithmic order types for a contract. Returns [] if none.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#algo-conid-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id.md
         Endpoint: GET /iserver/contract/{conid}/algos
         """
         data = self._get(f"/iserver/contract/{conid}/algos")
@@ -580,7 +580,7 @@ class IBKRClient:
     def get_secdef_info(self, conid: int) -> dict[str, Any]:
         """Security definition info: type, symbol, currency, exchange, listing exchange.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#secdef-info-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
         Endpoint: GET /iserver/secdef/info
         """
         return self._get("/iserver/secdef/info", {"conid": conid})
@@ -596,7 +596,7 @@ class IBKRClient:
         empty arrays unless /iserver/secdef/search was called for the same underlying
         beforehand (without the `name` field).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id.md
         Endpoint: GET /iserver/secdef/strikes
         """
         data = self._get(
@@ -620,7 +620,7 @@ class IBKRClient:
         Reimplemented 2026-07-07 (audit register item 6) — replaces the previous call
         to /trsrv/secdef/chains, which is absent from the documented CP API and 404'd
         on every call.
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search-symbol-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
         Endpoints: GET /iserver/secdef/search + GET /iserver/secdef/strikes
         """
         results = self._get("/iserver/secdef/search", {"symbol": symbol})
@@ -654,7 +654,7 @@ class IBKRClient:
     def get_bond_filters(self, symbol: str, issue_id: str) -> dict[str, Any]:
         """Available filter criteria for bond search.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#search-bond-filters
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-bond-filter-information.md
         Endpoint: GET /iserver/secdef/bond-filters
         """
         return self._get("/iserver/secdef/bond-filters", {"symbol": symbol, "issuerId": issue_id})
@@ -664,7 +664,7 @@ class IBKRClient:
 
         IBKR returns {"CL": [...], "ES": [...]} — this method flattens to a list.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-future-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
         Endpoint: GET /trsrv/futures
         """
         data = self._get("/trsrv/futures", {"symbols": ",".join(symbols)})
@@ -702,7 +702,7 @@ class IBKRClient:
     ) -> list[dict[str, Any]]:
         """Trading hours, sessions, and timezone for a symbol/exchange.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-schedule-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol.md
         Endpoint: GET /trsrv/secdef/schedule
         """
         params = {"assetClass": asset_class, "symbol": symbol, "exchange": exchange}
@@ -756,7 +756,7 @@ class IBKRClient:
         document CASH as a valid secType (only STK, IND, BOND) — this is the only
         documented FX resolution path.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
         Endpoint: GET /iserver/currency/pairs
         """
         data = self._get("/iserver/currency/pairs", {"currency": currency})
@@ -769,7 +769,7 @@ class IBKRClient:
     def get_contract_rules(self, conid: int, is_buy: bool = True) -> dict[str, Any]:
         """Order rules for a contract: min tick, valid order types, size constraints.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#rules-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-rules.md
         Endpoint: POST /iserver/contract/rules
         """
         return self._post("/iserver/contract/rules", {"conid": conid, "isBuy": is_buy})
@@ -783,7 +783,7 @@ class IBKRClient:
 
         Returns [{"accountId": "U1234567", ...}].
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-accounts
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts.md
         Endpoint: GET /portfolio/accounts
         """
         data = self._get("/portfolio/accounts")
@@ -792,7 +792,7 @@ class IBKRClient:
     def get_subaccounts(self) -> list[dict[str, Any]]:
         """Sub-accounts for IB Family accounts and advisors. Returns [] if not a list.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-subaccounts
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-subaccounts.md
         Endpoint: GET /portfolio/subaccounts
         """
         data = self._get("/portfolio/subaccounts")
@@ -801,7 +801,7 @@ class IBKRClient:
     def get_account_meta(self, account_id: str) -> dict[str, Any]:
         """Account metadata: display name, status, type.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-meta
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/specific-accounts-portfolio-information.md
         Endpoint: GET /portfolio/{accountId}/meta
         """
         _validate_account_id(account_id)
@@ -810,7 +810,7 @@ class IBKRClient:
     def get_account_summary(self, account_id: str) -> dict[str, Any]:
         """Net liquidation, cash, P&L. Response uses nested {"amount": value} objects.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-summary
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary.md
         Endpoint: GET /portfolio/{accountId}/summary
         """
         _validate_account_id(account_id)
@@ -819,7 +819,7 @@ class IBKRClient:
     def get_account_ledger(self, account_id: str) -> dict[str, Any]:
         """Cash balances by currency with detailed ledger fields.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-ledger
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-ledger.md
         Endpoint: GET /portfolio/{accountId}/ledger
         """
         _validate_account_id(account_id)
@@ -828,7 +828,7 @@ class IBKRClient:
     def get_account_allocation(self, account_id: str) -> dict[str, Any]:
         """Portfolio breakdown by asset class, sector, and industry.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-allocation-single
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-allocation-single.md
         Endpoint: GET /portfolio/{accountId}/allocation
         """
         _validate_account_id(account_id)
@@ -840,7 +840,7 @@ class IBKRClient:
         Returns [{"conid": ..., "contractDesc": ..., "position": ..., "mktPrice": ...,
         "mktValue": ..., "unrealizedPnl": ..., "realizedPnl": ...}].
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#positions
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions.md
         Endpoint: GET /portfolio/{accountId}/positions/{page}
         """
         _validate_account_id(account_id)
@@ -850,7 +850,7 @@ class IBKRClient:
     def get_positions_by_conid(self, conid: int) -> list[dict[str, Any]]:
         """Position data for a specific contract across all accounts. Returns [] if not a list.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#position-contract-info
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/position-contract-info.md
         Endpoint: GET /portfolio/positions/{conid}
         """
         data = self._get(f"/portfolio/positions/{conid}")
@@ -859,7 +859,7 @@ class IBKRClient:
     def get_position(self, account_id: str, conid: int) -> dict[str, Any]:
         """Position for a specific account + contract pair.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#contract-positions
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions-by-conid.md
         Endpoint: GET /portfolio/{accountId}/position/{conid}
         """
         _validate_account_id(account_id)
@@ -868,7 +868,7 @@ class IBKRClient:
     def get_combo_positions(self, account_id: str) -> list[dict[str, Any]]:
         """Combo/spread positions for an account. Returns [] if not a list.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-combo
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/combination-positions.md
         Endpoint: GET /portfolio/{accountId}/combo/positions
         """
         _validate_account_id(account_id)
@@ -878,7 +878,7 @@ class IBKRClient:
     def get_portfolio_allocation(self, account_ids: list[str]) -> dict[str, Any]:
         """Aggregated allocation across multiple accounts.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-allocation-all
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-allocation-all.md
         Endpoint: POST /portfolio/allocation
         """
         return self._post("/portfolio/allocation", {"acctIds": account_ids})
@@ -886,7 +886,7 @@ class IBKRClient:
     def invalidate_positions_cache(self, account_id: str) -> dict[str, Any]:
         """Force-refresh the IBKR position cache. Call before get_positions() if data looks stale.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#portfolio-invalidate
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/invalidate-backend-portfolio-cache.md
         Endpoint: POST /portfolio/{accountId}/positions/invalidate
         """
         _validate_account_id(account_id)
@@ -914,7 +914,7 @@ class IBKRClient:
         second call returns the actual live order list.
         Inactive = order exists on IBKR but is stalled (e.g. failed risk check).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#live-orders
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: GET /iserver/account/orders
         """
@@ -934,7 +934,7 @@ class IBKRClient:
         exactly as IBKR sent it — no status filtering, no shape normalization. Used
         by ClaudeToolkit's diagnose_orders to show what the server actually returned.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#live-orders
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
         Endpoint: GET /iserver/account/orders
         """
         self._ensure_accounts_initialized()
@@ -945,7 +945,7 @@ class IBKRClient:
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         """Full order details for a specific order ID.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#order-status
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
         Endpoint: GET /iserver/account/order/status/{orderId}
         """
         _validate_order_id(order_id)
@@ -986,7 +986,7 @@ class IBKRClient:
         trades. (This warmup was the real cause of the 2026-07-02 'mobile fills
         missing' observation — origin coverage is complete once primed.)
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trades
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/trades.md
         Endpoint: GET /iserver/account/trades
         """
         # days=7 requests maximum lookback; without it IBKR returns today's session only
@@ -1021,7 +1021,7 @@ class IBKRClient:
 
         The "periods" list is nested inside each account sub-dict, NOT at the top level.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-all-periods
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/all-periods.md
         Endpoint: POST /pa/allperiods
         """
         data = self._post("/pa/allperiods", {"acctIds": account_ids})
@@ -1048,7 +1048,7 @@ class IBKRClient:
         that extraction returns [], this method exposes the untouched response so the
         caller can identify the shape (used by ClaudeToolkit's get_pa_periods fallback).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-all-periods
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/all-periods.md
         Endpoint: POST /pa/allperiods
         """
         return self._post("/pa/allperiods", {"acctIds": account_ids})
@@ -1062,7 +1062,7 @@ class IBKRClient:
         are not valid for this endpoint. Use get_pa_periods() to retrieve the
         authoritative list for the account.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-account-performance
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/account-performance.md
         Endpoint: POST /pa/performance
         """
         return self._post("/pa/performance", {"acctIds": account_ids, "period": period})
@@ -1084,7 +1084,7 @@ class IBKRClient:
         ints) and `currency` (string). `days` is optional (int). Old calls returned HTTP
         400 because `conids` and `currency` were missing from the request body.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#pa-transaction-history
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/transaction-history.md
         Endpoint: POST /pa/transactions
         """
         body: dict[str, Any] = {
@@ -1104,7 +1104,7 @@ class IBKRClient:
     def get_scanner_params(self) -> dict[str, Any]:
         """Available scanner types and filter parameters.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#iserver-scanner-parameters
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/scanner/iserver-scanner-parameters.md
         Endpoint: GET /iserver/scanner/params
         """
         return self._get("/iserver/scanner/params")
@@ -1112,7 +1112,7 @@ class IBKRClient:
     def run_iserver_scanner(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Run a scanner with full parameter control. Returns [] if no contracts matched.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#iserver-market-scanner
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/scanner/iserver-market-scanner.md
         Endpoint: POST /iserver/scanner/run
         """
         data = self._post("/iserver/scanner/run", params)
@@ -1127,7 +1127,7 @@ class IBKRClient:
         """Account notifications — order fills, margin calls, system messages.
 
         IBKR enforces a hard cap of 10 notifications per request.
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#notification-list
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-notifications.md
         Endpoint: GET /fyi/notifications
         """
         max_results = min(max(1, max_results), 10)
@@ -1137,7 +1137,7 @@ class IBKRClient:
     def get_unread_count(self) -> int:
         """Number of unread FYI notifications.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#unread-bulletins
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/unread-bulletins.md
         Endpoint: GET /fyi/unreadnumber
         """
         data = self._get("/fyi/unreadnumber")
@@ -1146,7 +1146,7 @@ class IBKRClient:
     def get_delivery_options(self) -> dict[str, Any]:
         """Notification delivery channel configuration.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-delivery
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-delivery-options.md
         Endpoint: GET /fyi/deliveryoptions
         """
         return self._get("/fyi/deliveryoptions")
@@ -1154,7 +1154,7 @@ class IBKRClient:
     def get_mta_alert(self) -> dict[str, Any]:
         """Mobile Trading Alerts — account-level watchdog alerts.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-mta-alert
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-mta-alert.md
         Endpoint: GET /iserver/account/mta
         """
         return self._get("/iserver/account/mta")
@@ -1162,7 +1162,7 @@ class IBKRClient:
     def get_alerts(self, account_id: str) -> list[dict[str, Any]]:
         """All price alerts configured on the account. The orderId field is the alert ID.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
         Endpoint: GET /iserver/account/{accountId}/alerts
         """
         _validate_account_id(account_id)
@@ -1176,7 +1176,7 @@ class IBKRClient:
     def get_watchlists(self) -> list[dict[str, Any]]:
         """All watchlists for the account. Returns [] if not a list.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#all-watchlists
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists.md
         Endpoint: GET /iserver/watchlists
         """
         data = self._get("/iserver/watchlists", {"SC": "USER_WATCHLIST"})
@@ -1185,7 +1185,7 @@ class IBKRClient:
     def get_watchlist(self, watchlist_id: str) -> dict[str, Any]:
         """Contents of a specific watchlist. Uses the watchlist ID as a query param.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#watchlist-info
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information.md
         Endpoint: GET /iserver/watchlist
         """
         return self._get("/iserver/watchlist", {"id": watchlist_id})
@@ -1257,9 +1257,9 @@ class IBKRClient:
         Rule 536-B compliance. IBKR returns HTTP 400 without them for FUT/FOP orders.
         order_flow.py adds these automatically when sec_type is "FUT" or "FOP".
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
-                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/account/{accountId}/orders
         """
@@ -1275,7 +1275,7 @@ class IBKRClient:
         # Note: ticker IS a valid IBKR field (optional) and is NOT stripped.
         # manualIndicator / extOperator are FUT/FOP only (CME Rule 536-B) — caller adds them
         # for futures; omit here to avoid type-rejection on equity orders.
-        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [api_order]})
         return data if isinstance(data, list) else []
@@ -1283,7 +1283,7 @@ class IBKRClient:
     def modify_order(self, account_id: str, order_id: str, order: dict[str, Any]) -> dict[str, Any]:
         """Modify an existing order. Requires Touch ID (Gate 1) + tkinter dialog (Gate 2).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#modify-order
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/account/{accountId}/order/{orderId}
         """
@@ -1304,7 +1304,7 @@ class IBKRClient:
         mirrors modify_order()'s dialog, which already receives the full order dict. Found
         missing live 2026-07-10 — user-flagged hard requirement.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#cancel-order
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/cancel-order.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: DELETE /iserver/account/{accountId}/order/{orderId}
         """
@@ -1334,7 +1334,7 @@ class IBKRClient:
         text IBKR wants the human to read before confirming; the caller (Gate 2
         dialog) must display it, not just the reply_id.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/reply/{replyId}
         """
@@ -1363,7 +1363,7 @@ class IBKRClient:
         order ambiguous on IBKR's side. This is a deliberate behavior change, not
         a bug: see docs/2026-07-06-order-reply-confirmation-design.md.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/reply/{replyId}
         """
         reply_id = entry["id"]
@@ -1395,8 +1395,8 @@ class IBKRClient:
         HumanAuthError is raised (see _resolve_one_reply() for the decline-then-POST
         semantics, a deliberate change from reply_order()'s behavior).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
-                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
         """
         response = _as_reply_list(self.place_order(account_id, order))
@@ -1420,8 +1420,8 @@ class IBKRClient:
         modify test has been run as of 2026-07-06; only the place_order 3-reply chain
         is live-verified, see place_order_and_confirm()'s docstring).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#modify-order
-                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order-reply
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/account/{accountId}/order/{orderId}, then POST /iserver/reply/{replyId}*
         """
         response = self.modify_order(account_id, order_id, order)
@@ -1432,13 +1432,13 @@ class IBKRClient:
     def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
         """Whatif order preview — cost, commission, margin impact. Read-only, no security gates.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#whatif-order
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
         Endpoint: POST /iserver/account/{accountId}/orders/whatif
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
         # Strip display-only fields (underscore-prefixed) — same convention as place_order.
-        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": [api_order]})
 
@@ -1451,7 +1451,7 @@ class IBKRClient:
         (same pattern as get_order_status) — IBKR resolves the alert from the
         session's logged-in account.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-details-of-a-specific-alert.md
         Endpoint: GET /iserver/account/alert/{order_id}?type=Q
         """
         _validate_order_id(alert_id)
@@ -1463,7 +1463,7 @@ class IBKRClient:
         Use ClaudeToolkit.execute("create_price_alert", ...) instead — it resolves
         conid and exchange automatically.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
         Endpoint: POST /iserver/account/{accountId}/alert
         """
         _validate_account_id(account_id)
@@ -1472,7 +1472,7 @@ class IBKRClient:
     def delete_alert(self, account_id: str, alert_id: str) -> dict[str, Any]:
         """Delete an alert permanently.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#delete-alert
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/delete-an-alert.md
         Endpoint: DELETE /iserver/account/{accountId}/alert/{alertId}
         """
         _validate_account_id(account_id)
@@ -1484,7 +1484,7 @@ class IBKRClient:
     def activate_alert(self, account_id: str, alert_id: str, activate: bool = True) -> dict[str, Any]:
         """Toggle alert on (activate=True) or off (activate=False) without deleting it.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#activate-alert
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/activate-or-deactivate-an-alert.md
         Endpoint: POST /iserver/account/{accountId}/alert/activate
         """
         _validate_account_id(account_id)
@@ -1500,7 +1500,7 @@ class IBKRClient:
     def create_watchlist(self, name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Create a new watchlist. rows is a list of {"C": conid} objects.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-watchlist
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/create-a-watchlist.md
         Endpoint: POST /iserver/watchlist
         """
         return self._post("/iserver/watchlist", {"id": name, "name": name, "rows": rows})
@@ -1508,7 +1508,7 @@ class IBKRClient:
     def delete_watchlist(self, watchlist_id: str) -> dict[str, Any]:
         """Delete a watchlist permanently. watchlist_id is passed as query param `id`.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#delete-watchlist
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/delete-a-watchlist.md
         Endpoint: DELETE /iserver/watchlist
         """
         url = f"{self._base}/iserver/watchlist"
@@ -1522,7 +1522,7 @@ class IBKRClient:
     def mark_notification_read(self, notification_id: str) -> dict[str, Any]:
         """Mark a FYI notification as read.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#read-notification
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/mark-notification-read.md
         Endpoint: POST /fyi/notifications/{notificationId}/read
         """
         return self._post(f"/fyi/notifications/{notification_id}/read")
@@ -1530,7 +1530,7 @@ class IBKRClient:
     def update_delivery_option(self, device_id: str, option: str, enabled: bool) -> dict[str, Any]:
         """Enable or disable a notification delivery channel.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#enable-device
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-device-option.md
         Endpoint: POST /fyi/deliveryoptions/{option}
         """
         return self._post(f"/fyi/deliveryoptions/{option}", {"deviceId": device_id, "enabled": enabled})
@@ -1549,7 +1549,7 @@ class IBKRClient:
         IBKRClient instance and caches the result; every order read/write method calls
         it first, so callers never need to call this directly under normal use.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-brokerage-accounts
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts.md
         Endpoint: GET /iserver/accounts
         """
         return self._get("/iserver/accounts")
@@ -1566,7 +1566,7 @@ class IBKRClient:
     def switch_account(self, account_id: str) -> dict[str, Any]:
         """Switch the active account. For advisors and family accounts.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#switch-account
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/switch-account.md
         Endpoint: POST /iserver/account
         """
         _validate_account_id(account_id)
@@ -1575,7 +1575,7 @@ class IBKRClient:
     def get_pnl(self) -> dict[str, Any]:
         """Real-time partitioned P&L — daily, unrealized, realized — across all positions.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md
         Endpoint: GET /iserver/account/pnl/partitioned
         """
         return self._get("/iserver/account/pnl/partitioned")
@@ -1583,7 +1583,7 @@ class IBKRClient:
     def logout(self) -> dict[str, Any]:
         """End the current IBKR session.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#logout
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/logout-of-the-current-session.md
         Endpoint: POST /logout
         """
         return self._post("/logout")

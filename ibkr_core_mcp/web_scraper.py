@@ -139,8 +139,8 @@ def _slugify(url: str) -> str:
     sanitisation.
 
     Examples:
-        "https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/"
-        → "www-interactivebrokers-com-campus-ibkr-api-page-cpapi-v1"
+        "https://ibkrcampus.com/docs/web-api/v1/endpoints/introduction.md"
+        → "ibkrcampus-com-docs-web-api-v1-endpoints-introduction-md"
 
         "https://docs.firecrawl.dev/features/search"
         → "docs-firecrawl-dev-features-search"

@@ -34,7 +34,7 @@ when the real response is a dict keyed by currency — so the method always sile
 ### STK / IND / BOND — `/iserver/secdef/search`
 
 **Official doc:** `secType: String. Valid Values: "STK", "IND", "BOND"`
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
 
 This is the only secType list documented for this endpoint — FUT, OPT, CASH, CFD are not
 listed despite earlier in-repo docstrings claiming otherwise (see "Root cause").
@@ -60,7 +60,7 @@ accepted by this endpoint.
 
 **Official doc:** documented endpoint, response keyed by the requested currency:
 `{"USD": [{"symbol": "USD.SGD", "conid": 37928772, "ccyPair": "SGD"}, ...]}`.
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
 
 Symbol format: `'BASE.QUOTE'` (e.g. `'EUR.USD'`). Resolution splits on `.`, queries
 `get_currency_pairs(base)`, then matches the full `'BASE.QUOTE'` symbol exactly against the

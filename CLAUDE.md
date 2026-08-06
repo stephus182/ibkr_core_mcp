@@ -263,12 +263,23 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 
   **IBKR moved their Web API docs (discovered 2026-07-25).** The old single-page reference at
   `interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/` is now a Fern-hosted site at
-  **`interactivebrokers.com/docs/web-api/`**. All 81 deep links in this repo were repointed.
-  Two things to know before citing a source URL again:
+  **`ibkrcampus.com/docs/web-api/`**. The 2026-07-25 pass repointed 81 links but **missed 118
+  more**, `client.py` alone holding 75; those were repointed 2026-08-05 against the site's own
+  `llms.txt` index, and the count here is deliberately not restated as "all of them" — the last
+  claim of completeness was wrong. The only surviving `cpapi-v1` text is
+  `docs/audits/audit-evidence/scrapes/cpapi-v1.md`, a dated capture of the retired page which
+  carries a header saying so; its in-body URLs are evidence, not citations, and rewriting them
+  would falsify what was retrieved. Three things to know before citing a source URL again:
 
   - The old URLs **still return HTTP 200** — they redirect to the new site's Introduction page
     and *silently drop the `#anchor`*. A link checker reports success while the reader lands
     on the wrong page. Never re-add a `cpapi-v1/#…` link; a 200 is not evidence it works.
+  - **The new site also answers 200 for pages that do not exist.** A made-up path returns a
+    ~290-byte body reading `# Page Not Found`, so a status check cannot tell a real page from a
+    typo — a first verification pass here graded 74 URLs "resolving" on status alone and was
+    worthless. Check that the URL appears in `llms.txt`, or that the body lacks
+    `# Page Not Found`. Byte-size is a weak proxy: real pages can be short (`unread-bulletins`
+    is 576 B).
   - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
     is a complete 517-page index. There is also an MCP server at

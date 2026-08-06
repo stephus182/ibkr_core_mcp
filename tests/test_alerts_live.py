@@ -28,10 +28,10 @@ These write operations are validated manually through the ClaudIA UI:
 ask ClaudIA to create an alert and verify it appears on the IBKR mobile app.
 This is the correct validation path — not a gap in test coverage.
 
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#auth-sessions-brokerage
+Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/initialize-brokerage-session.md
 See docs/audits/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
 
-Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
+Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def live_toolkit(live_config):
     GDriveCache and SQLiteStore are mocked — alert operations do not touch them.
     Skips the entire module if the gateway is unreachable or unauthenticated.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ping
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
     """
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
@@ -79,7 +79,7 @@ def live_toolkit(live_config):
         pytest.skip("IBKR gateway not reachable or not authenticated")
     # Warm up the brokerage session — some write endpoints (alerts, orders) return
     # HTTP 403 without this initialisation call.
-    # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#accounts
+    # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts.md
     try:
         client.get_accounts()
     except Exception:
@@ -143,7 +143,7 @@ def _delete_safe(toolkit, alert_id: str) -> None:
 def test_toolkit_get_alerts(live_toolkit):
     """get_alerts returns a JSON list or the empty-state message — never an exception.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
     """
     text, fig = live_toolkit.execute("get_alerts", {})
     assert fig is None
@@ -163,7 +163,7 @@ def test_toolkit_get_alerts(live_toolkit):
 def test_toolkit_alert_price_above(live_toolkit):
     """Create AAPL >= $99999 (never fires), confirm orderId in response, delete.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
     """
     text, alert_id = _create_alert(live_toolkit, symbol="AAPL", operator=">=", price=99999.0)
     assert alert_id, f"No alert ID in create response: {text!r}"
@@ -178,7 +178,7 @@ def test_toolkit_alert_price_above(live_toolkit):
 def test_toolkit_alert_price_below(live_toolkit):
     """Create AAPL <= $0.01 (never fires) — verifies the '<=' operator path.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
     """
     text, alert_id = _create_alert(live_toolkit, symbol="AAPL", operator="<=", price=0.01)
     assert alert_id, f"No alert ID: {text!r}"
@@ -202,7 +202,7 @@ def test_toolkit_alert_custom_name(live_toolkit):
 def test_toolkit_alert_outside_rth(live_toolkit):
     """Alert with outside_rth=True (extended hours) is accepted by IBKR.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
     """
     text, alert_id = _create_alert(live_toolkit, outside_rth=True)
     assert alert_id, f"No alert ID: {text!r}"
@@ -226,7 +226,7 @@ def test_toolkit_alert_repeat(live_toolkit):
 def test_toolkit_alert_deactivate_and_reactivate(live_toolkit):
     """Toggle an alert off then back on — both activate_alert calls must succeed.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#activate-alert
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/activate-or-deactivate-an-alert.md
     """
     _, alert_id = _create_alert(live_toolkit)
     assert alert_id
@@ -250,7 +250,7 @@ def test_toolkit_alert_modify_price(live_toolkit):
     """modify_price_alert updates the trigger price — response is a valid JSON dict.
 
     Modify uses IBKR's create_alert endpoint (same as create — patch semantics):
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#create-alert
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
     """
     _, alert_id = _create_alert(live_toolkit, price=99999.0)
     assert alert_id
@@ -301,7 +301,7 @@ def test_toolkit_alert_full_roundtrip(live_toolkit):
     This is the canonical alert lifecycle test. All other tests in this file
     verify individual operations; this one verifies they chain correctly.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-alert-list
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
     """
     create_text, alert_id = _create_alert(live_toolkit, name="_ci_roundtrip", price=99999.0)
     assert alert_id, f"No alert ID from create: {create_text!r}"

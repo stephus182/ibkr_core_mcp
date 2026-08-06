@@ -111,7 +111,7 @@ def test_execute_get_market_snapshot_fut_uses_futures_endpoint_not_search(toolki
     """FUT must resolve via /trsrv/futures, not /iserver/secdef/search.
 
     /iserver/secdef/search only documents STK, IND, BOND support.
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
     """
     toolkit._client.get_futures.return_value = [
         {"symbol": "ES", "conid": 111, "expirationDate": 20260918},
@@ -340,7 +340,7 @@ def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit
     """CASH must resolve via /iserver/currency/pairs, not /iserver/secdef/search.
 
     secType=CASH is not in the documented STK/IND/BOND list for secdef/search.
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
     """
     toolkit._client.get_currency_pairs.return_value = [
         {"symbol": "EUR.USD", "conid": 12087792, "ccyPair": "USD"},

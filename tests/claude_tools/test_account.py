@@ -194,7 +194,7 @@ def test_get_ledger_dollar_signs_and_bold_pnl(toolkit):
 
 
 # ── _get_pnl — official /iserver/account/pnl/partitioned response shape ──────
-# Shape verified against https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
+# Shape verified against https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md
 # (scraped 2026-07-02, re-verified 2026-07-07): {"upnl": {"<acct>.Core": {rowType,
 # dpl, nl, upl, el, mv}}} — account/model-partition level, NOT per-position/conid.
 # The old tests below invented a {account: {conid: {ticker, uPnl, dPnl}}} shape

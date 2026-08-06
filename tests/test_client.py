@@ -806,7 +806,7 @@ def test_get_futures_handles_dict_response(client):
 def test_get_currency_pairs_handles_dict_response(client):
     """IBKR /iserver/currency/pairs returns {"USD": [{symbol, conid, ccyPair}]}.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
     """
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -1081,7 +1081,7 @@ def test_get_market_history_normalizes_period_and_bar_case(client):
 
 # ---------------------------------------------------------------------------
 # get_option_strikes / get_option_chain — documented secdef flow
-# Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#strike-conid-contract
+# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id.md
 # ---------------------------------------------------------------------------
 
 

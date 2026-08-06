@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 class Contract(BaseModel):
     """IBKR contract descriptor from /iserver/secdef/search or /trsrv/secdef.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
     """
 
     conid: int
@@ -43,7 +43,7 @@ class Contract(BaseModel):
 class Position(BaseModel):
     """Open position from /portfolio/{accountId}/positions/{page}.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions.md
     """
 
     conid: int = 0
@@ -80,7 +80,7 @@ class Trade(BaseModel):
     """Trade execution record — matches the trades table schema in SQLiteStore.
 
     Populated from /iserver/account/trades or IBKR Flex XML (all origins: CP API, TWS, mobile).
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/trades.md
     """
 
     execution_id: str = ""
@@ -96,7 +96,7 @@ class Trade(BaseModel):
 class Order(BaseModel):
     """Working order from /iserver/account/orders.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
     """
 
     order_id: str = Field(default="", alias="orderId", description="IBKR order ID (IBKR field: orderId)")
@@ -134,7 +134,7 @@ class AccountSummary(BaseModel):
     IBKR returns nested {"amount": value, "currency": "USD"} objects per field;
     _normalize extracts the amount for each key.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary.md
     """
 
     net_liquidation: float = 0.0
@@ -165,7 +165,7 @@ class AccountSummary(BaseModel):
 class Notification(BaseModel):
     """FYI notification from /fyi/notifications.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#fyi-notifications
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-subscriptions.md
     """
 
     id: str = ""
@@ -199,7 +199,7 @@ def bars_to_dataframe(raw: dict[str, Any]) -> pd.DataFrame:
       open, high, low, close, volume (sorted ascending by date).
     Returns an empty DataFrame with those columns if "data" is missing or empty.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
     """
     bars = raw.get("data", [])
     if not bars:

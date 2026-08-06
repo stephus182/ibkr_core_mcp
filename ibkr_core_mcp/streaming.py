@@ -49,7 +49,7 @@ class LiveQuote:
 @dataclass
 class TradeExecution:
     """A single parsed IBKR WebSocket trade execution (str topic).
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-trades-sub
+    Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
     """
 
     execution_id: str
@@ -80,7 +80,7 @@ class TradeExecution:
 @dataclass
 class PnLUpdate:
     """A single parsed IBKR WebSocket account P&L tick (spl topic).
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-pnl-sub
+    Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
     NOTE: IBKR's docs page mislabels this response section "Order Updates Response"
     (duplicate of the real order-updates heading earlier on the page) — the field
     content here is unambiguously P&L. Confirmed via a fresh targeted re-scrape, 2026-07-06.
@@ -122,7 +122,7 @@ def _parse_stream_execution(execution: TradeExecution) -> dict[str, Any]:
 class IBKRWebSocket:
     """Async WebSocket client for IBKR real-time market data.
 
-    Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets
+    Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
     Endpoint: wss://localhost:{port}/v1/api/ws
 
     Usage::
@@ -189,7 +189,7 @@ class IBKRWebSocket:
     async def subscribe(self, conid: int, fields: list[str] | None = None) -> None:
         """Subscribe to real-time market data for a contract.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets
+        Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
         Message format: smd+{conid}+{"fields": [...]}
         """
         if self._ws is None:
@@ -199,7 +199,7 @@ class IBKRWebSocket:
     async def unsubscribe(self, conid: int) -> None:
         """Unsubscribe from real-time market data for a contract.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#websockets
+        Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
         Message format: umd+{conid}+{}
         """
         if self._ws is not None:
@@ -208,7 +208,7 @@ class IBKRWebSocket:
     async def subscribe_executions(self, realtime_updates_only: bool = False, days: int = 1) -> None:
         """Subscribe to live trade executions.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-trades-sub
+        Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
         Message format: str+{"realtimeUpdatesOnly": bool, "days": int}
         """
         if self._ws is None:
@@ -223,7 +223,7 @@ class IBKRWebSocket:
     async def subscribe_pnl(self) -> None:
         """Subscribe to live account P&L ticks.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#ws-pnl-sub
+        Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
         Message format: spl+{}
         """
         if self._ws is None:

@@ -71,7 +71,7 @@ class _Resolved(NamedTuple):
 
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
-# Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
+# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
 _MD_AVAILABILITY: dict[str, str] = {
     "R": "Live (Real-Time)",
     "D": "Delayed (15–20 min)",
@@ -2216,7 +2216,7 @@ class ClaudeToolkit:
         # Order type names match IBKR CP API place-order field spec. Only types this
         # tool can fully parameterize are admitted: TRAIL/TRAILLMT need trailingAmt/
         # trailingType (not exposed here); MOC/LOC are not in the documented type list.
-        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
         _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
         symbol = inputs["symbol"].upper()
@@ -2261,7 +2261,7 @@ class ClaudeToolkit:
         }
         if sec_type in ("FUT", "FOP"):
             # Required for US Futures and Futures Options — CME Group Rule 536-B
-            # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#place-order
+            # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
             order["manualIndicator"] = True
             order["extOperator"] = "ClaudIA"
         # Price-field mapping per the CP API place-order spec: `price` is the limit
@@ -2295,7 +2295,7 @@ class ClaudeToolkit:
         per-position/conid breakdown in this endpoint at all, despite an earlier
         version of this docstring claiming one; for per-position detail use
         get_positions instead. Verified against
-        https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl
+        https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md
         (scraped 2026-07-02, re-verified 2026-07-07).
 
         Cold-gateway quirk (live-verified 2026-07-17, see
@@ -2518,7 +2518,7 @@ class ClaudeToolkit:
         rather than omit it. Silence is the one outcome that is not allowed: it reads as
         "the usual currency", which is exactly the assumption this exists to remove.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#secdef-info-contract
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
                 (GET /iserver/secdef/info; returns a LIST, live-verified 2026-07-28 —
                 the wrapper's return annotation says dict, so both shapes are handled)
         """
@@ -2559,9 +2559,9 @@ class ClaudeToolkit:
 
         Returns a `_Resolved`: the conid and the currency it trades in, or an error.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
-                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/ (trsrv/futures)
-                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#get-currency-pairs
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md (trsrv/futures)
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
         """
         if sec_type == "FUT":
             futures = self._client.get_futures([sym])
@@ -2793,8 +2793,8 @@ class ClaudeToolkit:
         meant. Reporting the other symbols while staying quiet about that one would be
         the same defect as picking a listing at random.
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
-                https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
@@ -2827,7 +2827,7 @@ class ClaudeToolkit:
 
         # First call initializes the iServer subscription but returns no price fields.
         # Retry once after 1s — same two-call warmup pattern as /iserver/account/orders.
-        # Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-snapshot
+        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
         def _has_prices(s: list[dict[str, Any]]) -> bool:
             return any(item.get("31") or item.get("84") or item.get("86") for item in s)
 
@@ -2892,7 +2892,7 @@ class ClaudeToolkit:
                 "even within a US equities bundle. "
                 "Check: Account Management → Settings → Market Data Subscriptions. "
                 "If the ticker is incorrect, please provide the right one. "
-                "Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#md-availability"
+                "Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md"
             )
         if notes:
             result = "\n".join(notes) + "\n\n" + result

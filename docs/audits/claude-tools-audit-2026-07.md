@@ -666,7 +666,7 @@ on real IBKR data, not just inconsistency):**
    `pos_pnl.get("uPnl")`/`.get("dPnl")`/`.get("ticker")` from a conid-keyed nesting
    that does not exist in IBKR's actual response. **Verified against the official
    docs** (`GET /iserver/account/pnl/partitioned`,
-   https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#account-pnl,
+   https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md,
    scraped fresh 2026-07-07): the real shape is
    `{"upnl": {"<acct>.Core": {rowType, dpl, nl, upl, el, mv}}}` — **one summary row
    per account/model partition, no per-position breakdown at all.** Every real
