@@ -527,14 +527,26 @@ class IBKRClient:
     def search_contract(self, symbol: str, sec_type: str = "STK") -> list[dict[str, Any]]:
         """Resolve a symbol to one or more contracts. Returns [] if no match.
 
-        Returns [{"conid": ..., "symbol": ..., "companyName": ..., "exchange": ..., "currency": ...}].
+        Returns [{"conid", "companyHeader", "companyName", "symbol", "description",
+        "restricted", "sections", "secType"}]. Corrected 2026-08-05 — this previously
+        documented `exchange` and `currency` keys, and **neither exists**: the endpoint
+        returns no currency at all, and the exchange appears only as `description`
+        ("Primary exchange of the contract", a bare code like "BATS" or "MEXI") and inside
+        `sections`. A caller reading a currency off this response reads `None`, which is
+        the one field that separates a US listing from its foreign twin.
+
+        **The order of the returned list is not documented as meaningful**, so `[0]` is not
+        "the best match". It is the Mexican listing for IGV. Callers that need *the* conid
+        for a symbol must use `ClaudeToolkit._resolve_stock_conid` (`/trsrv/stocks`, which
+        carries `isUS`), never this.
 
         sec_type: officially documented valid values are "STK", "IND", "BOND" only.
         FUT and CASH (FX) are NOT supported here — use get_futures() (/trsrv/futures)
         and get_currency_pairs() (/iserver/currency/pairs) respectively. OPT requires
         the separate secdef/search -> secdef/info flow (see get_secdef_info()).
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#sec-search
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
+                (read 2026-08-05; the old cpapi-v1 anchor redirects and drops the fragment)
         Endpoint: GET /iserver/secdef/search
         """
         data = self._get("/iserver/secdef/search", {"symbol": symbol, "secType": sec_type})
@@ -665,7 +677,17 @@ class IBKRClient:
     def get_stocks(self, symbols: list[str]) -> list[dict[str, Any]]:
         """Stock contracts for symbols. Same dict-flattening behaviour as get_futures().
 
-        Source: https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/#trsrv-stock-contract
+        The response is keyed by symbol; each value is a list of company records carrying
+        `name`, `assetClass` and a `contracts` list, and each contract carries `conid`,
+        `exchange` and **`isUS`** — *"States whether the contract is hosted in the United
+        States or not"*. That boolean is why this endpoint, and not
+        `/iserver/secdef/search`, is the one that can answer "which listing did they mean".
+
+        Flattening drops the symbol key, so callers resolving more than one symbol at a
+        time cannot tell the records apart — pass one symbol per call when that matters.
+
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol.md
+                (read 2026-08-05; the old cpapi-v1 anchor redirects and drops the fragment)
         Endpoint: GET /trsrv/stocks
         """
         data = self._get("/trsrv/stocks", {"symbols": ",".join(symbols)})

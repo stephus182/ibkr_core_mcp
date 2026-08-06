@@ -604,9 +604,20 @@ TOOL_DEFINITIONS = [
     {
         "name": "search_contract",
         "description": (
-            "Search for IBKR contracts by symbol and security type. "
-            "Returns conid, exchange, currency, and description. "
-            "Use this to discover conids before calling tools that require one."
+            "Search for IBKR contracts by symbol and security type. Returns conid, "
+            "companyName, and description (the primary exchange, e.g. 'BATS', 'MEXI'). "
+            "It does NOT return a currency. "
+            "The SAME ticker exists on several exchanges in different currencies, and can "
+            "belong to different companies: IGV is a US ETF on BATS in USD and a Mexican "
+            "listing on MEXI in MXN. For STK, rows are tagged '_is_us' and sorted US "
+            "listings first, because a bare ticker means the US listing unless the user "
+            "names another market. Treat any '_is_us': false row as a foreign listing and "
+            "do not use its conid unless the user explicitly asked for that market. If "
+            "'_is_us' is absent the US check could not be run — confirm with "
+            "get_contract_info before using the conid. Prefer get_contract_info or "
+            "get_market_snapshot to resolve a symbol you intend to trade: they route "
+            "through /trsrv/stocks, state the currency, and ask instead of guessing when a "
+            "ticker is ambiguous."
         ),
         "input_schema": {
             "type": "object",
@@ -1072,6 +1083,22 @@ def _validate_account_id(account_id: str) -> str:
     if not _ACCOUNT_ID_RE.match(account_id):
         raise ValueError(f"Invalid account ID format: {account_id!r}")
     return account_id
+
+
+def _offers_stk(row: dict[str, Any]) -> bool:
+    """True if a `/iserver/secdef/search` row is an actual stock listing.
+
+    A `secType=STK` search still returns non-stock rows: measured live 2026-08-05, both
+    AAPL and VOD come back with a "Corporate Fixed Income" aggregate carrying conid
+    2147483647, a null `symbol` and a `sections` list holding only `{"secType": "BOND"}`.
+    The schema documents that shape under bonds (an `issuers` array plus `bondid`).
+
+    Keyed on the `sections` list rather than on the sentinel conid, deliberately: the
+    conid is one observed magic number, while "which security types does this row
+    actually offer" is the documented field and stays true for whatever other aggregate
+    IBKR returns next.
+    """
+    return any((s or {}).get("secType") == "STK" for s in (row.get("sections") or []))
 
 
 def _money(v: float) -> str:
@@ -2429,7 +2456,97 @@ class ClaudeToolkit:
         contracts = self._client.search_contract(symbol, sec_type)
         if not contracts:
             return f"No contracts found for {symbol} ({sec_type}).", None
+        if sec_type.upper() == "STK":
+            contracts = self._us_listings_first(symbol, contracts)
         return json.dumps(contracts, indent=2), None
+
+    def _us_listings_first(self, sym: str, contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Tag each `/iserver/secdef/search` row with `_is_us` and sort US listings first.
+
+        `/iserver/secdef/search` answers neither question this needs. Its result **order is
+        undocumented** — the schema "provides no guidance on result ordering or
+        prioritization" — and it carries **no currency field** at all, so nothing in the
+        raw response distinguishes a US listing from a foreign one except `description`,
+        which is the primary exchange as a bare code ("BATS", "MEXI"). Measured live
+        2026-08-05: `contracts[0]` for IGV is the **Mexican** listing (conid 325209548),
+        with US/BATS (12658199) second. A US account asking for a bare ticker and being
+        handed a Mexican conid is a plausible number for the wrong instrument, which is
+        worse than no number because nothing about it looks wrong.
+
+        The rule is `_resolve_stock_conid`'s, applied here rather than restated: a bare
+        ticker is a US ticker by convention, so US listings sort first. Sorting is
+        deliberately **stable**, so IBKR's own order survives *within* each group — that
+        order is undocumented, and inventing a secondary key would replace one unfounded
+        ordering with another. Nothing is filtered: this is a search tool, and hiding the
+        foreign listings would make the ambiguous cases invisible (IGV is also I GRANDI
+        VIAGGI SPA; VOD is both VODAFONE GROUP PLC and VODACOM GROUP LTD).
+
+        `isUS` comes from `/trsrv/stocks`, the endpoint IBKR designates for resolving
+        stock symbols and the only one that answers the US question directly. That costs
+        one extra call per STK search, which is why this is not applied to IND/BOND —
+        `/trsrv/stocks` is stocks-only, and pretending otherwise would be a guess.
+
+        **`_is_us` is present only when the check actually ran.** If `/trsrv/stocks` fails
+        or knows none of these conids, rows are returned untagged and in IBKR's original
+        order rather than tagged `false`, because "not a US listing" and "could not check"
+        are opposite claims. Absence is the honest signal, and it keeps the flag a plain
+        boolean instead of a tri-state a reader can misread.
+
+        Only rows that actually offer a STK section take part (see `_offers_stk`); a
+        non-stock row is kept, untagged, after the listings rather than being made to
+        answer a question about stock listings that it cannot.
+
+        Args:
+            sym: Ticker, already upper-cased by the caller.
+            contracts: Raw `/iserver/secdef/search` rows, unmodified.
+
+        Returns:
+            The same rows — stock listings tagged and US-first when the check ran, with
+            non-stock rows appended unchanged; the input untouched otherwise.
+
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol.md
+                (`isUS` — "States whether the contract is hosted in the United States or not")
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
+                (no currency field; ordering undocumented. Both read 2026-08-05.)
+        """
+        try:
+            records = self._client.get_stocks([sym])
+            us_by_conid = {
+                int(c["conid"]): bool(c.get("isUS"))
+                for r in (records or [])
+                for c in (r.get("contracts") or [])
+                if c.get("conid") is not None
+            }
+        except (IBKRCoreError, TypeError, ValueError, AttributeError):
+            # A search that still returns every listing is far better than one that
+            # raises because the enrichment could not run.
+            return contracts
+
+        # A STK search does not only return stock listings. AAPL and VOD each come back
+        # with a "Corporate Fixed Income" aggregate — conid 2147483647 (INT_MAX), a null
+        # symbol, and a BOND-only section — which the docs describe under bonds ("an
+        # issuers array ... plus bondid"). `/trsrv/stocks` does not know that row and
+        # should not: it is not a stock. Demanding an isUS verdict for it made the
+        # all-or-nothing rule below fire on the two most ordinary tickers there are
+        # (measured live 2026-08-05: 4 of 5 rows covered for both). Non-stock rows are
+        # therefore excluded from the verdict and kept, untagged, after the listings.
+        stock_rows = [r for r in contracts if _offers_stk(r)]
+        other_rows = [r for r in contracts if not _offers_stk(r)]
+        if not stock_rows:
+            return contracts
+
+        tagged: list[dict[str, Any]] = []
+        for row in stock_rows:
+            try:
+                conid = int(row["conid"])
+            except (KeyError, TypeError, ValueError):
+                return contracts
+            if conid not in us_by_conid:
+                # Partial knowledge is worse than none: an untagged row sitting below
+                # tagged ones reads as "checked, not US". All or nothing.
+                return contracts
+            tagged.append({**row, "_is_us": us_by_conid[conid]})
+        return sorted(tagged, key=lambda r: not r["_is_us"]) + other_rows
 
     def _get_futures(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return available futures contracts and expiration dates for the given root symbols."""
