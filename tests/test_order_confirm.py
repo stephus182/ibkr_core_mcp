@@ -309,3 +309,70 @@ def test_confirm_reply_dialog_accepts_options_without_error():
         confirm_reply_dialog("RPL789", "msg", ["Yes", "No"])
     kwargs = mock_show.call_args.kwargs
     assert kwargs["confirm_label"] == "CONFIRM REPLY"
+
+
+# ============================================================================
+# Side extraction — which banner colour the human actually sees
+# ============================================================================
+
+
+def test_modify_dialog_carries_the_side_from_ibkrs_own_key():
+    """IBKR's live-order dict uses "side"; only confirm_order_dialog sets "Action".
+
+    _show_confirm_dialog read "Action" alone, so a SELL modify reached the dialog with
+    side "" and rendered the dark-green BUY banner over a live sell. The detail lines
+    showed side: SELL, but the colour — the part designed to be read first — did not.
+    """
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as mock_appkit:
+        oc.confirm_modify_dialog("123", {"side": "SELL", "quantity": 500, "price": 180}, "U1")
+
+    assert mock_appkit.call_args.args[4] == "SELL"
+
+
+def test_modify_dialog_accepts_capitalised_side_key():
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as mock_appkit:
+        oc.confirm_modify_dialog("123", {"Side": "SELL"}, "U1")
+
+    assert mock_appkit.call_args.args[4] == "SELL"
+
+
+def test_place_dialog_still_carries_action():
+    """The one dialog that already worked must keep working."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as mock_appkit:
+        oc.confirm_order_dialog({"side": "SELL", "ticker": "AAPL", "quantity": 1}, "U1")
+
+    assert mock_appkit.call_args.args[4] == "SELL"
+
+
+def test_cancel_dialog_without_order_detail_has_no_side():
+    """Nothing establishes a side here, so nothing may be asserted about one."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as mock_appkit:
+        oc.confirm_cancel_dialog("123", "U1")
+
+    assert mock_appkit.call_args.args[4] is None
+
+
+def test_cancel_dialog_carries_side_when_order_detail_is_supplied():
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as mock_appkit:
+        oc.confirm_cancel_dialog("123", "U1", {"side": "SELL", "ticker": "AAPL"})
+
+    assert mock_appkit.call_args.args[4] == "SELL"
+
+
+def test_reply_dialog_has_no_side():
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as mock_appkit:
+        oc.confirm_reply_dialog("r1", "Confirm this order?")
+
+    assert mock_appkit.call_args.args[4] is None

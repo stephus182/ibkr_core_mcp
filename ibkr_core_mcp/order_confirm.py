@@ -83,7 +83,15 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
 
 
 def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str) -> None:
-    """Gate 2 for modify_order."""
+    """Gate 2 for modify_order. Raises HumanAuthError if the user does not confirm.
+
+    `order` is IBKR's own live-order dict, forwarded verbatim as display detail. Note
+    it keys the side as `side`, not the `Action` that confirm_order_dialog builds —
+    `_extract_side` reads both, which is what makes the banner colour correct here.
+    Before that it read `Action` alone, and every SELL modify rendered green.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
+    """
     _show_confirm_dialog(
         title="⚠  MODIFY ORDER CONFIRMATION",
         details={
@@ -159,15 +167,47 @@ def _strip_html(text: str) -> str:
     return re.sub(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>", "", text)
 
 
+_SIDE_KEYS = ("Action", "side", "Side")
+
+
+def _extract_side(details: dict[str, Any]) -> str | None:
+    """Return the order side from whichever key carries it, or None if none does.
+
+    Three sources disagree on the key. `confirm_order_dialog` builds `Action` itself;
+    `confirm_modify_dialog` and `confirm_cancel_dialog` forward IBKR's live-order dict,
+    which uses `side`; and `confirm_reply_dialog` has no side at all. Reading only
+    `Action` — as this did until 2026-08-07 — meant three of the four Gate 2 dialogs
+    reached `_order_dialog` with no side, where the default was a confident green
+    "BUY ORDER" banner over what could be a live sell.
+
+    Returning None rather than a guess is the point. The banner is the pre-attentive
+    cue, read before any text, so an unknown side must render as unknown; the caller
+    must not be able to mistake "nobody told us" for "it is a buy".
+
+    Args:
+        details: The display dict handed to the dialog.
+
+    Returns:
+        The uppercased side, or None when no key carries one (and when a key is
+        present but empty, which is equally uninformative).
+    """
+    for key in _SIDE_KEYS:
+        raw = details.get(key)
+        if raw is not None and str(raw).strip():
+            return str(raw).upper()
+    return None
+
+
 def _show_confirm_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
 
-    macOS primary path: AppKit colored dialog (green for BUY, red for SELL) via subprocess.
+    macOS primary path: AppKit colored dialog (green BUY, red SELL, amber when the side
+    is unknown) via subprocess.
     macOS fallback: osascript plain dialog if AppKit subprocess fails.
     Non-macOS: tkinter fallback.
     """
     if sys.platform == "darwin":
-        side = str(details.get("Action", "")).upper()
+        side = _extract_side(details)
         try:
             _show_appkit_dialog(title, details, disclaimer, confirm_label, side)
             return
@@ -182,13 +222,18 @@ def _show_confirm_dialog(title: str, details: dict[str, Any], disclaimer: str, c
         raise HumanAuthError("No GUI dialog available: not on macOS and tkinter is not installed.")
 
 
-def _show_appkit_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, side: str) -> None:
+def _show_appkit_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, side: str | None
+) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
     The subprocess gets its own main thread so NSApplication can run without
     conflicting with the host application's asyncio event loop (e.g. the
     Panel/Bokeh Tornado loop in ClaudIA).
-    Green banner for BUY, red banner for SELL.
+
+    Green banner for BUY, red for SELL, amber "REVIEW ORDER" when `side` is None —
+    cancel and reply dialogs genuinely have no side, and colouring those green would
+    assert something no caller established.
 
     Raises HumanAuthError if user cancels/times out.
     Raises RuntimeError if the subprocess itself fails (caller falls back to osascript).

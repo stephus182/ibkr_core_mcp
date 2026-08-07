@@ -76,15 +76,22 @@ def _run_alert(data: dict[str, Any]) -> None:
         NSView,
     )
 
-    side = str(data.get("side", "BUY")).upper()
-    is_sell = any(k in side for k in ("SELL", "SHORT"))
+    # Three-valued on purpose. `data.get("side", "BUY")` used to make the DEFAULT a
+    # confident dark-green "BUY ORDER", so cancel and reply dialogs — which carry no
+    # side — and every SELL modify rendered as a buy. The banner is read before the
+    # text, so an unstated side has to look unstated.
+    raw_side = data.get("side")
+    side = str(raw_side).upper() if raw_side is not None else ""
 
-    if is_sell:
+    if any(k in side for k in ("SELL", "SHORT")):
         r, g, b = 0.72, 0.10, 0.10  # dark red
         label_text = "SELL ORDER"
-    else:
+    elif "BUY" in side:
         r, g, b = 0.10, 0.50, 0.20  # dark green
         label_text = "BUY ORDER"
+    else:
+        r, g, b = 0.55, 0.42, 0.05  # dark amber — neither confirmed nor denied
+        label_text = "REVIEW ORDER"
 
     bg_color = NSColor.colorWithRed_green_blue_alpha_(r, g, b, 1.0)
 

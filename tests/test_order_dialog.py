@@ -117,3 +117,50 @@ def test_abort_timer_scheduled_on_main_thread_in_modal_mode(monkeypatch: pytest.
     fake.NSRunLoop.currentRunLoop.return_value.addTimer_forMode_.assert_called_once_with(
         mock_timer_obj, fake.NSModalPanelRunLoopMode
     )
+
+
+def test_unknown_side_uses_a_neutral_banner_not_a_confident_buy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Cancel and reply dialogs carry no side at all — they must not read as a BUY.
+
+    `data.get("side", "BUY")` made the *default* a confident dark-green "BUY ORDER".
+    The banner is the pre-attentive cue, read before any text, so on 3 of the 4 Gate 2
+    dialogs it was asserting something nobody had established. An unknown side is
+    unknown; it is not a buy, and it is not a sell either.
+    """
+    fake = _install_fake_appkit(monkeypatch)
+    fake.NSAlert.alloc.return_value.init.return_value.runModal.return_value = 1000
+
+    from ibkr_core_mcp import _order_dialog
+
+    payload = _base_payload()
+    del payload["side"]
+    _order_dialog._run_alert(payload)
+
+    label_calls = [
+        c.args[0]
+        for c in fake.NSTextField.alloc.return_value.initWithFrame_.return_value.setStringValue_.call_args_list
+    ]
+    assert "BUY ORDER" not in label_calls, "an absent side must not render as a BUY"
+    assert "SELL ORDER" not in label_calls, "nor as a SELL — neutral means neutral"
+    assert "REVIEW ORDER" in label_calls
+    fake.NSColor.colorWithRed_green_blue_alpha_.assert_called_once_with(0.55, 0.42, 0.05, 1.0)
+    assert capsys.readouterr().out.strip() == "CONFIRMED"
+
+
+def test_empty_side_string_is_also_neutral(monkeypatch: pytest.MonkeyPatch) -> None:
+    """order_confirm passed "" for every non-place dialog, which is just as unknown."""
+    fake = _install_fake_appkit(monkeypatch)
+    fake.NSAlert.alloc.return_value.init.return_value.runModal.return_value = 1000
+
+    from ibkr_core_mcp import _order_dialog
+
+    _order_dialog._run_alert(_base_payload(side=""))
+
+    label_calls = [
+        c.args[0]
+        for c in fake.NSTextField.alloc.return_value.initWithFrame_.return_value.setStringValue_.call_args_list
+    ]
+    assert "REVIEW ORDER" in label_calls
+    assert "BUY ORDER" not in label_calls
