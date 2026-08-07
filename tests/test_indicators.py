@@ -36,12 +36,67 @@ def test_ema_length(ohlcv):
     assert result.notna().any()
 
 
+def _closes(values):
+    """Minimal OHLCV frame from a close series — rsi only reads df['close']."""
+    n = len(values)
+    return pd.DataFrame(
+        {"open": values, "high": values, "low": values, "close": values, "volume": np.ones(n)},
+        index=pd.date_range("2025-01-01", periods=n, freq="B"),
+    )
+
+
 def test_rsi_bounds(ohlcv):
+    """Was `assert (valid >= 0).all() and (valid <= 100).all()` after a dropna().
+
+    pandas' `.all()` on an EMPTY Series is True, so an rsi() returning all-NaN — the
+    single most likely breakage — satisfied it. It did exactly that for any
+    uninterrupted uptrend, and this test passed for all four inputs below including
+    the two that were broken. The emptiness guard is the whole point; without it,
+    adding the parametrisation alone would just be a second vacuous test.
+    """
     from ibkr_core_mcp.indicators import rsi
 
     result = rsi(ohlcv, period=14)
     valid = result.dropna()
+    assert not valid.empty, "all-NaN passes the bounds check vacuously"
     assert (valid >= 0).all() and (valid <= 100).all()
+
+
+def test_rsi_is_100_when_there_are_no_losses():
+    """Wilder's convention, verified against a real source rather than assumed:
+
+    "If the Average Loss equals zero, a 'divide by zero' situation occurs for RS, and
+    RSI is set to 100 by definition."
+    https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/relative-strength-index-rsi
+
+    `gain / loss.replace(0, nan)` made every value NaN instead, so add_indicators
+    rendered "RSI(14): nan" for any uninterrupted uptrend.
+    """
+    from ibkr_core_mcp.indicators import rsi
+
+    result = rsi(_closes(np.arange(1, 80, dtype=float)), period=14)
+
+    assert not result.dropna().empty
+    assert result.iloc[-1] == 100.0
+
+
+def test_rsi_is_0_when_there_are_no_gains():
+    """"Similarly, RSI equals 0 when Average Gain equals zero." — same source."""
+    from ibkr_core_mcp.indicators import rsi
+
+    result = rsi(_closes(np.arange(80, 1, -1, dtype=float)), period=14)
+
+    assert result.iloc[-1] == 0.0
+
+
+def test_rsi_is_undefined_for_a_perfectly_flat_series():
+    """Both averages zero: RS is 0/0 and no source defines it. NaN is the honest
+    answer — asserted explicitly so "it happens to be NaN" cannot drift unnoticed."""
+    from ibkr_core_mcp.indicators import rsi
+
+    result = rsi(_closes(np.full(80, 100.0)), period=14)
+
+    assert result.iloc[-1] != result.iloc[-1], "expected NaN for an undefined RSI"
 
 
 def test_macd_columns(ohlcv):

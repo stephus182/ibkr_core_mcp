@@ -17,12 +17,39 @@ def ema(df: pd.DataFrame, period: int = 20) -> pd.Series:
 
 
 def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Relative Strength Index (0–100). Returns a Series. Values >70 overbought, <30 oversold."""
+    """Relative Strength Index (0–100). Returns a Series. Values >70 overbought, <30 oversold.
+
+    Zero average loss is a divide-by-zero for RS, and Wilder's convention resolves it by
+    definition rather than by propagating NaN:
+
+        "If the Average Loss equals zero, a 'divide by zero' situation occurs for RS, and
+         RSI is set to 100 by definition. Similarly, RSI equals 0 when Average Gain
+         equals zero."
+        https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/relative-strength-index-rsi
+
+    This previously did `gain / loss.replace(0, nan)`, which made the whole series NaN
+    for any uninterrupted uptrend — `add_indicators` rendered "RSI(14): nan" — and for a
+    flat series. `test_rsi_bounds` could not catch it: it filtered with `dropna()` and
+    then asserted `.all()`, which pandas evaluates as True on an empty Series.
+
+    A perfectly flat series leaves both averages at zero. RS is then 0/0, no source
+    defines it, and NaN is returned rather than inventing a neutral 50.
+
+    Args:
+        df: OHLCV frame; only `close` is read.
+        period: Wilder smoothing period.
+
+    Returns:
+        Series aligned to `df.index`, 0–100, NaN only where genuinely undefined.
+    """
     delta = df["close"].diff()
     gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
     rs = gain / loss.replace(0, float("nan"))
-    return 100 - (100 / (1 + rs))
+    result = 100 - (100 / (1 + rs))
+    # Wilder's by-definition cases, applied only where the division actually failed.
+    result = result.mask((loss == 0) & (gain > 0), 100.0)
+    return result.mask((gain == 0) & (loss > 0), 0.0)
 
 
 def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
