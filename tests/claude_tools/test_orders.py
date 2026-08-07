@@ -339,3 +339,31 @@ def test_get_order_status_error(toolkit):
 # ============================================================================
 # _delete_cache
 # ============================================================================
+
+
+def test_get_live_orders_does_not_report_an_unreadable_response_as_no_orders(toolkit):
+    """The tool must not turn "the gateway did not answer" into "you have none".
+
+    get_live_orders now raises IBKRAPIError on an unrecognisable body instead of
+    returning []. Routed through _safe_error that would read "IBKR gateway returned an
+    error (HTTP 0)" and lose the point, so the handler catches it and says so plainly.
+    """
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    toolkit._client.get_live_orders.side_effect = IBKRAPIError("returned dict, not the documented array", 0)
+
+    text, fig = toolkit.execute("get_live_orders", {})
+
+    assert fig is None
+    assert "No open orders" not in text
+    assert "not the same as having none" in text.lower()
+    assert "diagnose_orders" in text
+
+
+def test_get_live_orders_still_reports_a_genuine_empty_list(toolkit):
+    """The control: a real empty must keep reading as empty."""
+    toolkit._client.get_live_orders.return_value = []
+
+    text, _ = toolkit.execute("get_live_orders", {})
+
+    assert "No open orders." in text

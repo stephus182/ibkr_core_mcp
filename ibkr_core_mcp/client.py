@@ -914,9 +914,25 @@ class IBKRClient:
         second call returns the actual live order list.
         Inactive = order exists on IBKR but is stalled (e.g. failed risk check).
 
+        **An unrecognisable response raises rather than returning `[]`.** The documented
+        body is `{"orders": [...], "snapshot": bool}`. Until 2026-08-07 anything else —
+        an error object returned with HTTP 200, a scalar, a dict with no `orders` key —
+        fell through to `return []`, which answers "do I have working orders?" with a
+        confident *no*. That is the one wrong answer this method must never give, and
+        `get_orders_raw` existing as a diagnostic escape hatch is the sign the shape was
+        already known to surprise. An empty *list* from IBKR is still returned as `[]`:
+        that empty is an answer.
+
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: GET /iserver/account/orders
+
+        Returns:
+            Working orders only, terminal statuses filtered out.
+
+        Raises:
+            IBKRAPIError: If the response body is not the documented shape, so the
+                caller can tell "the gateway did not answer" from "nothing is working".
         """
         self._ensure_accounts_initialized()
         self._get("/iserver/account/orders?force=true")  # instantiate subscription
@@ -924,7 +940,12 @@ class IBKRClient:
         data = self._get("/iserver/account/orders")  # retrieve actual data
         orders = data.get("orders", data) if isinstance(data, dict) else data
         if not isinstance(orders, list):
-            return []
+            raise IBKRAPIError(
+                f"/iserver/account/orders returned {type(orders).__name__}, not the documented "
+                f"orders array. Refusing to report this as 'no live orders'. Use get_orders_raw() "
+                f"or the diagnose_orders tool to see what the gateway actually sent.",
+                status_code=0,
+            )
         return [o for o in orders if o.get("status") and o.get("status") not in self._TERMINAL_STATUSES]
 
     def get_orders_raw(self) -> Any:

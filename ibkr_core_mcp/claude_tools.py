@@ -38,7 +38,7 @@ from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import BacktestError, IBKRCoreError
+from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.store import SQLiteStore
 
@@ -1791,7 +1791,20 @@ class ClaudeToolkit:
         order_ref is IBKR's real Live Orders field (snake_case); orderRef/cOID/clientOrderId
         are kept as fallbacks only (see docs/project-status.md Known Gaps, found 2026-07-10).
         """
-        orders = self._client.get_live_orders()
+        try:
+            orders = self._client.get_live_orders()
+        except IBKRAPIError as exc:
+            # Surfaced here rather than through _safe_error, which would render this as
+            # "IBKR gateway returned an error (HTTP 0)" and drop the one sentence that
+            # matters: we did NOT establish that there are no orders. The message names
+            # no internals, so returning it is safe — same reasoning as _run_backtest's
+            # sandbox errors.
+            return (
+                f"Could not read live orders: {exc}\n"
+                f"**This is not the same as having none.** Do not tell the user their "
+                f"order list is empty. Run diagnose_orders to see the raw response.",
+                None,
+            )
         if not orders:
             return "No open orders.", None
         lines = []

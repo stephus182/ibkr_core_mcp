@@ -1269,3 +1269,51 @@ def test_paged_single_chunk_requests_are_not_paginated(client):
             client.get_market_history_paginated(265598, period="6m", bar="1d")
     plain.assert_called_once()
     paged.assert_not_called()
+
+
+# ============================================================================
+# get_live_orders: an unrecognisable response is not "you have no orders"
+# ============================================================================
+# The documented response is {"orders": [...], "snapshot": bool}:
+# https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
+# Anything else used to `return []`, answering a safety-relevant question -- "do I
+# have working orders?" -- with a confident no. get_orders_raw exists precisely
+# because this shape can surprise, which is the tell that it was known to.
+
+
+def _mock_raw_orders_body(client, body):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = body
+    return patch.object(client._session, "get", return_value=mock_resp)
+
+
+def test_get_live_orders_raises_on_an_unrecognisable_response(client):
+    """A 200 whose body is not the documented shape must not read as "no orders"."""
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    with _mock_raw_orders_body(client, {"error": "no subscription", "statusCode": 500}), patch("time.sleep"):
+        with pytest.raises(IBKRAPIError) as excinfo:
+            client.get_live_orders()
+
+    assert "get_orders_raw" in str(excinfo.value), "the message must name the diagnostic escape hatch"
+
+
+def test_get_live_orders_raises_on_a_scalar_response(client):
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    with _mock_raw_orders_body(client, "service unavailable"), patch("time.sleep"):
+        with pytest.raises(IBKRAPIError):
+            client.get_live_orders()
+
+
+def test_get_live_orders_returns_empty_for_a_genuine_empty_list(client):
+    """The one empty that IS an answer: IBKR said orders, and there were none."""
+    with _mock_raw_orders_body(client, {"orders": [], "snapshot": True}), patch("time.sleep"):
+        assert client.get_live_orders() == []
+
+
+def test_get_live_orders_accepts_a_bare_list_response(client):
+    """Some gateway builds return the array directly rather than wrapped."""
+    with _mock_raw_orders_body(client, [{"orderId": 1, "status": "Submitted"}]), patch("time.sleep"):
+        assert len(client.get_live_orders()) == 1
