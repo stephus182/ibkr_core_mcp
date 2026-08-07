@@ -3156,15 +3156,45 @@ class ClaudeToolkit:
         # fetch_page is now that route, and a far better one, so search returns what a
         # search should return: where to look. One responsibility per tool is what let
         # the whole two-engine ladder be deleted.
+        #
+        # This is the ONLY tool with a real HTTP status to judge by: Firecrawl returns
+        # metadata.statusCode (int) and metadata.error (nullable str) per result, per its
+        # documented response schema. crawl_site and fetch_page both pass metadata=None
+        # because the local browser carries no status, so until 2026-08-07
+        # assess_quality's status branch was unreachable in production — and this tool,
+        # the one that could have used it, applied no quality signal at all. A 403 stub
+        # rendered exactly like a real result.
+        from ibkr_core_mcp.local_browser import assess_quality
+
         lines = [f"## Search results for: {query}\n"]
+        readable = 0
         for i, r in enumerate(results, 1):
+            markdown = r.get("markdown") or ""
+            metadata = r.get("metadata") or {}
+            verdict = assess_quality(markdown, metadata, r.get("url", ""))
             lines.append(f"### {i}. {r.get('title', '(no title)')}")
             lines.append(f"**URL:** {r.get('url', '')}\n")
-            snippet = " ".join((r.get("markdown") or "").split())[:400]
-            if snippet:
-                lines.append(f"{snippet}…")
+            if verdict == "fallback":
+                status = metadata.get("statusCode")
+                why = f"HTTP {status}" if isinstance(status, int) and status >= 400 else None
+                if not why:
+                    why = f"error: {metadata['error']}" if metadata.get("error") else "almost no text extracted"
+                # Annotated, never dropped: a host that refuses automated access is
+                # itself useful, and dropping it would make the result count lie.
+                lines.append(
+                    f"⚠ **Not usable content** ({why}). Do not treat this as the source. "
+                    f"If you need this page, fetch_page with a saved login profile may reach it."
+                )
+            else:
+                readable += 1
+                snippet = " ".join(markdown.split())[:400]
+                if snippet:
+                    lines.append(f"{snippet}…")
             lines.append("")
-        lines.append("Use fetch_page on whichever URL you want to read in full.")
+        lines.append(
+            f"{readable} of {len(results)} result(s) returned usable text. "
+            f"Use fetch_page on whichever of those URLs you want to read in full."
+        )
 
         drive_note = ""
         if save_to_drive:

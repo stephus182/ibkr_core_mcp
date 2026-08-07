@@ -159,7 +159,15 @@ pytest tests/test_web_scraper_dev_cache_live.py -v -m integration
 
 There is no recovery ladder to catch a bad result any more, so every tool has to be honest
 about its own output. That honesty is the replacement for the fallback, and it is enforced
-in three places by the same `assess_quality` signal.
+in three places by the same `assess_quality` signal — `crawl_site`, `fetch_page` and
+`firecrawl_search`.
+
+This sentence claimed "three places" from 2026-07-30, when only two existed. `crawl_site`
+and `fetch_page` were wired; `firecrawl_search` was not, and it was the only one of the
+three holding a real HTTP status. A result Firecrawl returned with `statusCode: 403` and a
+44-byte body was rendered exactly like a real one — the original bug in §3.1, still open on
+the one tool that could detect it for free, behind a doc line saying it was closed. Wired
+2026-08-07; the count is now true.
 
 ### 3.1 A page count is not evidence of content
 

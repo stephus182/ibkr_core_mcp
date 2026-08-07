@@ -234,13 +234,20 @@ def assess_quality(markdown: str, metadata: dict[str, Any] | None, url: str) -> 
         `"ambiguous"` is deliberately not enough: real short pages exist, and
         discarding them would be its own kind of wrong.
       * `fetch_page` — flags anything not `"ok"` as possibly incomplete.
-      * `firecrawl_search` — passes Firecrawl's own page dict, so the HTTP-status
-        branch is live there and only there.
+      * `firecrawl_search` — annotates any result grading `"fallback"` and excludes it
+        from the "read these" invitation. It passes Firecrawl's own per-result metadata,
+        so the HTTP-status branch is live there and only there.
 
     `fetch_page` and `crawl_site` pass `metadata=None` because the local browser
     returns `{"url", "markdown"}` and carries no HTTP status. That is working from
     less, not working wrongly — the word-count and paywall-marker checks still apply,
     and they are what catch a 44-byte 403 or a 1-byte anti-bot stub.
+
+    **This docstring described the `firecrawl_search` caller for nine days before it
+    existed** (2026-07-30 to 2026-08-07). Only two call sites were real, both passing
+    `metadata=None`, so the status branch was unreachable in production while unit tests
+    covered it directly and stayed green — documentation asserting that a check runs,
+    which is the same defect class the check itself exists to catch.
 
     Args:
         markdown: The markdown content scraped for this page/result.

@@ -667,3 +667,100 @@ def test_crawl_site_uses_the_48h_drive_cache():
         mock_crawl.assert_not_called()
 
     assert "cached crawl" in text
+
+
+# ============================================================================
+# firecrawl_search quality signal — the one tool that had none
+# ============================================================================
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+def test_firecrawl_search_flags_a_result_firecrawl_itself_reports_as_blocked(mock_fc_cls):
+    """A 403 stub was rendered exactly like a real result.
+
+    assess_quality had two call sites (crawl_site, fetch_page) and BOTH pass
+    metadata=None, so its HTTP-status branch was unreachable in production while its
+    docstring claimed firecrawl_search was the caller keeping it live. firecrawl_search
+    is the only tool that gets statusCode for free — verified against Firecrawl's own
+    response schema, where metadata.statusCode is an integer and metadata.error a
+    nullable string.
+    """
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {
+            "url": "https://blocked.example.com/article",
+            "title": "Blocked",
+            # Long enough that word count alone would grade it "ok" — only the
+            # status branch can catch this, which is the point.
+            "markdown": _REALISTIC_MARKDOWN,
+            "metadata": {"statusCode": 403},
+        }
+    ]
+    mock_fc_cls.return_value = mock_fc
+
+    text, _ = toolkit.execute("firecrawl_search", {"query": "test"})
+
+    assert "https://blocked.example.com/article" in text, "a blocked host is still information"
+    assert "not usable content" in text.lower()
+    assert "403" in text
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+def test_firecrawl_search_flags_a_result_carrying_an_error(mock_fc_cls):
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {
+            "url": "https://x.example.com/a",
+            "title": "Err",
+            "markdown": _REALISTIC_MARKDOWN,
+            "metadata": {"error": "timed out"},
+        }
+    ]
+    mock_fc_cls.return_value = mock_fc
+
+    text, _ = toolkit.execute("firecrawl_search", {"query": "test"})
+
+    assert "not usable content" in text.lower()
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+def test_firecrawl_search_does_not_flag_a_good_result(mock_fc_cls):
+    """The guard against a flag so eager it stops meaning anything."""
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {
+            "url": "https://good.example.com/a",
+            "title": "Good",
+            "markdown": _REALISTIC_MARKDOWN,
+            "metadata": {"statusCode": 200},
+        }
+    ]
+    mock_fc_cls.return_value = mock_fc
+
+    text, _ = toolkit.execute("firecrawl_search", {"query": "test"})
+
+    assert_tool_succeeded(text)
+    assert "not usable content" not in text.lower()
+    assert "https://good.example.com/a" in text
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+def test_firecrawl_search_keeps_flagged_results_out_of_the_read_these_invitation(mock_fc_cls):
+    """Annotate, never drop — but do not invite the model to fetch_page a 403 either."""
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {"url": "https://ok.example.com/a", "title": "OK", "markdown": _REALISTIC_MARKDOWN, "metadata": {}},
+        {"url": "https://bad.example.com/b", "title": "Bad", "markdown": "nope", "metadata": {"statusCode": 403}},
+    ]
+    mock_fc_cls.return_value = mock_fc
+
+    text, _ = toolkit.execute("firecrawl_search", {"query": "test"})
+
+    # Both still listed: the result count must not lie.
+    assert "https://ok.example.com/a" in text
+    assert "https://bad.example.com/b" in text
+    assert "1 of 2" in text, "the reply must say how many results are actually readable"

@@ -296,9 +296,12 @@ class FirecrawlClient:
               - "url": str   — source URL
               - "title": str — page title (empty string if not present)
               - "markdown": str — extracted markdown content (empty string if not present)
-              - "metadata": dict — Firecrawl's raw per-result metadata (statusCode,
-                error, etc., empty dict if not present), used by ClaudeToolkit's
-                Crawl4AI fallback (assess_quality) to judge extraction quality
+              - "metadata": dict — Firecrawl's raw per-result metadata (statusCode:
+                int, error: str|null, etc., empty dict if not present). Passed to
+                `assess_quality` by `_handle_firecrawl_search`, which is the only
+                caller with a real HTTP status to judge by, so it is the only one
+                where that function's status branch can fire.
+                Schema: https://docs.firecrawl.dev/api-reference/endpoint/search
 
         Raises:
             FirecrawlError: On HTTP 401 (bad key), 429 (rate limit), 5xx (service error),
