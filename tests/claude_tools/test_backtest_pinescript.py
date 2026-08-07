@@ -1,5 +1,7 @@
 import pytest
 
+from .conftest import assert_tool_succeeded
+
 pytestmark = pytest.mark.backtest_pinescript
 
 
@@ -52,7 +54,9 @@ def test_execute_run_backtest_tool(toolkit):
             "strategy_name": "test",
         },
     )
-    assert len(text) > 0
+    assert_tool_succeeded(text)
+    assert "Total Return" in text
+    assert "Sharpe" in text
 
 
 def test_execute_generate_pinescript_tool(toolkit):

@@ -474,4 +474,3 @@ class TestWaitWrappers:
         assert args[0] == gm.is_authenticated  # check function
         assert args[3] == 120  # timeout
         assert args[4] == 3  # poll_interval
-

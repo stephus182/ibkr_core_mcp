@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
+from .conftest import assert_tool_succeeded
+
 pytestmark = pytest.mark.market_data
 
 
@@ -72,8 +74,9 @@ def test_execute_add_indicators(toolkit):
     text, fig = toolkit.execute(
         "add_indicators", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
     )
-    assert len(text) > 0
+    assert_tool_succeeded(text)
     assert fig is None
+    assert "RSI" in text
 
 
 def test_execute_get_market_snapshot_warns_on_partial_resolution(toolkit):

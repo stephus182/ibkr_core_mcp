@@ -2,6 +2,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from .conftest import assert_tool_succeeded
+
 pytestmark = pytest.mark.account
 
 
@@ -13,7 +15,9 @@ def test_execute_get_account_summary(toolkit):
     }
     text, fig = toolkit.execute("get_account_summary", {})
     assert fig is None
-    assert len(text) > 0
+    assert_tool_succeeded(text)
+    assert "Net Liquidation" in text
+    assert "100,000" in text
 
 
 def test_get_account_summary_omits_pnl_fields(toolkit):
@@ -40,8 +44,9 @@ def test_execute_get_notifications(toolkit):
     ]
     toolkit._client.get_unread_count.return_value = 1
     text, fig = toolkit.execute("get_notifications", {})
-    assert len(text) > 0
+    assert_tool_succeeded(text)
     assert fig is None
+    assert "Test alert" in text
 
 
 def test_get_positions_empty(toolkit):
