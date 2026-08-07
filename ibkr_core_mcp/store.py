@@ -738,8 +738,15 @@ class SQLiteStore:
             }
             _market_calendar_cache[_cache_key] = result
             return result
-        except Exception:
-            return {}
+        except Exception as exc:
+            # An error MARKER, not {}. A bare empty dict made every caller's
+            # `cal.get("is_trading_day")` return None — falsy, i.e. "the market is
+            # closed" — from a failed exchange_calendars import or a bad MIC lookup.
+            # is_trading_day is explicitly None so that reading it as a boolean is
+            # wrong in a way someone notices, rather than wrong in the safe-looking
+            # direction. Public API, consumed by claudia_ui.
+            log.warning("get_market_calendar_context failed: %s: %s", type(exc).__name__, exc)
+            return {"error": f"{type(exc).__name__}: {exc}", "is_trading_day": None}
 
     _ALLOWED_TIME_COLS = frozenset({"time", "snapshot_at", "logged_at"})
 

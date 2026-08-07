@@ -539,3 +539,42 @@ def test_to_dict_carries_the_principles_metrics(ohlcv):
     code = "df['signal'] = 0\ndf.iloc[5:15, df.columns.get_loc('signal')] = 1"
     d = _run(ohlcv, code).to_dict()
     assert "expectancy" in d and "profit_factor" in d
+
+
+def test_backtest_refuses_an_empty_dataframe_instead_of_reporting_0_percent():
+    """`(sig == 0).all()` is True for an empty Series — the same pandas primitive that
+    made test_rsi_bounds unfalsifiable. A zero-row frame produced a fully-populated
+    BacktestResult reading "0.0% return, 0 trades", which is a measurement nobody made.
+    """
+    import pandas as pd
+
+    from ibkr_core_mcp.backtest import run_backtest
+    from ibkr_core_mcp.exceptions import BacktestError
+
+    empty = pd.DataFrame({"open": [], "high": [], "low": [], "close": [], "volume": []})
+
+    with pytest.raises(BacktestError, match="no rows|empty"):
+        run_backtest("df['signal'] = 0", empty, strategy_name="t", symbol="X")
+
+
+def test_backtest_still_reports_a_genuine_all_flat_strategy():
+    """The control: real rows with no signal is a real 0% result, not an error."""
+    import numpy as np
+    import pandas as pd
+
+    from ibkr_core_mcp.backtest import run_backtest
+
+    n = 40
+    df = pd.DataFrame(
+        {
+            "open": np.ones(n),
+            "high": np.ones(n),
+            "low": np.ones(n),
+            "close": np.linspace(100, 110, n),
+            "volume": np.ones(n),
+        },
+        index=pd.date_range("2025-01-01", periods=n, freq="B"),
+    )
+    result = run_backtest("df['signal'] = 0", df, strategy_name="t", symbol="X")
+    assert result.num_trades == 0
+    assert result.total_return == 0.0

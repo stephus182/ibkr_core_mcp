@@ -176,12 +176,20 @@ async def test_resource_trades_recent(toolkit, store):
 
 
 @pytest.mark.asyncio
-async def test_resource_unknown_uri_returns_empty(toolkit, store):
+async def test_resource_unknown_uri_says_so_rather_than_returning_empty(toolkit, store):
+    """Was `assert content == "[]"`, pinning the defect as the contract.
+
+    A URI this server does not serve is not an empty collection. Returning "[]" made
+    a typo'd resource name indistinguishable from a real, empty one — the same
+    conflation that made a down gateway read as an empty portfolio.
+    """
+    import json
+
     from ibkr_core_mcp.mcp_server import build_server
 
     server = build_server(toolkit, store)
-    content = await _read_resource_text(server, "ibkr://unknown/path")
-    assert content == "[]"
+    payload = json.loads(await _read_resource_text(server, "ibkr://unknown/path"))
+    assert payload["error"] == "unknown resource: ibkr://unknown/path"
 
 
 # ── _stream_loop_with_retry — retry and cancel ────────────────────────────────
@@ -312,3 +320,59 @@ async def test_resource_pnl_live_empty_when_never_recorded(toolkit, store):
     server = build_server(toolkit, store)
     content = await _read_resource_text(server, "ibkr://pnl/live")
     assert content == "{}"
+
+
+# ============================================================================
+# read_resource: "the gateway is down" must not read as "you have nothing"
+# ============================================================================
+
+
+async def test_read_resource_reports_a_failure_instead_of_an_empty_portfolio(toolkit, store):
+    """`text = "[]"` was set before the try, and the handler logged only
+    type(exc).__name__. A down gateway therefore produced a *successful* resource
+    response whose body was an empty array, and the model read "the portfolio is
+    empty". The exception message was discarded entirely."""
+    import json
+
+    from ibkr_core_mcp.exceptions import IBKRAuthError
+    from ibkr_core_mcp.mcp_server import build_server
+
+    toolkit._client.get_accounts.side_effect = IBKRAuthError("session expired")
+    server = build_server(toolkit, store)
+
+    content = await _read_resource_text(server, "ibkr://positions/current")
+
+    assert content != "[]", "a failed read must never look like an empty portfolio"
+    payload = json.loads(content)
+    assert "error" in payload
+    assert "session expired" in payload["error"], "the message, not just the exception class name"
+
+
+async def test_read_resource_reports_a_missing_account_rather_than_empty(toolkit, store):
+    """`if account_id:` left text as "[]" with no exception raised at all — a silent
+    branch producing the same empty array as a real empty portfolio."""
+    import json
+
+    from ibkr_core_mcp.mcp_server import build_server
+
+    toolkit._client.get_accounts.return_value = []
+    server = build_server(toolkit, store)
+
+    payload = json.loads(await _read_resource_text(server, "ibkr://positions/current"))
+
+    assert isinstance(payload, dict) and "error" in payload
+
+
+async def test_read_resource_still_returns_real_data(toolkit, store):
+    """The control: a working gateway must keep returning the plain array."""
+    import json
+
+    from ibkr_core_mcp.mcp_server import build_server
+
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1"}]
+    toolkit._client.get_positions.return_value = [{"conid": 265598, "position": 100}]
+    server = build_server(toolkit, store)
+
+    payload = json.loads(await _read_resource_text(server, "ibkr://positions/current"))
+
+    assert payload[0]["conid"] == 265598

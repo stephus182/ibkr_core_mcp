@@ -16,7 +16,7 @@ from RestrictedPython.Guards import full_write_guard, safer_getattr
 from RestrictedPython.Limits import limited_range
 
 from ibkr_core_mcp import analytics as _analytics
-from ibkr_core_mcp.exceptions import BacktestRuntimeError, BacktestSyntaxError
+from ibkr_core_mcp.exceptions import BacktestError, BacktestRuntimeError, BacktestSyntaxError
 
 _MAX_CODE_LEN = 4096
 _EXEC_TIMEOUT = 10  # seconds
@@ -210,9 +210,23 @@ def run_backtest(
     df.eval()/df.query() (pandas' own unsandboxed expression engine).
     Not blocked: other DataFrame public methods (df.to_csv etc.) — accepted
     residual risk, documented in SECURITY.md §Residual risk.
+
+    Raises:
+        BacktestSyntaxError: If the strategy code exceeds the size limit or will not
+            compile.
+        BacktestError: If `df` has no rows, or the sandbox fails. An empty frame used
+            to produce a fully-populated result reading "0.0% return, 0 trades",
+            because `(sig == 0).all()` is True for an empty Series — a measurement
+            nobody made, reported in the same shape as one they did.
     """
     if len(code) > _MAX_CODE_LEN:
         raise BacktestSyntaxError(f"Strategy code exceeds {_MAX_CODE_LEN} character limit ({len(code)} chars)")
+
+    if df is None or len(df) == 0:
+        raise BacktestError(
+            "Backtest received a DataFrame with no rows — there is nothing to test. "
+            "Check the symbol, timeframe, period and end date passed to fetch_market_data."
+        )
 
     # safe_globals already sets __builtins__ = safe_builtins, which excludes
     # __import__, open, eval, exec, compile, print and all introspection attrs.

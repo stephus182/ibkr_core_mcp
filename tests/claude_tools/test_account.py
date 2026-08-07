@@ -441,3 +441,33 @@ def test_get_positions_tolerates_null_value_fields(toolkit):
     assert "GLD" in text
     assert "0.00" in text
     assert "error" not in text.lower()
+
+
+def test_get_ledger_renders_an_unparseable_value_as_unknown_not_zero(toolkit):
+    """`_f` returned 0.0 for anything float() choked on, so a value IBKR never
+    reported — or reported with a thousands separator — rendered as a bolded
+    "**$0.00**". Zero is a plausible, actionable number for a brokerage account;
+    unknown is not zero, and nothing in the reply distinguished them."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_account_ledger.return_value = {
+        "USD": {
+            "netliquidationvalue": "n/a",
+            "cashbalance": 0,
+            "stockmarketvalue": 1000.0,
+        }
+    }
+    text, _ = toolkit.execute("get_ledger", {})
+
+    assert_tool_succeeded(text)
+    assert "Net Liquidation Value : **—**" in text, "unreported must not read as zero"
+    assert "Cash Balance          : $0.00" in text, "a genuine zero must still read as zero"
+
+
+def test_get_ledger_parses_a_value_with_thousands_separators(toolkit):
+    """IBKR has been observed returning "1,234,567.89"; float() raises on that."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_account_ledger.return_value = {"USD": {"netliquidationvalue": "1,234,567.89"}}
+
+    text, _ = toolkit.execute("get_ledger", {})
+
+    assert "$1,234,567.89" in text

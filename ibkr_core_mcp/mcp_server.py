@@ -123,7 +123,12 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
     @server.read_resource()
     async def handle_read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
         path = str(uri)
-        text = "[]"
+        # An error OBJECT, not "[]". `text` used to be initialised to an empty array
+        # before the try, so a down gateway or an expired session produced a perfectly
+        # successful resource response whose body said "you have no positions" — and
+        # only type(exc).__name__ was logged, so even the reason was thrown away. The
+        # mimeType contract is preserved; the model can read this and say what broke.
+        text = json.dumps({"error": "resource handler did not run", "resource": path})
         try:
             if path == "ibkr://accounts":
                 text = json.dumps(toolkit._client.get_accounts(), indent=2)
@@ -132,6 +137,11 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                 account_id = accounts[0].get("accountId", "") if accounts else ""
                 if account_id:
                     text = json.dumps(toolkit._client.get_positions(account_id), indent=2)
+                else:
+                    # Silent branch: no exception, but nothing was read either.
+                    text = json.dumps(
+                        {"error": "no account could be resolved, so positions were never read", "resource": path}
+                    )
             elif path == "ibkr://trades/recent":
                 text = json.dumps(store.get_trades()[:100], indent=2)
             elif path == "ibkr://pnl/live":
@@ -139,8 +149,11 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                 # pnl_snapshots stays empty and this always returns {}.
                 latest = store.get_latest_pnl()
                 text = json.dumps(latest if latest is not None else {}, indent=2)
+            else:
+                text = json.dumps({"error": f"unknown resource: {path}", "resource": path})
         except Exception as exc:
-            logger.warning("read_resource %s failed: %s", path, type(exc).__name__)
+            logger.warning("read_resource %s failed: %s: %s", path, type(exc).__name__, exc)
+            text = json.dumps({"error": f"{type(exc).__name__}: {exc}", "resource": path}, indent=2)
         return [ReadResourceContents(content=text, mime_type="application/json")]
 
     return server

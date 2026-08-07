@@ -841,3 +841,28 @@ def test_parent_directory_is_owner_only(store, mock_config):
 
     mode = stat_mod.S_IMODE(parent.stat().st_mode)
     assert mode == 0o700, f"store directory is {oct(mode)}, expected 0o700"
+
+
+def test_market_calendar_context_reports_a_failure_instead_of_an_empty_dict(monkeypatch):
+    """`except Exception: return {}` made a failed lookup read as "market closed".
+
+    Every caller does `cal.get("is_trading_day")`, and on {} that is None — falsy, and
+    indistinguishable from a genuine non-trading day. Public API, consumed by claudia_ui.
+    """
+    import ibkr_core_mcp.store as store_mod
+    from ibkr_core_mcp.store import SQLiteStore
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("exchange_calendars unavailable")
+
+    monkeypatch.setattr("exchange_calendars.get_calendar", _boom)
+    # The process-level cache is keyed by (date, exchanges) and survives across tests.
+    # Without clearing it this passes alone and fails beside its siblings — it would
+    # be reading another test's cached success rather than exercising the error path.
+    monkeypatch.setattr(store_mod, "_market_calendar_cache", {})
+
+    result = SQLiteStore.get_market_calendar_context()
+
+    assert result, "a failed lookup must not return a falsy dict"
+    assert "error" in result
+    assert result["is_trading_day"] is None, "explicitly unknown, not implicitly False"

@@ -1087,15 +1087,30 @@ def _validate_account_id(account_id: str) -> str:
     return account_id
 
 
-def _money(v: float) -> str:
-    """'$' + comma-grouped magnitude, sign only shown when negative (e.g. -$8,107.13)."""
+#: Rendered in place of a figure IBKR did not report. Deliberately not "$0.00":
+#: zero is a real, actionable balance and must stay distinguishable from unknown.
+_UNKNOWN_MONEY = "—"
+
+
+def _money(v: float | None) -> str:
+    """'$' + comma-grouped magnitude, sign only shown when negative (e.g. -$8,107.13).
+
+    None renders as an em dash, not $0.00 — see _UNKNOWN_MONEY.
+    """
+    if v is None:
+        return _UNKNOWN_MONEY
     sign = "-" if v < 0 else ""
     return f"{sign}${abs(v):,.2f}"
 
 
-def _money_signed(v: float) -> str:
+def _money_signed(v: float | None) -> str:
     """Like _money but always shows an explicit +/- sign — for P&L figures,
-    where the sign is the point (e.g. +$461.56, -$8,107.13)."""
+    where the sign is the point (e.g. +$461.56, -$8,107.13).
+
+    None renders as an em dash, not +$0.00 — an unreported P&L is not a flat one.
+    """
+    if v is None:
+        return _UNKNOWN_MONEY
     sign = "+" if v >= 0 else "-"
     return f"{sign}${abs(v):,.2f}"
 
@@ -1907,11 +1922,21 @@ class ClaudeToolkit:
             if not isinstance(data, dict):
                 continue
 
-            def _f(key: str, _data: dict[str, Any] = data) -> float:
+            def _f(key: str, _data: dict[str, Any] = data) -> float | None:
+                """Return the ledger value, or None when IBKR did not report a usable one.
+
+                Returned 0.0 for anything float() choked on, so a missing or
+                thousands-separated value rendered as a bolded "**$0.00**". Zero is a
+                plausible, actionable number for a brokerage account — "unknown" is not
+                zero, and nothing in the reply told them apart.
+                """
+                raw = _data.get(key)
+                if raw is None or raw == "":
+                    return None
                 try:
-                    return float(_data.get(key) or 0)
+                    return float(str(raw).replace(",", "").strip())
                 except (ValueError, TypeError):
-                    return 0.0
+                    return None
 
             nlv = _f("netliquidationvalue")
             cash = _f("cashbalance")
@@ -3297,10 +3322,15 @@ class ClaudeToolkit:
             cached = self._web_docs.get_cached_crawl(url)
             if cached is not None:
                 saved = len(cached["pages"])
+                # "Saved N page(s)" read as a fresh measurement; it is a count from
+                # index.json, and the .md files it names are not re-checked against
+                # Drive. Verifying would cost N round-trips on every cache hit and
+                # defeat the 48h cache, so the honest fix is to say what is known.
                 return (
                     f"Using cached crawl of {url} from Drive — nothing was re-fetched.\n"
                     f"Crawled at: {cached['crawled_at']}\n"
-                    f"Saved {saved} page(s). Pass force_refresh=true to re-crawl.\n"
+                    f"The cached manifest lists {saved} page(s); their contents were not "
+                    f"re-verified against Drive. Pass force_refresh=true to re-crawl.\n"
                     f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10]) + ("..." if saved > 10 else ""),
                     None,
                 )
