@@ -200,9 +200,11 @@ class GatewayManager:
                     self.CONTAINER_NAME,
                     "-p",
                     f"127.0.0.1:{self._port}:{self._port}",
-                    # GATEWAY_PORT is the only variable anything in the image reads:
-                    # run_gateway.sh's wait loop and healthcheck.sh both build their URL
-                    # from it. Three TICKLE_* variables were passed here until
+                    # GATEWAY_PORT is the only variable anything in the image reads, and
+                    # `healthcheck.sh` is the only reader — it builds the probe URL from
+                    # it. `run_gateway.sh` never references the variable; its wait loop
+                    # reaches the port only by calling that script.
+                    # Three TICKLE_* variables were passed here until
                     # 2026-08-07, addressed to a tickler.sh that had been out of the
                     # image since 2026-08-06 and is now deleted outright. Do not add
                     # them back: session renewal is the caller's, because a loop inside
