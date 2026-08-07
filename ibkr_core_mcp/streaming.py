@@ -19,6 +19,7 @@ https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/webs
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -28,8 +29,74 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
 
+log = logging.getLogger(__name__)
+
 _FIELD_MAP = {"31": "last", "84": "bid", "86": "ask", "87": "volume", "55": "symbol", "70": "high", "71": "low"}
 _DEFAULT_FIELDS = ["31", "55", "84", "86", "87"]
+
+#: Field 31's documented prefixes. "C" = previous day's closing price, "H" = trading
+#: has halted. Source:
+#: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-fields.md
+_PRICE_QUALIFIERS = ("C", "H")
+
+#: Field 87's documented multipliers — "Volume for the day, formatted with 'K' for
+#: thousands or 'M' for millions." Same source.
+_VOLUME_SUFFIXES = {"K": 1_000.0, "M": 1_000_000.0, "B": 1_000_000_000.0}
+
+
+def _parse_price(raw: object) -> tuple[float | None, str | None]:
+    """Parse an IBKR price field, separating a documented prefix from the number.
+
+    IBKR types every market-data field as a *string*, and field 31 "may contain one of
+    the following prefixes: C - Previous day's closing price. H - Trading has halted."
+    `float("C213.50")` raises, and the parser used to swallow that with a bare `pass` —
+    so on a closed or halted market the price vanished, `LiveQuote.last` stayed None, and
+    every downstream consumer read a perfectly valid-looking tick with no price in it.
+
+    Args:
+        raw: The field value as IBKR sent it.
+
+    Returns:
+        `(value, qualifier)`. `qualifier` is "C" or "H" when the prefix was present and
+        None otherwise. `(None, None)` when the value cannot be parsed at all — the
+        caller logs that rather than discarding it silently.
+    """
+    text = str(raw).strip()
+    if not text:
+        return None, None
+    qualifier: str | None = None
+    if text[0].upper() in _PRICE_QUALIFIERS:
+        qualifier = text[0].upper()
+        text = text[1:]
+    try:
+        return float(text), qualifier
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _parse_volume(raw: object) -> float | None:
+    """Parse field 87, which IBKR formats with a K/M multiplier suffix.
+
+    "Volume for the day, formatted with 'K' for thousands or 'M' for millions." So
+    `float("1.2M")` raises on any reasonably traded name, and volume silently vanished
+    for exactly the symbols anyone would be watching.
+
+    Args:
+        raw: The field value as IBKR sent it.
+
+    Returns:
+        The expanded float, or None if it cannot be parsed.
+    """
+    text = str(raw).strip().replace(",", "")
+    if not text:
+        return None
+    multiplier = _VOLUME_SUFFIXES.get(text[-1].upper())
+    if multiplier is not None:
+        text = text[:-1]
+    try:
+        return float(text) * (multiplier or 1.0)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -44,6 +111,10 @@ class LiveQuote:
     volume: float | None = None
     high: float | None = None
     low: float | None = None
+    #: IBKR's field-31 prefix when present: "C" = previous day's close, "H" = halted.
+    #: None for an ordinary live trade. Consumers that act on `last` must check this —
+    #: a "C" price is yesterday's and is not evidence of anything happening today.
+    last_qualifier: str | None = None
 
 
 @dataclass
@@ -303,11 +374,23 @@ class IBKRWebSocket:
             val = data[code]
             if attr == "symbol":
                 kwargs[attr] = str(val)
+            elif attr == "volume":
+                parsed = _parse_volume(val)
+                if parsed is None:
+                    log.warning("dropping unparseable volume for conid %s: %r", conid, val)
+                else:
+                    kwargs[attr] = parsed
             else:
-                try:
-                    kwargs[attr] = float(val)
-                except (TypeError, ValueError):
-                    pass
+                price, qualifier = _parse_price(val)
+                if price is None:
+                    # Logged, not swallowed. A dropped field used to be indistinguishable
+                    # from a field IBKR never sent, which is how C-prefixed prices went
+                    # missing for a year without anything recording it.
+                    log.warning("dropping unparseable %s for conid %s: %r", attr, conid, val)
+                    continue
+                kwargs[attr] = price
+                if attr == "last" and qualifier:
+                    kwargs["last_qualifier"] = qualifier
         return LiveQuote(**kwargs)
 
     def _parse_trade_executions(self, msg: dict[str, Any]) -> list[TradeExecution] | None:
@@ -399,9 +482,33 @@ class AlertManager:
         self._store = store
 
     def check_quote(self, quote: LiveQuote) -> list[dict[str, Any]]:
-        """Return newly-triggered alerts and mark them triggered. Returns [] if last is None."""
+        """Return newly-triggered alerts and mark them triggered.
+
+        Returns [] if there is no usable last price. Two cases are deliberately
+        different, because conflating them is what made this silent:
+
+          * `last is None` — nothing to compare against.
+          * `last_qualifier == "C"` — the price is IBKR's *previous day's close*, not a
+            trade. Comparing a threshold to yesterday's close would fire every alert
+            still sitting on the wrong side of it, every morning before the open.
+
+        `"H"` (halted) is **not** excluded: the venue has stopped, but that last price is
+        a real trade that really happened, so an alert on it is a true statement. It is
+        logged so a triggered-but-untradeable alert can be explained afterwards.
+
+        Args:
+            quote: The parsed tick to evaluate.
+
+        Returns:
+            The alert rows that newly triggered, already marked in the store.
+        """
         if quote.last is None:
             return []
+        if quote.last_qualifier == "C":
+            log.debug("conid %s: ignoring previous-close price %s for alerts", quote.conid, quote.last)
+            return []
+        if quote.last_qualifier == "H":
+            log.warning("conid %s: evaluating alerts against a halted price %s", quote.conid, quote.last)
         active = [a for a in self._store.get_alerts(active_only=True) if a["conid"] == quote.conid]
         triggered = []
         for alert in active:

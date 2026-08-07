@@ -179,7 +179,13 @@ def test_parse_conid_fallback_from_topic():
 
 
 def test_parse_non_numeric_price_skipped():
-    """A non-numeric price field should be silently skipped, not raise."""
+    """A non-numeric price field is skipped, not raised on.
+
+    No longer *silently*: it is logged at WARNING (see
+    test_parse_market_data_logs_a_value_it_cannot_parse). "N/A" has no documented
+    meaning and stays unparseable — unlike "C213.50"/"H99.0", which are IBKR's
+    documented prefixes and are now understood rather than discarded.
+    """
     from ibkr_core_mcp.streaming import IBKRWebSocket, LiveQuote
 
     ws = object.__new__(IBKRWebSocket)
@@ -589,3 +595,115 @@ def test_parse_stream_execution_side_normalization(raw_side, expected):
 
     ex = TradeExecution(execution_id="E1", side=raw_side)
     assert _parse_stream_execution(ex)["side"] == expected
+
+
+# ============================================================================
+# IBKR's documented field-31 prefixes and field-87 suffixes
+# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-fields.md
+#   31 "May contain one of the following prefixes: C - Previous day's closing
+#      price. H - Trading has halted."
+#   87 "Volume for the day, formatted with 'K' for thousands or 'M' for millions."
+# float() raises on all of these; the parser swallowed that with `except: pass`,
+# so the field silently vanished and LiveQuote still looked valid.
+# ============================================================================
+
+
+def _quote_from(fields):
+    import json as _json
+
+    from ibkr_core_mcp.streaming import IBKRWebSocket
+
+    ws = object.__new__(IBKRWebSocket)
+    return ws._parse_message(_json.dumps({"topic": "smd+265598", "data": [{"conid": 265598, **fields}]}))
+
+
+def test_parse_market_data_keeps_a_previous_close_price_and_marks_it():
+    """Market closed: IBKR sends "C213.50". last became None and the tick looked empty."""
+    quote = _quote_from({"31": "C213.50"})
+
+    assert quote.last == 213.50
+    assert quote.last_qualifier == "C"
+
+
+def test_parse_market_data_keeps_a_halted_price_and_marks_it():
+    quote = _quote_from({"31": "H99.0"})
+
+    assert quote.last == 99.0
+    assert quote.last_qualifier == "H"
+
+
+def test_parse_market_data_leaves_an_ordinary_price_unqualified():
+    quote = _quote_from({"31": "182.50"})
+
+    assert quote.last == 182.50
+    assert quote.last_qualifier is None
+
+
+def test_parse_market_data_expands_a_formatted_volume():
+    """Field 87 is documented as K/M formatted, so float() fails on every busy day."""
+    assert _quote_from({"87": "1.2M"}).volume == 1_200_000.0
+    assert _quote_from({"87": "850K"}).volume == 850_000.0
+    assert _quote_from({"87": "1234"}).volume == 1234.0
+
+
+def test_parse_market_data_logs_a_value_it_cannot_parse(caplog):
+    """The core of the defect: a dropped field must leave a trace.
+
+    `except (TypeError, ValueError): pass` meant an unparseable tick was
+    indistinguishable from a tick that never carried the field.
+    """
+    with caplog.at_level("WARNING"):
+        quote = _quote_from({"31": "not-a-price"})
+
+    assert quote.last is None
+    assert "not-a-price" in caplog.text
+    assert "unparseable last" in caplog.text
+
+
+def test_alert_does_not_fire_on_a_previous_close_price():
+    """A "C" price is yesterday's close. Firing on it would alert every morning.
+
+    check_quote returned [] whenever last was None, so before this the C-prefixed
+    tick reached the alert engine as "no price" and mcp_server reported "no alerts
+    triggered" — silently, for a reason nothing recorded.
+    """
+    from unittest.mock import MagicMock
+
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
+
+    store = MagicMock()
+    store.get_alerts.return_value = [{"id": 1, "conid": 265598, "direction": "above", "threshold": 100.0}]
+    mgr = AlertManager(store)
+
+    triggered = mgr.check_quote(LiveQuote(conid=265598, last=213.50, last_qualifier="C"))
+
+    assert triggered == []
+    store.mark_alert_triggered.assert_not_called()
+
+
+def test_alert_fires_on_a_halted_price_because_that_trade_really_happened():
+    """ "H" marks the venue halted, not the price fictional — it is the last real trade."""
+    from unittest.mock import MagicMock
+
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
+
+    store = MagicMock()
+    store.get_alerts.return_value = [{"id": 1, "conid": 265598, "direction": "above", "threshold": 100.0}]
+    mgr = AlertManager(store)
+
+    triggered = mgr.check_quote(LiveQuote(conid=265598, last=213.50, last_qualifier="H"))
+
+    assert len(triggered) == 1
+    store.mark_alert_triggered.assert_called_once_with(1)
+
+
+def test_alert_still_fires_on_an_ordinary_live_price():
+    from unittest.mock import MagicMock
+
+    from ibkr_core_mcp.streaming import AlertManager, LiveQuote
+
+    store = MagicMock()
+    store.get_alerts.return_value = [{"id": 1, "conid": 265598, "direction": "above", "threshold": 100.0}]
+    mgr = AlertManager(store)
+
+    assert len(mgr.check_quote(LiveQuote(conid=265598, last=213.50))) == 1
