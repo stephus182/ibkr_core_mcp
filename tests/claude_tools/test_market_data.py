@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from .conftest import assert_tool_succeeded
+from .conftest import assert_tool_failed, assert_tool_succeeded
 
 pytestmark = pytest.mark.market_data
 
@@ -623,7 +623,7 @@ def test_get_contract_info_error(toolkit):
     toolkit._client.get_contract_info_and_rules.side_effect = RuntimeError("timeout")
     text, fig = toolkit.execute("get_contract_info", {"symbol": "AAPL"})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================
@@ -667,7 +667,7 @@ def test_get_option_chain_error(toolkit):
     toolkit._client.get_option_chain.side_effect = RuntimeError("chain unavailable")
     text, fig = toolkit.execute("get_option_chain", {"symbol": "AAPL"})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================
@@ -701,7 +701,7 @@ def test_run_scanner_error(toolkit):
     toolkit._client.run_iserver_scanner.side_effect = RuntimeError("scanner down")
     text, fig = toolkit.execute("run_scanner", {"scan_code": "TOP_VOLUME_RATE"})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================
@@ -732,7 +732,7 @@ def test_get_trading_schedule_error(toolkit):
     toolkit._client.get_trading_schedule.side_effect = RuntimeError("schedule unavailable")
     text, fig = toolkit.execute("get_trading_schedule", {"symbol": "AAPL"})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================

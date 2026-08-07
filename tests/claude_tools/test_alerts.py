@@ -1,5 +1,7 @@
 import pytest
 
+from .conftest import assert_tool_failed
+
 pytestmark = pytest.mark.alerts
 
 
@@ -167,7 +169,7 @@ def test_modify_price_alert_error(toolkit):
     toolkit._client.get_alert.side_effect = RuntimeError("alert service down")
     text, fig = toolkit.execute("modify_price_alert", {"alert_id": "1", "price": 200.0})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================

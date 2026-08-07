@@ -2,6 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from .conftest import assert_tool_succeeded
+
 pytestmark = pytest.mark.web_scraping
 
 _REALISTIC_PARAGRAPH = (
@@ -458,6 +460,10 @@ def test_fetch_page_does_not_cry_wolf_on_a_full_page():
 
     text, _payload = toolkit.execute("fetch_page", {"url": "https://example.com/article"})
 
+    # An error string also lacks the word "incomplete", so the absence check alone
+    # passed even with fetch_page raising on every call — a "does not cry wolf" test
+    # that could not tell silence from failure.
+    assert_tool_succeeded(text)
     assert "incomplete" not in text.lower()
 
 

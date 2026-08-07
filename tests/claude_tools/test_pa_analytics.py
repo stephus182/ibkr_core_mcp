@@ -1,5 +1,7 @@
 import pytest
 
+from .conftest import assert_tool_failed
+
 pytestmark = pytest.mark.pa_analytics
 
 
@@ -44,7 +46,7 @@ def test_get_pa_performance_error(toolkit):
     toolkit._client.get_pa_performance.side_effect = RuntimeError("PA down")
     text, fig = toolkit.execute("get_pa_performance", {"period": "1M"})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================

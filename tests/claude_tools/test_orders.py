@@ -1,5 +1,7 @@
 import pytest
 
+from .conftest import assert_tool_failed
+
 pytestmark = pytest.mark.orders
 
 
@@ -331,7 +333,7 @@ def test_get_order_status_error(toolkit):
     toolkit._client.get_order_status.side_effect = RuntimeError("order not found")
     text, fig = toolkit.execute("get_order_status", {"order_id": "99"})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================

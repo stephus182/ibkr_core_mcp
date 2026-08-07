@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from .conftest import assert_tool_succeeded
+from .conftest import assert_tool_failed, assert_tool_succeeded
 
 pytestmark = pytest.mark.account
 
@@ -160,6 +160,11 @@ def test_get_ledger_omits_zero_futures(toolkit):
         }
     }
     text, fig = toolkit.execute("get_ledger", {})
+    # assert_tool_succeeded first: every assertion below is an absence check, and an
+    # error string is absent everything. Without it this passed even when the handler
+    # raised on every call.
+    assert_tool_succeeded(text)
+    assert "Cash Balance" in text, "the rows that should survive must actually be there"
     assert "Futures Market Value" not in text
     assert "Futures P&L" not in text
 
@@ -393,7 +398,7 @@ def test_get_watchlists_error(toolkit):
     toolkit._client.get_watchlists.side_effect = RuntimeError("watchlist timeout")
     text, fig = toolkit.execute("get_watchlists", {})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================
@@ -417,7 +422,7 @@ def test_get_allocation_error(toolkit):
     toolkit._client.get_account_allocation.side_effect = RuntimeError("allocation unavailable")
     text, fig = toolkit.execute("get_allocation", {})
     assert fig is None
-    assert "unexpected" in text.lower()
+    assert_tool_failed(text, containing="unexpected error")
 
 
 # ============================================================================
