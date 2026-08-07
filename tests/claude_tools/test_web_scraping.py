@@ -126,33 +126,9 @@ def test_firecrawl_search_saves_to_drive_when_requested(mock_wds_cls, mock_fc_cl
     assert "file-id-123" in result or "Drive" in result
 
 
-def test_crawl_does_not_root_scrape_when_firecrawl_returned_content():
-    toolkit = _make_toolkit()
-    toolkit._firecrawl = MagicMock()
-    toolkit._firecrawl.crawl.return_value = [
-        {"url": "https://example.com/a", "markdown": _REALISTIC_MARKDOWN, "metadata": {}}
-    ]
-    toolkit._web_docs = MagicMock()
-    toolkit._web_docs.get_cached_crawl.return_value = None
-    toolkit._web_docs.save_crawl.return_value = {
-        "url": "https://example.com",
-        "crawled_at": "2026-07-25T00:00:00+00:00",
-        "pages": [{"url": "https://example.com/a", "file_id": "f1"}],
-    }
-    toolkit._crawl4ai = MagicMock()
-
-    toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
-
-    toolkit._crawl4ai.scrape.assert_not_called()
-
-
 # ============================================================================
 # Per-result quality assessment wiring
 # ============================================================================
-
-
-def _long_markdown(word_count: int) -> str:
-    return " ".join(["word"] * word_count)
 
 
 def test_validate_public_url_blocks_localhost():
@@ -168,86 +144,6 @@ def test_validate_public_url_blocks_link_local():
 def test_validate_public_url_allows_public_https():
     toolkit = _make_toolkit()
     assert toolkit._validate_public_url("https://example.com/article") is None
-
-
-@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
-@patch("ibkr_core_mcp.local_browser.Crawl4AIScraper")
-def test_firecrawl_search_never_fetches_blocked_result_url_via_crawl4ai(mock_c4a_cls, mock_fc_cls):
-    """A search result pointing at a private/internal address (e.g. a manipulated
-    or attacker-influenced search result) must not trigger a local Crawl4AI fetch
-    just because Firecrawl's own markdown for it looks incomplete."""
-    toolkit = _make_toolkit()
-    mock_fc = MagicMock()
-    mock_fc.search.return_value = [
-        {
-            "url": "http://169.254.169.254/latest/meta-data/",
-            "title": "Suspicious result",
-            "markdown": "",
-            "metadata": {},
-        }
-    ]
-    mock_fc_cls.return_value = mock_fc
-
-    result, fig = toolkit.execute("firecrawl_search", {"query": "test"})
-    mock_c4a_cls.return_value.scrape.assert_not_called()
-
-
-@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
-@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
-@patch("ibkr_core_mcp.local_browser.Crawl4AIScraper")
-def test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
-    """A crawled sub-page URL that resolves to a private address (e.g. Firecrawl
-    followed a redirect/internal link off the validated root) must not reach
-    Crawl4AIScraper.scrape even though the top-level crawl root passed the guard."""
-    toolkit = _make_toolkit()
-    mock_fc = MagicMock()
-    mock_fc.crawl.return_value = [
-        {"url": "http://127.0.0.1:8080/internal", "markdown": "", "metadata": {"statusCode": 403}}
-    ]
-    mock_fc_cls.return_value = mock_fc
-    mock_wds = MagicMock()
-    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
-    mock_wds.save_crawl.return_value = {
-        "url": "https://example.com",
-        "crawled_at": "2026-01-01T00:00:00+00:00",
-        "pages": [{"url": "http://127.0.0.1:8080/internal", "file_id": "fid"}],
-    }
-    mock_wds_cls.return_value = mock_wds
-
-    toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
-    mock_c4a_cls.return_value.scrape_batch.assert_not_called()
-
-
-@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
-@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
-@patch("ibkr_core_mcp.local_browser.Crawl4AIScraper")
-def test_firecrawl_crawl_does_not_claim_fallback_used_when_unavailable(mock_c4a_cls, mock_wds_cls, mock_fc_cls):
-    """A page whose fallback attempt fails/is skipped/is unavailable must not be
-    counted in the 'Crawl4AI fallback used for N page(s)' summary — that count
-    must reflect only pages where Crawl4AI actually replaced the content."""
-    from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError
-
-    toolkit = _make_toolkit()
-    mock_fc = MagicMock()
-    mock_fc.crawl.return_value = [
-        {"url": "https://example.com/blocked", "markdown": "", "metadata": {"statusCode": 403}}
-    ]
-    mock_fc_cls.return_value = mock_fc
-    mock_c4a_cls.return_value.scrape_batch.side_effect = Crawl4AIUnavailableError(
-        "Crawl4AI is not installed. Install with `pip install ibkr_core_mcp[scraper]`."
-    )
-    mock_wds = MagicMock()
-    mock_wds.get_cached_crawl.return_value = None  # force cache-miss -> fetch-fresh path
-    mock_wds.save_crawl.return_value = {
-        "url": "https://example.com",
-        "crawled_at": "2026-01-01T00:00:00+00:00",
-        "pages": [],
-    }
-    mock_wds_cls.return_value = mock_wds
-
-    result, fig = toolkit.execute("firecrawl_crawl", {"url": "https://example.com"})
-    assert fig is None
-    assert "Crawl4AI fallback used" not in result
 
 
 # ============================================================================
@@ -270,23 +166,6 @@ def test_firecrawl_search_forwards_wait_for_and_proxy_to_the_client():
     assert kwargs["proxy"] == "auto"
 
 
-def _blocked_firecrawl_toolkit(exc):
-    """Toolkit whose Firecrawl crawl raises `exc`, with Crawl4AI ready to rescue it."""
-    toolkit = _make_toolkit()
-    toolkit._firecrawl = MagicMock()
-    toolkit._firecrawl.crawl.side_effect = exc
-    toolkit._web_docs = MagicMock()
-    toolkit._web_docs.get_cached_crawl.return_value = None
-    toolkit._web_docs.save_crawl.return_value = {
-        "url": "https://example.com",
-        "crawled_at": "2026-07-26T00:00:00+00:00",
-        "pages": [{"url": "https://example.com", "file_id": "f1"}],
-    }
-    toolkit._crawl4ai = MagicMock()
-    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": _REALISTIC_MARKDOWN}
-    return toolkit
-
-
 # ============================================================================
 # Recovery ladder — the "never downgrade" invariant
 #
@@ -305,24 +184,6 @@ def _blocked_firecrawl_toolkit(exc):
 
 # ~3.5 KB — real prose (over assess_quality's 200-word confidence bar, so no per-page
 # fallback fires\).
-_SUB_THRESHOLD_MARKDOWN = _REALISTIC_PARAGRAPH * 2
-
-
-def _ladder_toolkit():
-    """Toolkit whose Firecrawl and local rungs are both wired to return nothing."""
-    toolkit = _make_toolkit()
-    toolkit._firecrawl = MagicMock()
-    toolkit._firecrawl.crawl.return_value = []
-    toolkit._web_docs = MagicMock()
-    toolkit._web_docs.get_cached_crawl.return_value = None
-    toolkit._web_docs.save_crawl.return_value = {
-        "url": "https://example.com",
-        "crawled_at": "2026-07-28T00:00:00+00:00",
-        "pages": [{"url": "https://example.com", "file_id": "f1"}],
-    }
-    toolkit._crawl4ai = MagicMock()
-    toolkit._crawl4ai.scrape.return_value = {"url": "https://example.com", "markdown": ""}
-    return toolkit
 
 
 # ============================================================================

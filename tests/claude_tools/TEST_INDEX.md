@@ -64,18 +64,22 @@ pytest tests/claude_tools/test_tool_descriptions.py    # schema/description hone
   small refactor — e.g. a shared retry helper, or a `sleep_fn` parameter
   defaulting to `time.sleep` — would remove the need for the guardrail
   fixture entirely. Not implemented here; this reorg stayed test-only.
-- **`_REAL_DNS_EXEMPT_TESTS` in the root `tests/conftest.py`:** 14 tests in
+- **`_REAL_DNS_EXEMPT_TESTS` in the root `tests/conftest.py`:** tests in
   `test_web_scraping.py` are exempted, by name, from the `_no_real_io`
   guardrail's socket block. Their purpose is exercising the real SSRF/DNS
   validation path (`ClaudeToolkit._validate_public_url` ->
   `local_browser.is_private_host` -> `socket.gethostbyname`) against a real
   public hostname (`example.com`/`wsj.com`) — mocking DNS away would weaken
   coverage of that security-critical logic, so they keep making a real (fast)
-  DNS lookup instead. `test_firecrawl_crawl_saves_pages_to_drive` is on that
-  list permanently, not just historically: `_handle_firecrawl_crawl`
-  validates the crawl's root URL unconditionally before calling Firecrawl at
-  all, independent of any per-page markdown quality, so it always needs real
-  DNS to reach its "Crawl complete" assertion. If a future change makes
+  DNS lookup instead.
+
+  The count is deliberately not restated here: it said 14 while the set held 20,
+  and a number in prose drifts silently. `tests/test_conftest_hygiene.py` now
+  asserts that every name in the set matches a real test — three names for tools
+  deleted on 2026-07-30 survived in it until 2026-08-07, granting an exemption
+  nothing used. Prune the set in the same commit as any test deletion.
+
+  If a future change makes
   `is_private_host` mockable/injectable, these could move to the fully-mocked
   guardrail instead — not attempted here to avoid weakening the security
   logic under test as part of a test-reorg change.

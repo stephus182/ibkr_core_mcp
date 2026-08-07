@@ -81,7 +81,7 @@ def test_rsi_is_100_when_there_are_no_losses():
 
 
 def test_rsi_is_0_when_there_are_no_gains():
-    """"Similarly, RSI equals 0 when Average Gain equals zero." — same source."""
+    """ "Similarly, RSI equals 0 when Average Gain equals zero." — same source."""
     from ibkr_core_mcp.indicators import rsi
 
     result = rsi(_closes(np.arange(80, 1, -1, dtype=float)), period=14)

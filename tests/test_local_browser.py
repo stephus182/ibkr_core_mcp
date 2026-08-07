@@ -1247,3 +1247,30 @@ def test_search_site_keeps_its_simple_list_contract(monkeypatch):
 
     assert isinstance(results, list)
     assert results[0]["url"] == "https://x.dev/hit"
+
+
+def test_crawl_site_installs_the_per_request_ssrf_guard(monkeypatch, tmp_path):
+    """Repointed from test_firecrawl_crawl_never_fetches_blocked_subpage_url_via_crawl4ai.
+
+    That test called the deleted firecrawl_crawl tool, got back "Unknown tool:
+    firecrawl_crawl", and asserted `scrape_batch.assert_not_called()` — on a method
+    Crawl4AIScraper does not even have. It could not fail. Two independent audits and a
+    forced-error probe each rediscovered it.
+
+    The behaviour it was named for is real and lives here: crawl_site walks sub-pages
+    with BFSDeepCrawlStrategy, and only _install_ssrf_guard stops a discovered sub-page
+    URL pointing at a private address from being fetched. _reject_private_requests is
+    tested directly above, but nothing asserted crawl_site actually WIRES it — delete
+    the set_hook line and every one of those guard tests still passes. That is the same
+    "tested function, unwired caller" gap this audit found in assess_quality.
+    """
+    from ibkr_core_mcp.local_browser import _install_ssrf_guard, crawl_site
+
+    _browser_kwargs, _strategy_kwargs, hooks = _install_fake_deep_crawler(
+        monkeypatch, [_FakeDeepResult("https://example.com/", "root content", depth=0)]
+    )
+    crawl_site("https://example.com/", tmp_path, max_pages=5, max_depth=1)
+
+    assert hooks.get("on_page_context_created") is _install_ssrf_guard, (
+        "sub-page fetches would be unguarded against SSRF"
+    )
