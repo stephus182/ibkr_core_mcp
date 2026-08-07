@@ -14,8 +14,9 @@ RUN mkdir -p api_gateway/root
 COPY conf.yaml api_gateway/root/conf.yaml
 COPY run_gateway.sh /app/run_gateway.sh
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
-# tickler.sh is deliberately NOT copied — see run_gateway.sh for why the
-# in-container tickler was removed on 2026-08-06.
+# There is no tickler in this image and there must not be one. tickler.sh stopped being
+# copied on 2026-08-06 and was deleted from the tree on 2026-08-07; see run_gateway.sh
+# for why renewal cannot live in the container.
 
 RUN chmod +x /app/run_gateway.sh /usr/local/bin/healthcheck.sh
 

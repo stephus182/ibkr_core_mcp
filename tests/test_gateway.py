@@ -181,7 +181,29 @@ class TestStart:
         args = mock_run.call_args.args[0]
         joined = " ".join(str(a) for a in args)
         assert "GATEWAY_PORT=5055" in joined
-        assert "TICKLE_INTERVAL=60" in joined
+
+    def test_no_tickle_env_reaches_the_container(self) -> None:
+        """Nothing in the image reads a TICKLE_* variable, so nothing may pass one.
+
+        Until 2026-08-07 `start()` passed TICKLE_BASE_URL / TICKLE_INTERVAL /
+        TICKLE_ENDPOINT and this suite *asserted* one of them was there — pinning dead
+        behaviour in place. `tickler.sh` was removed from the image on 2026-08-06 and
+        deleted outright on 2026-08-07; renewal is the caller's, because a loop inside
+        the container cannot see the host-side suspend flag that coordinates a login.
+
+        Asserted as an absence over every argument rather than on a count, so a
+        reintroduction under any of the three names fails here.
+        """
+        gm = GatewayManager(port=5055)
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "container_exists", return_value=False),
+            patch.object(gm, "image_exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            gm.start()
+        joined = " ".join(str(a) for a in mock_run.call_args.args[0])
+        assert "TICKLE" not in joined.upper(), joined
 
     def test_docker_run_binds_port_to_loopback_only(self) -> None:
         """The gateway holds an authenticated IBKR session with no gate enforcement

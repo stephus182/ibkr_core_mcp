@@ -200,15 +200,16 @@ class GatewayManager:
                     self.CONTAINER_NAME,
                     "-p",
                     f"127.0.0.1:{self._port}:{self._port}",
-                    # Pass env vars used by tickler.sh inside the container
+                    # GATEWAY_PORT is the only variable anything in the image reads:
+                    # run_gateway.sh's wait loop and healthcheck.sh both build their URL
+                    # from it. Three TICKLE_* variables were passed here until
+                    # 2026-08-07, addressed to a tickler.sh that had been out of the
+                    # image since 2026-08-06 and is now deleted outright. Do not add
+                    # them back: session renewal is the caller's, because a loop inside
+                    # the container cannot see the host-side suspend flag that
+                    # coordinates a login. Guarded by a test asserting their absence.
                     "-e",
                     f"GATEWAY_PORT={self._port}",
-                    "-e",
-                    "TICKLE_INTERVAL=60",
-                    "-e",
-                    f"TICKLE_BASE_URL=https://host.docker.internal:{self._port}/v1/api",
-                    "-e",
-                    "TICKLE_ENDPOINT=/tickle",
                     self.IMAGE_NAME,
                 ],
                 check=True,

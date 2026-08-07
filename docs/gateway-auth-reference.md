@@ -35,11 +35,18 @@ client = IBKRClient(Config.from_env(), auth=TokenAuth("cookie_string_here"))
 
 **Session constraints:**
 
-- Session expires without activity. The Docker gateway container already keeps it alive on
-  its own — `tickler.sh` runs inside the container and POSTs `/tickle` every 60 s
-  (`TICKLE_INTERVAL`, set by `GatewayManager`). Call `client.tickle()` yourself only if you're
-  managing session keepalive outside the bundled container (e.g. a headless `TokenAuth` client
-  talking to a gateway you started/manage separately).
+- Session expires without activity, and **nothing in the container renews it — you must run
+  your own keepalive.** This paragraph said the opposite until 2026-08-07: that a bundled
+  `tickler.sh` POSTed `/tickle` every 60 s so callers did not need one. That was the
+  reassuring half of the claim, and a caller who believed it ran no keepalive and watched
+  sessions expire with nothing to explain why. The in-container tickler was removed on
+  2026-08-06 and the script deleted on 2026-08-07; the same false claim was corrected in
+  `gateway/__init__.py` on 2026-08-06 and this page was missed.
+  Renewal cannot live in the container: a loop in there cannot see the host-side suspend
+  flag that coordinates a login, and on 2026-08-05 three such ticklers renewed a **borrowed**
+  session every 60 s, defeating every attempt to clear it — `POST /logout` could not, only
+  `docker restart` could. Call `client.tickle()` from the host, and pause it while a login
+  is in flight.
 - Rate limit: IBKR's documented global limit is **10 requests/second** for any endpoint not in
   its per-endpoint table (several endpoints are far stricter — e.g. `/iserver/account/orders`
   and `/iserver/account/trades` are 1 req/5s, `/tickle` is 1 req/s). `rate_limiter.py` does not

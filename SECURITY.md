@@ -273,18 +273,17 @@ All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker",
 
 No user-supplied string reaches any subprocess argument.
 
-### Shell Scripts (tickler.sh, healthcheck.sh, run_gateway.sh)
+### Shell Scripts (healthcheck.sh, run_gateway.sh)
 
-The three bundled shell scripts receive all configuration via Docker environment variables set by `manager.py`:
+The two bundled shell scripts receive all configuration via Docker environment variables set by `manager.py`:
 
 | Variable | Set to | How |
 |---|---|---|
 | `GATEWAY_PORT` | `int` port value | `-e GATEWAY_PORT={self._port}` |
-| `TICKLE_BASE_URL` | `https://host.docker.internal:{port}/v1/api` | `-e TICKLE_BASE_URL=...` |
-| `TICKLE_INTERVAL` | `"60"` (literal) | `-e TICKLE_INTERVAL=60` |
-| `TICKLE_ENDPOINT` | `"/tickle"` (literal) | `-e TICKLE_ENDPOINT=/tickle` |
 
 All values originate from `manager.py` constants or the integer `port` parameter. No external input is expanded by the shell inside the container.
+
+`GATEWAY_PORT` is the only variable passed, and the shrink is itself the security change. A third script, `tickler.sh`, ran a `while true` loop POSTing `/tickle` on three `TICKLE_*` variables; it left the image on 2026-08-06 and the tree on 2026-08-07, and the variables stopped being passed the same day. An in-container renewal loop is not a neutral convenience — it cannot see the host-side suspend flag that coordinates a login, and on 2026-08-05 three of them kept a **borrowed** SSO session alive through every attempt to clear it (`POST /logout` could not; `docker restart` could). Renewal is the caller's, from the host. `healthcheck.sh` was changed from POST to GET on the same reasoning: `/tickle` is documented as preventing a session from ending, so a POST there is a session-affecting write dressed as a health check.
 
 ### conf.yaml Security Decisions
 
@@ -436,7 +435,7 @@ This handler intercepts **every** request Chromium makes during the page load �
 | Connection | TLS verification |
 |---|---|
 | IBKR Client Portal Gateway (`localhost:5055`) — Python | `verify=False` — intentional; self-signed cert on loopback only |
-| IBKR Client Portal Gateway — container-internal (`tickler.sh`, `healthcheck.sh`) | `curl -sk` — verification disabled; self-signed cert on loopback within the Docker network |
+| IBKR Client Portal Gateway — container-internal (`healthcheck.sh`) | `curl -sk` — verification disabled; self-signed cert on loopback within the Docker network |
 | IBKR Flex Web Service (`ndcdyn.interactivebrokers.com`) | Standard TLS, no overrides |
 | Google Drive API | Standard TLS via Google client library |
 

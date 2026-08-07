@@ -184,9 +184,8 @@ ibkr_core_mcp/
     ├── manager.py        # GatewayManager — Docker lifecycle, auth polling
     ├── Dockerfile        # eclipse-temurin:21 + IBKR Client Portal zip
     ├── conf.yaml         # Gateway config (port, SSL, CORS, IP allowlist)
-    ├── run_gateway.sh    # Entrypoint: start Java process + tickler
-    ├── tickler.sh        # Periodic POST /tickle to keep session alive
-    └── healthcheck.sh    # curl-based readiness probe used by run_gateway.sh
+    ├── run_gateway.sh    # Entrypoint: start the Java process and wait — nothing else
+    └── healthcheck.sh    # curl GET readiness probe used by run_gateway.sh's wait loop
 ```
 
 Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDriveCache`,
