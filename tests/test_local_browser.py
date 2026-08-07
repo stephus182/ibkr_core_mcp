@@ -520,6 +520,7 @@ def test_two_fetches_of_one_profile_do_not_run_at_the_same_time(monkeypatch, tmp
     assert max_concurrent == 1, f"{max_concurrent} browser sessions shared one profile — this is the 0 B bug"
 
 
+@pytest.mark.timeout(10)  # asserts by NOT deadlocking; a regression stalls 180s without this
 def test_anonymous_fetches_take_no_lock_and_stay_parallel(monkeypatch, tmp_path):
     """The serialisation cost must be paid only where Chrome forces it. Anonymous fetches get a
     throwaway profile directory each, share nothing, and were measured running genuinely in
@@ -532,6 +533,7 @@ def test_anonymous_fetches_take_no_lock_and_stay_parallel(monkeypatch, tmp_path)
         pass  # would deadlock if anonymous fetches took a lock
 
 
+@pytest.mark.timeout(10)  # asserts by NOT deadlocking; a regression stalls 180s without this
 def test_profile_lock_is_per_profile_not_global(tmp_path):
     """Two different subscription sites must not queue behind each other."""
     from ibkr_core_mcp.local_browser import _profile_in_use

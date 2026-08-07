@@ -61,7 +61,7 @@ server = [
 # tool. Heavy (it pulls Playwright and browser binaries), so it stays optional — every
 # code path that uses it degrades to a message when it is absent.
 scraper = ["crawl4ai>=0.5.0"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "mypy>=1.8", "ruff>=0.16"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-mock>=3.12", "pytest-socket>=0.7", "pytest-timeout>=2.3", "mypy>=1.8", "ruff>=0.16"]
 
 [project.urls]
 Homepage = "https://github.com/stephus182/ibkr_core_mcp"
@@ -95,6 +95,14 @@ markers = [
     "errors: claude_tools _safe_error mapping",
 ]
 asyncio_mode = "auto"
+# A deadlocked test reports nothing at all — no pass, no fail, just a stalled run.
+# The per-profile browser locks in test_local_browser.py assert their property by
+# NOT deadlocking, so a regression there stalls for _PROFILE_LOCK_TIMEOUT_S (180s)
+# per test before erroring. 300s is deliberately generous: it is a backstop against
+# a genuinely hung test, not a performance budget, and the slowest live test
+# (test_client_live.py, against a real gateway) must stay comfortably under it.
+# Tests with a tighter, meaningful bound set their own @pytest.mark.timeout.
+timeout = 300
 
 [tool.mypy]
 python_version = "3.12"
