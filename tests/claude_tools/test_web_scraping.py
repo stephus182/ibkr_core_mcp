@@ -482,11 +482,14 @@ def test_search_site_blocks_a_private_domain_before_any_lookup():
 
 def test_search_site_ranks_and_points_at_fetch_page():
     toolkit = _make_toolkit()
-    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
-        mock_search.return_value = [
-            {"url": "https://docs.x.dev/deep", "title": "Deep Crawling", "score": 1.0},
-            {"url": "https://docs.x.dev/multi", "title": "Multi URL", "score": 0.4},
-        ]
+    with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
+        mock_search.return_value = (
+            [
+                {"url": "https://docs.x.dev/deep", "title": "Deep Crawling", "score": 1.0},
+                {"url": "https://docs.x.dev/multi", "title": "Multi URL", "score": 0.4},
+            ],
+            {"discovered": 87, "scored": 87, "searched": True},
+        )
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "deep crawling"})
 
     assert "Deep Crawling" in text
@@ -498,22 +501,58 @@ def test_search_site_ranks_and_points_at_fetch_page():
 
 
 def test_search_site_says_nothing_matched_rather_than_returning_an_empty_list():
-    """Zero matches is a real answer ("the site has no such page"), not a failure,
-    and must not read as a broken tool."""
+    """Zero matches IS a real answer — but only when pages were actually scored.
+
+    87 discovered, 87 scored, none above neutral: the flat-distribution case. This is the
+    one empty result that earns "do not retry", and it must keep earning it — the fix for
+    the other two cases must not have deleted the useful instruction.
+    """
     toolkit = _make_toolkit()
-    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
-        mock_search.return_value = []
+    with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
+        mock_search.return_value = ([], {"discovered": 87, "scored": 87, "searched": True})
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "nonexistent topic"})
 
     assert "No pages on docs.x.dev matched" in text
-    assert "reachable" in text
+    assert "87 page(s) were read and scored" in text, "the count is what makes the claim checkable"
+    assert "do not retry" in text
+    assert "not a failure" in text
+
+
+def test_search_site_does_not_claim_pages_were_read_when_none_were_discovered():
+    """A dead sitemap must not be reported as "none of them is about that".
+
+    _is_no_information_plateau([]) returns False by design, so zero discovered URLs fell
+    through to the same message as a genuine no-match — one that explicitly instructs the
+    model not to retry. That suppressed recovery from a transient sitemap 404.
+    """
+    toolkit = _make_toolkit()
+    with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
+        mock_search.return_value = ([], {"discovered": 0, "scored": 0, "searched": False})
+        text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "deep crawling"})
+
+    assert "do not retry" not in text, "a failed lookup must never suppress a retry"
+    assert "were read and scored" not in text, "nothing was read; do not claim it was"
+    assert "This is a failure, not an answer" in text
+    assert "no pages were discovered" in text
+
+
+def test_search_site_does_not_claim_pages_were_scored_when_none_were():
+    """URLs found but head extraction yielded no scores — nothing was ranked."""
+    toolkit = _make_toolkit()
+    with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
+        mock_search.return_value = ([], {"discovered": 42, "scored": 0, "searched": False})
+        text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "deep crawling"})
+
+    assert "do not retry" not in text
+    assert "42 page(s) were discovered but none could be scored" in text
+    assert "This is a failure, not an answer" in text
 
 
 def test_search_site_reports_a_missing_package_without_raising():
     from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError
 
     toolkit = _make_toolkit()
-    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
+    with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
         mock_search.side_effect = Crawl4AIUnavailableError("not installed")
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "q"})
 
@@ -525,8 +564,11 @@ def test_search_site_needs_no_firecrawl_key():
     that would recreate the coupling this whole refactor removes."""
     toolkit = _make_toolkit()
     toolkit._config.firecrawl_api_key = ""
-    with patch("ibkr_core_mcp.local_browser.search_site") as mock_search:
-        mock_search.return_value = [{"url": "https://docs.x.dev/a", "title": "A", "score": 1.0}]
+    with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
+        mock_search.return_value = (
+            [{"url": "https://docs.x.dev/a", "title": "A", "score": 1.0}],
+            {"discovered": 5, "scored": 5, "searched": True},
+        )
         text, _ = toolkit.execute("search_site", {"domain": "docs.x.dev", "query": "q"})
 
     assert "FIRECRAWL_API_KEY" not in text

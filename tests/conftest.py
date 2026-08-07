@@ -86,6 +86,8 @@ _REAL_DNS_EXEMPT_TESTS = {
     # NOT listed -- it wants the rejection, and localhost needs no DNS to be caught.
     "test_search_site_ranks_and_points_at_fetch_page",
     "test_search_site_says_nothing_matched_rather_than_returning_an_empty_list",
+    "test_search_site_does_not_claim_pages_were_read_when_none_were_discovered",
+    "test_search_site_does_not_claim_pages_were_scored_when_none_were",
     "test_search_site_reports_a_missing_package_without_raising",
     "test_search_site_needs_no_firecrawl_key",
     # crawl_site handler tests: the root URL is SSRF-validated before the browser runs,

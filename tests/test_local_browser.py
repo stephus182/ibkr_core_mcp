@@ -1177,3 +1177,73 @@ def test_crawl_site_raises_when_crawl4ai_is_not_installed(monkeypatch, tmp_path)
     monkeypatch.setitem(sys.modules, "crawl4ai", None)
     with pytest.raises(Crawl4AIUnavailableError, match="ibkr_core_mcp\\[scraper\\]"):
         crawl_site("https://d.dev/", tmp_path)
+
+
+def test_search_site_detailed_reports_zero_discovered_separately_from_zero_matched(monkeypatch):
+    """A dead sitemap and a genuine no-match both produced an empty list.
+
+    _is_no_information_plateau([]) returns False by design, so when the seeder discovered
+    nothing at all the caller received exactly what a real "none of these matched" looks
+    like — and told the model not to retry. These are opposite situations.
+    """
+    from ibkr_core_mcp.local_browser import search_site_detailed
+
+    _install_fake_seeder(monkeypatch, [])
+    matches, stats = search_site_detailed("x.dev", "q")
+
+    assert matches == []
+    assert stats["discovered"] == 0
+    assert stats["scored"] == 0
+    assert stats["searched"] is False, "nothing was discovered, so nothing was searched"
+
+
+def test_search_site_detailed_reports_discovered_but_unscored(monkeypatch):
+    """URLs found, but head extraction yielded no relevance_score on any of them.
+
+    local_browser's own docstring warns that without extract_head zero URLs are scored;
+    a runtime head-extraction failure lands in the same hole, and used to be reported as
+    a confident "none of them is about that".
+    """
+    from ibkr_core_mcp.local_browser import search_site_detailed
+
+    _install_fake_seeder(monkeypatch, [_entry("https://x.dev/a", None), _entry("https://x.dev/b", None)])
+    matches, stats = search_site_detailed("x.dev", "q")
+
+    assert matches == []
+    assert stats["discovered"] == 2
+    assert stats["scored"] == 0
+    assert stats["searched"] is False, "unscored pages were never ranked against the query"
+
+
+def test_search_site_detailed_reports_a_genuine_no_match(monkeypatch):
+    """The flat-distribution case: pages really were read and scored, and none matched."""
+    from ibkr_core_mcp.local_browser import search_site_detailed
+
+    _install_fake_seeder(monkeypatch, [_entry(f"https://x.dev/{i}", 0.5) for i in range(87)])
+    matches, stats = search_site_detailed("x.dev", "zzzq nonexistent topic xyzzy")
+
+    assert matches == []
+    assert stats["discovered"] == 87
+    assert stats["scored"] == 87
+    assert stats["searched"] is True, "this is the one empty result that IS a real answer"
+
+
+def test_search_site_detailed_reports_a_hit(monkeypatch):
+    from ibkr_core_mcp.local_browser import search_site_detailed
+
+    _install_fake_seeder(monkeypatch, [_entry("https://x.dev/hit", 0.9, "Hit"), _entry("https://x.dev/miss", 0.0)])
+    matches, stats = search_site_detailed("x.dev", "q")
+
+    assert [m["url"] for m in matches] == ["https://x.dev/hit"]
+    assert stats == {"discovered": 2, "scored": 2, "searched": True}
+
+
+def test_search_site_keeps_its_simple_list_contract(monkeypatch):
+    """The documented `search_site(...) -> list` form must not change shape."""
+    from ibkr_core_mcp.local_browser import search_site
+
+    _install_fake_seeder(monkeypatch, [_entry("https://x.dev/hit", 0.9, "Hit")])
+    results = search_site("x.dev", "q")
+
+    assert isinstance(results, list)
+    assert results[0]["url"] == "https://x.dev/hit"

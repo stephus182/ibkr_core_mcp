@@ -772,8 +772,54 @@ def search_site(domain: str, query: str, limit: int = 10, source: str = "sitemap
         Up to `limit` dicts of {"url", "title", "score"}, highest score first.
         **Only pages that actually matched** (score > 0) are returned: BM25 is sparse —
         the same run scored just 4 of 87 URLs above zero — so returning the tail would
-        pad a real answer with pages the query did not match. An empty list means
-        nothing on that site matched, which is a usable answer.
+        pad a real answer with pages the query did not match.
+
+        An empty list is **ambiguous** in this form: it means "discovered nothing",
+        "discovered pages but scored none of them", or "scored them and none matched".
+        Only the last is an answer. Use `search_site_detailed` when the difference
+        matters — it is what `_handle_search_site` calls, because telling a model
+        "none of them is about that, do not retry" after a sitemap 404 is a
+        confidently wrong answer that also suppresses recovery.
+
+    Raises:
+        Crawl4AIUnavailableError: If `crawl4ai` is not installed.
+        ValueError: If `domain` or `query` is blank.
+    """
+    matches, _stats = search_site_detailed(domain, query, limit=limit, source=source)
+    return matches
+
+
+def search_site_detailed(
+    domain: str, query: str, limit: int = 10, source: str = "sitemap+cc"
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """`search_site`, plus what actually happened — so an empty result can be explained.
+
+    Three different situations produced an identical empty list, and the caller could
+    not tell them apart:
+
+    | discovered | scored | what it means |
+    |---|---|---|
+    | 0 | 0 | The sitemap was empty, 404'd, or robots blocked the seeder. **A failure.** |
+    | N | 0 | URLs found, but no page yielded a `relevance_score`. **Nothing was ranked.** |
+    | N | M>0 | Pages really were read and scored, and none matched. **A real answer.** |
+
+    `_is_no_information_plateau([])` returns `False` — correct for its own contract,
+    since an empty score list shows no flat distribution — so the first two rows fell
+    through to the same `return []` as the third. `_handle_search_site` then told the
+    model the site "was reachable and its pages were read and scored", and instructed it
+    not to retry. That is true only of the third row.
+
+    Args:
+        domain: Bare hostname. Caller SSRF-validates first, as for `search_site`.
+        query: Free-text query; must be non-empty.
+        limit: Maximum matches to return. Clamped to [1, 50].
+        source: "sitemap", "cc", or "sitemap+cc".
+
+    Returns:
+        `(matches, stats)`. `matches` is exactly what `search_site` returns. `stats` is
+        `{"discovered": int, "scored": int, "searched": bool}`, where `searched` is True
+        only when at least one page was actually ranked against the query — i.e. only
+        when an empty `matches` is a real answer rather than a failed lookup.
 
     Raises:
         Crawl4AIUnavailableError: If `crawl4ai` is not installed.
@@ -812,8 +858,13 @@ def search_site(domain: str, query: str, limit: int = 10, source: str = "sitemap
     raw: list[dict[str, Any]] = _run_async(_seed())
 
     scores = [e["relevance_score"] for e in raw if isinstance(e.get("relevance_score"), (int, float))]
+    # `searched` is the whole point of this function: it is False when the ranking never
+    # ran, so the caller cannot report "we read them and none matched" about pages that
+    # were never discovered or never scored.
+    stats: dict[str, Any] = {"discovered": len(raw), "scored": len(scores), "searched": bool(scores)}
+
     if _is_no_information_plateau(scores):
-        return []
+        return [], stats
 
     matches: list[dict[str, Any]] = []
     for entry in raw:
@@ -829,7 +880,7 @@ def search_site(domain: str, query: str, limit: int = 10, source: str = "sitemap
             }
         )
     matches.sort(key=lambda m: m["score"], reverse=True)
-    return matches[:limit]
+    return matches[:limit], stats
 
 
 def create_profile(url_or_domain: str, profiles_dir: Path) -> Path:

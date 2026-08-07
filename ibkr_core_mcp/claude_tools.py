@@ -3346,7 +3346,7 @@ class ClaudeToolkit:
             Never raises: a missing browser package, an unreachable sitemap and a query
             that simply matched nothing are three different messages.
         """
-        from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, search_site
+        from ibkr_core_mcp.local_browser import Crawl4AIUnavailableError, search_site_detailed
 
         domain = str(inputs.get("domain", "")).strip()
         query = str(inputs.get("query", "")).strip()
@@ -3366,7 +3366,7 @@ class ClaudeToolkit:
         source = inputs.get("source") or "sitemap+cc"
 
         try:
-            matches = search_site(domain, query, limit=limit, source=source)
+            matches, stats = search_site_detailed(domain, query, limit=limit, source=source)
         except Crawl4AIUnavailableError as exc:
             return (
                 f"Cannot search {domain}: {exc}\n"
@@ -3381,10 +3381,31 @@ class ClaudeToolkit:
             return f"Search of {domain} failed: {exc}", None
 
         if not matches:
+            # Three different situations used to print the message below. Only the last
+            # one earns it — and it is the only one where "do not retry" is safe advice.
+            if not stats["discovered"]:
+                return (
+                    f"Could not search {domain}: no pages were discovered.\n"
+                    f"The sitemap was empty, unreachable, or the seeder was blocked, so "
+                    f"nothing was ever ranked against {query!r}. **This is a failure, not "
+                    f"an answer** — it does not mean the site has no page on the subject. "
+                    f"Try source='cc' (Common Crawl instead of the sitemap), crawl_site to "
+                    f"walk the site directly, or firecrawl_search to look beyond it.",
+                    None,
+                )
+            if not stats["scored"]:
+                return (
+                    f"Could not rank {domain}: {stats['discovered']} page(s) were discovered "
+                    f"but none could be scored.\n"
+                    f"Head extraction returned nothing to match {query!r} against, so there "
+                    f"is no ranking. **This is a failure, not an answer.** Retry, or use "
+                    f"crawl_site to read the pages directly.",
+                    None,
+                )
             return (
                 f"No pages on {domain} matched {query!r}.\n"
-                f"The site was reachable and its pages were read and scored — none of them "
-                f"is about that. This is a real answer, not a failure: do not retry the same "
+                f"{stats['scored']} page(s) were read and scored — none of them is about "
+                f"that. This is a real answer, not a failure: do not retry the same "
                 f"query, and do not treat any page on this site as the source. "
                 f"Try different wording, source='sitemap+cc' for wider coverage, or "
                 f"firecrawl_search to look beyond this one domain.",
