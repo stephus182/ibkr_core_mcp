@@ -4,7 +4,7 @@ Used by both ibkr_core_mcp.cache.GDriveCache and claudia_ui's claudia.gdrive_syn
 so there is exactly one implementation of "how do we load/refresh a Drive token." Before
 this module existed, both classes independently reimplemented the same ~15 lines of
 Credentials-loading/refresh/persist logic — see
-docs/superpowers/specs/2026-07-10-gdrive-auth-dedup-design.md (claudia_ui repo) for why
+docs/plans/2026-07-10-gdrive-auth-dedup-design.md (claudia_ui repo) for why
 that was extracted.
 
 Source (google-auth credentials): https://google-auth.readthedocs.io/en/stable/reference/google.oauth2.credentials.html

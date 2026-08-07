@@ -1,7 +1,7 @@
 # claude_tools Test Index
 
 Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 44 tools. See
-`docs/2026-07-08-claude-tools-test-reorg-design.md` for the full rationale.
+`docs/plans/2026-07-08-claude-tools-test-reorg-design.md` for the full rationale.
 
 ## Layers
 

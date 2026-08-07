@@ -111,7 +111,7 @@ ignore_missing_imports = true
 files = ["ibkr_core_mcp", "tests"]
 
 # tests/ never annotates function signatures (established convention, 0 annotations
-# across 747 tests) — disallow_untyped_defs would demand annotating every test
+# across the test suite) — disallow_untyped_defs would demand annotating every test
 # function/fixture for zero safety benefit. check_untyped_defs (inherited from
 # strict) still type-checks each function's body, so real bugs inside untyped
 # tests are still caught — see the 2026-07-22 code-quality audit for the fresh

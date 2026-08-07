@@ -14,7 +14,7 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 |---|---|
 | `GatewayManager` | Builds and runs the official IBKR Client Portal Gateway as a Docker container, guides browser login + 2FA |
 | `IBKRClient` | Full REST client for the Client Portal API — market data, positions, orders, scanners |
-| `ClaudeToolkit` | 42 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
+| `ClaudeToolkit` | 44 ready-made Claude AI tools (`tools=` parameter) for Anthropic SDK integration |
 | `SQLiteStore` | Local SQLite store — trade history, price alerts, session log |
 | `GDriveCache` | Google Drive Parquet cache for OHLCV data |
 | `streaming` | IBKR WebSocket live quotes + price alert engine |
@@ -336,7 +336,7 @@ The session lives under `CRAWL4AI_PROFILES_DIR` (default
 `~/.ibkr_core/crawl4ai_profiles/<domain>/`) and is reused automatically on later scrapes of that
 domain. Every URL reaching the local browser is SSRF-validated first, and a second
 Playwright-level guard re-checks every navigation, redirect and subresource — see
-[SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback).
+[SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
 
 **Live tests are mandatory for this subsystem**, because every defect in it was found by running
 a tool rather than by a test failing:
@@ -359,7 +359,7 @@ Copy `.env.example` to `.env` and fill in:
 | Variable | Required | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | ✅ for `Config.from_env()` | Anthropic API key (required by `ClaudeToolkit`; `Config.from_env()` raises if absent) |
-| `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055`) |
+| `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055/v1/api`) — the `/v1/api` suffix is required; paths are appended verbatim |
 | `IBKR_SQLITE_PATH` | optional | SQLite store path (default: `~/.ibkr_core/store.db`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | for GDrive | Root Drive folder — parent of `db/` and `market_data/` subfolders |
 | `GDRIVE_DB_FOLDER_ID` | optional | Explicit folder for claudia.db. If unset, auto-created as `db/` inside `GOOGLE_DRIVE_FOLDER_ID` |
@@ -403,7 +403,7 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 
 `GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts.
 
-**Web scraping (`search_site`, `crawl_site`, `fetch_page`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--crawl4ai-fallback).
+**Web scraping (`search_site`, `crawl_site`, `fetch_page`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
 
 See [SECURITY.md](SECURITY.md) for the full security model.
 

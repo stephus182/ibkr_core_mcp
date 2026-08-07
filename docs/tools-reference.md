@@ -818,7 +818,7 @@ back, an explicit "returned no content" naming the likely cause.
 **Thin content is flagged, not just measured.** A byte count is not a warning: a
 reply reading `# Fetched: <url>` / `(1 B)` followed by one byte still looks like a
 successful fetch of a short page. When the result fails `assess_quality` — the
-same word-count and paywall-marker signal the recovery ladder branches on, not a
+same word-count and paywall-marker signal crawl_site and firecrawl_search branch on, not a
 second threshold invented for this tool — the reply carries an explicit "this
 content looks incomplete … do not treat it as the full page". Measured live
 2026-07-28: `wsj.com` returns exactly **1 B** and is flagged; `ft.com`'s free

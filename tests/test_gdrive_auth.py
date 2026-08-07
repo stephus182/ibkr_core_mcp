@@ -1,7 +1,7 @@
 """Tests for gdrive_auth — shared Drive OAuth credential load/refresh/persist logic.
 
 Shared by ibkr_core_mcp's GDriveCache and claudia_ui's GDriveSync. See
-docs/superpowers/specs/2026-07-10-gdrive-auth-dedup-design.md (claudia_ui repo) for why
+docs/plans/2026-07-10-gdrive-auth-dedup-design.md (claudia_ui repo) for why
 this module exists.
 """
 

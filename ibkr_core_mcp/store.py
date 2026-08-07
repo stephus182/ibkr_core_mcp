@@ -209,7 +209,19 @@ class SQLiteStore:
             _restrict(Path(self._db_path + suffix), 0o600)
 
     def initialize(self) -> None:
-        """Create all tables if they don't exist."""
+        """Create every table and index this store uses, if absent. Safe to re-run.
+
+        One `executescript` covering `trades`, `position_snapshots`, `signals`,
+        `backtest_results`, `price_alerts`, `pnl_snapshots`, `session_log` and
+        `flex_import_log`. It does NOT create the generated `flex_*` dataset tables —
+        those come from `flex_store` against `flex_schema`. There is no migration
+        framework: every statement is
+        `CREATE TABLE IF NOT EXISTS`, so adding a COLUMN to an existing table needs an
+        explicit `ALTER` here, not just an edit to the CREATE.
+
+        Most getters call this defensively before querying, so a caller that never
+        calls it explicitly still gets a valid schema.
+        """
         with self._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS trades (
@@ -853,7 +865,18 @@ class SQLiteStore:
         start: str | None = None,
         end: str | None = None,
     ) -> pd.DataFrame:
-        """Return position snapshot history as DataFrame."""
+        """Return rows from `position_snapshots`, newest first, as a DataFrame.
+
+        Args:
+            symbol: Restrict to one symbol. None returns every symbol.
+            start: Inclusive lower bound on `snapshot_at` (ISO-8601 string).
+            end: Inclusive upper bound on `snapshot_at` (ISO-8601 string).
+
+        Returns:
+            DataFrame with columns `symbol`, `conid`, `position`, `mkt_price`,
+            `mkt_value`, `unrealized_pnl`, `snapshot_at`. Empty (but with those
+            columns present) when nothing matches, so callers can index it either way.
+        """
         self.initialize()
         query, params = self._apply_filters(
             "SELECT * FROM position_snapshots WHERE 1=1", [], symbol, start, end, "snapshot_at"

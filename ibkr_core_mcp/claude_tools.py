@@ -1804,7 +1804,7 @@ class ClaudeToolkit:
         Origin is determined from the order_ref prefix ('CLAUDIA-' = ClaudIA-staged) rather
         than clientId, which is unreliable — both CP API and mobile orders can show clientId=0.
         order_ref is IBKR's real Live Orders field (snake_case); orderRef/cOID/clientOrderId
-        are kept as fallbacks only (see docs/project-status.md Known Gaps, found 2026-07-10).
+        are kept as fallbacks only (see claudia_ui's docs/project-status.md Known Gaps in that repo, found 2026-07-10).
         """
         try:
             orders = self._client.get_live_orders()
@@ -3110,9 +3110,9 @@ class ClaudeToolkit:
         resolves to a public address), or a "Blocked: ..." message if not.
 
         Shared by every code path that can trigger a *local* fetch of an
-        externally-sourced URL: the firecrawl_crawl root URL, and — critically —
-        every URL that reaches the local browser: `crawl_site`'s root, `fetch_page`'s
-        URL, and `search_site`'s domain. All three can be model-supplied rather than
+        externally-sourced URL that reaches the local browser: `crawl_site`'s root,
+        `fetch_page`'s URL, and `search_site`'s domain. All three can be model-supplied
+        rather than
         typed by the user, and a deep crawl additionally follows links discovered on
         the page — which is why the browser-level guard exists on top of this one.
 
@@ -3551,7 +3551,7 @@ class ClaudeToolkit:
         # A byte count alone is not a warning. Live baseline 2026-07-28: wsj.com without a
         # login profile returns exactly 1 B, and "# Fetched: <url> (1 B)" followed by one
         # byte reads like a successful fetch of a short page. assess_quality is the same
-        # signal the fallback ladder already branches on — word counts and paywall markers —
+        # signal crawl_site and firecrawl_search also branch on — word counts, paywall
         # so this reuses the repo's existing judgment rather than inventing a second
         # threshold that could drift away from it.
         #

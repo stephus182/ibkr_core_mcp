@@ -9,6 +9,11 @@ Missing values resolve to empty strings rather than raising, which is deliberate
 it lets a caller construct a partial `Config` and have the *feature* that needs a
 given variable report "not configured" at the point of use, instead of making an
 unrelated import fail. See the standalone-dev note in `CLAUDE.md`.
+
+**One exception:** `from_env` raises `ConfigError` when `ANTHROPIC_API_KEY` is
+missing, because a toolkit with no key cannot do anything at all. That is exactly
+the trap `crawl4ai_profiles_dir_from_env` exists to work around for callers who
+only want the scraper — use it rather than `from_env` in that case.
 """
 
 from __future__ import annotations
@@ -75,8 +80,10 @@ class Config:
     # Optional dedicated folder for account-level data (flex XMLs, etc.).
     # If empty, GDriveCache auto-creates an 'account_data/' subfolder inside gdrive_folder_id.
     gdrive_account_folder_id: str = ""
-    # Firecrawl REST API key (fc-...). If empty, firecrawl_search and firecrawl_crawl
-    # return a "not available" error string to the LLM rather than raising.
+    # Firecrawl REST API key (fc-...). If empty, firecrawl_search returns a "not
+    # available" error string to the LLM rather than raising. It is the ONLY tool that
+    # needs a key: fetch_page, crawl_site and search_site are a local browser and
+    # public sitemaps.
     firecrawl_api_key: str = field(default="", repr=False)
     # Drive folder ID to use as the web_docs/ root. Auto-creates 'web_docs/' under
     # gdrive_folder_id if empty.

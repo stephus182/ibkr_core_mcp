@@ -2,7 +2,7 @@
 
 > **Status: closed 2026-07-30.** The scraper is finished and verified; treat further work as a
 > new project with its own justification, not as continuation. Closing state: 44 toolkit tools,
-> **797 unit + 11 live web tests green**, `ruff check` + `ruff format` + `mypy` clean.
+> **917 unit + 11 live web tests green**, `ruff check` + `ruff format` + `mypy` clean.
 >
 > **The last open item closed 2026-07-30: reading a paywalled article end-to-end is now
 > demonstrated** (§6) — a subscriber-only FT article returned in full, 35,394 B. It required one
@@ -597,7 +597,7 @@ are AI-friendly:
 
 - **Append `.md` to any page URL** for clean markdown:
   `https://www.interactivebrokers.com/docs/web-api/<page>.md`
-- **`https://www.interactivebrokers.com/docs/web-api/llms.txt`** is a complete 517-page index
+- **`https://www.interactivebrokers.com/docs/web-api/llms.txt`** is the complete page index (469 unique .md URLs, measured 2026-08-07)
 - There is an MCP server at `https://ibkrcampus.com/docs/web-api/_mcp/server`
 
 Use `WebFetch` on those. No Firecrawl credits, no bot-block, no ladder.

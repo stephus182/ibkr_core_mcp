@@ -793,24 +793,33 @@ def test_wal_sidecars_are_not_world_readable(store):
 
     Securing only the main file would leave the most recent writes readable.
 
-    The `assert checked` at the end is not ceremony. This loop can legitimately run
-    zero times — SQLite only creates the sidecars in WAL mode — and a loop that
-    executes zero times passes by asserting nothing, which is exactly the class of
-    defect this suite was audited for on 2026-08-07.
+    A connection is held OPEN for the assertions. SQLite deletes -wal/-shm on a clean
+    close, and `log_entry` uses `with self._connect()` — which commits but does not
+    close, so the connection dies whenever refcounting gets to it. That made the
+    sidecars present or absent depending on GC timing: the test passed in isolation and
+    silently asserted NOTHING in a full-file run. The `assert checked` guard is what
+    exposed it; keeping a live connection is what fixes it.
     """
     import stat as stat_mod
     from pathlib import Path
 
     store.log_entry("test", note="force a write so the WAL is populated")
-    checked = 0
-    for suffix in ("-wal", "-shm"):
-        sidecar = Path(store._db_path + suffix)
-        if not sidecar.exists():
-            continue
-        checked += 1
-        mode = stat_mod.S_IMODE(sidecar.stat().st_mode)
-        assert mode == 0o600, f"{sidecar.name} is {oct(mode)}, expected 0o600"
-    assert checked, "neither WAL sidecar existed — this test asserted nothing"
+    # Held open purely so a connection exists: SQLite removes -wal/-shm when the LAST
+    # connection closes, so this keeps them on disk for the duration of the assertions.
+    conn = store._connect()
+    try:
+        store.log_entry("test", note="write while a connection is held open")
+        checked = 0
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(store._db_path + suffix)
+            if not sidecar.exists():
+                continue
+            checked += 1
+            mode = stat_mod.S_IMODE(sidecar.stat().st_mode)
+            assert mode == 0o600, f"{sidecar.name} is {oct(mode)}, expected 0o600"
+        assert checked, "neither WAL sidecar existed — this test asserted nothing"
+    finally:
+        conn.close()
 
 
 def test_wal_sidecar_permission_repair_is_self_healing(store):
@@ -829,17 +838,21 @@ def test_wal_sidecar_permission_repair_is_self_healing(store):
     from pathlib import Path
 
     store.log_entry("test", note="create the sidecars")
-    sidecars = [Path(store._db_path + s) for s in ("-wal", "-shm")]
-    present = [p for p in sidecars if p.exists()]
-    assert present, "neither WAL sidecar existed — this test asserted nothing"
+    conn = store._connect()  # held open: SQLite removes the sidecars on a clean close
+    try:
+        store.log_entry("test", note="write while a connection is held open")
+        present = [p for p in (Path(store._db_path + x) for x in ("-wal", "-shm")) if p.exists()]
+        assert present, "neither WAL sidecar existed — this test asserted nothing"
 
-    for p in present:
-        p.chmod(0o644)
-    store.log_entry("test", note="reconnect so the repair runs")
+        for p in present:
+            p.chmod(0o644)
+        store.log_entry("test", note="reconnect so the repair runs")
 
-    for p in present:
-        mode = stat_mod.S_IMODE(p.stat().st_mode)
-        assert mode == 0o600, f"pre-existing 0644 {p.name} was not repaired"
+        for p in present:
+            mode = stat_mod.S_IMODE(p.stat().st_mode)
+            assert mode == 0o600, f"pre-existing 0644 {p.name} was not repaired"
+    finally:
+        conn.close()
 
 
 def test_permission_repair_is_self_healing(store):

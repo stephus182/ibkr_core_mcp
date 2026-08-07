@@ -230,6 +230,10 @@ class IBKRWebSocket:
 
         Raises:
             ModuleNotFoundError: If `websockets` is not installed.
+            StreamingError: If the configured URL is not loopback. This is the
+                security-relevant failure and went undocumented until 2026-08-07:
+                the gateway must run on the same machine, so a non-localhost host
+                means the session cookie would be sent somewhere it does not belong.
         """
         try:
             import websockets  # base dependency — imported lazily to keep import-time cost out of the hot path

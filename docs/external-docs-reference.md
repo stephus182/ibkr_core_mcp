@@ -14,7 +14,7 @@
 > | Method | URL |
 > |---|---|
 > | Clean markdown of any page | append `.md` to the page URL |
-> | Full documentation index (517 pages) | https://www.interactivebrokers.com/docs/web-api/llms.txt |
+> | Full documentation index (469 pages, measured 2026-08-07) | https://www.interactivebrokers.com/docs/web-api/llms.txt |
 > | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server |
 >
 > `FirecrawlClient.crawl()` returns 0 pages on `interactivebrokers.com` — the host needs

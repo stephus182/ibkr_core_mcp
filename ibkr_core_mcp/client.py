@@ -1403,7 +1403,7 @@ class IBKRClient:
         {"confirmed": False} to IBKR *before* re-raising — unlike the standalone
         reply_order(), which raises without ever contacting IBKR and leaves the
         order ambiguous on IBKR's side. This is a deliberate behavior change, not
-        a bug: see docs/2026-07-06-order-reply-confirmation-design.md.
+        a bug: see docs/plans/2026-07-06-order-reply-confirmation-design.md.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/reply/{replyId}

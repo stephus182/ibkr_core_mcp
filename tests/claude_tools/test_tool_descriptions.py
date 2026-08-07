@@ -136,7 +136,7 @@ def test_fetch_page_names_a_challenge_page_as_a_block(toolkit):
 
 
 def _snapshot_description(toolkit) -> str:
-    return next(t for t in toolkit.tools if t["name"] == "get_market_snapshot")["description"]
+    return str(next(t for t in toolkit.tools if t["name"] == "get_market_snapshot")["description"])
 
 
 def test_snapshot_description_instructs_reporting_the_currency(toolkit):
