@@ -75,8 +75,13 @@ def test_calmar_positive(positive_returns):
     from ibkr_core_mcp.analytics import calmar
 
     result = calmar(positive_returns)
-    # May be 0 if no drawdown, but should not be negative
-    assert result >= 0
+    # `assert result >= 0` passed for a calmar() hard-wired to return 0.0. For a series
+    # of positive returns the ratio must be strictly positive, and finite — an infinite
+    # Calmar (zero drawdown) is a division artefact, not a measured edge.
+    import math
+
+    assert result > 0, "a positive-return series must have a positive Calmar"
+    assert math.isfinite(result)
 
 
 def test_win_rate_empty():

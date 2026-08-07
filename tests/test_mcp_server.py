@@ -2,6 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from .claude_tools.conftest import assert_tool_failed, assert_tool_succeeded
+
 
 @pytest.fixture
 def toolkit(mock_config):
@@ -88,7 +90,26 @@ def test_dispatch_add_price_alert_invalid_direction(toolkit, store):
         toolkit,
         store,
     )
-    assert "error" in result.lower() or "direction" in result.lower() or "unexpected" in result.lower()
+    # Was three or'd substrings, one of which ("unexpected") is _safe_error's catch-all
+    # for EVERY exception — so any incidental KeyError or TypeError satisfied it and the
+    # test never established that direction validation is what fired.
+    assert_tool_failed(result)
+    # The property that actually matters: no alert was created.
+    assert store.get_alerts(active_only=False) == []
+
+
+def test_dispatch_add_price_alert_valid_direction_is_accepted(toolkit, store):
+    """The control for the test above: if everything errored, that one would still pass."""
+    from ibkr_core_mcp.mcp_server import _dispatch
+
+    result = _dispatch(
+        "add_price_alert",
+        {"conid": 265598, "symbol": "AAPL", "threshold": 190.0, "direction": "above"},
+        toolkit,
+        store,
+    )
+    assert_tool_succeeded(result)
+    assert len(store.get_alerts(active_only=False)) == 1
 
 
 def test_dispatch_unknown_tool_returns_error(toolkit, store):
@@ -113,8 +134,11 @@ def test_dispatch_get_price_alerts_all_includes_triggered(toolkit, store):
     store.mark_alert_triggered(aid)
     active_result = _dispatch("get_price_alerts", {"active_only": True}, toolkit, store)
     all_result = _dispatch("get_price_alerts", {"active_only": False}, toolkit, store)
-    # active should report none; all should include the triggered one
-    assert "No" in active_result or "AAPL" not in active_result
+    # active should report none; all should include the triggered one.
+    # The second disjunct of `"No" in active_result or "AAPL" not in active_result` was
+    # satisfied by any failure whatsoever, since an error string contains no "AAPL".
+    assert_tool_succeeded(active_result)
+    assert "No price alerts" in active_result
     assert "AAPL" in all_result
 
 

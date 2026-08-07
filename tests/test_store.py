@@ -792,17 +792,54 @@ def test_wal_sidecars_are_not_world_readable(store):
     """The WAL carries committed-but-uncheckpointed rows — same content, same rule.
 
     Securing only the main file would leave the most recent writes readable.
+
+    The `assert checked` at the end is not ceremony. This loop can legitimately run
+    zero times — SQLite only creates the sidecars in WAL mode — and a loop that
+    executes zero times passes by asserting nothing, which is exactly the class of
+    defect this suite was audited for on 2026-08-07.
     """
     import stat as stat_mod
     from pathlib import Path
 
     store.log_entry("test", note="force a write so the WAL is populated")
+    checked = 0
     for suffix in ("-wal", "-shm"):
         sidecar = Path(store._db_path + suffix)
         if not sidecar.exists():
             continue
+        checked += 1
         mode = stat_mod.S_IMODE(sidecar.stat().st_mode)
         assert mode == 0o600, f"{sidecar.name} is {oct(mode)}, expected 0o600"
+    assert checked, "neither WAL sidecar existed — this test asserted nothing"
+
+
+def test_wal_sidecar_permission_repair_is_self_healing(store):
+    """A sidecar already on disk at 0644 must be corrected on the next connection.
+
+    The test above cannot catch a regression on its own, and that took a mutation to
+    discover: SQLite creates -wal/-shm inheriting the main database's mode, and the
+    main file is already 0600 by then, so the sidecars are 0600 whether or not
+    _restrict_db_permissions handles them. Its assertions run and cannot fail —
+    a subtler vacuity than an empty loop, and invisible to any static check.
+
+    Only a sidecar that is ALREADY wrong exercises the repair, which is also the
+    real-world case: every install predating the 2026-08-05 fix has 0644 files.
+    """
+    import stat as stat_mod
+    from pathlib import Path
+
+    store.log_entry("test", note="create the sidecars")
+    sidecars = [Path(store._db_path + s) for s in ("-wal", "-shm")]
+    present = [p for p in sidecars if p.exists()]
+    assert present, "neither WAL sidecar existed — this test asserted nothing"
+
+    for p in present:
+        p.chmod(0o644)
+    store.log_entry("test", note="reconnect so the repair runs")
+
+    for p in present:
+        mode = stat_mod.S_IMODE(p.stat().st_mode)
+        assert mode == 0o600, f"pre-existing 0644 {p.name} was not repaired"
 
 
 def test_permission_repair_is_self_healing(store):

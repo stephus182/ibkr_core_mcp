@@ -426,14 +426,22 @@ def test_get_pa_performance(live_client, account_id):
 
 
 @pytest.mark.integration
+@pytest.mark.xfail(
+    strict=False,
+    reason="/pa/transactions returned HTTP 400 for every tested period/days value on "
+    "2026-06-30 — parameter format unconfirmed. See docs/audits/live-test-log.md#run-2026-06-30",
+)
 def test_get_pa_transactions(live_client, account_id):
-    # NOTE: /pa/transactions returns HTTP 400 for all tested period/days values
-    # ("1D","7D","MTD","1M","YTD","1Y", days=7/30/90) — parameter format TBD.
-    # The implementation passes "period" but the docstring says "days" (int).
-    # Skipping until the correct request format is confirmed from official docs.
-    pytest.skip(
-        "/pa/transactions: correct request parameter format not yet confirmed — see docs/audits/live-test-log.md#run-2026-06-30"
-    )
+    """xfail, not skip: an unconditional pytest.skip() is a TODO wearing a test's clothes.
+
+    Disabled since 2026-06-30 while still being counted in the integration suite, so
+    nothing would have noticed if IBKR fixed the endpoint — or if our request format
+    started working by accident. strict=False means an unexpected pass is reported as
+    XPASS rather than a failure, which is the signal to go confirm the format and
+    remove this marker.
+    """
+    result = live_client.get_pa_transactions([account_id], [265598], days=30)
+    assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------

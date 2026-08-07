@@ -521,8 +521,12 @@ def test_profit_factor_is_none_when_nothing_lost(ohlcv):
     read as a measured edge, and inf would propagate into JSON as a non-value."""
     code = "df['signal'] = 0\ndf.iloc[5:15, df.columns.get_loc('signal')] = 1"
     r = _run(ohlcv, code)
-    if r.win_rate == 1.0:
-        assert r.profit_factor is None
+    # The precondition is asserted, not tested. It used to guard the only assertion in
+    # the body (`if r.win_rate == 1.0:`), so the day the fixture stopped producing an
+    # all-winning trade this would have asserted nothing while still reporting green
+    # under the name "profit_factor is none when nothing lost".
+    assert r.win_rate == 1.0, "fixture no longer produces an all-winning strategy"
+    assert r.profit_factor is None
 
 
 def test_flat_strategy_reports_no_trade_metrics(ohlcv):

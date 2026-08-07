@@ -263,13 +263,15 @@ def test_save_creates_new_file_when_none_exists(drive_cache):
 
     # create() must have been called (for the parquet file and/or manifest)
     svc.files().create.assert_called()
-    # update() must NOT have been called for the data file
-    # (MagicMock records calls; we check update was not used for data)
-    update_calls = svc.files().update.call_args_list
-    # The update call has fileId kwarg — if it was called for an existing parquet,
-    # it would include the old file id. Since list returned empty, no update expected.
-    data_updates = [c for c in update_calls if c.kwargs.get("fileId") == "existing-file-id"]
-    assert not data_updates
+    # update() must NOT have been called at all: list() returned no files, so there is
+    # nothing to update.
+    #
+    # This was `[c for c in update_calls if c.kwargs.get("fileId") == "existing-file-id"]`
+    # followed by `assert not data_updates`. "existing-file-id" appears nowhere else in
+    # this test — the sibling below uses "existing-parquet-id" — so the comprehension was
+    # always [] and the assertion was `assert not []`. It would have passed with save()
+    # calling update() on every file in Drive.
+    svc.files().update.assert_not_called()
 
 
 def test_save_updates_existing_file_when_found(drive_cache):
