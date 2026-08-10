@@ -8,7 +8,8 @@ Every attribute IBKR emits gets a column. That is the whole point: the previous
 trade dataset was built by a parser that kept 10 of 85 attributes and silently
 dropped the rest, and nothing detected it for months. Deriving the column set from
 the statements themselves makes "every attribute has a column" a testable invariant
-(see tests/test_flex_schema.py) instead of a promise.
+instead of a promise — see
+``tests/test_flex_import.py::test_every_attribute_in_the_xml_has_a_column``.
 
 Keying
 ------
@@ -29,7 +30,7 @@ from __future__ import annotations
 
 from typing import Any
 
-#: Source archive audited to build this file: 20 statements.
+#: Source archive audited to build this file: 22 statements.
 ELEMENTS: dict[str, dict[str, Any]] = {
     "ConversionRate": {
         "table": "flex_conversion_rate",

@@ -412,6 +412,32 @@ def build_schema(inventory: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
+def schema_shrinkage(schema: dict[str, Any]) -> dict[str, list[str]]:
+    """Report what the freshly built schema would remove from the current one.
+
+    Growth is this script's purpose and is always allowed; loss never is. A source
+    archive that happens to be partial — a single statement, or a directory where most
+    files were rejected — builds a perfectly valid *smaller* schema, and the tables and
+    columns it omits take their data with them at the next rebuild.
+
+    Compares against the currently-imported :mod:`ibkr_core_mcp.flex_schema`, so it is a
+    no-op on a first-ever generation (nothing to lose).
+
+    Returns ``{element: [what would disappear]}``, empty if the schema only grows.
+    """
+    from ibkr_core_mcp.flex_schema import ELEMENTS as CURRENT
+
+    lost: dict[str, list[str]] = {}
+    for tag, spec in CURRENT.items():
+        if tag not in schema:
+            lost[tag] = ["the whole element"]
+            continue
+        missing = sorted(set(spec["columns"]) - set(schema[tag]["columns"]))
+        if missing:
+            lost[tag] = missing
+    return lost
+
+
 SCHEMA_HEADER = '''"""Flex XML → SQLite schema. GENERATED FILE — do not edit by hand.
 
 Regenerate with::
@@ -422,7 +448,8 @@ Every attribute IBKR emits gets a column. That is the whole point: the previous
 trade dataset was built by a parser that kept 10 of 85 attributes and silently
 dropped the rest, and nothing detected it for months. Deriving the column set from
 the statements themselves makes "every attribute has a column" a testable invariant
-(see tests/test_flex_schema.py) instead of a promise.
+instead of a promise — see
+``tests/test_flex_import.py::test_every_attribute_in_the_xml_has_a_column``.
 
 Keying
 ------
@@ -492,12 +519,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json-out", type=Path, default=Path("docs/flex-xml-structure.json"))
     parser.add_argument("--md-out", type=Path, default=Path("docs/flex-xml-structure-audit.md"))
     parser.add_argument("--schema-out", type=Path, default=Path("ibkr_core_mcp/flex_schema.py"))
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="permit the regenerated schema to drop elements or attributes it currently has",
+    )
     args = parser.parse_args(argv)
 
     if not args.src.is_dir():
         raise SystemExit(f"source directory not found: {args.src}")
 
     inventory = audit_directory(args.src)
+
+    # Everything below this point overwrites a repo file, so every refusal belongs
+    # above it. The rejection report moved up here with them: printing "REJECTED 21"
+    # after the schema has already been replaced is a post-mortem, not a warning.
+    if inventory["files_rejected"]:
+        print(f"REJECTED {len(inventory['files_rejected'])}:")
+        for entry in inventory["files_rejected"]:
+            print(f"   {entry['file']}: {entry['reason']}")
+
+    if inventory["files_audited"] == 0:
+        print(
+            f"\nREFUSED  no parseable statements in {args.src} — "
+            f"{len(inventory['files_rejected'])} file(s) rejected, 0 audited.\n"
+            "         Generating from this would overwrite the schema with an empty one,\n"
+            "         and every consumer would then agree the schema is empty."
+        )
+        return 2
+
+    schema = build_schema(inventory)
+
+    lost = schema_shrinkage(schema)
+    if lost and not args.allow_shrink:
+        detail = "\n".join(f"    <{tag}>: {', '.join(items)}" for tag, items in sorted(lost.items()))
+        print(
+            f"\nREFUSED  the regenerated schema would drop what the current one has:\n{detail}\n"
+            "         A partial archive produces a smaller schema, and the tables or columns\n"
+            "         it drops take their data with them on the next rebuild.\n"
+            "         Re-fetch the full archive, or pass --allow-shrink if this is deliberate."
+        )
+        return 2
 
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(inventory, indent=2, sort_keys=False), encoding="utf-8")
@@ -510,10 +572,6 @@ def main(argv: list[str] | None = None) -> int:
     _canonicalise(args.schema_out)
 
     print(f"Audited {inventory['files_audited']} files from {args.src}")
-    if inventory["files_rejected"]:
-        print(f"REJECTED {len(inventory['files_rejected'])}:")
-        for entry in inventory["files_rejected"]:
-            print(f"   {entry['file']}: {entry['reason']}")
     print(f"\n{'element':<32}{'rows':>9}{'attrs':>7}")
     for tag, data in inventory["elements"].items():
         print(f"{tag:<32}{data['count']:>9,}{data['attribute_count']:>7}")

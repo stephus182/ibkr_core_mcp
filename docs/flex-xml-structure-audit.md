@@ -8,13 +8,7 @@ This document is derived from the archived statements themselves, not from IBKR'
 
 Field *meanings* come from IBKR and are cited where they matter: [Trades report](https://www.ibkrguides.com/reportingreference/reportguide/trades_default.htm) · [Codes](https://www.ibkrguides.com/reportingreference/reportguide/codes.htm) · [Flex Queries](https://www.ibkrguides.com/clientportal/performanceandstatements/flex.htm)
 
-**Files audited:** 20  ·  **rejected:** 1
-
-## Rejected files
-
-These are not statements and must never be imported:
-
-- `flex_U*******_2026-07-02_2928480049.xml` — root is <FlexStatementResponse>, not <FlexQueryResponse>. Status=Warn ErrorCode=1019 ErrorMessage=Statement generation in progress. Please try again shortly.
+**Files audited:** 22  ·  **rejected:** 0
 
 ## Statement coverage
 
@@ -40,80 +34,82 @@ These are not statements and must never be imported:
 | `flex_U*******_2026-07-28_5172583425.xml` | ClaudIA Full Activity | AF | 20260629 | 20260727 | 20260728;102857 |
 | `flex_U*******_2026-08-03_2959557037.xml` | ClaudIA Full Activity | AF | 20260702 | 20260731 | 20260803;220921 |
 | `flex_U*******_2026-08-04_3901827331.xml` | ClaudIA Full Activity | AF | 20260706 | 20260803 | 20260804;133057 |
+| `flex_U*******_2026-08-05_5987206783.xml` | ClaudIA Full Activity | AF | 20260706 | 20260804 | 20260805;081755 |
+| `flex_U*******_2026-08-06_4602951826.xml` | ClaudIA Full Activity | AF | 20260707 | 20260805 | 20260806;162947 |
 
 ## Element inventory
 
 | Element | Rows | Files | Attributes |
 |---|---:|---:|---:|
-| `ConversionRate` | 91,884 | 20 | 4 |
-| `StatementOfFundsLine` | 6,335 | 20 | 56 |
-| `Trade` | 2,343 | 20 | 85 |
-| `UnbundledCommissionDetail` | 2,328 | 20 | 49 |
-| `Order` | 2,248 | 20 | 85 |
-| `Lot` | 1,430 | 20 | 85 |
-| `CashTransaction` | 783 | 20 | 46 |
+| `ConversionRate` | 93,912 | 22 | 4 |
+| `StatementOfFundsLine` | 6,867 | 22 | 56 |
+| `Trade` | 2,560 | 22 | 85 |
+| `UnbundledCommissionDetail` | 2,545 | 22 | 49 |
+| `Order` | 2,461 | 22 | 85 |
+| `Lot` | 1,603 | 22 | 85 |
+| `CashTransaction` | 819 | 22 | 46 |
 | `WashSale` | 443 | 12 | 85 |
-| `SymbolSummary` | 285 | 20 | 85 |
-| `SecurityInfo` | 181 | 20 | 33 |
-| `OpenPosition` | 80 | 20 | 50 |
-| `AssetSummary` | 37 | 20 | 85 |
-| `AccountInformation` | 20 | 20 | 37 |
-| `ChangeInNAV` | 20 | 20 | 58 |
+| `SymbolSummary` | 301 | 22 | 85 |
+| `SecurityInfo` | 193 | 22 | 33 |
+| `OpenPosition` | 85 | 22 | 50 |
+| `AssetSummary` | 41 | 22 | 85 |
+| `AccountInformation` | 22 | 22 | 37 |
+| `ChangeInNAV` | 22 | 22 | 58 |
 
-## `<ConversionRate>` — 91,884 rows, 4 attributes
-
-| Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
-|---|---:|---:|---|---:|---|
-| `fromCurrency` | 91,884 | 100 | TEXT | redacted |  |
-| `rate` | 91,884 | 100 | REAL | redacted |  |
-| `reportDate` | 91,884 | 100 | TEXT | redacted |  |
-| `toCurrency` | 91,884 | 100 | TEXT | redacted |  |
-
-## `<StatementOfFundsLine>` — 6,335 rows, 56 attributes
+## `<ConversionRate>` — 93,912 rows, 4 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 6,335 | 100 | TEXT | redacted |  |
-| `activityDescription` | 6,335 | 100 | TEXT | redacted |  |
-| `amount` | 6,335 | 100 | REAL | redacted |  |
-| `balance` | 6,335 | 100 | REAL | redacted |  |
-| `currency` | 6,335 | 100 | TEXT | 3 | `USD`×6279 · `EUR`×43 · `CHF`×13 |
-| `date` | 6,335 | 100 | TEXT | redacted |  |
-| `fxRateToBase` | 6,335 | 100 | REAL | redacted |  |
-| `levelOfDetail` | 6,335 | 100 | TEXT | 2 | `Currency`×3192 · `BaseCurrency`×3143 |
-| `reportDate` | 6,335 | 100 | TEXT | redacted |  |
-| `tradeCommission` | 6,335 | 100 | REAL | redacted |  |
-| `tradeGross` | 6,335 | 100 | REAL | redacted |  |
-| `tradePrice` | 6,335 | 100 | REAL | redacted |  |
-| `tradeQuantity` | 6,335 | 100 | REAL | redacted |  |
-| `tradeTax` | 6,335 | 100 | REAL | redacted |  |
-| `activityCode` | 6,249 | 99 | TEXT | redacted |  |
-| `settleDate` | 6,247 | 99 | TEXT | redacted |  |
-| `fineness` | 5,910 | 93 | REAL | redacted |  |
-| `multiplier` | 5,910 | 93 | REAL | redacted |  |
-| `weight` | 5,910 | 93 | REAL | redacted |  |
-| `assetCategory` | 5,432 | 86 | TEXT | 5 | `FUT`×3422 · `STK`×1644 · `CASH`×342 · `OPT`×16 · `FUND`×8 |
-| `conid` | 5,140 | 81 | INTEGER | redacted |  |
-| `description` | 5,140 | 81 | TEXT | redacted |  |
-| `symbol` | 5,140 | 81 | TEXT | redacted |  |
-| `listingExchange` | 5,082 | 80 | TEXT | redacted |  |
-| `figi` | 4,642 | 73 | TEXT | redacted |  |
-| `buySell` | 4,496 | 71 | TEXT | 2 | `BUY`×2598 · `SELL`×1898 |
-| `orderID` | 4,446 | 70 | INTEGER | redacted |  |
-| `tradeCode` | 4,446 | 70 | TEXT | redacted |  |
-| `underlyingSymbol` | 4,402 | 69 | TEXT | redacted |  |
-| `debit` | 3,490 | 55 | REAL | redacted |  |
-| `expiry` | 3,438 | 54 | TEXT | redacted |  |
-| `underlyingConid` | 3,438 | 54 | INTEGER | redacted |  |
-| `credit` | 2,759 | 44 | REAL | redacted |  |
-| `transactionID` | 1,751 | 28 | INTEGER | redacted |  |
-| `subCategory` | 1,660 | 26 | TEXT | 5 | `ETF`×1222 · `COMMON`×342 · `ADR`×40 · `PREFERENCE`×40 · `C`×16 |
-| `isin` | 1,652 | 26 | TEXT | redacted |  |
-| `securityID` | 1,652 | 26 | TEXT | redacted |  |
-| `securityIDType` | 1,652 | 26 | TEXT | 1 | `ISIN`×1652 |
-| `cusip` | 1,584 | 25 | TEXT | redacted |  |
-| `issuerCountryCode` | 1,144 | 18 | TEXT | redacted |  |
-| `actionID` | 162 | 3 | INTEGER | redacted |  |
+| `fromCurrency` | 93,912 | 100 | TEXT | redacted |  |
+| `rate` | 93,912 | 100 | REAL | redacted |  |
+| `reportDate` | 93,912 | 100 | TEXT | redacted |  |
+| `toCurrency` | 93,912 | 100 | TEXT | redacted |  |
+
+## `<StatementOfFundsLine>` — 6,867 rows, 56 attributes
+
+| Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
+|---|---:|---:|---|---:|---|
+| `accountId` | 6,867 | 100 | TEXT | redacted |  |
+| `activityDescription` | 6,867 | 100 | TEXT | redacted |  |
+| `amount` | 6,867 | 100 | REAL | redacted |  |
+| `balance` | 6,867 | 100 | REAL | redacted |  |
+| `currency` | 6,867 | 100 | TEXT | 3 | `USD`×6811 · `EUR`×43 · `CHF`×13 |
+| `date` | 6,867 | 100 | TEXT | redacted |  |
+| `fxRateToBase` | 6,867 | 100 | REAL | redacted |  |
+| `levelOfDetail` | 6,867 | 100 | TEXT | 2 | `Currency`×3458 · `BaseCurrency`×3409 |
+| `reportDate` | 6,867 | 100 | TEXT | redacted |  |
+| `tradeCommission` | 6,867 | 100 | REAL | redacted |  |
+| `tradeGross` | 6,867 | 100 | REAL | redacted |  |
+| `tradePrice` | 6,867 | 100 | REAL | redacted |  |
+| `tradeQuantity` | 6,867 | 100 | REAL | redacted |  |
+| `tradeTax` | 6,867 | 100 | REAL | redacted |  |
+| `activityCode` | 6,773 | 99 | TEXT | redacted |  |
+| `settleDate` | 6,771 | 99 | TEXT | redacted |  |
+| `fineness` | 6,430 | 94 | REAL | redacted |  |
+| `multiplier` | 6,430 | 94 | REAL | redacted |  |
+| `weight` | 6,430 | 94 | REAL | redacted |  |
+| `assetCategory` | 5,900 | 86 | TEXT | 5 | `FUT`×3866 · `STK`×1664 · `CASH`×346 · `OPT`×16 · `FUND`×8 |
+| `conid` | 5,604 | 82 | INTEGER | redacted |  |
+| `description` | 5,604 | 82 | TEXT | redacted |  |
+| `symbol` | 5,604 | 82 | TEXT | redacted |  |
+| `listingExchange` | 5,546 | 81 | TEXT | redacted |  |
+| `figi` | 5,106 | 74 | TEXT | redacted |  |
+| `buySell` | 4,922 | 72 | TEXT | 2 | `BUY`×2806 · `SELL`×2116 |
+| `orderID` | 4,872 | 71 | INTEGER | redacted |  |
+| `tradeCode` | 4,872 | 71 | TEXT | redacted |  |
+| `underlyingSymbol` | 4,866 | 71 | TEXT | redacted |  |
+| `expiry` | 3,882 | 57 | TEXT | redacted |  |
+| `underlyingConid` | 3,882 | 57 | INTEGER | redacted |  |
+| `debit` | 3,744 | 55 | REAL | redacted |  |
+| `credit` | 3,029 | 44 | REAL | redacted |  |
+| `transactionID` | 1,849 | 27 | INTEGER | redacted |  |
+| `subCategory` | 1,680 | 24 | TEXT | 5 | `ETF`×1234 · `COMMON`×350 · `ADR`×40 · `PREFERENCE`×40 · `C`×16 |
+| `isin` | 1,672 | 24 | TEXT | redacted |  |
+| `securityID` | 1,672 | 24 | TEXT | redacted |  |
+| `securityIDType` | 1,672 | 24 | TEXT | 1 | `ISIN`×1672 |
+| `cusip` | 1,604 | 23 | TEXT | redacted |  |
+| `issuerCountryCode` | 1,164 | 17 | TEXT | redacted |  |
+| `actionID` | 162 | 2 | INTEGER | redacted |  |
 | `tradeID` | 128 | 2 | INTEGER | redacted |  |
 | `putCall` | 16 | 0 | TEXT | 1 | `C`×16 |
 | `strike` | 16 | 0 | REAL | redacted |  |
@@ -130,71 +126,71 @@ These are not statements and must never be imported:
 | `relatedTransactionID` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `serialNumber` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<Trade>` — 2,343 rows, 85 attributes
+## `<Trade>` — 2,560 rows, 85 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 2,343 | 100 | TEXT | redacted |  |
-| `accruedInt` | 2,343 | 100 | REAL | redacted |  |
-| `assetCategory` | 2,343 | 100 | TEXT | 5 | `FUT`×1512 · `STK`×795 · `CASH`×25 · `OPT`×8 · `FUND`×3 |
-| `buySell` | 2,343 | 100 | TEXT | 2 | `BUY`×1362 · `SELL`×981 |
-| `changeInPrice` | 2,343 | 100 | REAL | redacted |  |
-| `changeInQuantity` | 2,343 | 100 | REAL | redacted |  |
-| `closePrice` | 2,343 | 100 | REAL | redacted |  |
-| `conid` | 2,343 | 100 | INTEGER | redacted |  |
-| `cost` | 2,343 | 100 | REAL | redacted |  |
-| `currency` | 2,343 | 100 | TEXT | 3 | `USD`×2328 · `EUR`×13 · `CHF`×2 |
-| `dateTime` | 2,343 | 100 | TEXT | redacted |  |
-| `description` | 2,343 | 100 | TEXT | redacted |  |
-| `exchOrderId` | 2,343 | 100 | TEXT | redacted |  |
-| `exchange` | 2,343 | 100 | TEXT | redacted |  |
-| `extExecID` | 2,343 | 100 | TEXT | redacted |  |
-| `fifoPnlRealized` | 2,343 | 100 | REAL | redacted |  |
-| `fineness` | 2,343 | 100 | REAL | redacted |  |
-| `fxRateToBase` | 2,343 | 100 | REAL | redacted |  |
-| `ibCommission` | 2,343 | 100 | REAL | redacted |  |
-| `ibCommissionCurrency` | 2,343 | 100 | TEXT | 2 | `USD`×2330 · `EUR`×13 |
-| `ibOrderID` | 2,343 | 100 | INTEGER | redacted |  |
-| `isAPIOrder` | 2,343 | 100 | TEXT | redacted |  |
-| `levelOfDetail` | 2,343 | 100 | TEXT | 1 | `EXECUTION`×2343 |
-| `mtmPnl` | 2,343 | 100 | REAL | redacted |  |
-| `multiplier` | 2,343 | 100 | REAL | redacted |  |
-| `netCash` | 2,343 | 100 | REAL | redacted |  |
-| `origOrderID` | 2,343 | 100 | INTEGER | redacted |  |
-| `origTradePrice` | 2,343 | 100 | REAL | redacted |  |
-| `origTransactionID` | 2,343 | 100 | INTEGER | redacted |  |
-| `proceeds` | 2,343 | 100 | REAL | redacted |  |
-| `quantity` | 2,343 | 100 | REAL | redacted |  |
-| `reportDate` | 2,343 | 100 | TEXT | redacted |  |
-| `settleDateTarget` | 2,343 | 100 | TEXT | redacted |  |
-| `symbol` | 2,343 | 100 | TEXT | redacted |  |
-| `taxes` | 2,343 | 100 | REAL | redacted |  |
-| `tradeDate` | 2,343 | 100 | TEXT | redacted |  |
-| `tradeID` | 2,343 | 100 | INTEGER | redacted |  |
-| `tradeMoney` | 2,343 | 100 | REAL | redacted |  |
-| `tradePrice` | 2,343 | 100 | REAL | redacted |  |
-| `transactionID` | 2,343 | 100 | INTEGER | redacted |  |
-| `transactionType` | 2,343 | 100 | TEXT | 2 | `ExchTrade`×2342 · `BookTrade`×1 |
-| `weight` | 2,343 | 100 | REAL | redacted |  |
-| `ibExecID` | 2,342 | 100 | TEXT | redacted |  |
-| `orderTime` | 2,342 | 100 | TEXT | redacted |  |
-| `orderType` | 2,337 | 100 | TEXT | redacted |  |
-| `brokerageOrderID` | 2,333 | 100 | TEXT | redacted |  |
-| `openCloseIndicator` | 2,318 | 99 | TEXT | 3 | `O`×1358 · `C`×956 · `C;O`×4 |
-| `listingExchange` | 2,315 | 99 | TEXT | redacted |  |
-| `figi` | 2,123 | 91 | TEXT | redacted |  |
-| `underlyingSymbol` | 2,006 | 86 | TEXT | redacted |  |
-| `expiry` | 1,520 | 65 | TEXT | redacted |  |
-| `underlyingConid` | 1,520 | 65 | INTEGER | redacted |  |
-| `rtn` | 1,140 | 49 | TEXT | redacted |  |
-| `subCategory` | 803 | 34 | TEXT | 5 | `ETF`×573 · `COMMON`×187 · `ADR`×22 · `PREFERENCE`×13 · `C`×8 |
-| `isin` | 798 | 34 | TEXT | redacted |  |
-| `securityID` | 798 | 34 | TEXT | redacted |  |
-| `securityIDType` | 798 | 34 | TEXT | 1 | `ISIN`×798 |
-| `cusip` | 771 | 33 | TEXT | redacted |  |
-| `issuerCountryCode` | 578 | 25 | TEXT | redacted |  |
-| `notes` | 226 | 10 | TEXT | 5 | `P`×167 · `IA`×33 · `L`×14 · `IA;P`×11 · `R`×1 |
-| `orderReference` | 12 | 1 | TEXT | redacted |  |
+| `accountId` | 2,560 | 100 | TEXT | redacted |  |
+| `accruedInt` | 2,560 | 100 | REAL | redacted |  |
+| `assetCategory` | 2,560 | 100 | TEXT | 5 | `FUT`×1715 · `STK`×809 · `CASH`×25 · `OPT`×8 · `FUND`×3 |
+| `buySell` | 2,560 | 100 | TEXT | 2 | `BUY`×1466 · `SELL`×1094 |
+| `changeInPrice` | 2,560 | 100 | REAL | redacted |  |
+| `changeInQuantity` | 2,560 | 100 | REAL | redacted |  |
+| `closePrice` | 2,560 | 100 | REAL | redacted |  |
+| `conid` | 2,560 | 100 | INTEGER | redacted |  |
+| `cost` | 2,560 | 100 | REAL | redacted |  |
+| `currency` | 2,560 | 100 | TEXT | 3 | `USD`×2545 · `EUR`×13 · `CHF`×2 |
+| `dateTime` | 2,560 | 100 | TEXT | redacted |  |
+| `description` | 2,560 | 100 | TEXT | redacted |  |
+| `exchOrderId` | 2,560 | 100 | TEXT | redacted |  |
+| `exchange` | 2,560 | 100 | TEXT | redacted |  |
+| `extExecID` | 2,560 | 100 | TEXT | redacted |  |
+| `fifoPnlRealized` | 2,560 | 100 | REAL | redacted |  |
+| `fineness` | 2,560 | 100 | REAL | redacted |  |
+| `fxRateToBase` | 2,560 | 100 | REAL | redacted |  |
+| `ibCommission` | 2,560 | 100 | REAL | redacted |  |
+| `ibCommissionCurrency` | 2,560 | 100 | TEXT | 2 | `USD`×2547 · `EUR`×13 |
+| `ibOrderID` | 2,560 | 100 | INTEGER | redacted |  |
+| `isAPIOrder` | 2,560 | 100 | TEXT | redacted |  |
+| `levelOfDetail` | 2,560 | 100 | TEXT | 1 | `EXECUTION`×2560 |
+| `mtmPnl` | 2,560 | 100 | REAL | redacted |  |
+| `multiplier` | 2,560 | 100 | REAL | redacted |  |
+| `netCash` | 2,560 | 100 | REAL | redacted |  |
+| `origOrderID` | 2,560 | 100 | INTEGER | redacted |  |
+| `origTradePrice` | 2,560 | 100 | REAL | redacted |  |
+| `origTransactionID` | 2,560 | 100 | INTEGER | redacted |  |
+| `proceeds` | 2,560 | 100 | REAL | redacted |  |
+| `quantity` | 2,560 | 100 | REAL | redacted |  |
+| `reportDate` | 2,560 | 100 | TEXT | redacted |  |
+| `settleDateTarget` | 2,560 | 100 | TEXT | redacted |  |
+| `symbol` | 2,560 | 100 | TEXT | redacted |  |
+| `taxes` | 2,560 | 100 | REAL | redacted |  |
+| `tradeDate` | 2,560 | 100 | TEXT | redacted |  |
+| `tradeID` | 2,560 | 100 | INTEGER | redacted |  |
+| `tradeMoney` | 2,560 | 100 | REAL | redacted |  |
+| `tradePrice` | 2,560 | 100 | REAL | redacted |  |
+| `transactionID` | 2,560 | 100 | INTEGER | redacted |  |
+| `transactionType` | 2,560 | 100 | TEXT | 2 | `ExchTrade`×2559 · `BookTrade`×1 |
+| `weight` | 2,560 | 100 | REAL | redacted |  |
+| `ibExecID` | 2,559 | 100 | TEXT | redacted |  |
+| `orderTime` | 2,559 | 100 | TEXT | redacted |  |
+| `orderType` | 2,554 | 100 | TEXT | redacted |  |
+| `brokerageOrderID` | 2,550 | 100 | TEXT | redacted |  |
+| `openCloseIndicator` | 2,535 | 99 | TEXT | 3 | `O`×1461 · `C`×1070 · `C;O`×4 |
+| `listingExchange` | 2,532 | 99 | TEXT | redacted |  |
+| `figi` | 2,340 | 91 | TEXT | redacted |  |
+| `underlyingSymbol` | 2,223 | 87 | TEXT | redacted |  |
+| `expiry` | 1,723 | 67 | TEXT | redacted |  |
+| `underlyingConid` | 1,723 | 67 | INTEGER | redacted |  |
+| `rtn` | 1,338 | 52 | TEXT | redacted |  |
+| `subCategory` | 817 | 32 | TEXT | 5 | `ETF`×579 · `COMMON`×195 · `ADR`×22 · `PREFERENCE`×13 · `C`×8 |
+| `isin` | 812 | 32 | TEXT | redacted |  |
+| `securityID` | 812 | 32 | TEXT | redacted |  |
+| `securityIDType` | 812 | 32 | TEXT | 1 | `ISIN`×812 |
+| `cusip` | 785 | 31 | TEXT | redacted |  |
+| `issuerCountryCode` | 592 | 23 | TEXT | redacted |  |
+| `notes` | 234 | 9 | TEXT | 5 | `P`×175 · `IA`×33 · `L`×14 · `IA;P`×11 · `R`×1 |
+| `orderReference` | 12 | 0 | TEXT | redacted |  |
 | `putCall` | 8 | 0 | TEXT | 1 | `C`×8 |
 | `strike` | 8 | 0 | REAL | redacted |  |
 | `underlyingListingExchange` | 8 | 0 | TEXT | redacted |  |
@@ -220,48 +216,48 @@ These are not statements and must never be imported:
 | `whenRealized` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `whenReopened` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<UnbundledCommissionDetail>` — 2,328 rows, 49 attributes
+## `<UnbundledCommissionDetail>` — 2,545 rows, 49 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 2,328 | 100 | TEXT | redacted |  |
-| `assetCategory` | 2,328 | 100 | TEXT | 5 | `FUT`×1512 · `STK`×786 · `CASH`×20 · `OPT`×8 · `FUND`×2 |
-| `brokerClearingCharge` | 2,328 | 100 | REAL | redacted |  |
-| `brokerExecutionCharge` | 2,328 | 100 | REAL | redacted |  |
-| `buySell` | 2,328 | 100 | TEXT | 2 | `BUY`×1349 · `SELL`×979 |
-| `conid` | 2,328 | 100 | INTEGER | redacted |  |
-| `currency` | 2,328 | 100 | TEXT | 3 | `USD`×2314 · `EUR`×13 · `CHF`×1 |
-| `dateTime` | 2,328 | 100 | TEXT | redacted |  |
-| `description` | 2,328 | 100 | TEXT | redacted |  |
-| `exchange` | 2,328 | 100 | TEXT | redacted |  |
-| `fineness` | 2,328 | 100 | REAL | redacted |  |
-| `fxRateToBase` | 2,328 | 100 | REAL | redacted |  |
-| `multiplier` | 2,328 | 100 | REAL | redacted |  |
-| `other` | 2,328 | 100 | INTEGER | redacted |  |
-| `price` | 2,328 | 100 | REAL | redacted |  |
-| `quantity` | 2,328 | 100 | REAL | redacted |  |
-| `regFINRATradingActivityFee` | 2,328 | 100 | REAL | redacted |  |
-| `regOther` | 2,328 | 100 | REAL | redacted |  |
-| `regSection31TransactionFee` | 2,328 | 100 | REAL | redacted |  |
-| `symbol` | 2,328 | 100 | TEXT | redacted |  |
-| `thirdPartyClearingCharge` | 2,328 | 100 | INTEGER | redacted |  |
-| `thirdPartyExecutionCharge` | 2,328 | 100 | REAL | redacted |  |
-| `thirdPartyRegulatoryCharge` | 2,328 | 100 | REAL | redacted |  |
-| `totalCommission` | 2,328 | 100 | REAL | redacted |  |
-| `tradeID` | 2,328 | 100 | INTEGER | redacted |  |
-| `weight` | 2,328 | 100 | REAL | redacted |  |
-| `listingExchange` | 2,306 | 99 | TEXT | redacted |  |
-| `figi` | 2,116 | 91 | TEXT | redacted |  |
-| `underlyingSymbol` | 2,004 | 86 | TEXT | redacted |  |
-| `expiry` | 1,520 | 65 | TEXT | redacted |  |
-| `underlyingConid` | 1,520 | 65 | INTEGER | redacted |  |
-| `subCategory` | 794 | 34 | TEXT | 5 | `ETF`×571 · `COMMON`×183 · `ADR`×19 · `PREFERENCE`×13 · `C`×8 |
-| `isin` | 788 | 34 | TEXT | redacted |  |
-| `securityID` | 788 | 34 | TEXT | redacted |  |
-| `securityIDType` | 788 | 34 | TEXT | 1 | `ISIN`×788 |
-| `cusip` | 761 | 33 | TEXT | redacted |  |
-| `issuerCountryCode` | 571 | 25 | TEXT | redacted |  |
-| `orderReference` | 12 | 1 | TEXT | redacted |  |
+| `accountId` | 2,545 | 100 | TEXT | redacted |  |
+| `assetCategory` | 2,545 | 100 | TEXT | 5 | `FUT`×1715 · `STK`×800 · `CASH`×20 · `OPT`×8 · `FUND`×2 |
+| `brokerClearingCharge` | 2,545 | 100 | REAL | redacted |  |
+| `brokerExecutionCharge` | 2,545 | 100 | REAL | redacted |  |
+| `buySell` | 2,545 | 100 | TEXT | 2 | `BUY`×1453 · `SELL`×1092 |
+| `conid` | 2,545 | 100 | INTEGER | redacted |  |
+| `currency` | 2,545 | 100 | TEXT | 3 | `USD`×2531 · `EUR`×13 · `CHF`×1 |
+| `dateTime` | 2,545 | 100 | TEXT | redacted |  |
+| `description` | 2,545 | 100 | TEXT | redacted |  |
+| `exchange` | 2,545 | 100 | TEXT | redacted |  |
+| `fineness` | 2,545 | 100 | REAL | redacted |  |
+| `fxRateToBase` | 2,545 | 100 | REAL | redacted |  |
+| `multiplier` | 2,545 | 100 | REAL | redacted |  |
+| `other` | 2,545 | 100 | INTEGER | redacted |  |
+| `price` | 2,545 | 100 | REAL | redacted |  |
+| `quantity` | 2,545 | 100 | REAL | redacted |  |
+| `regFINRATradingActivityFee` | 2,545 | 100 | REAL | redacted |  |
+| `regOther` | 2,545 | 100 | REAL | redacted |  |
+| `regSection31TransactionFee` | 2,545 | 100 | REAL | redacted |  |
+| `symbol` | 2,545 | 100 | TEXT | redacted |  |
+| `thirdPartyClearingCharge` | 2,545 | 100 | INTEGER | redacted |  |
+| `thirdPartyExecutionCharge` | 2,545 | 100 | REAL | redacted |  |
+| `thirdPartyRegulatoryCharge` | 2,545 | 100 | REAL | redacted |  |
+| `totalCommission` | 2,545 | 100 | REAL | redacted |  |
+| `tradeID` | 2,545 | 100 | INTEGER | redacted |  |
+| `weight` | 2,545 | 100 | REAL | redacted |  |
+| `listingExchange` | 2,523 | 99 | TEXT | redacted |  |
+| `figi` | 2,333 | 92 | TEXT | redacted |  |
+| `underlyingSymbol` | 2,221 | 87 | TEXT | redacted |  |
+| `expiry` | 1,723 | 68 | TEXT | redacted |  |
+| `underlyingConid` | 1,723 | 68 | INTEGER | redacted |  |
+| `subCategory` | 808 | 32 | TEXT | 5 | `ETF`×577 · `COMMON`×191 · `ADR`×19 · `PREFERENCE`×13 · `C`×8 |
+| `isin` | 802 | 32 | TEXT | redacted |  |
+| `securityID` | 802 | 32 | TEXT | redacted |  |
+| `securityIDType` | 802 | 32 | TEXT | 1 | `ISIN`×802 |
+| `cusip` | 775 | 30 | TEXT | redacted |  |
+| `issuerCountryCode` | 585 | 23 | TEXT | redacted |  |
+| `orderReference` | 12 | 0 | TEXT | redacted |  |
 | `putCall` | 8 | 0 | TEXT | 1 | `C`×8 |
 | `strike` | 8 | 0 | REAL | redacted |  |
 | `underlyingListingExchange` | 8 | 0 | TEXT | redacted |  |
@@ -274,55 +270,55 @@ These are not statements and must never be imported:
 | `principalAdjustFactor` | 0 | 0 | REAL | redacted | **never populated in this archive** |
 | `serialNumber` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<Order>` — 2,248 rows, 85 attributes
+## `<Order>` — 2,461 rows, 85 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 2,248 | 100 | TEXT | redacted |  |
-| `accruedInt` | 2,248 | 100 | REAL | redacted |  |
-| `assetCategory` | 2,248 | 100 | TEXT | 5 | `FUT`×1496 · `STK`×716 · `CASH`×25 · `OPT`×8 · `FUND`×3 |
-| `buySell` | 2,248 | 100 | TEXT | 2 | `BUY`×1299 · `SELL`×949 |
-| `closePrice` | 2,248 | 100 | REAL | redacted |  |
-| `conid` | 2,248 | 100 | INTEGER | redacted |  |
-| `cost` | 2,248 | 100 | REAL | redacted |  |
-| `currency` | 2,248 | 100 | TEXT | 3 | `USD`×2233 · `EUR`×13 · `CHF`×2 |
-| `dateTime` | 2,248 | 100 | TEXT | redacted |  |
-| `description` | 2,248 | 100 | TEXT | redacted |  |
-| `fifoPnlRealized` | 2,248 | 100 | REAL | redacted |  |
-| `fineness` | 2,248 | 100 | REAL | redacted |  |
-| `fxRateToBase` | 2,248 | 100 | REAL | redacted |  |
-| `ibCommission` | 2,248 | 100 | REAL | redacted |  |
-| `ibCommissionCurrency` | 2,248 | 100 | TEXT | 2 | `USD`×2235 · `EUR`×13 |
-| `ibOrderID` | 2,248 | 100 | INTEGER | redacted |  |
-| `levelOfDetail` | 2,248 | 100 | TEXT | 1 | `ORDER`×2248 |
-| `mtmPnl` | 2,248 | 100 | REAL | redacted |  |
-| `multiplier` | 2,248 | 100 | REAL | redacted |  |
-| `netCash` | 2,248 | 100 | REAL | redacted |  |
-| `openCloseIndicator` | 2,248 | 100 | TEXT | 3 | `O`×1304 · `C`×919 · `-`×25 |
-| `proceeds` | 2,248 | 100 | REAL | redacted |  |
-| `quantity` | 2,248 | 100 | REAL | redacted |  |
-| `reportDate` | 2,248 | 100 | TEXT | redacted |  |
-| `settleDateTarget` | 2,248 | 100 | TEXT | redacted |  |
-| `symbol` | 2,248 | 100 | TEXT | redacted |  |
-| `taxes` | 2,248 | 100 | REAL | redacted |  |
-| `tradeDate` | 2,248 | 100 | TEXT | redacted |  |
-| `tradeMoney` | 2,248 | 100 | REAL | redacted |  |
-| `tradePrice` | 2,248 | 100 | REAL | redacted |  |
-| `weight` | 2,248 | 100 | REAL | redacted |  |
-| `orderTime` | 2,247 | 100 | TEXT | redacted |  |
-| `orderType` | 2,242 | 100 | TEXT | redacted |  |
-| `notes` | 2,223 | 99 | TEXT | 11 | `O`×1220 · `C`×868 · `O;P`×41 · `C;P`×32 · `IA;O`×28 · `C;L`×14 · `IM;O;P`×9 · `C;IA`×5 · `C;O`×4 · `O;R`×1 · `IA;O;P`×1 |
-| `listingExchange` | 2,220 | 99 | TEXT | redacted |  |
-| `figi` | 2,037 | 91 | TEXT | redacted |  |
-| `underlyingSymbol` | 1,934 | 86 | TEXT | redacted |  |
-| `expiry` | 1,504 | 67 | TEXT | redacted |  |
-| `underlyingConid` | 1,504 | 67 | INTEGER | redacted |  |
-| `subCategory` | 724 | 32 | TEXT | 5 | `ETF`×524 · `COMMON`×161 · `ADR`×18 · `PREFERENCE`×13 · `C`×8 |
-| `isin` | 719 | 32 | TEXT | redacted |  |
-| `securityID` | 719 | 32 | TEXT | redacted |  |
-| `securityIDType` | 719 | 32 | TEXT | 1 | `ISIN`×719 |
-| `cusip` | 692 | 31 | TEXT | redacted |  |
-| `issuerCountryCode` | 511 | 23 | TEXT | redacted |  |
+| `accountId` | 2,461 | 100 | TEXT | redacted |  |
+| `accruedInt` | 2,461 | 100 | REAL | redacted |  |
+| `assetCategory` | 2,461 | 100 | TEXT | 5 | `FUT`×1699 · `STK`×726 · `CASH`×25 · `OPT`×8 · `FUND`×3 |
+| `buySell` | 2,461 | 100 | TEXT | 2 | `BUY`×1403 · `SELL`×1058 |
+| `closePrice` | 2,461 | 100 | REAL | redacted |  |
+| `conid` | 2,461 | 100 | INTEGER | redacted |  |
+| `cost` | 2,461 | 100 | REAL | redacted |  |
+| `currency` | 2,461 | 100 | TEXT | 3 | `USD`×2446 · `EUR`×13 · `CHF`×2 |
+| `dateTime` | 2,461 | 100 | TEXT | redacted |  |
+| `description` | 2,461 | 100 | TEXT | redacted |  |
+| `fifoPnlRealized` | 2,461 | 100 | REAL | redacted |  |
+| `fineness` | 2,461 | 100 | REAL | redacted |  |
+| `fxRateToBase` | 2,461 | 100 | REAL | redacted |  |
+| `ibCommission` | 2,461 | 100 | REAL | redacted |  |
+| `ibCommissionCurrency` | 2,461 | 100 | TEXT | 2 | `USD`×2448 · `EUR`×13 |
+| `ibOrderID` | 2,461 | 100 | INTEGER | redacted |  |
+| `levelOfDetail` | 2,461 | 100 | TEXT | 1 | `ORDER`×2461 |
+| `mtmPnl` | 2,461 | 100 | REAL | redacted |  |
+| `multiplier` | 2,461 | 100 | REAL | redacted |  |
+| `netCash` | 2,461 | 100 | REAL | redacted |  |
+| `openCloseIndicator` | 2,461 | 100 | TEXT | 3 | `O`×1407 · `C`×1029 · `-`×25 |
+| `proceeds` | 2,461 | 100 | REAL | redacted |  |
+| `quantity` | 2,461 | 100 | REAL | redacted |  |
+| `reportDate` | 2,461 | 100 | TEXT | redacted |  |
+| `settleDateTarget` | 2,461 | 100 | TEXT | redacted |  |
+| `symbol` | 2,461 | 100 | TEXT | redacted |  |
+| `taxes` | 2,461 | 100 | REAL | redacted |  |
+| `tradeDate` | 2,461 | 100 | TEXT | redacted |  |
+| `tradeMoney` | 2,461 | 100 | REAL | redacted |  |
+| `tradePrice` | 2,461 | 100 | REAL | redacted |  |
+| `weight` | 2,461 | 100 | REAL | redacted |  |
+| `orderTime` | 2,460 | 100 | TEXT | redacted |  |
+| `orderType` | 2,455 | 100 | TEXT | redacted |  |
+| `notes` | 2,436 | 99 | TEXT | 11 | `O`×1323 · `C`×974 · `O;P`×41 · `C;P`×36 · `IA;O`×28 · `C;L`×14 · `IM;O;P`×9 · `C;IA`×5 · `C;O`×4 · `O;R`×1 · `IA;O;P`×1 |
+| `listingExchange` | 2,433 | 99 | TEXT | redacted |  |
+| `figi` | 2,250 | 91 | TEXT | redacted |  |
+| `underlyingSymbol` | 2,147 | 87 | TEXT | redacted |  |
+| `expiry` | 1,707 | 69 | TEXT | redacted |  |
+| `underlyingConid` | 1,707 | 69 | INTEGER | redacted |  |
+| `subCategory` | 734 | 30 | TEXT | 5 | `ETF`×530 · `COMMON`×165 · `ADR`×18 · `PREFERENCE`×13 · `C`×8 |
+| `isin` | 729 | 30 | TEXT | redacted |  |
+| `securityID` | 729 | 30 | TEXT | redacted |  |
+| `securityIDType` | 729 | 30 | TEXT | 1 | `ISIN`×729 |
+| `cusip` | 702 | 29 | TEXT | redacted |  |
+| `issuerCountryCode` | 521 | 21 | TEXT | redacted |  |
 | `putCall` | 8 | 0 | TEXT | 1 | `C`×8 |
 | `strike` | 8 | 0 | REAL | redacted |  |
 | `underlyingListingExchange` | 8 | 0 | TEXT | redacted |  |
@@ -364,46 +360,46 @@ These are not statements and must never be imported:
 | `whenRealized` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `whenReopened` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<Lot>` — 1,430 rows, 85 attributes
+## `<Lot>` — 1,603 rows, 85 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 1,430 | 100 | TEXT | redacted |  |
-| `assetCategory` | 1,430 | 100 | TEXT | 4 | `FUT`×767 · `STK`×657 · `OPT`×4 · `FUND`×2 |
-| `buySell` | 1,430 | 100 | TEXT | 2 | `SELL`×945 · `BUY`×485 |
-| `conid` | 1,430 | 100 | INTEGER | redacted |  |
-| `cost` | 1,430 | 100 | REAL | redacted |  |
-| `currency` | 1,430 | 100 | TEXT | 2 | `USD`×1420 · `EUR`×10 |
-| `dateTime` | 1,430 | 100 | TEXT | redacted |  |
-| `description` | 1,430 | 100 | TEXT | redacted |  |
-| `fifoPnlRealized` | 1,430 | 100 | REAL | redacted |  |
-| `fineness` | 1,430 | 100 | REAL | redacted |  |
-| `fxRateToBase` | 1,430 | 100 | REAL | redacted |  |
-| `holdingPeriodDateTime` | 1,430 | 100 | TEXT | redacted |  |
-| `levelOfDetail` | 1,430 | 100 | TEXT | 1 | `CLOSED_LOT`×1430 |
-| `multiplier` | 1,430 | 100 | REAL | redacted |  |
-| `notes` | 1,430 | 100 | TEXT | 2 | `ST`×1418 · `LT`×12 |
-| `openCloseIndicator` | 1,430 | 100 | TEXT | 2 | `C`×1426 · `C;O`×4 |
-| `openDateTime` | 1,430 | 100 | TEXT | redacted |  |
-| `quantity` | 1,430 | 100 | REAL | redacted |  |
-| `reportDate` | 1,430 | 100 | TEXT | redacted |  |
-| `symbol` | 1,430 | 100 | TEXT | redacted |  |
-| `tradeDate` | 1,430 | 100 | TEXT | redacted |  |
-| `tradePrice` | 1,430 | 100 | REAL | redacted |  |
-| `transactionID` | 1,430 | 100 | INTEGER | redacted |  |
-| `weight` | 1,430 | 100 | REAL | redacted |  |
-| `exchange` | 1,429 | 100 | TEXT | redacted |  |
-| `listingExchange` | 1,428 | 100 | TEXT | redacted |  |
-| `figi` | 1,303 | 91 | TEXT | redacted |  |
-| `underlyingSymbol` | 1,203 | 84 | TEXT | redacted |  |
-| `expiry` | 771 | 54 | TEXT | redacted |  |
-| `underlyingConid` | 771 | 54 | INTEGER | redacted |  |
-| `subCategory` | 661 | 46 | TEXT | 5 | `ETF`×468 · `COMMON`×159 · `ADR`×20 · `PREFERENCE`×10 · `C`×4 |
-| `isin` | 659 | 46 | TEXT | redacted |  |
-| `securityID` | 659 | 46 | TEXT | redacted |  |
-| `securityIDType` | 659 | 46 | TEXT | 1 | `ISIN`×659 |
-| `cusip` | 637 | 45 | TEXT | redacted |  |
-| `issuerCountryCode` | 516 | 36 | TEXT | redacted |  |
+| `accountId` | 1,603 | 100 | TEXT | redacted |  |
+| `assetCategory` | 1,603 | 100 | TEXT | 4 | `FUT`×868 · `STK`×729 · `OPT`×4 · `FUND`×2 |
+| `buySell` | 1,603 | 100 | TEXT | 2 | `SELL`×1036 · `BUY`×567 |
+| `conid` | 1,603 | 100 | INTEGER | redacted |  |
+| `cost` | 1,603 | 100 | REAL | redacted |  |
+| `currency` | 1,603 | 100 | TEXT | 2 | `USD`×1593 · `EUR`×10 |
+| `dateTime` | 1,603 | 100 | TEXT | redacted |  |
+| `description` | 1,603 | 100 | TEXT | redacted |  |
+| `fifoPnlRealized` | 1,603 | 100 | REAL | redacted |  |
+| `fineness` | 1,603 | 100 | REAL | redacted |  |
+| `fxRateToBase` | 1,603 | 100 | REAL | redacted |  |
+| `holdingPeriodDateTime` | 1,603 | 100 | TEXT | redacted |  |
+| `levelOfDetail` | 1,603 | 100 | TEXT | 1 | `CLOSED_LOT`×1603 |
+| `multiplier` | 1,603 | 100 | REAL | redacted |  |
+| `notes` | 1,603 | 100 | TEXT | 2 | `ST`×1591 · `LT`×12 |
+| `openCloseIndicator` | 1,603 | 100 | TEXT | 2 | `C`×1599 · `C;O`×4 |
+| `openDateTime` | 1,603 | 100 | TEXT | redacted |  |
+| `quantity` | 1,603 | 100 | REAL | redacted |  |
+| `reportDate` | 1,603 | 100 | TEXT | redacted |  |
+| `symbol` | 1,603 | 100 | TEXT | redacted |  |
+| `tradeDate` | 1,603 | 100 | TEXT | redacted |  |
+| `tradePrice` | 1,603 | 100 | REAL | redacted |  |
+| `transactionID` | 1,603 | 100 | INTEGER | redacted |  |
+| `weight` | 1,603 | 100 | REAL | redacted |  |
+| `exchange` | 1,602 | 100 | TEXT | redacted |  |
+| `listingExchange` | 1,601 | 100 | TEXT | redacted |  |
+| `figi` | 1,476 | 92 | TEXT | redacted |  |
+| `underlyingSymbol` | 1,376 | 86 | TEXT | redacted |  |
+| `expiry` | 872 | 54 | TEXT | redacted |  |
+| `underlyingConid` | 872 | 54 | INTEGER | redacted |  |
+| `subCategory` | 733 | 46 | TEXT | 5 | `ETF`×510 · `COMMON`×189 · `ADR`×20 · `PREFERENCE`×10 · `C`×4 |
+| `isin` | 731 | 46 | TEXT | redacted |  |
+| `securityID` | 731 | 46 | TEXT | redacted |  |
+| `securityIDType` | 731 | 46 | TEXT | 1 | `ISIN`×731 |
+| `cusip` | 709 | 44 | TEXT | redacted |  |
+| `issuerCountryCode` | 588 | 37 | TEXT | redacted |  |
 | `putCall` | 4 | 0 | TEXT | 1 | `C`×4 |
 | `strike` | 4 | 0 | REAL | redacted |  |
 | `underlyingListingExchange` | 4 | 0 | TEXT | redacted |  |
@@ -454,42 +450,42 @@ These are not statements and must never be imported:
 | `whenRealized` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `whenReopened` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<CashTransaction>` — 783 rows, 46 attributes
+## `<CashTransaction>` — 819 rows, 46 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 783 | 100 | TEXT | redacted |  |
-| `amount` | 783 | 100 | REAL | redacted |  |
-| `currency` | 783 | 100 | TEXT | 2 | `USD`×765 · `EUR`×18 |
-| `description` | 783 | 100 | TEXT | redacted |  |
-| `fineness` | 783 | 100 | REAL | redacted |  |
-| `fxRateToBase` | 783 | 100 | REAL | redacted |  |
-| `levelOfDetail` | 783 | 100 | TEXT | 2 | `DETAIL`×492 · `SUMMARY`×291 |
-| `multiplier` | 783 | 100 | REAL | redacted |  |
-| `reportDate` | 783 | 100 | TEXT | redacted |  |
-| `settleDate` | 783 | 100 | TEXT | redacted |  |
-| `type` | 783 | 100 | TEXT | 8 | `Other Fees`×282 · `Deposits/Withdrawals`×132 · `Dividends`×118 · `Broker Interest Received`×86 · `Broker Interest Paid`×77 · `Commission Adjustments`×46 · `Payment In Lieu Of Dividends`×32 · `Withholding Tax`×10 |
-| `weight` | 783 | 100 | REAL | redacted |  |
-| `dateTime` | 763 | 97 | TEXT | redacted |  |
-| `transactionID` | 492 | 63 | INTEGER | redacted |  |
-| `acctAlias` | 291 | 37 | TEXT | redacted |  |
-| `assetCategory` | 206 | 26 | TEXT | 2 | `STK`×204 · `FUND`×2 |
-| `conid` | 206 | 26 | INTEGER | redacted |  |
-| `isin` | 206 | 26 | TEXT | redacted |  |
-| `securityID` | 206 | 26 | TEXT | redacted |  |
-| `securityIDType` | 206 | 26 | TEXT | 1 | `ISIN`×206 |
-| `symbol` | 206 | 26 | TEXT | redacted |  |
-| `listingExchange` | 204 | 26 | TEXT | redacted |  |
-| `subCategory` | 204 | 26 | TEXT | 4 | `ETF`×168 · `COMMON`×20 · `PREFERENCE`×12 · `ADR`×4 |
-| `cusip` | 194 | 25 | TEXT | redacted |  |
+| `accountId` | 819 | 100 | TEXT | redacted |  |
+| `amount` | 819 | 100 | REAL | redacted |  |
+| `currency` | 819 | 100 | TEXT | 2 | `USD`×801 · `EUR`×18 |
+| `description` | 819 | 100 | TEXT | redacted |  |
+| `fineness` | 819 | 100 | REAL | redacted |  |
+| `fxRateToBase` | 819 | 100 | REAL | redacted |  |
+| `levelOfDetail` | 819 | 100 | TEXT | 2 | `DETAIL`×520 · `SUMMARY`×299 |
+| `multiplier` | 819 | 100 | REAL | redacted |  |
+| `reportDate` | 819 | 100 | TEXT | redacted |  |
+| `settleDate` | 819 | 100 | TEXT | redacted |  |
+| `type` | 819 | 100 | TEXT | 8 | `Other Fees`×304 · `Deposits/Withdrawals`×140 · `Dividends`×118 · `Broker Interest Received`×86 · `Broker Interest Paid`×83 · `Commission Adjustments`×46 · `Payment In Lieu Of Dividends`×32 · `Withholding Tax`×10 |
+| `weight` | 819 | 100 | REAL | redacted |  |
+| `dateTime` | 799 | 98 | TEXT | redacted |  |
+| `transactionID` | 520 | 63 | INTEGER | redacted |  |
+| `acctAlias` | 299 | 37 | TEXT | redacted |  |
+| `assetCategory` | 206 | 25 | TEXT | 2 | `STK`×204 · `FUND`×2 |
+| `conid` | 206 | 25 | INTEGER | redacted |  |
+| `isin` | 206 | 25 | TEXT | redacted |  |
+| `securityID` | 206 | 25 | TEXT | redacted |  |
+| `securityIDType` | 206 | 25 | TEXT | 1 | `ISIN`×206 |
+| `symbol` | 206 | 25 | TEXT | redacted |  |
+| `listingExchange` | 204 | 25 | TEXT | redacted |  |
+| `subCategory` | 204 | 25 | TEXT | 4 | `ETF`×168 · `COMMON`×20 · `PREFERENCE`×12 · `ADR`×4 |
+| `cusip` | 194 | 24 | TEXT | redacted |  |
 | `actionID` | 160 | 20 | INTEGER | redacted |  |
-| `dividendType` | 154 | 20 | TEXT | redacted |  |
-| `exDate` | 150 | 19 | TEXT | redacted |  |
-| `figi` | 133 | 17 | TEXT | redacted |  |
+| `dividendType` | 154 | 19 | TEXT | redacted |  |
+| `exDate` | 150 | 18 | TEXT | redacted |  |
+| `figi` | 133 | 16 | TEXT | redacted |  |
 | `issuerCountryCode` | 120 | 15 | TEXT | redacted |  |
-| `underlyingSymbol` | 102 | 13 | TEXT | redacted |  |
+| `underlyingSymbol` | 102 | 12 | TEXT | redacted |  |
 | `tradeID` | 26 | 3 | INTEGER | redacted |  |
-| `availableForTradingDate` | 20 | 3 | TEXT | redacted |  |
+| `availableForTradingDate` | 20 | 2 | TEXT | redacted |  |
 | `clientReference` | 5 | 1 | TEXT | redacted |  |
 | `code` | 0 | 0 | TEXT | 0 | **never populated in this archive** |
 | `commodityType` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
@@ -595,48 +591,48 @@ These are not statements and must never be imported:
 | `underlyingSecurityID` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `volatilityOrderLink` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<SymbolSummary>` — 285 rows, 85 attributes
+## `<SymbolSummary>` — 301 rows, 85 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 285 | 100 | TEXT | redacted |  |
-| `accruedInt` | 285 | 100 | REAL | redacted |  |
-| `assetCategory` | 285 | 100 | TEXT | 5 | `STK`×162 · `FUT`×106 · `OPT`×8 · `CASH`×7 · `FUND`×2 |
-| `buySell` | 285 | 100 | TEXT | 2 | `SELL`×143 · `BUY`×142 |
-| `conid` | 285 | 100 | INTEGER | redacted |  |
-| `cost` | 285 | 100 | REAL | redacted |  |
-| `currency` | 285 | 100 | TEXT | 3 | `USD`×280 · `EUR`×4 · `CHF`×1 |
-| `description` | 285 | 100 | TEXT | redacted |  |
-| `exchange` | 285 | 100 | TEXT | redacted |  |
-| `fifoPnlRealized` | 285 | 100 | REAL | redacted |  |
-| `fineness` | 285 | 100 | REAL | redacted |  |
-| `ibCommission` | 285 | 100 | REAL | redacted |  |
-| `ibCommissionCurrency` | 285 | 100 | TEXT | 2 | `USD`×281 · `EUR`×4 |
-| `levelOfDetail` | 285 | 100 | TEXT | 1 | `SYMBOL_SUMMARY`×285 |
-| `mtmPnl` | 285 | 100 | REAL | redacted |  |
-| `multiplier` | 285 | 100 | REAL | redacted |  |
-| `netCash` | 285 | 100 | REAL | redacted |  |
-| `proceeds` | 285 | 100 | REAL | redacted |  |
-| `quantity` | 285 | 100 | REAL | redacted |  |
-| `reportDate` | 285 | 100 | TEXT | redacted |  |
-| `settleDateTarget` | 285 | 100 | TEXT | redacted |  |
-| `symbol` | 285 | 100 | TEXT | redacted |  |
-| `taxes` | 285 | 100 | REAL | redacted |  |
-| `tradeDate` | 285 | 100 | TEXT | redacted |  |
-| `tradeMoney` | 285 | 100 | REAL | redacted |  |
-| `tradePrice` | 285 | 100 | REAL | redacted |  |
-| `weight` | 285 | 100 | REAL | redacted |  |
-| `listingExchange` | 276 | 97 | TEXT | redacted |  |
-| `figi` | 225 | 79 | TEXT | redacted |  |
-| `underlyingSymbol` | 200 | 70 | TEXT | redacted |  |
-| `subCategory` | 170 | 60 | TEXT | 5 | `ETF`×113 · `COMMON`×40 · `C`×8 · `ADR`×5 · `PREFERENCE`×4 |
-| `isin` | 164 | 58 | TEXT | redacted |  |
-| `securityID` | 164 | 58 | TEXT | redacted |  |
-| `securityIDType` | 164 | 58 | TEXT | 1 | `ISIN`×164 |
-| `cusip` | 156 | 55 | TEXT | redacted |  |
-| `expiry` | 114 | 40 | TEXT | redacted |  |
-| `underlyingConid` | 114 | 40 | INTEGER | redacted |  |
-| `issuerCountryCode` | 105 | 37 | TEXT | redacted |  |
+| `accountId` | 301 | 100 | TEXT | redacted |  |
+| `accruedInt` | 301 | 100 | REAL | redacted |  |
+| `assetCategory` | 301 | 100 | TEXT | 5 | `STK`×170 · `FUT`×114 · `OPT`×8 · `CASH`×7 · `FUND`×2 |
+| `buySell` | 301 | 100 | TEXT | 2 | `SELL`×153 · `BUY`×148 |
+| `conid` | 301 | 100 | INTEGER | redacted |  |
+| `cost` | 301 | 100 | REAL | redacted |  |
+| `currency` | 301 | 100 | TEXT | 3 | `USD`×296 · `EUR`×4 · `CHF`×1 |
+| `description` | 301 | 100 | TEXT | redacted |  |
+| `exchange` | 301 | 100 | TEXT | redacted |  |
+| `fifoPnlRealized` | 301 | 100 | REAL | redacted |  |
+| `fineness` | 301 | 100 | REAL | redacted |  |
+| `ibCommission` | 301 | 100 | REAL | redacted |  |
+| `ibCommissionCurrency` | 301 | 100 | TEXT | 2 | `USD`×297 · `EUR`×4 |
+| `levelOfDetail` | 301 | 100 | TEXT | 1 | `SYMBOL_SUMMARY`×301 |
+| `mtmPnl` | 301 | 100 | REAL | redacted |  |
+| `multiplier` | 301 | 100 | REAL | redacted |  |
+| `netCash` | 301 | 100 | REAL | redacted |  |
+| `proceeds` | 301 | 100 | REAL | redacted |  |
+| `quantity` | 301 | 100 | REAL | redacted |  |
+| `reportDate` | 301 | 100 | TEXT | redacted |  |
+| `settleDateTarget` | 301 | 100 | TEXT | redacted |  |
+| `symbol` | 301 | 100 | TEXT | redacted |  |
+| `taxes` | 301 | 100 | REAL | redacted |  |
+| `tradeDate` | 301 | 100 | TEXT | redacted |  |
+| `tradeMoney` | 301 | 100 | REAL | redacted |  |
+| `tradePrice` | 301 | 100 | REAL | redacted |  |
+| `weight` | 301 | 100 | REAL | redacted |  |
+| `listingExchange` | 292 | 97 | TEXT | redacted |  |
+| `figi` | 241 | 80 | TEXT | redacted |  |
+| `underlyingSymbol` | 216 | 72 | TEXT | redacted |  |
+| `subCategory` | 178 | 59 | TEXT | 5 | `ETF`×119 · `COMMON`×42 · `C`×8 · `ADR`×5 · `PREFERENCE`×4 |
+| `isin` | 172 | 57 | TEXT | redacted |  |
+| `securityID` | 172 | 57 | TEXT | redacted |  |
+| `securityIDType` | 172 | 57 | TEXT | 1 | `ISIN`×172 |
+| `cusip` | 164 | 54 | TEXT | redacted |  |
+| `expiry` | 122 | 41 | TEXT | redacted |  |
+| `underlyingConid` | 122 | 41 | INTEGER | redacted |  |
+| `issuerCountryCode` | 113 | 38 | TEXT | redacted |  |
 | `putCall` | 8 | 3 | TEXT | 1 | `C`×8 |
 | `strike` | 8 | 3 | REAL | redacted |  |
 | `underlyingListingExchange` | 8 | 3 | TEXT | redacted |  |
@@ -685,31 +681,31 @@ These are not statements and must never be imported:
 | `whenRealized` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `whenReopened` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<SecurityInfo>` — 181 rows, 33 attributes
+## `<SecurityInfo>` — 193 rows, 33 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `assetCategory` | 181 | 100 | TEXT | 4 | `STK`×121 · `FUT`×54 · `OPT`×4 · `FUND`×2 |
-| `conid` | 181 | 100 | INTEGER | redacted |  |
-| `currency` | 181 | 100 | TEXT | 2 | `USD`×179 · `EUR`×2 |
-| `description` | 181 | 100 | TEXT | redacted |  |
-| `fineness` | 181 | 100 | REAL | redacted |  |
-| `multiplier` | 181 | 100 | REAL | redacted |  |
-| `symbol` | 181 | 100 | TEXT | redacted |  |
-| `weight` | 181 | 100 | REAL | redacted |  |
-| `listingExchange` | 179 | 99 | TEXT | redacted |  |
-| `figi` | 148 | 82 | TEXT | redacted |  |
-| `underlyingSymbol` | 131 | 72 | TEXT | redacted |  |
-| `subCategory` | 125 | 69 | TEXT | 5 | `ETF`×86 · `COMMON`×30 · `C`×4 · `ADR`×3 · `PREFERENCE`×2 |
-| `isin` | 123 | 68 | TEXT | redacted |  |
-| `securityID` | 123 | 68 | TEXT | redacted |  |
-| `securityIDType` | 123 | 68 | TEXT | 1 | `ISIN`×123 |
-| `cusip` | 119 | 66 | TEXT | redacted |  |
-| `issuerCountryCode` | 89 | 49 | TEXT | redacted |  |
-| `expiry` | 58 | 32 | TEXT | redacted |  |
-| `settlementPolicyMethod` | 58 | 32 | TEXT | redacted |  |
-| `underlyingCategory` | 58 | 32 | TEXT | redacted |  |
-| `underlyingConid` | 58 | 32 | INTEGER | redacted |  |
+| `assetCategory` | 193 | 100 | TEXT | 4 | `STK`×129 · `FUT`×58 · `OPT`×4 · `FUND`×2 |
+| `conid` | 193 | 100 | INTEGER | redacted |  |
+| `currency` | 193 | 100 | TEXT | 2 | `USD`×191 · `EUR`×2 |
+| `description` | 193 | 100 | TEXT | redacted |  |
+| `fineness` | 193 | 100 | REAL | redacted |  |
+| `multiplier` | 193 | 100 | REAL | redacted |  |
+| `symbol` | 193 | 100 | TEXT | redacted |  |
+| `weight` | 193 | 100 | REAL | redacted |  |
+| `listingExchange` | 191 | 99 | TEXT | redacted |  |
+| `figi` | 160 | 83 | TEXT | redacted |  |
+| `underlyingSymbol` | 143 | 74 | TEXT | redacted |  |
+| `subCategory` | 133 | 69 | TEXT | 5 | `ETF`×92 · `COMMON`×32 · `C`×4 · `ADR`×3 · `PREFERENCE`×2 |
+| `isin` | 131 | 68 | TEXT | redacted |  |
+| `securityID` | 131 | 68 | TEXT | redacted |  |
+| `securityIDType` | 131 | 68 | TEXT | 1 | `ISIN`×131 |
+| `cusip` | 127 | 66 | TEXT | redacted |  |
+| `issuerCountryCode` | 97 | 50 | TEXT | redacted |  |
+| `expiry` | 62 | 32 | TEXT | redacted |  |
+| `settlementPolicyMethod` | 62 | 32 | TEXT | redacted |  |
+| `underlyingCategory` | 62 | 32 | TEXT | redacted |  |
+| `underlyingConid` | 62 | 32 | INTEGER | redacted |  |
 | `putCall` | 4 | 2 | TEXT | 1 | `C`×4 |
 | `strike` | 4 | 2 | REAL | redacted |  |
 | `underlyingListingExchange` | 4 | 2 | TEXT | redacted |  |
@@ -723,43 +719,43 @@ These are not statements and must never be imported:
 | `principalAdjustFactor` | 0 | 0 | REAL | redacted | **never populated in this archive** |
 | `serialNumber` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<OpenPosition>` — 80 rows, 50 attributes
+## `<OpenPosition>` — 85 rows, 50 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 80 | 100 | TEXT | redacted |  |
-| `assetCategory` | 80 | 100 | TEXT | 3 | `STK`×74 · `FUT`×5 · `FUND`×1 |
-| `conid` | 80 | 100 | INTEGER | redacted |  |
-| `costBasisMoney` | 80 | 100 | REAL | redacted |  |
-| `costBasisPrice` | 80 | 100 | REAL | redacted |  |
-| `currency` | 80 | 100 | TEXT | 1 | `USD`×80 |
-| `description` | 80 | 100 | TEXT | redacted |  |
-| `fifoPnlUnrealized` | 80 | 100 | REAL | redacted |  |
-| `fineness` | 80 | 100 | REAL | redacted |  |
-| `fxRateToBase` | 80 | 100 | REAL | redacted |  |
-| `levelOfDetail` | 80 | 100 | TEXT | 1 | `SUMMARY`×80 |
-| `markPrice` | 80 | 100 | REAL | redacted |  |
-| `multiplier` | 80 | 100 | REAL | redacted |  |
-| `openPrice` | 80 | 100 | REAL | redacted |  |
-| `position` | 80 | 100 | REAL | redacted |  |
-| `positionValue` | 80 | 100 | REAL | redacted |  |
-| `reportDate` | 80 | 100 | TEXT | redacted |  |
-| `side` | 80 | 100 | TEXT | redacted |  |
-| `symbol` | 80 | 100 | TEXT | redacted |  |
-| `weight` | 80 | 100 | REAL | redacted |  |
-| `listingExchange` | 79 | 99 | TEXT | redacted |  |
-| `cusip` | 75 | 94 | TEXT | redacted |  |
-| `isin` | 75 | 94 | TEXT | redacted |  |
-| `percentOfNAV` | 75 | 94 | REAL | redacted |  |
-| `securityID` | 75 | 94 | TEXT | redacted |  |
-| `securityIDType` | 75 | 94 | TEXT | 1 | `ISIN`×75 |
-| `subCategory` | 74 | 92 | TEXT | 3 | `ETF`×55 · `COMMON`×18 · `ADR`×1 |
-| `figi` | 69 | 86 | TEXT | redacted |  |
-| `underlyingSymbol` | 65 | 81 | TEXT | redacted |  |
-| `issuerCountryCode` | 64 | 80 | TEXT | redacted |  |
-| `code` | 11 | 14 | TEXT | 1 | `SY`×11 |
-| `expiry` | 5 | 6 | TEXT | redacted |  |
-| `underlyingConid` | 5 | 6 | INTEGER | redacted |  |
+| `accountId` | 85 | 100 | TEXT | redacted |  |
+| `assetCategory` | 85 | 100 | TEXT | 3 | `STK`×78 · `FUT`×6 · `FUND`×1 |
+| `conid` | 85 | 100 | INTEGER | redacted |  |
+| `costBasisMoney` | 85 | 100 | REAL | redacted |  |
+| `costBasisPrice` | 85 | 100 | REAL | redacted |  |
+| `currency` | 85 | 100 | TEXT | 1 | `USD`×85 |
+| `description` | 85 | 100 | TEXT | redacted |  |
+| `fifoPnlUnrealized` | 85 | 100 | REAL | redacted |  |
+| `fineness` | 85 | 100 | REAL | redacted |  |
+| `fxRateToBase` | 85 | 100 | REAL | redacted |  |
+| `levelOfDetail` | 85 | 100 | TEXT | 1 | `SUMMARY`×85 |
+| `markPrice` | 85 | 100 | REAL | redacted |  |
+| `multiplier` | 85 | 100 | REAL | redacted |  |
+| `openPrice` | 85 | 100 | REAL | redacted |  |
+| `position` | 85 | 100 | REAL | redacted |  |
+| `positionValue` | 85 | 100 | REAL | redacted |  |
+| `reportDate` | 85 | 100 | TEXT | redacted |  |
+| `side` | 85 | 100 | TEXT | redacted |  |
+| `symbol` | 85 | 100 | TEXT | redacted |  |
+| `weight` | 85 | 100 | REAL | redacted |  |
+| `listingExchange` | 84 | 99 | TEXT | redacted |  |
+| `cusip` | 79 | 93 | TEXT | redacted |  |
+| `isin` | 79 | 93 | TEXT | redacted |  |
+| `percentOfNAV` | 79 | 93 | REAL | redacted |  |
+| `securityID` | 79 | 93 | TEXT | redacted |  |
+| `securityIDType` | 79 | 93 | TEXT | 1 | `ISIN`×79 |
+| `subCategory` | 78 | 92 | TEXT | 3 | `ETF`×59 · `COMMON`×18 · `ADR`×1 |
+| `figi` | 74 | 87 | TEXT | redacted |  |
+| `underlyingSymbol` | 70 | 82 | TEXT | redacted |  |
+| `issuerCountryCode` | 68 | 80 | TEXT | redacted |  |
+| `code` | 11 | 13 | TEXT | 1 | `SY`×11 |
+| `expiry` | 6 | 7 | TEXT | redacted |  |
+| `underlyingConid` | 6 | 7 | INTEGER | redacted |  |
 | `accruedInt` | 0 | 0 | REAL | redacted | **never populated in this archive** |
 | `acctAlias` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `commodityType` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
@@ -778,17 +774,17 @@ These are not statements and must never be imported:
 | `underlyingSecurityID` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `vestingDate` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<AssetSummary>` — 37 rows, 85 attributes
+## `<AssetSummary>` — 41 rows, 85 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 37 | 100 | TEXT | redacted |  |
-| `assetCategory` | 37 | 100 | TEXT | 5 | `STK`×17 · `FUT`×15 · `FUND`×2 · `CASH`×2 · `OPT`×1 |
-| `ibCommission` | 37 | 100 | REAL | redacted |  |
-| `levelOfDetail` | 37 | 100 | TEXT | 1 | `ASSET_SUMMARY`×37 |
-| `taxes` | 37 | 100 | REAL | redacted |  |
-| `proceeds` | 35 | 95 | REAL | redacted |  |
-| `quantity` | 35 | 95 | REAL | redacted |  |
+| `accountId` | 41 | 100 | TEXT | redacted |  |
+| `assetCategory` | 41 | 100 | TEXT | 5 | `STK`×19 · `FUT`×17 · `FUND`×2 · `CASH`×2 · `OPT`×1 |
+| `ibCommission` | 41 | 100 | REAL | redacted |  |
+| `levelOfDetail` | 41 | 100 | TEXT | 1 | `ASSET_SUMMARY`×41 |
+| `taxes` | 41 | 100 | REAL | redacted |  |
+| `proceeds` | 39 | 95 | REAL | redacted |  |
+| `quantity` | 39 | 95 | REAL | redacted |  |
 | `accruedInt` | 0 | 0 | REAL | redacted | **never populated in this archive** |
 | `acctAlias` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `brokerageOrderID` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
@@ -868,38 +864,38 @@ These are not statements and must never be imported:
 | `whenRealized` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `whenReopened` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<AccountInformation>` — 20 rows, 37 attributes
+## `<AccountInformation>` — 22 rows, 37 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountCapabilities` | 20 | 100 | TEXT | redacted |  |
-| `accountId` | 20 | 100 | TEXT | redacted |  |
-| `accountType` | 20 | 100 | TEXT | redacted |  |
-| `city` | 20 | 100 | TEXT | redacted |  |
-| `cityResidentialAddress` | 20 | 100 | TEXT | redacted |  |
-| `country` | 20 | 100 | TEXT | redacted |  |
-| `countryResidentialAddress` | 20 | 100 | TEXT | redacted |  |
-| `currency` | 20 | 100 | TEXT | 1 | `USD`×20 |
-| `customerType` | 20 | 100 | TEXT | redacted |  |
-| `dateFunded` | 20 | 100 | TEXT | redacted |  |
-| `dateOfBirth` | 20 | 100 | TEXT | redacted |  |
-| `dateOpened` | 20 | 100 | TEXT | redacted |  |
-| `dividendReinvestmentEnabled` | 20 | 100 | TEXT | redacted |  |
-| `hasPendingTasks` | 20 | 100 | TEXT | redacted |  |
-| `ibEntity` | 20 | 100 | TEXT | redacted |  |
-| `lastTradedDate` | 20 | 100 | TEXT | redacted |  |
-| `name` | 20 | 100 | TEXT | redacted |  |
-| `postalCode` | 20 | 100 | INTEGER | redacted |  |
-| `postalCodeResidentialAddress` | 20 | 100 | INTEGER | redacted |  |
-| `primaryEmail` | 20 | 100 | TEXT | redacted |  |
-| `state` | 20 | 100 | TEXT | redacted |  |
-| `stateResidentialAddress` | 20 | 100 | TEXT | redacted |  |
-| `street` | 20 | 100 | TEXT | redacted |  |
-| `street2` | 20 | 100 | TEXT | redacted |  |
-| `street2ResidentialAddress` | 20 | 100 | TEXT | redacted |  |
-| `streetResidentialAddress` | 20 | 100 | TEXT | redacted |  |
-| `taxLotMatchingMethod` | 20 | 100 | TEXT | redacted |  |
-| `tradingPermissions` | 20 | 100 | TEXT | redacted |  |
+| `accountCapabilities` | 22 | 100 | TEXT | redacted |  |
+| `accountId` | 22 | 100 | TEXT | redacted |  |
+| `accountType` | 22 | 100 | TEXT | redacted |  |
+| `city` | 22 | 100 | TEXT | redacted |  |
+| `cityResidentialAddress` | 22 | 100 | TEXT | redacted |  |
+| `country` | 22 | 100 | TEXT | redacted |  |
+| `countryResidentialAddress` | 22 | 100 | TEXT | redacted |  |
+| `currency` | 22 | 100 | TEXT | 1 | `USD`×22 |
+| `customerType` | 22 | 100 | TEXT | redacted |  |
+| `dateFunded` | 22 | 100 | TEXT | redacted |  |
+| `dateOfBirth` | 22 | 100 | TEXT | redacted |  |
+| `dateOpened` | 22 | 100 | TEXT | redacted |  |
+| `dividendReinvestmentEnabled` | 22 | 100 | TEXT | redacted |  |
+| `hasPendingTasks` | 22 | 100 | TEXT | redacted |  |
+| `ibEntity` | 22 | 100 | TEXT | redacted |  |
+| `lastTradedDate` | 22 | 100 | TEXT | redacted |  |
+| `name` | 22 | 100 | TEXT | redacted |  |
+| `postalCode` | 22 | 100 | INTEGER | redacted |  |
+| `postalCodeResidentialAddress` | 22 | 100 | INTEGER | redacted |  |
+| `primaryEmail` | 22 | 100 | TEXT | redacted |  |
+| `state` | 22 | 100 | TEXT | redacted |  |
+| `stateResidentialAddress` | 22 | 100 | TEXT | redacted |  |
+| `street` | 22 | 100 | TEXT | redacted |  |
+| `street2` | 22 | 100 | TEXT | redacted |  |
+| `street2ResidentialAddress` | 22 | 100 | TEXT | redacted |  |
+| `streetResidentialAddress` | 22 | 100 | TEXT | redacted |  |
+| `taxLotMatchingMethod` | 22 | 100 | TEXT | redacted |  |
+| `tradingPermissions` | 22 | 100 | TEXT | redacted |  |
 | `accountRepName` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `accountRepPhone` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `acctAlias` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
@@ -910,66 +906,66 @@ These are not statements and must never be imported:
 | `recurringTransactions` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `syepEnrollmentStatus` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
-## `<ChangeInNAV>` — 20 rows, 58 attributes
+## `<ChangeInNAV>` — 22 rows, 58 attributes
 
 | Attribute | Non-empty | % | SQL type | Distinct | Sample / values |
 |---|---:|---:|---|---:|---|
-| `accountId` | 20 | 100 | TEXT | redacted |  |
-| `advisorFees` | 20 | 100 | REAL | redacted |  |
-| `assetTransfers` | 20 | 100 | INTEGER | redacted |  |
-| `billPay` | 20 | 100 | INTEGER | redacted |  |
-| `billableSalesTax` | 20 | 100 | REAL | redacted |  |
-| `brokerFees` | 20 | 100 | REAL | redacted |  |
-| `carbonCredits` | 20 | 100 | REAL | redacted |  |
-| `changeInBrokerFeeAccruals` | 20 | 100 | REAL | redacted |  |
-| `changeInCGTWithholdingAccruals` | 20 | 100 | INTEGER | redacted |  |
-| `changeInDividendAccruals` | 20 | 100 | REAL | redacted |  |
-| `changeInIncentiveCouponAccruals` | 20 | 100 | INTEGER | redacted |  |
-| `changeInInterestAccruals` | 20 | 100 | REAL | redacted |  |
-| `changeInLiteSurchargeAccruals` | 20 | 100 | INTEGER | redacted |  |
-| `changeInUnrealized` | 20 | 100 | INTEGER | redacted |  |
-| `clientFees` | 20 | 100 | REAL | redacted |  |
-| `commissionCreditsRedemption` | 20 | 100 | REAL | redacted |  |
-| `commissionReceivables` | 20 | 100 | REAL | redacted |  |
-| `commissions` | 20 | 100 | REAL | redacted |  |
-| `commissionsAtPaxos` | 20 | 100 | REAL | redacted |  |
-| `corporateActionProceeds` | 20 | 100 | REAL | redacted |  |
-| `costAdjustments` | 20 | 100 | REAL | redacted |  |
-| `currency` | 20 | 100 | TEXT | 1 | `USD`×20 |
-| `debitCardActivity` | 20 | 100 | REAL | redacted |  |
-| `depositsWithdrawals` | 20 | 100 | REAL | redacted |  |
-| `dividends` | 20 | 100 | REAL | redacted |  |
-| `donations` | 20 | 100 | INTEGER | redacted |  |
-| `endingValue` | 20 | 100 | REAL | redacted |  |
-| `excessFundSweep` | 20 | 100 | INTEGER | redacted |  |
-| `feesReceivables` | 20 | 100 | REAL | redacted |  |
-| `forexCommissions` | 20 | 100 | REAL | redacted |  |
-| `fromDate` | 20 | 100 | TEXT | redacted |  |
-| `fxTranslation` | 20 | 100 | REAL | redacted |  |
-| `grantActivity` | 20 | 100 | INTEGER | redacted |  |
-| `interest` | 20 | 100 | REAL | redacted |  |
-| `internalCashTransfers` | 20 | 100 | REAL | redacted |  |
-| `linkingAdjustments` | 20 | 100 | REAL | redacted |  |
-| `mtm` | 20 | 100 | REAL | redacted |  |
-| `mtmAtPaxos` | 20 | 100 | INTEGER | redacted |  |
-| `netFxTrading` | 20 | 100 | INTEGER | redacted |  |
-| `other` | 20 | 100 | INTEGER | redacted |  |
-| `otherFees` | 20 | 100 | REAL | redacted |  |
-| `otherIncome` | 20 | 100 | INTEGER | redacted |  |
-| `paxosTransfers` | 20 | 100 | INTEGER | redacted |  |
-| `realized` | 20 | 100 | INTEGER | redacted |  |
-| `referralFee` | 20 | 100 | REAL | redacted |  |
-| `salesTax` | 20 | 100 | REAL | redacted |  |
-| `softDollars` | 20 | 100 | INTEGER | redacted |  |
-| `startingValue` | 20 | 100 | REAL | redacted |  |
-| `taxReceivables` | 20 | 100 | REAL | redacted |  |
-| `toDate` | 20 | 100 | TEXT | redacted |  |
-| `transactionTax` | 20 | 100 | REAL | redacted |  |
-| `transferredPnlAdjustments` | 20 | 100 | REAL | redacted |  |
-| `twr` | 20 | 100 | REAL | redacted |  |
-| `withholding871m` | 20 | 100 | INTEGER | redacted |  |
-| `withholdingTax` | 20 | 100 | REAL | redacted |  |
-| `withholdingTaxCollected` | 20 | 100 | REAL | redacted |  |
+| `accountId` | 22 | 100 | TEXT | redacted |  |
+| `advisorFees` | 22 | 100 | REAL | redacted |  |
+| `assetTransfers` | 22 | 100 | INTEGER | redacted |  |
+| `billPay` | 22 | 100 | INTEGER | redacted |  |
+| `billableSalesTax` | 22 | 100 | REAL | redacted |  |
+| `brokerFees` | 22 | 100 | REAL | redacted |  |
+| `carbonCredits` | 22 | 100 | REAL | redacted |  |
+| `changeInBrokerFeeAccruals` | 22 | 100 | REAL | redacted |  |
+| `changeInCGTWithholdingAccruals` | 22 | 100 | INTEGER | redacted |  |
+| `changeInDividendAccruals` | 22 | 100 | REAL | redacted |  |
+| `changeInIncentiveCouponAccruals` | 22 | 100 | INTEGER | redacted |  |
+| `changeInInterestAccruals` | 22 | 100 | REAL | redacted |  |
+| `changeInLiteSurchargeAccruals` | 22 | 100 | INTEGER | redacted |  |
+| `changeInUnrealized` | 22 | 100 | INTEGER | redacted |  |
+| `clientFees` | 22 | 100 | REAL | redacted |  |
+| `commissionCreditsRedemption` | 22 | 100 | REAL | redacted |  |
+| `commissionReceivables` | 22 | 100 | REAL | redacted |  |
+| `commissions` | 22 | 100 | REAL | redacted |  |
+| `commissionsAtPaxos` | 22 | 100 | REAL | redacted |  |
+| `corporateActionProceeds` | 22 | 100 | REAL | redacted |  |
+| `costAdjustments` | 22 | 100 | REAL | redacted |  |
+| `currency` | 22 | 100 | TEXT | 1 | `USD`×22 |
+| `debitCardActivity` | 22 | 100 | REAL | redacted |  |
+| `depositsWithdrawals` | 22 | 100 | REAL | redacted |  |
+| `dividends` | 22 | 100 | REAL | redacted |  |
+| `donations` | 22 | 100 | INTEGER | redacted |  |
+| `endingValue` | 22 | 100 | REAL | redacted |  |
+| `excessFundSweep` | 22 | 100 | INTEGER | redacted |  |
+| `feesReceivables` | 22 | 100 | REAL | redacted |  |
+| `forexCommissions` | 22 | 100 | REAL | redacted |  |
+| `fromDate` | 22 | 100 | TEXT | redacted |  |
+| `fxTranslation` | 22 | 100 | REAL | redacted |  |
+| `grantActivity` | 22 | 100 | INTEGER | redacted |  |
+| `interest` | 22 | 100 | REAL | redacted |  |
+| `internalCashTransfers` | 22 | 100 | REAL | redacted |  |
+| `linkingAdjustments` | 22 | 100 | REAL | redacted |  |
+| `mtm` | 22 | 100 | REAL | redacted |  |
+| `mtmAtPaxos` | 22 | 100 | INTEGER | redacted |  |
+| `netFxTrading` | 22 | 100 | INTEGER | redacted |  |
+| `other` | 22 | 100 | INTEGER | redacted |  |
+| `otherFees` | 22 | 100 | REAL | redacted |  |
+| `otherIncome` | 22 | 100 | INTEGER | redacted |  |
+| `paxosTransfers` | 22 | 100 | INTEGER | redacted |  |
+| `realized` | 22 | 100 | INTEGER | redacted |  |
+| `referralFee` | 22 | 100 | REAL | redacted |  |
+| `salesTax` | 22 | 100 | REAL | redacted |  |
+| `softDollars` | 22 | 100 | INTEGER | redacted |  |
+| `startingValue` | 22 | 100 | REAL | redacted |  |
+| `taxReceivables` | 22 | 100 | REAL | redacted |  |
+| `toDate` | 22 | 100 | TEXT | redacted |  |
+| `transactionTax` | 22 | 100 | REAL | redacted |  |
+| `transferredPnlAdjustments` | 22 | 100 | REAL | redacted |  |
+| `twr` | 22 | 100 | REAL | redacted |  |
+| `withholding871m` | 22 | 100 | INTEGER | redacted |  |
+| `withholdingTax` | 22 | 100 | REAL | redacted |  |
+| `withholdingTaxCollected` | 22 | 100 | REAL | redacted |  |
 | `acctAlias` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 | `model` | 0 | 0 | TEXT | redacted | **never populated in this archive** |
 
