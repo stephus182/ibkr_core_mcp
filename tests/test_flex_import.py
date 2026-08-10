@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import Any
 
 import pytest
 
@@ -32,84 +33,14 @@ from ibkr_core_mcp.flex_import import (
 )
 from ibkr_core_mcp.flex_schema import ELEMENTS
 from ibkr_core_mcp.flex_store import create_flex_tables, table_columns, upsert_flex_rows
+from tests.flex_fixtures import element, statement, trade
 
-
-def _trade(**overrides: str) -> str:
-    """Render a <Trade> with all 85 attributes, overridable per test."""
-    attrs = dict.fromkeys(ELEMENTS["Trade"]["columns"], "")
-    attrs.update(
-        {
-            "accountId": "U0000000",
-            "currency": "USD",
-            "fxRateToBase": "1",
-            "assetCategory": "STK",
-            "symbol": "TEST",
-            "description": "TEST INSTRUMENT",
-            "conid": "11111111",
-            "multiplier": "1",
-            "reportDate": "20260601",
-            "dateTime": "20260601;093001",
-            "tradeDate": "20260601",
-            "settleDateTarget": "20260602",
-            "transactionType": "ExchTrade",
-            "exchange": "TESTEX",
-            "quantity": "10",
-            "tradePrice": "100.5",
-            "tradeMoney": "1005",
-            "proceeds": "-1005",
-            "taxes": "0",
-            "ibCommission": "-1.25",
-            "ibCommissionCurrency": "USD",
-            "netCash": "-1006.25",
-            "closePrice": "101",
-            "cost": "1006.25",
-            "fifoPnlRealized": "0",
-            "mtmPnl": "5",
-            "buySell": "BUY",
-            "ibOrderID": "900000001",
-            "transactionID": "800000001",
-            "ibExecID": "0000aaaa.60000001.01.01",
-            "tradeID": "700000001",
-            "levelOfDetail": "EXECUTION",
-            "openCloseIndicator": "O",
-            "changeInPrice": "0",
-            "changeInQuantity": "0",
-            "isAPIOrder": "N",
-            "accruedInt": "0",
-            "fineness": "0.0",
-            "weight": "0.0",
-            "origOrderID": "0",
-            "origTransactionID": "0",
-            "origTradePrice": "0",
-            "exchOrderId": "N/A",
-            "extExecID": "aa.bb.cc",
-            "orderTime": "20260601;092955",
-            "orderType": "LMT",
-            "brokerageOrderID": "0000.0001.0002.0003",
-            "listingExchange": "TESTEX",
-        }
-    )
-    attrs.update(overrides)
-    body = " ".join(f'{k}="{v}"' for k, v in attrs.items())
-    return f"<Trade {body} />"
-
-
-def _element(tag: str, **overrides: str) -> str:
-    attrs = dict.fromkeys(ELEMENTS[tag]["columns"], "")
-    attrs.update(overrides)
-    body = " ".join(f'{k}="{v}"' for k, v in attrs.items())
-    return f"<{tag} {body} />"
-
-
-def _statement(inner: str) -> str:
-    return (
-        '<FlexQueryResponse queryName="Synthetic" type="AF">'
-        '<FlexStatements count="1">'
-        '<FlexStatement accountId="U0000000" fromDate="20260601" toDate="20260630"'
-        ' period="" whenGenerated="20260701;120000">'
-        f"<Trades>{inner}</Trades>"
-        "</FlexStatement></FlexStatements></FlexQueryResponse>"
-    )
+# The builders live in tests/flex_fixtures.py so the script suites under tests/scripts/
+# construct statements the same way this file does — one definition of "a synthetic
+# statement", derived from ELEMENTS rather than hardcoded.
+_trade = trade
+_element = element
+_statement = statement
 
 
 # ── the invariant that makes this whole design checkable ────────────────────────
@@ -226,7 +157,7 @@ def test_the_same_statement_imported_twice_does_not_duplicate():
 # ── the live/Flex merge — the defect that produced 75 duplicate rows ─────────────
 
 
-def _live(exec_id: str = "0000aaaa.60000001.01.01", side: str = "SELL") -> list[dict]:
+def _live(exec_id: str = "0000aaaa.60000001.01.01", side: str = "SELL") -> list[dict[str, Any]]:
     return [
         {
             "execution_id": exec_id,

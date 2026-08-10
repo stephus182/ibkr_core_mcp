@@ -93,8 +93,14 @@ markers = [
     "backtest_pinescript: claude_tools backtest/pinescript handlers",
     "web_scraping: claude_tools firecrawl/scrape-fallback handlers",
     "errors: claude_tools _safe_error mapping",
+    "scripts: the operational CLIs under scripts/",
 ]
 asyncio_mode = "auto"
+# scripts/ is not a package and has no __init__.py — the four Flex CLIs are imported by
+# tests/scripts/ as bare module names. Putting the directory on sys.path here is what
+# makes them testable at all; until 2026-08-10 they had zero tests, which is precisely
+# why a `return 0` that could not fail survived in every one of them.
+pythonpath = ["scripts"]
 # A deadlocked test reports nothing at all — no pass, no fail, just a stalled run.
 # The per-profile browser locks in test_local_browser.py assert their property by
 # NOT deadlocking, so a regression there stalls for _PROFILE_LOCK_TIMEOUT_S (180s)
@@ -108,7 +114,12 @@ timeout = 300
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-files = ["ibkr_core_mcp", "tests"]
+files = ["ibkr_core_mcp", "tests", "scripts"]
+# scripts/ has no __init__.py, so mypy needs the directory on its search path to
+# resolve `import rebuild_flex_dataset` the way pytest's pythonpath does. Measured
+# 2026-08-10: the four Flex CLIs are already fully annotated and pass strict mode
+# unchanged, so they are checked at the same bar as the package — no override needed.
+mypy_path = "scripts"
 
 # tests/ never annotates function signatures (established convention, 0 annotations
 # across the test suite) — disallow_untyped_defs would demand annotating every test
