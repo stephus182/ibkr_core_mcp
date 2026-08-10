@@ -435,7 +435,7 @@ class GDriveCache:
                 svc.files()
                 .list(
                     q=f"'{folder_id}' in parents and trashed=false",
-                    fields="files(id,name,size,modifiedTime)",
+                    fields="files(id,name,size,modifiedTime,md5Checksum)",
                     orderBy="name",
                     pageSize=1000,
                 )
