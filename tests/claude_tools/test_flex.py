@@ -375,3 +375,95 @@ def test_check_flex_coverage_error(toolkit):
 # ============================================================================
 # _get_pa_periods — empty fallback path
 # ============================================================================
+
+
+# ── the archive refusal must reach the user, not just the log ───────────────────
+
+
+def test_sync_flex_trades_warns_that_the_archive_did_not_update(toolkit, monkeypatch):
+    """A schema-drift refusal used to be invisible above the logging layer."""
+    from ibkr_core_mcp import claude_tools as ct
+    from ibkr_core_mcp.flex_query import FlexArchiveResult
+
+    class FakeFlex:
+        def __init__(self, *a, **k):
+            self.last_archive_result = FlexArchiveResult(
+                ok=False,
+                src_file="s.xml",
+                kind="schema-drift",
+                reason="<Trade> has attribute(s) the schema does not know: ['brandNewIBKRField']",
+            )
+
+        def fetch_trades(self, account_id):
+            return [{"time": "2026-08-10T09:30:00"}]
+
+    monkeypatch.setattr(ct, "FlexQueryClient", FakeFlex, raising=False)
+    monkeypatch.setattr("ibkr_core_mcp.flex_query.FlexQueryClient", FakeFlex)
+    toolkit._config.flex_token = "tok"
+    toolkit._config.flex_query_id = "123"
+    monkeypatch.setattr(toolkit, "_first_account_id", lambda: ("U0000000", None))
+    monkeypatch.setattr(
+        toolkit._store,
+        "get_trade_date_coverage",
+        lambda **kw: {
+            "oldest": "2024-01-01",
+            "newest": "2026-08-10",
+            "days_since_newest": 0,
+            "settled_newest": None,
+            "days_since_settled": None,
+            "flex_dataset_empty": False,
+            "stale": False,
+            "total_trades": 1,
+            "gaps": [],
+        },
+    )
+
+    text, fig = toolkit._sync_flex_trades({"account_id": "U0000000"})
+
+    assert "Flex archive NOT updated" in text
+    assert "brandNewIBKRField" in text
+    assert "legacy trades table DID update" in text
+    assert "1 trades fetched" in text, "the successful part of the sync must still report"
+    assert fig is None
+
+
+def test_stale_message_reports_the_settled_date_not_the_legacy_one():
+    """'DATA STALE (0d old)' was self-contradictory: the 0d came from a different table."""
+    from ibkr_core_mcp.claude_tools import _format_coverage
+
+    lines = _format_coverage(
+        {
+            "oldest": "2024-01-01",
+            "newest": "2026-08-10",
+            "days_since_newest": 0,
+            "settled_newest": "2026-08-05",
+            "days_since_settled": 5,
+            "flex_dataset_empty": False,
+            "stale": True,
+            "total_trades": 10,
+            "gaps": [],
+        }
+    )
+
+    assert "settled through 2026-08-05, 5d" in lines[0]
+    assert "(0d old)" not in lines[0]
+
+
+def test_empty_flex_dataset_is_reported_as_such():
+    from ibkr_core_mcp.claude_tools import _format_coverage
+
+    lines = _format_coverage(
+        {
+            "oldest": "2024-01-01",
+            "newest": "2026-08-10",
+            "days_since_newest": 0,
+            "settled_newest": None,
+            "days_since_settled": None,
+            "flex_dataset_empty": True,
+            "stale": True,
+            "total_trades": 10,
+            "gaps": [],
+        }
+    )
+
+    assert "FLEX DATASET EMPTY" in lines[0]

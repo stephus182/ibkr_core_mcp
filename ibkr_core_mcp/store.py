@@ -17,7 +17,7 @@ import sqlite3
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -511,19 +511,30 @@ class SQLiteStore:
         return {r["execution_id"] for r in rows}
 
     @staticmethod
-    def _settled_newest_date(conn: sqlite3.Connection) -> str | None:
+    def _settled_newest_date(conn: sqlite3.Connection) -> str | None | Literal[False]:
         """Newest **settled** trade date — `flex_trade` rows sourced from a statement.
 
-        None when there is no Flex dataset to ask (an older store, or one that has never
-        synced), which sends the caller back to the whole-table answer. Deliberately
-        excludes `source='live'`: those are the fills whose statement has not arrived, and
-        counting them would mark the store current precisely when a pull is due.
+        Three distinct answers, because two of them used to be one:
+
+        * a date — the newest settled trade;
+        * ``None`` — **no Flex dataset exists** (an older store, or one that has never
+          synced), so the caller should fall back to the whole-table answer;
+        * ``False`` — the table exists and is **empty**, which is not the same thing at
+          all. Falling back there reports the legacy table's freshness on behalf of a
+          Flex dataset that holds nothing, and that is exactly the state a rebuild
+          importing zero statements leaves behind. It must read as definitively stale.
+
+        Deliberately excludes `source='live'`: those are the fills whose statement has
+        not arrived, and counting them would mark the store current precisely when a
+        pull is due.
         """
         try:
             row = conn.execute("SELECT MAX(trade_date_iso) FROM flex_trade WHERE source = 'flex'").fetchone()
         except sqlite3.DatabaseError:
             return None  # table absent — store predates the Flex dataset
-        return str(row[0]) if row and row[0] else None
+        if row and row[0]:
+            return str(row[0])
+        return False  # table present, no settled rows — a wiped or never-imported dataset
 
     def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
         """Return trade activity distribution from the trades table.
@@ -598,8 +609,11 @@ class SQLiteStore:
         newest = dates[-1]
         days_since_newest = (date.today() - newest).days
         # Staleness asks about SETTLED data only (see the docstring). Falling back to the
-        # report's own newest keeps the old behaviour for stores with no Flex dataset.
-        settled = date.fromisoformat(settled_newest) if settled_newest else newest
+        # report's own newest keeps the old behaviour for stores with no Flex dataset —
+        # but an *empty* flex_trade (settled_newest is False) is not that case, and must
+        # not borrow the legacy table's freshness.
+        flex_dataset_empty = settled_newest is False
+        settled = date.fromisoformat(settled_newest) if isinstance(settled_newest, str) else newest
 
         try:
             import exchange_calendars as ec
@@ -616,10 +630,20 @@ class SQLiteStore:
             last_trading_day = None
             stale = (date.today() - settled).days > 2
 
+        if flex_dataset_empty:
+            stale = True
+
         return {
             "oldest": dates[0].isoformat(),
             "newest": newest.isoformat(),
             "days_since_newest": days_since_newest,
+            # The settled figures are reported separately from the legacy ones so a
+            # caller never has to mix them. `_format_coverage` used to print
+            # days_since_newest (legacy) beside stale (Flex-derived), yielding the
+            # uninterpretable "DATA STALE (0d old)".
+            "settled_newest": settled_newest if isinstance(settled_newest, str) else None,
+            "days_since_settled": (date.today() - settled).days if not flex_dataset_empty else None,
+            "flex_dataset_empty": flex_dataset_empty,
             "last_trading_day": last_trading_day.isoformat() if last_trading_day else None,
             "stale": stale,
             "total_trades": total,

@@ -535,3 +535,75 @@ def test_invalid_end_date_format_raises(flex_client):
     """fetch_trades must raise ValueError for non-YYYYMMDD end_date strings."""
     with pytest.raises(ValueError, match="YYYYMMDD"):
         flex_client.fetch_trades("U1234567", end_date="2026/06/25")
+
+
+# ── the archive refusal must be visible, not merely non-fatal ────────────────────
+#
+# `_store_full_statement` returned a bare `{}` for both "IBKR added a field, refusing to
+# import" and "this statement had no rows". Both callers discarded it. A single new
+# attribute in <Trade> therefore stopped the entire flex_* dataset while every surface
+# went on reporting a successful sync.
+
+
+@pytest.fixture
+def archive_client(mock_config):
+    """A client backed by a real SQLite store, so flex_* writes actually happen."""
+    from ibkr_core_mcp.flex_query import FlexQueryClient
+    from ibkr_core_mcp.store import SQLiteStore
+
+    store = SQLiteStore(mock_config)
+    store.initialize()
+    return FlexQueryClient(mock_config, store, MagicMock())
+
+
+def _drifted_statement():
+    """A statement carrying an attribute the generated schema does not know."""
+    from tests.flex_fixtures import statement, trade
+
+    return statement(trade().replace("<Trade ", '<Trade brandNewIBKRField="42" '))
+
+
+def test_store_full_statement_reports_schema_drift_instead_of_an_empty_dict(archive_client):
+    result = archive_client._store_full_statement(_drifted_statement(), "drifted.xml")
+
+    assert result.ok is False
+    assert result.kind == "schema-drift"
+    assert "brandNewIBKRField" in result.reason
+
+
+def test_store_full_statement_distinguishes_a_zero_row_statement_from_a_refusal(archive_client):
+    """An empty statement is a success; both used to produce an identical `{}`."""
+    from tests.flex_fixtures import statement
+
+    result = archive_client._store_full_statement(statement(""), "empty.xml")
+
+    assert result.ok is True
+    assert result.rows == {}
+
+
+def test_store_full_statement_reports_the_flex_store_drift_valueerror(archive_client, monkeypatch):
+    """flex_store's own drift guard was swallowed by the broad `except Exception`."""
+    from tests.flex_fixtures import statement, trade
+
+    monkeypatch.setattr(
+        archive_client._store,
+        "upsert_flex_statement",
+        lambda parsed: (_ for _ in ()).throw(ValueError("schema drift")),
+    )
+
+    result = archive_client._store_full_statement(statement(trade()), "s.xml")
+
+    assert result.ok is False
+    assert result.kind == "parser-drift"
+
+
+def test_store_full_statement_records_its_result_on_the_client(archive_client, tmp_path):
+    """Both call sites discarded the return value; the client now retains it."""
+    path = tmp_path / "drifted.xml"
+    path.write_text(_drifted_statement(), encoding="utf-8")
+
+    archive_client.import_from_file(str(path))
+
+    assert archive_client.last_archive_result is not None
+    assert archive_client.last_archive_result.ok is False
+    assert archive_client.last_archive_result.kind == "schema-drift"

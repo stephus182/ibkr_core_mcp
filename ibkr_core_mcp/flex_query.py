@@ -19,7 +19,9 @@ Base URL is `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/`
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
+from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +32,36 @@ from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import FlexQueryError
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FlexArchiveResult:
+    """Outcome of writing one statement into the generated ``flex_*`` tables.
+
+    Exists because the previous return value — a plain ``dict`` of per-element row
+    counts — could not express "refused". An empty dict meant both "IBKR added a field,
+    so nothing was imported" and "this statement legitimately had no rows", and the
+    callers discarded it either way.
+
+    ``kind`` is one of ``schema-drift`` (regenerate the schema), ``parser-drift``,
+    ``database``, or ``unexpected``; ``None`` when :attr:`ok`.
+    """
+
+    ok: bool
+    src_file: str
+    rows: dict[str, int] = field(default_factory=dict)
+    kind: str | None = None
+    reason: str | None = None
+
+    @property
+    def remedy(self) -> str:
+        """The one action that resolves this failure, phrased for a tool response."""
+        if self.kind == "schema-drift":
+            return "python scripts/audit_flex_xml.py --src ~/.ibkr_core/flex_archive, then re-sync"
+        if self.kind == "parser-drift":
+            return "regenerate the schema and re-run; the parser and schema disagree"
+        return "check the ibkr_core_mcp logs for the full traceback"
+
 
 if TYPE_CHECKING:
     from ibkr_core_mcp.cache import GDriveCache
@@ -193,6 +225,10 @@ class FlexQueryClient:
         self._config = config
         self._store = store
         self._cache = cache
+        #: Outcome of the most recent flex_* archive write, or None if none has run.
+        #: `fetch_trades` and `import_from_file` both return the *legacy* trade list, so
+        #: this is how a caller learns that the complete-capture write behind it refused.
+        self.last_archive_result: FlexArchiveResult | None = None
 
     def import_from_file(self, xml_path: str) -> list[dict[str, Any]]:
         """Parse a locally downloaded Flex XML file → upsert SQLite → return trades.
@@ -208,7 +244,7 @@ class FlexQueryClient:
         self._store_full_statement(xml_text, Path(xml_path).name)
         return trades
 
-    def _store_full_statement(self, xml_text: str, src_file: str) -> dict[str, int]:
+    def _store_full_statement(self, xml_text: str, src_file: str) -> FlexArchiveResult:
         """Store every element of the statement into the generated flex_* tables.
 
         Runs alongside the legacy `trades` upsert rather than replacing it: the legacy
@@ -217,8 +253,14 @@ class FlexQueryClient:
 
         Deliberately non-fatal. The legacy upsert has already committed by the time this
         runs, and a schema-drift failure here (IBKR adding an attribute) must not turn a
-        successful trade sync into a failed one — it is logged loudly instead, which is
-        the signal to re-run `scripts/audit_flex_xml.py`.
+        successful trade sync into a failed one.
+
+        **The tolerance is right; the silence was not.** This used to return a bare
+        ``{}`` on failure — which is also exactly what a statement containing zero rows
+        returns — and both callers discarded it. One new attribute in ``<Trade>`` could
+        therefore stop the entire ``flex_*`` dataset while every surface went on
+        reporting a successful sync. The result is now a typed value the caller can
+        surface, and it is retained on :attr:`last_archive_result`.
         """
         from .flex_import import FlexImportError, parse_statement
 
@@ -231,13 +273,25 @@ class FlexQueryClient:
                 len(written),
                 src_file,
             )
-            return written
+            result = FlexArchiveResult(ok=True, src_file=src_file, rows=written)
         except FlexImportError as exc:
             log.error("flex archive: %s not stored in flex_* tables: %s", src_file, exc)
-            return {}
+            result = FlexArchiveResult(False, src_file, {}, "schema-drift", str(exc))
+        except ValueError as exc:
+            # flex_store's own drift guard ("parser produced no value for ..."). It was
+            # previously caught by the blanket handler below and reported identically to
+            # a transient failure, losing the one detail that says what to do about it.
+            log.error("flex archive: parser drift storing %s: %s", src_file, exc)
+            result = FlexArchiveResult(False, src_file, {}, "parser-drift", str(exc))
+        except sqlite3.Error as exc:
+            log.error("flex archive: database failure storing %s: %s", src_file, exc)
+            result = FlexArchiveResult(False, src_file, {}, "database", str(exc))
         except Exception as exc:  # noqa: BLE001 - never fail a completed trade sync
             log.error("flex archive: unexpected failure storing %s: %s", src_file, exc, exc_info=True)
-            return {}
+            result = FlexArchiveResult(False, src_file, {}, "unexpected", str(exc))
+
+        self.last_archive_result = result
+        return result
 
     def sync_archive_from_drive(self) -> dict[str, Any]:
         """Download all XML files from account_data/ on Drive and import them into SQLite.

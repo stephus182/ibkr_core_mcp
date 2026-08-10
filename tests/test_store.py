@@ -916,3 +916,72 @@ def test_market_calendar_context_reports_a_failure_instead_of_an_empty_dict(monk
     assert result, "a failed lookup must not return a falsy dict"
     assert "error" in result
     assert result["is_trading_day"] is None, "explicitly unknown, not implicitly False"
+
+
+# ── an empty flex_trade is not "no Flex dataset" ────────────────────────────────
+
+
+def test_coverage_is_stale_when_flex_trade_exists_but_is_empty(mock_config):
+    """The composition that produced a genuine false green.
+
+    `_settled_newest_date` returned None both when the table was absent (an older store,
+    where falling back to the legacy `trades` newest is right) and when it was present
+    but empty (a rebuild that imported nothing, where falling back reports fresh data
+    from a dataset that has none). A wiped flex_* dataset therefore read as current.
+    """
+    from datetime import date
+
+    from ibkr_core_mcp.store import SQLiteStore
+
+    store = SQLiteStore(mock_config)
+    store.initialize()
+    store.initialize_flex_tables()
+    today = date.today().isoformat()
+    store.upsert_trades(
+        [
+            {
+                "execution_id": "e1",
+                "symbol": "TEST",
+                "side": "BUY",
+                "size": 1,
+                "price": 1.0,
+                "time": f"{today}T09:30:00",
+                "commission": 0.5,
+                "account": "U0000000",
+            }
+        ]
+    )
+
+    cov = store.get_trade_date_coverage()
+
+    assert cov["stale"] is True, "an empty flex_trade reported fresh data"
+    assert cov["settled_newest"] is None
+    assert cov["flex_dataset_empty"] is True
+
+
+def test_coverage_reports_the_settled_date_separately_from_the_legacy_newest(mock_config):
+    """The stale message used to mix the two, producing 'DATA STALE (0d old)'."""
+    from ibkr_core_mcp.store import SQLiteStore
+
+    store = SQLiteStore(mock_config)
+    store.initialize()
+    store.initialize_flex_tables()
+    store.upsert_trades(
+        [
+            {
+                "execution_id": "e1",
+                "symbol": "TEST",
+                "side": "BUY",
+                "size": 1,
+                "price": 1.0,
+                "time": "2026-08-10T09:30:00",
+                "commission": 0.5,
+                "account": "U0000000",
+            }
+        ]
+    )
+
+    cov = store.get_trade_date_coverage()
+
+    assert "settled_newest" in cov
+    assert "days_since_settled" in cov

@@ -109,9 +109,24 @@ def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
 
 
 def _format_coverage(cov: dict[str, Any]) -> list[str]:
-    """Format trade date coverage into human-readable lines with staleness and gap notes."""
-    days_old = cov.get("days_since_newest", 0)
-    stale_note = f" ⚠ DATA STALE ({days_old}d old) — run sync_flex_trades to refresh" if cov.get("stale") else ""
+    """Format trade date coverage into human-readable lines with staleness and gap notes.
+
+    The staleness note reports the **settled** date, because `stale` is derived from
+    `flex_trade` while `newest`/`days_since_newest` come from the legacy `trades` table.
+    Mixing them produced the self-contradictory "⚠ DATA STALE (0d old)" — a warning whose
+    own evidence said nothing was wrong, prescribing the command that had just failed.
+    """
+    stale_note = ""
+    if cov.get("flex_dataset_empty"):
+        stale_note = (
+            " ⚠ FLEX DATASET EMPTY — the counts below are from the legacy trades table; "
+            "the complete Flex dataset holds no settled rows"
+        )
+    elif cov.get("stale"):
+        settled = cov.get("settled_newest")
+        days = cov.get("days_since_settled")
+        detail = f"settled through {settled}, {days}d" if settled else f"{cov.get('days_since_newest', 0)}d old"
+        stale_note = f" ⚠ DATA STALE ({detail}) — run sync_flex_trades to refresh"
     lines = [
         f"\nTrade history: {cov['oldest']} → {cov['newest']}  ({cov['total_trades']} trades total){stale_note}",
     ]
@@ -1592,14 +1607,30 @@ class ClaudeToolkit:
         flex = FlexQueryClient(self._config, self._store, self._cache)
         trades = flex.fetch_trades(account_id)
         cov = self._store.get_trade_date_coverage()
+        archive = flex.last_archive_result
         self._store.log_entry(
             "flex_sync",
             account=account_id,
             trades_fetched=len(trades),
             newest=cov.get("newest"),
             total=cov.get("total_trades"),
+            archive_ok=archive.ok if archive else None,
+            archive_reason=archive.reason if archive and not archive.ok else None,
         )
-        lines = [f"Flex sync complete: {len(trades)} trades fetched for account {account_id}."]
+
+        lines = []
+        # The complete-capture write into flex_* can refuse (IBKR added a field) while
+        # the legacy trades upsert succeeds. That refusal used to reach a log line and
+        # nowhere else, so this message reported a clean sync over a dataset that had
+        # silently stopped receiving rows. It leads, because everything below it is the
+        # legacy table's view.
+        if archive and not archive.ok:
+            lines.append(
+                f"⚠ Flex archive NOT updated ({archive.kind}): {archive.reason}\n"
+                f"  The legacy trades table DID update — the counts below describe legacy data only.\n"
+                f"  Fix: {archive.remedy}"
+            )
+        lines.append(f"Flex sync complete: {len(trades)} trades fetched for account {account_id}.")
         lines.extend(_format_coverage(cov))
         return "\n".join(lines), None
 
