@@ -151,3 +151,81 @@ guards; the data was already correct, and a rebuild carries risk with no offsett
 Before anyone runs `rebuild_flex_dataset.py` in future: refresh the archive first, then use
 `--dry-run`. The script now refuses on an unparseable archive, refuses while unenriched
 `source='live'` rows exist, backs up before dropping, and returns the audit gate's exit code.
+
+---
+
+## 7. Live end-to-end verification (same day, after the code changes)
+
+Run against the real gateway and the real Flex Web Service, to confirm the fetch path
+still works and lands what IBKR actually has. Database backed up first to
+`~/.ibkr_core/backups/store-20260810-pre-live-flex-sync.db` (`integrity_check: ok`).
+
+### The fetch is provably complete
+
+32 fills were captured from the CP API (`/iserver/account/trades?days=7`) **before** the
+sync, as an independent reference, then matched against `flex_trade` by IBKR's own
+execution id — not by date, which cannot work: CL and ES futures trade nearly around the
+clock, so a fill's wall-clock date and its `tradeDate` routinely differ.
+
+| | |
+|---|---|
+| Live fills matched in `flex_trade` | **26 of 32** |
+| Not matched | **6 — every one dated 2026-08-10 (today)** |
+
+That is the correct result, not a gap: Flex is T+1, so today's fills cannot appear in any
+statement yet. Every historical fill IBKR showed live is present.
+
+Per-day counts differ from the CP API (Aug 6: 4 vs 5, Aug 7: 10 vs 8) purely because of
+the trading-day boundary described above. Matching on execution id is the only sound
+comparison; matching on date would report phantom discrepancies.
+
+### What the sync brought in
+
+| | before | after |
+|---|---|---|
+| `flex_trade` (`source='flex'`) | 1,117 | **1,131** (+14) |
+| `flex_trade` (`source='live'`) | 0 | 0 |
+| legacy `trades` | 1,213 | 1,227 (+14) |
+| `flex_import_log` | 22 | 23 (+1) |
+| Newest settled date | 2026-08-05 | **2026-08-07** |
+| Rows dated 2026-08-10 | — | **0** (correct: T+1) |
+
+The archive write succeeded — `stored 1799 rows across 13 element types` — so no refusal
+warning was emitted, which is the correct behaviour of the Phase 6 change on a healthy
+sync. The staleness note also cleared on its own, having correctly read
+`DATA STALE (settled through 2026-08-05, 5d)` beforehand.
+
+### Check 0b earned itself back within the hour
+
+The sync uploads its statement to Drive but does not refresh the local archive, so the
+gate immediately went to **40/46** with the *same five* failures seen at the start of the
+day — 1,131 rows vs 1,117 in XML, two element counts, two distribution mismatches.
+
+The difference is that the first line now says why:
+
+```
+[FAIL] 0b. archive holds every statement the import log recorded
+       — 1 missing: ['flex_U1675699_2026-08-10_6523460410.xml']
+```
+
+That morning the same five failures appeared with no explanation and took a full
+investigation to attribute. `fetch_flex_archive.py` then downloaded the file (verified
+against Drive's md5) and the gate returned to **46/46, exit 0**.
+
+**Operational consequence: `sync_flex_trades` leaves the local archive one statement
+behind. Refresh it before running or trusting the gate.**
+
+### Final state
+
+| | |
+|---|---|
+| Gate | **46/46, exit 0** |
+| `PRAGMA integrity_check` | ok |
+| Annual reconciliations 2020–2025 | still **exact to the cent**, all six |
+| Realised P&L identity (trades == lots + wash-sale) | holds: −11,367.35 == −26,768.40 + 15,401.05 |
+| Archive | 23 files, **23/23 verified against Drive md5** |
+| Unenriched live rows | 0 |
+
+Realised P&L moved −13,229.51 → **−11,367.35** on the 14 new trades. The entire +1,862.16
+change falls in 2026 (−23,571.92 → −21,709.76); every prior year is unchanged, which the
+six annual reconciliations independently confirm.
