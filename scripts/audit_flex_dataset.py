@@ -34,23 +34,115 @@ DEFAULT_SRC = Path.home() / ".ibkr_core" / "flex_archive"
 DEFAULT_DB = Path.home() / ".ibkr_core" / "store.db"
 
 
-class Gate:
-    """Collects pass/fail results so every check runs even after one fails."""
+#: Every check id this audit is expected to produce. A check that does not run is a
+#: failure, not an absence — `Gate.finalize` turns any id missing from a run into a FAIL.
+#: The id is the leading token of the check's name, which is also the only stable
+#: identifier the audit has across runs; that is why duplicates are rejected outright.
+#:
+#: Retired ids, deliberately not reused: 6, 10, 11, 13.
+EXPECTED_CHECKS = frozenset(
+    {
+        "0.",  # every archive file parses
+        "0b.",  # archive holds every statement the import log recorded
+        "15.",  # every XML attribute has a schema entry
+        "15b.",  # every schema column exists in the database
+        "16.",  # per-element row counts (family)
+        "1.",  # flex_trade rows == distinct tradeIDs
+        "2.",  # no duplicate ib_exec_id
+        "3.",  # no blank asset_category
+        "4.",  # fifo_pnl_realized stored where the XML had it
+        "4b.",  # fifo_pnl_realized values match the XML
+        "5.",  # date_time_iso uniformly ISO
+        "5b.",  # trade_date_iso uniformly YYYY-MM-DD
+        "7.",  # asset_category distribution
+        "8.",  # open_close_indicator distribution
+        "9.",  # note codes documented
+        "12.",  # ib_commission sign preserved
+        "14.",  # raw_attrs completeness
+        "18.",  # live rows carry the merge key
+        "19.",  # live rows do not guess a trading day
+        "20.",  # live SELL quantities signed
+        "21.",  # live rows parsed their timestamp
+        "22.",  # statement window dates are complete
+        "17.",  # realised P&L reconciles
+        "17a.",  # annual statements were discovered at all
+        "17c.",  # per-calendar-year reconciliation (family)
+        "17d.",  # no trading day outside every annual window
+        "17e.",  # every closed lot carries a realised-P&L value
+        "17f.",  # every closed lot resolves to a stored trade
+    }
+)
 
-    def __init__(self) -> None:
-        """Start with an empty result set."""
+#: Ids that legitimately repeat — one per element, one per calendar year.
+FAMILY_CHECKS = frozenset({"16.", "17c."})
+
+
+class Gate:
+    """Collects pass/fail results so every check runs even after one fails.
+
+    The summary line prints ``passed/total``. Before 2026-08-10 the total was simply
+    however many checks had run, so a check that silently did not execute shrank the
+    denominator with it and the summary stayed true — the calendar-year reconciliation
+    disappeared exactly that way whenever no annual statement was found. The expected-id
+    registry is what makes the denominator fixed and the summary meaningful.
+    """
+
+    def __init__(self, expected: frozenset[str], families: frozenset[str] = frozenset()) -> None:
+        """Start with an empty result set and the ids this run must produce."""
         self.results: list[tuple[bool, str, str]] = []
+        self.expected = expected
+        self.families = families
+        self.seen: set[str] = set()
 
     def check(self, name: str, ok: bool, detail: str = "") -> bool:
-        """Record and print one result. Returns `ok` so callers can chain."""
+        """Record and print one result. Returns `ok` so callers can chain.
+
+        Raises if the id is unregistered (a typo, or a check added without declaring it)
+        or if a non-family id is used twice (two different checks sharing one identifier,
+        which is what made ``"17."`` ambiguous in run-to-run comparisons).
+        """
+        check_id = name.split(" ", 1)[0]
+        if check_id not in self.expected:
+            raise KeyError(f"{check_id} is not in EXPECTED_CHECKS — declare it or fix the name")
+        if check_id in self.seen and check_id not in self.families:
+            raise ValueError(f"{check_id} is used by two different checks — ids must be unique")
+        self.seen.add(check_id)
+
         self.results.append((ok, name, detail))
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
         return ok
+
+    def finalize(self) -> None:
+        """Record a failure for every expected check that never ran."""
+        for check_id in sorted(self.expected - self.seen):
+            self.results.append((False, f"{check_id} expected check never ran", "no result was recorded"))
+            print(f"  [FAIL] {check_id} expected check never ran — no result was recorded")
 
     @property
     def failed(self) -> int:
         """Number of checks that did not pass."""
         return sum(1 for ok, _, _ in self.results if not ok)
+
+
+def annual_windows(rows: Any) -> list[tuple[str, str, str]]:
+    """Pick IBKR's annual statements out of `(from_date, to_date)` pairs.
+
+    An annual statement runs first trading day → last trading day, so it is recognised
+    from its dates rather than a filename: same calendar year, opening in the first week,
+    closing in the last.
+
+    Missing dates yield nothing rather than raising. A NULL ``stmt_to_date`` used to
+    reach ``t[:4]`` and abort the entire audit with a TypeError, while a NULL
+    ``stmt_from_date`` was filtered out in SQL and vanished silently — two different
+    failure modes for the same missing data. Check 22 is what reports them.
+    """
+    found: list[tuple[str, str, str]] = []
+    for from_date, to_date in rows:
+        if not from_date or not to_date:
+            continue
+        if from_date[:4] == to_date[:4] and from_date[4:] <= "0107" and to_date[4:] >= "1224":
+            found.append((from_date[:4], from_date, to_date))
+    return sorted(found)
 
 
 def source_truth(src: Path) -> dict[str, Any]:
@@ -63,7 +155,8 @@ def source_truth(src: Path) -> dict[str, Any]:
     attrs_seen: dict[str, set[str]] = defaultdict(set)
     pnl_by_trade: dict[str, float] = {}
     symbol_summary_pnl: dict[tuple[str, str], float] = {}
-    rejected = 0
+    rejected: list[str] = []
+    files_parsed = 0
     # Per-tradeID views, so distributions can be compared against a database that stores
     # one row per tradeID rather than one row per XML occurrence.
     cat_by_trade: dict[str, str] = {}
@@ -74,11 +167,12 @@ def source_truth(src: Path) -> dict[str, Any]:
         try:
             root = ET.parse(path).getroot()
         except ET.ParseError:
-            rejected += 1
+            rejected.append(f"{path.name}: not well-formed XML")
             continue
         if root.tag != "FlexQueryResponse":
-            rejected += 1
+            rejected.append(f"{path.name}: root is <{root.tag}>, not a statement")
             continue
+        files_parsed += 1
         for tag in ELEMENTS:
             for element in root.iter(tag):
                 element_rows[tag] += 1
@@ -113,6 +207,7 @@ def source_truth(src: Path) -> dict[str, Any]:
         "pnl_by_trade": pnl_by_trade,
         "symbol_summary_pnl": symbol_summary_pnl,
         "rejected": rejected,
+        "files_parsed": files_parsed,
         # De-duplicated by tradeID to match how the database stores trades.
         "asset_categories_dedup": dict(Counter(cat_by_trade.values())),
         "open_close_dedup": dict(Counter(oc_by_trade.values())),
@@ -126,21 +221,57 @@ def run_gate(db_path: Path, src: Path) -> int:
     conn.row_factory = sqlite3.Row
     q = conn.execute
     truth = source_truth(src)
-    gate = Gate()
+    gate = Gate(expected=EXPECTED_CHECKS, families=FAMILY_CHECKS)
+
+    print("\n── Source archive ──────────────────────────────────────────────────")
+
+    # 0. The archive this whole audit compares against must itself be sound. These
+    # rejections were counted and returned by source_truth, and then never read: a
+    # truncated or error-payload file silently shrank the "source of truth" while every
+    # downstream comparison reported agreement with what remained.
+    gate.check(
+        "0. every file in the archive is a parseable statement",
+        not truth["rejected"],
+        "; ".join(truth["rejected"]) if truth["rejected"] else f"{truth['files_parsed']} parsed",
+    )
+
+    # 0b. ...and it must be *current*. Measured 2026-08-10: the local archive was one
+    # statement behind the database, so five checks failed and described a data problem
+    # that did not exist. A stale source of truth produces false reds as readily as a
+    # missing check produces false greens.
+    archived = {path.name for path in src.glob("*.xml")}
+    try:
+        imported = {r["filename"] for r in q("SELECT filename FROM flex_import_log")}
+    except sqlite3.DatabaseError:
+        imported = set()
+    absent = sorted(imported - archived)
+    gate.check(
+        "0b. archive holds every statement the import log recorded",
+        not absent,
+        f"{len(absent)} missing: {absent}" if absent else f"{len(imported)} logged imports present",
+    )
 
     print("\n── Structure ───────────────────────────────────────────────────────")
 
-    # 1 / 15. Every attribute the XML carries has a column.
+    # 15. Every attribute the XML carries has a column.
+    #
+    # The evidence is measured, not asserted. It used to be the literal string
+    # "222 attributes across 14 elements", printed identically for an archive of 3
+    # statements or 0 — and `not missing_columns` is vacuously true when nothing was
+    # read at all, so an empty source printed a confident PASS.
     missing_columns: dict[str, list[str]] = {}
     for tag, attrs in truth["attrs_seen"].items():
         known = {attr for attr in ELEMENTS[tag]["columns"]}
         gap = attrs - known
         if gap:
             missing_columns[tag] = sorted(gap)
+    attrs_counted = sum(len(a) for a in truth["attrs_seen"].values())
     gate.check(
         "15. every XML attribute has a schema entry",
-        not missing_columns,
-        json.dumps(missing_columns) if missing_columns else "222 attributes across 14 elements",
+        not missing_columns and bool(truth["attrs_seen"]),
+        json.dumps(missing_columns)
+        if missing_columns
+        else f"{attrs_counted} attributes across {len(truth['attrs_seen'])} elements",
     )
 
     db_gap: dict[str, list[str]] = {}
@@ -354,17 +485,35 @@ def run_gate(db_path: Path, src: Path) -> int:
     #
     # Measured 2026-08-04: no such trade exists in six years of history, and all six
     # annual totals reconcile exactly. This check keeps that true.
-    annual = []
-    for report in q(
-        "SELECT DISTINCT stmt_from_date f, stmt_to_date t FROM flex_trade "
-        "WHERE source='flex' AND stmt_from_date IS NOT NULL"
-    ):
-        f, t = report["f"], report["t"]
-        # An annual statement: same calendar year, opening in the first week, closing in
-        # the last. Derived from the dates rather than from filenames.
-        if f[:4] == t[:4] and f[4:] <= "0107" and t[4:] >= "1224":
-            annual.append((f[:4], f, t))
-    for year, f, t in sorted(annual):
+    #
+    # NOTE: the per-statement comparison this reasoning refers to compares *totals*
+    # inside a window (checks 4/4b, per trade). A direct per-statement SymbolSummary
+    # reconciliation does not exist yet — `source_truth` computes `symbol_summary_pnl`
+    # for it and nothing reads it. Do not read the paragraph above as claiming otherwise.
+    windows = [
+        (r["f"], r["t"])
+        for r in q("SELECT DISTINCT stmt_from_date f, stmt_to_date t FROM flex_trade WHERE source='flex'")
+    ]
+    incomplete = sum(1 for f, t in windows if not f or not t)
+    gate.check(
+        "22. every Flex row records a complete statement window",
+        incomplete == 0,
+        f"{incomplete} row group(s) with a NULL from/to date",
+    )
+
+    annual = annual_windows(windows)
+    # A discovery step that finds nothing must itself be a failed check. This block used
+    # to be wrapped in `if annual:`, so an archive of only quarterly statements — or a
+    # re-pull starting 20260108, one day past the window — removed the reconciliation
+    # entirely while the summary went on reporting "N/N checks passed".
+    gate.check(
+        "17a. annual statements were found to reconcile against",
+        bool(annual),
+        f"{len(annual)} annual window(s): {[y for y, _, _ in annual]}"
+        if annual
+        else "no annual statement in the archive — the calendar-year reconciliation cannot run",
+    )
+    for year, f, t in annual:
         ibkr = q(
             "SELECT COALESCE(SUM(fifo_pnl_realized),0) v FROM flex_symbol_summary "
             "WHERE stmt_from_date=? AND stmt_to_date=?",
@@ -402,19 +551,20 @@ def run_gate(db_path: Path, src: Path) -> int:
         f"{realised:,.2f} vs {lots_pnl + wash_pnl:,.2f}",
     )
 
-    # 17b. Capture check that IS a gate: every closed lot must be stored with a P&L value.
+    # 17e. Capture check that IS a gate: every closed lot must be stored with a P&L value.
     lots_missing = q("SELECT COUNT(*) c FROM flex_lot WHERE fifo_pnl_realized IS NULL").fetchone()["c"]
-    gate.check("17. every closed lot carries a realised-P&L value", lots_missing == 0, f"{lots_missing} missing")
+    gate.check("17e. every closed lot carries a realised-P&L value", lots_missing == 0, f"{lots_missing} missing")
 
-    # 17c. The trade/lot linkage is intact: Lot.transaction_id is the OPENING transaction,
+    # 17f. The trade/lot linkage is intact: Lot.transaction_id is the OPENING transaction,
     # so every lot must resolve to a trade we hold.
     orphan_lots = q(
         "SELECT COUNT(*) c FROM flex_lot l "
         "WHERE NOT EXISTS (SELECT 1 FROM flex_trade t WHERE t.transaction_id = l.transaction_id)"
     ).fetchone()["c"]
-    gate.check("17b. every closed lot resolves to a stored trade", orphan_lots == 0, f"{orphan_lots} orphaned")
+    gate.check("17f. every closed lot resolves to a stored trade", orphan_lots == 0, f"{orphan_lots} orphaned")
 
     conn.close()
+    gate.finalize()
     print("\n" + "─" * 68)
     print(f"  {len(gate.results) - gate.failed}/{len(gate.results)} checks passed")
     if gate.failed:
