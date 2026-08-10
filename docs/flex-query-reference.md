@@ -70,10 +70,27 @@ parsed.counts       # {'Trade': 100, 'Lot': 62, 'Order': 100, 'ConversionRate': 
 Regenerate the schema whenever IBKR changes the statement shape:
 
 ```bash
+python scripts/fetch_flex_archive.py                               # refresh the archive first
 python scripts/audit_flex_xml.py --src ~/.ibkr_core/flex_archive   # audit + schema
-python scripts/rebuild_flex_dataset.py --db ~/.ibkr_core/store.db  # rebuild
-python scripts/audit_flex_dataset.py --db ~/.ibkr_core/store.db    # 30-check gate
+python scripts/rebuild_flex_dataset.py --db ~/.ibkr_core/store.db --dry-run   # rehearse
+python scripts/rebuild_flex_dataset.py --db ~/.ibkr_core/store.db  # rebuild, then gate
+python scripts/audit_flex_dataset.py --db ~/.ibkr_core/store.db    # the gate on its own
 ```
+
+**These scripts refuse rather than proceed** (all four gained guards on 2026-08-10, after
+an audit found that each ended in an unconditional `return 0`):
+
+| Situation | What happens |
+|---|---|
+| Archive holds an unparseable file or an IBKR error payload | `rebuild` exits 2 **before** dropping anything. No override flag exists. |
+| `flex_trade` holds `source='live'` rows | `rebuild` exits 2 — those Client-Portal fills are awaiting their T+1 statement and exist in no XML file. `--drop-live` discards them explicitly. |
+| Any rebuild that drops tables | A `store.db.pre-rebuild-<timestamp>.bak` snapshot is taken first, via SQLite's online-backup API. `--no-backup` opts out. |
+| `--src` is empty, or the regenerated schema would **lose** an element or attribute | `audit_flex_xml` exits 2 without writing `flex_schema.py`. `--allow-shrink` overrides. |
+| A local archive file does not match Drive's `md5Checksum` | `fetch_flex_archive` exits 2 and writes no manifest. |
+| The archive is missing a statement `flex_import_log` recorded | The gate fails check `0b`. **Refresh the archive before trusting a red gate** — a stale source of truth produces false reds as readily as a missing check produces false greens. |
+
+`rebuild_flex_dataset.py` now runs the gate and returns its exit code, which is what its
+docstring promised from the beginning. There is deliberately no `--skip-audit`.
 
 **An unknown attribute is a hard error.** If IBKR adds a field, `parse_statement` raises
 rather than discarding it — the import fails loudly and names the attribute.
@@ -147,6 +164,23 @@ reconciles, and **no trading day in six years falls outside an annual window**:
 `scripts/audit_flex_dataset.py` re-runs this as checks **17c** and **17d**. Annual statements
 are identified from their dates (same calendar year, opening in the first week, closing in
 the last), not from filenames, so the check keeps working as new years are archived.
+
+Check **17a** exists because that discovery step could previously find nothing and take
+17c/17d with it: both sat inside `if annual:`, so an archive of only quarterly statements —
+or a re-pull starting `20260108`, one day past the hardcoded window — removed the
+reconciliation entirely while the summary went on reporting "N/N checks passed" about a set
+that no longer contained it. The gate now declares its expected check ids up front and fails
+any that did not run, so the denominator cannot shrink to match the checks that survived.
+
+**On the 2026-07-02 statement.** `flex_U1675699_2026-07-02_2928480049.xml` was a 226-byte
+`<FlexStatementResponse>` carrying `ErrorCode 1019` ("Statement generation in progress" —
+[official codes](https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm)),
+not a statement. It contributed zero rows, and `flex_query._get_statement` has retried that
+condition since the incident. The local copy was deleted on 2026-08-10 and
+`fetch_flex_archive.py` now refuses any payload whose root is not `<FlexQueryResponse>`,
+because the Drive copy still exists and a plain local delete came straight back on the next
+fetch. `flex_import_log` still holds its row (id 13, `raw_trade_count=0`), which is what
+check `0b` reports.
 
 `<Trade>`, `<Lot>`, `<Order>`, `<WashSale>`, `<SymbolSummary>` and `<AssetSummary>` are the
 **same 85-attribute shape** distinguished by `levelOfDetail`, and are siblings under
