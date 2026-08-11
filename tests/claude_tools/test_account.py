@@ -370,19 +370,61 @@ def test_prime_pnl_subscription_swallows_ws_failure(toolkit, caplog):
 
 
 def test_get_watchlists_happy_path(toolkit):
-    """Returns watchlist summary and raw JSON."""
-    toolkit._client.get_watchlists.return_value = [
-        {
-            "id": "wl1",
-            "name": "My Watchlist",
-            "rows": [{"ST": "AAPL"}, {"ST": "TSLA"}],
-        }
-    ]
+    """Returns watchlist summary and raw JSON.
+
+    The list endpoint returns metadata only, so the handler fetches each
+    watchlist's instruments separately — see `_get_watchlists`.
+    """
+    toolkit._client.get_watchlists.return_value = [{"id": "wl1", "name": "My Watchlist", "read_only": False}]
+    toolkit._client.get_watchlist.return_value = {
+        "id": "wl1",
+        "name": "My Watchlist",
+        "instruments": [{"conid": 265598, "fullName": "AAPL"}, {"conid": 76792991, "fullName": "TSLA"}],
+    }
     text, fig = toolkit.execute("get_watchlists", {})
     assert fig is None
     assert "My Watchlist" in text
     assert "AAPL" in text
     assert "TSLA" in text
+
+
+def test_get_watchlists_fetches_contents_per_watchlist(toolkit):
+    """The tool promises contents, so it must call get_watchlist for each id."""
+    toolkit._client.get_watchlists.return_value = [
+        {"id": "a", "name": "Alpha"},
+        {"id": "b", "name": "Beta"},
+    ]
+    toolkit._client.get_watchlist.side_effect = [
+        {"instruments": [{"fullName": "AAPL"}]},
+        {"instruments": [{"fullName": "MSFT"}]},
+    ]
+    text, _ = toolkit.execute("get_watchlists", {})
+    assert [c.args[0] for c in toolkit._client.get_watchlist.call_args_list] == ["a", "b"]
+    assert "AAPL" in text and "MSFT" in text
+
+
+def test_get_watchlists_survives_a_failed_contents_fetch(toolkit):
+    """One unreadable watchlist must not blank out the whole listing."""
+    toolkit._client.get_watchlists.return_value = [
+        {"id": "a", "name": "Alpha"},
+        {"id": "b", "name": "Beta"},
+    ]
+    toolkit._client.get_watchlist.side_effect = [RuntimeError("boom"), {"instruments": [{"fullName": "MSFT"}]}]
+    text, _ = toolkit.execute("get_watchlists", {})
+    assert "Alpha" in text and "Beta" in text
+    assert "MSFT" in text
+    assert "could not be read" in text
+
+
+def test_get_watchlists_marks_ib_created_lists_read_only(toolkit):
+    """system_lists arrive with read_only=True and must be distinguishable."""
+    toolkit._client.get_watchlists.return_value = [
+        {"id": "u1", "name": "Mine", "read_only": False},
+        {"id": "s1", "name": "US Indices and ETFs", "read_only": True},
+    ]
+    toolkit._client.get_watchlist.return_value = {"instruments": []}
+    text, _ = toolkit.execute("get_watchlists", {})
+    assert "read-only" in text
 
 
 def test_get_watchlists_empty(toolkit):
@@ -471,3 +513,24 @@ def test_get_ledger_parses_a_value_with_thousands_separators(toolkit):
     text, _ = toolkit.execute("get_ledger", {})
 
     assert "$1,234,567.89" in text
+
+
+def test_get_watchlists_caps_contents_fetches_and_says_so(toolkit):
+    """The real account has 8 user + 28 IB-created lists.
+
+    Fetching contents for all of them is one API call each. The handler bounds that
+    fan-out, and — per this repo's no-silent-caps rule — states what it skipped rather
+    than quietly returning partial data that reads as complete.
+    """
+    from ibkr_core_mcp.claude_tools import _WATCHLIST_CONTENTS_LIMIT
+
+    n = _WATCHLIST_CONTENTS_LIMIT + 6
+    toolkit._client.get_watchlists.return_value = [{"id": str(i), "name": f"WL{i}"} for i in range(n)]
+    toolkit._client.get_watchlist.return_value = {"instruments": [{"fullName": "AAPL"}]}
+    text, _ = toolkit.execute("get_watchlists", {})
+
+    assert toolkit._client.get_watchlist.call_count == _WATCHLIST_CONTENTS_LIMIT
+    # Every watchlist is still listed — the cap limits contents, not visibility.
+    assert f"({n} found)" in text
+    assert "WL0" in text and f"WL{n - 1}" in text
+    assert "contents not fetched" in text

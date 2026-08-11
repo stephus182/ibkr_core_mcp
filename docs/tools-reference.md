@@ -652,7 +652,15 @@ List all IBKR watchlists and their contents.
 
 **Inputs:** none
 
-**Output:** JSON array of watchlists. Each entry has `id`, `name`, `rows` (array of instruments).
+**Output:** A summary line per watchlist, then the raw JSON array. Each entry has `id`, `name`,
+`read_only` and `instruments` (the array of contracts).
+
+IBKR splits watchlists into `user_lists` (yours) and `system_lists` (IB-created, e.g. "US
+Indices and ETFs"); both are returned, and the IB-created ones are marked `read-only,
+IB-created` in the summary and carry `read_only: true`. `/iserver/watchlists` returns metadata
+only, so the handler makes one additional `/iserver/watchlist?id=…` call per watchlist to fill
+in the contents — a watchlist whose contents fail to load is still listed, annotated
+`could not be read`, rather than silently dropped.
 
 **IBKR endpoint:** `GET /iserver/watchlists`
 

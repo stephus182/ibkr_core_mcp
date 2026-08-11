@@ -1106,6 +1106,14 @@ def _validate_account_id(account_id: str) -> str:
 #: zero is a real, actionable balance and must stay distinguishable from unknown.
 _UNKNOWN_MONEY = "—"
 
+#: How many watchlists `get_watchlists` fetches contents for. `/iserver/watchlists`
+#: returns metadata only, so each list's symbols cost one extra call; a real account
+#: carries ~36 lists (8 user-created + 28 IB-created), which would otherwise mean 37
+#: sequential calls for one question. Lists past this bound are still shown — only the
+#: symbol lookup stops, and the handler says how many it skipped rather than presenting
+#: a truncated answer as complete.
+_WATCHLIST_CONTENTS_LIMIT = 25
+
 
 def _money(v: float | None) -> str:
     """'$' + comma-grouped magnitude, sign only shown when negative (e.g. -$8,107.13).
@@ -3098,21 +3106,54 @@ class ClaudeToolkit:
         watchlists = self._client.get_watchlists()
         if not watchlists:
             return "No watchlists found in IBKR account.", None
-        # Emit raw IBKR response first so the structure is transparent, then a
-        # plain-text summary. This prevents misreading ambiguous field names.
-        lines = [f"IBKR watchlists ({len(watchlists)} found) — raw response below:\n"]
-        for wl in watchlists:
+
+        # /iserver/watchlists returns metadata only — no symbols. The contents live
+        # behind a second call per watchlist, and no other tool exposes them, so this
+        # handler makes those calls itself; otherwise the tool's "and their contents"
+        # promise would be unfulfillable rather than merely unfulfilled.
+        detailed: list[dict[str, Any]] = []
+        lines = [f"IBKR watchlists ({len(watchlists)} found):\n"]
+        skipped = 0
+        for index, wl in enumerate(watchlists):
             wl_id = wl.get("id") or wl.get("watchlistId") or "?"
             wl_name = wl.get("name") or wl.get("watchlistName") or "?"
-            rows = wl.get("rows") or wl.get("instruments") or wl.get("symbols") or []
-            symbols = (
-                [r.get("ST") or r.get("symbol") or r.get("conid") or str(r) for r in rows if isinstance(r, dict)]
-                if rows
-                else []
+            flag = " (read-only, IB-created)" if wl.get("read_only") or wl.get("readOnly") else ""
+            # Contents cost one call each and a real account carries ~36 lists (8 user +
+            # 28 IB-created), so the fan-out is bounded. Every watchlist is still listed;
+            # only the symbol lookup stops, and the count skipped is reported below.
+            if index >= _WATCHLIST_CONTENTS_LIMIT:
+                skipped += 1
+                lines.append(f"  [{wl_id}] {wl_name}{flag}: (contents not fetched)")
+                detailed.append(dict(wl))
+                continue
+            try:
+                contents = self._client.get_watchlist(str(wl_id)) if wl_id != "?" else {}
+            except Exception as exc:
+                # One unreadable list must not blank out the others: name it and move on.
+                lines.append(f"  [{wl_id}] {wl_name}{flag}: could not be read — {exc}")
+                detailed.append({**wl, "_contents_error": str(exc)})
+                continue
+            rows = contents.get("instruments") or contents.get("rows") or contents.get("symbols") or []
+            symbols = [
+                # fullName is the local symbol per IBKR's doc; the rest are tolerated variants.
+                r.get("fullName") or r.get("ST") or r.get("symbol") or r.get("conid")
+                for r in rows
+                if isinstance(r, dict)
+            ]
+            rendered = ", ".join(str(s) for s in symbols if s is not None)
+            lines.append(f"  [{wl_id}] {wl_name}{flag}: {rendered or '(empty)'}")
+            detailed.append({**wl, "instruments": rows})
+
+        if skipped:
+            lines.append(
+                f"\nContents were fetched for the first {_WATCHLIST_CONTENTS_LIMIT} watchlists; "
+                f"{skipped} more are listed above without symbols, to bound the number of API "
+                f"calls. Ask for a specific watchlist by name to see its contents."
             )
-            lines.append(f"  [{wl_id}] {wl_name}: {', '.join(str(s) for s in symbols) or '(no symbols)'}")
+        # Raw response last so the structure stays transparent and ambiguous field
+        # names can be checked against it rather than guessed from the summary.
         lines.append("\nRaw IBKR response:")
-        lines.append(json.dumps(watchlists, indent=2))
+        lines.append(json.dumps(detailed, indent=2, default=str))
         return "\n".join(lines), None
 
     def _get_order_status(self, inputs: dict[str, Any]) -> tuple[str, Any]:

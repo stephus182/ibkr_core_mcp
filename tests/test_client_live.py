@@ -349,6 +349,30 @@ def test_get_watchlists(live_client):
 
 
 @pytest.mark.integration
+def test_get_watchlists_does_not_silently_drop_lists(live_client):
+    """Cross-check the parse against the raw payload.
+
+    The old assertion here was `isinstance(result, list)`, which is satisfied by `[]` —
+    so it passed for weeks while `get_watchlists()` returned nothing for an account with
+    eight watchlists (2026-07-23 bug). A shape assertion cannot catch a silent
+    under-report; only comparing against the raw response can. If IBKR says there are
+    watchlists, the parsed result must contain them.
+    """
+    raw = live_client._get("/iserver/watchlists", {"SC": "USER_WATCHLIST"})
+    payload = raw.get("data") if isinstance(raw, dict) else None
+    if not isinstance(payload, dict):
+        payload = {}
+    expected_ids = {
+        str(w.get("id"))
+        for key in ("user_lists", "system_lists")
+        for w in (payload.get(key) or [])
+        if isinstance(w, dict) and w.get("id") is not None
+    }
+    parsed_ids = {str(w.get("id")) for w in live_client.get_watchlists() if w.get("id") is not None}
+    assert parsed_ids == expected_ids, f"parse dropped watchlists: raw={expected_ids} parsed={parsed_ids}"
+
+
+@pytest.mark.integration
 def test_watchlist_roundtrip(live_client):
     """Create → read → delete a watchlist to verify all three fixed paths."""
     from ibkr_core_mcp.exceptions import IBKRRateLimitError

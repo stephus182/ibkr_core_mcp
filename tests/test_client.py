@@ -1317,3 +1317,83 @@ def test_get_live_orders_accepts_a_bare_list_response(client):
     """Some gateway builds return the array directly rather than wrapped."""
     with _mock_raw_orders_body(client, [{"orderId": 1, "status": "Submitted"}]), patch("time.sleep"):
         assert len(client.get_live_orders()) == 1
+
+
+# ----------------------------------------------------------------------
+# get_watchlists — the 2026-07-23 silent-empty bug
+#
+# IBKR returns a *dict* ({"data": {"user_lists": [...], "system_lists": [...]}}),
+# never a bare list, so the original `return data if isinstance(data, list) else []`
+# discarded every watchlist and reported "none found" for an account with 8.
+# Shapes below are from the official endpoint doc, re-fetched 2026-08-11:
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists
+# ----------------------------------------------------------------------
+
+
+def _watchlist_response(client, payload):
+    with patch.object(client._session, "get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = payload
+        mock_get.return_value = mock_resp
+        return client.get_watchlists()
+
+
+def test_get_watchlists_parses_documented_user_lists(client):
+    """The documented nested shape must yield the watchlists, not []."""
+    result = _watchlist_response(
+        client,
+        {
+            "data": {
+                "scanners_only": False,
+                "show_scanners": False,
+                "bulk_delete": False,
+                "user_lists": [
+                    {"is_open": False, "read_only": False, "name": "Test Watchlist", "id": "1234", "type": "watchlist"}
+                ],
+            },
+            "action": "content",
+            "MID": "1",
+        },
+    )
+    assert [w["id"] for w in result] == ["1234"]
+    assert result[0]["name"] == "Test Watchlist"
+
+
+def test_get_watchlists_includes_system_lists(client):
+    """`system_lists` are IB-created watchlists and count as watchlists too."""
+    result = _watchlist_response(
+        client,
+        {
+            "data": {
+                "user_lists": [{"id": "u1", "name": "Mine", "read_only": False}],
+                "system_lists": [{"id": "s1", "name": "US Indices and ETFs", "read_only": True}],
+            }
+        },
+    )
+    assert [w["id"] for w in result] == ["u1", "s1"]
+    # IBKR's own read_only flag distinguishes them — no synthetic tagging needed.
+    assert result[1]["read_only"] is True
+
+
+def test_get_watchlists_empty_account_returns_empty_list(client):
+    """A genuinely empty account still reports empty — the fix must not invent rows."""
+    assert _watchlist_response(client, {"data": {"user_lists": []}, "action": "content"}) == []
+
+
+def test_get_watchlists_tolerates_bare_list(client):
+    """Defensive: if IBKR ever returns a bare list, don't regress to []."""
+    result = _watchlist_response(client, [{"id": "wl1", "name": "Legacy"}])
+    assert [w["id"] for w in result] == ["wl1"]
+
+
+def test_get_watchlists_ignores_non_dict_entries(client):
+    """Malformed entries are skipped rather than crashing the caller."""
+    result = _watchlist_response(client, {"data": {"user_lists": [{"id": "ok", "name": "Good"}, "junk", None]}})
+    assert [w["id"] for w in result] == ["ok"]
+
+
+def test_get_watchlists_handles_unexpected_payload(client):
+    """An unrecognised shape yields [] rather than raising."""
+    assert _watchlist_response(client, {"unexpected": True}) == []
+    assert _watchlist_response(client, "not json at all") == []

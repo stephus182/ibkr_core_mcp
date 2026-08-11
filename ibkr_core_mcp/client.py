@@ -1216,13 +1216,40 @@ class IBKRClient:
     # ------------------------------------------------------------------
 
     def get_watchlists(self) -> list[dict[str, Any]]:
-        """All watchlists for the account. Returns [] if not a list.
+        """All watchlists for the account, user-created first, then IB-created.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists.md
+        Returns watchlist *metadata* — `id`, `name`, `read_only`, `type`. The
+        constituent symbols are not in this response; fetch them per watchlist with
+        `get_watchlist(id)`.
+
+        IBKR wraps the lists in a dict — `{"data": {"user_lists": [...],
+        "system_lists": [...]}, "action": ..., "MID": ...}` — and never returns a bare
+        array. This method previously read `data if isinstance(data, list) else []`,
+        which therefore discarded every watchlist and reported none for an account that
+        had eight (found 2026-07-23 against a live gateway, fixed 2026-08-11; see
+        `docs/plans/2026-07-23-get-watchlists-empty-bug.md`). The bare-list branch is
+        kept only as tolerance for a shape IBKR has never actually sent.
+
+        `system_lists` are included because the caller asked for *all* watchlists;
+        IBKR's own `read_only: true` marks them, so no synthetic tagging is added.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists
         Endpoint: GET /iserver/watchlists
         """
         data = self._get("/iserver/watchlists", {"SC": "USER_WATCHLIST"})
-        return data if isinstance(data, list) else []
+        if isinstance(data, list):
+            return [w for w in data if isinstance(w, dict)]
+        if not isinstance(data, dict):
+            return []
+        payload = data.get("data")
+        if not isinstance(payload, dict):
+            return []
+        watchlists: list[dict[str, Any]] = []
+        for key in ("user_lists", "system_lists"):
+            entries = payload.get(key)
+            if isinstance(entries, list):
+                watchlists.extend(w for w in entries if isinstance(w, dict))
+        return watchlists
 
     def get_watchlist(self, watchlist_id: str) -> dict[str, Any]:
         """Contents of a specific watchlist. Uses the watchlist ID as a query param.
