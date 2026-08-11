@@ -13,8 +13,12 @@
 > `docs/web-api/web-api-v-1-0-documentation/…` is superseded by `docs/web-api/v1/…`, and the
 > WebSocket segment `websockets/` is now `ws/`. 93 links across the living docs and source
 > were repointed on 2026-08-11; every target was checked for membership in `llms.txt` before
-> rewriting, and a sample was live-fetched. Surviving `web-api-v-1-0-documentation` strings
-> exist only in `docs/plans/`, which is a dated record and deliberately not rewritten.
+> rewriting, and then **all 72 unique URLs were live-fetched — 72/72 real**, with a fabricated
+> control URL in the same batch returning `# Page Not Found` to show the check could still
+> fail. **Zero clickable links on the old prefix remain anywhere in the repo.** The string
+> still appears as prose — in this file, in `CLAUDE.md` and in `docs/web-scraper-reference.md`,
+> all naming it as superseded — and as real URLs inside `docs/plans/`, a dated record
+> deliberately left unrewritten.
 >
 > **How this one was caught, since a link checker cannot catch it.** `llms.txt` contains 469
 > entries and **zero** `web-api-v-1-0-documentation` paths. Appending `.md` returns a real
@@ -223,8 +227,11 @@ fully resolve — listed for a future pass rather than guessed at now:
   Firecrawl's own result was already complete and `assess_quality` never routed it to fallback;
   `max_pages=1` throughout), the "likely JS-rendered" guess above was wrong — the retry/cache
   upgrade didn't touch the actual cause, and it isn't JS rendering. `crawl()`'s poll loop
-  (`web_scraper.py:299-333`) never surfaces Firecrawl's internal `total`/`completed` job-progress
-  fields to its caller, only the final page list, so those aren't usable as sanctioned evidence —
+  (in `web_scraper.py` at the time; **`FirecrawlClient.crawl` was deleted in the 2026-07-30
+  rewrite, so this reference no longer resolves — kept because the reasoning below still
+  explains how the root causes were established**) never surfaced Firecrawl's internal
+  `total`/`completed` job-progress fields to its caller, only the final page list, so those
+  weren't usable as sanctioned evidence —
   root cause for each URL below was instead confirmed with a plain, non-Firecrawl HTTP check
   (`curl -I -L` for redirects, a plain fetch of `robots.txt`) to find where the URL actually leads,
   then that destination was re-confirmed as fetchable via `ClaudeToolkit.firecrawl_crawl` itself

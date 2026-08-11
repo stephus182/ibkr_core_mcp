@@ -38,7 +38,7 @@ What changed on 2026-07-24/25 is the consumer. `claudia_ui` migrated from Chainl
 So the seam question is settled by fact rather than prediction: **the chart surface is
 `claudia_ui`, and its rendering engine is Bokeh via Panel.** A chart-producing tool in
 this package would still not return a figure object — `execute()`'s return type was
-tightened to `tuple[str, None]` (`ibkr_core_mcp/claude_tools.py:1051`) precisely because
+tightened to `tuple[str, None]` (`ClaudeToolkit.execute`) precisely because
 every handler returns `None` in the figure slot. `claudia_ui` reads the cached OHLCV
 DataFrame and builds the figure on its own side.
 

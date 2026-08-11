@@ -56,10 +56,10 @@ change the other variable.**
 
 Both rows are logged in [`web-scraper-reference.md`](web-scraper-reference.md) §11 under
 2026-07-30, and the FT row is what §6 of that file now documents as the proven path. The
-resulting rule lives in code at `ibkr_core_mcp/local_browser.py:446` (`_browser_config`), and
+resulting rule lives in code at `ibkr_core_mcp/local_browser.py` (`_browser_config`), and
 is pinned by `test_crawl4ai_scraper_uses_saved_profile_when_present`
 (`tests/test_local_browser.py:419`) and `test_crawl_site_stays_headless_without_a_profile`
-(`tests/test_local_browser.py:1161`) — one asserting `headless is False` with a profile, the
+(`tests/test_local_browser.py`) — one asserting `headless is False` with a profile, the
 other `True` without, so the asymmetry cannot be flattened in either direction.
 
 A corollary worth stating separately: **a site being reachable is not the same as its content
@@ -75,11 +75,11 @@ at least once.
 | What you see | What it usually is | Tell | Guarded by |
 |---|---|---|---|
 | Exactly **1 B** at `http=401`/`403` | Anti-bot refusing the automated browser at the edge | A byte count that reads like a successful fetch of a short page. **A login profile cannot help — the block precedes authentication.** | `test_fetch_page_flags_an_anti_bot_stub_rather_than_presenting_it` (`tests/test_web_tools_live.py:151`) |
-| ~25 KB of plausible page, no article body | The site's **paywall barrier page** | Subscription pricing, "Try unlimited access", offer links. Grades `ambiguous`, not `fallback` — and `fetch_page` gates on `!= "ok"`, so it is still flagged (`ibkr_core_mcp/claude_tools.py:3326`). | `_PAYWALL_MARKERS` (`ibkr_core_mcp/local_browser.py:87`) |
+| ~25 KB of plausible page, no article body | The site's **paywall barrier page** | Subscription pricing, "Try unlimited access", offer links. Grades `ambiguous`, not `fallback` — and `fetch_page` gates on `!= "ok"`, so it is still flagged (`ibkr_core_mcp/claude_tools.py`). | `_PAYWALL_MARKERS` (`ibkr_core_mcp/local_browser.py:87`) |
 | ~1 KB "Security Verification" / "Just a moment" / captcha | A **challenge**, not content | Returns HTTP 200 and looks like a page. The most dangerous shape, because nothing about it is obviously an error. | `fetch_page`'s description tells the model to report, not retry — `test_fetch_page_names_a_challenge_page_as_a_block` (`tests/claude_tools/test_tool_descriptions.py:126`) |
 | A 44-byte nginx 403 archived as a document | An **error page is still a page** | Crawlers count it. `docs.crawl4ai.com/core/` is a directory prefix; the handler said "saved 1 page(s)". **Third instance of this trap** — after "saved 0 page(s)" as success and `fetch_page`'s "(1 B)". Assume a fourth exists. | `test_crawl_site_refuses_to_archive_an_error_page` (`tests/test_web_tools_live.py:173`) |
-| Full-looking page, article truncated mid-way | **Expired session**, or no profile matched | Check profile *name* and *age*: a profile named `www.example.com` does not serve `example.com` (`_resolve_profile_dir`, `ibkr_core_mcp/local_browser.py:305`). `list_profiles` prints age (`ibkr_core_mcp/local_browser.py:904`). | `test_resolve_profile_dir_strips_www` (`tests/test_local_browser.py:323`) |
-| 0 B, no exception | **Two browsers contending for one profile** | Only one Chrome may hold a `user_data_dir`. Serialised since 2026-07-30 (`_profile_in_use`, `ibkr_core_mcp/local_browser.py:393`). | `test_two_fetches_of_one_profile_do_not_run_at_the_same_time` (`tests/test_local_browser.py:456`) |
+| Full-looking page, article truncated mid-way | **Expired session**, or no profile matched | Check profile *name* and *age*: a profile named `www.example.com` does not serve `example.com` (`_resolve_profile_dir`, `ibkr_core_mcp/local_browser.py`). `list_profiles` prints age (`ibkr_core_mcp/local_browser.py`). | `test_resolve_profile_dir_strips_www` (`tests/test_local_browser.py:323`) |
+| 0 B, no exception | **Two browsers contending for one profile** | Only one Chrome may hold a `user_data_dir`. Serialised since 2026-07-30 (`_profile_in_use`, `ibkr_core_mcp/local_browser.py`). | `test_two_fetches_of_one_profile_do_not_run_at_the_same_time` (`tests/test_local_browser.py:456`) |
 
 Every row above is a defect that shipped here first and was found by *running a tool*, never
 by a test failing — the tests came after. That is why
@@ -141,7 +141,7 @@ Source: <https://docs.crawl4ai.com/advanced/identity-based-crawling/>
 Two rules govern every profiled fetch here, both measured rather than assumed, and both
 enforced in code rather than left to the caller:
 
-**Visible, not headless** — `_browser_config`, `ibkr_core_mcp/local_browser.py:446`. A profile
+**Visible, not headless** — `_browser_config`, `ibkr_core_mcp/local_browser.py`. A profile
 carries short-lived bot-management cookies minted by the visible browser that created it —
 FT's jar holds 15 `__cf_bm` (Cloudflare Bot Management) entries beside `FTSession_s` and
 `ft-access-decision-policy`. Replaying them headless is a fingerprint mismatch. A profiled
@@ -151,7 +151,7 @@ stealth example carries the same advice as a bare comment — `headless=False  #
 avoiding detection` — **without explaining why**; the mechanism above is ours, measured. Vendor
 advice agreeing with a measurement is not the same as vendor advice explaining it.
 
-**Serialised per profile** — `_profile_in_use`, `ibkr_core_mcp/local_browser.py:393`. A profile
+**Serialised per profile** — `_profile_in_use`, `ibkr_core_mcp/local_browser.py`. A profile
 is a real Chrome `user_data_dir` guarded by a `SingletonLock`. Two concurrent profiled fetches
 of one domain returned 0 B and 0 B; the same pair anonymously returned 25,242 B and 25,293 B.
 Per profile, not global, so two subscription sites do not queue behind each other; released in
@@ -162,7 +162,7 @@ Anonymous fetches are subject to neither — headless, parallel, no lock. The co
 only where they buy something.
 
 **Name the profile after the registrable domain** — `_resolve_profile_dir`,
-`ibkr_core_mcp/local_browser.py:305`. Matching broadens on the URL being fetched, never on the
+`ibkr_core_mcp/local_browser.py`. Matching broadens on the URL being fetched, never on the
 profile name: a `www.ft.com` directory serves only `www.ft.com`, while `ft.com` serves
 `ft.com`, `www.ft.com` and `markets.ft.com`. Setup walkthrough, including the three
 `create-profile` traps that each cost a live session:

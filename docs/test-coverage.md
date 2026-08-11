@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**982 unit tests · 92 integration tests (1,074 total) · 85% line coverage (non-integration)** — all three measured 2026-08-11, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**992 unit tests · 93 integration tests (1,085 total) · 85% line coverage (non-integration)** — all three measured 2026-08-11, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
 
@@ -17,7 +17,7 @@ coverage run --source=ibkr_core_mcp -m pytest -m "not integration" -q && coverag
 > caveat that it was a floor, never re-measured, because `pytest-cov` was missing. The direct
 > `coverage run` above settles it at **85%** — so the floor held. The per-module figures below
 > were re-measured in the same run; several had drifted by 1–9 points in both directions
-> (`client.py` 64% → 73%, `cache.py` 59% → 51%).
+> (`client.py` 64% → 74%, `cache.py` 59% → 51%).
 
 Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log.md)
 
@@ -67,7 +67,7 @@ inside a spawned child process, invisible to single-process coverage instrumenta
 | `cache.py` | 51% | All GDrive API operations (upload, download, manifest) require live OAuth tokens and Drive access. Error paths exercised in integration tests only. |
 | `mcp_server.py` | 67% | SSE transport wiring (`uvicorn`, `starlette` app/routes) and MCP protocol request handlers exercise the full tool chain — require a live IBKR gateway + MCP client. Tested integration-only. |
 | `gateway/manager.py` | 73% | Docker container lifecycle (`ensure_docker_running`, `image_exists`) and the interactive startup flow require Docker Desktop and a terminal for user input. All pure logic is tested. |
-| `client.py` | 73% | IBKR Client Portal REST API endpoints — all require a running gateway at `localhost:5055`. Tested live via integration tests. The tested 73% covers shared infrastructure: auth, request signing, pagination math, error handling, retry logic. |
+| `client.py` | 74% | IBKR Client Portal REST API endpoints — all require a running gateway at `localhost:5055`. Tested live via integration tests. The tested 74% covers shared infrastructure: auth, request signing, pagination math, error handling, retry logic. |
 | `_order_dialog.py` | 84% | macOS AppKit `NSAlert`/`NSRunLoop` modal dialog subprocess (Gate 2's actual display code, split into its own process — see the pyobjc/Tahoe/Python 3.14 spurious-auto-confirm workaround) — requires a real running display/event loop, not unit-testable |
 | `order_confirm.py` | 86% | AppleScript `display dialog` fallback path and countdown-tick internals — require a running display/event loop; macOS only |
 | `flex_query.py` | 83% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
