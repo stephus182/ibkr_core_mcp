@@ -13,7 +13,7 @@ testable without a live socket — only the I/O methods need a gateway.
 notifications only and never place orders, which is why they carry none of the
 order-write security gates.
 
-https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/introduction
+https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction
 """
 
 from __future__ import annotations

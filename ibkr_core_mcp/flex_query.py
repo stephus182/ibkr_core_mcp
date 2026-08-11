@@ -580,7 +580,7 @@ class FlexQueryClient:
             # in 20 of 20 archived statements and against its annual statements 6/6 years.
             #
             # `tradePnl` was read here first for months. It does not exist in the XML at
-            # all (all 85 <Trade> attributes are enumerated in docs/flex-xml-structure-audit.md),
+            # all (all 85 <Trade> attributes are enumerated in docs/audits/flex-xml-structure-audit.md),
             # so the lookup always fell through to fifoPnlRealized — dead code with a
             # comment that asserted the wrong field was authoritative. Removed 2026-08-04.
             #

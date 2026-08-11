@@ -12,7 +12,7 @@ Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`N
 
 Pass `toolkit.tools` directly to the Anthropic SDK `tools=` parameter. Route responses through `toolkit.execute(block.name, block.input)`.
 
-**IBKR API source:** https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
+**IBKR API source:** https://www.interactivebrokers.com/docs/web-api/v1/introduction
 
 ---
 
@@ -229,7 +229,7 @@ side, size, price (plus commission and realized P&L for `source="store"`).
 
 **Note (live):** Returns all trades on the account regardless of order origin (mobile, TWS, API).
 Calls IBKR with `?days=7`, the documented maximum for this endpoint.
-Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
+Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
 
 **Rate limit:** 1 req/5 secs (official).
 
@@ -318,7 +318,7 @@ Automatically paginates requests exceeding the 1000 data-point limit using `star
 **Output:** Summary with row count, date range, and last close.
 
 **Note:** Max 1000 data points per request — handled automatically by pagination.
-Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
+Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
 
 **Rate limit:** 5 concurrent requests (official).
 
@@ -561,7 +561,7 @@ metrics.
 IBKR alerts are server-side — they fire even when ClaudIA is not running and are delivered
 to the IBKR mobile app.
 
-Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/alerts/introduction
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/introduction
 
 ### `get_alerts`
 List all IBKR price alerts configured on the account.
@@ -671,7 +671,7 @@ IBKR FYI notifications — account alerts, order fills, margin calls, news.
 Also includes total unread count.
 
 **Note:** IBKR enforces a hard cap of 10 notifications per request.
-Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction
+Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
 
 **IBKR endpoint:** `GET /fyi/notifications`
 

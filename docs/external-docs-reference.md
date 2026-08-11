@@ -9,6 +9,21 @@
 > the reader to the wrong page. Treat any surviving `cpapi-v1/#…` reference as broken
 > regardless of its status code.
 >
+> **Second move, found 2026-08-11 — the path shape changed too.** The endpoint prefix
+> `docs/web-api/web-api-v-1-0-documentation/…` is superseded by `docs/web-api/v1/…`, and the
+> WebSocket segment `websockets/` is now `ws/`. 93 links across the living docs and source
+> were repointed on 2026-08-11; every target was checked for membership in `llms.txt` before
+> rewriting, and a sample was live-fetched. Surviving `web-api-v-1-0-documentation` strings
+> exist only in `docs/plans/`, which is a dated record and deliberately not rewritten.
+>
+> **How this one was caught, since a link checker cannot catch it.** `llms.txt` contains 469
+> entries and **zero** `web-api-v-1-0-documentation` paths. Appending `.md` returns a real
+> page on the `v1/` form (~6,400 B) and a `# Page Not Found` body on the old form (~1,000 B) —
+> the same size as a deliberately-fabricated control URL. That control is the point: the
+> plain HTML page is JavaScript-rendered, so fetching it returns an empty body for a real page
+> and a fabricated one *alike*, which is why the `.md` variant, not the HTML page, is the
+> oracle. Never grade one of these URLs on status code or byte count.
+>
 > Fastest ways to verify a claim against the new site:
 >
 > | Method | URL |
@@ -25,8 +40,8 @@
 
 | Topic | URL |
 |---|---|
-| **Client Portal API reference** (all CP endpoints — cited per-endpoint throughout `client.py`, see `docs/api-reference.md`) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction |
-| **Pacing limitations** (global 10 req/s + the per-endpoint table; backs `rate_limiter.py`) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/pacing-limitations |
+| **Client Portal API reference** (all CP endpoints — cited per-endpoint throughout `client.py`, see `docs/api-reference.md`) | https://www.interactivebrokers.com/docs/web-api/v1/introduction |
+| **Pacing limitations** (global 10 req/s + the per-endpoint table; backs `rate_limiter.py`) | https://www.interactivebrokers.com/docs/web-api/v1/pacing-limitations |
 | **Web API changelog** (field/behavior changes, e.g. Dec 2025 snapshot fields, May 2025 FUT/FOP `manualIndicator`/`extOperator` requirement) | https://www.interactivebrokers.com/docs/web-api/changelog |
 | **Orders / modify / cancel** (two-call pattern, field names) | https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/ |
 | **GTC order lifecycle** (quarter-end auto-cancel behavior) | https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/ |
@@ -59,9 +74,9 @@ note in `client.py`), not re-presented as independently sourced from the glossar
 
 | Topic | URL |
 |---|---|
-| **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/introduction |
-| **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/order-position-operations/request-trades-data |
-| **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/order-position-operations/request-profit-loss |
+| **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction |
+| **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/docs/web-api/v1/ws/order-position-operations/request-trades-data |
+| **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/docs/web-api/v1/ws/order-position-operations/request-profit-loss |
 
 **Google Drive API v3** (`cache.py`)
 
@@ -104,7 +119,7 @@ not in the code.
 | **Crawl4AI — complete SDK reference** (same material as `llms-full.txt` but served as ~988 KB of HTML, not plain text — prefer the file above) | https://docs.crawl4ai.com/complete-sdk-reference/ |
 | **Crawl4AI — docs sitemap** (the machine-readable index: 87 pages) | https://docs.crawl4ai.com/sitemap.xml |
 | **Crawl4AI identity-based crawling** (`BrowserProfiler`, `BrowserConfig(use_managed_browser, user_data_dir)`) | https://docs.crawl4ai.com/advanced/identity-based-crawling/ |
-| **Crawl4AI anti-bot / fallback, undetected browser, proxy & security** (the `/advanced/` index; the two pages below are the ones actually read) | https://docs.crawl4ai.com/advanced/ |
+| **Crawl4AI anti-bot / fallback, undetected browser, proxy & security** (section index. ⚠️ **Returns HTTP 403 to an automated browser — verified 2026-08-11.** Its child pages below serve fine; go straight to them, or open the index in a normal browser) | https://docs.crawl4ai.com/advanced/ |
 | **Crawl4AI undetected browser** (the three anti-bot tiers — regular / `enable_stealth` / `UndetectedAdapter` — and the vendor's progressive-enhancement advice. Names **Cloudflare and DataDome** explicitly. **This project stops at tier 1 by choice**; see `web-scraping-methodology.md` §3, which is careful to call that a scope decision rather than an impossibility. Also the source of `headless=False  # Better for avoiding detection`, which independently corroborates the 2026-07-30 FT measurement without explaining it) | https://docs.crawl4ai.com/advanced/undetected-browser/ |
 | **Crawl4AI anti-bot detection & retries** (`proxy_config`, `max_retries`, `fallback_fetch_function` on `CrawlerRunConfig`; block detection keyed on *structural* HTML markers rather than keywords, covering 403/429 short bodies, Cloudflare "Just a moment", Akamai, PerimeterX, captcha injection, Imperva/Sucuri. **We use none of it** — `assess_quality` predates it. Read before adding any retry logic) | https://docs.crawl4ai.com/advanced/anti-bot-and-fallback/ |
 | **Crawl4AI installation** (`crawl4ai-setup` post-install step) | https://docs.crawl4ai.com/core/installation/ |
@@ -197,7 +212,7 @@ fully resolve — listed for a future pass rather than guessed at now:
 - **`docs.firecrawl.dev/v1/api-reference/endpoint/scrape`** — not fetched (code never calls
   `/v1/scrape`, so not needed for verification), but would complete the picture if ever added as a
   contrast citation explaining why this repo doesn't use it.
-- **Re-tested 2026-07-14 (follow-up plan Task 1, `docs/plans/2026-07-14-doc-improvement-upgraded-scraper-plan.md`)
+- **Re-tested 2026-07-14 (follow-up plan Task 1, `docs/plans/archive/docs/2026-07-14-doc-improvement-upgraded-scraper-plan.md`)
   through the upgraded `ClaudeToolkit.firecrawl_crawl`** (retry-with-backoff and the Drive
   read-cache were both exercised — the latter via `get_cached_crawl`'s pre-check on every call, the
   former by an observed `HTTP 429` on one call that retried and succeeded moments later. Crawl4AI

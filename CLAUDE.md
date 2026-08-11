@@ -285,8 +285,27 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
   `ibkr_core_mcp/`, `tests/`, or the living docs cites one. (This paragraph previously named
   a single evidence file as "the only surviving cpapi-v1 text"; eight files contained it —
   a completeness claim that was itself wrong, in the paragraph warning about completeness
-  claims.) Three things to know before citing a source URL again:
+  claims.) **IBKR moved a second time, and this one changed the path, not the host (found
+  2026-08-11).** The endpoint prefix `docs/web-api/web-api-v-1-0-documentation/…` is superseded
+  by `docs/web-api/v1/…`, and the WebSocket segment `websockets/` is now `ws/`. 93 links were
+  repointed across the living docs, `client.py`, `streaming.py`, `test_client.py` and
+  `README.md`; each target was confirmed present in `llms.txt` before rewriting and then
+  live-fetched (72/72 real). Surviving old-prefix strings are prose warnings and `docs/plans/`
+  records, not links. **Cite the `v1/` form.**
 
+  Four things to know before citing a source URL again:
+
+  - **The HTML page cannot tell you whether a page exists — only the `.md` variant can.** The
+    site is JavaScript-rendered, so fetching the HTML of a real page and of a URL invented on
+    the spot returns **byte-identical empty output**. Appending `.md` discriminates cleanly
+    (~6,400 B for a real page vs ~1,000 B `# Page Not Found`), but *only on the `v1/` prefix* —
+    `.md` on the old prefix fails even for a page that genuinely exists. Always run a
+    deliberately-fabricated control URL in the same batch: it is the only proof your check can
+    still fail, and a check that cannot fail found "73 of 74 links broken" here on a parser bug.
+  - **`llms.txt` membership proves existence but its absence proves nothing.**
+    `docs/web-api/changelog` is real (11,686 B, confirmed live) yet is not in the index. When
+    the index is silent, `firecrawl_search` settles it — whole-web search is the one job the
+    local browser structurally cannot do.
   - The old URLs **still return HTTP 200** — they redirect to the new site's Introduction page
     and *silently drop the `#anchor`*. A link checker reports success while the reader lands
     on the wrong page. Never re-add a `cpapi-v1/#…` link; a 200 is not evidence it works.
@@ -298,7 +317,7 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is 576 B).
   - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
-    is the complete page index (469 unique .md URLs measured 2026-08-07; it said "517-page" from an earlier, unverified count). There is also an MCP server at
+    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There is also an MCP server at
     `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
     is gone: as of 2026-07-30 there are **four web tools, one job each, and no fallback

@@ -57,10 +57,10 @@ This library is built on official documented APIs. Any contribution touching API
 
 | API | Official reference |
 |---|---|
-| IBKR Client Portal API | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/introduction |
+| IBKR Client Portal API | https://www.interactivebrokers.com/docs/web-api/v1/introduction |
 | IBKR Flex Web Service | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm |
 | Flex error codes | https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm |
-| IBKR WebSocket streaming | https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/websockets/introduction |
+| IBKR WebSocket streaming | https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction |
 | Google Drive API v3 | https://developers.google.com/drive/api/reference/rest/v3 |
 | macOS LocalAuthentication | https://developer.apple.com/documentation/localauthentication |
 | Firecrawl API | https://docs.firecrawl.dev/api-reference/endpoint/scrape |

@@ -262,6 +262,8 @@ Ecosystem survey (web search, 2026-07-30) — background for §7 only, not load-
 claim above:
 
 - <https://mcavdar.com/blog/crawl4ai-in-action-real-world-use-cases-for-smarter-web-scraping>
+  — ⚠️ **unreachable as of 2026-08-11**: navigation times out at 60 s and the page returns
+  118 B. Kept as the record of what the 2026-07-30 survey read, not as a live link.
 - <https://mrscraper.com/blog/crawl4ai-modern-web-crawling-guide>
 - <https://47billion.com/blog/web-scraping-for-ai-pipelines-what-actually-works-in-2026/>
 

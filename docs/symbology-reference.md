@@ -115,7 +115,7 @@ round trip; the alternative costs a decision made on a price from another countr
   so every call silently returned `[]`. Identical in shape and cause to the
   `get_currency_pairs` defect fixed 2026-06-30. Fixed by unwrapping the `secdef` key.
 
-  Source: <https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id>
+  Source: <https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-the-security-definition-by-contract-id>
 
   **Live-verified 2026-07-28** against an authenticated gateway, first call:
   `get_secdef([12658199, 325209548, 195853874])` returned **3 rows, not `[]`**, the raw body

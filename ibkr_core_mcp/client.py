@@ -732,7 +732,7 @@ class IBKRClient:
         rests on the endpoint documentation alone. `tests/test_client_live.py` covers it
         when a gateway is available.
 
-        Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-the-security-definition-by-contract-id
                 (scraped 2026-07-28: "Returns a list of security definitions for the
                 given conids `GET /trsrv/secdef`", Response Object "secdef: array")
         Endpoint: GET /trsrv/secdef?conids=<comma-separated>
@@ -1403,7 +1403,7 @@ class IBKRClient:
         {"confirmed": False} to IBKR *before* re-raising — unlike the standalone
         reply_order(), which raises without ever contacting IBKR and leaves the
         order ambiguous on IBKR's side. This is a deliberate behavior change, not
-        a bug: see docs/plans/2026-07-06-order-reply-confirmation-design.md.
+        a bug: see docs/plans/archive/security-orders/2026-07-06-order-reply-confirmation-design.md.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/reply/{replyId}

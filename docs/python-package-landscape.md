@@ -11,7 +11,7 @@ Panel. Nothing below is assumed from memory.
 
 `plotly` was added to this package early on, never wired to any tool, and later
 **removed** for exactly that reason (`CHANGELOG.md`: "`plotly` removed from package
-dependencies — was never used"; `docs/plans/2026-06-27-publication-readiness.md`: "was
+dependencies — was never used"; `docs/plans/archive/core-buildout/2026-06-27-publication-readiness.md`: "was
 never used, no claudia code referenced it"). `execute()`'s return type was tightened
 from `tuple[str, Figure | None]` to `tuple[str, None]` at the same time, since every
 one of the 42+ tool handlers returned `None` for the figure slot.
@@ -55,8 +55,10 @@ DataFrame and builds the figure on its own side.
 
 **Recommendation:** none of these are missing gaps today, and the question is now
 narrower than it was. Charting is solved in `claudia_ui` with Bokeh via Panel. If a
-further chart is built (e.g. the equity-curve or P&L chart referenced as a "future" item
-in `docs/plans/2026-06-27-v2-architecture-plan.md:178`), **extend the existing Bokeh pane
+further chart is built (e.g. an equity-curve or P&L chart — listed as a "future" item in
+the v2 architecture plan, which was cancelled 2026-07-10 and deleted in the 2026-08-11
+plans cleanup; the surviving record of that decision is
+`docs/plans/2026-06-27-architecture-notes.md`), **extend the existing Bokeh pane
 rather than introducing a second charting library** — and build it in `claudia_ui`, since
 this package deliberately returns data, never figures. Adding a charting dependency
 *here* would repeat the original `plotly` mistake described above.
@@ -87,7 +89,7 @@ package's per-request tool-call pattern doesn't hit).
 | PyPortfolioOpt | Not installed | No portfolio-construction/optimization tool exists — current `claude_tools.py` handlers read/report on IBKR positions and analyze historical performance, they don't propose allocations. This is a genuine capability gap, not a duplicate of existing code. |
 
 **Recommendation:** skip Vectorbt/Backtrader (would require reopening the sandboxing
-design decision — see `docs/plans/2026-05-24-human-auth-order-security-plan.md` and
+design decision — see `docs/plans/archive/security-orders/2026-05-24-human-auth-order-security-plan.md` and
 the backtest subprocess-isolation history in memory) and skip Quantstats (metrics
 already covered, tear-sheet HTML has no viewer). **PyPortfolioOpt is the one real gap**
 in this category — flag it if/when a "suggest portfolio weights" or

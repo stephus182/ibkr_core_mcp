@@ -27,7 +27,7 @@ def mock_config(tmp_path, tmp_db):
 # socket.gethostbyname) against a real public hostname (example.com/wsj.com).
 # Discovered while adding _no_real_io below: unrelated to the 3 sleep/network
 # bugs that fixture was built to catch (see
-# docs/plans/2026-07-08-claude-tools-test-reorg-design.md), and pre-dates this
+# docs/plans/archive/testing-audits/2026-07-08-claude-tools-test-reorg-design.md), and pre-dates this
 # reorg. Mocking DNS resolution here would weaken coverage of security-critical
 # SSRF logic (see SECURITY.md § SSRF Prevention (Web Scraping)), so these are
 # exempted by name instead of having DNS mocked away.

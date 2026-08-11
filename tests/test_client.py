@@ -844,7 +844,7 @@ def test_get_secdef_unwraps_the_secdef_key(client):
     defect, in the same shape, as test_get_currency_pairs_handles_dict_response above.
     A method that always returns empty looks exactly like an instrument with no data.
 
-    Source: https://www.interactivebrokers.com/docs/web-api/web-api-v-1-0-documentation/endpoints/contract/search-the-security-definition-by-contract-id
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-the-security-definition-by-contract-id
     """
     mock_resp = MagicMock()
     mock_resp.status_code = 200

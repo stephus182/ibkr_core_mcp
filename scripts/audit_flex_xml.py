@@ -516,8 +516,8 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns a process exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC)
-    parser.add_argument("--json-out", type=Path, default=Path("docs/flex-xml-structure.json"))
-    parser.add_argument("--md-out", type=Path, default=Path("docs/flex-xml-structure-audit.md"))
+    parser.add_argument("--json-out", type=Path, default=Path("docs/audits/audit-evidence/flex-xml-structure.json"))
+    parser.add_argument("--md-out", type=Path, default=Path("docs/audits/flex-xml-structure-audit.md"))
     parser.add_argument("--schema-out", type=Path, default=Path("ibkr_core_mcp/flex_schema.py"))
     parser.add_argument(
         "--allow-shrink",
