@@ -99,6 +99,10 @@ def _run_alert(data: dict[str, Any]) -> None:
     detail_text = "\n".join(f"{k}: {v}" for k, v in details.items())
     disclaimer = data.get("disclaimer", "")
     confirm_label = data.get("confirm_label", "CONFIRM")
+    # Default is deliberately NOT "CANCEL": this button sits beside confirm_label, and on the
+    # cancel dialog "CANCEL" vs "CANCEL ORDER" meant abandon-vs-perform with the same first
+    # word (found live 2026-08-13). A missing key must not be able to recreate that collision.
+    abandon_label = data.get("abandon_label", "GO BACK")
     title = data.get("title", "LIVE ORDER CONFIRMATION")
     timeout_s = int(data.get("timeout_s", 60))
 
@@ -112,7 +116,7 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     # Buttons: first added = rightmost = NSAlertFirstButtonReturn (1000)
     alert.addButtonWithTitle_(confirm_label)  # right
-    alert.addButtonWithTitle_("CANCEL")  # left
+    alert.addButtonWithTitle_(abandon_label)  # left
 
     # No Return key on confirm (prevent accidental submission); Escape for cancel
     buttons = alert.buttons()

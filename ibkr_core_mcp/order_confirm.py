@@ -35,7 +35,7 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     """Gate 2 for place_order. Raises HumanAuthError if user does not confirm.
 
     Shows an AppKit colored dialog (green=BUY, red=SELL) with full order details,
-    a CANCEL button, and a SEND TO IBKR button. Auto-cancels after 60 seconds.
+    a DO NOT SEND button, and a SEND TO IBKR button. Auto-cancels after 60 seconds.
     Falls back to osascript if the AppKit subprocess fails; tkinter on non-macOS.
     Futures notional uses the _multiplier display field: price × qty × multiplier.
 
@@ -50,14 +50,22 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     price = order.get("price")
     tif = order.get("tif", order.get("timeInForce", "DAY"))
     multiplier = order.get("_multiplier")
-    price_str = f"${price}" if price is not None else "MARKET"
+    # Currency is displayed only when the caller established one, and always as an ISO
+    # code. Until 2026-08-13 this rendered f"${price}" and a hardcoded "USD": "$" is
+    # shared by USD/MXN/CAD/AUD/HKD/SGD, and this account holds EUR-denominated equities,
+    # so the last surface before an irreversible action asserted a currency nothing had
+    # established. A wrong-currency price is dangerous precisely because it reads as
+    # ordinary. No currency in the order means no currency shown — never a guess.
+    currency = str(order.get("_currency") or order.get("currency") or "").strip().upper()
+    ccy = f" {currency}" if currency else ""
+    price_str = f"{price}{ccy}" if price is not None else "MARKET"
     try:
         if price is not None and multiplier is not None:
             # Futures: notional = price × qty × multiplier
             notional = float(price) * float(qty) * float(multiplier)
-            total_str = f"${notional:,.2f} USD (×{multiplier:g} multiplier)"
+            total_str = f"{notional:,.2f}{ccy} (×{multiplier:g} multiplier)"
         elif price is not None:
-            total_str = f"${float(price) * float(qty):,.2f} USD"
+            total_str = f"{float(price) * float(qty):,.2f}{ccy}"
         else:
             total_str = "Market"
     except (TypeError, ValueError):
@@ -79,6 +87,7 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
             "and may result in real financial transactions that cannot be undone."
         ),
         confirm_label="SEND TO IBKR",
+        abandon_label="DO NOT SEND",
     )
 
 
@@ -101,6 +110,7 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
         },
         disclaimer="This will MODIFY a live order at Interactive Brokers.",
         confirm_label="MODIFY ORDER",
+        abandon_label="LEAVE UNCHANGED",
     )
 
 
@@ -122,6 +132,7 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         details=details,
         disclaimer="This will CANCEL a live order at Interactive Brokers.",
         confirm_label="CANCEL ORDER",
+        abandon_label="KEEP ORDER",
     )
 
 
@@ -136,7 +147,7 @@ def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | 
     `options` (IBKR's messageOptions, e.g. varying button wording like "Yes"/"No" vs.
     "Decline"/"Accept and Continue") is accepted for signature completeness only — it is
     NOT surfaced as actual dialog button labels. The dialog keeps this package's own
-    consistent confirm_label / cancel wording.
+    consistent confirm_label / abandon_label wording.
 
     HTML is stripped from `message` before display since the AppKit/tkinter/osascript
     dialogs are plain text and IBKR reply messages have been observed containing tags
@@ -153,6 +164,7 @@ def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | 
         details=details,
         disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
         confirm_label="CONFIRM REPLY",
+        abandon_label="DO NOT REPLY",
     )
 
 
@@ -198,32 +210,48 @@ def _extract_side(details: dict[str, Any]) -> str | None:
     return None
 
 
-def _show_confirm_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
+def _show_confirm_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
 
     macOS primary path: AppKit colored dialog (green BUY, red SELL, amber when the side
     is unknown) via subprocess.
     macOS fallback: osascript plain dialog if AppKit subprocess fails.
     Non-macOS: tkinter fallback.
+
+    `abandon_label` is a required parameter, not a default, because this renderer is shared
+    by all four Gate 2 dialogs and it used to hardcode "CANCEL" for the abandon button.
+    On the *cancel* dialog that produced "CANCEL ORDER" (perform it) beside "CANCEL"
+    (abandon it): two adjacent buttons, same first word, opposite meanings, on a live
+    order. Found by looking at the rendered dialog live on 2026-08-13 (B3) — no amount of
+    code reading had caught it. Making the caller state the label is what stops a future
+    dialog from silently inheriting a word that contradicts its own confirm button;
+    `test_no_gate2_dialog_offers_two_buttons_sharing_a_first_word` enforces it over the class.
     """
     if sys.platform == "darwin":
         side = _extract_side(details)
         try:
-            _show_appkit_dialog(title, details, disclaimer, confirm_label, side)
+            _show_appkit_dialog(title, details, disclaimer, confirm_label, side, abandon_label)
             return
         except HumanAuthError:
             raise  # user decision — do not fall back
         except Exception:
             pass  # AppKit subprocess failed — fall back to plain osascript
-        _show_osascript_dialog(title, details, disclaimer, confirm_label)
+        _show_osascript_dialog(title, details, disclaimer, confirm_label, abandon_label)
     elif tk is not None:
-        _show_tkinter_dialog(title, details, disclaimer, confirm_label)
+        _show_tkinter_dialog(title, details, disclaimer, confirm_label, abandon_label)
     else:
         raise HumanAuthError("No GUI dialog available: not on macOS and tkinter is not installed.")
 
 
 def _show_appkit_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, side: str | None
+    title: str,
+    details: dict[str, Any],
+    disclaimer: str,
+    confirm_label: str,
+    side: str | None,
+    abandon_label: str,
 ) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
@@ -244,6 +272,7 @@ def _show_appkit_dialog(
             "details": details,
             "disclaimer": disclaimer,
             "confirm_label": confirm_label,
+            "abandon_label": abandon_label,
             "side": side,
             "timeout_s": _DIALOG_TIMEOUT_S,
         }
@@ -268,11 +297,13 @@ def _show_appkit_dialog(
         raise HumanAuthError("Order cancelled by user")
 
 
-def _show_osascript_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
+def _show_osascript_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+) -> None:
     """Native macOS confirmation dialog via osascript.
 
-    Uses AppleScript 'display dialog' with caution icon, two buttons (CANCEL / confirm),
-    and a hard timeout. The default button is CANCEL so accidental Enter does nothing.
+    Uses AppleScript 'display dialog' with caution icon, two buttons (abandon / confirm),
+    and a hard timeout. The default button is the abandon one so accidental Enter does nothing.
 
     Source: https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_cmds.html#//apple_ref/doc/uid/TP40000983-CH216-SW12
     """
@@ -282,8 +313,8 @@ def _show_osascript_dialog(title: str, details: dict[str, Any], disclaimer: str,
     script = (
         f"set dlg to display dialog {_as_str(message)} "
         f"with title {_as_str(title)} "
-        f'buttons {{"CANCEL", {_as_str(confirm_label)}}} '
-        f'default button "CANCEL" '
+        f"buttons {{{_as_str(abandon_label)}, {_as_str(confirm_label)}}} "
+        f"default button {_as_str(abandon_label)} "
         f"giving up after {_DIALOG_TIMEOUT_S} "
         f"with icon caution\n"
         f"if gave up of dlg then\n"
@@ -303,7 +334,7 @@ def _show_osascript_dialog(title: str, details: dict[str, Any], disclaimer: str,
         raise HumanAuthError(f"Confirmation dialog failed: {exc}") from exc
 
     output = proc.stdout.strip()
-    if proc.returncode != 0 or output in ("", "timeout", "CANCEL"):
+    if proc.returncode != 0 or output in ("", "timeout", abandon_label):
         raise HumanAuthError("Order cancelled by user")
     if output != confirm_label:
         raise HumanAuthError(f"Unexpected dialog response: {output!r}")
@@ -315,7 +346,9 @@ def _as_str(text: str) -> str:
     return f'"{escaped}"'
 
 
-def _show_tkinter_dialog(title: str, details: dict[str, Any], disclaimer: str, confirm_label: str) -> None:
+def _show_tkinter_dialog(
+    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+) -> None:
     """Fallback tkinter dialog for non-macOS environments.
 
     Must be called from the main thread. Auto-cancels after _DIALOG_TIMEOUT_S seconds.
@@ -391,9 +424,9 @@ def _show_tkinter_dialog(title: str, details: dict[str, Any], disclaimer: str, c
         dialog.destroy()
         root.destroy()
 
-    tk.Button(btn_frame, text="CANCEL", command=on_cancel, width=12, bg="#bdc3c7", font=("Helvetica", 11)).pack(
-        side="left", padx=10
-    )
+    tk.Button(
+        btn_frame, text=abandon_label, command=on_cancel, width=16, bg="#bdc3c7", font=("Helvetica", 11)
+    ).pack(side="left", padx=10)
     tk.Button(
         btn_frame,
         text=confirm_label,

@@ -1,6 +1,8 @@
+import re
 import subprocess
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -67,6 +69,7 @@ def _dialog_args():
         details={"Symbol": "AAPL", "Action": "BUY"},
         disclaimer="Live order warning",
         confirm_label="SEND TO IBKR",
+        abandon_label="DO NOT SEND",
     )
 
 
@@ -161,7 +164,7 @@ def test_appkit_dialog_confirmed_does_not_raise():
     import ibkr_core_mcp.order_confirm as oc
 
     with patch.object(subprocess, "run", return_value=_appkit_proc("CONFIRMED\n")):
-        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
+        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
 
 
 def test_appkit_dialog_cancelled_raises_humanauth():
@@ -169,7 +172,7 @@ def test_appkit_dialog_cancelled_raises_humanauth():
 
     with patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")):
         with pytest.raises(HumanAuthError, match="cancelled by user"):
-            oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
+            oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
 
 
 def test_appkit_dialog_subprocess_failure_raises_runtimeerror():
@@ -178,7 +181,7 @@ def test_appkit_dialog_subprocess_failure_raises_runtimeerror():
 
     with patch.object(subprocess, "run", return_value=_appkit_proc("", returncode=1, stderr="ERROR: no AppKit")):
         with pytest.raises(RuntimeError, match="AppKit dialog failed"):
-            oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
+            oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
 
 
 def test_appkit_dialog_timeout_raises_humanauth():
@@ -186,7 +189,7 @@ def test_appkit_dialog_timeout_raises_humanauth():
 
     with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="dialog", timeout=70)):
         with pytest.raises(HumanAuthError, match="timed out"):
-            oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY")
+            oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
 
 
 # ---------------------------------------------------------------------------
@@ -376,3 +379,150 @@ def test_reply_dialog_has_no_side():
         oc.confirm_reply_dialog("r1", "Confirm this order?")
 
     assert mock_appkit.call_args.args[4] is None
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 button labels — the abandon button must never be confusable with the
+# confirm button. Found live 2026-08-13 (B3): the cancel dialog offered
+# "CANCEL ORDER" (perform the cancellation) beside "CANCEL" (abandon it) —
+# adjacent, same first word, opposite meaning, on a live order.
+#
+# Asserted over EVERY public Gate 2 dialog, not just the cancel one: the defect
+# is a shared renderer hardcoding a clause that is wrong for one caller, so the
+# control has to cover the class or it will pass again the next time a dialog
+# is added.
+# ---------------------------------------------------------------------------
+
+
+def _invoke_every_gate2_dialog():
+    """Yield (name, kwargs) for each public Gate 2 dialog, with the renderer mocked."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    cases = (
+        ("confirm_order_dialog", lambda: oc.confirm_order_dialog(
+            {"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0}, "U123")),
+        ("confirm_modify_dialog", lambda: oc.confirm_modify_dialog(
+            "8001", {"side": "SELL", "quantity": 2}, "U123")),
+        ("confirm_cancel_dialog", lambda: oc.confirm_cancel_dialog(
+            "8001", "U123", {"side": "BUY", "quantity": 1})),
+        ("confirm_reply_dialog", lambda: oc.confirm_reply_dialog("r-1", "some warning")),
+    )
+    for name, call in cases:
+        with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+            call()
+        yield name, mock_show.call_args.kwargs
+
+
+def test_every_gate2_dialog_passes_an_explicit_abandon_label():
+    for name, kwargs in _invoke_every_gate2_dialog():
+        assert kwargs.get("abandon_label"), (
+            f"{name} passes no abandon_label — the abandon button is hardcoded in each "
+            f"backend, so no caller can make it unambiguous"
+        )
+
+
+def test_no_gate2_dialog_offers_two_buttons_sharing_a_first_word():
+    for name, kwargs in _invoke_every_gate2_dialog():
+        confirm = str(kwargs.get("confirm_label", ""))
+        abandon = str(kwargs.get("abandon_label", ""))
+        assert confirm and abandon, f"{name} is missing a button label"
+        assert confirm.split()[0].upper() != abandon.split()[0].upper(), (
+            f"{name}: confirm={confirm!r} and abandon={abandon!r} begin with the same "
+            f"word — a mis-click inverts the outcome on a live order"
+        )
+        assert abandon.upper() != confirm.upper()
+        assert not confirm.upper().startswith(abandon.upper() + " "), (
+            f"{name}: abandon={abandon!r} is a prefix of confirm={confirm!r}"
+        )
+
+
+def test_abandon_label_reaches_the_appkit_subprocess_payload():
+    """The label must cross the process boundary, not just the mock.
+
+    _show_appkit_dialog renders in a subprocess fed by JSON on stdin. A label that
+    stopped at the Python call would leave the real button reading whatever
+    _order_dialog.py defaults to — the mock would still be satisfied.
+    """
+    import ibkr_core_mcp.order_confirm as oc
+
+    captured: dict[str, str] = {}
+
+    def fake_run(cmd, input=None, **kwargs):  # noqa: A002 - matches subprocess.run
+        captured["payload"] = input
+        return MagicMock(returncode=0, stdout="CONFIRMED", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=fake_run):
+        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "CANCEL ORDER", "BUY", "KEEP ORDER")
+
+    import json
+
+    sent = json.loads(captured["payload"])
+    assert sent["abandon_label"] == "KEEP ORDER"
+    assert sent["confirm_label"] == "CANCEL ORDER"
+
+
+def test_order_dialog_subprocess_never_defaults_abandon_to_the_confirm_word():
+    """A payload missing abandon_label must not fall back to 'CANCEL'.
+
+    _order_dialog.py runs standalone, so a caller that forgets the key must not be able
+    to recreate the CANCEL/CANCEL ORDER collision by omission.
+    """
+    src = (Path(__file__).parent.parent / "ibkr_core_mcp" / "_order_dialog.py").read_text()
+    assert 'data.get("abandon_label"' in src, "_order_dialog.py does not read abandon_label"
+    assert 'addButtonWithTitle_("CANCEL")' not in src, "abandon button is still hardcoded"
+    match = re.search(r'data\.get\("abandon_label",\s*"([^"]*)"\)', src)
+    assert match, "abandon_label default not found"
+    assert match.group(1).split()[0].upper() != "CANCEL", (
+        f"default abandon label {match.group(1)!r} starts with CANCEL — collides with 'CANCEL ORDER'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 currency — the dialog must never assert a currency nothing established.
+# Found 2026-08-13 (gap #24): price_str was f"${price}" and the total was
+# f"${...} USD", hardcoded, on the last human-readable surface before an
+# irreversible action, for an account that holds EUR-denominated equities.
+# "$" alone is shared by USD/MXN/CAD/AUD/HKD/SGD.
+# ---------------------------------------------------------------------------
+
+
+def _order_dialog_details(order: dict) -> str:
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        oc.confirm_order_dialog(order, "U123")
+    details = mock_show.call_args.kwargs["details"]
+    return " | ".join(f"{k}: {v}" for k, v in details.items())
+
+
+def test_gate2_does_not_assert_a_currency_when_the_order_carries_none():
+    rendered = _order_dialog_details(
+        {"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0}
+    )
+    assert "$" not in rendered, f"bare $ asserted with no currency established: {rendered}"
+    assert "USD" not in rendered, f"USD asserted with no currency established: {rendered}"
+
+
+def test_gate2_uses_the_orders_own_currency_when_it_is_provided():
+    rendered = _order_dialog_details(
+        {"ticker": "SAP", "side": "BUY", "quantity": 10, "price": 100.0, "_currency": "EUR"}
+    )
+    assert "EUR" in rendered, f"order currency EUR not shown: {rendered}"
+    assert "USD" not in rendered, f"USD asserted over an EUR order: {rendered}"
+    assert "$" not in rendered, f"bare $ rendered for a non-dollar currency: {rendered}"
+
+
+def test_gate2_renders_usd_as_an_iso_code_not_a_dollar_sign():
+    rendered = _order_dialog_details(
+        {"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0, "_currency": "USD"}
+    )
+    assert "USD" in rendered
+    assert "$" not in rendered, f"$ is shared by six currencies — use the ISO code: {rendered}"
+
+
+def test_gate2_futures_notional_does_not_assert_usd():
+    rendered = _order_dialog_details(
+        {"ticker": "ES", "side": "BUY", "quantity": 1, "price": 5000.0, "_multiplier": 50}
+    )
+    assert "USD" not in rendered, f"futures notional hardcodes USD: {rendered}"
+    assert "$" not in rendered

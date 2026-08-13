@@ -1,4 +1,6 @@
+import re as _re
 import sys
+from pathlib import Path as _Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -102,3 +104,41 @@ def test_require_touch_id_timeout(monkeypatch):
         mock_event_cls.return_value = mock_event
         with pytest.raises(HumanAuthError, match="timed out"):
             require_touch_id("Test order")
+
+
+# ---------------------------------------------------------------------------
+# Touch ID reason grammar (gap #25, found 2026-08-13 at all five call sites).
+#
+# macOS composes the prompt as "<App> is trying to " + localizedReason
+# (human_auth.py, evaluatePolicy_localizedReason_reply_). Every reason began with
+# the noun phrase "IBKR: ", producing "Python is trying to IBKR: Cancel order 8001."
+# Cosmetic in effect, but it is the Gate 1 biometric prompt — the surface whose whole
+# job is to state plainly what is about to happen.
+#
+# Scanned from source rather than by invoking the five client methods: this must cover
+# the CLASS, so a call site added later is caught without anyone remembering to
+# extend a fixture.
+# ---------------------------------------------------------------------------
+
+
+
+def _touch_id_reasons() -> list[str]:
+    src = (_Path(__file__).parent.parent / "ibkr_core_mcp" / "client.py").read_text()
+    return _re.findall(r'require_touch_id\(\s*f?"([^"]*)"', src)
+
+
+def test_touch_id_call_sites_are_discoverable():
+    reasons = _touch_id_reasons()
+    assert len(reasons) >= 5, f"expected the known Gate 1 call sites, found {reasons}"
+
+
+def test_every_touch_id_reason_completes_the_system_prompt_grammatically():
+    for reason in _touch_id_reasons():
+        rendered = f"Python is trying to {reason}."
+        assert not _re.match(r"^[A-Za-z]+:", reason), (
+            f"reason starts with a label prefix, rendering: {rendered!r}"
+        )
+        assert reason[:1].islower(), (
+            f"reason must begin with a lowercase verb completing 'is trying to', "
+            f"rendering: {rendered!r}"
+        )

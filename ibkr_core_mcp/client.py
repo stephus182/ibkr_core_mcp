@@ -1337,7 +1337,7 @@ class IBKRClient:
         symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
         side = order.get("side", "?")
         qty = order.get("quantity", "?")
-        require_touch_id(f"IBKR: Place order — {side} {qty} {symbol}")
+        require_touch_id(f"place an IBKR order — {side} {qty} {symbol}")
         confirm_order_dialog(order, account_id)
         # Strip display-only fields (underscore-prefixed, e.g. _companyName).
         # These carry Gate-2 dialog metadata and are not valid IBKR request fields.
@@ -1359,7 +1359,7 @@ class IBKRClient:
         _validate_account_id(account_id)
         _validate_order_id(order_id)
         self._ensure_accounts_initialized()
-        require_touch_id(f"IBKR: Modify order {order_id}")
+        require_touch_id(f"modify IBKR order {order_id}")
         confirm_modify_dialog(order_id, order, account_id)
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", order)
 
@@ -1380,7 +1380,7 @@ class IBKRClient:
         _validate_account_id(account_id)
         _validate_order_id(order_id)
         self._ensure_accounts_initialized()
-        require_touch_id(f"IBKR: Cancel order {order_id}")
+        require_touch_id(f"cancel IBKR order {order_id}")
         confirm_cancel_dialog(order_id, account_id, order_details)
         url = f"{self._base}/iserver/account/{account_id}/order/{order_id}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30))
@@ -1409,7 +1409,7 @@ class IBKRClient:
         """
         _validate_reply_id(reply_id)
         self._ensure_accounts_initialized()
-        require_touch_id(f"IBKR: Confirm order reply {reply_id}")
+        require_touch_id(f"confirm an IBKR order reply {reply_id}")
         confirm_reply_dialog(reply_id)
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
         return data if isinstance(data, list) else []
@@ -1438,7 +1438,7 @@ class IBKRClient:
         reply_id = entry["id"]
         message = " ".join(entry.get("message", []))
         options = entry.get("messageOptions")
-        require_touch_id(f"IBKR: Confirm order reply {reply_id}")
+        require_touch_id(f"confirm an IBKR order reply {reply_id}")
         try:
             confirm_reply_dialog(reply_id, message, options)
         except HumanAuthError:
