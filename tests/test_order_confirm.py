@@ -559,3 +559,15 @@ def test_confirm_order_dialog_omits_outside_rth_when_the_body_does_not_carry_it(
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_order_dialog(order, "U1234567")
     assert "Outside RTH" not in mock_show.call_args.kwargs["details"]
+
+
+def test_confirm_order_dialog_omits_outside_rth_when_the_key_is_present_but_not_a_bool():
+    """Review 2026-09-04 #4: a present-but-None key must not render as 'No' — the dialog
+    claims nothing it was not given a real value for."""
+    from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+    order = {"ticker": "ES", "side": "BUY", "quantity": 1, "orderType": "STP",
+             "price": 7725.0, "tif": "GTC", "outsideRTH": None}
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_order_dialog(order, "U1234567")
+    assert "Outside RTH" not in mock_show.call_args.kwargs["details"]

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from .conftest import assert_tool_failed
@@ -367,3 +369,23 @@ def test_get_live_orders_still_reports_a_genuine_empty_list(toolkit):
     text, _ = toolkit.execute("get_live_orders", {})
 
     assert "No open orders." in text
+
+
+def test_execute_get_live_orders_reports_outside_rth_in_three_states(toolkit):
+    """2026-09-04: the live-orders row carries `outsideRTH` (undocumented) — measured False
+    on a stock GTC limit and None on an ES futures limit. The model must be able to answer
+    "is my stop active overnight?" from the tool, and an unreported attribute must read as
+    not reported, never as No."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 1, "ticker": "ES", "side": "BUY", "totalSize": 1, "price": 7725.0,
+         "status": "Submitted", "timeInForce": "GTC", "outsideRTH": True},
+        {"orderId": 2, "ticker": "AAPL", "side": "BUY", "totalSize": 1, "price": 150.0,
+         "status": "Submitted", "timeInForce": "GTC", "outsideRTH": False},
+        {"orderId": 3, "ticker": "ES", "side": "BUY", "totalSize": 1, "price": 7660.0,
+         "status": "Submitted", "timeInForce": "GTC", "outsideRTH": None},
+    ]
+    text, _ = toolkit.execute("get_live_orders", {})
+    lines = {int(re.search(r"orderId=(\d+)", ln).group(1)): ln for ln in text.splitlines() if "orderId=" in ln}
+    assert "outsideRTH=yes" in lines[1]
+    assert "outsideRTH=no" in lines[2]
+    assert "outsideRTH=not-reported" in lines[3]

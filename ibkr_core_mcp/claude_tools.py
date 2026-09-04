@@ -1886,9 +1886,14 @@ class ClaudeToolkit:
                 origin = f"API (clientId={client_id})"
             else:
                 origin = "EXTERNAL (mobile/TWS/web portal) — read-only via API"
+            # outsideRTH decides when a stop on a US future can trigger. The row carries
+            # it undocumented — measured 2026-09-04: False on a stock GTC limit, None on an
+            # ES futures limit — so three states, and None must read as not reported.
+            rth = o.get("outsideRTH")
+            rth_str = "not-reported" if not isinstance(rth, bool) else ("yes" if rth else "no")
             line = (
                 f"- orderId={o.get('orderId', '?')} {ticker} {side} {qty} @ {price} "
-                f"[{status}] TIF={tif} origin={origin}"
+                f"[{status}] TIF={tif} outsideRTH={rth_str} origin={origin}"
             )
             if order_ref and not order_ref.startswith("CLAUDIA-"):
                 line += f" ref={order_ref}"

@@ -84,8 +84,8 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     # the last screen before the send. Shown only when the caller sent it — an absent
     # attribute means IBKR's default applies, and the dialog claims nothing it was not
     # given (2026-09-04).
-    if "outsideRTH" in order:
-        details["Outside RTH"] = "Yes" if order.get("outsideRTH") else "No"
+    if isinstance(order.get("outsideRTH"), bool):  # a present None is not a value
+        details["Outside RTH"] = "Yes" if order["outsideRTH"] else "No"
     details["Total (est.)"] = total_str
     _show_confirm_dialog(
         title="⚠  LIVE ORDER CONFIRMATION",
@@ -102,8 +102,11 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
 def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str) -> None:
     """Gate 2 for modify_order. Raises HumanAuthError if the user does not confirm.
 
-    `order` is IBKR's own live-order dict, forwarded verbatim as display detail. Note
-    it keys the side as `side`, not the `Action` that confirm_order_dialog builds —
+    `order` is whatever the caller dispatches — from claudia_ui it is the fresh replacement
+    body built in `_execute_modify_order_core` (so an `outsideRTH` it carries shows raw, as
+    `outsideRTH: True`, alongside `orderType`/`tif`); from other callers it may be IBKR's own
+    live-order dict. Forwarded verbatim as display detail. Note it keys the side as `side`,
+    not the `Action` that confirm_order_dialog builds —
     `_extract_side` reads both, which is what makes the banner colour correct here.
     Before that it read `Action` alone, and every SELL modify rendered green.
 
