@@ -37,7 +37,8 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     Shows an AppKit colored dialog (green=BUY, red=SELL) with full order details,
     a DO NOT SEND button, and a SEND TO IBKR button. Auto-cancels after 60 seconds.
     Falls back to osascript if the AppKit subprocess fails; tkinter on non-macOS.
-    Futures notional uses the _multiplier display field: price × qty × multiplier.
+    Futures notional uses the _multiplier display field: price × qty × multiplier. When the
+    caller sets _multiplier_unknown instead, no number is printed at all (2026-09-04).
 
     Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
     """
@@ -60,7 +61,12 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     ccy = f" {currency}" if currency else ""
     price_str = f"{price}{ccy}" if price is not None else "MARKET"
     try:
-        if price is not None and multiplier is not None:
+        if order.get("_multiplier_unknown"):
+            # A futures order whose multiplier the caller could not learn. price × qty here
+            # is not an estimate, it is wrong by the multiplier — live 2026-09-04 it printed
+            # 7,735.00 for one ES contract standing for 386,750 USD. Say so instead.
+            total_str = "— (contract multiplier unknown; not price × quantity)"
+        elif price is not None and multiplier is not None:
             # Futures: notional = price × qty × multiplier
             notional = float(price) * float(qty) * float(multiplier)
             total_str = f"{notional:,.2f}{ccy} (×{multiplier:g} multiplier)"

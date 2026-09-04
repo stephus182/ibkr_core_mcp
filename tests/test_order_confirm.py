@@ -571,3 +571,38 @@ def test_confirm_order_dialog_omits_outside_rth_when_the_key_is_present_but_not_
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_order_dialog(order, "U1234567")
     assert "Outside RTH" not in mock_show.call_args.kwargs["details"]
+
+
+# ---------------------------------------------------------------------------
+# Futures notional (2026-09-04). Live: Gate 2 showed 'Total (est.): 7,735.00' for ONE ES
+# contract — price × qty with no multiplier, 50× short of the 386,750 USD it stood for.
+# The multiplier now arrives as _multiplier when known; when the caller could not learn
+# it, _multiplier_unknown=True and the dialog must refuse to print a number.
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_order_dialog_futures_notional_uses_the_multiplier_and_currency():
+    """price × qty × multiplier, with the ISO currency the caller established."""
+    from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+    order = {"ticker": "ES", "_companyName": "ESU6 · expires 2026-09-18 · ×50", "side": "BUY",
+             "quantity": 1, "orderType": "STP", "price": 7735.0, "tif": "GTC",
+             "_multiplier": 50.0, "_currency": "USD"}
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_order_dialog(order, "U1")
+    details = mock_show.call_args.kwargs["details"]
+    assert details["Total (est.)"] == "386,750.00 USD (×50 multiplier)"
+    assert "ESU6" in details["Symbol"]
+
+
+def test_confirm_order_dialog_refuses_a_notional_when_the_multiplier_is_unknown():
+    """No multiplier on a futures order → no number, an honest dash and the reason."""
+    from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+    order = {"ticker": "ES", "side": "BUY", "quantity": 1, "orderType": "STP",
+             "price": 7735.0, "tif": "GTC", "_multiplier_unknown": True}
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_order_dialog(order, "U1")
+    total = mock_show.call_args.kwargs["details"]["Total (est.)"]
+    assert "7,735.00" not in total
+    assert "multiplier unknown" in total.lower()
