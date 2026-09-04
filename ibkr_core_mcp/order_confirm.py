@@ -70,18 +70,26 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
             total_str = "Market"
     except (TypeError, ValueError):
         total_str = "—"
+    details = {
+        "Account": account_id,
+        "Action": side,
+        "Symbol": symbol_str,
+        "Quantity": str(qty),
+        "Order Type": order_type,
+        "Price": price_str,
+        "TIF": tif,
+    }
+    # The outside-RTH attribute decides WHEN a stop on a US future can trigger (IBKR
+    # simulates those stops and fires them only in RTH unless it is set), so it belongs on
+    # the last screen before the send. Shown only when the caller sent it — an absent
+    # attribute means IBKR's default applies, and the dialog claims nothing it was not
+    # given (2026-09-04).
+    if "outsideRTH" in order:
+        details["Outside RTH"] = "Yes" if order.get("outsideRTH") else "No"
+    details["Total (est.)"] = total_str
     _show_confirm_dialog(
         title="⚠  LIVE ORDER CONFIRMATION",
-        details={
-            "Account": account_id,
-            "Action": side,
-            "Symbol": symbol_str,
-            "Quantity": str(qty),
-            "Order Type": order_type,
-            "Price": price_str,
-            "TIF": tif,
-            "Total (est.)": total_str,
-        },
+        details=details,
         disclaimer=(
             "This is a LIVE order. It will be sent to Interactive Brokers "
             "and may result in real financial transactions that cannot be undone."

@@ -526,3 +526,36 @@ def test_gate2_futures_notional_does_not_assert_usd():
     )
     assert "USD" not in rendered, f"futures notional hardcodes USD: {rendered}"
     assert "$" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# outsideRTH row (2026-09-04) — the attribute that decides when a futures stop can fire
+# belongs in the human's view. Shown whenever the body carries it, Yes/No verbatim; absent
+# when the caller sent nothing (IBKR's default applies and nothing is claimed).
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_order_dialog_shows_outside_rth_when_the_body_carries_it():
+    """True → 'Yes', False → 'No', keyed 'Outside RTH', placed after TIF."""
+    from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+    for value, shown in ((True, "Yes"), (False, "No")):
+        order = {"ticker": "ES", "side": "BUY", "quantity": 1, "orderType": "STP",
+                 "price": 7725.0, "tif": "GTC", "outsideRTH": value}
+        with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+            confirm_order_dialog(order, "U1234567")
+        details = mock_show.call_args.kwargs["details"]
+        assert details["Outside RTH"] == shown
+        keys = list(details)
+        assert keys.index("Outside RTH") == keys.index("TIF") + 1
+
+
+def test_confirm_order_dialog_omits_outside_rth_when_the_body_does_not_carry_it():
+    """No attribute sent → no row: the dialog must not claim a value nobody set."""
+    from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT",
+             "price": 150.0, "tif": "DAY"}
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_order_dialog(order, "U1234567")
+    assert "Outside RTH" not in mock_show.call_args.kwargs["details"]
