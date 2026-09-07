@@ -773,6 +773,16 @@ stripped).
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
+**One ticket per call.** This method wraps the single `order` dict as `{"orders": [order]}`.
+IBKR's endpoint takes an *array* — "Only one order ticket object may be submitted per request,
+unless constructing a bracket" — where a bracket is a parent carrying `cOID` plus children
+carrying `parentId` equal to it, held by IBKR until the parent fills. That shape is **not
+reachable through this method** (nor through `get_order_preview()`, which wraps one dict the
+same way); a bracket needs its own method that shows both legs on Gate 2. Documented
+2026-09-06, tracked in claudia_ui as Known Gaps #36.
+Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+        https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+
 ### `modify_order(account_id, order_id, order) -> dict`
 Modify an existing order after both security gates pass.
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`
