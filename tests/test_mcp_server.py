@@ -240,9 +240,9 @@ async def test_stream_loop_retry_on_error():
     with (
         patch("ibkr_core_mcp.mcp_server._stream_loop", side_effect=flaky_loop),
         patch("asyncio.sleep", new=AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
     ):
-        with pytest.raises(asyncio.CancelledError):
-            await _stream_loop_with_retry(MagicMock(), MagicMock())
+        await _stream_loop_with_retry(MagicMock(), MagicMock())
 
     assert call_count == 2
 
@@ -258,9 +258,11 @@ async def test_stream_loop_cancelled_propagates():
     async def always_cancel(toolkit, store):
         raise asyncio.CancelledError
 
-    with patch("ibkr_core_mcp.mcp_server._stream_loop", side_effect=always_cancel):
-        with pytest.raises(asyncio.CancelledError):
-            await _stream_loop_with_retry(MagicMock(), MagicMock())
+    with (
+        patch("ibkr_core_mcp.mcp_server._stream_loop", side_effect=always_cancel),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _stream_loop_with_retry(MagicMock(), MagicMock())
 
 
 # ── _stream_loop — dispatch on tagged union (str/spl/smd) ────────────────────

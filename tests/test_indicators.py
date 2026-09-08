@@ -222,5 +222,5 @@ def test_add_all_preserves_ohlcv(ohlcv):
     from ibkr_core_mcp import indicators
 
     result = indicators.add_all(ohlcv)
-    assert set(["open", "high", "low", "close", "volume"]).issubset(set(result.columns))
+    assert {"open", "high", "low", "close", "volume"}.issubset(set(result.columns))
     assert len(result) == len(ohlcv)

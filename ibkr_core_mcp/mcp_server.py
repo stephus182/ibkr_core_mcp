@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -56,7 +57,7 @@ _GET_ALERTS_DEF: dict[str, Any] = {
     },
 }
 
-_ALL_TOOL_DEFS: list[dict[str, Any]] = list(TOOL_DEFINITIONS) + [_ADD_ALERT_DEF, _GET_ALERTS_DEF]
+_ALL_TOOL_DEFS: list[dict[str, Any]] = [*TOOL_DEFINITIONS, _ADD_ALERT_DEF, _GET_ALERTS_DEF]
 _EXISTING_TOOL_NAMES: frozenset[str] = frozenset(str(t["name"]) for t in TOOL_DEFINITIONS)
 
 
@@ -220,10 +221,8 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
             await uv_task
         finally:
             stream_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await stream_task
-            except asyncio.CancelledError:
-                pass
     else:
         await uv_task
 

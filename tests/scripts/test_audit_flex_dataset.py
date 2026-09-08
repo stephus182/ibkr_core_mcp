@@ -57,7 +57,7 @@ def test_gate_rejects_an_unregistered_check_id():
     """A typo'd or unlisted id must fail loudly, not quietly join the tally."""
     gate = audit_flex_dataset.Gate(expected=frozenset({"a."}))
 
-    with pytest.raises(KeyError, match="zz."):
+    with pytest.raises(KeyError, match=r"zz."):
         gate.check("zz. never registered", True)
 
 
@@ -66,7 +66,7 @@ def test_gate_rejects_a_duplicate_non_family_check_id():
     gate = audit_flex_dataset.Gate(expected=frozenset({"a."}))
     gate.check("a. first", True)
 
-    with pytest.raises(ValueError, match="a."):
+    with pytest.raises(ValueError, match=r"a."):
         gate.check("a. second, different check", True)
 
 
@@ -148,7 +148,7 @@ def test_check_15_fails_when_the_source_yielded_no_attributes(built, tmp_path, c
     Asserted on check 15 by name: an empty source fails many checks, so `rc == 1` would
     pass even with the vacuous-truth hole reopened.
     """
-    src, db = built
+    _src, db = built
     bare = tmp_path / "bare"
     bare.mkdir()
 

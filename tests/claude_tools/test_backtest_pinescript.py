@@ -43,7 +43,7 @@ def test_execute_run_backtest_tool(toolkit):
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = df
     toolkit._store.save_backtest.return_value = 1
-    text, fig = toolkit.execute(
+    text, _fig = toolkit.execute(
         "run_backtest",
         {
             "code": "df['signal'] = 1",
@@ -60,7 +60,7 @@ def test_execute_run_backtest_tool(toolkit):
 
 
 def test_execute_generate_pinescript_tool(toolkit):
-    text, fig = toolkit.execute("generate_pinescript", {"symbol": "AAPL", "indicators": ["rsi", "macd"]})
+    text, _fig = toolkit.execute("generate_pinescript", {"symbol": "AAPL", "indicators": ["rsi", "macd"]})
     assert "//@version=5" in text
 
 

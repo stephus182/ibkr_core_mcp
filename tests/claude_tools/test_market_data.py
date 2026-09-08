@@ -19,7 +19,7 @@ def test_execute_check_cache_hit(toolkit):
 
 def test_execute_check_cache_miss(toolkit):
     toolkit._cache.check.return_value = False
-    text, fig = toolkit.execute(
+    text, _fig = toolkit.execute(
         "check_cache", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
     )
     assert "MISS" in text
@@ -105,7 +105,7 @@ def test_execute_get_market_snapshot_invalid_conid_skipped(toolkit):
         {"name": "APPLE INC", "assetClass": "STK", "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
     ]
     toolkit._client.get_market_snapshot.return_value = []
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL"]})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL"]})
     assert "Could not resolve" in text
     toolkit._client.get_market_snapshot.assert_not_called()
 
@@ -121,7 +121,7 @@ def test_execute_get_market_snapshot_fut_uses_futures_endpoint_not_search(toolki
         {"symbol": "ES", "conid": 222, "expirationDate": 20260619},
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 222, "31": "5800.0", "6509": "R"}]
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
     toolkit._client.search_contract.assert_not_called()
     toolkit._client.get_market_snapshot.assert_called_once_with([222])
     assert "5800.0" in text
@@ -129,7 +129,7 @@ def test_execute_get_market_snapshot_fut_uses_futures_endpoint_not_search(toolki
 
 def test_execute_get_market_snapshot_fut_no_contracts_found(toolkit):
     toolkit._client.get_futures.return_value = []
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ZZFUT"], "sec_type": "FUT"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ZZFUT"], "sec_type": "FUT"})
     assert "Could not resolve" in text
     toolkit._client.get_market_snapshot.assert_not_called()
 
@@ -154,7 +154,7 @@ def test_execute_get_market_snapshot_exchange_filter_selects_listing(toolkit):
         }
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 2, "31": "700.0", "6509": "D"}]
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ASML"], "exchange": "AMS"})
     toolkit._client.get_market_snapshot.assert_called_once_with([2])
     assert "700.0" in text
 
@@ -171,7 +171,7 @@ def test_execute_get_market_snapshot_exchange_filter_no_match_asks_instead_of_su
     toolkit._client.get_stocks.return_value = [
         {"name": "GENERAL ELECTRIC", "assetClass": "STK", "contracts": [{"conid": 1, "exchange": "NYSE", "isUS": True}]}
     ]
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["GE"], "exchange": "NONEXISTENT"})
     toolkit._client.get_market_snapshot.assert_not_called()
     assert "no listing on NONEXISTENT" in text
     assert "NYSE" in text
@@ -306,7 +306,7 @@ def test_ambiguity_reaches_the_user_and_no_price_is_fetched(toolkit):
         },
     ]
 
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
 
     toolkit._client.get_market_snapshot.assert_not_called()
     assert "no US listing" in text
@@ -320,7 +320,7 @@ def test_snapshot_always_states_the_currency(toolkit):
     toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 12658199, "31": "95.0", "6509": "R"}]
 
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
 
     assert '"_currency": "USD"' in text
 
@@ -334,7 +334,7 @@ def test_snapshot_says_unknown_rather_than_omitting_the_currency(toolkit):
     toolkit._client.get_secdef_info.side_effect = IBKRAPIError("boom")
     toolkit._client.get_market_snapshot.return_value = [{"conid": 12658199, "31": "95.0", "6509": "R"}]
 
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
 
     assert '"_currency": "UNKNOWN"' in text
 
@@ -350,7 +350,7 @@ def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit
         {"symbol": "EUR.JPY", "conid": 28201823, "ccyPair": "JPY"},
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 12087792, "31": "1.0850", "6509": "R"}]
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["EUR.USD"], "sec_type": "CASH"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["EUR.USD"], "sec_type": "CASH"})
     toolkit._client.get_currency_pairs.assert_called_once_with("EUR")
     toolkit._client.search_contract.assert_not_called()
     toolkit._client.get_market_snapshot.assert_called_once_with([12087792])
@@ -358,7 +358,7 @@ def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit
 
 
 def test_execute_get_market_snapshot_cash_invalid_format_rejected(toolkit):
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["EURUSD"], "sec_type": "CASH"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["EURUSD"], "sec_type": "CASH"})
     assert "Could not resolve" in text
     toolkit._client.get_currency_pairs.assert_not_called()
     toolkit._client.get_market_snapshot.assert_not_called()
@@ -368,7 +368,7 @@ def test_execute_get_market_snapshot_cash_pair_not_found(toolkit):
     toolkit._client.get_currency_pairs.return_value = [
         {"symbol": "EUR.JPY", "conid": 28201823, "ccyPair": "JPY"},
     ]
-    text, fig = toolkit.execute("get_market_snapshot", {"symbols": ["EUR.USD"], "sec_type": "CASH"})
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["EUR.USD"], "sec_type": "CASH"})
     assert "Could not resolve" in text
     toolkit._client.get_market_snapshot.assert_not_called()
 
@@ -406,7 +406,7 @@ def test_fetch_market_data_live_path(toolkit):
     ]
     toolkit._client.get_market_history_paginated.return_value = {"data": data_rows}
 
-    text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
+    text, _fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "AAPL" in text
     assert "IBKR" in text
     toolkit._cache.save.assert_called_once()
@@ -416,7 +416,7 @@ def test_fetch_market_data_no_contract(toolkit):
     toolkit._cache.check.return_value = False
     # STK resolves via /trsrv/stocks since 2026-07-28, not /iserver/secdef/search.
     toolkit._client.get_stocks.return_value = []
-    text, fig = toolkit.execute("fetch_market_data", {"symbol": "FAKE", "period": "1Y", "bar": "1d"})
+    text, _fig = toolkit.execute("fetch_market_data", {"symbol": "FAKE", "period": "1Y", "bar": "1d"})
     assert "Could not resolve conid" in text
 
 
@@ -426,7 +426,7 @@ def test_fetch_market_data_empty_data(toolkit):
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_market_history_paginated.return_value = {"data": []}
     with patch("time.sleep"):
-        text, fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
+        text, _fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "no data" in text.lower()
 
 

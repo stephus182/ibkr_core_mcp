@@ -36,6 +36,7 @@ Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-av
 
 from __future__ import annotations
 
+import contextlib
 import json
 from unittest.mock import MagicMock
 
@@ -80,10 +81,8 @@ def live_toolkit(live_config):
     # Warm up the brokerage session — some write endpoints (alerts, orders) return
     # HTTP 403 without this initialisation call.
     # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts.md
-    try:
+    with contextlib.suppress(Exception):
         client.get_accounts()
-    except Exception:
-        pass
     return ClaudeToolkit(client, MagicMock(), MagicMock(), live_config)
 
 
@@ -128,10 +127,8 @@ def _delete_safe(toolkit, alert_id: str) -> None:
     """Delete an alert; silently ignore errors so cleanup never masks a test failure."""
     if not alert_id:
         return
-    try:
+    with contextlib.suppress(Exception):
         toolkit.execute("delete_alert", {"alert_id": alert_id})
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------

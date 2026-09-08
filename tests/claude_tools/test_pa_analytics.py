@@ -24,7 +24,7 @@ def test_execute_get_analytics_tool(toolkit):
     )
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = df
-    text, fig = toolkit.execute(
+    text, _fig = toolkit.execute(
         "get_analytics", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
     )
     assert "sharpe" in text.lower() or "Sharpe" in text

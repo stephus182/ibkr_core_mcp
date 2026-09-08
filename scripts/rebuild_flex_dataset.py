@@ -34,11 +34,11 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from audit_flex_dataset import run_gate  # noqa: E402
+from audit_flex_dataset import run_gate
 
-from ibkr_core_mcp.flex_import import FlexImportError, ParsedStatement, parse_statement  # noqa: E402
-from ibkr_core_mcp.flex_schema import ELEMENTS  # noqa: E402
-from ibkr_core_mcp.flex_store import create_flex_tables, upsert_flex_rows  # noqa: E402
+from ibkr_core_mcp.flex_import import FlexImportError, ParsedStatement, parse_statement
+from ibkr_core_mcp.flex_schema import ELEMENTS
+from ibkr_core_mcp.flex_store import create_flex_tables, upsert_flex_rows
 
 DEFAULT_SRC = Path.home() / ".ibkr_core" / "flex_archive"
 DEFAULT_DB = Path.home() / ".ibkr_core" / "store.db"

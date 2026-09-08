@@ -35,7 +35,7 @@ def test_preview_order_lmt_includes_price(toolkit):
         "initMarginChange": "500",
         "maintMarginChange": "300",
     }
-    text, fig = toolkit.execute(
+    text, _fig = toolkit.execute(
         "preview_order",
         {
             "symbol": "AAPL",
@@ -252,7 +252,7 @@ def test_diagnose_orders_shows_filtered_status(toolkit):
             }
         ]
     }
-    text, fig = toolkit.execute("diagnose_orders", {})
+    text, _fig = toolkit.execute("diagnose_orders", {})
     assert "FILTERED" in text
 
 
@@ -271,7 +271,7 @@ def test_execute_get_live_orders_labels_claudia_staged_via_order_ref(toolkit):
             "order_ref": "CLAUDIA-1783692527147",
         },
     ]
-    text, fig = toolkit.execute("get_live_orders", {})
+    text, _fig = toolkit.execute("get_live_orders", {})
     assert "ClaudIA-staged" in text
     assert "EXTERNAL" not in text
 
@@ -290,7 +290,7 @@ def test_execute_get_live_orders_still_falls_back_to_external_without_order_ref(
             "clientId": 0,
         },
     ]
-    text, fig = toolkit.execute("get_live_orders", {})
+    text, _fig = toolkit.execute("get_live_orders", {})
     assert "EXTERNAL" in text
 
 
@@ -311,7 +311,7 @@ def test_diagnose_orders_labels_claudia_staged_via_order_ref(toolkit):
             },
         ]
     }
-    text, fig = toolkit.execute("diagnose_orders", {})
+    text, _fig = toolkit.execute("diagnose_orders", {})
     assert "ClaudIA-staged" in text
 
 

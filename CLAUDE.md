@@ -68,6 +68,8 @@ reasons. The mocks were weaker than the dependency each time (a fake seeder scor
 ```bash
 ruff check .              # lint — must be clean
 ruff format --check .     # formatting — must be clean
+# The ruff rule set (`[tool.ruff.lint]` in pyproject.toml) is identical to claudia_ui's,
+# aligned 2026-09-08 — change it in both repos or in neither.
 mypy                      # type check — must be clean (files= covers both ibkr_core_mcp/ and tests/)
 ```
 

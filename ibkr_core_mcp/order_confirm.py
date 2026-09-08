@@ -253,8 +253,8 @@ def _show_confirm_dialog(
             return
         except HumanAuthError:
             raise  # user decision — do not fall back
-        except Exception:
-            pass  # AppKit subprocess failed — fall back to plain osascript
+        except Exception:  # noqa: S110 - AppKit subprocess failed; fall back to plain osascript
+            pass
         _show_osascript_dialog(title, details, disclaimer, confirm_label, abandon_label)
     elif tk is not None:
         _show_tkinter_dialog(title, details, disclaimer, confirm_label, abandon_label)

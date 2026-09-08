@@ -1903,10 +1903,7 @@ class ClaudeToolkit:
     def _diagnose_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return the raw unfiltered orders response to diagnose empty results."""
         raw = self._client.get_orders_raw()
-        if isinstance(raw, dict):
-            orders = raw.get("orders", raw)
-        else:
-            orders = raw
+        orders = raw.get("orders", raw) if isinstance(raw, dict) else raw
         if not isinstance(orders, list):
             return (
                 f"Unexpected response shape — not a list.\n"
@@ -2665,7 +2662,7 @@ class ClaudeToolkit:
         if sec_type == "CASH":
             if "." not in sym:
                 return _Resolved(0, None, f"FX pair {sym} must be in 'BASE.QUOTE' format (e.g. 'EUR.USD').")
-            base, _, quote = sym.partition(".")
+            base, _, _quote = sym.partition(".")
             pairs = self._client.get_currency_pairs(base)
             if not pairs:
                 return _Resolved(0, None, f"No FX pairs found for base currency {base}.")

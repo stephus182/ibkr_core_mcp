@@ -286,7 +286,7 @@ class FlexQueryClient:
         except sqlite3.Error as exc:
             log.error("flex archive: database failure storing %s: %s", src_file, exc)
             result = FlexArchiveResult(False, src_file, {}, "database", str(exc))
-        except Exception as exc:  # noqa: BLE001 - never fail a completed trade sync
+        except Exception as exc:  # never fail a completed trade sync
             log.error("flex archive: unexpected failure storing %s: %s", src_file, exc, exc_info=True)
             result = FlexArchiveResult(False, src_file, {}, "unexpected", str(exc))
 

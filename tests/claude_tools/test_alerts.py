@@ -31,7 +31,7 @@ def test_execute_get_alerts_returns_json(toolkit):
 def test_execute_create_price_alert_resolves_symbol(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.create_alert.return_value = {"orderId": 42, "alertName": "AAPL >= 200"}
-    text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
+    _text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
     # STK resolves via /trsrv/stocks since 2026-07-28 (the conftest fixture supplies a
     # single US listing, conid 265598); /iserver/secdef/search must not be consulted.
     toolkit._client.get_stocks.assert_called_once_with(["AAPL"])
@@ -78,7 +78,7 @@ def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
     toolkit._client.get_stocks.return_value = [
         {"name": "APPLE INC", "assetClass": "STK", "contracts": [{"conid": "N/A", "exchange": "NASDAQ", "isUS": True}]}
     ]
-    text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
+    text, _fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 200.0})
     assert "conid" in text.lower()
     toolkit._client.create_alert.assert_not_called()
 
@@ -87,7 +87,7 @@ def test_execute_create_price_alert_no_contract(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     # STK resolves via /trsrv/stocks since 2026-07-28, not /iserver/secdef/search.
     toolkit._client.get_stocks.return_value = []
-    text, fig = toolkit.execute("create_price_alert", {"symbol": "FAKE", "operator": "<=", "price": 50.0})
+    text, _fig = toolkit.execute("create_price_alert", {"symbol": "FAKE", "operator": "<=", "price": 50.0})
     assert "Could not resolve conid" in text or "No" in text
     toolkit._client.create_alert.assert_not_called()
 
@@ -104,7 +104,7 @@ def test_execute_create_price_alert_custom_name(toolkit):
 def test_execute_delete_alert(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.delete_alert.return_value = {"success": True}
-    text, fig = toolkit.execute("delete_alert", {"alert_id": "42"})
+    _text, fig = toolkit.execute("delete_alert", {"alert_id": "42"})
     toolkit._client.delete_alert.assert_called_once_with("U123", "42")
     assert fig is None
 

@@ -99,9 +99,8 @@ def flex_table_ddl(tag: str) -> list[str]:
     if tag == "Trade":
         # 1:1 with execution_key in the whole archive; a violation means two different
         # executions claimed one IBKR tradeID, which is worth failing loudly on.
-        statements.append(  # noqa: S608 - identifiers come from the generated schema
-            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_trade_id ON {table}(trade_id)"
-        )
+        # identifiers come from the generated schema, never from input
+        statements.append(f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_trade_id ON {table}(trade_id)")
         statements.append(f"CREATE INDEX IF NOT EXISTS idx_{table}_ib_exec_id ON {table}(ib_exec_id)")
     if table not in _UNINDEXED_TABLES:
         for column in _INDEXED:

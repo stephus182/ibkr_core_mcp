@@ -235,9 +235,8 @@ async def test_connect_rejects_non_localhost():
 
     ws = IBKRWebSocket("https://external.broker.com:5055/v1/api", "cookie=abc")
     # Patch websockets so the import succeeds; the localhost guard fires before connect()
-    with patch.dict("sys.modules", {"websockets": MagicMock()}):
-        with pytest.raises(StreamingError, match="localhost"):
-            await ws.connect()
+    with patch.dict("sys.modules", {"websockets": MagicMock()}), pytest.raises(StreamingError, match="localhost"):
+        await ws.connect()
 
 
 @pytest.mark.asyncio
@@ -249,9 +248,11 @@ async def test_connect_missing_websockets_raises_import_error():
     from ibkr_core_mcp.streaming import IBKRWebSocket
 
     ws = IBKRWebSocket("https://localhost:5055/v1/api", "cookie=abc")
-    with patch.dict(sys.modules, {"websockets": None}):
-        with pytest.raises(ModuleNotFoundError, match="base dependency of ibkr_core_mcp"):
-            await ws.connect()
+    with (
+        patch.dict(sys.modules, {"websockets": None}),
+        pytest.raises(ModuleNotFoundError, match="base dependency of ibkr_core_mcp"),
+    ):
+        await ws.connect()
 
 
 # ── TradeExecution / PnLUpdate dataclasses ───────────────────────────────────

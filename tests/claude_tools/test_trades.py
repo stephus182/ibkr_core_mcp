@@ -108,7 +108,7 @@ def test_parse_live_trades_upsert_error_surfaced(toolkit):
         {"execution_id": "E1", "symbol": "AAPL", "side": "B", "size": 10, "price": 180, "time": "2026-05-22T10:00:00"}
     ]
     toolkit._store.upsert_trades.side_effect = RuntimeError("DB locked")
-    text, fig = toolkit.execute("get_trades", {"source": "live"})
+    text, _fig = toolkit.execute("get_trades", {"source": "live"})
     # Raw exception must NOT leak to LLM — only a controlled message appears
     assert "DB locked" not in text
     assert "could not be saved" in text.lower()

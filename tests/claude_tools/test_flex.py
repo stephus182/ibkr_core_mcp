@@ -6,7 +6,7 @@ pytestmark = pytest.mark.flex
 
 
 def test_sync_flex_trades_no_token(toolkit):
-    text, fig = toolkit.execute("sync_flex_trades", {})
+    text, _fig = toolkit.execute("sync_flex_trades", {})
     assert "IBKR_FLEX_TOKEN" in text
 
 

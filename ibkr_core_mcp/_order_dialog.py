@@ -155,7 +155,7 @@ def _run_alert(data: dict[str, Any]) -> None:
             from AppKit import NSApp
 
             NSApp.abortModal()
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort abort; the modal may already be gone
             pass
 
     abort_timer = NSTimer.timerWithTimeInterval_repeats_block_(timeout_s, False, _abort)

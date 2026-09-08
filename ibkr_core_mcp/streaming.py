@@ -18,6 +18,7 @@ https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import ssl
@@ -438,15 +439,11 @@ class IBKRWebSocket:
             ):
                 if field not in record:
                     continue
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     kwargs[attr] = float(record[field]) if field != "conid" else int(record[field])
-                except (TypeError, ValueError):
-                    pass
             if "trade_time_r" in record:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     kwargs["trade_time_epoch"] = int(record["trade_time_r"])
-                except (TypeError, ValueError):
-                    pass
             executions.append(TradeExecution(**kwargs))
         return executions or None
 
@@ -459,17 +456,13 @@ class IBKRWebSocket:
             return None
         kwargs: dict[str, Any] = {"account": str(account)}
         if "rowType" in data:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 kwargs["row_type"] = int(data["rowType"])
-            except (TypeError, ValueError):
-                pass
         for field in ("dpl", "nl", "upl", "uel", "mv"):
             if field not in data:
                 continue
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 kwargs[field] = float(data[field])
-            except (TypeError, ValueError):
-                pass
         return PnLUpdate(**kwargs)
 
 

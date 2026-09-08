@@ -181,9 +181,8 @@ class Notification(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "isRead" in data and "is_read" not in data:
-                data.setdefault("is_read", data["isRead"])
+        if isinstance(data, dict) and "isRead" in data and "is_read" not in data:
+            data.setdefault("is_read", data["isRead"])
         return data
 
 

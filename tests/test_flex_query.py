@@ -156,9 +156,9 @@ def test_get_statement_raises_after_max_retries(flex_client):
     with (
         patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_pending),
         patch("ibkr_core_mcp.flex_query.time.sleep"),
+        pytest.raises(FlexQueryError, match="not ready"),
     ):
-        with pytest.raises(FlexQueryError, match="not ready"):
-            flex_client._get_statement("https://example.com/GetStatement", "9876543210")
+        flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
 
 # Byte-exact copy of the error document IBKR returned live on 2026-07-02, which
@@ -213,9 +213,9 @@ def test_get_statement_raises_when_1019_persists(flex_client):
     with (
         patch("ibkr_core_mcp.flex_query.requests.get", return_value=always_1019),
         patch("ibkr_core_mcp.flex_query.time.sleep"),
+        pytest.raises(FlexQueryError, match="not ready"),
     ):
-        with pytest.raises(FlexQueryError, match="not ready"):
-            flex_client._get_statement("https://example.com/GetStatement", "9876543210")
+        flex_client._get_statement("https://example.com/GetStatement", "9876543210")
 
 
 def test_get_statement_raises_immediately_on_other_warn(flex_client):
@@ -371,51 +371,44 @@ _BAD_URL = b"""<?xml version="1.0" ?>
 
 def test_send_request_error_1001_auth_failure(flex_client):
     """Error 1001 must raise with auth-failure diagnosis, not a raw IBKR error."""
-    with _mock_get(_FAIL_1001):
-        with pytest.raises(FlexQueryError, match="1001"):
-            flex_client._send_request()
+    with _mock_get(_FAIL_1001), pytest.raises(FlexQueryError, match="1001"):
+        flex_client._send_request()
 
 
 def test_send_request_error_1001_message_mentions_retry(flex_client):
     """The 1001 message must say it is transient and suggest a retry."""
-    with _mock_get(_FAIL_1001):
-        with pytest.raises(FlexQueryError, match="Transient"):
-            flex_client._send_request()
+    with _mock_get(_FAIL_1001), pytest.raises(FlexQueryError, match="Transient"):
+        flex_client._send_request()
 
 
 def test_send_request_warn_1025_lockout(flex_client):
     """Error 1025 (Warn status) must raise with token regeneration instructions."""
-    with _mock_get(_WARN_1025):
-        with pytest.raises(FlexQueryError, match="1025"):
-            flex_client._send_request()
+    with _mock_get(_WARN_1025), pytest.raises(FlexQueryError, match="1025"):
+        flex_client._send_request()
 
 
 def test_send_request_warn_1025_mentions_regenerate(flex_client):
     """The 1025 message must tell the user to regenerate the Flex token."""
-    with _mock_get(_WARN_1025):
-        with pytest.raises(FlexQueryError, match="regenerate"):
-            flex_client._send_request()
+    with _mock_get(_WARN_1025), pytest.raises(FlexQueryError, match="regenerate"):
+        flex_client._send_request()
 
 
 def test_send_request_fail_unknown_error_code(flex_client):
     """Unknown Fail codes must still raise (not silently succeed)."""
-    with _mock_get(_FAIL_UNKNOWN):
-        with pytest.raises(FlexQueryError, match="9999"):
-            flex_client._send_request()
+    with _mock_get(_FAIL_UNKNOWN), pytest.raises(FlexQueryError, match="9999"):
+        flex_client._send_request()
 
 
 def test_send_request_warn_unknown_error_code(flex_client):
     """Unknown Warn codes must still raise (not silently succeed)."""
-    with _mock_get(_WARN_UNKNOWN):
-        with pytest.raises(FlexQueryError, match="8888"):
-            flex_client._send_request()
+    with _mock_get(_WARN_UNKNOWN), pytest.raises(FlexQueryError, match="8888"):
+        flex_client._send_request()
 
 
 def test_send_request_rejects_non_ibkr_url(flex_client):
     """URL allowlist must reject any URL not on the known IBKR Flex subdomains."""
-    with _mock_get(_BAD_URL):
-        with pytest.raises(FlexQueryError, match="unexpected URL"):
-            flex_client._send_request()
+    with _mock_get(_BAD_URL), pytest.raises(FlexQueryError, match="unexpected URL"):
+        flex_client._send_request()
 
 
 _GDCDYN_URL = b"""<?xml version="1.0" ?>
@@ -432,7 +425,7 @@ def test_send_request_accepts_gdcdyn_url(flex_client):
     Observed 2026-06-26: SendRequest response contained gdcdyn URL, rejected by old allowlist.
     """
     with _mock_get(_GDCDYN_URL):
-        ref, url = flex_client._send_request()
+        _ref, url = flex_client._send_request()
     from urllib.parse import urlparse
 
     assert urlparse(url).hostname == "gdcdyn.interactivebrokers.com"

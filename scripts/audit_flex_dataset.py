@@ -26,9 +26,9 @@ import defusedxml.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ibkr_core_mcp.flex_import import STATEMENT_CODES, parse_notes  # noqa: E402
-from ibkr_core_mcp.flex_schema import ELEMENTS  # noqa: E402
-from ibkr_core_mcp.flex_store import table_columns  # noqa: E402
+from ibkr_core_mcp.flex_import import STATEMENT_CODES, parse_notes
+from ibkr_core_mcp.flex_schema import ELEMENTS
+from ibkr_core_mcp.flex_store import table_columns
 
 DEFAULT_SRC = Path.home() / ".ibkr_core" / "flex_archive"
 DEFAULT_DB = Path.home() / ".ibkr_core" / "store.db"
@@ -261,7 +261,7 @@ def run_gate(db_path: Path, src: Path) -> int:
     # read at all, so an empty source printed a confident PASS.
     missing_columns: dict[str, list[str]] = {}
     for tag, attrs in truth["attrs_seen"].items():
-        known = {attr for attr in ELEMENTS[tag]["columns"]}
+        known = set(ELEMENTS[tag]["columns"])
         gap = attrs - known
         if gap:
             missing_columns[tag] = sorted(gap)

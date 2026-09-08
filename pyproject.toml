@@ -197,16 +197,21 @@ line-length = 120
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "S", "B", "D"]
+# One rule set for both repos, aligned 2026-09-08 with claudia_ui. Keep `select`, `ignore`
+# and `allowed-confusables` identical there: a rule worth having is worth having in both,
+# and a suppression one repo needs is written at the site, not added to the list.
+select = ["E", "W", "F", "I", "UP", "S", "B", "SIM", "C4", "RUF", "FA", "D"]
 ignore = [
     "E501",   # line too long — string literals, test fixtures, and tool descriptions exceed 120 chars
-    "S101",   # assert — used in tests
-    "S603",   # subprocess — all calls use list form, never shell=True
-    "S105",   # hardcoded-password-string — IBKR JKS defaults in conf.yaml tests
-    "S311",   # random — not used for cryptography
-    "S501",   # verify=False — intentional, IBKR gateway uses a self-signed localhost cert (documented in SECURITY.md)
-    "S607",   # partial executable path — docker/open are standard OS tools; full paths would be OS-specific
-    "S110",   # try-except-pass — intentional in optional store saves and tkinter after_cancel guard
+
+    # flake8-bandit ("S"): only the two rules that fire on every subprocess call, whatever it
+    # runs, are ignored here. Every other S rule is live, and each deliberate exception in
+    # package code carries an inline `noqa` stating why — so a new `verify=False`, `assert`
+    # or `random` call is a finding until someone writes the reason down next to it.
+    # (Until 2026-09-08 S101, S105, S110, S311 and S501 were ignored globally as well; each
+    # of those now lives at its sites or in the tests/* entry below.)
+    "S603",   # subprocess-without-shell-equals-true — every call is list-form; none uses shell=True
+    "S607",   # start-process-with-partial-path — docker/open resolve on PATH; full paths would be OS-specific
 
     # pydocstyle: "D" is enabled for the D1xx *coverage* rules. Those are the ones worth
     # enforcing — the 2026-07-25 docs pass found 39 undocumented public definitions,
@@ -230,13 +235,21 @@ ignore = [
     "D413",   # blank line required after the last section
     "D415",   # summary must end with punctuation
 ]
+# RUF001/002/003 flag characters that can be confused with ASCII. These three are correct
+# typography used on purpose — en dash for a range, × for a count, U+2212 for a signed
+# figure — so they are allowed by name and the rule stays live for real confusables.
+allowed-confusables = ["–", "×", "−"]
 
 [tool.ruff.lint.per-file-ignores]
 # Docstring coverage is enforced on the package, not the suite: test names are the
 # documentation there, and this codebase's tests carry no signature annotations by
 # established convention (see the mypy tests.* override above for the same rationale).
-"tests/*" = ["S101", "S106", "S108", "S603", "S607", "D"]
+# Tests also assert, and carry fixture tokens and /tmp paths as literals; none is a finding.
+"tests/*" = ["S101", "S105", "S106", "S108", "D"]
 # One-off audit/evidence scripts, committed verbatim as run (timing decomposition, tool-token
 # counts, dependency graph, worked metric examples). They are records of a past analysis, not
-# maintained library code, so docstring coverage is not enforced on them. Every other rule is.
-"scripts/audit/*" = ["D"]
+# maintained library code, so docstring coverage, the simplification rewrites and the
+# assert-as-check idiom are not enforced on them. Every other rule is.
+"scripts/audit/*" = ["D", "SIM", "S101"]
+# `__all__` is grouped by role under section comments; RUF022's flat sort would erase that.
+"ibkr_core_mcp/__init__.py" = ["RUF022"]

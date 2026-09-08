@@ -557,7 +557,7 @@ def test_backtest_refuses_an_empty_dataframe_instead_of_reporting_0_percent():
 
     empty = pd.DataFrame({"open": [], "high": [], "low": [], "close": [], "volume": []})
 
-    with pytest.raises(BacktestError, match="no rows|empty"):
+    with pytest.raises(BacktestError, match=r"no rows|empty"):
         run_backtest("df['signal'] = 0", empty, strategy_name="t", symbol="X")
 
 

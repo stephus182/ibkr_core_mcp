@@ -52,7 +52,7 @@ def test_execute_get_notifications(toolkit):
 def test_get_positions_empty(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_positions.return_value = []
-    text, fig = toolkit.execute("get_positions", {})
+    text, _fig = toolkit.execute("get_positions", {})
     assert "No open positions" in text
 
 
@@ -65,7 +65,7 @@ def test_get_positions_filters_zero_size(toolkit):
         {"contractDesc": "CLOSED_FUTURE", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
         {"contractDesc": "CLOSED_OPTION", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
     ]
-    text, fig = toolkit.execute("get_positions", {})
+    text, _fig = toolkit.execute("get_positions", {})
     assert "AAPL" in text
     assert "CLOSED_STOCK" not in text
     assert "CLOSED_FUTURE" not in text
@@ -80,7 +80,7 @@ def test_get_positions_all_zero_returns_empty(toolkit):
         {"contractDesc": "FLAT_A", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
         {"contractDesc": "FLAT_B", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
     ]
-    text, fig = toolkit.execute("get_positions", {})
+    text, _fig = toolkit.execute("get_positions", {})
     assert "No open positions" in text
 
 
@@ -92,7 +92,7 @@ def test_get_positions_field_fallback(toolkit):
         {"ticker": "TSLA", "position": 10, "mktValue": 2500.0, "unrealizedPnl": -50.0},
         {"symbol": "GOOG", "position": 5, "mktValue": 7500.0, "unrealizedPnl": 100.0},
     ]
-    text, fig = toolkit.execute("get_positions", {})
+    text, _fig = toolkit.execute("get_positions", {})
     assert "AAPL" in text
     assert "TSLA" in text
     assert "GOOG" in text
@@ -159,7 +159,7 @@ def test_get_ledger_omits_zero_futures(toolkit):
             "futuresonlypnl": 0,
         }
     }
-    text, fig = toolkit.execute("get_ledger", {})
+    text, _fig = toolkit.execute("get_ledger", {})
     # assert_tool_succeeded first: every assertion below is an absence check, and an
     # error string is absent everything. Without it this passed even when the handler
     # raised on every call.
@@ -172,7 +172,7 @@ def test_get_ledger_omits_zero_futures(toolkit):
 def test_get_ledger_empty(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_account_ledger.return_value = {}
-    text, fig = toolkit.execute("get_ledger", {})
+    text, _fig = toolkit.execute("get_ledger", {})
     assert "No ledger data" in text
 
 
@@ -193,7 +193,7 @@ def test_get_ledger_dollar_signs_and_bold_pnl(toolkit):
             "futuresonlypnl": 475.00,
         }
     }
-    text, fig = toolkit.execute("get_ledger", {})
+    text, _fig = toolkit.execute("get_ledger", {})
     assert "**$63,166.84**" in text
     assert "$16,045.96" in text
     assert "**$16,045.96**" not in text
@@ -221,7 +221,7 @@ def test_get_pnl_empty(toolkit):
     """
     toolkit._client.get_pnl.return_value = {}
     with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime, patch("time.sleep"):
-        text, fig = toolkit.execute("get_pnl", {})
+        text, _fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert "No P&L" in text or "P&L" in text
 
@@ -239,7 +239,7 @@ def test_get_pnl_reports_account_partition_totals(toolkit):
             }
         }
     }
-    text, fig = toolkit.execute("get_pnl", {})
+    text, _fig = toolkit.execute("get_pnl", {})
     assert "U1675699.Core" in text
     assert "607.00" in text  # unrealized
     assert "15.70" in text  # daily
@@ -252,7 +252,7 @@ def test_get_pnl_multiple_account_partitions(toolkit):
             "U2.Core": {"rowType": 1, "dpl": -5.0, "nl": 2000.0, "upl": -8.0, "el": 2000.0, "mv": 0.0},
         }
     }
-    text, fig = toolkit.execute("get_pnl", {})
+    text, _fig = toolkit.execute("get_pnl", {})
     assert "U1.Core" in text and "U2.Core" in text
     assert "+12.00" in text  # total unrealized: 20 + -8
     assert "+5.00" in text  # total daily: 10 + -5
@@ -264,7 +264,7 @@ def test_get_pnl_skips_non_numeric(toolkit):
             "U1234.Core": {"rowType": 1, "dpl": "N/A", "nl": 10000.0, "upl": "N/A", "el": 10000.0, "mv": 0.0},
         }
     }
-    text, fig = toolkit.execute("get_pnl", {})
+    text, _fig = toolkit.execute("get_pnl", {})
     # Should not raise; malformed partition skipped, totals still print
     assert "Total" in text
 
@@ -277,7 +277,7 @@ def test_get_pnl_missing_upnl_key_returns_no_data_message(toolkit):
     """
     toolkit._client.get_pnl.return_value = {"unexpected": {}}
     with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime, patch("time.sleep"):
-        text, fig = toolkit.execute("get_pnl", {})
+        text, _fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert "No P&L" in text
 
@@ -300,7 +300,7 @@ def test_get_pnl_retries_after_priming_when_first_call_empty(toolkit):
     }
     toolkit._client.get_pnl.side_effect = [{"upnl": {}}, real_data]
     with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime, patch("time.sleep"):
-        text, fig = toolkit.execute("get_pnl", {})
+        text, _fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert toolkit._client.get_pnl.call_count == 2
     assert "U1675699.Core" in text
@@ -315,7 +315,7 @@ def test_get_pnl_skips_priming_when_first_call_has_data(toolkit):
         }
     }
     with patch.object(toolkit, "_prime_pnl_subscription") as mock_prime:
-        text, fig = toolkit.execute("get_pnl", {})
+        text, _fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_not_called()
     assert toolkit._client.get_pnl.call_count == 1
     assert "U1.Core" in text
@@ -479,7 +479,7 @@ def test_get_positions_tolerates_null_value_fields(toolkit):
     toolkit._client.get_positions.return_value = [
         {"contractDesc": "GLD", "position": 100, "mktValue": None, "unrealizedPnl": None},
     ]
-    text, fig = toolkit.execute("get_positions", {})
+    text, _fig = toolkit.execute("get_positions", {})
     assert "GLD" in text
     assert "0.00" in text
     assert "error" not in text.lower()

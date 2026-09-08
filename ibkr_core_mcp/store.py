@@ -11,6 +11,7 @@ recomputed only when the date rolls over.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -264,10 +265,8 @@ class SQLiteStore:
                 ("asset_class", "TEXT DEFAULT ''"),
                 ("realized_pnl", "REAL DEFAULT NULL"),
             ]:
-                try:
+                with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                     conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {defn}")
-                except sqlite3.OperationalError:
-                    pass  # column already exists
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS backtest_results (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -511,7 +510,7 @@ class SQLiteStore:
         return {r["execution_id"] for r in rows}
 
     @staticmethod
-    def _settled_newest_date(conn: sqlite3.Connection) -> str | None | Literal[False]:
+    def _settled_newest_date(conn: sqlite3.Connection) -> str | Literal[False] | None:
         """Newest **settled** trade date — `flex_trade` rows sourced from a statement.
 
         Three distinct answers, because two of them used to be one:

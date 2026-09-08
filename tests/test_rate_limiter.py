@@ -28,9 +28,8 @@ def test_429_retries_then_raises():
     from ibkr_core_mcp.rate_limiter import with_retry
 
     mock_fn = MagicMock(return_value=_make_response(429))
-    with patch("time.sleep"):
-        with pytest.raises(IBKRRateLimitError):
-            with_retry(mock_fn, max_retries=2)
+    with patch("time.sleep"), pytest.raises(IBKRRateLimitError):
+        with_retry(mock_fn, max_retries=2)
     assert mock_fn.call_count == 3  # 1 + 2 retries
 
 
@@ -70,9 +69,8 @@ def test_503_retries_then_raises():
     from ibkr_core_mcp.rate_limiter import with_retry
 
     mock_fn = MagicMock(return_value=_make_response(503))
-    with patch("time.sleep"):
-        with pytest.raises(IBKRRateLimitError):
-            with_retry(mock_fn, max_retries=2)
+    with patch("time.sleep"), pytest.raises(IBKRRateLimitError):
+        with_retry(mock_fn, max_retries=2)
     assert mock_fn.call_count == 3  # initial + 2 retries
 
 
@@ -92,9 +90,8 @@ def test_backoff_delays_increase_exponentially():
 
     mock_fn = MagicMock(return_value=_make_response(429))
     sleep_calls = []
-    with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
-        with pytest.raises(IBKRRateLimitError):
-            with_retry(mock_fn, max_retries=3)
+    with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)), pytest.raises(IBKRRateLimitError):
+        with_retry(mock_fn, max_retries=3)
     # Each delay should be strictly greater than the previous
     assert len(sleep_calls) == 3
     assert sleep_calls[1] > sleep_calls[0]

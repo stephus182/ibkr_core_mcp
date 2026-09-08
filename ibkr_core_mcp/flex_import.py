@@ -36,9 +36,9 @@ from .exceptions import FlexQueryError
 from .flex_schema import ELEMENTS
 
 __all__ = [
+    "STATEMENT_CODES",
     "FlexImportError",
     "ParsedStatement",
-    "STATEMENT_CODES",
     "execution_key_for",
     "live_trade_rows",
     "normalise_date",

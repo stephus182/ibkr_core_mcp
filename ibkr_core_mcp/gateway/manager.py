@@ -257,7 +257,7 @@ class GatewayManager:
         try:
             resp = requests.get(
                 f"{self._api_url}/tickle",
-                verify=False,
+                verify=False,  # noqa: S501 - localhost gateway, self-signed cert (SECURITY.md)
                 timeout=3,
             )
             return 200 <= resp.status_code < 600
@@ -277,7 +277,7 @@ class GatewayManager:
         try:
             resp = requests.get(
                 f"{self._api_url}/iserver/auth/status",
-                verify=False,
+                verify=False,  # noqa: S501 - localhost gateway, self-signed cert (SECURITY.md)
                 timeout=5,
             )
         except requests.exceptions.RequestException as exc:

@@ -36,7 +36,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import requests
 from google.auth.transport.requests import Request
@@ -88,7 +88,7 @@ def _request_with_backoff(fn: Callable[[], requests.Response]) -> requests.Respo
             delay = float(retry_after) if retry_after is not None else min(2**attempt, _FIRECRAWL_MAX_BACKOFF)
         except (TypeError, ValueError):
             delay = min(2**attempt, _FIRECRAWL_MAX_BACKOFF)
-        time.sleep(delay + random.random())
+        time.sleep(delay + random.random())  # noqa: S311 - backoff jitter, not cryptography
         attempt += 1
 
 
@@ -359,7 +359,7 @@ class WebDocsStore:
                 gdrive_web_docs_folder_id.
     """
 
-    _SCOPES = ["https://www.googleapis.com/auth/drive"]
+    _SCOPES: ClassVar[list[str]] = ["https://www.googleapis.com/auth/drive"]
 
     def __init__(self, config: Config) -> None:
         """Prepare the store without contacting Drive.

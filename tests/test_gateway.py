@@ -69,9 +69,9 @@ class TestEnsureDockerRunning:
         with (
             patch.object(gm, "is_docker_available", return_value=False),
             patch("platform.system", return_value="Linux"),
+            pytest.raises(GatewayError, match="Docker is not running"),
         ):
-            with pytest.raises(GatewayError, match="Docker is not running"):
-                gm.ensure_docker_running()
+            gm.ensure_docker_running()
 
     def test_raises_on_macos_if_docker_never_becomes_ready(self) -> None:
         gm = GatewayManager()
@@ -81,9 +81,9 @@ class TestEnsureDockerRunning:
             patch("subprocess.run"),
             patch("time.sleep"),
             patch("time.monotonic", side_effect=[0, 999]),  # deadline passed immediately
+            pytest.raises(GatewayError, match="did not become ready"),
         ):
-            with pytest.raises(GatewayError, match="did not become ready"):
-                gm.ensure_docker_running(timeout=5)
+            gm.ensure_docker_running(timeout=5)
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +121,11 @@ class TestBuildImage:
         import subprocess
 
         gm = GatewayManager()
-        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")):
-            with pytest.raises(GatewayError, match="build"):
-                gm.build_image()
+        with (
+            patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")),
+            pytest.raises(GatewayError, match="build"),
+        ):
+            gm.build_image()
 
     def test_start_wraps_called_process_error_as_gateway_error(self) -> None:
         import subprocess
@@ -134,9 +136,9 @@ class TestBuildImage:
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run", side_effect=subprocess.CalledProcessError(125, "docker")),
+            pytest.raises(GatewayError, match="port"),
         ):
-            with pytest.raises(GatewayError, match="port"):
-                gm.start()
+            gm.start()
 
 
 # ---------------------------------------------------------------------------

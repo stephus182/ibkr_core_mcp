@@ -546,9 +546,8 @@ def test_profile_lock_is_released_when_the_fetch_raises(tmp_path):
     """A crashed browser session must not strand the profile until the process dies."""
     from ibkr_core_mcp.local_browser import _profile_in_use
 
-    with pytest.raises(RuntimeError):
-        with _profile_in_use(tmp_path / "ft.com"):
-            raise RuntimeError("browser died")
+    with pytest.raises(RuntimeError), _profile_in_use(tmp_path / "ft.com"):
+        raise RuntimeError("browser died")
 
     with _profile_in_use(tmp_path / "ft.com"):
         pass  # re-acquirable, so the finally: released it

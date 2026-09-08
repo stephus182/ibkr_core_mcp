@@ -33,7 +33,7 @@ def _drive(monkeypatch, files, payloads):
     cache = MagicMock()
     cache.list_account_files.return_value = files
 
-    def get_media(fileId):  # noqa: N803 - matches the googleapiclient signature
+    def get_media(fileId):
         request = MagicMock()
         request._payload = payloads[fileId]
         return request

@@ -47,7 +47,7 @@ class ArchiveFetchError(Exception):
     """A file failed checksum verification, so no manifest was written."""
 
 
-class ArchiveSkipped(Exception):  # noqa: N818 - a report, not an error condition
+class ArchiveSkipped(Exception):  # a report, not an error condition
     """Some payloads were not statements and were excluded; the manifest was written."""
 
 
