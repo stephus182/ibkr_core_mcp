@@ -441,9 +441,9 @@ def _show_tkinter_dialog(
         dialog.destroy()
         root.destroy()
 
-    tk.Button(
-        btn_frame, text=abandon_label, command=on_cancel, width=16, bg="#bdc3c7", font=("Helvetica", 11)
-    ).pack(side="left", padx=10)
+    tk.Button(btn_frame, text=abandon_label, command=on_cancel, width=16, bg="#bdc3c7", font=("Helvetica", 11)).pack(
+        side="left", padx=10
+    )
     tk.Button(
         btn_frame,
         text=confirm_label,

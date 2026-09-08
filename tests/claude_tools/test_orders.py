@@ -377,15 +377,43 @@ def test_execute_get_live_orders_reports_outside_rth_in_three_states(toolkit):
     "is my stop active overnight?" from the tool, and an unreported attribute must read as
     not reported, never as No."""
     toolkit._client.get_live_orders.return_value = [
-        {"orderId": 1, "ticker": "ES", "side": "BUY", "totalSize": 1, "price": 7725.0,
-         "status": "Submitted", "timeInForce": "GTC", "outsideRTH": True},
-        {"orderId": 2, "ticker": "AAPL", "side": "BUY", "totalSize": 1, "price": 150.0,
-         "status": "Submitted", "timeInForce": "GTC", "outsideRTH": False},
-        {"orderId": 3, "ticker": "ES", "side": "BUY", "totalSize": 1, "price": 7660.0,
-         "status": "Submitted", "timeInForce": "GTC", "outsideRTH": None},
+        {
+            "orderId": 1,
+            "ticker": "ES",
+            "side": "BUY",
+            "totalSize": 1,
+            "price": 7725.0,
+            "status": "Submitted",
+            "timeInForce": "GTC",
+            "outsideRTH": True,
+        },
+        {
+            "orderId": 2,
+            "ticker": "AAPL",
+            "side": "BUY",
+            "totalSize": 1,
+            "price": 150.0,
+            "status": "Submitted",
+            "timeInForce": "GTC",
+            "outsideRTH": False,
+        },
+        {
+            "orderId": 3,
+            "ticker": "ES",
+            "side": "BUY",
+            "totalSize": 1,
+            "price": 7660.0,
+            "status": "Submitted",
+            "timeInForce": "GTC",
+            "outsideRTH": None,
+        },
     ]
     text, _ = toolkit.execute("get_live_orders", {})
-    lines = {int(re.search(r"orderId=(\d+)", ln).group(1)): ln for ln in text.splitlines() if "orderId=" in ln}
+    lines: dict[int, str] = {}
+    for ln in text.splitlines():
+        m = re.search(r"orderId=(\d+)", ln)
+        if m:
+            lines[int(m.group(1))] = ln
     assert "outsideRTH=yes" in lines[1]
     assert "outsideRTH=no" in lines[2]
     assert "outsideRTH=not-reported" in lines[3]

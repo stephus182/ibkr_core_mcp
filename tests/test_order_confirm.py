@@ -399,12 +399,12 @@ def _invoke_every_gate2_dialog():
     import ibkr_core_mcp.order_confirm as oc
 
     cases = (
-        ("confirm_order_dialog", lambda: oc.confirm_order_dialog(
-            {"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0}, "U123")),
-        ("confirm_modify_dialog", lambda: oc.confirm_modify_dialog(
-            "8001", {"side": "SELL", "quantity": 2}, "U123")),
-        ("confirm_cancel_dialog", lambda: oc.confirm_cancel_dialog(
-            "8001", "U123", {"side": "BUY", "quantity": 1})),
+        (
+            "confirm_order_dialog",
+            lambda: oc.confirm_order_dialog({"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0}, "U123"),
+        ),
+        ("confirm_modify_dialog", lambda: oc.confirm_modify_dialog("8001", {"side": "SELL", "quantity": 2}, "U123")),
+        ("confirm_cancel_dialog", lambda: oc.confirm_cancel_dialog("8001", "U123", {"side": "BUY", "quantity": 1})),
         ("confirm_reply_dialog", lambda: oc.confirm_reply_dialog("r-1", "some warning")),
     )
     for name, call in cases:
@@ -486,7 +486,7 @@ def test_order_dialog_subprocess_never_defaults_abandon_to_the_confirm_word():
 # ---------------------------------------------------------------------------
 
 
-def _order_dialog_details(order: dict) -> str:
+def _order_dialog_details(order: dict[str, object]) -> str:
     import ibkr_core_mcp.order_confirm as oc
 
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
@@ -496,9 +496,7 @@ def _order_dialog_details(order: dict) -> str:
 
 
 def test_gate2_does_not_assert_a_currency_when_the_order_carries_none():
-    rendered = _order_dialog_details(
-        {"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0}
-    )
+    rendered = _order_dialog_details({"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 150.0})
     assert "$" not in rendered, f"bare $ asserted with no currency established: {rendered}"
     assert "USD" not in rendered, f"USD asserted with no currency established: {rendered}"
 
@@ -521,9 +519,7 @@ def test_gate2_renders_usd_as_an_iso_code_not_a_dollar_sign():
 
 
 def test_gate2_futures_notional_does_not_assert_usd():
-    rendered = _order_dialog_details(
-        {"ticker": "ES", "side": "BUY", "quantity": 1, "price": 5000.0, "_multiplier": 50}
-    )
+    rendered = _order_dialog_details({"ticker": "ES", "side": "BUY", "quantity": 1, "price": 5000.0, "_multiplier": 50})
     assert "USD" not in rendered, f"futures notional hardcodes USD: {rendered}"
     assert "$" not in rendered
 
@@ -540,8 +536,15 @@ def test_confirm_order_dialog_shows_outside_rth_when_the_body_carries_it():
     from ibkr_core_mcp.order_confirm import confirm_order_dialog
 
     for value, shown in ((True, "Yes"), (False, "No")):
-        order = {"ticker": "ES", "side": "BUY", "quantity": 1, "orderType": "STP",
-                 "price": 7725.0, "tif": "GTC", "outsideRTH": value}
+        order = {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "STP",
+            "price": 7725.0,
+            "tif": "GTC",
+            "outsideRTH": value,
+        }
         with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
             confirm_order_dialog(order, "U1234567")
         details = mock_show.call_args.kwargs["details"]
@@ -554,8 +557,7 @@ def test_confirm_order_dialog_omits_outside_rth_when_the_body_does_not_carry_it(
     """No attribute sent → no row: the dialog must not claim a value nobody set."""
     from ibkr_core_mcp.order_confirm import confirm_order_dialog
 
-    order = {"ticker": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT",
-             "price": 150.0, "tif": "DAY"}
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 150.0, "tif": "DAY"}
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_order_dialog(order, "U1234567")
     assert "Outside RTH" not in mock_show.call_args.kwargs["details"]
@@ -566,8 +568,15 @@ def test_confirm_order_dialog_omits_outside_rth_when_the_key_is_present_but_not_
     claims nothing it was not given a real value for."""
     from ibkr_core_mcp.order_confirm import confirm_order_dialog
 
-    order = {"ticker": "ES", "side": "BUY", "quantity": 1, "orderType": "STP",
-             "price": 7725.0, "tif": "GTC", "outsideRTH": None}
+    order = {
+        "ticker": "ES",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "STP",
+        "price": 7725.0,
+        "tif": "GTC",
+        "outsideRTH": None,
+    }
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_order_dialog(order, "U1234567")
     assert "Outside RTH" not in mock_show.call_args.kwargs["details"]
@@ -585,9 +594,17 @@ def test_confirm_order_dialog_futures_notional_uses_the_multiplier_and_currency(
     """price × qty × multiplier, with the ISO currency the caller established."""
     from ibkr_core_mcp.order_confirm import confirm_order_dialog
 
-    order = {"ticker": "ES", "_companyName": "ESU6 · expires 2026-09-18 · ×50", "side": "BUY",
-             "quantity": 1, "orderType": "STP", "price": 7735.0, "tif": "GTC",
-             "_multiplier": 50.0, "_currency": "USD"}
+    order = {
+        "ticker": "ES",
+        "_companyName": "ESU6 · expires 2026-09-18 · ×50",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "STP",
+        "price": 7735.0,
+        "tif": "GTC",
+        "_multiplier": 50.0,
+        "_currency": "USD",
+    }
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_order_dialog(order, "U1")
     details = mock_show.call_args.kwargs["details"]
@@ -599,8 +616,15 @@ def test_confirm_order_dialog_refuses_a_notional_when_the_multiplier_is_unknown(
     """No multiplier on a futures order → no number, an honest dash and the reason."""
     from ibkr_core_mcp.order_confirm import confirm_order_dialog
 
-    order = {"ticker": "ES", "side": "BUY", "quantity": 1, "orderType": "STP",
-             "price": 7735.0, "tif": "GTC", "_multiplier_unknown": True}
+    order = {
+        "ticker": "ES",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "STP",
+        "price": 7735.0,
+        "tif": "GTC",
+        "_multiplier_unknown": True,
+    }
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_order_dialog(order, "U1")
     total = mock_show.call_args.kwargs["details"]["Total (est.)"]

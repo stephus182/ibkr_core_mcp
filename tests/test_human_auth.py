@@ -121,7 +121,6 @@ def test_require_touch_id_timeout(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-
 def _touch_id_reasons() -> list[str]:
     src = (_Path(__file__).parent.parent / "ibkr_core_mcp" / "client.py").read_text()
     return _re.findall(r'require_touch_id\(\s*f?"([^"]*)"', src)
@@ -135,10 +134,7 @@ def test_touch_id_call_sites_are_discoverable():
 def test_every_touch_id_reason_completes_the_system_prompt_grammatically():
     for reason in _touch_id_reasons():
         rendered = f"Python is trying to {reason}."
-        assert not _re.match(r"^[A-Za-z]+:", reason), (
-            f"reason starts with a label prefix, rendering: {rendered!r}"
-        )
+        assert not _re.match(r"^[A-Za-z]+:", reason), f"reason starts with a label prefix, rendering: {rendered!r}"
         assert reason[:1].islower(), (
-            f"reason must begin with a lowercase verb completing 'is trying to', "
-            f"rendering: {rendered!r}"
+            f"reason must begin with a lowercase verb completing 'is trying to', rendering: {rendered!r}"
         )
