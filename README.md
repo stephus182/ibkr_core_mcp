@@ -1,5 +1,7 @@
 # ibkr_core_mcp
 
+[![CI](https://github.com/stephus182/ibkr_core_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/stephus182/ibkr_core_mcp/actions/workflows/ci.yml)
+
 Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API and ships batteries-included tooling for algorithmic trading, backtesting, real-time streaming, and Claude AI integration.
 
 > **Who is this for?** IBKR account holders who want to automate market data retrieval, portfolio monitoring, and order staging from Python — or who want to connect an AI assistant to their brokerage.

@@ -26,6 +26,7 @@ cd /path/to/ibkr_core_mcp
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,server]"
+git config core.hooksPath .githooks   # the four CI gates as a pre-push hook (see Linting & Type Checking)
 ```
 
 **Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`) — invoke the
@@ -78,7 +79,11 @@ the first red one.** Run 34082479743 (2026-09-07) failed at `ruff format --check
 files, and that red step hid two real mypy errors CI never reached; they surfaced only when
 the formatting was fixed. A green `ruff check` says nothing about `ruff format`, and a red
 `ruff format` says nothing about mypy or pytest. The same four steps, in the same order, are
-claudia_ui's CI (`.github/workflows/ci.yml` in both repos, aligned 2026-09-08).
+claudia_ui's CI (`.github/workflows/ci.yml` in both repos, aligned 2026-09-08), and they are
+`.githooks/pre-push` in both repos, which refuses a push that would go red — enabled once per
+clone by `git config core.hooksPath .githooks` (Dev Setup); `git push --no-verify` bypasses it
+on purpose. Branch protection cannot do this for a direct-push workflow: a required status
+check rejects every push whose commit has not already passed CI, which a direct push never has.
 
 `[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` and `scripts/`. `tests/` is also checked
 (`files = ["ibkr_core_mcp", "tests", "scripts"]`) but under a narrower `tests.*` override that relaxes

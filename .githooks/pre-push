@@ -1,0 +1,27 @@
+#!/bin/sh
+# The four CI gates, run locally before every push, in CI's order. A red step stops the
+# push, the same way it stops CI — except here nothing has left the machine yet.
+#
+# Enabled per clone by `git config core.hooksPath .githooks` (Dev Setup, CLAUDE.md).
+# Bypass for a deliberate push of red work: `git push --no-verify`.
+set -u
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+venv="$root/.venv/bin"
+if [ ! -x "$venv/ruff" ] || [ ! -x "$venv/mypy" ] || [ ! -x "$venv/pytest" ]; then
+    echo "pre-push: no usable .venv at $venv (ruff, mypy, pytest) — see CLAUDE.md Dev Setup" >&2
+    exit 1
+fi
+run() {
+    name=$1; shift
+    if ! "$@"; then
+        echo "" >&2
+        echo "pre-push: $name failed — push refused. Fix it, or push red on purpose with --no-verify." >&2
+        exit 1
+    fi
+}
+run "ruff check"         "$venv/ruff" check .
+run "ruff format"        "$venv/ruff" format --check .
+run "mypy"               "$venv/mypy"
+run "pytest (unit only)" "$venv/pytest" -m "not integration" -q -p no:cacheprovider
+echo "pre-push: all four gates green"
