@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**992 unit tests · 93 integration tests (1,085 total) · 85% line coverage (non-integration)** — all three measured 2026-08-11, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,008 unit tests · 93 integration tests (1,101 total) · 85% line coverage (non-integration)** — all three re-measured 2026-09-08 with the commands below (992 / 93 / 85% on 2026-08-11; the per-module tables further down are still that day's reading), not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
 

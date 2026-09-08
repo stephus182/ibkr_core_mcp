@@ -111,9 +111,14 @@ pythonpath = ["scripts"]
 timeout = 300
 
 [tool.mypy]
-python_version = "3.12"
+# No python_version pin (aligned with claudia_ui 2026-09-08): mypy then targets the
+# interpreter it runs under, which is what the 3.11 + 3.12 CI matrix needs — pinned, one
+# job checks the other's stubs (claudia_ui's 3.12 job failed on numpy 2.5.3's `type`
+# statements under a 3.11 pin, run 34244032164). No global ignore_missing_imports either:
+# the unstubbed imports are named in the override below — pandas, exchange_calendars and
+# google_auth_oauthlib joined that list when the global flag came off (2026-09-08) — so a
+# NEW dependency without stubs is a finding rather than a silent Any.
 strict = true
-ignore_missing_imports = true
 files = ["ibkr_core_mcp", "tests", "scripts"]
 # scripts/ has no __init__.py, so mypy needs the directory on its search path to
 # resolve `import rebuild_flex_dataset` the way pytest's pythonpath does. Measured
@@ -153,6 +158,12 @@ module = [
     "defusedxml.*",
     "crawl4ai",
     "crawl4ai.*",
+    "pandas",
+    "pandas.*",
+    "exchange_calendars",
+    "exchange_calendars.*",
+    "google_auth_oauthlib",
+    "google_auth_oauthlib.*",
 ]
 ignore_missing_imports = true
 

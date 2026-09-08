@@ -70,11 +70,18 @@ ruff check .              # lint — must be clean
 ruff format --check .     # formatting — must be clean
 # The ruff rule set (`[tool.ruff.lint]` in pyproject.toml) is identical to claudia_ui's,
 # aligned 2026-09-08 — change it in both repos or in neither.
-mypy                      # type check — must be clean (files= covers both ibkr_core_mcp/ and tests/)
+mypy                      # type check — must be clean (files= covers ibkr_core_mcp/, tests/ and scripts/)
 ```
 
-`[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` itself. `tests/` is also checked
-(`files = ["ibkr_core_mcp", "tests"]`) but under a narrower `tests.*` override that relaxes
+**Run the whole line before pushing, in this order — CI runs these four steps and stops at
+the first red one.** Run 34082479743 (2026-09-07) failed at `ruff format --check` on four
+files, and that red step hid two real mypy errors CI never reached; they surfaced only when
+the formatting was fixed. A green `ruff check` says nothing about `ruff format`, and a red
+`ruff format` says nothing about mypy or pytest. The same four steps, in the same order, are
+claudia_ui's CI (`.github/workflows/ci.yml` in both repos, aligned 2026-09-08).
+
+`[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` and `scripts/`. `tests/` is also checked
+(`files = ["ibkr_core_mcp", "tests", "scripts"]`) but under a narrower `tests.*` override that relaxes
 only `disallow_untyped_defs`/`disallow_incomplete_defs`/`disallow_untyped_calls` — this
 codebase's tests carry zero signature annotations by established convention, and demanding
 them would be a large, low-value diff. Every other strict check, including body-level
