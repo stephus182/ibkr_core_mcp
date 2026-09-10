@@ -35,6 +35,7 @@ from ibkr_core_mcp.order_confirm import (
     confirm_modify_dialog,
     confirm_order_dialog,
     confirm_reply_dialog,
+    reply_message_text,
 )
 from ibkr_core_mcp.rate_limiter import with_retry
 
@@ -1414,7 +1415,7 @@ class IBKRClient:
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
         return data if isinstance(data, list) else []
 
-    def _resolve_one_reply(self, entry: dict[str, Any]) -> Any:
+    def _resolve_one_reply(self, entry: dict[str, Any], reply_log: list[dict[str, Any]] | None = None) -> Any:
         """Run Gate 1 + Gate 2 for one reply-chain entry, then tell IBKR the outcome.
 
         `entry` is a single {"id", "message", "messageOptions"?, ...} dict — the first
@@ -1434,19 +1435,43 @@ class IBKRClient:
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/reply/{replyId}
+
+        `reply_log`, when given, receives one record per reply: `reply_id`, the raw
+        `message`, `message_text` (tags stripped, entities unescaped), `message_options`,
+        `confirmed` and a UTC `at` stamp. The record is appended BEFORE the gates with
+        `confirmed: False` and flipped to True only once the human has confirmed, so a
+        Touch ID failure or a decline leaves an honest record. claudia_ui gap #38
+        (2026-09-10): two human-confirmed IBKR precautions had left no trace anywhere.
         """
         reply_id = entry["id"]
         message = " ".join(entry.get("message", []))
         options = entry.get("messageOptions")
+        record: dict[str, Any] = {
+            "reply_id": reply_id,
+            "message": message,
+            "message_text": reply_message_text(message),
+            "message_options": options,
+            "confirmed": False,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if reply_log is not None:
+            reply_log.append(record)
         require_touch_id(f"confirm an IBKR order reply {reply_id}")
         try:
             confirm_reply_dialog(reply_id, message, options)
         except HumanAuthError:
             self._post(f"/iserver/reply/{reply_id}", {"confirmed": False})
             raise HumanAuthError("User declined IBKR order reply") from None
+        record["confirmed"] = True
         return self._post(f"/iserver/reply/{reply_id}", {"confirmed": True})
 
-    def place_order_and_confirm(self, account_id: str, order: dict[str, Any]) -> list[dict[str, Any]]:
+    def place_order_and_confirm(
+        self,
+        account_id: str,
+        order: dict[str, Any],
+        *,
+        reply_log: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Place an order and resolve its full reply chain, looping until a terminal response.
 
         Calls the existing place_order() for the initial submission — Gate 1 + Gate 2
@@ -1467,13 +1492,23 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
                 https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
+
+        `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
+        return value stays the terminal response.
         """
         response = _as_reply_list(self.place_order(account_id, order))
         while response and "id" in response[0]:
-            response = _as_reply_list(self._resolve_one_reply(response[0]))
+            response = _as_reply_list(self._resolve_one_reply(response[0], reply_log))
         return response
 
-    def modify_order_and_confirm(self, account_id: str, order_id: str, order: dict[str, Any]) -> dict[str, Any]:
+    def modify_order_and_confirm(
+        self,
+        account_id: str,
+        order_id: str,
+        order: dict[str, Any],
+        *,
+        reply_log: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Modify an order and resolve its full reply chain, looping until a terminal response.
 
         Same loop/display/decline semantics as place_order_and_confirm() — see that
@@ -1492,10 +1527,13 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
                 https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/account/{accountId}/order/{orderId}, then POST /iserver/reply/{replyId}*
+
+        `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
+        return value stays the terminal response.
         """
         response = self.modify_order(account_id, order_id, order)
         while "id" in response:
-            response = _as_reply_dict(self._resolve_one_reply(response))
+            response = _as_reply_dict(self._resolve_one_reply(response, reply_log))
         return response
 
     def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:

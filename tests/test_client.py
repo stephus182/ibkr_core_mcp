@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 from unittest.mock import patch as _patch
 
@@ -1404,3 +1405,99 @@ def test_get_watchlists_handles_unexpected_payload(client):
     """An unrecognised shape yields [] rather than raising."""
     assert _watchlist_response(client, {"unexpected": True}) == []
     assert _watchlist_response(client, "not json at all") == []
+
+
+def test_place_order_and_confirm_records_each_reply_in_the_callers_log(client):
+    """claudia_ui gap #38 (2026-09-10): two human-confirmed IBKR precautions left no trace
+    because only the terminal response was returned. The caller-owned list gets one record per
+    reply — raw and cleaned text, confirmed flag, UTC stamp — and the return value is unchanged."""
+    order = {"ticker": "ES", "side": "BUY", "quantity": 1}
+    reply_log: list[dict[str, Any]] = []
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response(
+                [
+                    {
+                        "id": "RPL1",
+                        "message": ["Value estimate of 395,000 USD exceeds", "the Total Value Limit."],
+                        "messageOptions": ["ok"],
+                    }
+                ]
+            ),
+            _make_ok_response([{"id": "RPL2", "message": ["Stop Variant&nbsp;Order Confirmation"]}]),
+            _make_ok_response([{"order_id": "975324733", "order_status": "PreSubmitted"}]),
+        ]
+        result = client.place_order_and_confirm("U1234567", order, reply_log=reply_log)
+    assert result == [{"order_id": "975324733", "order_status": "PreSubmitted"}]
+    assert [r["reply_id"] for r in reply_log] == ["RPL1", "RPL2"]
+    assert reply_log[0]["message"] == "Value estimate of 395,000 USD exceeds the Total Value Limit."
+    assert reply_log[0]["message_options"] == ["ok"]
+    assert reply_log[1]["message"] == "Stop Variant&nbsp;Order Confirmation"  # raw, never cleaned
+    assert reply_log[1]["message_text"] == "Stop Variant\xa0Order Confirmation"
+    assert all(r["confirmed"] is True for r in reply_log)
+    assert all(r["at"].endswith("Z") for r in reply_log)
+
+
+def test_place_order_and_confirm_logs_a_declined_reply_as_not_confirmed(client):
+    """A decline is recorded (confirmed False) before the decline POST and the re-raise."""
+    from ibkr_core_mcp.exceptions import HumanAuthError
+
+    order = {"ticker": "ES", "side": "BUY", "quantity": 1}
+    reply_log: list[dict[str, Any]] = []
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_reply_dialog",
+            side_effect=[None, HumanAuthError("cancelled")],
+        ),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"id": "RPL1", "message": ["first"]}]),
+            _make_ok_response([{"id": "RPL2", "message": ["second"]}]),
+            _make_ok_response({"confirmed": False}),
+        ]
+        with pytest.raises(HumanAuthError):
+            client.place_order_and_confirm("U1234567", order, reply_log=reply_log)
+    assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [("RPL1", True), ("RPL2", False)]
+    assert mock_post.call_args_list[2].kwargs.get("json") == {"confirmed": False}
+
+
+def test_place_order_and_confirm_without_a_log_is_unchanged(client):
+    """`reply_log` is optional: callers that pass nothing get exactly the old behaviour."""
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"id": "RPL1", "message": ["x"]}]),
+            _make_ok_response([{"order_status": "Submitted"}]),
+        ]
+        assert client.place_order_and_confirm("U1234567", order) == [{"order_status": "Submitted"}]
+
+
+def test_modify_order_and_confirm_records_replies_too(client):
+    """The modify chain records its replies the same way as the place chain."""
+    reply_log: list[dict[str, Any]] = []
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response({"id": "RPL9", "message": ["price band"]}),
+            _make_ok_response({"order_id": "1", "order_status": "Submitted"}),
+        ]
+        result = client.modify_order_and_confirm("U1234567", "1", {"side": "BUY"}, reply_log=reply_log)
+    assert result == {"order_id": "1", "order_status": "Submitted"}
+    assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [("RPL9", True)]
