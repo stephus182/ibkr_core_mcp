@@ -339,7 +339,12 @@ Resolves symbols to conids automatically.
 **Output:** JSON array with live quote fields. Field codes: `"31"` = last price, `"84"` = bid,
 `"86"` = ask, `"87"` = volume. Each quote also includes `_data_status` (`"Live (Real-Time)"` when
 subscribed, `"Delayed (15–20 min)"` when not) and `_quote_time` (ET timestamp) — always report
-both to the user.
+both to the user. **For `sec_type: "FUT"` each quote also carries `_contract`** — the resolved
+contract in IBKR's own terms from a per-conid cache of `GET /iserver/contract/{conid}/info`:
+`local_symbol` (`"ESU6"`), `month` (`"SEP26"`, IBKR's `MMMYY` token from `contract_month`),
+`expires` (`"2026-09-18"`), `name` (`"E-mini S&P 500"`), `multiplier` (`50.0`). A bare root
+always means the front month; the block says which contract that is. Omitted when the read fails
+(never guessed). Measured 2026-09-10.
 
 **Note:** Max 100 conids per request, max 50 fields per request. Snapshot subscriptions require
 a brief warm-up (≈1s); empty result on first call — retry once.
@@ -409,7 +414,10 @@ Futures contracts for one or more root symbols — expiry months, conids, exchan
 |-----------|------|----------|-------------|
 | `symbols` | array[string] | ✅ | Root symbols, e.g. `["CL", "ES", "GC"]` |
 
-**Output:** JSON array of futures contracts with `conid`, `symbol`, `exchange`, `expirationDate`.
+**Output:** JSON array of futures contracts with `conid`, `symbol`, `exchange`, `expirationDate`,
+**sorted by expiry per root symbol; the earliest row carries `front_month: true`** (2026-09-10 —
+`/trsrv/futures` itself returns the rows in no date order, Dec 2026 first for ES, and a model once
+read list position as a volume ranking; claudia_ui gap #37).
 
 **IBKR endpoint:** `GET /trsrv/futures`
 
