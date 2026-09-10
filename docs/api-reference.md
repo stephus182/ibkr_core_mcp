@@ -212,6 +212,20 @@ Resolve a symbol to one or more contracts. Returns `[]` if no match.
 **Endpoint:** `GET /iserver/secdef/search`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
 
+**Futures, measured 2026-09-10 against the live gateway (the docs disagree with themselves):**
+the API Reference documents `secType` as a closed `STK | IND | BOND` enum, IBKR's own guide
+"Finding Derivative Products" calls it with `secType=FUT`, and the gateway accepts it:
+`symbol=ES&secType=FUT` returns the underlying (conid `11004968`, `companyName "E-mini S&P 500"`,
+`companyHeader "E-mini S&P 500 - CME"`) whose FUT `sections` entry carries `exchange "CME"` and
+`months "SEP26;DEC26;MAR27;…"` (`MMMYY`, the token `/iserver/secdef/info` takes) — followed by
+every equity named `ES` (Eversource on NYSE and MEXI, …), so the type does **not** filter the
+list. **An exchange local symbol is not a search input**: `symbol=ESU6` and `symbol=ES SEP26`
+both return `{"error": "No symbol found"}`. The month-qualified path is search → `secdef/info`
+(below), never search alone. Sources (scraped 2026-09-10, archive `claudia_ui/.firecrawl/ibkr/`):
+https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-symbols.md,
+https://ibkrcampus.com/docs/web-api/trading/instrument-discovery/finding-derivative-products.md,
+https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
+
 ---
 
 ### `get_contract_info(conid) -> dict`
@@ -234,12 +248,31 @@ Security definition info (type, symbol, currency, exchange, listing exchange).
 **Endpoint:** `GET /iserver/secdef/info`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid
 
+**Resolving one futures month, measured 2026-09-10** (the request is documented by IBKR's API
+group and the CP API lesson; the FUT response is shown nowhere, so it was measured):
+`conid=<underlying>&sectype=FUT&month=SEP26&exchange=CME` → **exactly one record** —
+`conid 649180671`, `symbol "ES"`, `secType "FUT"`, `listingExchange "CME"`, `maturityDate "20260918"`,
+`multiplier "50"`, `tradingClass "ES"`, `desc1 "Sep18'26(50)"`, `currency "USD"`; `desc2`, `ticker`
+and `companyName` come back `null` on a future. `month` takes `MMMYY` (`SEP26`) **or** `YYYYMM`
+(`202609`); it is case-sensitive (`sep26` → HTTP 500 `No Contracts retrieved`); `sectype` and
+`secType` are both accepted; **`exchange` is required** (omitting it → the same HTTP 500). This
+method wraps only the `conid` form; a month-qualified wrapper is the futures-identity design of
+2026-09-10 (claudia_ui Known Gaps #37). Sources:
+https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-info.md,
+https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-query-contract-details-for-derivatives-in-the-web-api/,
+https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
+
 ### `get_secdef(conids) -> list[dict]`
 Batch security definitions for up to 200 conids. The response is an **object** wrapping the
 array — `{"secdef": [...]}` — and this method unwraps it; reading the body as a bare list
 returned `[]` on every call until 2026-07-28 (same defect shape as `get_currency_pairs`).
 Each record carries `currency`, `listingExchange`, `countryCode`, `isUS`, `name`,
 `assetClass` — the batch source for facts `/iserver/secdef/info` returns one conid at a time.
+For a future (measured 2026-09-10 on ES conid 649180671) it also carries `fullName "ES Sep18'26"`,
+`name "E-mini S&P 500"`, `expiry "20260918"`, `lastTradingDay "20260918"`, `multiplier 50.0` and
+`ticker "ES"` — the batch source for a positions table's long name and month. The exchange local
+symbol (`ESU6`) lives only on `GET /iserver/contract/{conid}/info` as `local_symbol`, beside
+`text "ES SEP26 (50)"`, `contract_month "202609"` and `company_name`.
 **Endpoint:** `GET /trsrv/secdef?conids=<comma-separated>`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-the-security-definition-by-contract-id
 
