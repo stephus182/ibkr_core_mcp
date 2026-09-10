@@ -3,6 +3,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -246,24 +247,27 @@ def test_confirm_cancel_dialog_passes_order_id():
     assert "CANCEL" in kwargs["confirm_label"]
 
 
-def test_confirm_cancel_dialog_shows_order_details_when_provided():
-    """User-flagged hard requirement, 2026-07-10: the cancel dialog must show full
-    order details (symbol/side/qty/price/TIF), not just an opaque order ID — mirrors
-    what confirm_modify_dialog already does."""
+def test_confirm_cancel_dialog_shows_typed_order_details_when_provided():
+    """User-flagged hard requirement, 2026-07-10: the cancel dialog must show full order
+    details, not just an opaque order ID. Since 2026-09-10 those details are the typed rows
+    every Gate 2 dialog shares, never the raw dict (claudia_ui gaps #27(b–e), #40)."""
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
 
         confirm_cancel_dialog(
             "ORD456",
             "U1234567",
-            {"symbol": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 100.0},
+            {"ticker": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 100.0, "tif": "GTC"},
         )
-    kwargs = mock_show.call_args.kwargs
-    assert kwargs["details"]["Order ID"] == "ORD456"
-    assert kwargs["details"]["Account"] == "U1234567"
-    assert kwargs["details"]["symbol"] == "AAPL"
-    assert kwargs["details"]["side"] == "BUY"
-    assert kwargs["details"]["price"] == "100.0"
+    details = mock_show.call_args.kwargs["details"]
+    assert details["Order ID"] == "ORD456"
+    assert details["Account"] == "U1234567"
+    assert details["Symbol"] == "AAPL"
+    assert details["Action"] == "BUY"
+    assert details["Price"] == "100.0"
+    assert details["TIF"] == "GTC"
+    assert "symbol" not in details and "side" not in details and "price" not in details
+    assert list(details).count("Order ID") == 1
 
 
 def test_confirm_reply_dialog_passes_reply_id():
@@ -669,3 +673,133 @@ def test_confirm_reply_dialog_shows_the_cleaned_message():
 
         confirm_reply_dialog("RPL1", "Confirm&nbsp;Mandatory Cap Price<br/>")
     assert mock_show.call_args.kwargs["details"]["Message"] == "Confirm\xa0Mandatory Cap Price"
+
+
+_TYPED_ROW_KEYS = {
+    "Account",
+    "Action",
+    "Symbol",
+    "Quantity",
+    "Order Type",
+    "Price",
+    "Stop",
+    "TIF",
+    "Outside RTH",
+    "Total (est.)",
+    "Order ID",
+    "Changes",
+    "Currently at IBKR",
+}
+
+
+def test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once():
+    """claudia_ui gap #40 (screenshots 2026-09-10): the modify dialog was the raw body
+    (`orderType`, `manualIndicator: True`), the cancel dialog the raw proposal (`order_id` and
+    `Order ID` both, `limit_price: None`). All three dialogs now draw from one row builder."""
+    from ibkr_core_mcp.order_confirm import (
+        confirm_cancel_dialog,
+        confirm_modify_dialog,
+        confirm_order_dialog,
+    )
+
+    body = {
+        "conid": 649180671,
+        "orderType": "STP",
+        "side": "BUY",
+        "tif": "GTC",
+        "quantity": 1,
+        "ticker": "ES",
+        "manualIndicator": True,
+        "price": 7895.0,
+        "outsideRTH": True,
+        "limit_price": None,
+        "_companyName": "ESU6 · expires 2026-09-18 · x50",
+        "_multiplier": 50.0,
+        "_currency": "USD",
+        "_changes": [{"field": "stop_price", "previous_value": 7900.0}],
+        "_current_description": "Buy 1 ES Sep18'26 Stop 7900.00, GTC",
+    }
+    calls: list[dict[str, Any]] = []
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog", side_effect=lambda **kw: calls.append(kw)):
+        confirm_order_dialog(body, "U1")
+        confirm_modify_dialog("975324733", body, "U1")
+        confirm_cancel_dialog("975324733", "U1", body)
+    assert len(calls) == 3
+    for kw in calls:
+        details = kw["details"]
+        assert set(details) <= _TYPED_ROW_KEYS, details
+        assert "None" not in details.values()
+        assert "manualIndicator" not in details
+        assert details["Symbol"] == "ES — ESU6 · expires 2026-09-18 · x50"
+        assert details["Price"] == "7895.0 USD"
+        assert details["Outside RTH"] == "Yes"
+        assert details["Total (est.)"] == "394,750.00 USD (×50 multiplier)"
+    assert "Order ID" not in calls[0]["details"]
+    assert calls[1]["details"]["Order ID"] == "975324733"
+    assert calls[1]["details"]["Changes"] == "stop price 7900.0 → 7895.0"
+    assert calls[1]["details"]["Currently at IBKR"] == "Buy 1 ES Sep18'26 Stop 7900.00, GTC"
+    assert calls[2]["details"]["Order ID"] == "975324733"
+    assert calls[2]["details"]["Currently at IBKR"] == "Buy 1 ES Sep18'26 Stop 7900.00, GTC"
+    assert "Changes" not in calls[2]["details"]
+
+
+def test_stop_limit_dialog_shows_the_stop_as_its_own_row():
+    """A stop-limit's trigger lives in auxPrice; no dialog showed it before 2026-09-10."""
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+        confirm_order_dialog(
+            {
+                "ticker": "AAPL",
+                "side": "SELL",
+                "quantity": 2,
+                "orderType": "STOP_LIMIT",
+                "price": 100.0,
+                "auxPrice": 98.0,
+                "tif": "DAY",
+                "_currency": "USD",
+            },
+            "U1",
+        )
+    details = mock_show.call_args.kwargs["details"]
+    keys = list(details)
+    assert details["Price"] == "100.0 USD" and details["Stop"] == "98.0 USD"
+    assert keys.index("Stop") == keys.index("Price") + 1
+    assert keys.index("TIF") == keys.index("Stop") + 1
+
+
+def test_modify_dialog_changes_row_covers_every_field_kind():
+    """Each proposal field maps to the body key carrying its new value; unknown → '?'."""
+    from ibkr_core_mcp.order_confirm import confirm_modify_dialog
+
+    body = {
+        "ticker": "AAPL",
+        "side": "BUY",
+        "quantity": 3,
+        "orderType": "LMT",
+        "price": 105.0,
+        "tif": "DAY",
+        "outsideRTH": True,
+        "_changes": [
+            {"field": "limit_price", "previous_value": 100.0},
+            {"field": "quantity", "previous_value": 1},
+            {"field": "tif", "previous_value": "GTC"},
+            {"field": "outside_rth", "previous_value": False},
+            {"field": "mystery", "previous_value": 7},
+            "not a dict",
+        ],
+    }
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_modify_dialog("1", body, "U1")
+    assert mock_show.call_args.kwargs["details"]["Changes"] == (
+        "limit price 100.0 → 105.0\nquantity 1 → 3\ntif GTC → DAY\noutside rth No → Yes\nmystery 7 → ?"
+    )
+
+
+def test_confirm_cancel_dialog_without_order_keeps_the_id_only_shape():
+    """A caller without detail still gets the order-id-only dialog, unchanged."""
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
+
+        confirm_cancel_dialog("ORD456", "U1234567")
+    assert mock_show.call_args.kwargs["details"] == {"Order ID": "ORD456", "Account": "U1234567"}

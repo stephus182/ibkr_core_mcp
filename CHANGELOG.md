@@ -9,7 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `order_confirm.reply_message_text()` — IBKR reply text with tags stripped, then entities
+  unescaped (claudia_ui gap #39, 2026-09-10).
+- `IBKRClient.place_order_and_confirm` / `modify_order_and_confirm` accept `reply_log=`, a
+  caller-owned list that receives one record per IBKR reply (raw + cleaned text,
+  `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
+
 ### Changed
+- Gate 2: the modify and cancel dialogs render the same typed rows as the place dialog
+  (Account / Action / Symbol / Quantity / Order Type / Price / Stop / TIF / Outside RTH /
+  Total) plus `Order ID`, a `Changes` row (`<field> <previous> → <new>`, from `_changes`) and
+  `Currently at IBKR` (from `_current_description`); raw body keys, nulls and the reason
+  blob are gone (claudia_ui gap #40, 2026-09-10). A stop-limit's `auxPrice` now shows as
+  its own `Stop` row on every dialog.
+- `IBKRClient.modify_order` strips `_`-prefixed display keys before the POST, as
+  `place_order` always did.
 - **`search_contract` resolves a ticker to exactly ONE listing, with its currency — or asks which one was meant** (2026-08-05). It used to return every match `/iserver/secdef/search` produced, in that endpoint's undocumented order, while its own description told the model to *"use this to discover conids before calling tools that require one"*. Measured live: `contracts[0]` for **IGV was the Mexican listing** (conid 325209548, MEXI), with US/BATS 12658199 second. The consuming app's order path already refused symbol-only proposals, so placement was structurally safe — but the model was still being handed a menu whose first row was the wrong country.
 
   **Ranking the rows US-first and tagging them `_is_us` was built, measured, and then rejected.** It made the right answer easier to pick but still left the *pick* to the model, so correctness depended on the model reading a flag rather than on the code — the same weakness the original had. A list of plausible conids is the ambiguity, not a service.

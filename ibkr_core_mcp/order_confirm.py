@@ -32,24 +32,26 @@ from ibkr_core_mcp.exceptions import HumanAuthError
 _DIALOG_TIMEOUT_S = 60  # auto-cancels if unattended
 
 
-def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
-    """Gate 2 for place_order. Raises HumanAuthError if user does not confirm.
+def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
+    """The typed rows every Gate 2 dialog shows for an order (place, modify, cancel).
 
-    Shows an AppKit colored dialog (green=BUY, red=SELL) with full order details,
-    a DO NOT SEND button, and a SEND TO IBKR button. Auto-cancels after 60 seconds.
-    Falls back to osascript if the AppKit subprocess fails; tkinter on non-macOS.
-    Futures notional uses the _multiplier display field: price × qty × multiplier. When the
-    caller sets _multiplier_unknown instead, no number is printed at all (2026-09-04).
-
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    `order` is an IBKR-shaped body plus the display-only `_`-prefixed keys the callers add
+    (`_companyName`, `_multiplier`, `_multiplier_unknown`, `_currency`). Raw body keys never
+    reach the screen: until 2026-09-10 the modify and cancel dialogs forwarded their dict
+    verbatim — `orderType`, `manualIndicator: True`, `limit_price: None`, a reason blob, the
+    order id twice — so the last human-readable surface before an irreversible action was
+    the least legible one (claudia_ui gap #40).
     """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     company_name = order.get("_companyName", order.get("companyName", ""))
     symbol_str = f"{symbol} — {company_name}" if company_name else symbol
-    side = order.get("side", "?")
+    # IBKR-shaped bodies say `side`; a live-order dict from another caller may say
+    # `Side`; a pre-built row set says `Action`. All three feed the banner colour.
+    side = order.get("side", order.get("Side", order.get("Action", "?")))
     qty = order.get("quantity", "?")
     order_type = order.get("orderType", order.get("order_type", "MARKET"))
     price = order.get("price")
+    aux_price = order.get("auxPrice")
     tif = order.get("tif", order.get("timeInForce", "DAY"))
     multiplier = order.get("_multiplier")
     # Currency is displayed only when the caller established one, and always as an ISO
@@ -77,26 +79,83 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
             total_str = "Market"
     except (TypeError, ValueError):
         total_str = "—"
-    details = {
+    rows = {
         "Account": account_id,
         "Action": side,
         "Symbol": symbol_str,
         "Quantity": str(qty),
         "Order Type": order_type,
         "Price": price_str,
-        "TIF": tif,
     }
+    if aux_price is not None:
+        # A stop-limit's trigger lives in auxPrice; no dialog showed it before 2026-09-10.
+        rows["Stop"] = f"{aux_price}{ccy}"
+    rows["TIF"] = tif
     # The outside-RTH attribute decides WHEN a stop on a US future can trigger (IBKR
     # simulates those stops and fires them only in RTH unless it is set), so it belongs on
     # the last screen before the send. Shown only when the caller sent it — an absent
     # attribute means IBKR's default applies, and the dialog claims nothing it was not
     # given (2026-09-04).
     if isinstance(order.get("outsideRTH"), bool):  # a present None is not a value
-        details["Outside RTH"] = "Yes" if order["outsideRTH"] else "No"
-    details["Total (est.)"] = total_str
+        rows["Outside RTH"] = "Yes" if order["outsideRTH"] else "No"
+    rows["Total (est.)"] = total_str
+    return rows
+
+
+# Proposal field → the replacement-body key(s) carrying its new value, first present wins.
+# `stop_price` sits in `auxPrice` on a stop-limit and in `price` on a plain stop (IBKR's
+# field spec; see claudia_ui order_flow's body construction).
+_CHANGE_FIELD_KEYS: dict[str, tuple[str, ...]] = {
+    "limit_price": ("price",),
+    "stop_price": ("auxPrice", "price"),
+    "quantity": ("quantity",),
+    "tif": ("tif",),
+    "order_type": ("orderType",),
+    "outside_rth": ("outsideRTH",),
+    "action": ("side",),
+}
+
+
+def _yes_no(value: Any) -> Any:
+    """Booleans read as Yes/No on a dialog; every other value passes through."""
+    return ("Yes" if value else "No") if isinstance(value, bool) else value
+
+
+def _format_changes(order: dict[str, Any]) -> str:
+    """Render `order["_changes"]` as one `<field> <previous> → <new>` line per entry, "" if none.
+
+    The new value is read from the replacement body itself, so the row can never disagree
+    with what is about to be sent; an unknown field renders `?` rather than a guess.
+    """
+    lines: list[str] = []
+    for change in order.get("_changes") or []:
+        if not isinstance(change, dict) or not change.get("field"):
+            continue
+        field = str(change["field"])
+        new: Any = "?"
+        for key in _CHANGE_FIELD_KEYS.get(field, ()):
+            if order.get(key) is not None:
+                new = order[key]
+                break
+        previous = _yes_no(change.get("previous_value"))
+        lines.append(f"{field.replace('_', ' ')} {previous} → {_yes_no(new)}")
+    return "\n".join(lines)
+
+
+def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
+    """Gate 2 for place_order. Raises HumanAuthError if user does not confirm.
+
+    Shows an AppKit colored dialog (green=BUY, red=SELL) with full order details,
+    a DO NOT SEND button, and a SEND TO IBKR button. Auto-cancels after 60 seconds.
+    Falls back to osascript if the AppKit subprocess fails; tkinter on non-macOS.
+    Futures notional uses the _multiplier display field: price × qty × multiplier. When the
+    caller sets _multiplier_unknown instead, no number is printed at all (2026-09-04).
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    """
     _show_confirm_dialog(
         title="⚠  LIVE ORDER CONFIRMATION",
-        details=details,
+        details=_order_rows(order, account_id),
         disclaimer=(
             "This is a LIVE order. It will be sent to Interactive Brokers "
             "and may result in real financial transactions that cannot be undone."
@@ -109,23 +168,28 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
 def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str) -> None:
     """Gate 2 for modify_order. Raises HumanAuthError if the user does not confirm.
 
-    `order` is whatever the caller dispatches — from claudia_ui it is the fresh replacement
-    body built in `_execute_modify_order_core` (so an `outsideRTH` it carries shows raw, as
-    `outsideRTH: True`, alongside `orderType`/`tif`); from other callers it may be IBKR's own
-    live-order dict. Forwarded verbatim as display detail. Note it keys the side as `side`,
-    not the `Action` that confirm_order_dialog builds —
-    `_extract_side` reads both, which is what makes the banner colour correct here.
-    Before that it read `Action` alone, and every SELL modify rendered green.
+    `order` is the fresh replacement body the caller dispatches plus display-only keys:
+    `_changes` (the proposal's `{"field", "previous_value"}` list) renders one `Changes`
+    line per field as `<field> <previous> → <new>`, and `_current_description` (IBKR's own
+    `order_description_with_contract` from a status read) renders as `Currently at IBKR`.
+    Before 2026-09-10 the dict was forwarded verbatim — `orderType`, `manualIndicator:
+    True`, `outsideRTH: True` — with no month, notional, currency or before/after
+    (claudia_ui gap #40). The side is read as `side`, so the banner colour is right for
+    SELL modifies (before 2026-09 every SELL modify rendered green).
 
     Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
     """
+    details = _order_rows(order, account_id)
+    details["Order ID"] = order_id
+    changes = _format_changes(order)
+    if changes:
+        details["Changes"] = changes
+    current = order.get("_current_description")
+    if current:
+        details["Currently at IBKR"] = str(current)
     _show_confirm_dialog(
         title="⚠  MODIFY ORDER CONFIRMATION",
-        details={
-            **{k: str(v) for k, v in order.items() if k not in ("Order ID", "Account")},
-            "Order ID": order_id,
-            "Account": account_id,
-        },
+        details=details,
         disclaimer="This will MODIFY a live order at Interactive Brokers.",
         confirm_label="MODIFY ORDER",
         abandon_label="LEAVE UNCHANGED",
@@ -135,16 +199,22 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
 def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] | None = None) -> None:
     """Gate 2 for cancel_order.
 
-    `order` is optional display-only detail (symbol/side/qty/price/TIF/etc.) so the human
-    can visually verify which order they're cancelling — mirrors confirm_modify_dialog's
-    pattern. None preserves the old order-id-only dialog for any caller without full order
-    detail available. Found missing live 2026-07-10 — user-flagged hard requirement.
+    `order` is optional display-only detail in the IBKR body shape (`side`, `quantity`,
+    `orderType`, `price`/`auxPrice`, `tif`, `outsideRTH`, `ticker`, plus the `_`-prefixed
+    display keys); `_current_description` — IBKR's `order_description_with_contract` —
+    renders as `Currently at IBKR`. None keeps the order-id-only dialog for a caller
+    without detail. Found missing live 2026-07-10 (user-flagged hard requirement); rendered
+    as the raw proposal dict until 2026-09-10 — `order_id` and `Order ID` both,
+    `limit_price: None`, the reason blob (claudia_ui gaps #27(b–e), #40).
     """
-    details: dict[str, Any] = {}
     if order:
-        details.update({k: str(v) for k, v in order.items() if k not in ("Order ID", "Account")})
-    details["Order ID"] = order_id
-    details["Account"] = account_id
+        details = _order_rows(order, account_id)
+        details["Order ID"] = order_id
+        current = order.get("_current_description")
+        if current:
+            details["Currently at IBKR"] = str(current)
+    else:
+        details = {"Order ID": order_id, "Account": account_id}
     _show_confirm_dialog(
         title="⚠  CANCEL ORDER CONFIRMATION",
         details=details,
@@ -215,9 +285,10 @@ _SIDE_KEYS = ("Action", "side", "Side")
 def _extract_side(details: dict[str, Any]) -> str | None:
     """Return the order side from whichever key carries it, or None if none does.
 
-    Three sources disagree on the key. `confirm_order_dialog` builds `Action` itself;
-    `confirm_modify_dialog` and `confirm_cancel_dialog` forward IBKR's live-order dict,
-    which uses `side`; and `confirm_reply_dialog` has no side at all. Reading only
+    Three sources disagree on the key. Since 2026-09-10 all three order dialogs build
+    their rows through `_order_rows`, which folds `side`/`Side` into `Action`; a caller
+    handing a raw dict straight to this renderer may still say `side` or `Side`; and
+    `confirm_reply_dialog` has no side at all. Reading only
     `Action` — as this did until 2026-08-07 — meant three of the four Gate 2 dialogs
     reached `_order_dialog` with no side, where the default was a confident green
     "BUY ORDER" banner over what could be a live sell.

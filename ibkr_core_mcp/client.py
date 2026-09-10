@@ -1362,7 +1362,11 @@ class IBKRClient:
         self._ensure_accounts_initialized()
         require_touch_id(f"modify IBKR order {order_id}")
         confirm_modify_dialog(order_id, order, account_id)
-        return self._post(f"/iserver/account/{account_id}/order/{order_id}", order)
+        # Display-only `_`-prefixed keys (the futures label, multiplier, currency,
+        # `_changes`, `_current_description`) never reach IBKR — the same convention as
+        # place_order, applied here since 2026-09-10.
+        api_order = {k: v for k, v in order.items() if not k.startswith("_")}
+        return self._post(f"/iserver/account/{account_id}/order/{order_id}", api_order)
 
     def cancel_order(
         self, account_id: str, order_id: str, order_details: dict[str, Any] | None = None

@@ -1501,3 +1501,20 @@ def test_modify_order_and_confirm_records_replies_too(client):
         result = client.modify_order_and_confirm("U1234567", "1", {"side": "BUY"}, reply_log=reply_log)
     assert result == {"order_id": "1", "order_status": "Submitted"}
     assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [("RPL9", True)]
+
+
+def test_modify_order_strips_display_only_keys_before_posting(client):
+    """The `_`-prefixed display convention (label, multiplier, currency, `_changes`,
+    `_current_description`) now applies to modify exactly as to place (2026-09-10)."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response({"order_id": "1", "order_status": "Submitted"})
+        client.modify_order(
+            "U1234567",
+            "1",
+            {"side": "SELL", "price": 10.0, "_currency": "USD", "_changes": [], "_current_description": "x"},
+        )
+    assert mock_post.call_args.kwargs.get("json") == {"side": "SELL", "price": 10.0}
