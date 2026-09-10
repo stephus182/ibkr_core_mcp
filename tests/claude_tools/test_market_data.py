@@ -766,3 +766,70 @@ def test_delete_cache_miss(toolkit):
 # ============================================================================
 # _modify_price_alert
 # ============================================================================
+
+
+def test_get_futures_is_sorted_by_expiry_and_flags_the_front_month(toolkit):
+    """claudia_ui gap #37 (2026-09-10): /trsrv/futures listed Dec 2026 first and the model
+    read list position as a volume ranking. Rows come back sorted per root symbol with the
+    earliest flagged, so the front month is stated, not inferred."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 515416632, "expirationDate": 20261218},
+        {"symbol": "NQ", "conid": 3, "expirationDate": 20261218},
+        {"symbol": "ES", "conid": 649180671, "expirationDate": 20260918},
+        {"symbol": "NQ", "conid": 4, "expirationDate": 20260918},
+    ]
+    text, _fig = toolkit.execute("get_futures", {"symbols": ["ES", "NQ"]})
+    rows = json.loads(text)
+    assert [(r["symbol"], r["conid"], r["front_month"]) for r in rows] == [
+        ("ES", 649180671, True),
+        ("ES", 515416632, False),
+        ("NQ", 4, True),
+        ("NQ", 3, False),
+    ]
+
+
+_ES_INFO = {
+    "local_symbol": "ESU6",
+    "contract_month": "202609",
+    "maturity_date": "20260918",
+    "company_name": "E-mini S&P 500",
+    "multiplier": "50",
+}
+
+
+def test_fut_snapshot_names_the_resolved_contract_once_per_conid(toolkit):
+    """A futures quote carries `_contract` — IBKR's local symbol, month token, expiry and
+    name (measured 2026-09-10 on ES 649180671) — read once per conid and cached."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 515416632, "expirationDate": 20261218},
+        {"symbol": "ES", "conid": 649180671, "expirationDate": 20260918},
+    ]
+    toolkit._client.get_contract_info.return_value = _ES_INFO
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 649180671, "31": "7601.0", "6509": "R"}]
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
+    assert '"local_symbol": "ESU6"' in text
+    assert '"month": "SEP26"' in text
+    assert '"expires": "2026-09-18"' in text
+    assert '"name": "E-mini S&P 500"' in text
+    assert '"multiplier": 50.0' in text
+    toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
+    toolkit._client.get_contract_info.assert_called_once_with(649180671)
+
+
+def test_stk_snapshot_carries_no_contract_block(toolkit):
+    """A stock quote is unchanged: no `_contract`, no contract-info read."""
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 265598, "31": "185.0", "6509": "R"}]
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["AAPL"]})
+    assert "_contract" not in text
+    toolkit._client.get_contract_info.assert_not_called()
+
+
+def test_fut_snapshot_omits_the_contract_block_when_the_read_fails(toolkit):
+    """A failed contract-info read leaves the block out — never a guessed name."""
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    toolkit._client.get_futures.return_value = [{"symbol": "ES", "conid": 649180671, "expirationDate": 20260918}]
+    toolkit._client.get_contract_info.side_effect = IBKRAPIError("HTTP 500")
+    toolkit._client.get_market_snapshot.return_value = [{"conid": 649180671, "31": "7601.0", "6509": "R"}]
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
+    assert "7601.0" in text and "_contract" not in text

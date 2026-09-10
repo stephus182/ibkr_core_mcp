@@ -10,6 +10,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `get_futures` rows sorted by expiry per root symbol with `front_month: true` on the
+  earliest; `get_market_snapshot` FUT quotes carry `_contract` (local symbol, month token,
+  expiry, name, multiplier) from a per-conid cache of `/iserver/contract/{conid}/info`
+  (claudia_ui gap #37, 2026-09-10).
 - `order_confirm.reply_message_text()` — IBKR reply text with tags stripped, then entities
   unescaped (claudia_ui gap #39, 2026-09-10).
 - `IBKRClient.place_order_and_confirm` / `modify_order_and_confirm` accept `reply_log=`, a

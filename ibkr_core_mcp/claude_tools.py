@@ -652,7 +652,8 @@ TOOL_DEFINITIONS = [
         "name": "get_futures",
         "description": (
             "Look up futures contracts for one or more symbols. "
-            "Returns available expiry months, conids, and exchange info. "
+            "Returns available expiry months, conids, and exchange info, sorted by expiry per "
+            "root symbol; the earliest row carries front_month: true. "
             "Useful for CL, ES, NQ, GC, and other futures."
         ),
         "input_schema": {
@@ -703,6 +704,11 @@ TOOL_DEFINITIONS = [
             "- OPT: options require a prior search_contract + secdef/info flow to resolve "
             "  the option conid. Call search_contract first, then get_market_snapshot with "
             "  the resolved conid directly (not ticker)."
+            "\n\nFor sec_type FUT each quote also carries _contract — the resolved contract "
+            "in IBKR's own terms: local_symbol (e.g. ESU6), month (e.g. SEP26), expires, "
+            "name, multiplier. A bare root symbol always means the front month; name the "
+            "contract by its local_symbol when you report it, and never rank months by "
+            "anything you have not quoted."
         ),
         "input_schema": {
             "type": "object",
@@ -1190,6 +1196,53 @@ def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
     return parsed, skipped
 
 
+_MONTH_TOKENS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def _month_token(contract_month: Any) -> str | None:
+    """`202609` → `SEP26`, IBKR's own month token (the `month` `/iserver/secdef/info` takes)."""
+    text = str(contract_month or "")
+    if len(text) != 6 or not text.isdigit():
+        return None
+    month = int(text[4:6])
+    if not 1 <= month <= 12:
+        return None
+    return f"{_MONTH_TOKENS[month - 1]}{text[2:4]}"
+
+
+def _iso_date(yyyymmdd: Any) -> str | None:
+    """`20260918` → `2026-09-18`; None for anything else."""
+    text = str(yyyymmdd or "")
+    if len(text) != 8 or not text.isdigit():
+        return None
+    return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+
+
+def _expiration_key(row: dict[str, Any]) -> int:
+    try:
+        return int(row.get("expirationDate") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sorted_with_front_month(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`/trsrv/futures` rows sorted by root symbol then expiry, the earliest dated row of
+    each root flagged `front_month: true` — the rule `_resolve_snapshot_conid` applies,
+    stated in the result. Rows without a parseable date sort first and are never flagged."""
+    ordered = sorted(
+        (dict(r) for r in rows if isinstance(r, dict)),
+        key=lambda r: (str(r.get("symbol") or ""), _expiration_key(r)),
+    )
+    flagged: set[str] = set()
+    for row in ordered:
+        sym = str(row.get("symbol") or "")
+        is_front = sym not in flagged and _expiration_key(row) > 0
+        row["front_month"] = is_front
+        if is_front:
+            flagged.add(sym)
+    return ordered
+
+
 class ClaudeToolkit:
     """Ready-made Anthropic tool-use layer for IBKR research. Portable across any Claude-powered app.
 
@@ -1233,6 +1286,9 @@ class ClaudeToolkit:
         # but not safe if ClaudeToolkit is ever driven by a genuinely multi-threaded
         # host app. Add a lock if that becomes a real usage pattern.
         self._crawl4ai: Any = None
+        # conid → the contract named in IBKR's own terms, for the `_contract` block on a
+        # futures quote. A contract's identity never changes, so one read per conid.
+        self._contract_identity: dict[int, dict[str, Any]] = {}
 
     @property
     def client(self) -> IBKRClient:
@@ -2577,12 +2633,18 @@ class ClaudeToolkit:
         return json.dumps(contracts, indent=2), None
 
     def _get_futures(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return available futures contracts and expiration dates for the given root symbols."""
+        """Return the futures contracts for the given root symbols, sorted by expiry.
+
+        `/trsrv/futures` returns its rows in no date order (measured 2026-09-10: Dec 2026
+        first for ES, 21 rows) and the model once read list position as a volume ranking
+        (claudia_ui gap #37). Rows are sorted per root symbol and the earliest carries
+        `front_month: true` — see `_sorted_with_front_month`.
+        """
         symbols = [s.upper() for s in inputs["symbols"]]
         futures = self._client.get_futures(symbols)
         if not futures:
             return f"No futures found for {', '.join(symbols)}.", None
-        return json.dumps(futures, indent=2), None
+        return json.dumps(_sorted_with_front_month(futures), indent=2), None
 
     def _listing_currency(self, conid: int) -> str | None:
         """Return the currency a listing trades in, or None if it could not be read.
@@ -2609,6 +2671,40 @@ class ClaudeToolkit:
         if isinstance(row, dict) and row.get("currency"):
             return str(row["currency"])
         return None
+
+    def _futures_identity(self, conid: int) -> dict[str, Any] | None:
+        """The resolved contract named in IBKR's own terms, for a quote's `_contract` block.
+
+        From `/iserver/contract/{conid}/info` — measured 2026-09-10 on ES 649180671:
+        `local_symbol "ESU6"`, `contract_month "202609"`, `maturity_date "20260918"`,
+        `company_name "E-mini S&P 500"`, `multiplier "50"`. Cached per conid. None when the
+        read fails or carries no local symbol: the block is then omitted, never guessed.
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-instrument-info.md
+        """
+        cached = self._contract_identity.get(conid)
+        if cached is not None:
+            return cached
+        try:
+            info: Any = self._client.get_contract_info(conid)
+        except IBKRCoreError:
+            return None
+        if not isinstance(info, dict):
+            return None
+        local_symbol = str(info.get("local_symbol") or "").strip()
+        if not local_symbol:
+            return None
+        identity: dict[str, Any] = {
+            "local_symbol": local_symbol,
+            "month": _month_token(info.get("contract_month")),
+            "expires": _iso_date(info.get("maturity_date")),
+            "name": str(info.get("company_name") or "").strip() or None,
+        }
+        try:
+            identity["multiplier"] = float(info["multiplier"])
+        except (KeyError, TypeError, ValueError):
+            identity["multiplier"] = None
+        self._contract_identity[conid] = identity
+        return identity
 
     def _resolve_snapshot_conid(self, sym: str, sec_type: str, exchange: str | None) -> _Resolved:
         """Resolve one symbol to a conid using the correct endpoint for its sec_type.
@@ -2881,6 +2977,7 @@ class ClaudeToolkit:
         conids: list[int] = []
         conid_to_sym: dict[int, str] = {}
         conid_to_ccy: dict[int, str | None] = {}
+        conid_to_contract: dict[int, dict[str, Any]] = {}
         ambiguous: list[str] = []
         failed: list[str] = []
         for sym in symbols:
@@ -2893,6 +2990,10 @@ class ClaudeToolkit:
                 conids.append(resolved.conid)
                 conid_to_sym[resolved.conid] = sym
                 conid_to_ccy[resolved.conid] = resolved.currency
+                if sec_type == "FUT":
+                    contract = self._futures_identity(resolved.conid)
+                    if contract:
+                        conid_to_contract[resolved.conid] = contract
         if not conids:
             # The ambiguity questions ARE the answer when nothing resolved. Collapsing
             # them into "could not resolve" would throw away the one thing the user can
@@ -2952,6 +3053,11 @@ class ClaudeToolkit:
                     "_currency": ccy or "UNKNOWN",
                     "_data_status": data_status,
                     "_quote_time": quote_time,
+                    **(
+                        {"_contract": conid_to_contract[cid]}
+                        if isinstance(cid, int) and cid in conid_to_contract
+                        else {}
+                    ),
                     **item,
                 }
             )
