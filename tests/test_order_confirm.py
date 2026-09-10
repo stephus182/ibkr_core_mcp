@@ -645,3 +645,27 @@ def test_confirm_order_dialog_refuses_a_notional_when_the_multiplier_is_unknown(
     total = mock_show.call_args.kwargs["details"]["Total (est.)"]
     assert "7,735.00" not in total
     assert "multiplier unknown" in total.lower()
+
+
+def test_reply_message_text_strips_tags_then_unescapes_entities():
+    """Order matters: unescaping first would turn a literal '&lt;b&gt;' into '<b>', which the
+    tag stripper would then delete. Live 2026-09-10 (claudia_ui gap #39): IBKR's Stop Variant
+    disclosure reached the dialog with '&nbsp;&nbsp;&nbsp;' between every sentence."""
+    from ibkr_core_mcp.order_confirm import reply_message_text
+
+    text = (
+        "<h4>Stop Variant Order Confirmation</h4>&nbsp;&nbsp;&nbsp;A Stop Order is an "
+        "instruction to buy or sell.&nbsp;&nbsp;&nbsp;Price must be &lt;b&gt; 100."
+    )
+    shown = reply_message_text(text)
+    assert "&nbsp;" not in shown and "&lt;" not in shown and "<h4>" not in shown
+    assert shown.startswith("Stop Variant Order Confirmation\xa0\xa0\xa0A Stop Order")
+    assert shown.endswith("Price must be <b> 100.")
+
+
+def test_confirm_reply_dialog_shows_the_cleaned_message():
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+
+        confirm_reply_dialog("RPL1", "Confirm&nbsp;Mandatory Cap Price<br/>")
+    assert mock_show.call_args.kwargs["details"]["Message"] == "Confirm\xa0Mandatory Cap Price"
