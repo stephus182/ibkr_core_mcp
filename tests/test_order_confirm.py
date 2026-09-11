@@ -848,7 +848,7 @@ def test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once():
         assert "None" not in details.values()
         assert "manualIndicator" not in details
         assert details["Symbol"] == "ES — ESU6 · expires 2026-09-18 · x50"
-        assert details["Price"] == "7,895.00 USD"
+        assert details["Price"] == "7,895.00"  # index points, not money (2026-09-11)
         assert details["Outside RTH"] == "Yes"
         assert details["Total (est.)"] == "394,750.00 USD (×50 multiplier)"
     assert "Order ID" not in calls[0]["details"]
@@ -940,10 +940,11 @@ def _fake_appkit(detail_height: float = 90.0, disclaimer_height: float = 34.0):
     ak = MagicMock()
     alert = ak.NSAlert.alloc.return_value.init.return_value
     alert.runModal.return_value = 1000
+    detail = ak.NSMutableAttributedString.alloc.return_value.init.return_value
+    detail.boundingRectWithSize_options_context_.return_value = MagicMock(size=MagicMock(height=detail_height))
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
-    heights = iter([detail_height, disclaimer_height])
-    made.return_value.boundingRectWithSize_options_context_.side_effect = lambda *_: MagicMock(
-        size=MagicMock(height=next(heights))
+    made.return_value.boundingRectWithSize_options_context_.return_value = MagicMock(
+        size=MagicMock(height=disclaimer_height)
     )
     return ak
 
@@ -955,7 +956,6 @@ def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
     detail (bold) above the disclaimer (regular) above the banner — the order read today.
     """
     import sys
-    from unittest.mock import call as mock_call
 
     from ibkr_core_mcp._order_dialog import _run_alert
 
@@ -975,12 +975,90 @@ def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
     alert = ak.NSAlert.alloc.return_value.init.return_value
     alert.setInformativeText_.assert_called_once_with("")
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
-    (detail_text, detail_attrs), (disc_text, disc_attrs) = (c.args for c in made.call_args_list)
-    assert detail_text == "Action: BUY\nSymbol: ES — ESU6\nQuantity: 1"
-    assert detail_attrs[ak.NSFontAttributeName] == ak.NSFont.boldSystemFontOfSize_.return_value
+    disc_text, disc_attrs = made.call_args_list[-1].args
     assert disc_text == "This is a LIVE order."
     assert disc_attrs[ak.NSFontAttributeName] == ak.NSFont.systemFontOfSize_.return_value
     # container = banner 48 + gap 8 + disclaimer (34 + 2) + gap 8 + detail (90 + 2); the
-    # container is the first rect made, the banner box the second
-    assert ak.NSMakeRect.call_args_list[0] == mock_call(0, 0, 420, 48 + 8 + 36 + 8 + 92)
-    assert ak.NSMakeRect.call_args_list[1] == mock_call(0, 0, 420, 48)
+    # container is the first rect made, the banner box the second; then the disclaimer field
+    # sits just above the banner and the detail field above that — the reading order.
+    rects = [c.args for c in ak.NSMakeRect.call_args_list]
+    assert rects[0] == (0, 0, 420, 48 + 8 + 36 + 8 + 92)
+    assert rects[1] == (0, 0, 420, 48)
+    assert (8, 48 + 8, 404, 36) in rects  # disclaimer field
+    assert (8, 48 + 8 + 36 + 8, 404, 92) in rects  # detail field, above it
+
+
+def test_a_futures_price_is_not_a_currency_amount():
+    """`Price: 7,900.00 USD` on an ES order was wrong: the price is 7,900 index points and the
+    USD figure is the ×50 total (user, 2026-09-11). Futures price rows carry no currency;
+    the total, which IS money, keeps it; a stock's price is money and keeps it too."""
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    fut = _order_rows(
+        {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "STOP_LIMIT",
+            "price": 7895.0,
+            "auxPrice": 7900.0,
+            "tif": "GTC",
+            "_multiplier": 50.0,
+            "_currency": "USD",
+        },
+        "U1",
+    )
+    assert fut["Price"] == "7,895.00" and fut["Stop"] == "7,900.00"
+    assert fut["Total (est.)"] == "394,750.00 USD (×50 multiplier)"
+    unknown = _order_rows(
+        {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "STP",
+            "price": 7900.0,
+            "_multiplier_unknown": True,
+            "_currency": "USD",
+        },
+        "U1",
+    )
+    assert unknown["Price"] == "7,900.00"
+    stk = _order_rows(
+        {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": "LMT", "price": 150.0, "_currency": "USD"},
+        "U1",
+    )
+    assert stk["Price"] == "150.00 USD" and stk["Total (est.)"] == "1,500.00 USD"
+
+
+def test_dialog_bolds_the_values_not_the_labels():
+    """User read of the first smoke (2026-09-11): bold is right, but for the values only —
+    `Action:` regular, `BUY` bold — so each row is two runs, joined by regular newlines."""
+    import sys
+
+    from ibkr_core_mcp._order_dialog import _run_alert
+
+    ak = _fake_appkit()
+    with patch.dict(sys.modules, {"AppKit": ak, "Foundation": MagicMock()}):
+        _run_alert(
+            {
+                "title": "T",
+                "details": {"Action": "BUY", "Quantity": "1"},
+                "disclaimer": "D",
+                "confirm_label": "SEND",
+                "abandon_label": "DO NOT SEND",
+                "side": "BUY",
+                "timeout_s": 1,
+            }
+        )
+    made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
+    bold = ak.NSFont.boldSystemFontOfSize_.return_value
+    regular = ak.NSFont.systemFontOfSize_.return_value
+    runs = [(c.args[0], c.args[1][ak.NSFontAttributeName]) for c in made.call_args_list]
+    assert runs == [
+        ("Action: ", regular),
+        ("BUY", bold),
+        ("\n", regular),
+        ("Quantity: ", regular),
+        ("1", bold),
+        ("D", regular),
+    ]

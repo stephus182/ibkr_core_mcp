@@ -86,7 +86,13 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # The same formatter as the Changes row, so one dialog cannot show one number two
     # ways: live 2026-09-10 it read `Price: 6945.0 USD` four lines above
     # `limit price 6,995.00 → 6,945.00` (claudia_ui gap #46).
-    price_str = f"{change_value_text('limit_price', price)}{ccy}" if price is not None else "MARKET"
+    # A futures price is quoted in the contract's own units — index points for ES — not
+    # in currency; the money figure is the multiplied total. `Price: 7,900.00 USD` was wrong
+    # (user, 2026-09-11). No unit is printed rather than a guessed one: no IB field names
+    # the quotation unit, and "points" would be wrong for crude or a bond future.
+    is_future = multiplier is not None or bool(order.get("_multiplier_unknown"))
+    price_ccy = "" if is_future else ccy
+    price_str = f"{change_value_text('limit_price', price)}{price_ccy}" if price is not None else "MARKET"
     try:
         if order.get("_multiplier_unknown"):
             # A futures order whose multiplier the caller could not learn. price × qty here
@@ -113,7 +119,7 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     }
     if aux_price is not None:
         # A stop-limit's trigger lives in auxPrice; no dialog showed it before 2026-09-10.
-        rows["Stop"] = f"{change_value_text('stop_price', aux_price)}{ccy}"
+        rows["Stop"] = f"{change_value_text('stop_price', aux_price)}{price_ccy}"
     rows["TIF"] = tif
     # The outside-RTH attribute decides WHEN a stop on a US future can trigger (IBKR
     # simulates those stops and fires them only in RTH unless it is set), so it belongs on

@@ -136,6 +136,7 @@ def _run_alert(data: dict[str, Any]) -> None:
         NSMakeRect,
         NSMakeSize,
         NSModalPanelRunLoopMode,
+        NSMutableAttributedString,
         NSRunLoop,
         NSTextField,
         NSTimer,
@@ -146,7 +147,6 @@ def _run_alert(data: dict[str, Any]) -> None:
     bg_color = NSColor.colorWithRed_green_blue_alpha_(r, g, b, 1.0)
 
     details = data.get("details", {})
-    detail_text = "\n".join(f"{k}: {v}" for k, v in details.items())
     disclaimer = data.get("disclaimer", "")
     confirm_label = data.get("confirm_label", "CONFIRM")
     # Default is deliberately NOT "CANCEL": this button sits beside confirm_label, and on the
@@ -173,18 +173,21 @@ def _run_alert(data: dict[str, Any]) -> None:
     buttons.objectAtIndex_(0).setKeyEquivalent_("")  # disable Return on confirm
     buttons.objectAtIndex_(1).setKeyEquivalent_("\x1b")  # Escape = cancel
 
-    def _attributed(text: str, font: Any) -> tuple[Any, float]:
-        """An attributed string in `font`, and its wrapped height at the dialog width."""
-        value = NSAttributedString.alloc().initWithString_attributes_(
+    def _attributed(text: str, font: Any) -> Any:
+        """An attributed string in `font`, in the label colour."""
+        return NSAttributedString.alloc().initWithString_attributes_(
             text,
             {NSFontAttributeName: font, NSForegroundColorAttributeName: NSColor.labelColor()},
         )
+
+    def _measure(value: Any) -> float:
+        """The wrapped height of `value` at the dialog width."""
         rect = value.boundingRectWithSize_options_context_(
             NSMakeSize(_DIALOG_WIDTH - 2 * _GAP, 10_000),
             _NS_STRING_DRAWING_USES_LINE_FRAGMENT_ORIGIN,
             None,
         )
-        return value, float(rect.size.height) + 2
+        return float(rect.size.height) + 2
 
     def _field(value: Any, y: float, height: float) -> Any:
         """A read-only, borderless text field showing `value`."""
@@ -199,8 +202,18 @@ def _run_alert(data: dict[str, Any]) -> None:
     # The order detail is what the human is agreeing to: bold, above the disclaimer,
     # above the banner — the reading order the dialog always had (user design
     # 2026-09-10/11, claudia_ui gap #42). Heights are measured, so long rows wrap.
-    detail_value, detail_h = _attributed(detail_text, NSFont.boldSystemFontOfSize_(13))
-    disclaimer_value, disclaimer_h = _attributed(disclaimer, NSFont.systemFontOfSize_(12))
+    # Values bold, labels regular (user read of the first smoke, 2026-09-11): each row is
+    # two runs, joined by regular newlines, measured as one block.
+    regular, bold = NSFont.systemFontOfSize_(13), NSFont.boldSystemFontOfSize_(13)
+    detail_value = NSMutableAttributedString.alloc().init()
+    for i, (key, val) in enumerate(details.items()):
+        if i:
+            detail_value.appendAttributedString_(_attributed("\n", regular))
+        detail_value.appendAttributedString_(_attributed(f"{key}: ", regular))
+        detail_value.appendAttributedString_(_attributed(str(val), bold))
+    detail_h = _measure(detail_value)
+    disclaimer_value = _attributed(disclaimer, NSFont.systemFontOfSize_(12))
+    disclaimer_h = _measure(disclaimer_value)
     total_h = _BANNER_H + _GAP + disclaimer_h + _GAP + detail_h
     container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, _DIALOG_WIDTH, total_h))
     # Coloured banner via NSBox, at the bottom
