@@ -1,5 +1,6 @@
 import re as _re
 import sys
+from dataclasses import FrozenInstanceError
 from pathlib import Path as _Path
 from unittest.mock import MagicMock, patch
 
@@ -138,3 +139,53 @@ def test_every_touch_id_reason_completes_the_system_prompt_grammatically():
         assert reason[:1].islower(), (
             f"reason must begin with a lowercase verb completing 'is trying to', rendering: {rendered!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# One authorization per order write (claudia_ui gap #47, user rule 2026-09-11)
+# ---------------------------------------------------------------------------
+
+
+def test_authorization_covers_its_own_scope_until_it_expires(monkeypatch):
+    """One fingerprint covers one transaction for a bounded time, and nothing else."""
+    from ibkr_core_mcp import human_auth
+
+    now = [1000.0]
+    monkeypatch.setattr(human_auth.time, "monotonic", lambda: now[0])
+    auth = human_auth.OrderWriteAuthorization(scope="place:abc", label="BUY 1 ES", granted_at=1000.0, ttl_s=300.0)
+    assert auth.covers("place:abc")
+    assert not auth.covers("place:abd")  # a different order
+    assert not auth.covers("modify:1:abc")  # a different action
+    now[0] = 1299.0
+    assert auth.covers("place:abc") and not auth.expired
+    now[0] = 1300.0
+    assert auth.expired and not auth.covers("place:abc")
+
+
+def test_authorize_order_write_is_touch_id_then_a_frozen_value(monkeypatch):
+    """Gate 1 exactly as before, then a frozen token — and no module state appears."""
+    from ibkr_core_mcp import human_auth
+
+    calls: list[str] = []
+    monkeypatch.setattr(human_auth, "require_touch_id", lambda reason: calls.append(reason))
+    monkeypatch.setattr(human_auth.time, "monotonic", lambda: 42.0)
+    auth = human_auth.authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")
+    assert calls == ["place an IBKR order — BUY 1 ES"]
+    assert auth == human_auth.OrderWriteAuthorization("place:abc", "BUY 1 ES", 42.0, 300.0)
+    with pytest.raises(FrozenInstanceError):
+        auth.scope = "other"  # type: ignore[misc]
+    assert not any(isinstance(v, human_auth.OrderWriteAuthorization) for v in vars(human_auth).values()), (
+        "an authorization must never be held at module level"
+    )
+
+
+def test_authorize_order_write_grants_nothing_when_touch_id_is_denied(monkeypatch):
+    """A refused fingerprint raises before any value exists."""
+    from ibkr_core_mcp import human_auth
+
+    def deny(reason: str) -> None:
+        raise HumanAuthError("Touch ID denied")
+
+    monkeypatch.setattr(human_auth, "require_touch_id", deny)
+    with pytest.raises(HumanAuthError):
+        human_auth.authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")

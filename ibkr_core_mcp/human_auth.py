@@ -9,8 +9,19 @@ The policy is `LAPolicyDeviceOwnerAuthentication`: biometrics first, falling bac
 to the device password if the biometric read genuinely fails. That fallback is
 Apple's own recovery path, not a bypass added here — the stricter biometrics-only
 policy was evaluated and rejected because a failed scan under it leaves the user no
-recovery at all. There is deliberately no bypass flag and no caching of a prior
-success; every gated call re-authenticates. Do not add one.
+recovery at all. There is deliberately no bypass flag and no *cache* of a prior success — nothing that lets
+a later, unrelated write ride on an earlier fingerprint. What `authorize_order_write`
+returns is not that: one authorization for one write, bound to that write's own data and
+to a 300 s window, held only by the call chain that earned it, checked identically at the
+write and at every reply, and expiring closed. The precaution replies IBKR sends for that
+same write validate through their dialogs without a second fingerprint — the user's rule
+(2026-09-11), matching IBKR Mobile and TWS, which ask for one biometric per placement,
+modification or cancellation. The standards say the same: the unit of authorization is the
+transaction (OWASP Transaction Authorization 1.5, EU RTS 2018/389 Art. 5); intent is an
+explicit button, not a biometric (NIST SP 800-63B-4 "Authentication Intent"); repeated
+approval prompts are a named threat (NIST "Authentication Fatigue", CISA "push fatigue").
+Sources and quotes: claudia_ui `docs/api-reference.md` § Order authorization. Do not add a
+cache; do not make an authorization global; do not let a reply skip its dialog.
 
 https://developer.apple.com/documentation/localauthentication/lapolicy
 """
@@ -18,11 +29,75 @@ https://developer.apple.com/documentation/localauthentication/lapolicy
 from __future__ import annotations
 
 import threading
+import time
+from dataclasses import dataclass
 from typing import Any
 
 from ibkr_core_mcp.exceptions import HumanAuthError
 
 _TIMEOUT = 60
+
+# How long one Gate 1 covers one order write. Justified on our own measurements, not on
+# a vendor number (Apple's reuse constant page prints no value): each reply dialog
+# auto-cancels at 60 s, the longest chain seen is three replies (2026-09-10), and IBKR
+# requires the chain to run back-to-back — 300 s covers three dialogs at their limit plus
+# latency, and sits well inside NIST SP 800-63B-4's tightest inactivity timeout (15 min).
+ORDER_WRITE_AUTHORIZATION_TTL_S = 300.0
+
+
+@dataclass(frozen=True)
+class OrderWriteAuthorization:
+    """One human authorization for one order write, bound to that write's own data.
+
+    Created by `authorize_order_write` immediately after a successful Touch ID and passed
+    *down* the call chain that needed it — `place_order_and_confirm` → `place_order` →
+    `_resolve_one_reply` — so the precaution replies IBKR sends for that same write do not
+    each demand a fresh fingerprint. It lives only in that call frame: no module state, no
+    attribute on the client, nothing persisted, nothing shared across actions. That is the
+    difference between an authorization and the cache this module refuses.
+
+    `scope` is the transaction's own data (`client._order_write_scope`): the canonical body
+    about to be sent, hashed — a body altered after the fingerprint is a different scope and
+    `covers()` is False. The write and every reply run the same `covers(scope)` check with
+    the scope the chain computed from the body it sent. `label` is the one-line order
+    description the reply dialogs put in their title. Expiry fails closed: the holder
+    prompts again.
+
+    Why once per write: the user's rule (2026-09-11), matching IBKR Mobile and TWS, and
+    what the standards describe — see the module docstring.
+    """
+
+    scope: str
+    label: str
+    granted_at: float
+    ttl_s: float
+
+    @property
+    def expired(self) -> bool:
+        """True once the window has passed — the holder must prompt again."""
+        return (time.monotonic() - self.granted_at) >= self.ttl_s
+
+    def covers(self, scope: str) -> bool:
+        """True only for the same transaction inside the window."""
+        return scope == self.scope and not self.expired
+
+
+def authorize_order_write(
+    reason: str, scope: str, label: str, ttl_s: float = ORDER_WRITE_AUTHORIZATION_TTL_S
+) -> OrderWriteAuthorization:
+    """Gate 1 for one order write: Touch ID, then the authorization it grants.
+
+    Args:
+        reason: The Touch ID prompt text, completing "Python is trying to …".
+        scope: The transaction's own data, from `client._order_write_scope`.
+        label: The order's one-line description, for the reply dialogs' title.
+        ttl_s: Validity window; `ORDER_WRITE_AUTHORIZATION_TTL_S` unless a test shortens it.
+
+    Returns:
+        The authorization. Raises `HumanAuthError` (from `require_touch_id`) on any denial.
+    """
+    require_touch_id(reason)
+    return OrderWriteAuthorization(scope, label, time.monotonic(), ttl_s)
 
 
 def require_touch_id(reason: str) -> None:
