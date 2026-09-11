@@ -1062,3 +1062,40 @@ def test_dialog_bolds_the_values_not_the_labels():
         ("1", bold),
         ("D", regular),
     ]
+
+
+def test_futures_quantity_row_names_the_contract_size():
+    """claudia_ui gap #45: `x50` used to ride on the Symbol line as if it were part of the
+    contract's name. Size sits with size — the Quantity row — and only when the multiplier
+    is known; a stock's quantity is plain shares."""
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    fut = _order_rows(
+        {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "STP",
+            "price": 7900.0,
+            "_multiplier": 50.0,
+            "_currency": "USD",
+        },
+        "U1",
+    )
+    assert fut["Quantity"] == "1 (×50 per contract)"
+    unknown = _order_rows(
+        {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 2,
+            "orderType": "STP",
+            "price": 7900.0,
+            "_multiplier_unknown": True,
+        },
+        "U1",
+    )
+    assert unknown["Quantity"] == "2 (multiplier unknown)"
+    stk = _order_rows(
+        {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": "LMT", "price": 150.0, "_currency": "USD"}, "U1"
+    )
+    assert stk["Quantity"] == "10"

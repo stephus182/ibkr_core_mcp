@@ -53,6 +53,17 @@ def _quantity_text(qty: Any) -> str:
     return str(int(value)) if value.is_integer() else str(value)
 
 
+def _contract_size_suffix(order: dict[str, Any], multiplier: float | None) -> str:
+    """` (×50 per contract)` for a future with a known multiplier, ` (multiplier unknown)`
+    when the caller could not learn it, and nothing for a stock — a stock's quantity is
+    plain shares (claudia_ui gap #45, 2026-09-11)."""
+    if multiplier is not None:
+        return f" (×{multiplier:g} per contract)"
+    if order.get("_multiplier_unknown"):
+        return " (multiplier unknown)"
+    return ""
+
+
 def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     """The typed rows every Gate 2 dialog shows for an order (place, modify, cancel).
 
@@ -113,7 +124,9 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
         "Account": account_id,
         "Action": side,
         "Symbol": symbol_str,
-        "Quantity": _quantity_text(qty),
+        # Size sits with size (claudia_ui gap #45): the multiplier belongs beside the
+        # quantity it scales, not on the Symbol line where it read as part of the name.
+        "Quantity": _quantity_text(qty) + _contract_size_suffix(order, multiplier),
         "Order Type": order_type,
         "Price": price_str,
     }
