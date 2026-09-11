@@ -1486,6 +1486,9 @@ class IBKRClient:
         _validate_order_id(order_id)
         self._ensure_accounts_initialized()
         require_touch_id(f"cancel IBKR order {order_id}")
+        # Cancel is a single write with no reply chain, so no authorization value — but
+        # the log must still witness the fingerprint (2026-09-11: 8 of 12 prompts logged).
+        log.info("Gate 1: granted for cancel:%s", order_id)
         confirm_cancel_dialog(order_id, account_id, order_details)
         url = f"{self._base}/iserver/account/{account_id}/order/{order_id}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30))

@@ -1703,3 +1703,19 @@ def test_modify_order_and_confirm_asks_for_one_fingerprint(client):
     assert touch_id.call_args.args[0] == "modify IBKR order 42"
     assert modify_dlg.call_count == 1 and reply_dlg.call_count == 1
     assert reply_dlg.call_args.kwargs["order_label"] == "BUY 1 ES (order 42)"
+
+
+def test_cancel_order_logs_its_gate1_grant(client, caplog):
+    """The server log is the independent witness of the fingerprint count: on 2026-09-11 it
+    showed 8 of 12 prompts because the four cancels wrote no `Gate 1` line. Now they do."""
+    import logging
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog"),
+        _patch.object(client._session, "delete") as mock_del,
+        caplog.at_level(logging.INFO, logger="ibkr_core_mcp.client"),
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted", "order_id": 9876543210})
+        client.cancel_order("U1234567", "9876543210")
+    assert "Gate 1: granted for cancel:9876543210" in caplog.text

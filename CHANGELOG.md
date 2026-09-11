@@ -35,6 +35,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
 
 ### Changed
+- `cancel_order` logs `Gate 1: granted for cancel:<id>` like the place and modify chains, so the
+  server log witnesses every fingerprint (2026-09-11: the coverage matrix showed 8 of 12).
 - Gate 2 dialogs (claudia_ui gap #42, 2026-09-11): the order detail is rendered in the
   accessory view with **values bold** and labels regular, above the disclaimer, above the
   banner — the reading order the dialog always had — with heights measured so long rows
