@@ -698,11 +698,14 @@ def test_the_banner_states_the_action_not_the_side():
     """
     from ibkr_core_mcp._order_dialog import _banner
 
-    red = (0.72, 0.10, 0.10)
-    amber = (0.55, 0.42, 0.05)
+    green, red, amber = (0.10, 0.50, 0.20), (0.72, 0.10, 0.10), (0.55, 0.42, 0.05)
     for side in ("BUY", "SELL", "B", None):
         assert _banner(side, "CANCEL") == (red, "CANCEL ORDER")
-        assert _banner(side, "MODIFY") == (amber, "MODIFY ORDER")
+    # Modify states the action but keeps the ORDER'S colour, as IB does (user decision
+    # 2026-09-10 23:20; the amber shipped that evening was wrong by decision, not defect).
+    assert _banner("BUY", "MODIFY") == (green, "MODIFY ORDER")
+    assert _banner("SELL", "MODIFY") == (red, "MODIFY ORDER")
+    assert _banner(None, "MODIFY") == (amber, "MODIFY ORDER")  # an unstated side still looks unstated
 
 
 def test_the_banner_still_reads_the_side_when_placing():

@@ -59,7 +59,8 @@ def _banner(side: str | None, action: str | None) -> tuple[tuple[float, float, f
     (claudia_ui gap #40), a cancel dialog titled CANCEL ORDER CONFIRMATION rendered a
     confident green "BUY ORDER" — the cue said the opposite of the act being authorised
     (gap #42, read live). An action therefore wins over the side: what is being authorised
-    is the cancel, not the buy, and the side is already on the rows as `Action:`.
+    is the cancel, not the buy, and the side is already on the rows as `Action:`. Modify
+    states its action in the text and keeps the order's colour (user decision 2026-09-10).
 
     Side still decides the *place* dialog, and stays three-valued on purpose:
     `data.get("side", "BUY")` once made the DEFAULT a confident green "BUY ORDER", so
@@ -75,9 +76,24 @@ def _banner(side: str | None, action: str | None) -> tuple[tuple[float, float, f
     """
     act = str(action or "").strip().upper()
     if act == "CANCEL":
-        return (0.72, 0.10, 0.10), "CANCEL ORDER"  # dark red — destructive
+        return (0.72, 0.10, 0.10), "CANCEL ORDER"  # dark red — destructive, whatever the side
     if act == "MODIFY":
-        return (0.55, 0.42, 0.05), "MODIFY ORDER"  # dark amber — a change, not a creation
+        # The text states the action; the colour follows the order's side, as IB does
+        # (user decision 2026-09-10 23:20 — the amber shipped that evening was wrong by
+        # decision, not by defect). An unstated side still looks unstated.
+        colour, _ = _side_colour(side)
+        return colour, "MODIFY ORDER"
+    return _side_colour(side)
+
+
+def _side_colour(side: str | None) -> tuple[tuple[float, float, float], str]:
+    """The order's colour and side word: green BUY, red SELL, amber when unstated.
+
+    Three-valued on purpose — `data.get("side", "BUY")` once made the DEFAULT a confident
+    green, so dialogs with no side rendered as buys. An unstated side has to look unstated.
+    Shared by the place dialog (which shows the side word) and the modify banner (which
+    shows only the colour), so the two cannot disagree about what a side looks like.
+    """
     text = str(side).upper() if side is not None else ""
     if any(k in text for k in ("SELL", "SHORT")):
         return (0.72, 0.10, 0.10), "SELL ORDER"
