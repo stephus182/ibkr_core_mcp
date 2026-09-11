@@ -151,7 +151,7 @@ def test_authorization_covers_its_own_scope_until_it_expires(monkeypatch):
     from ibkr_core_mcp import human_auth
 
     now = [1000.0]
-    monkeypatch.setattr(human_auth.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr("ibkr_core_mcp.human_auth.time.monotonic", lambda: now[0])
     auth = human_auth.OrderWriteAuthorization(scope="place:abc", label="BUY 1 ES", granted_at=1000.0, ttl_s=300.0)
     assert auth.covers("place:abc")
     assert not auth.covers("place:abd")  # a different order
@@ -168,7 +168,7 @@ def test_authorize_order_write_is_touch_id_then_a_frozen_value(monkeypatch):
 
     calls: list[str] = []
     monkeypatch.setattr(human_auth, "require_touch_id", lambda reason: calls.append(reason))
-    monkeypatch.setattr(human_auth.time, "monotonic", lambda: 42.0)
+    monkeypatch.setattr("ibkr_core_mcp.human_auth.time.monotonic", lambda: 42.0)
     auth = human_auth.authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")
     assert calls == ["place an IBKR order — BUY 1 ES"]
     assert auth == human_auth.OrderWriteAuthorization("place:abc", "BUY 1 ES", 42.0, 300.0)
