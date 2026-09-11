@@ -417,7 +417,12 @@ Futures contracts for one or more root symbols — expiry months, conids, exchan
 **Output:** JSON array of futures contracts with `conid`, `symbol`, `exchange`, `expirationDate`,
 **sorted by expiry per root symbol; the earliest row carries `front_month: true`** (2026-09-10 —
 `/trsrv/futures` itself returns the rows in no date order, Dec 2026 first for ES, and a model once
-read list position as a volume ranking; claudia_ui gap #37).
+read list position as a volume ranking; claudia_ui gap #37). **That row also carries `_contract`**
+(2026-09-11) — `local_symbol` (e.g. `ESU6`), `month` (`SEP26`), `expires`, `name`, `multiplier` —
+from the same per-conid `/iserver/contract/{conid}/info` cache a FUT quote uses, so the model
+quotes a measured local symbol instead of deriving one from the month code (it had written
+"front month confirmed: ESU6" with no tool result containing that string). A failed read leaves
+the row without the block — never a guess.
 
 **IBKR endpoint:** `GET /trsrv/futures`
 
