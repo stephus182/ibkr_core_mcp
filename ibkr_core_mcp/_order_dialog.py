@@ -28,6 +28,10 @@ _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 _NS_BOX_CUSTOM = 4
 _NS_NO_TITLE = 0
 _NS_ALERT_FIRST_BUTTON_RETURN = 1000
+_NS_STRING_DRAWING_USES_LINE_FRAGMENT_ORIGIN = 1  # NSStringDrawingOptions
+_DIALOG_WIDTH = 420
+_BANNER_H = 48
+_GAP = 8
 
 
 def main() -> None:
@@ -96,14 +100,25 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     Prints "CONFIRMED" or "CANCELLED" to stdout; never raises for user input,
     only for a genuinely broken AppKit call (caught by main()'s caller).
+
+    Layout (2026-09-11, claudia_ui gap #42): NSAlert's informative text cannot be styled,
+    so the order detail and the disclaimer both live in the accessory view — the detail
+    in bold above the disclaimer above the coloured banner, the reading order the dialog
+    always had — and the informative text is left empty. Row heights are measured with
+    `boundingRectWithSize_options_context_` at the dialog width, so a long row such as
+    `Currently at IBKR: …` wraps instead of clipping.
     """
     from AppKit import (
         NSAlert,
         NSApplication,
+        NSAttributedString,
         NSBox,
         NSColor,
         NSFont,
+        NSFontAttributeName,
+        NSForegroundColorAttributeName,
         NSMakeRect,
+        NSMakeSize,
         NSModalPanelRunLoopMode,
         NSRunLoop,
         NSTextField,
@@ -131,7 +146,7 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     alert = NSAlert.alloc().init()
     alert.setMessageText_(title)
-    alert.setInformativeText_(f"{detail_text}\n\n{disclaimer}")
+    alert.setInformativeText_("")
 
     # Buttons: first added = rightmost = NSAlertFirstButtonReturn (1000)
     alert.addButtonWithTitle_(confirm_label)  # right
@@ -142,9 +157,38 @@ def _run_alert(data: dict[str, Any]) -> None:
     buttons.objectAtIndex_(0).setKeyEquivalent_("")  # disable Return on confirm
     buttons.objectAtIndex_(1).setKeyEquivalent_("\x1b")  # Escape = cancel
 
-    # Colored banner via NSBox
-    container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 420, 48))
-    box = NSBox.alloc().initWithFrame_(NSMakeRect(0, 0, 420, 48))
+    def _attributed(text: str, font: Any) -> tuple[Any, float]:
+        """An attributed string in `font`, and its wrapped height at the dialog width."""
+        value = NSAttributedString.alloc().initWithString_attributes_(
+            text,
+            {NSFontAttributeName: font, NSForegroundColorAttributeName: NSColor.labelColor()},
+        )
+        rect = value.boundingRectWithSize_options_context_(
+            NSMakeSize(_DIALOG_WIDTH - 2 * _GAP, 10_000),
+            _NS_STRING_DRAWING_USES_LINE_FRAGMENT_ORIGIN,
+            None,
+        )
+        return value, float(rect.size.height) + 2
+
+    def _field(value: Any, y: float, height: float) -> Any:
+        """A read-only, borderless text field showing `value`."""
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(_GAP, y, _DIALOG_WIDTH - 2 * _GAP, height))
+        field.setAttributedStringValue_(value)
+        field.setBezeled_(False)
+        field.setEditable_(False)
+        field.setSelectable_(False)
+        field.setDrawsBackground_(False)
+        return field
+
+    # The order detail is what the human is agreeing to: bold, above the disclaimer,
+    # above the banner — the reading order the dialog always had (user design
+    # 2026-09-10/11, claudia_ui gap #42). Heights are measured, so long rows wrap.
+    detail_value, detail_h = _attributed(detail_text, NSFont.boldSystemFontOfSize_(13))
+    disclaimer_value, disclaimer_h = _attributed(disclaimer, NSFont.systemFontOfSize_(12))
+    total_h = _BANNER_H + _GAP + disclaimer_h + _GAP + detail_h
+    container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, _DIALOG_WIDTH, total_h))
+    # Coloured banner via NSBox, at the bottom
+    box = NSBox.alloc().initWithFrame_(NSMakeRect(0, 0, _DIALOG_WIDTH, _BANNER_H))
     box.setBoxType_(_NS_BOX_CUSTOM)
     box.setFillColor_(bg_color)
     box.setBorderColor_(bg_color)
@@ -161,6 +205,8 @@ def _run_alert(data: dict[str, Any]) -> None:
     lbl.setSelectable_(False)
     container.addSubview_(lbl)
 
+    container.addSubview_(_field(disclaimer_value, _BANNER_H + _GAP, disclaimer_h))
+    container.addSubview_(_field(detail_value, _BANNER_H + _GAP + disclaimer_h + _GAP, detail_h))
     alert.setAccessoryView_(container)
 
     # Auto-dismiss after timeout — NSApp.abortModal() returns NSModalResponseAbort (-1000).

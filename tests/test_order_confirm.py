@@ -930,3 +930,54 @@ def test_reply_dialog_title_names_the_order_when_told():
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_reply_dialog("RPL1", "Confirm?")
     assert mock_show.call_args.kwargs["title"] == "⚠  CONFIRM ORDER REPLY"
+
+
+def _fake_appkit(detail_height: float = 90.0, disclaimer_height: float = 34.0):
+    """A MagicMock AppKit: NSAlert confirms; attributed strings report the given heights."""
+    ak = MagicMock()
+    alert = ak.NSAlert.alloc.return_value.init.return_value
+    alert.runModal.return_value = 1000
+    made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
+    heights = iter([detail_height, disclaimer_height])
+    made.return_value.boundingRectWithSize_options_context_.side_effect = lambda *_: MagicMock(
+        size=MagicMock(height=next(heights))
+    )
+    return ak
+
+
+def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
+    """User design 2026-09-10/11: the full order detail on every pop-up, in bold.
+
+    NSAlert informative text is plain, so detail and disclaimer live in the accessory view:
+    detail (bold) above the disclaimer (regular) above the banner — the order read today.
+    """
+    import sys
+    from unittest.mock import call as mock_call
+
+    from ibkr_core_mcp._order_dialog import _run_alert
+
+    ak = _fake_appkit()
+    with patch.dict(sys.modules, {"AppKit": ak, "Foundation": MagicMock()}):
+        _run_alert(
+            {
+                "title": "T",
+                "details": {"Action": "BUY", "Symbol": "ES — ESU6", "Quantity": "1"},
+                "disclaimer": "This is a LIVE order.",
+                "confirm_label": "SEND",
+                "abandon_label": "DO NOT SEND",
+                "side": "BUY",
+                "timeout_s": 1,
+            }
+        )
+    alert = ak.NSAlert.alloc.return_value.init.return_value
+    alert.setInformativeText_.assert_called_once_with("")
+    made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
+    (detail_text, detail_attrs), (disc_text, disc_attrs) = (c.args for c in made.call_args_list)
+    assert detail_text == "Action: BUY\nSymbol: ES — ESU6\nQuantity: 1"
+    assert detail_attrs[ak.NSFontAttributeName] == ak.NSFont.boldSystemFontOfSize_.return_value
+    assert disc_text == "This is a LIVE order."
+    assert disc_attrs[ak.NSFontAttributeName] == ak.NSFont.systemFontOfSize_.return_value
+    # container = banner 48 + gap 8 + disclaimer (34 + 2) + gap 8 + detail (90 + 2); the
+    # container is the first rect made, the banner box the second
+    assert ak.NSMakeRect.call_args_list[0] == mock_call(0, 0, 420, 48 + 8 + 36 + 8 + 92)
+    assert ak.NSMakeRect.call_args_list[1] == mock_call(0, 0, 420, 48)
