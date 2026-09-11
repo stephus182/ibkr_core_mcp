@@ -10,6 +10,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `get_futures`: the front-month row carries `_contract` (local symbol, month, expiry, name,
+  multiplier) from the per-conid identity cache — one contract-info call for the row the
+  model quotes. Closes claudia_ui gap #37 residual (a): the model had derived `ESU6` from
+  the month code and called it confirmed (2026-09-11).
 - **One Touch ID per order write** (claudia_ui gap #47, user rule 2026-09-11, as IBKR Mobile
   and TWS ask once per placement, modification or cancellation): `place_order_and_confirm`
   and `modify_order_and_confirm` run Gate 1 once and pass a `human_auth.OrderWriteAuthorization`

@@ -653,7 +653,10 @@ TOOL_DEFINITIONS = [
         "description": (
             "Look up futures contracts for one or more symbols. "
             "Returns available expiry months, conids, and exchange info, sorted by expiry per "
-            "root symbol; the earliest row carries front_month: true. "
+            "root symbol; the earliest row carries front_month: true, and that row also "
+            "carries _contract — the resolved contract in IBKR's own terms (local_symbol "
+            "such as ESU6, month, expires, name, multiplier). Quote _contract; never derive "
+            "a symbol from the month code. "
             "Useful for CL, ES, NQ, GC, and other futures."
         ),
         "input_schema": {
@@ -2639,12 +2642,25 @@ class ClaudeToolkit:
         first for ES, 21 rows) and the model once read list position as a volume ranking
         (claudia_ui gap #37). Rows are sorted per root symbol and the earliest carries
         `front_month: true` — see `_sorted_with_front_month`.
+
+        The front-month row also carries `_contract` — the same block a FUT quote has,
+        from the per-conid cache (`_futures_identity`), so one contract-info call for the
+        one row the model quotes, not one per expiry. Until 2026-09-11 nothing measured
+        gave the model a local symbol here, and it derived `ESU6` from the month-code
+        convention and wrote "front month confirmed" (claudia_ui gap #37 residual (a)).
+        A failed read leaves the row without the block — never a guess.
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         futures = self._client.get_futures(symbols)
         if not futures:
             return f"No futures found for {', '.join(symbols)}.", None
-        return json.dumps(_sorted_with_front_month(futures), indent=2), None
+        rows = _sorted_with_front_month(futures)
+        for row in rows:
+            if row.get("front_month") and isinstance(row.get("conid"), int):
+                identity = self._futures_identity(row["conid"])
+                if identity is not None:
+                    row["_contract"] = identity
+        return json.dumps(rows, indent=2), None
 
     def _listing_currency(self, conid: int) -> str | None:
         """Return the currency a listing trades in, or None if it could not be read.

@@ -833,3 +833,46 @@ def test_fut_snapshot_omits_the_contract_block_when_the_read_fails(toolkit):
     toolkit._client.get_market_snapshot.return_value = [{"conid": 649180671, "31": "7601.0", "6509": "R"}]
     text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
     assert "7601.0" in text and "_contract" not in text
+
+
+def test_get_futures_names_the_front_month_in_ibkr_terms(toolkit):
+    """claudia_ui gap #37(a): with no local symbol in /trsrv/futures, the model derived `ESU6`
+    from the month-code convention and wrote "front month confirmed" (2026-09-10). The
+    front-month row now carries the same `_contract` block a FUT quote does, from the
+    per-conid cache — one contract-info call for the one row the model quotes, not one per
+    expiry — so both paths quote a measured string."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 515416632, "expirationDate": 20261218},
+        {"symbol": "ES", "conid": 649180671, "expirationDate": 20260918},
+    ]
+    toolkit._client.get_contract_info.return_value = {
+        "local_symbol": "ESU6",
+        "contract_month": "202609",
+        "maturity_date": "20260918",
+        "company_name": "E-mini S&P 500",
+        "multiplier": "50",
+    }
+    text, _fig = toolkit.execute("get_futures", {"symbols": ["ES"]})
+    front, back = json.loads(text)
+    assert front["front_month"] and front["_contract"] == {
+        "local_symbol": "ESU6",
+        "month": "SEP26",
+        "expires": "2026-09-18",
+        "name": "E-mini S&P 500",
+        "multiplier": 50.0,
+    }
+    assert "_contract" not in back
+    toolkit._client.get_contract_info.assert_called_once_with(649180671)
+    toolkit.execute("get_futures", {"symbols": ["ES"]})
+    assert toolkit._client.get_contract_info.call_count == 1  # cached per conid
+
+
+def test_get_futures_omits_the_contract_block_rather_than_guess(toolkit):
+    """A failed or empty contract-info read leaves the row without `_contract` — never a
+    derived symbol — and the sort and flag are unaffected."""
+    from ibkr_core_mcp.exceptions import IBKRCoreError
+
+    toolkit._client.get_futures.return_value = [{"symbol": "ES", "conid": 649180671, "expirationDate": 20260918}]
+    toolkit._client.get_contract_info.side_effect = IBKRCoreError("down")
+    (row,) = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
+    assert row["front_month"] and "_contract" not in row
