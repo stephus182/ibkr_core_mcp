@@ -119,8 +119,9 @@ def _run_alert(data: dict[str, Any]) -> None:
 
     Layout (2026-09-11, claudia_ui gap #42): NSAlert's informative text cannot be styled,
     so the order detail and the disclaimer both live in the accessory view — the detail
-    in bold above the disclaimer above the coloured banner, the reading order the dialog
-    always had — and the informative text is left empty. Row heights are measured with
+    rows with their values in bold and labels regular, above the disclaimer, above the
+    coloured banner: the reading order the dialog always had — and the informative text
+    is left empty. Row heights are measured with
     `boundingRectWithSize_options_context_` at the dialog width, so a long row such as
     `Currently at IBKR: …` wraps instead of clipping.
     """
@@ -199,11 +200,10 @@ def _run_alert(data: dict[str, Any]) -> None:
         field.setDrawsBackground_(False)
         return field
 
-    # The order detail is what the human is agreeing to: bold, above the disclaimer,
-    # above the banner — the reading order the dialog always had (user design
-    # 2026-09-10/11, claudia_ui gap #42). Heights are measured, so long rows wrap.
-    # Values bold, labels regular (user read of the first smoke, 2026-09-11): each row is
-    # two runs, joined by regular newlines, measured as one block.
+    # The order detail is what the human is agreeing to (user design 2026-09-10/11,
+    # claudia_ui gap #42): values bold, labels regular — each row two runs, joined by
+    # regular newlines and measured as one block so long rows wrap — above the
+    # disclaimer, above the banner: the reading order the dialog always had.
     regular, bold = NSFont.systemFontOfSize_(13), NSFont.boldSystemFontOfSize_(13)
     detail_value = NSMutableAttributedString.alloc().init()
     for i, (key, val) in enumerate(details.items()):

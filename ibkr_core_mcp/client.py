@@ -1527,7 +1527,8 @@ class IBKRClient:
         authorization: OrderWriteAuthorization | None = None,
         scope: str | None = None,
     ) -> Any:
-        """Run Gate 1 + Gate 2 for one reply-chain entry, then tell IBKR the outcome.
+        """Run Gate 2 — and Gate 1 unless the chain's authorization covers it — for one
+        reply-chain entry, then tell IBKR the outcome.
 
         `entry` is a single {"id", "message", "messageOptions"?, ...} dict — the first
         (and only) element of a /iserver/reply/{replyId}-shaped response, or the bare

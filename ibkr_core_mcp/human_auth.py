@@ -9,19 +9,22 @@ The policy is `LAPolicyDeviceOwnerAuthentication`: biometrics first, falling bac
 to the device password if the biometric read genuinely fails. That fallback is
 Apple's own recovery path, not a bypass added here — the stricter biometrics-only
 policy was evaluated and rejected because a failed scan under it leaves the user no
-recovery at all. There is deliberately no bypass flag and no *cache* of a prior success — nothing that lets
-a later, unrelated write ride on an earlier fingerprint. What an `OrderWriteAuthorization`
-(granted by `client._authorize_order_write`) is, is not that: one authorization for one write, bound to that write's own data and
-to a 300 s window, held only by the call chain that earned it, checked identically at the
-write and at every reply, and expiring closed. The precaution replies IBKR sends for that
-same write validate through their dialogs without a second fingerprint — the user's rule
-(2026-09-11), matching IBKR Mobile and TWS, which ask for one biometric per placement,
-modification or cancellation. The standards say the same: the unit of authorization is the
-transaction (OWASP Transaction Authorization 1.5, EU RTS 2018/389 Art. 5); intent is an
-explicit button, not a biometric (NIST SP 800-63B-4 "Authentication Intent"); repeated
-approval prompts are a named threat (NIST "Authentication Fatigue", CISA "push fatigue").
-Sources and quotes: claudia_ui `docs/api-reference.md` § Order authorization. Do not add a
-cache; do not make an authorization global; do not let a reply skip its dialog.
+recovery at all.
+
+There is deliberately no bypass flag and no *cache* of a prior success — nothing that
+lets a later, unrelated write ride on an earlier fingerprint. An `OrderWriteAuthorization`,
+granted by `client._authorize_order_write`, is not that: it is one authorization for one
+write, bound to that write's own data and to a 300 s window, held only by the call chain
+that earned it, checked identically at the write and at every reply, and expiring closed.
+The precaution replies IBKR sends for that same write validate through their dialogs
+without a second fingerprint — the user's rule (2026-09-11), matching IBKR Mobile and TWS,
+which ask for one biometric per placement, modification or cancellation. The standards say
+the same: the unit of authorization is the transaction (OWASP Transaction Authorization
+1.5, EU RTS 2018/389 Art. 5); intent is an explicit button, not a biometric (NIST SP
+800-63B-4 "Authentication Intent"); repeated approval prompts are a named threat (NIST
+"Authentication Fatigue", CISA "push fatigue"). Sources and quotes: claudia_ui
+`docs/api-reference.md` § Order authorization. Do not add a cache; do not make an
+authorization global; do not let a reply skip its dialog.
 
 https://developer.apple.com/documentation/localauthentication/lapolicy
 """
@@ -66,6 +69,13 @@ class OrderWriteAuthorization:
 
     Why once per write: the user's rule (2026-09-11), matching IBKR Mobile and TWS, and
     what the standards describe — see the module docstring.
+
+    What it is not a defence against: in-process code. Anything running inside this
+    process can construct one by hand and pass it to `place_order` — the same power it
+    already had to monkeypatch `require_touch_id` or call `_post` directly. The gates guard
+    against the model (no tool reaches a write) and against automation acting without a
+    human; they never guarded the process against its own code, and this value does not
+    change that boundary.
     """
 
     scope: str
