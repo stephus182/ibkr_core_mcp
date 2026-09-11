@@ -1518,3 +1518,41 @@ def test_modify_order_strips_display_only_keys_before_posting(client):
             {"side": "SELL", "price": 10.0, "_currency": "USD", "_changes": [], "_current_description": "x"},
         )
     assert mock_post.call_args.kwargs.get("json") == {"side": "SELL", "price": 10.0}
+
+
+# ---------------------------------------------------------------------------
+# One authorization per order write (claudia_ui gap #47, user rule 2026-09-11)
+# ---------------------------------------------------------------------------
+
+
+def test_order_write_scope_is_the_canonical_body_and_nothing_else():
+    """Dynamic linking: the same order gives the same scope; any change, a different one.
+
+    Display-only `_` keys never leave the machine and must not move the scope."""
+    from ibkr_core_mcp.client import _order_write_scope
+
+    body = {
+        "conid": 649180671,
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "STP",
+        "auxPrice": 7900,
+        "tif": "GTC",
+        "cOID": "CLAUDIA-1",
+    }
+    same = dict(reversed(list(body.items())))
+    assert _order_write_scope("place", body) == _order_write_scope("place", same)
+    assert _order_write_scope("place", {**body, "_companyName": "x"}) == _order_write_scope("place", body)
+    assert _order_write_scope("place", {**body, "auxPrice": 7901}) != _order_write_scope("place", body)
+    assert _order_write_scope("place", body).startswith("place:")
+    assert _order_write_scope("modify", body, order_id="42").startswith("modify:42:")
+    assert _order_write_scope("modify", body, order_id="42") != _order_write_scope("modify", body, order_id="43")
+
+
+def test_order_label_is_side_quantity_symbol_from_either_spelling():
+    """The one line every prompt and dialog names the order by."""
+    from ibkr_core_mcp.client import _order_label
+
+    assert _order_label({"side": "BUY", "quantity": 1, "ticker": "ES"}) == "BUY 1 ES"
+    assert _order_label({"side": "SELL", "quantity": 2, "symbol": "AAPL"}) == "SELL 2 AAPL"
+    assert _order_label({"conid": 1}) == "? ? UNKNOWN"

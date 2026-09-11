@@ -18,8 +18,11 @@ Endpoint reference: https://www.interactivebrokers.com/docs/web-api/
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -107,6 +110,41 @@ def _chunk_days_for_bar(bar: str) -> int:
     bpd = _BARS_PER_CALENDAR_DAY.get(bar.lower(), 0.69)
     days = int(_MAX_POINTS * _CHUNK_SAFETY / bpd)
     return max(7, min(1000, days))
+
+
+def _order_write_scope(kind: str, body: Mapping[str, Any], order_id: str | None = None) -> str:
+    """The transaction's own data as a scope string — what one Gate 1 is bound to.
+
+    The canonical body is exactly what reaches IBKR: display-only `_`-prefixed keys are
+    dropped (they never leave the machine), keys are sorted, values serialised with
+    `default=str`. Hashed so the scope is opaque and fixed-length; a body altered after the
+    fingerprint — a price, the quantity, the conid — hashes differently and the
+    authorization no longer covers it (EU RTS 2018/389 Art. 5(1)(d), in code). The scope is
+    of the body *as sent*, not of its economics: `7900` and `7900.0` are different bodies,
+    which is right, because a chain always carries one body object end to end.
+
+    Args:
+        kind: "place", "modify" or "cancel".
+        body: The order body about to be sent.
+        order_id: The live order's id for modify/cancel, part of the scope.
+
+    Returns:
+        `"<kind>:<digest>"`, or `"<kind>:<order_id>:<digest>"` when an order id is given.
+    """
+    canonical = {k: v for k, v in body.items() if not str(k).startswith("_")}
+    digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return f"{kind}:{order_id}:{digest}" if order_id is not None else f"{kind}:{digest}"
+
+
+def _order_label(order: Mapping[str, Any]) -> str:
+    """`BUY 1 ES` — the one line every Gate 1 prompt and every dialog names an order by.
+
+    Read once here so the prompt, the authorization and the reply dialogs cannot disagree
+    about which order they are for. `ticker` is IBKR's field; `symbol` is what a caller
+    may still say; either is accepted, as `place_order` always has.
+    """
+    symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
+    return f"{order.get('side', '?')} {order.get('quantity', '?')} {symbol}"
 
 
 def _validate_account_id(account_id: str) -> None:
@@ -1335,10 +1373,7 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
-        symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
-        side = order.get("side", "?")
-        qty = order.get("quantity", "?")
-        require_touch_id(f"place an IBKR order — {side} {qty} {symbol}")
+        require_touch_id(f"place an IBKR order — {_order_label(order)}")
         confirm_order_dialog(order, account_id)
         # Strip display-only fields (underscore-prefixed, e.g. _companyName).
         # These carry Gate-2 dialog metadata and are not valid IBKR request fields.
