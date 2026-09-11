@@ -290,7 +290,13 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
     )
 
 
-def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | None = None) -> None:
+def confirm_reply_dialog(
+    reply_id: str,
+    message: str = "",
+    options: list[str] | None = None,
+    *,
+    order_label: str | None = None,
+) -> None:
     """Gate 2 for reply_order. Shows the ACTUAL IBKR warning text, not just the reply_id.
 
     `message` defaults to "" so the standalone reply_order() call site (which only ever
@@ -307,6 +313,10 @@ def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | 
     since the AppKit/tkinter/osascript dialogs are plain text and IBKR reply messages have
     been observed containing tags (e.g. "<h4>...</h4>", verified live 2026-07-06) and
     entities (`&nbsp;` between every sentence of the Stop Variant disclosure, 2026-09-10).
+
+    `order_label` (2026-09-11): with Gate 1 once per order write, this dialog is the only
+    gate on a reply, so its title names the order — `⚠  CONFIRM ORDER REPLY — BUY 1 ES`.
+    The standalone `reply_order()` path passes none and keeps the bare title.
     """
     # `options` is intentionally unused below — reserved for a future caller that wants
     # to log/inspect IBKR's messageOptions; never rendered as dialog button labels (see
@@ -314,8 +324,9 @@ def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | 
     details: dict[str, Any] = {"Reply ID": reply_id}
     if message:
         details["Message"] = reply_message_text(message)
+    title = "⚠  CONFIRM ORDER REPLY" + (f" — {order_label}" if order_label else "")
     _show_confirm_dialog(
-        title="⚠  CONFIRM ORDER REPLY",
+        title=title,
         details=details,
         disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
         confirm_label="CONFIRM REPLY",

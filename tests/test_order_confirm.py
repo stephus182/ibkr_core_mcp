@@ -917,3 +917,16 @@ def test_confirm_cancel_dialog_without_order_keeps_the_id_only_shape():
 
         confirm_cancel_dialog("ORD456", "U1234567")
     assert mock_show.call_args.kwargs["details"] == {"Order ID": "ORD456", "Account": "U1234567"}
+
+
+def test_reply_dialog_title_names_the_order_when_told():
+    """With Gate 1 once per write (2026-09-11) this dialog is the only gate on a reply,
+    so its title says which order it is about; the standalone reply path stays as it was."""
+    from ibkr_core_mcp.order_confirm import confirm_reply_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_reply_dialog("RPL1", "Confirm?", None, order_label="BUY 1 ES")
+    assert mock_show.call_args.kwargs["title"] == "⚠  CONFIRM ORDER REPLY — BUY 1 ES"
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_reply_dialog("RPL1", "Confirm?")
+    assert mock_show.call_args.kwargs["title"] == "⚠  CONFIRM ORDER REPLY"
