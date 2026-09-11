@@ -876,3 +876,68 @@ def test_get_futures_omits_the_contract_block_rather_than_guess(toolkit):
     toolkit._client.get_contract_info.side_effect = IBKRCoreError("down")
     (row,) = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
     assert row["front_month"] and "_contract" not in row
+
+
+def test_snapshot_names_the_price_fields_and_drops_the_numeric_ids(toolkit):
+    """Live 2026-09-11: with IBKR's numeric field ids in the result the model swapped the
+    pairs — reported the day's low/high (`71`/`70`) as "Bid / Ask" and the bid/ask
+    (`84`/`86`) as "Day High / Low", then reasoned about a spread that did not exist. The
+    tool names the fields from the package's one map and keeps the ids and the server
+    noise out of the model's view (Anthropic, writing-tools-for-agents: resolve cryptic
+    identifiers to meaningful names; return only high-signal information)."""
+    toolkit._client.get_stocks.return_value = IGV_LISTINGS
+    toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
+    toolkit._client.get_market_snapshot.return_value = [
+        {
+            "conid": 12658199,
+            "conidEx": "12658199",
+            "55": "IGV",
+            "6509": "R",
+            "6119": "q2",
+            "server_id": "q2",
+            "_updated": 1789159026300,
+            "31": "100.35",
+            "84": "100.33",
+            "86": "100.34",
+            "70": "104.46",
+            "71": "98.48",
+            "82": "-2.13",
+            "83": -2.08,
+            "87": "371K",
+            "87_raw": 371000.0,
+        }
+    ]
+
+    text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["IGV"]})
+    import json
+
+    quote = json.loads(text)[0]
+    assert quote["last"] == "100.35"
+    assert quote["bid"] == "100.33"
+    assert quote["ask"] == "100.34"
+    assert quote["high"] == "104.46"
+    assert quote["low"] == "98.48"
+    assert quote["change"] == "-2.13"
+    assert quote["change_pct"] == -2.08
+    assert quote["volume"] == "371K"
+    assert quote["volume_raw"] == 371000.0
+    assert quote["conid"] == 12658199
+    assert quote["_data_status"] == "Live (Real-Time)"
+    for gone in (
+        "31",
+        "84",
+        "86",
+        "70",
+        "71",
+        "82",
+        "83",
+        "87",
+        "87_raw",
+        "55",
+        "6509",
+        "6119",
+        "server_id",
+        "conidEx",
+        "_updated",
+    ):
+        assert gone not in quote, gone

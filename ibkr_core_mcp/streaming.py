@@ -32,7 +32,33 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_FIELD_MAP = {"31": "last", "84": "bid", "86": "ask", "87": "volume", "55": "symbol", "70": "high", "71": "low"}
+SNAPSHOT_FIELD_NAMES: dict[str, str] = {
+    "31": "last",
+    "84": "bid",
+    "86": "ask",
+    "70": "high",
+    "71": "low",
+    "82": "change",
+    "83": "change_pct",
+    "87": "volume",
+    "87_raw": "volume_raw",
+    "55": "symbol",
+}
+"""IBKR's numeric market-data field codes -> the names ClaudIA and the model read.
+
+The one definition in the package: `_FIELD_MAP` below (the streaming `Quote` attributes)
+and `claude_tools._get_market_snapshot` (the tool result) both draw from it. Source:
+https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-fields.md
+(`87_raw` is the client's own numeric companion to the formatted volume).
+
+Why the tool names them (2026-09-11): with the raw codes in its result the model swapped
+the pairs live — the day's low/high (`71`/`70`) reported as "Bid / Ask", the bid/ask
+(`84`/`86`) as "Day High / Low". Anthropic's tool-writing guidance: resolving arbitrary
+identifiers to meaningful names "significantly improves Claude's precision … by reducing
+hallucinations".
+"""
+
+_FIELD_MAP = {code: SNAPSHOT_FIELD_NAMES[code] for code in ("31", "84", "86", "87", "55", "70", "71")}
 _DEFAULT_FIELDS = ["31", "55", "84", "86", "87"]
 
 #: Field 31's documented prefixes. "C" = previous day's closing price, "H" = trading

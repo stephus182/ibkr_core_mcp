@@ -35,6 +35,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
 
 ### Changed
+- `get_market_snapshot`: the price fields reach the model **by name** (`last`, `bid`, `ask`,
+  `high`, `low`, `change`, `change_pct`, `volume`, `volume_raw`) from the package's one map,
+  `streaming.SNAPSHOT_FIELD_NAMES`; IBKR's numeric codes and server bookkeeping (`server_id`,
+  `6119`, `conidEx`, `_updated`, `6509`, `55`) are no longer in the result. Live 2026-09-11 the
+  model read `71`/`70` as bid/ask and `84`/`86` as the day's low/high and reasoned about a
+  spread that did not exist (claudia_ui gap #52).
 - `cancel_order` logs `Gate 1: granted for cancel:<id>` like the place and modify chains, so the
   server log witnesses every fingerprint (2026-09-11: the coverage matrix showed 8 of 12).
 - Gate 2 dialogs (claudia_ui gap #42, 2026-09-11): the order detail is rendered in the

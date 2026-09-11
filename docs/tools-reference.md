@@ -336,8 +336,12 @@ Resolves symbols to conids automatically.
 | `sec_type` | string | — | `"STK"` (default), `"IND"`, `"FUT"`, `"CASH"`, `"BOND"`. **`OPT` is not supported** — resolve the option conid first via `search_contract` + `get_option_chain`, then pass that conid directly rather than a ticker. |
 | `exchange` | string | — | Optional, for STK/IND only — filters to a specific listing (e.g. `"AMS"` Euronext Amsterdam, `"ETR"` Xetra, `"LSE"` London, `"TSE"` Tokyo, `"HKEX"` Hong Kong, `"ASX"` Sydney, `"TSX"` Toronto, `"BVSP"` Brazil, `"NSE"` India). Omit for US equities (SMART routing). Without it, the first search result is used. |
 
-**Output:** JSON array with live quote fields. Field codes: `"31"` = last price, `"84"` = bid,
-`"86"` = ask, `"87"` = volume. Each quote also includes `_data_status` (`"Live (Real-Time)"` when
+**Output:** JSON array with the live quote fields **by name** — `last`, `bid`, `ask`, `high`,
+`low`, `change`, `change_pct`, `volume`, `volume_raw` — plus `conid`. IBKR's numeric codes
+(`"31"` last, `"84"` bid, `"86"` ask, `"70"` high, `"71"` low, `"82"`/`"83"` change,
+`"87"` volume) and its server bookkeeping are not in the result since 2026-09-11: with the
+raw codes the model swapped the pairs live (day low/high reported as bid/ask). One map:
+`streaming.SNAPSHOT_FIELD_NAMES`. Each quote also includes `_data_status` (`"Live (Real-Time)"` when
 subscribed, `"Delayed (15–20 min)"` when not) and `_quote_time` (ET timestamp) — always report
 both to the user. **For `sec_type: "FUT"` each quote also carries `_contract`** — the resolved
 contract in IBKR's own terms from a per-conid cache of `GET /iserver/contract/{conid}/info`:

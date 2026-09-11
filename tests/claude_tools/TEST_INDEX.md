@@ -27,7 +27,7 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 44 tools. See
 | File | Tools / helpers covered | Marker | Test count |
 | --- | --- | --- | --- |
 | `test_tool_descriptions.py` | `TOOL_DEFINITIONS` schema shape, tool count, execution-verb scan | (none — spans all tools) | 6 |
-| `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators | `market_data` | 38 |
+| `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators | `market_data` | 39 |
 | `test_account.py` | get_account_summary, get_positions, get_ledger, get_pnl, get_allocation, get_watchlists, get_notifications | `account` | 25 |
 | `test_trades.py` | get_trades, `_parse_live_trades` | `trades` | 10 |
 | `test_orders.py` | get_live_orders, diagnose_orders, preview_order, get_order_status | `orders` | 16 |

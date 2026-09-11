@@ -41,6 +41,7 @@ from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.store import SQLiteStore
+from ibkr_core_mcp.streaming import SNAPSHOT_FIELD_NAMES
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,24 @@ class _Resolved(NamedTuple):
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
 # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
+def _named_quote_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """The price fields of one raw snapshot item, by name, and nothing else.
+
+    IBKR returns numeric field codes (`"31"`, `"84"`, …) plus server bookkeeping
+    (`server_id`, `6119`, `conidEx`, `_updated`, `6509`). The model gets the codes' names
+    (`streaming.SNAPSHOT_FIELD_NAMES`) and `conid`; the bookkeeping is consumed by the
+    caller (`_data_status`, `_quote_time`) or dropped. Live 2026-09-11, the raw codes were
+    misread as each other's pairs. `55` (symbol) is dropped too — `_symbol` carries it.
+    """
+    named: dict[str, Any] = {}
+    for code, name in SNAPSHOT_FIELD_NAMES.items():
+        if code in item and name != "symbol":
+            named[name] = item[code]
+    if "conid" in item:
+        named["conid"] = item["conid"]
+    return named
+
+
 _MD_AVAILABILITY: dict[str, str] = {
     "R": "Live (Real-Time)",
     "D": "Delayed (15–20 min)",
@@ -674,8 +693,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_market_snapshot",
         "description": (
-            "Get market data snapshot for one or more symbols: last price, bid, ask, "
-            "high, low, change, change%, and volume. Each quote includes _data_status "
+            "Get market data snapshot for one or more symbols. Each quote carries the "
+            "price fields by name — last, bid, ask, high, low, change, change_pct, volume "
+            "— plus _data_status "
             "('Live (Real-Time)' when subscribed, 'Delayed (15–20 min)' when not), "
             "_quote_time (timestamp in ET), and _currency (the ISO code this listing "
             "trades in, or 'UNKNOWN'). Always report all three to the user.\n\n"
@@ -2956,7 +2976,9 @@ class ClaudeToolkit:
           _quote_time   — timestamp of the quote in ET (from field _updated, ms epoch).
                           Always report this to the user alongside price data.
 
-        Price fields: 31=last, 84=bid, 86=ask, 70=high, 71=low, 82=change, 83=change%, 87=volume.
+        Price fields are named — last, bid, ask, high, low, change, change_pct, volume,
+        volume_raw — from `streaming.SNAPSHOT_FIELD_NAMES` (`_named_quote_fields`); IBKR's
+        numeric codes and its server bookkeeping never reach the model (2026-09-11).
 
           _currency     — the currency this listing trades in, or 'UNKNOWN'. Always
                           report it with the price, as an ISO code and never as a bare
@@ -3074,7 +3096,7 @@ class ClaudeToolkit:
                         if isinstance(cid, int) and cid in conid_to_contract
                         else {}
                     ),
-                    **item,
+                    **_named_quote_fields(item),
                 }
             )
 
