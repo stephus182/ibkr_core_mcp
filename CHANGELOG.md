@@ -10,6 +10,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **One Touch ID per order write** (claudia_ui gap #47, user rule 2026-09-11, as IBKR Mobile
+  and TWS ask once per placement, modification or cancellation): `place_order_and_confirm`
+  and `modify_order_and_confirm` run Gate 1 once and pass a `human_auth.OrderWriteAuthorization`
+  down the chain — bound to the exact body about to be sent (`client._order_write_scope`,
+  hashed), 300 s, verified identically at the write and at every precaution reply, fails
+  closed, never persisted. Every dialog stays; the reply dialog's title now names its order
+  (`confirm_reply_dialog(..., order_label=)`). `place_order` / `modify_order` /
+  `_resolve_one_reply` accept `authorization=` (and `scope=`) and behave exactly as before
+  without them. Researched against OWASP, NIST SP 800-63B-4, CISA, EU RTS 2018/389 and Apple
+  LocalAuthentication — sources in claudia_ui `docs/api-reference.md`.
 - `get_futures` rows sorted by expiry per root symbol with `front_month: true` on the
   earliest; `get_market_snapshot` FUT quotes carry `_contract` (local symbol, month token,
   expiry, name, multiplier) from a per-conid cache of `/iserver/contract/{conid}/info`
@@ -21,6 +31,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
 
 ### Changed
+- Gate 2 dialogs (claudia_ui gap #42, 2026-09-11): the order detail is rendered in the
+  accessory view with **values bold** and labels regular, above the disclaimer, above the
+  banner — the reading order the dialog always had — with heights measured so long rows
+  wrap; the MODIFY ORDER banner takes the order's colour (green buy / red sell, as IB does);
+  a futures price row carries no currency (it is index points — the money is the
+  multiplied total).
+- `SECURITY.md` §Gate 1 corrected (claudia_ui gap #48): the policy is
+  `LAPolicyDeviceOwnerAuthentication` with the device-password fallback, as the code has
+  always had it — not biometrics-only; and Gate 1 is documented as once per order write.
 - Gate 2: the modify and cancel dialogs render the same typed rows as the place dialog
   (Account / Action / Symbol / Quantity / Order Type / Price / Stop / TIF / Outside RTH /
   Total) plus `Order ID`, a `Changes` row (`<field> <previous> → <new>`, from `_changes`) and

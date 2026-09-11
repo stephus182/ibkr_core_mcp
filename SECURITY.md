@@ -53,19 +53,20 @@ Each of these is detailed in the sections below.
 
 ## Order Execution Security — Two-Gate System
 
-**All order write operations require two sequential human-in-the-loop validations. There is no bypass, no fallback, and no session cache.**
+**All order write operations require two sequential human-in-the-loop validations: one biometric per order write, and a dialog with an explicit button for every message. There is no bypass and no session cache; the biometric's own OS recovery path (the device password after a failed scan) is the one fallback, by design.**
 
 ### Gate 1 — Biometric Authentication (Touch ID)
 
 | Property | Value |
 |---|---|
-| Mechanism | Apple `LocalAuthentication` — `LAPolicyDeviceOwnerAuthenticationWithBiometrics` |
-| Password / PIN fallback | **None** — explicitly prohibited by policy; the biometric-only policy is set at the API call, not as a preference |
+| Mechanism | Apple `LocalAuthentication` — `LAPolicyDeviceOwnerAuthentication` (biometrics first, device password on a failed scan) |
+| Frequency | **Once per order write.** Place, modify and cancel each take one Touch ID — as IBKR Mobile and TWS ask once per placement, modification or cancellation — and the precaution replies IBKR sends for that write validate through their own dialogs (explicit button, order named in the title) without a second fingerprint. `client._authorize_order_write` → `human_auth.OrderWriteAuthorization`: bound to the write's own body (hashed), 300 s, checked identically at the write and at every reply, fails closed, never persisted, never global. User rule 2026-09-11; sources (OWASP, NIST SP 800-63B-4, CISA, EU RTS 2018/389, Apple) in claudia_ui `docs/api-reference.md` § Order authorization. |
+| Password / PIN fallback | **Device password after a failed biometric read** — Apple's own recovery path under this policy. The biometrics-only policy (`…WithBiometrics`) was evaluated and rejected: a failed scan under it leaves the user no recovery at all (`human_auth.py`). Corrected 2026-09-11: this document had claimed biometrics-only with no fallback while the code never did (claudia_ui gap #48). |
 | Timeout | 60 seconds; raises `HumanAuthError` on expiry |
 | On denial | `HumanAuthError` raised immediately; IBKR endpoint is never contacted |
 | Location | `ibkr_core_mcp/human_auth.py` |
 
-`LAPolicyDeviceOwnerAuthenticationWithBiometrics` is distinct from `LAPolicyDeviceOwnerAuthentication`. The system cannot offer a password fallback even if the user attempts it — the OS enforces this at the API level.
+`LAPolicyDeviceOwnerAuthentication` is distinct from `LAPolicyDeviceOwnerAuthenticationWithBiometrics`: under the former the OS itself offers the device password after a failed biometric read. The code chose it deliberately (`human_auth.py`); until 2026-09-11 this paragraph described the latter, which was never the policy in force.
 
 ### Gate 2 — Visual Order Confirmation Dialog
 
@@ -553,9 +554,9 @@ No single control is the sole barrier. Each threat has layered mitigations:
 
 The following rules are enforced at PR review. Any PR that violates them will be rejected:
 
-1. **Never add a bypass flag, session cache, or fallback** to `require_touch_id` or any order confirmation function.
+1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
 2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`.
-3. **Never add a password or PIN fallback** — `LAPolicyDeviceOwnerAuthenticationWithBiometrics` is the required policy.
+3. **Never make an authorization global or persistent, and never let a reply skip its dialog** — one biometric per order write, one dialog per message. The device-password fallback under `LAPolicyDeviceOwnerAuthentication` is Apple's recovery path and stays.
 4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution.
 5. **Never forward raw exception messages to the LLM** — use `_safe_error` for all tool error returns.
 6. **Never pass unsanitized LLM input to URLs or SQL** — validate with `_validate_account_id` or equivalent before use.
