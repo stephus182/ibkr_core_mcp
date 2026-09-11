@@ -47,6 +47,41 @@ def main() -> None:
         sys.exit(1)
 
 
+def _banner(side: str | None, action: str | None) -> tuple[tuple[float, float, float], str]:
+    """The banner's colour and text: the ACTION being authorised, else the order's side.
+
+    The banner is the largest, most pre-attentive element on the dialog, and until
+    2026-09-10 it could only say a side. With the side finally readable on the typed rows
+    (claudia_ui gap #40), a cancel dialog titled CANCEL ORDER CONFIRMATION rendered a
+    confident green "BUY ORDER" — the cue said the opposite of the act being authorised
+    (gap #42, read live). An action therefore wins over the side: what is being authorised
+    is the cancel, not the buy, and the side is already on the rows as `Action:`.
+
+    Side still decides the *place* dialog, and stays three-valued on purpose:
+    `data.get("side", "BUY")` once made the DEFAULT a confident green "BUY ORDER", so
+    cancel and reply dialogs — which carry no side — and every SELL modify rendered as a
+    buy. An unstated side has to look unstated.
+
+    Args:
+        side: The order's side, or None where the caller established none.
+        action: The action being authorised ("CANCEL", "MODIFY"), or None for a placement.
+
+    Returns:
+        ((red, green, blue), banner text).
+    """
+    act = str(action or "").strip().upper()
+    if act == "CANCEL":
+        return (0.72, 0.10, 0.10), "CANCEL ORDER"  # dark red — destructive
+    if act == "MODIFY":
+        return (0.55, 0.42, 0.05), "MODIFY ORDER"  # dark amber — a change, not a creation
+    text = str(side).upper() if side is not None else ""
+    if any(k in text for k in ("SELL", "SHORT")):
+        return (0.72, 0.10, 0.10), "SELL ORDER"
+    if "BUY" in text:
+        return (0.10, 0.50, 0.20), "BUY ORDER"
+    return (0.55, 0.42, 0.05), "REVIEW ORDER"  # neither confirmed nor denied
+
+
 def _run_alert(data: dict[str, Any]) -> None:
     """Build and run the app-modal NSAlert described by `data`.
 
@@ -76,23 +111,7 @@ def _run_alert(data: dict[str, Any]) -> None:
         NSView,
     )
 
-    # Three-valued on purpose. `data.get("side", "BUY")` used to make the DEFAULT a
-    # confident dark-green "BUY ORDER", so cancel and reply dialogs — which carry no
-    # side — and every SELL modify rendered as a buy. The banner is read before the
-    # text, so an unstated side has to look unstated.
-    raw_side = data.get("side")
-    side = str(raw_side).upper() if raw_side is not None else ""
-
-    if any(k in side for k in ("SELL", "SHORT")):
-        r, g, b = 0.72, 0.10, 0.10  # dark red
-        label_text = "SELL ORDER"
-    elif "BUY" in side:
-        r, g, b = 0.10, 0.50, 0.20  # dark green
-        label_text = "BUY ORDER"
-    else:
-        r, g, b = 0.55, 0.42, 0.05  # dark amber — neither confirmed nor denied
-        label_text = "REVIEW ORDER"
-
+    (r, g, b), label_text = _banner(data.get("side"), data.get("action"))
     bg_color = NSColor.colorWithRed_green_blue_alpha_(r, g, b, 1.0)
 
     details = data.get("details", {})

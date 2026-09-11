@@ -663,8 +663,84 @@ def test_reply_message_text_strips_tags_then_unescapes_entities():
     )
     shown = reply_message_text(text)
     assert "&nbsp;" not in shown and "&lt;" not in shown and "<h4>" not in shown
-    assert shown.startswith("Stop Variant Order Confirmation\xa0\xa0\xa0A Stop Order")
+    # The heading is its own line now: <h4> is block-level, so deleting it with no
+    # separator is what produced "Cap PriceTo avoid" live (gap #39).
+    assert shown.startswith("Stop Variant Order Confirmation\n\xa0\xa0\xa0A Stop Order")
     assert shown.endswith("Price must be <b> 100.")
+
+
+def test_a_block_tag_becomes_a_line_break_not_nothing():
+    """A heading must not fuse into the sentence after it (claudia_ui gap #39).
+
+    The exact string IBKR sent on 2026-09-10 for order 1793215923. That gap recorded the
+    run-on as IBKR's own text — "`_resolve_one_reply` joins the message list with a space"
+    — and reading the raw message disproved it: the HTML is correct, a block element ends
+    its own line, and deleting it with no separator was ours.
+    """
+    from ibkr_core_mcp.order_confirm import reply_message_text
+
+    raw = (
+        "t your order has on the market price. <h4>Confirm Mandatory Cap Price</h4>To "
+        "avoid trading at a price that is not consistent with a fair and orderly market, IB"
+    )
+    shown = reply_message_text(raw)
+    assert "PriceTo" not in shown
+    assert "Confirm Mandatory Cap Price\nTo avoid trading" in shown
+
+
+def test_the_banner_states_the_action_not_the_side():
+    """A cancel reads CANCEL ORDER in red whatever the order's side (claudia_ui gap #42).
+
+    Read live 2026-09-10: a dialog titled CANCEL ORDER CONFIRMATION, with a CANCEL ORDER
+    button, carried a confident green `BUY ORDER` banner — the largest and most
+    pre-attentive element on the screen saying the opposite of the act being authorised.
+    The side is not lost: it is on the rows as `Action:`.
+    """
+    from ibkr_core_mcp._order_dialog import _banner
+
+    red = (0.72, 0.10, 0.10)
+    amber = (0.55, 0.42, 0.05)
+    for side in ("BUY", "SELL", "B", None):
+        assert _banner(side, "CANCEL") == (red, "CANCEL ORDER")
+        assert _banner(side, "MODIFY") == (amber, "MODIFY ORDER")
+
+
+def test_the_banner_still_reads_the_side_when_placing():
+    """Placement has no competing action, so the side is what matters — and an unstated
+    side must still look unstated rather than defaulting to a confident green buy."""
+    from ibkr_core_mcp._order_dialog import _banner
+
+    assert _banner("BUY", None) == ((0.10, 0.50, 0.20), "BUY ORDER")
+    assert _banner("SELL", None) == ((0.72, 0.10, 0.10), "SELL ORDER")
+    assert _banner("SHORT", None) == ((0.72, 0.10, 0.10), "SELL ORDER")
+    assert _banner(None, None) == ((0.55, 0.42, 0.05), "REVIEW ORDER")
+    assert _banner("", None) == ((0.55, 0.42, 0.05), "REVIEW ORDER")
+
+
+def test_quantity_never_shows_a_trailing_point_zero():
+    """IBKR reports `size` as '1.0'; a human writes 1 (claudia_ui gap #42)."""
+    from ibkr_core_mcp.order_confirm import _quantity_text
+
+    assert _quantity_text("1.0") == "1"
+    assert _quantity_text(1.0) == "1"
+    assert _quantity_text(3) == "3"
+    assert _quantity_text("2.5") == "2.5"
+    assert _quantity_text(1000000.0) == "1000000"  # never scientific notation
+    assert _quantity_text("?") == "?"
+
+
+def test_cancel_and_modify_dialogs_declare_their_action():
+    """The renderer cannot infer the action, so each dialog states it (gap #42)."""
+    from ibkr_core_mcp.order_confirm import confirm_cancel_dialog, confirm_modify_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_cancel_dialog("555", "U1", {"side": "BUY", "quantity": "1.0", "ticker": "ES"})
+    assert mock_show.call_args.kwargs["action"] == "CANCEL"
+    assert mock_show.call_args.kwargs["details"]["Quantity"] == "1"
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_modify_dialog("555", {"side": "BUY", "quantity": 1, "ticker": "ES"}, "U1")
+    assert mock_show.call_args.kwargs["action"] == "MODIFY"
 
 
 def test_confirm_reply_dialog_shows_the_cleaned_message():

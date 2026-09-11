@@ -32,6 +32,27 @@ from ibkr_core_mcp.exceptions import HumanAuthError
 _DIALOG_TIMEOUT_S = 60  # auto-cancels if unattended
 
 
+def _quantity_text(qty: Any) -> str:
+    """The order's quantity as a human writes it.
+
+    IBKR's order status reports `size` as a string — `'1.0'` for one contract — so the
+    cancel dialog showed `Quantity: 1.0` while the modify dialog, fed from the proposal,
+    showed `1` (claudia_ui gap #42, read live 2026-09-10). Anything unparseable is shown
+    unchanged rather than guessed at.
+
+    Args:
+        qty: The quantity from a proposal or from an IBKR status row.
+
+    Returns:
+        The quantity as text, without a trailing `.0`.
+    """
+    try:
+        value = float(qty)
+    except (TypeError, ValueError):
+        return str(qty)
+    return str(int(value)) if value.is_integer() else str(value)
+
+
 def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     """The typed rows every Gate 2 dialog shows for an order (place, modify, cancel).
 
@@ -83,7 +104,7 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
         "Account": account_id,
         "Action": side,
         "Symbol": symbol_str,
-        "Quantity": str(qty),
+        "Quantity": _quantity_text(qty),
         "Order Type": order_type,
         "Price": price_str,
     }
@@ -193,6 +214,7 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
         disclaimer="This will MODIFY a live order at Interactive Brokers.",
         confirm_label="MODIFY ORDER",
         abandon_label="LEAVE UNCHANGED",
+        action="MODIFY",
     )
 
 
@@ -221,6 +243,7 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         disclaimer="This will CANCEL a live order at Interactive Brokers.",
         confirm_label="CANCEL ORDER",
         abandon_label="KEEP ORDER",
+        action="CANCEL",
     )
 
 
@@ -257,15 +280,32 @@ def confirm_reply_dialog(reply_id: str, message: str = "", options: list[str] | 
     )
 
 
+# Block-level elements end a line in HTML, so deleting them outright fuses the text on
+# either side. Measured live 2026-09-10: IBKR sent "…on the market price. <h4>Confirm
+# Mandatory Cap Price</h4>To avoid trading…" — correct HTML — and the dialog read
+# "Cap PriceTo avoid" (claudia_ui gap #39, whose recorded cause blamed IBKR's own text).
+_BLOCK_TAG = re.compile(
+    r"</?(?:br|p|div|h[1-6]|li|ul|ol|tr|table|blockquote|hr)(?:\s[^<>]*)?/?>",
+    re.IGNORECASE,
+)
+
+
 def _strip_html(text: str) -> str:
     """Strip HTML tags from IBKR reply message text for display in plain-text dialogs.
 
-    Only matches well-formed tags (e.g. "<h4>", "</h4>", "<br/>", '<span class="x">')
-    — NOT a bare "<" or ">" that isn't part of a tag. A naive r"<[^>]+>" would delete
-    everything between an unrelated "<" (e.g. a message reading "price must be < 100.50")
-    and the next unrelated ">" anywhere later in the string, corrupting real content.
+    Block-level tags become a newline; every other tag is removed. Only well-formed tags
+    match (e.g. "<h4>", "</h4>", "<br/>", '<span class="x">') — NOT a bare "<" or ">" that
+    isn't part of a tag. A naive r"<[^>]+>" would delete everything between an unrelated
+    "<" (e.g. a message reading "price must be < 100.50") and the next unrelated ">"
+    anywhere later in the string, corrupting real content.
+
+    Leading and trailing newlines are trimmed — a message ending in "<br/>" would otherwise
+    gain a blank last line — but only newlines: IBKR indents with `&nbsp;`, which
+    `str.strip()` would eat.
     """
-    return re.sub(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>", "", text)
+    text = _BLOCK_TAG.sub("\n", text)
+    text = re.sub(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip("\n")
 
 
 def reply_message_text(message: str) -> str:
@@ -312,7 +352,12 @@ def _extract_side(details: dict[str, Any]) -> str | None:
 
 
 def _show_confirm_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+    title: str,
+    details: dict[str, Any],
+    disclaimer: str,
+    confirm_label: str,
+    abandon_label: str,
+    action: str | None = None,
 ) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
 
@@ -333,7 +378,7 @@ def _show_confirm_dialog(
     if sys.platform == "darwin":
         side = _extract_side(details)
         try:
-            _show_appkit_dialog(title, details, disclaimer, confirm_label, side, abandon_label)
+            _show_appkit_dialog(title, details, disclaimer, confirm_label, side, abandon_label, action)
             return
         except HumanAuthError:
             raise  # user decision — do not fall back
@@ -353,6 +398,7 @@ def _show_appkit_dialog(
     confirm_label: str,
     side: str | None,
     abandon_label: str,
+    action: str | None = None,
 ) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
@@ -375,6 +421,7 @@ def _show_appkit_dialog(
             "confirm_label": confirm_label,
             "abandon_label": abandon_label,
             "side": side,
+            "action": action,
             "timeout_s": _DIALOG_TIMEOUT_S,
         }
     )
