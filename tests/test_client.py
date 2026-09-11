@@ -5,6 +5,8 @@ from unittest.mock import patch as _patch
 
 import pytest
 
+from ibkr_core_mcp.exceptions import HumanAuthError
+
 
 @pytest.fixture
 def client(mock_config):
@@ -190,7 +192,6 @@ def test_place_order_calls_touch_id_before_post(client):
 
 
 def test_place_order_aborts_if_touch_id_fails(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
     with (
@@ -203,7 +204,6 @@ def test_place_order_aborts_if_touch_id_fails(client):
 
 
 def test_place_order_aborts_if_dialog_cancelled(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 100}
     with (
@@ -217,7 +217,6 @@ def test_place_order_aborts_if_dialog_cancelled(client):
 
 
 def test_modify_order_aborts_if_touch_id_fails(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
@@ -229,7 +228,6 @@ def test_modify_order_aborts_if_touch_id_fails(client):
 
 
 def test_cancel_order_aborts_if_touch_id_fails(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
@@ -241,7 +239,6 @@ def test_cancel_order_aborts_if_touch_id_fails(client):
 
 
 def test_reply_order_aborts_if_touch_id_fails(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
@@ -312,7 +309,6 @@ def test_reply_order_calls_both_gates(client):
 
 
 def test_modify_order_aborts_if_dialog_cancelled(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id"),
@@ -325,7 +321,6 @@ def test_modify_order_aborts_if_dialog_cancelled(client):
 
 
 def test_cancel_order_aborts_if_dialog_cancelled(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id"),
@@ -338,7 +333,6 @@ def test_cancel_order_aborts_if_dialog_cancelled(client):
 
 
 def test_reply_order_aborts_if_dialog_cancelled(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id"),
@@ -399,11 +393,15 @@ def test_place_order_and_confirm_one_reply(client):
         result = client.place_order_and_confirm("U1234567", order)
     assert result == [{"order_status": "Submitted"}]
     assert mock_post.call_count == 2
-    mock_reply_dlg.assert_called_once_with("RPL1", "Order price is outside of the Price Band.", None)
+    mock_reply_dlg.assert_called_once_with(
+        "RPL1", "Order price is outside of the Price Band.", None, order_label="BUY 10 AAPL"
+    )
     confirm_call = mock_post.call_args_list[1]
     assert confirm_call[0][0] == f"{client._base}/iserver/reply/RPL1"
     assert confirm_call.kwargs.get("json") == {"confirmed": True}
-    assert mock_tid.call_count == 2  # place_order's gate + one reply gate
+    # One Gate 1 for the write; the reply rode on it (2026-09-11). Before that day this
+    # line read `== 2` — the write's gate plus one reply gate — which is the defect.
+    assert mock_tid.call_count == 1
 
 
 def test_place_order_and_confirm_three_chained_replies(client):
@@ -425,9 +423,9 @@ def test_place_order_and_confirm_three_chained_replies(client):
     assert result == [{"order_status": "Submitted"}]
     assert mock_post.call_count == 4
     assert mock_reply_dlg.call_args_list == [
-        call("RPL1", "Price is outside of the Price Band.", None),
-        call("RPL2", "No market data for this contract.", None),
-        call("RPL3", "This order requires a mandatory cap price.", None),
+        call("RPL1", "Price is outside of the Price Band.", None, order_label="BUY 10 AAPL"),
+        call("RPL2", "No market data for this contract.", None, order_label="BUY 10 AAPL"),
+        call("RPL3", "This order requires a mandatory cap price.", None, order_label="BUY 10 AAPL"),
     ]
     urls = [c[0][0] for c in mock_post.call_args_list]
     assert urls[1:] == [
@@ -450,7 +448,7 @@ def test_place_order_and_confirm_passes_message_options(client):
             _make_ok_response([{"order_status": "Submitted"}]),
         ]
         client.place_order_and_confirm("U1234567", order)
-    mock_reply_dlg.assert_called_once_with("RPL1", "Confirm?", ["Yes", "No"])
+    mock_reply_dlg.assert_called_once_with("RPL1", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL")
 
 
 def test_place_order_and_confirm_decline_mid_chain(client):
@@ -459,7 +457,6 @@ def test_place_order_and_confirm_decline_mid_chain(client):
     Deliberate behavior change vs. reply_order(), which raises without ever contacting
     IBKR on cancel, leaving the order ambiguous on IBKR's side.
     """
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     order = {"ticker": "AAPL", "side": "BUY", "quantity": 10}
     with (
@@ -517,7 +514,6 @@ def test_modify_order_and_confirm_chained_replies(client):
 
 
 def test_modify_order_and_confirm_decline_mid_chain(client):
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     with (
         _patch("ibkr_core_mcp.client.require_touch_id"),
@@ -1445,7 +1441,6 @@ def test_place_order_and_confirm_records_each_reply_in_the_callers_log(client):
 
 def test_place_order_and_confirm_logs_a_declined_reply_as_not_confirmed(client):
     """A decline is recorded (confirmed False) before the decline POST and the re-raise."""
-    from ibkr_core_mcp.exceptions import HumanAuthError
 
     order = {"ticker": "ES", "side": "BUY", "quantity": 1}
     reply_log: list[dict[str, Any]] = []
@@ -1556,3 +1551,127 @@ def test_order_label_is_side_quantity_symbol_from_either_spelling():
     assert _order_label({"side": "BUY", "quantity": 1, "ticker": "ES"}) == "BUY 1 ES"
     assert _order_label({"side": "SELL", "quantity": 2, "symbol": "AAPL"}) == "SELL 2 AAPL"
     assert _order_label({"conid": 1}) == "? ? UNKNOWN"
+
+
+def _three_reply_chain():
+    """The live-verified shape: reply → reply → reply → terminal."""
+    return [
+        _make_ok_response([{"id": "RPL1", "message": ["Price is outside of the Price Band."]}]),
+        _make_ok_response([{"id": "RPL2", "message": ["No market data for this contract."]}]),
+        _make_ok_response([{"id": "RPL3", "message": ["This order requires a mandatory cap price."]}]),
+        _make_ok_response([{"order_status": "Submitted"}]),
+    ]
+
+
+def test_place_order_and_confirm_asks_for_one_fingerprint_and_four_dialogs(client):
+    """The user's rule (2026-09-11): authenticate once per write, validate every message.
+
+    Measured 2026-09-10: this chain cost FOUR Touch IDs. IBKR Mobile and TWS ask once."""
+    order = {"ticker": "ES", "side": "BUY", "quantity": 1, "conid": 649180671}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog") as order_dlg,
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = _three_reply_chain()
+        client.place_order_and_confirm("U1234567", order)
+    assert touch_id.call_count == 1
+    assert touch_id.call_args.args[0] == "place an IBKR order — BUY 1 ES"
+    assert order_dlg.call_count == 1
+    assert reply_dlg.call_count == 3
+    assert all(c.kwargs.get("order_label") == "BUY 1 ES" for c in reply_dlg.call_args_list)
+
+
+def test_a_reply_with_no_authorization_still_prompts(client):
+    """Fail closed: the standalone paths behave exactly as before."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_status": "Submitted"}])
+        client._resolve_one_reply({"id": "RPL1", "message": ["x"]})
+    touch_id.assert_called_once()
+
+
+def test_a_reply_with_an_expired_or_foreign_authorization_prompts_again(client):
+    """Expiry and mismatch both fail closed — never a silent pass on presence alone."""
+    import time as _time
+
+    from ibkr_core_mcp.human_auth import OrderWriteAuthorization
+
+    stale = OrderWriteAuthorization("place:x", "BUY 1 ES", granted_at=_time.monotonic() - 10_000.0, ttl_s=1.0)
+    foreign = OrderWriteAuthorization("place:other", "SELL 1 ES", granted_at=_time.monotonic(), ttl_s=300.0)
+    for auth in (stale, foreign):
+        with (
+            _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+            _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+            _patch.object(client._session, "post") as mock_post,
+        ):
+            mock_post.return_value = _make_ok_response([{"order_status": "Submitted"}])
+            client._resolve_one_reply({"id": "RPL1", "message": ["x"]}, authorization=auth, scope="place:x")
+        touch_id.assert_called_once()
+
+
+def test_place_order_prompts_when_the_body_no_longer_matches_the_authorization(client):
+    """Mutation: an authorization for one body does not cover another (dynamic linking)."""
+    import time as _time
+
+    from ibkr_core_mcp.client import _order_write_scope
+    from ibkr_core_mcp.human_auth import OrderWriteAuthorization
+
+    body = {"ticker": "ES", "side": "BUY", "quantity": 1, "conid": 649180671, "auxPrice": 7900}
+    auth = OrderWriteAuthorization(_order_write_scope("place", body), "BUY 1 ES", _time.monotonic(), 300.0)
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_status": "Submitted"}])
+        client.place_order("U1234567", {**body, "auxPrice": 7800}, authorization=auth)
+        touch_id.assert_called_once()
+        touch_id.reset_mock()
+        client.place_order("U1234567", body, authorization=auth)
+        touch_id.assert_not_called()
+
+
+def test_declining_a_reply_still_ends_the_chain_after_one_fingerprint(client):
+    """DO NOT REPLY declines to IBKR and aborts (the existing decline test pins the POST);
+    the authorization dies with the call frame — no second fingerprint was ever asked."""
+    order = {"ticker": "ES", "side": "BUY", "quantity": 1, "conid": 649180671}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=[None, HumanAuthError("declined")]),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [*_three_reply_chain()[:2], _make_ok_response([])]
+        with pytest.raises(HumanAuthError):
+            client.place_order_and_confirm("U1234567", order)
+    assert touch_id.call_count == 1
+
+
+def test_authorize_order_write_is_touch_id_then_a_frozen_value(monkeypatch):
+    """Gate 1 through the one seam this module holds, then the token it grants."""
+    from ibkr_core_mcp import client as client_mod
+    from ibkr_core_mcp.human_auth import OrderWriteAuthorization
+
+    calls: list[str] = []
+    monkeypatch.setattr(client_mod, "require_touch_id", lambda reason: calls.append(reason))
+    monkeypatch.setattr("ibkr_core_mcp.client.time.monotonic", lambda: 42.0)
+    auth = client_mod._authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")
+    assert calls == ["place an IBKR order — BUY 1 ES"]
+    assert auth == OrderWriteAuthorization("place:abc", "BUY 1 ES", 42.0, 300.0)
+
+
+def test_authorize_order_write_grants_nothing_when_touch_id_is_denied(monkeypatch):
+    """A refused fingerprint raises before any value exists."""
+    from ibkr_core_mcp import client as client_mod
+
+    def deny(reason: str) -> None:
+        raise HumanAuthError("Touch ID denied")
+
+    monkeypatch.setattr(client_mod, "require_touch_id", deny)
+    with pytest.raises(HumanAuthError):
+        client_mod._authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")

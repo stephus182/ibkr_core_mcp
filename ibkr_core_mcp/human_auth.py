@@ -10,8 +10,8 @@ to the device password if the biometric read genuinely fails. That fallback is
 Apple's own recovery path, not a bypass added here — the stricter biometrics-only
 policy was evaluated and rejected because a failed scan under it leaves the user no
 recovery at all. There is deliberately no bypass flag and no *cache* of a prior success — nothing that lets
-a later, unrelated write ride on an earlier fingerprint. What `authorize_order_write`
-returns is not that: one authorization for one write, bound to that write's own data and
+a later, unrelated write ride on an earlier fingerprint. What an `OrderWriteAuthorization`
+(granted by `client._authorize_order_write`) is, is not that: one authorization for one write, bound to that write's own data and
 to a 300 s window, held only by the call chain that earned it, checked identically at the
 write and at every reply, and expiring closed. The precaution replies IBKR sends for that
 same write validate through their dialogs without a second fingerprint — the user's rule
@@ -49,7 +49,8 @@ ORDER_WRITE_AUTHORIZATION_TTL_S = 300.0
 class OrderWriteAuthorization:
     """One human authorization for one order write, bound to that write's own data.
 
-    Created by `authorize_order_write` immediately after a successful Touch ID and passed
+    Created by `client._authorize_order_write` immediately after a successful Touch ID — the
+    one seam every Gate 1 prompt in this package goes through — and passed
     *down* the call chain that needed it — `place_order_and_confirm` → `place_order` →
     `_resolve_one_reply` — so the precaution replies IBKR sends for that same write do not
     each demand a fresh fingerprint. It lives only in that call frame: no module state, no
@@ -80,24 +81,6 @@ class OrderWriteAuthorization:
     def covers(self, scope: str) -> bool:
         """True only for the same transaction inside the window."""
         return scope == self.scope and not self.expired
-
-
-def authorize_order_write(
-    reason: str, scope: str, label: str, ttl_s: float = ORDER_WRITE_AUTHORIZATION_TTL_S
-) -> OrderWriteAuthorization:
-    """Gate 1 for one order write: Touch ID, then the authorization it grants.
-
-    Args:
-        reason: The Touch ID prompt text, completing "Python is trying to …".
-        scope: The transaction's own data, from `client._order_write_scope`.
-        label: The order's one-line description, for the reply dialogs' title.
-        ttl_s: Validity window; `ORDER_WRITE_AUTHORIZATION_TTL_S` unless a test shortens it.
-
-    Returns:
-        The authorization. Raises `HumanAuthError` (from `require_touch_id`) on any denial.
-    """
-    require_touch_id(reason)
-    return OrderWriteAuthorization(scope, label, time.monotonic(), ttl_s)
 
 
 def require_touch_id(reason: str) -> None:

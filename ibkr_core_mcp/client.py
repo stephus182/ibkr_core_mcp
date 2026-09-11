@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from collections.abc import Mapping
@@ -32,7 +33,11 @@ import urllib3
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError
-from ibkr_core_mcp.human_auth import require_touch_id
+from ibkr_core_mcp.human_auth import (
+    ORDER_WRITE_AUTHORIZATION_TTL_S,
+    OrderWriteAuthorization,
+    require_touch_id,
+)
 from ibkr_core_mcp.order_confirm import (
     confirm_cancel_dialog,
     confirm_modify_dialog,
@@ -112,6 +117,9 @@ def _chunk_days_for_bar(bar: str) -> int:
     return max(7, min(1000, days))
 
 
+log = logging.getLogger(__name__)
+
+
 def _order_write_scope(kind: str, body: Mapping[str, Any], order_id: str | None = None) -> str:
     """The transaction's own data as a scope string — what one Gate 1 is bound to.
 
@@ -145,6 +153,29 @@ def _order_label(order: Mapping[str, Any]) -> str:
     """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     return f"{order.get('side', '?')} {order.get('quantity', '?')} {symbol}"
+
+
+def _authorize_order_write(
+    reason: str, scope: str, label: str, ttl_s: float = ORDER_WRITE_AUTHORIZATION_TTL_S
+) -> OrderWriteAuthorization:
+    """Gate 1 for one order write: Touch ID, then the authorization it grants.
+
+    Lives here, beside the standalone prompts, so that every Gate 1 in the package goes
+    through the one `require_touch_id` reference this module holds — one seam to reason
+    about, one seam a test doubles. (A first cut put it in `human_auth`, where it called
+    that module's own reference and slipped past every existing double; 2026-09-11.)
+
+    Args:
+        reason: The Touch ID prompt text, completing "Python is trying to …".
+        scope: The transaction's own data, from `_order_write_scope`.
+        label: The order's one-line description, for the reply dialogs' title.
+        ttl_s: Validity window; `ORDER_WRITE_AUTHORIZATION_TTL_S` unless a test shortens it.
+
+    Returns:
+        The authorization. Raises `HumanAuthError` (from `require_touch_id`) on any denial.
+    """
+    require_touch_id(reason)
+    return OrderWriteAuthorization(scope, label, time.monotonic(), ttl_s)
 
 
 def _validate_account_id(account_id: str) -> None:
@@ -1332,8 +1363,18 @@ class IBKRClient:
     # Order Management (write — human auth required)
     # ------------------------------------------------------------------
 
-    def place_order(self, account_id: str, order: dict[str, Any]) -> list[dict[str, Any]]:
+    def place_order(
+        self,
+        account_id: str,
+        order: dict[str, Any],
+        *,
+        authorization: OrderWriteAuthorization | None = None,
+    ) -> list[dict[str, Any]]:
         """Place a new order. Requires Touch ID (Gate 1) + tkinter confirmation dialog (Gate 2).
+
+        `authorization` (2026-09-11): the value `place_order_and_confirm` earned for this exact
+        body. When it covers this body, Gate 1 is not repeated; Gate 2 always runs. Called
+        directly with none — the documented single-shot use — it prompts as it always has.
 
         Both security gates fire before any network call. HumanAuthError is raised if either
         gate fails or times out. ClaudIA constraint: ClaudeToolkit exposes no tool calling
@@ -1373,7 +1414,14 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
-        require_touch_id(f"place an IBKR order — {_order_label(order)}")
+        # Gate 1. A chain started by place_order_and_confirm already earned an
+        # authorization for exactly this body; anything else — a direct call, an expired
+        # window, a body that no longer matches — prompts. Fails closed. (2026-09-11)
+        scope = _order_write_scope("place", order)
+        if authorization is None or not authorization.covers(scope):
+            require_touch_id(f"place an IBKR order — {_order_label(order)}")
+        else:
+            log.info("Gate 1: place covered by authorization %s", scope)
         confirm_order_dialog(order, account_id)
         # Strip display-only fields (underscore-prefixed, e.g. _companyName).
         # These carry Gate-2 dialog metadata and are not valid IBKR request fields.
@@ -1454,7 +1502,14 @@ class IBKRClient:
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
         return data if isinstance(data, list) else []
 
-    def _resolve_one_reply(self, entry: dict[str, Any], reply_log: list[dict[str, Any]] | None = None) -> Any:
+    def _resolve_one_reply(
+        self,
+        entry: dict[str, Any],
+        reply_log: list[dict[str, Any]] | None = None,
+        *,
+        authorization: OrderWriteAuthorization | None = None,
+        scope: str | None = None,
+    ) -> Any:
         """Run Gate 1 + Gate 2 for one reply-chain entry, then tell IBKR the outcome.
 
         `entry` is a single {"id", "message", "messageOptions"?, ...} dict — the first
@@ -1474,6 +1529,11 @@ class IBKRClient:
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
         Endpoint: POST /iserver/reply/{replyId}
+
+        `authorization` / `scope` (2026-09-11): the chain's authorization and the scope it was
+        granted for. A reply covered by them validates through its dialog alone — the user's
+        rule, matching IBKR Mobile and TWS; the dialog's title then names the order. Without
+        them the reply prompts, exactly as `reply_order()` always has.
 
         `reply_log`, when given, receives one record per reply: `reply_id`, the raw
         `message`, `message_text` (tags stripped, entities unescaped), `message_options`,
@@ -1495,9 +1555,17 @@ class IBKRClient:
         }
         if reply_log is not None:
             reply_log.append(record)
-        require_touch_id(f"confirm an IBKR order reply {reply_id}")
+        # Gate 1 for a reply: the same check the write ran, with the scope the chain
+        # computed from the body it sent. No authorization, no scope, expired, or for
+        # another write — prompt. Never a silent pass on presence alone. (2026-09-11)
+        if authorization is None or scope is None or not authorization.covers(scope):
+            require_touch_id(f"confirm an IBKR order reply {reply_id}")
+        else:
+            log.info("Gate 1: reply %s covered by authorization %s", reply_id, scope)
         try:
-            confirm_reply_dialog(reply_id, message, options)
+            # The unauthorised path keeps its call exactly as before — no label to show.
+            reply_kwargs = {"order_label": authorization.label} if authorization is not None else {}
+            confirm_reply_dialog(reply_id, message, options, **reply_kwargs)
         except HumanAuthError:
             self._post(f"/iserver/reply/{reply_id}", {"confirmed": False})
             raise HumanAuthError("User declined IBKR order reply") from None
@@ -1512,6 +1580,11 @@ class IBKRClient:
         reply_log: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Place an order and resolve its full reply chain, looping until a terminal response.
+
+        One Touch ID for the whole chain (2026-09-11): Gate 1 runs here, once, bound to this
+        body and to 300 s; the write and every precaution reply verify that same
+        authorization and keep their dialogs. IBKR Mobile and TWS ask once per placement;
+        so does this.
 
         Calls the existing place_order() for the initial submission — Gate 1 + Gate 2
         already run correctly there and are unchanged. If IBKR's response requires a
@@ -1535,9 +1608,15 @@ class IBKRClient:
         `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
         return value stays the terminal response.
         """
-        response = _as_reply_list(self.place_order(account_id, order))
+        scope = _order_write_scope("place", order)
+        label = _order_label(order)
+        authorization = _authorize_order_write(f"place an IBKR order — {label}", scope, label)
+        log.info("Gate 1: granted for %s (%s)", scope, label)
+        response = _as_reply_list(self.place_order(account_id, order, authorization=authorization))
         while response and "id" in response[0]:
-            response = _as_reply_list(self._resolve_one_reply(response[0], reply_log))
+            response = _as_reply_list(
+                self._resolve_one_reply(response[0], reply_log, authorization=authorization, scope=scope)
+            )
         return response
 
     def modify_order_and_confirm(

@@ -162,30 +162,13 @@ def test_authorization_covers_its_own_scope_until_it_expires(monkeypatch):
     assert auth.expired and not auth.covers("place:abc")
 
 
-def test_authorize_order_write_is_touch_id_then_a_frozen_value(monkeypatch):
-    """Gate 1 exactly as before, then a frozen token — and no module state appears."""
+def test_authorization_is_a_frozen_value_and_never_module_state():
+    """A token, not a cache: immutable, and nothing of its type lives at module level."""
     from ibkr_core_mcp import human_auth
 
-    calls: list[str] = []
-    monkeypatch.setattr(human_auth, "require_touch_id", lambda reason: calls.append(reason))
-    monkeypatch.setattr("ibkr_core_mcp.human_auth.time.monotonic", lambda: 42.0)
-    auth = human_auth.authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")
-    assert calls == ["place an IBKR order — BUY 1 ES"]
-    assert auth == human_auth.OrderWriteAuthorization("place:abc", "BUY 1 ES", 42.0, 300.0)
+    auth = human_auth.OrderWriteAuthorization("place:abc", "BUY 1 ES", 42.0, 300.0)
     with pytest.raises(FrozenInstanceError):
         auth.scope = "other"  # type: ignore[misc]
     assert not any(isinstance(v, human_auth.OrderWriteAuthorization) for v in vars(human_auth).values()), (
         "an authorization must never be held at module level"
     )
-
-
-def test_authorize_order_write_grants_nothing_when_touch_id_is_denied(monkeypatch):
-    """A refused fingerprint raises before any value exists."""
-    from ibkr_core_mcp import human_auth
-
-    def deny(reason: str) -> None:
-        raise HumanAuthError("Touch ID denied")
-
-    monkeypatch.setattr(human_auth, "require_touch_id", deny)
-    with pytest.raises(HumanAuthError):
-        human_auth.authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")
