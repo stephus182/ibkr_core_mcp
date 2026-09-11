@@ -123,13 +123,22 @@ def test_require_touch_id_timeout(monkeypatch):
 
 
 def _touch_id_reasons() -> list[str]:
+    """Every Gate 1 reason in client.py, whichever helper carries it to Apple's prompt.
+
+    Since 2026-09-11 the *_and_confirm chains prompt through `_authorize_order_write(...)`
+    and the standalone writes through `require_touch_id(...)`; both reach the dialog
+    verbatim, so both are checked.
+    """
     src = (_Path(__file__).parent.parent / "ibkr_core_mcp" / "client.py").read_text()
-    return _re.findall(r'require_touch_id\(\s*f?"([^"]*)"', src)
+    return _re.findall(r'(?:require_touch_id|_authorize_order_write)\(\s*f?"([^"]*)"', src)
 
 
 def test_touch_id_call_sites_are_discoverable():
     reasons = _touch_id_reasons()
-    assert len(reasons) >= 5, f"expected the known Gate 1 call sites, found {reasons}"
+    assert len(reasons) >= 7, (
+        "expected the 5 standalone Gate 1 sites plus the 2 chain grants "
+        f"(place_order_and_confirm, modify_order_and_confirm), found {reasons}"
+    )
 
 
 def test_every_touch_id_reason_completes_the_system_prompt_grammatically():
