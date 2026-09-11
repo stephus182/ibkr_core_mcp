@@ -83,7 +83,10 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # ordinary. No currency in the order means no currency shown — never a guess.
     currency = str(order.get("_currency") or order.get("currency") or "").strip().upper()
     ccy = f" {currency}" if currency else ""
-    price_str = f"{price}{ccy}" if price is not None else "MARKET"
+    # The same formatter as the Changes row, so one dialog cannot show one number two
+    # ways: live 2026-09-10 it read `Price: 6945.0 USD` four lines above
+    # `limit price 6,995.00 → 6,945.00` (claudia_ui gap #46).
+    price_str = f"{change_value_text('limit_price', price)}{ccy}" if price is not None else "MARKET"
     try:
         if order.get("_multiplier_unknown"):
             # A futures order whose multiplier the caller could not learn. price × qty here
@@ -110,7 +113,7 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     }
     if aux_price is not None:
         # A stop-limit's trigger lives in auxPrice; no dialog showed it before 2026-09-10.
-        rows["Stop"] = f"{aux_price}{ccy}"
+        rows["Stop"] = f"{change_value_text('stop_price', aux_price)}{ccy}"
     rows["TIF"] = tif
     # The outside-RTH attribute decides WHEN a stop on a US future can trigger (IBKR
     # simulates those stops and fires them only in RTH unless it is set), so it belongs on
@@ -142,6 +145,46 @@ def _yes_no(value: Any) -> Any:
     return ("Yes" if value else "No") if isinstance(value, bool) else value
 
 
+_PRICE_CHANGE_FIELDS = ("limit_price", "stop_price")
+
+
+def change_value_text(field: str, value: Any) -> str:
+    """One rendering of a changed field's value, shared by every surface that shows a diff.
+
+    A diff exists to be compared at a glance, so the two sides of the arrow have to be
+    formatted alike. Until 2026-09-10 they were not: on order 1793215935 one stop-price
+    change rendered as `stop_price: 7900.0 -> 7950` in the chat card and `stop price
+    7900.0 -> 7950.0` on Gate 2, because each surface printed whatever type the value
+    happened to arrive as — a float from the proposal's `previous_value`, an int from the
+    model's replacement. Public so claudia_ui's approval text uses this definition rather
+    than a third copy, the same reason `reply_message_text` is public.
+
+    Prices take the thousands-and-two-decimals form the rest of the approval text already
+    uses; a whole quantity loses its `.0`; booleans read Yes/No; None renders `?` rather
+    than the string "None", matching `_format_changes`'s rule that an unknown is never a
+    guess.
+
+    Args:
+        field: The changed field's name, from `propose_modify`'s `changes[].field` enum.
+        value: That field's value, before or after.
+
+    Returns:
+        The value as it should appear on a dialog or in the approval text.
+    """
+    if value is None:
+        return "?"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if field in _PRICE_CHANGE_FIELDS:
+        try:
+            return f"{float(value):,.2f}"
+        except (TypeError, ValueError):
+            return str(value)
+    if field == "quantity":
+        return _quantity_text(value)
+    return str(value)
+
+
 def _format_changes(order: dict[str, Any]) -> str:
     """Render `order["_changes"]` as one `<field> <previous> → <new>` line per entry, "" if none.
 
@@ -158,8 +201,8 @@ def _format_changes(order: dict[str, Any]) -> str:
             if order.get(key) is not None:
                 new = order[key]
                 break
-        previous = _yes_no(change.get("previous_value"))
-        lines.append(f"{field.replace('_', ' ')} {previous} → {_yes_no(new)}")
+        previous = change_value_text(field, change.get("previous_value"))
+        lines.append(f"{field.replace('_', ' ')} {previous} → {change_value_text(field, new)}")
     return "\n".join(lines)
 
 

@@ -264,7 +264,7 @@ def test_confirm_cancel_dialog_shows_typed_order_details_when_provided():
     assert details["Account"] == "U1234567"
     assert details["Symbol"] == "AAPL"
     assert details["Action"] == "BUY"
-    assert details["Price"] == "100.0"
+    assert details["Price"] == "100.00"
     assert details["TIF"] == "GTC"
     assert "symbol" not in details and "side" not in details and "price" not in details
     assert list(details).count("Order ID") == 1
@@ -743,6 +743,44 @@ def test_cancel_and_modify_dialogs_declare_their_action():
     assert mock_show.call_args.kwargs["action"] == "MODIFY"
 
 
+def test_both_sides_of_a_change_are_formatted_alike():
+    """A diff is read by comparing two values, so they must be rendered the same way.
+
+    Live 2026-09-10 on order 1793215935, one stop-price change rendered three ways: the
+    chat card said `stop_price: 7900.0 → 7950`, Gate 2 said `stop price 7900.0 → 7950.0`.
+    Each surface printed whatever type the value arrived as — a float from the proposal's
+    `previous_value`, an int from the model's replacement body.
+    """
+    from ibkr_core_mcp.order_confirm import change_value_text
+
+    assert change_value_text("stop_price", 7900.0) == "7,900.00"
+    assert change_value_text("stop_price", 7950) == "7,950.00"
+    assert change_value_text("limit_price", "100.5") == "100.50"
+    assert change_value_text("quantity", 1.0) == "1"
+    assert change_value_text("quantity", "2.0") == "2"
+    assert change_value_text("outside_rth", True) == "Yes"
+    assert change_value_text("outside_rth", False) == "No"
+    assert change_value_text("tif", "GTC") == "GTC"
+    assert change_value_text("order_type", "STP") == "STP"
+    assert change_value_text("stop_price", None) == "?"
+    assert change_value_text("stop_price", "?") == "?"  # _format_changes's unknown sentinel
+
+
+def test_the_gate2_changes_row_uses_the_shared_formatter():
+    """The dialog's diff line must agree with the approval text to the character."""
+    from ibkr_core_mcp.order_confirm import _format_changes
+
+    order = {
+        "auxPrice": 7950,
+        "quantity": 2.0,
+        "_changes": [
+            {"field": "stop_price", "previous_value": 7900.0},
+            {"field": "quantity", "previous_value": "1.0"},
+        ],
+    }
+    assert _format_changes(order) == "stop price 7,900.00 → 7,950.00\nquantity 1 → 2"
+
+
 def test_confirm_reply_dialog_shows_the_cleaned_message():
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         from ibkr_core_mcp.order_confirm import confirm_reply_dialog
@@ -807,12 +845,12 @@ def test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once():
         assert "None" not in details.values()
         assert "manualIndicator" not in details
         assert details["Symbol"] == "ES — ESU6 · expires 2026-09-18 · x50"
-        assert details["Price"] == "7895.0 USD"
+        assert details["Price"] == "7,895.00 USD"
         assert details["Outside RTH"] == "Yes"
         assert details["Total (est.)"] == "394,750.00 USD (×50 multiplier)"
     assert "Order ID" not in calls[0]["details"]
     assert calls[1]["details"]["Order ID"] == "975324733"
-    assert calls[1]["details"]["Changes"] == "stop price 7900.0 → 7895.0"
+    assert calls[1]["details"]["Changes"] == "stop price 7,900.00 → 7,895.00"
     assert calls[1]["details"]["Currently at IBKR"] == "Buy 1 ES Sep18'26 Stop 7900.00, GTC"
     assert calls[2]["details"]["Order ID"] == "975324733"
     assert calls[2]["details"]["Currently at IBKR"] == "Buy 1 ES Sep18'26 Stop 7900.00, GTC"
@@ -839,7 +877,7 @@ def test_stop_limit_dialog_shows_the_stop_as_its_own_row():
         )
     details = mock_show.call_args.kwargs["details"]
     keys = list(details)
-    assert details["Price"] == "100.0 USD" and details["Stop"] == "98.0 USD"
+    assert details["Price"] == "100.00 USD" and details["Stop"] == "98.00 USD"
     assert keys.index("Stop") == keys.index("Price") + 1
     assert keys.index("TIF") == keys.index("Stop") + 1
 
@@ -868,7 +906,7 @@ def test_modify_dialog_changes_row_covers_every_field_kind():
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         confirm_modify_dialog("1", body, "U1")
     assert mock_show.call_args.kwargs["details"]["Changes"] == (
-        "limit price 100.0 → 105.0\nquantity 1 → 3\ntif GTC → DAY\noutside rth No → Yes\nmystery 7 → ?"
+        "limit price 100.00 → 105.00\nquantity 1 → 3\ntif GTC → DAY\noutside rth No → Yes\nmystery 7 → ?"
     )
 
 
