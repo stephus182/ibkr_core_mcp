@@ -1433,8 +1433,19 @@ class IBKRClient:
         data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [api_order]})
         return data if isinstance(data, list) else []
 
-    def modify_order(self, account_id: str, order_id: str, order: dict[str, Any]) -> dict[str, Any]:
+    def modify_order(
+        self,
+        account_id: str,
+        order_id: str,
+        order: dict[str, Any],
+        *,
+        authorization: OrderWriteAuthorization | None = None,
+    ) -> dict[str, Any]:
         """Modify an existing order. Requires Touch ID (Gate 1) + tkinter dialog (Gate 2).
+
+        `authorization` (2026-09-11): the value `modify_order_and_confirm` earned for this
+        exact replacement body and order id. When it covers them, Gate 1 is not repeated;
+        Gate 2 always runs. Called directly with none, it prompts as it always has.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -1443,7 +1454,13 @@ class IBKRClient:
         _validate_account_id(account_id)
         _validate_order_id(order_id)
         self._ensure_accounts_initialized()
-        require_touch_id(f"modify IBKR order {order_id}")
+        # Gate 1 — the same rule as place_order: covered by the chain's authorization for
+        # exactly this body and order id, or prompt. Fails closed. (2026-09-11)
+        scope = _order_write_scope("modify", order, order_id=order_id)
+        if authorization is None or not authorization.covers(scope):
+            require_touch_id(f"modify IBKR order {order_id}")
+        else:
+            log.info("Gate 1: modify covered by authorization %s", scope)
         confirm_modify_dialog(order_id, order, account_id)
         # Display-only `_`-prefixed keys (the futures label, multiplier, currency,
         # `_changes`, `_current_description`) never reach IBKR — the same convention as
@@ -1629,6 +1646,11 @@ class IBKRClient:
     ) -> dict[str, Any]:
         """Modify an order and resolve its full reply chain, looping until a terminal response.
 
+        One Touch ID for the whole chain (2026-09-11): modify is its own transaction and
+        keeps its own Gate 1 — run here, once, bound to this replacement body and order id
+        and to 300 s — and its precaution replies verify that same authorization behind
+        their dialogs. IBKR Mobile and TWS ask once per modification; so does this.
+
         Same loop/display/decline semantics as place_order_and_confirm() — see that
         method's docstring — applied to modify_order() instead of place_order(). IBKR's
         reply-chain shape for modify is documented as the same {"id", "message", ...}
@@ -1649,9 +1671,15 @@ class IBKRClient:
         `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
         return value stays the terminal response.
         """
-        response = self.modify_order(account_id, order_id, order)
+        scope = _order_write_scope("modify", order, order_id=order_id)
+        label = f"{_order_label(order)} (order {order_id})"
+        authorization = _authorize_order_write(f"modify IBKR order {order_id}", scope, label)
+        log.info("Gate 1: granted for %s (%s)", scope, label)
+        response = self.modify_order(account_id, order_id, order, authorization=authorization)
         while "id" in response:
-            response = _as_reply_dict(self._resolve_one_reply(response, reply_log))
+            response = _as_reply_dict(
+                self._resolve_one_reply(response, reply_log, authorization=authorization, scope=scope)
+            )
         return response
 
     def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:

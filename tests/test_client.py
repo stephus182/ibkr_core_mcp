@@ -508,8 +508,8 @@ def test_modify_order_and_confirm_chained_replies(client):
     assert result == {"order_status": "Submitted"}
     assert mock_post.call_count == 3
     assert mock_reply_dlg.call_args_list == [
-        call("RPL1", "Price band warning.", None),
-        call("RPL2", "No market data.", None),
+        call("RPL1", "Price band warning.", None, order_label="? ? UNKNOWN (order 1234567890)"),
+        call("RPL2", "No market data.", None, order_label="? ? UNKNOWN (order 1234567890)"),
     ]
 
 
@@ -1675,3 +1675,31 @@ def test_authorize_order_write_grants_nothing_when_touch_id_is_denied(monkeypatc
     monkeypatch.setattr(client_mod, "require_touch_id", deny)
     with pytest.raises(HumanAuthError):
         client_mod._authorize_order_write("place an IBKR order — BUY 1 ES", "place:abc", "BUY 1 ES")
+
+
+def test_modify_order_and_confirm_asks_for_one_fingerprint(client):
+    """Modify is its own transaction — its own Touch ID — and its replies ride on it."""
+    order = {
+        "conid": 649180671,
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "STP",
+        "auxPrice": 7950,
+        "tif": "GTC",
+        "ticker": "ES",
+    }
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog") as modify_dlg,
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response({"id": "RPL1", "message": ["Confirm?"]}),
+            _make_ok_response({"order_id": "42", "order_status": "Submitted"}),
+        ]
+        client.modify_order_and_confirm("U1234567", "42", order)
+    assert touch_id.call_count == 1
+    assert touch_id.call_args.args[0] == "modify IBKR order 42"
+    assert modify_dlg.call_count == 1 and reply_dlg.call_count == 1
+    assert reply_dlg.call_args.kwargs["order_label"] == "BUY 1 ES (order 42)"
