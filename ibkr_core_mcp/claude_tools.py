@@ -40,6 +40,7 @@ from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
+from ibkr_core_mcp.redaction import redact_error
 from ibkr_core_mcp.store import SQLiteStore
 from ibkr_core_mcp.streaming import SNAPSHOT_FIELD_NAMES
 
@@ -1718,7 +1719,7 @@ class ClaudeToolkit:
             try:
                 self._store.upsert_trades(parsed)
             except Exception as exc:
-                log.warning("_get_trades: store upsert failed: %s", exc)
+                log.warning("_get_trades: store upsert failed: %s", redact_error(exc))
                 upsert_note = "\n⚠ Trade history could not be saved to local store."
             # Also record into flex_trade, keyed on IBKR's exec id so the T+1 Flex
             # statement for the same fill merges onto this row instead of creating a
@@ -1726,7 +1727,7 @@ class ClaudeToolkit:
             try:
                 self._store.upsert_flex_trades_from_live(parsed)
             except Exception as exc:
-                log.warning("_get_trades: flex_trade live upsert failed: %s", exc)
+                log.warning("_get_trades: flex_trade live upsert failed: %s", redact_error(exc))
         skip_note = f" ({skipped} record(s) skipped — missing required fields)" if skipped else ""
 
         if not trades:
@@ -1822,7 +1823,7 @@ class ClaudeToolkit:
         try:
             result = flex.sync_archive_from_drive()
         except FileNotFoundError as e:
-            return str(e), None
+            return redact_error(e), None
         if result["files"] == 0:
             return "No XML files found in account_data/ on Drive.", None
         lines = [f"Imported {result['trades']} trades from {result['files']} file(s):"]
@@ -1933,7 +1934,7 @@ class ClaudeToolkit:
             try:
                 unique_ids, raw_count = FlexQueryClient.extract_execution_ids(xml_text)
             except Exception as exc:
-                file_lines.append(f"  ✗ PARSE ERROR  {filename}: {exc}")
+                file_lines.append(f"  ✗ PARSE ERROR  {filename}: {redact_error(exc)}")
                 issues.append(filename)
                 continue
 
@@ -2026,7 +2027,7 @@ class ClaudeToolkit:
             # no internals, so returning it is safe — same reasoning as _run_backtest's
             # sandbox errors.
             return (
-                f"Could not read live orders: {exc}\n"
+                f"Could not read live orders: {redact_error(exc)}\n"
                 f"**This is not the same as having none.** Do not tell the user their "
                 f"order list is empty. Run diagnose_orders to see the raw response.",
                 None,
@@ -2386,7 +2387,7 @@ class ClaudeToolkit:
             # the conservative fallback for anything else).
             cols = ", ".join(str(c) for c in df.columns)
             return (
-                f"Backtest failed: {exc}\n"
+                f"Backtest failed: {redact_error(exc)}\n"
                 f"  Available df columns: {cols}\n"
                 "  Contract: strategy code receives df (raw OHLCV — indicators are "
                 "NOT pre-computed; derive them in the code) and must set "
@@ -2396,7 +2397,7 @@ class ClaudeToolkit:
         try:
             self._store.save_backtest(result.to_dict())
         except Exception as exc:
-            log.warning("_run_backtest: failed to persist result to store: %s", exc)
+            log.warning("_run_backtest: failed to persist result to store: %s", redact_error(exc))
         lines = [
             f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period})",
             f"  Total Return:  {result.total_return:.1%}",
@@ -2645,7 +2646,7 @@ class ClaudeToolkit:
 
             _run_async(_touch())
         except Exception as exc:
-            log.warning("_get_pnl: failed to prime spl WS subscription: %s", exc)
+            log.warning("_get_pnl: failed to prime spl WS subscription: %s", redact_error(exc))
 
     def _get_analytics(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return return, CAGR, Sharpe, Sortino, Calmar, and drawdown stats from cached bars.
@@ -3369,8 +3370,8 @@ class ClaudeToolkit:
                 contents = self._client.get_watchlist(str(wl_id)) if wl_id != "?" else {}
             except Exception as exc:
                 # One unreadable list must not blank out the others: name it and move on.
-                lines.append(f"  [{wl_id}] {wl_name}{flag}: could not be read — {exc}")
-                detailed.append({**wl, "_contents_error": str(exc)})
+                lines.append(f"  [{wl_id}] {wl_name}{flag}: could not be read — {redact_error(exc)}")
+                detailed.append({**wl, "_contents_error": redact_error(exc)})
                 continue
             rows = contents.get("instruments") or contents.get("rows") or contents.get("symbols") or []
             symbols = [
@@ -3457,7 +3458,7 @@ class ClaudeToolkit:
             if is_private_host(host):
                 return "Blocked: cannot fetch from localhost, link-local, or private/reserved addresses."
         except Exception as exc:
-            return f"Invalid URL: {exc}"
+            return f"Invalid URL: {redact_error(exc)}"
         return None
 
     def _handle_firecrawl_search(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -3494,7 +3495,7 @@ class ClaudeToolkit:
         try:
             results = self._firecrawl.search(query, limit=limit, wait_for_ms=wait_for_ms, proxy=proxy)
         except FirecrawlError as exc:
-            return f"Firecrawl search failed (HTTP {exc.status_code}): {exc}", None
+            return f"Firecrawl search failed (HTTP {exc.status_code}): {redact_error(exc)}", None
 
         if not results:
             return f"No results found for: {query}", None
@@ -3553,7 +3554,7 @@ class ClaudeToolkit:
                 file_id = self._web_docs.save_search(query, results)
                 drive_note = f"\n\n*Snapshot saved to Drive (file ID: {file_id})*"
             except Exception as exc:
-                log.warning("firecrawl_search: Drive save failed: %s", exc)
+                log.warning("firecrawl_search: Drive save failed: %s", redact_error(exc))
                 drive_note = "\n\n*Note: Drive snapshot failed — results shown above.*"
 
         return "\n".join(lines) + drive_note, None
@@ -3650,14 +3651,14 @@ class ClaudeToolkit:
             pages = crawl_site(url, self._config.crawl4ai_profiles_dir, max_pages=max_pages, max_depth=max_depth)
         except Crawl4AIUnavailableError as exc:
             return (
-                f"Cannot crawl {url}: {exc}\n"
+                f"Cannot crawl {url}: {redact_error(exc)}\n"
                 f'Install the local browser with `pip install "ibkr_core_mcp[scraper]"` '
                 f"followed by `crawl4ai-setup`.",
                 None,
             )
         except Exception as exc:
-            log.warning("crawl_site failed for %s: %s", url, exc)
-            return f"Crawl of {url} failed: {exc}", None
+            log.warning("crawl_site failed for %s: %s", url, redact_error(exc))
+            return f"Crawl of {url} failed: {redact_error(exc)}", None
 
         if not pages:
             return (
@@ -3699,7 +3700,7 @@ class ClaudeToolkit:
         try:
             manifest = self._web_docs.save_crawl(url, pages)
         except Exception as exc:
-            return f"Crawl completed ({len(pages)} pages) but Drive save failed: {exc}", None
+            return f"Crawl completed ({len(pages)} pages) but Drive save failed: {redact_error(exc)}", None
 
         saved = len(manifest["pages"])
         return (
@@ -3753,7 +3754,7 @@ class ClaudeToolkit:
             matches, stats = search_site_detailed(domain, query, limit=limit, source=source)
         except Crawl4AIUnavailableError as exc:
             return (
-                f"Cannot search {domain}: {exc}\n"
+                f"Cannot search {domain}: {redact_error(exc)}\n"
                 f"search_site needs the local browser package. Install it with "
                 f'`pip install "ibkr_core_mcp[scraper]"` followed by `crawl4ai-setup`.',
                 None,
@@ -3761,8 +3762,8 @@ class ClaudeToolkit:
         except Exception as exc:
             # Broad by intent, matching _handle_fetch_page: an unreachable sitemap or a
             # Common Crawl outage must reach the model as something it can act on.
-            log.warning("search_site failed for %s (%r): %s", domain, query, exc)
-            return f"Search of {domain} failed: {exc}", None
+            log.warning("search_site failed for %s (%r): %s", domain, query, redact_error(exc))
+            return f"Search of {domain} failed: {redact_error(exc)}", None
 
         if not matches:
             # Three different situations used to print the message below. Only the last
@@ -3838,7 +3839,7 @@ class ClaudeToolkit:
             page = self._get_crawl4ai().scrape(url)
         except Crawl4AIUnavailableError as exc:
             return (
-                f"Cannot fetch {url}: {exc}\n"
+                f"Cannot fetch {url}: {redact_error(exc)}\n"
                 f"fetch_page needs the local browser. Install it with "
                 f'`pip install "ibkr_core_mcp[scraper]"` followed by `crawl4ai-setup`.',
                 None,
@@ -3846,8 +3847,8 @@ class ClaudeToolkit:
         except Exception as exc:
             # Broad by intent: a crashed browser, a navigation timeout or a dead network
             # must reach the model as a message it can act on, not a traceback.
-            log.warning("fetch_page failed for %s: %s", url, exc)
-            return f"Fetch of {url} failed: {exc}", None
+            log.warning("fetch_page failed for %s: %s", url, redact_error(exc))
+            return f"Fetch of {url} failed: {redact_error(exc)}", None
 
         markdown = page.get("markdown", "")
         if not markdown:

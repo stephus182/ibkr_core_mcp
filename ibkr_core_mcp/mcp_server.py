@@ -23,6 +23,7 @@ from pydantic import AnyUrl
 
 from ibkr_core_mcp import __version__
 from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
+from ibkr_core_mcp.redaction import redact_error
 
 if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
@@ -155,8 +156,8 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
             else:
                 text = json.dumps({"error": f"unknown resource: {path}", "resource": path})
         except Exception as exc:
-            logger.warning("read_resource %s failed: %s: %s", path, type(exc).__name__, exc)
-            text = json.dumps({"error": f"{type(exc).__name__}: {exc}", "resource": path}, indent=2)
+            logger.warning("read_resource %s failed: %s", path, redact_error(exc))
+            text = json.dumps({"error": redact_error(exc), "resource": path}, indent=2)
         return [ReadResourceContents(content=text, mime_type="application/json")]
 
     return server
