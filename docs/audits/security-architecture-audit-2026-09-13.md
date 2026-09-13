@@ -265,9 +265,13 @@ config `.gitleaks.toml`: default rules plus `fc-…` and `sk-ant-…` shapes; al
 placeholder-credential test files). A one-time full-history scan is a local step
 (`gitleaks git --redact`), not CI. Blocking.
 
-**CodeQL / Semgrep — not added.** The uncovered classes were exactly the architectural ones,
-each now a 30-line stdlib `ast` test with zero noise and no new tool. Revisit with external
-contributors or a second HTTP client.
+**CodeQL / Semgrep — not added by this audit, and CodeQL turns out to be already on.** The
+uncovered classes were exactly the architectural ones, each now a 30-line stdlib `ast` test with
+zero noise and no new tool. Discovered at push time: GitHub's *default* CodeQL setup has been
+configured on the repository since 2026-07-21 (languages `python` and `actions`, default query
+suite, weekly), running as a dynamic workflow outside `ci.yml`; it reported **0 open alerts** on
+2026-09-13. It stays — it costs nothing and is not a merge gate — and Semgrep is still not
+added.
 
 **Coverage — deferred.** Named-module 100 % branch coverage as a non-blocking report first:
 `human_auth.py`, `order_confirm.py` (minus tkinter widget lines), the order section of
@@ -416,6 +420,21 @@ pytest-socket under `disable_socket(allow_unix_socket=True)`: `getaddrinfo` → 
 | B9 TOCTOU | `2 failed` (posted quantity 999, shown 1) | `2 passed` |
 | B5 redaction | `ModuleNotFoundError: ibkr_core_mcp.redaction` | `12 passed` |
 | Whole suite | 1,051 unit before | **1,188 unit passed**, 93 integration deselected; ruff, `ruff format`, mypy strict clean |
+
+### First CI run of the new gates (run 34772667943, push of `b97f2ec`)
+
+| Job | Result |
+|---|---|
+| Python 3.11 / 3.12 (ruff, format, mypy, pytest incl. `tests/security/`) | success |
+| Secret scan (gitleaks) | success (annotation only: the action targets Node 20) |
+| Dependency audit (pip-audit) | **failure** — `nltk 3.10.3  PYSEC-2026-3740  (no fix version)`: model-artifact path traversal, transitive via crawl4ai, APIs never called here |
+
+That failure is the gate working as designed: a finding with **no fixed release** is the one
+case the policy sends to `security/pip-audit-ignores.txt`, with the reason and a re-check date
+(2026-10-13). The entry was added in the follow-up commit; nothing else was reported, so the
+tree resolved by CI (fresh pip, `[dev,server,scraper]`) is otherwise clean. Note for the record:
+the first read of this run mis-reported it green because `gh run watch … | tail` returned
+`tail`'s exit status; the job list is the authority.
 
 ### Local pip-audit (this machine's venv, 2026-09-13)
 

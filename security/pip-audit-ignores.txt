@@ -8,3 +8,5 @@
 #   * A finding with NO fixed release is ignored here with a re-check date, and removed
 #     the moment a fix ships.
 #   * The CI step reads this file verbatim; an entry without a reason is a review finding.
+
+PYSEC-2026-3740   # nltk <= 3.10.3 model-artifact path traversal (TransitionParser/AveragedPerceptron/PerceptronTagger/maxent); NO fixed release; transitive via crawl4ai, which uses nltk for tokenising only — none of those APIs is called here; first CI run 34772667943; added 2026-09-13; re-check 2026-10-13
