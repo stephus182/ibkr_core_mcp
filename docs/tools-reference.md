@@ -883,3 +883,16 @@ Full detail: `docs/web-scraper-reference.md` §6.
 than raising — as it does for a crashed browser or a blocked URL. The URL is
 SSRF-validated *before* the browser is constructed, since a late check would
 already have made the request.
+
+
+---
+
+## Capability declarations (2026-09-13)
+
+Every definition in `TOOL_DEFINITIONS` carries a `capabilities` frozenset — `READ_ONLY`,
+`COMPUTE`, `NETWORK`, `WEB_FETCH`, `LOCAL_IO`, `GOOGLE_DRIVE`, `DATABASE`, `ACCOUNT_STATE`,
+`ORDER_PREVIEW`, `ORDER_EXECUTION`, `SANDBOX_EXECUTION` — stripped by `ClaudeToolkit.tools`
+before the schema reaches the model and returned by `claude_tools.tool_capabilities()`. No tool
+declares `ORDER_EXECUTION`, and `tests/security/test_tool_capabilities.py` fails if a handler's
+source touches a sink its declaration omits. The per-capability list of mutating tools is in
+`SECURITY.md` § Capability declarations.

@@ -9,7 +9,46 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+Findings of the 2026-09-13 security architecture audit
+(`docs/audits/security-architecture-audit-2026-09-13.md`), each with the regression test that
+failed before its fix:
+- **Backtest sandbox: arbitrary file read and write from strategy code (A1/A2, High).**
+  `df.style.from_custom_template(dir, file)` rendered any file into the un-redacted error
+  channel; `df.to_csv(path, header=False)` wrote attacker-chosen bytes to any path as the
+  operator; `df.apply("to_csv", …)` and `df.pipe(pd.DataFrame.to_csv, …)` reached the writer by
+  name. `_sandboxed_getattr` now applies an **attribute allowlist** to every pandas/numpy object
+  and class, the string-function argument of `apply`/`agg`/`transform` faces the same list, and
+  the runtime-error text is one line capped at 300 chars. `build_sandbox()` is public so the
+  namespace is a testable value (`tests/security/test_sandbox_boundary.py`, 21 tests).
+- **SSE transport accepted DNS-rebinding and cross-origin requests (A3).** The MCP SDK disables
+  Host/Origin validation when no settings are passed; `build_sse_app` now passes
+  `TransportSecuritySettings` allowing loopback only (`test_transport_security.py`).
+- **SSRF guard**: parses decimal/hex/octal/short IPv4 literals locally with `inet_aton` before
+  DNS (octal `0177.0.0.1` resolved as public while Chromium reads 127.0.0.1) and blocks the RFC
+  6598 range `100.64.0.0/10` (Tailscale) and the IPv4 inside an IPv4-mapped IPv6 address
+  (`test_ssrf_boundary.py`).
+- **One redaction function** (`redaction.redact_error`) for every exception the model layer
+  shows or logs; a `requests` exception carries the Flex token in its URL, and three channels
+  bypassed `_safe_error` (`test_error_redaction.py`, structural).
+- **Unit tests no longer load the operator's `.env`**: `Config()` ran `load_dotenv()` through a
+  default factory; an autouse fixture stubs it and removes secret-named variables, and the
+  socket block is armed from session start (`test_no_live_io.py`).
+- **The body Gate 2 shows is the body sent**: `place_order`/`modify_order`/`get_order_preview`
+  copy the order dict at entry (`test_order_write_boundary.py`).
+
 ### Added
+- **Tool capability registry**: every `TOOL_DEFINITIONS` entry and both server-local tools carry
+  a `capabilities` frozenset from `claude_tools.CAPABILITIES`; `ClaudeToolkit.tools` strips it
+  before schemas reach the API; `tool_capabilities()` returns the map. The suite asserts the set
+  declaring `ORDER_EXECUTION` is empty and that every sink a handler's source touches is
+  declared — which reclassified `verify_flex_import` (it writes the import manifest).
+- **`tests/security/`** — nine files, `security` marker, structural (AST) and canary tests for
+  the ten properties in `SECURITY.md` § Security Regression Suite; each structural checker is
+  proven able to fire on a violating snippet.
+- **CI gates 5 and 6**: `pip-audit` over `[dev,server,scraper]` (per push and weekly; ignores
+  only from `security/pip-audit-ignores.txt`) and `gitleaks` over the pushed range
+  (`.gitleaks.toml`). `pip-audit` joins the `dev` extra.
 - `get_futures`: the front-month row carries `_contract` (local symbol, month, expiry, name,
   multiplier) from the per-conid identity cache — one contract-info call for the row the
   model quotes. Closes claudia_ui gap #37 residual (a): the model had derived `ESU6` from

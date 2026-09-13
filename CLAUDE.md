@@ -51,6 +51,10 @@ pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 
+# Security regression suite — the ten properties of SECURITY.md § Security Regression Suite,
+# each read from the source or driven with canaries; ~10 s. Part of the unit run and of CI.
+pytest -m security
+
 # Web tools — a LIVE run is mandatory before calling any scraper change done.
 # 11 tests, ~28s. Skips cleanly without the [scraper] extra or a Firecrawl key.
 pytest tests/test_web_tools_live.py -v -m integration
@@ -84,6 +88,12 @@ claudia_ui's CI (`.github/workflows/ci.yml` in both repos, aligned 2026-09-08), 
 clone by `git config core.hooksPath .githooks` (Dev Setup); `git push --no-verify` bypasses it
 on purpose. Branch protection cannot do this for a direct-push workflow: a required status
 check rejects every push whose commit has not already passed CI, which a direct push never has.
+
+**Two more gates run in CI only** (they need the network): `pip-audit` over the full installed
+tree, weekly as well as per push, with ignores only from `security/pip-audit-ignores.txt`; and
+`gitleaks` over the pushed range, configured by `.gitleaks.toml`. Neither is in the pre-push
+hook. Added 2026-09-13; the reasoning is in
+`docs/audits/security-architecture-audit-2026-09-13.md` § Phase 3.
 
 `[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` and `scripts/`. `tests/` is also checked
 (`files = ["ibkr_core_mcp", "tests", "scripts"]`) but under a narrower `tests.*` override that relaxes
@@ -193,7 +203,8 @@ ibkr_core_mcp/
 ├── backtest.py           # RestrictedPython sandbox executor
 ├── indicators.py         # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py          # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
-├── claude_tools.py       # Claude tool definitions + handlers (44 tools, portable)
+├── claude_tools.py       # Claude tool definitions + handlers (44 tools, portable; each declares `capabilities`)
+├── redaction.py          # redact_error — the one path for exception text the model layer shows or logs
 ├── mcp_server.py         # MCP server (stdio + SSE transports) — 46 tools, 4 resources
 ├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
 ├── order_confirm.py      # Gate 2: builds the confirmation dialog + side extraction
@@ -259,6 +270,7 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 - Never move the gates out of `IBKRClient` — enforcement must be at the innermost call site.
 - The required policy is `LAPolicyDeviceOwnerAuthentication` (Touch ID/Face ID, falling back to the device's system password on a failed/cancelled biometric scan) — Apple's own recovery path for a genuinely-failed biometric read, not a bypass this library adds. The stricter biometrics-only policy was evaluated and rejected: a failed scan under it has no recovery path at all. Don't change this policy without updating both this file and `README.md`'s Security section in the same PR.
 - Any PR that weakens these gates *beyond* the documented policy above — e.g. skipping `require_touch_id`/`confirm_order_dialog` entirely, caching a prior success, or adding a fallback beyond the OS's own password prompt — will be rejected.
+- **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate, or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audit that produced them: `docs/audits/security-architecture-audit-2026-09-13.md`.
 
 ---
 

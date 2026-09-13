@@ -111,3 +111,15 @@ charts and query your IBKR account in the same conversation:
 ```
 
 See: https://github.com/tradesdontlie/tradingview-mcp
+
+
+---
+
+## SSE transport security (2026-09-13)
+
+`--transport sse` binds `127.0.0.1` and, since 2026-09-13, validates `Host` and `Origin` through
+the MCP SDK's `TransportSecuritySettings` (loopback on any port). Without those settings the SDK
+disables its DNS-rebinding protection, which would let a web page in the operator's browser
+drive every tool once its DNS answer flipped to 127.0.0.1. A foreign `Host` receives 421, a
+foreign `Origin` 403; `tests/security/test_transport_security.py` exercises both. Detail:
+`SECURITY.md` § MCP Transport.

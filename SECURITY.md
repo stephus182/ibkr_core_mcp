@@ -114,7 +114,12 @@ reply_order()   ──► require_touch_id() ──► reply_dialog()   ──�
 
 ### Scope Minimization — No Order Writes in Tool Surface
 
-`ClaudeToolkit` exposes **42 read-only tools** to the LLM. None of them can write to IBKR. The complete tool surface is:
+`ClaudeToolkit` exposes **44 tools** to the LLM (46 through the MCP server, which adds two
+local price-alert tools). **None of them can place, modify, cancel or confirm an order** —
+`tests/security/test_tool_capabilities.py` asserts that the set of tools declaring
+`ORDER_EXECUTION` is empty. They are *not* all read-only, and until 2026-09-13 this section
+said "42 read-only tools" while eight of them mutated state outside the machine
+(docs/audits/security-architecture-audit-2026-09-13.md, B3). The complete tool surface is:
 
 | Category | Tools |
 |---|---|
@@ -132,7 +137,28 @@ reply_order()   ──► require_touch_id() ──► reply_dialog()   ──�
 | PA reporting | `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` |
 | Web scraping | `firecrawl_search`, `search_site`, `crawl_site`, `fetch_page` |
 
-`sync_flex_trades` writes to the local SQLite store and GDrive cache, not to IBKR. Order placement must go through `IBKRClient` directly, which enforces both gates.
+### Capability declarations
+
+Every tool definition carries a `capabilities` frozenset drawn from `claude_tools.CAPABILITIES`
+(`READ_ONLY`, `COMPUTE`, `NETWORK`, `WEB_FETCH`, `LOCAL_IO`, `GOOGLE_DRIVE`, `DATABASE`,
+`ACCOUNT_STATE`, `ORDER_PREVIEW`, `ORDER_EXECUTION`, `SANDBOX_EXECUTION`); `ClaudeToolkit.tools`
+strips the field before schemas reach the Anthropic API, and `tool_capabilities()` returns the
+map. The test suite checks three things: every tool declares a non-empty known set; no tool
+declares `ORDER_EXECUTION`; and every sink a handler's own source touches (an IBKR write, a
+store write, a Drive write, the sandbox, the browser, Firecrawl, Flex) is declared. The tools
+that mutate state, as that test freezes them:
+
+| Capability | Tools |
+|---|---|
+| `ACCOUNT_STATE` (IBKR server-side, ungated) | `create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert` |
+| `ORDER_PREVIEW` | `preview_order` |
+| `GOOGLE_DRIVE` (write/delete) | `fetch_market_data`, `delete_cache`, `sync_flex_trades`, `firecrawl_search` (with `save_to_drive`), `crawl_site` |
+| `DATABASE` (SQLite write) | `get_trades`, `sync_flex_trades`, `sync_flex_archive`, `import_flex_file`, `verify_flex_import`, `run_backtest`, `add_price_alert` |
+| `SANDBOX_EXECUTION` | `run_backtest` |
+| `WEB_FETCH` | `fetch_page`, `crawl_site`, `search_site` |
+| `NETWORK` (remote service) | `sync_flex_trades`, `firecrawl_search` |
+
+Order placement must go through `IBKRClient` directly, which enforces both gates; `tests/security/test_order_write_boundary.py` asserts that `claude_tools.py` and `mcp_server.py` never reference an order-write method, `_post`, `_session` or `OrderWriteAuthorization`.
 
 This directly implements the [MCP scope minimization principle](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#scope-minimization): the LLM's initial and maximum scope covers only low-risk read/analysis operations; order-write elevation requires out-of-band human authentication that the LLM cannot trigger.
 
@@ -174,6 +200,15 @@ def _safe_error(tool: str, exc: Exception) -> str:
 
 Adversarial strategy code that raises exceptions with embedded payloads cannot inject text into the model context through this path. Raw IBKR API error bodies, Flex XML content, and Python runtime exception messages are never forwarded.
 
+Where a handler must show the model *detail* — the sandbox error it has to fix, a browser
+failure it can act on, a resource handler's reason — it goes through one function,
+`redaction.redact_error`: exception type plus the first line of the message, secret-shaped
+material scrubbed (Bearer headers, `sk-ant-`/`fc-` keys, `t=`/`token=`/`key=` query parameters,
+Cookie headers), one line, 300 characters. A `requests` exception carries the full request URL,
+and the Flex token travels in `?t=…` — probed 2026-09-13, verbatim in the text — which is why
+every `{exc}`, `str(exc)` and log call in `claude_tools.py` and `mcp_server.py` is routed
+through it and `tests/security/test_error_redaction.py` fails on any that is not.
+
 ---
 
 ## Code Execution Security — Backtest Sandbox
@@ -197,7 +232,30 @@ Raw `pd` and `np` module objects are replaced with `types.SimpleNamespace` wrapp
 - `_SAFE_PD`: `DataFrame`, `Series`, `concat`, `to_datetime`, `isna`, `notna`, `NaT`, `NA`
 - `_SAFE_NP`: arithmetic, array creation, and math functions only — no `load*`, `save*`, `read_*`, `to_*`
 
-This prevents reading arbitrary files via `pd.read_parquet`, writing files via `df.to_csv` on shared state, and poisoning the process-level module singletons.
+This keeps `pd.read_*` out of reach and stops strategy code poisoning the process-level module
+singletons. It does **not** by itself restrict what `df` — a real DataFrame — can do; that is
+the attribute allowlist below.
+
+### Attribute allowlist (2026-09-13)
+
+`_sandboxed_getattr` applies an **allowlist** to every pandas or numpy object, instance or
+class: only the names in `backtest._PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS` resolve — the
+vectorised-strategy vocabulary (arithmetic, reductions, indexing, rolling/ewm/expanding/groupby
+windows, reshaping, `.str`/`.dt`, in-memory `to_numpy`/`to_list`/`to_frame`/`to_dict`). No
+`to_*` writer, no `style`, no `plot`, no `info`, no `attrs`. The string-function argument of
+`apply`/`agg`/`aggregate`/`transform` faces the same list, because pandas resolves that name
+with its own unguarded `getattr`. The runtime-error text returned to the model is one line
+capped at 300 characters.
+
+Why an allowlist: the 2026-09-13 audit demonstrated, by execution, that the previous two-name
+denylist (`eval`, `query`) left `df.style.from_custom_template(dir, file)` rendering **any file**
+through jinja2 into the error channel (arbitrary read, A1), `df.to_csv(path, header=False)`
+writing **attacker-chosen bytes to any path** as the operator (A2), `df.to_clipboard()` spawning
+`pbcopy`, and `df.apply("to_csv", path_or_buf=path)` / `df.pipe(pd.DataFrame.to_csv, path)`
+reaching the writer by name. Every one of those is an ordinary public method. Naming the bad
+ones one at a time is the `eval`/`query` fix again, forever. `tests/security/test_sandbox_boundary.py`
+holds each path closed with canary files and pins the sandbox globals and the two safe
+namespaces to frozen sets — widening any of them is a security change made in that test too.
 
 ### Resource limits
 
@@ -208,13 +266,66 @@ This prevents reading arbitrary files via `pd.read_parquet`, writing files via `
 
 ### Residual risk
 
-**DataFrame write methods** — Strategy code can call `df.to_csv()`, `df.to_json()`, or `df.to_parquet()` on its own DataFrame copy. This can write the OHLCV market data passed to the sandbox to a local file, but cannot access credentials, read arbitrary paths, or make network calls. The `_SAFE_PD` namespace excludes all `pd.read_*` methods, so only write-only access to non-sensitive content is possible. Full elimination requires a subprocess with OS-level restrictions (`seccomp`, macOS sandbox, or Docker).
+**DataFrame write methods (fixed 2026-09-13)** — This paragraph used to say strategy code
+could write "the OHLCV market data passed to the sandbox to a local file, but cannot access
+credentials, read arbitrary paths, or make network calls". The first half understated it (the
+content was arbitrary) and the second half was false (`Styler.from_custom_template` read any
+file). Both are closed by the attribute allowlist above. What remains: the sandbox child runs
+with the operator's uid and no OS-level confinement, so the allowlist is the boundary. An
+OS-level second layer (`sandbox-exec` on macOS) is the next step if that ever proves
+insufficient.
 
 **`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/audits/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook now denies `eval`/`query` by name before falling through to `safer_getattr`. Any future DataFrame method found to accept and internally evaluate a string as code (rather than treat it as data) should be added to `backtest.py`'s `_DENIED_ATTRS`.
 
 **Thread timeout non-termination (fixed 2026-07-16)** — The sandbox previously ran in a `ThreadPoolExecutor` thread; `Future.cancel()` cannot stop a thread that is already executing, so strategy code containing `while True: pass` survived the 10-second timeout and kept consuming CPU in a background thread. This was worse than "unbounded CPU consumption" alone: `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit, unable to terminate cleanly without a forced kill. The sandbox now runs strategy code (both `compile_restricted` and `exec`) in an isolated `multiprocessing.Process` (spawn context) communicating results back over a `multiprocessing.Pipe`. A daemon watchdog thread enforces the execution timeout directly: if the deadline passes, it escalates `terminate()` (SIGTERM), then `kill()` (SIGKILL) after a short grace period if the process hasn't exited — a real OS process can be forcibly stopped, unlike a thread. Killing the process is also what reliably unblocks the parent's read of the result pipe no matter what state it's in (waiting for the first byte, or partway through a large payload), since a `multiprocessing.Connection.recv()` call has no timeout of its own once any bytes are readable. The watchdog itself is a daemon thread with a provably bounded lifetime, so — unlike the `ThreadPoolExecutor` it replaced — it can never become an unkillable, process-exit-blocking thread. See `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
 
 ---
+
+## MCP Transport — Host and Origin Validation
+
+`--transport sse` serves HTTP on `127.0.0.1:5174`. That bind stops the LAN, not the operator's
+own browser: a page whose DNS answer flips to 127.0.0.1 becomes same-origin with the server,
+opens `/sse`, reads the session id, and can POST JSON-RPC to `/messages/` — every tool, from an
+unattended tab. The MCP SDK ships DNS-rebinding protection but **disables it when no settings
+are passed** ("for backwards compatibility"), which is how `SseServerTransport("/messages/")` ran
+until 2026-09-13 (audit A3). `mcp_server.build_sse_app` now passes `TransportSecuritySettings`
+allowing only loopback `Host` and `Origin` values on any port; a foreign `Host` gets 421, a
+foreign `Origin` 403. `tests/security/test_transport_security.py` drives the Starlette app both
+ways. The stdio transport (the default) has no HTTP surface.
+
+## Security Regression Suite — `tests/security/`
+
+The 2026-09-13 audit's conclusion was that the important properties held by convention, and a
+lint-clean, fully typed change could violate any of them silently. Each now has a test that
+reads the source or drives the code, and a `security` marker (`pytest -m security`, ~10 s):
+
+| File | Property held |
+|---|---|
+| `test_order_write_boundary.py` | The three order-write endpoints are built only inside the gated methods; each runs a gate before its first network call; the model layer never names an order write; `OrderWriteAuthorization` is minted in one function; the body Gate 2 shows is the body sent |
+| `test_preview_is_not_execution.py` | `/orders/whatif` is built only by `get_order_preview`, which runs no gate; `preview_order` touches no other order method |
+| `test_tool_capabilities.py` | Every tool declares capabilities; none declares `ORDER_EXECUTION`; `READ_ONLY` never shares a declaration with a mutating capability; every sink a handler touches is declared |
+| `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
+| `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser-reaching handler validates first; both crawler entry points install the per-request guard |
+| `test_error_redaction.py` | Secret-shaped material never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `str()`'d or logged raw |
+| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no secret variable is visible; `Config()` loads no `.env` |
+| `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
+| `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback |
+
+Each structural file also feeds its checker a deliberately-violating snippet, so the guard is
+proven able to fire. The properties, as a constitution: **(1)** no order reaches IBKR except
+through the four gated methods, and the model layer never references them; **(2)** preview is
+not execution; **(3)** every tool declares its capabilities and none declares `ORDER_EXECUTION`;
+**(4)** strategy code cannot touch the filesystem, processes or network, and its allowlist is
+frozen; **(5)** every externally derived URL is checked before the fetch and on every browser
+request; **(6)** error text reaching the model or a log passes one redaction function; **(7)**
+unit tests cannot open sockets, resolve names or see credentials; **(8)** processes are spawned
+only from three named modules, never through a shell; **(9)** every path-interpolated identifier
+passes its regex; **(10)** the HTTP transport validates `Host` and `Origin`.
+
+CI adds two gates the four code gates cannot provide: `pip-audit` over the full installed tree
+(`[dev,server,scraper]`, weekly as well as per push, ignores only from
+`security/pip-audit-ignores.txt` with a reason and a re-check date) and `gitleaks` over the
+pushed range (`.gitleaks.toml`: default rules plus the Firecrawl and Anthropic key shapes).
 
 ## Session Security
 
@@ -425,7 +536,14 @@ async def _reject_private_requests(route, request):
         await route.continue_()
 ```
 
-This handler intercepts **every** request Chromium makes during the page load — the initial navigation, every HTTP redirect hop, and every subresource — and re-resolves + re-checks each one at the moment it's actually about to be sent, inside the same browser process. This closes both gaps: DNS rebinding no longer helps an attacker, because the check that matters is the one immediately before Chromium connects, not an earlier check in a different process; and redirects to a private address are aborted regardless of what the original URL looked like. Both layers share one implementation (`local_browser.is_private_host`) so they cannot silently drift apart. Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack, which routes redirects and subresources through the same request-interception path as the initial navigation.
+This handler intercepts **every** request Chromium makes during the page load — the initial navigation, every HTTP redirect hop, and every subresource — and re-resolves + re-checks each one at the moment it's actually about to be sent, inside the same browser process. This closes both gaps: DNS rebinding no longer helps an attacker, because the check that matters is the one immediately before Chromium connects, not an earlier check in a different process; and redirects to a private address are aborted regardless of what the original URL looked like. Both layers share one implementation (`local_browser.is_private_host`) so they cannot silently drift apart. Since 2026-09-13 that implementation also parses every
+non-canonical literal locally with `socket.inet_aton` before asking DNS — decimal, hex,
+**octal** (`0177.0.0.1`, which the system resolver reads as public 177.0.0.1 and Chromium as
+127.0.0.1) and short forms — and blocks the RFC 6598 shared range `100.64.0.0/10` (CGNAT,
+Tailscale) and the IPv4 inside an IPv4-mapped IPv6 address. `tests/security/test_ssrf_boundary.py`
+holds a table of twenty forms, none needing DNS. **`search_site` has layer 1 only**: it drives
+crawl4ai's httpx sitemap seeder, not a browser, so no per-request guard exists there; the
+exposure is limited to what a sitemap/robots/`<head>` parse can return. Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack, which routes redirects and subresources through the same request-interception path as the initial navigation.
 
 **Path-traversal hardening (defense in depth):** the domain extracted from a URL is used to build a filesystem path (`profiles_dir / domain`, for locating and writing saved login profiles). `local_browser._safe_domain` explicitly rejects any domain containing `..`, `/`, or `\`, or that is empty, before it reaches a path join — independent of upstream URL validation, so it can't be silently reopened by a future change elsewhere.
 

@@ -115,7 +115,8 @@ Dated filenames, not retroactively edited.
 | [`2026-08-10-flex-dataset-audit.md`](audits/2026-08-10-flex-dataset-audit.md) | Flex dataset completeness — the live data-loss window and the row deleted |
 | [`2026-07-22-code-quality-audit.md`](audits/2026-07-22-code-quality-audit.md) | `tests/` mypy gap — 1,164 → 183 → 0 errors, and the `tests.*` override rationale |
 | [`2026-06-30-quote-access-matrix.md`](audits/2026-06-30-quote-access-matrix.md) | Which quote fields the account's subscriptions actually return, per instrument type |
-| [`security-audit-2026-07-11.md`](audits/security-audit-2026-07-11.md) | Latest security audit — 6 findings (4 High, 2 Medium), all fixed and verified in code |
+| [`security-architecture-audit-2026-09-13.md`](audits/security-architecture-audit-2026-09-13.md) | **Latest** — security *architecture* audit: trust-boundary map, 10 invariants, 3 confirmed issues (sandbox arbitrary file read/write, SSE DNS rebinding) fixed test-first, the `tests/security/` constitution, pip-audit + gitleaks gates, probe evidence and the red→green record |
+| [`security-audit-2026-07-11.md`](audits/security-audit-2026-07-11.md) | Security audit — 6 findings (4 High, 2 Medium), all fixed and verified in code |
 | [`security-audit-2026-06-23.md`](audits/security-audit-2026-06-23.md) · [`-06-10`](audits/security-audit-2026-06-10.md) · [`-05-27`](audits/security-audit-2026-05-27.md) · [`-05-26`](audits/security-audit-2026-05-26.md) · [`-05-25`](audits/security-audit-2026-05-25.md) | Earlier security passes, superseded by the 2026-07-11 audit but kept as the dated record |
 
 `audit-evidence/` holds raw supporting data — dependency graphs, token counts, timing runs
