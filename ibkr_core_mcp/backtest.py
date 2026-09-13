@@ -45,6 +45,135 @@ def _write_guard(ob: object) -> object:
 # explicitly. See docs/audits/security-audit-2026-07-11.md H-1.
 _DENIED_ATTRS = frozenset({"eval", "query"})
 
+# ---------------------------------------------------------------------------
+# Attribute ALLOWLIST for pandas and numpy objects (2026-09-13).
+#
+# A denylist could not hold. `df` is a real DataFrame, so strategy code had the whole
+# DataFrame API: `df.style.from_custom_template(dir, file)` rendered ANY file through
+# jinja2 and the runtime-error channel carried it back to the model (arbitrary read —
+# docs/audits/security-architecture-audit-2026-09-13.md A1); `df.to_csv(path,
+# header=False)` wrote attacker-chosen bytes to any path as the operator (A2);
+# `df.to_clipboard()` spawned `pbcopy`. Every one of those is an ordinary public method
+# name that safer_getattr lets through. Naming the bad ones one at a time is the
+# eval/query fix again, forever.
+#
+# So the rule is inverted: on any object whose type comes from pandas or numpy — an
+# instance, or the class itself (`pd.DataFrame.to_csv` is the same writer) — only the
+# names below resolve. The set is the vectorised-strategy vocabulary: arithmetic,
+# reductions, indexing, rolling/ewm/expanding/groupby windows, reshaping, the `.str`
+# and `.dt` accessors, and the in-memory `to_numpy`/`to_list`/`to_frame`/`to_dict`
+# converters. It deliberately holds no `to_*` writer, no `style`, no `plot`, no `info`,
+# no `attrs`. Widening it is a security change: add the name here AND to the frozen
+# expectation in tests/security/test_sandbox_boundary.py in the same commit.
+# ---------------------------------------------------------------------------
+_PANDAS_ALLOWED_ATTRS: frozenset[str] = frozenset(
+    {
+        # --- properties / accessors ---
+        "T", "at", "iat", "iloc", "loc", "index", "columns", "values", "shape", "size", "ndim",
+        "empty", "dtypes", "dtype", "name", "names", "str", "dt", "axes", "hasnans", "nbytes",
+        "is_monotonic_increasing", "is_monotonic_decreasing", "is_unique", "nlevels", "levels",
+        "codes", "freq", "inferred_freq", "groups", "indices", "tz",
+        # --- arithmetic / comparison ---
+        "abs", "add", "sub", "mul", "div", "truediv", "floordiv", "mod", "pow", "dot",
+        "radd", "rsub", "rmul", "rdiv", "rtruediv", "rfloordiv", "rmod", "rpow",
+        "eq", "ne", "lt", "le", "gt", "ge", "equals", "identical",
+        # --- reductions / statistics ---
+        "all", "any", "count", "sum", "prod", "mean", "median", "mode", "std", "var", "sem",
+        "skew", "kurt", "kurtosis", "min", "max", "idxmin", "idxmax", "argmin", "argmax",
+        "quantile", "describe", "nunique", "unique", "value_counts", "corr", "cov", "corrwith",
+        "autocorr", "cumsum", "cumprod", "cummax", "cummin", "diff", "pct_change", "rank",
+        "round", "clip", "nlargest", "nsmallest", "first_valid_index", "last_valid_index",
+        "searchsorted", "factorize", "argsort", "ohlc",
+        # --- transform / reshape / select ---
+        "apply", "agg", "aggregate", "transform", "map", "applymap", "pipe", "astype", "copy",
+        "assign", "rename", "rename_axis", "reindex", "reindex_like", "reset_index",
+        "set_index", "sort_values", "sort_index", "drop", "drop_duplicates", "duplicated",
+        "dropna", "fillna", "bfill", "ffill", "interpolate", "isna", "isnull", "notna",
+        "notnull", "where", "mask", "shift", "between", "isin", "get", "head", "tail",
+        "sample", "squeeze", "transpose", "align", "merge", "join", "combine",
+        "combine_first", "items", "keys", "filter", "take", "truncate", "replace", "update",
+        "insert", "pop", "explode", "stack", "unstack", "pivot", "pivot_table", "melt",
+        "infer_objects", "convert_dtypes", "asfreq", "at_time", "between_time", "asof",
+        "droplevel", "swaplevel", "get_level_values", "get_loc", "get_indexer", "union",
+        "intersection", "difference", "symmetric_difference", "append", "delete", "putmask",
+        "get_group", "first", "last", "nth", "ngroup", "cumcount",
+        # --- windows ---
+        "groupby", "rolling", "expanding", "ewm", "resample",
+        # --- in-memory converters (no path, no buffer) ---
+        "to_numpy", "to_list", "tolist", "to_frame", "to_series", "to_dict", "to_period",
+        "to_timestamp", "to_pydatetime", "from_dict", "from_records", "item",
+        # --- .dt / DatetimeIndex ---
+        "year", "month", "day", "hour", "minute", "second", "microsecond", "nanosecond",
+        "dayofweek", "day_of_week", "weekday", "dayofyear", "day_of_year", "quarter", "date",
+        "time", "week", "weekofyear", "days_in_month", "daysinmonth", "is_month_end",
+        "is_month_start", "is_quarter_end", "is_quarter_start", "is_year_end", "is_year_start",
+        "is_leap_year", "normalize", "floor", "ceil", "strftime", "tz_localize", "tz_convert",
+        "month_name", "day_name", "components", "total_seconds", "days", "seconds",
+        "microseconds", "nanoseconds", "as_unit", "isocalendar",
+        # --- .str ---
+        "contains", "startswith", "endswith", "lower", "upper", "title", "capitalize",
+        "swapcase", "strip", "lstrip", "rstrip", "len", "split", "rsplit", "cat", "slice",
+        "slice_replace", "find", "rfind", "rindex", "match", "fullmatch", "extract",
+        "extractall", "findall", "pad", "center", "ljust", "rjust", "zfill", "wrap", "repeat",
+        "isalnum", "isalpha", "isdigit", "isspace", "islower", "isupper", "istitle",
+        "isnumeric", "isdecimal", "removeprefix", "removesuffix", "partition", "rpartition",
+        "translate",
+    }
+)  # fmt: skip
+
+_NUMPY_ALLOWED_ATTRS: frozenset[str] = frozenset(
+    {
+        "shape", "size", "ndim", "dtype", "T", "astype", "sum", "mean", "std", "var", "min",
+        "max", "argmax", "argmin", "cumsum", "cumprod", "clip", "round", "copy", "reshape",
+        "flatten", "ravel", "tolist", "item", "any", "all", "prod", "nonzero", "searchsorted",
+        "sort", "argsort", "take", "repeat", "squeeze", "transpose", "swapaxes", "fill", "real",
+        "imag", "conj", "itemsize", "diagonal", "trace", "dot", "is_integer", "kind", "name",
+    }
+)  # fmt: skip
+
+# Methods whose FIRST argument may be a *string naming another method*. pandas resolves
+# that name with its own getattr (`apply_str` → `getattr(obj, func)`), never touching
+# this hook: `df.apply("to_csv", path_or_buf=path)` wrote a file on 2026-09-13. The name
+# must face the same allowlist whether it arrives as an attribute or as a string.
+_STRING_FUNC_METHODS = frozenset({"apply", "agg", "aggregate", "transform"})
+
+_MAX_ERROR_TEXT = 300
+
+
+def _is_pandas_or_numpy(obj: object) -> bool:
+    """True for instances and classes whose defining module is pandas or numpy."""
+    cls = obj if isinstance(obj, type) else type(obj)
+    module = getattr(cls, "__module__", "") or ""
+    return module == "pandas" or module.startswith(("pandas.", "numpy"))
+
+
+def _check_func_names(func: object) -> None:
+    """Reject a string (or nested strings) naming a method outside the allowlist."""
+    if isinstance(func, str):
+        if func not in _PANDAS_ALLOWED_ATTRS:
+            raise AttributeError(f"backtest sandbox: {func!r} is not available to strategy code")
+    elif isinstance(func, (list, tuple, set, frozenset)):
+        for item in func:
+            _check_func_names(item)
+    elif isinstance(func, dict):
+        for item in func.values():
+            _check_func_names(item)
+
+
+def _guard_string_func(method: Any, name: str) -> Any:
+    """Wrap an `apply`/`agg`/`transform` bound method so a string func faces the allowlist."""
+
+    def guarded(*args: Any, **kwargs: Any) -> Any:
+        _check_func_names(args[0] if args else kwargs.get("func"))
+        if name in ("agg", "aggregate"):
+            # Named aggregation: agg(out=("column", "func")) — the func is the last element.
+            for value in kwargs.values():
+                if isinstance(value, tuple) and value:
+                    _check_func_names(value[-1])
+        return method(*args, **kwargs)
+
+    return guarded
+
 
 def _sandboxed_getattr(obj: object, name: str, default: object = None) -> object:
     if name in _DENIED_ATTRS:
@@ -52,7 +181,30 @@ def _sandboxed_getattr(obj: object, name: str, default: object = None) -> object
             f"backtest sandbox: access to {name!r} is blocked — pandas' own "
             "eval/query expression engine is not sandboxed by RestrictedPython"
         )
-    return safer_getattr(obj, name, default)  # type: ignore[no-untyped-call]
+    if _is_pandas_or_numpy(obj):
+        module = (obj if isinstance(obj, type) else type(obj)).__module__ or ""
+        allowed = _NUMPY_ALLOWED_ATTRS if module.startswith("numpy") else _PANDAS_ALLOWED_ATTRS
+        if name not in allowed:
+            raise AttributeError(f"backtest sandbox: {name!r} is not available to strategy code")
+    value = safer_getattr(obj, name, default)  # type: ignore[no-untyped-call]
+    if name in _STRING_FUNC_METHODS and callable(value):
+        return _guard_string_func(value, name)
+    return value
+
+
+def _error_text(exc: BaseException) -> str:
+    """One bounded line for the runtime-error channel.
+
+    The text is returned to the model un-redacted so it can correct code it wrote itself
+    (`ClaudeToolkit._run_backtest`). Un-redacted must not mean unbounded: with the file
+    reads above closed, this is still the only channel from the sandbox back to the model,
+    so it carries the exception type and the first line of its message, capped, and never
+    a newline — a raised string cannot become a bulk transfer.
+    """
+    message = str(exc)
+    first_line = message.splitlines()[0] if message else ""
+    text = f"{type(exc).__name__}: {first_line}"
+    return text[: _MAX_ERROR_TEXT - 1] + "…" if len(text) > _MAX_ERROR_TEXT else text
 
 
 # Safe numpy namespace — math/array operations only, no file I/O
@@ -148,6 +300,31 @@ def _terminate_then_kill(process: multiprocessing.process.BaseProcess) -> None:
         process.join()
 
 
+def build_sandbox(df: pd.DataFrame) -> dict[str, Any]:
+    """The complete namespace strategy code runs in — every name it can reach, in one place.
+
+    Public and pure so `tests/security/test_sandbox_boundary.py` can assert the key set is
+    exactly the documented one: a name added here is a new capability handed to
+    model-written code, and it should be added on purpose, with the test updated in the
+    same commit (docs/audits/security-architecture-audit-2026-09-13.md, B4).
+    """
+    return {
+        **safe_globals,
+        "_write_": _write_guard,
+        "_getattr_": _sandboxed_getattr,
+        "_getitem_": lambda ob, key: ob[key],
+        "_getiter_": iter,
+        "pd": _SAFE_PD,
+        "np": _SAFE_NP,
+        "float": float,
+        "int": int,
+        "abs": abs,
+        "range": limited_range,
+        "len": len,
+        "df": df,
+    }
+
+
 def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> None:
     """Compile and run strategy code inside an isolated child process.
 
@@ -171,25 +348,11 @@ def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> Non
         conn.send(("syntax_error", str(e)))
         return
 
-    sandbox: dict[str, Any] = {
-        **safe_globals,
-        "_write_": _write_guard,
-        "_getattr_": _sandboxed_getattr,
-        "_getitem_": lambda ob, key: ob[key],
-        "_getiter_": iter,
-        "pd": _SAFE_PD,
-        "np": _SAFE_NP,
-        "float": float,
-        "int": int,
-        "abs": abs,
-        "range": limited_range,
-        "len": len,
-        "df": df,
-    }
+    sandbox = build_sandbox(df)
     try:
         exec(byte_code, sandbox)  # noqa: S102
     except Exception as e:
-        conn.send(("runtime_error", f"{type(e).__name__}: {e}"))
+        conn.send(("runtime_error", _error_text(e)))
         return
 
     conn.send(("ok", sandbox.get("df", df)))

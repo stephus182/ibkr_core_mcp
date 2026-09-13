@@ -94,6 +94,7 @@ markers = [
     "web_scraping: claude_tools firecrawl/scrape-fallback handlers",
     "errors: claude_tools _safe_error mapping",
     "scripts: the operational CLIs under scripts/",
+    "security: the security-invariant regression suite under tests/security/ (docs/audits/security-architecture-audit-2026-09-13.md)",
 ]
 asyncio_mode = "auto"
 # scripts/ is not a package and has no __init__.py — the four Flex CLIs are imported by
