@@ -18,11 +18,11 @@ from typing import TYPE_CHECKING, Any
 from mcp.server import NotificationOptions, Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.models import InitializationOptions
-from mcp.types import Resource, TextContent, Tool
+from mcp.types import Resource, TextContent, Tool, ToolAnnotations
 from pydantic import AnyUrl
 
 from ibkr_core_mcp import __version__
-from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
+from ibkr_core_mcp.claude_tools import READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
 from ibkr_core_mcp.redaction import redact_error
 
 if TYPE_CHECKING:
@@ -62,6 +62,24 @@ _GET_ALERTS_DEF: dict[str, Any] = {
 
 _ALL_TOOL_DEFS: list[dict[str, Any]] = [*TOOL_DEFINITIONS, _ADD_ALERT_DEF, _GET_ALERTS_DEF]
 _EXISTING_TOOL_NAMES: frozenset[str] = frozenset(str(t["name"]) for t in TOOL_DEFINITIONS)
+
+_DESTRUCTIVE_CAPABILITIES = frozenset({"GOOGLE_DRIVE", "ACCOUNT_STATE"})
+_OPEN_WORLD_CAPABILITIES = frozenset({"NETWORK", "WEB_FETCH"})
+
+
+def tool_annotations(capabilities: frozenset[str]) -> ToolAnnotations:
+    """The MCP-native hints derived from a tool's declared capabilities.
+
+    MCP clients gate their own confirmation prompts on `readOnlyHint` / `destructiveHint`;
+    until 2026-09-13 the declaration existed only for this package's test suite and the
+    protocol field stayed empty (review). Deriving both from one set keeps the internal
+    vocabulary and the protocol-native one from drifting.
+    """
+    return ToolAnnotations(
+        readOnlyHint=capabilities <= READ_LIKE_CAPABILITIES,
+        destructiveHint=bool(capabilities & _DESTRUCTIVE_CAPABILITIES),
+        openWorldHint=bool(capabilities & _OPEN_WORLD_CAPABILITIES),
+    )
 
 
 def _dispatch(name: str, args: dict[str, Any], toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
@@ -104,6 +122,7 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                 name=t["name"],
                 description=t["description"],
                 inputSchema=t["input_schema"],
+                annotations=tool_annotations(frozenset(t["capabilities"])),
             )
             for t in _ALL_TOOL_DEFS
         ]
@@ -214,8 +233,18 @@ def build_sse_app(server: Server) -> Any:
         "/messages/",
         security_settings=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
-            allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+            # Bare entries as well as `:*` wildcards: the SDK matches a wildcard with
+            # `startswith(base + ":")`, so a port-less Host or Origin (`--port 80`) needs
+            # its own entry (review 2026-09-13).
+            allowed_hosts=["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*"],
+            allowed_origins=[
+                "http://127.0.0.1",
+                "http://127.0.0.1:*",
+                "http://localhost",
+                "http://localhost:*",
+                "http://[::1]",
+                "http://[::1]:*",
+            ],
         ),
     )
 

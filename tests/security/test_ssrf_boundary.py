@@ -78,11 +78,42 @@ def test_every_handler_that_reaches_the_browser_or_seeder_validates_the_host_fir
 
 
 def test_both_crawler_entry_points_install_the_per_request_guard():
-    """Layer 2: `_install_ssrf_guard` is registered on every browser this module opens.
-    `search_site` has no browser (httpx seeder) and therefore no layer 2 — documented."""
+    """Layer 2: `_install_ssrf_guard` is registered on every browser this module opens."""
     installers = functions_calling(LOCAL_BROWSER, "set_hook")
     assert {"_scrape_one", "_crawl"} <= installers, installers
     assert "_install_ssrf_guard" in LOCAL_BROWSER
+
+
+# ── search_site: the seeder gets the same per-request layer, on httpx ─────────
+
+
+def test_the_seeder_hook_refuses_a_private_host_and_passes_a_public_one():
+    """Review 2026-09-13: `search_site` validated the bare domain and then handed crawl4ai's
+    seeder an unguarded httpx client — every sitemap entry, nested index and `<head>` fetch
+    afterwards could target loopback or link-local. httpx runs request hooks on every
+    request, redirect hops included, which is the browser paths' layer 2 in httpx form."""
+    import asyncio
+
+    import httpx
+
+    from ibkr_core_mcp.local_browser import _reject_private_httpx_request
+
+    with pytest.raises(httpx.RequestError):
+        asyncio.run(_reject_private_httpx_request(httpx.Request("GET", "http://169.254.169.254/latest/meta-data/")))
+    with pytest.raises(httpx.RequestError):
+        asyncio.run(_reject_private_httpx_request(httpx.Request("GET", "http://127.0.0.1:5055/v1/api/tickle")))
+    asyncio.run(_reject_private_httpx_request(httpx.Request("GET", "http://93.184.216.34/sitemap.xml")))
+
+
+def test_search_site_installs_the_seeder_hook():
+    seeders = functions_calling(LOCAL_BROWSER, "AsyncUrlSeeder")
+    assert "_seed" in seeders, seeders
+    import ast
+
+    from .structural import function_named
+
+    seed = ast.unparse(function_named(LOCAL_BROWSER, "_seed"))
+    assert "_reject_private_httpx_request" in seed and "event_hooks" in seed
 
 
 def test_the_ordering_probe_sees_a_late_validation():

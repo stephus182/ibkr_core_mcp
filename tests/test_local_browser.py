@@ -834,6 +834,8 @@ def _install_fake_seeder(monkeypatch, entries: list[dict[str, Any]]):
             captured.append(kwargs)
 
     class FakeAsyncUrlSeeder:
+        client = types.SimpleNamespace(event_hooks={})  # the seeder's httpx client; search_site installs its hook
+
         async def __aenter__(self):
             return self
 

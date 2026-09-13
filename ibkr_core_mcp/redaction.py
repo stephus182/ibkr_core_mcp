@@ -19,16 +19,38 @@ import re
 
 _MAX_LEN = 300
 
-# Each pattern names one shape of secret this package handles. Order matters only for
-# readability; every pattern runs. Keep them specific: the model reads what survives.
+# Shape-based, not name-based (review 2026-09-13): the first version anchored `\b` before
+# `token`/`key`/`secret`, so `refresh_token=`, `client_secret=`, `access_token=` and a URL's
+# userinfo all passed through verbatim. The rules now are: every Authorization/Cookie value;
+# the two key prefixes this package handles; any URL userinfo; any URL query string whole
+# (the model never needs a query value); and any `identifier=value` / `identifier: value`
+# whose identifier contains a credential word. Order matters where rules overlap.
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"Bearer\s+\S+"),  # Authorization headers (Firecrawl)
-    re.compile(r"sk-ant-[A-Za-z0-9_\-]+"),  # Anthropic keys
-    re.compile(r"\bfc-[A-Za-z0-9]{10,}"),  # Firecrawl keys
-    re.compile(r"(?i)\b(t|token|key|api_key|apikey|password|secret|session_id)=[^&\s'\"]+"),  # query params
-    re.compile(r"(?i)cookie:\s*[^\n]+"),  # Cookie headers
-    re.compile(r"(?i)\b(token|key|password|secret)\s*[:=]\s*'?[A-Za-z0-9_\-]{8,}'?"),  # key: value
+    re.compile(r"(?i)\bbearer\s+\S+"),
+    re.compile(r"(?i)cookie:\s*[^\n]+"),
+    re.compile(r"sk-ant-[A-Za-z0-9_\-]+"),
+    re.compile(r"\bfc-[A-Za-z0-9]{10,}"),
+    re.compile(r"://[^/\s@:]+:[^/\s@]+@"),  # https://user:password@host → https://[redacted]@host
+    re.compile(r"\?[^\s'\"]+"),  # ?t=…&q=… → ?[redacted]
+    re.compile(
+        r"(?i)\b(?:[\w\-]*(?:token|secret|passw|pwd|session|credential|auth)[\w\-]*"
+        r"|api[_\-]?key|access[_\-]?key|secret[_\-]?key|private[_\-]?key|key)"
+        r"\s*[=:]\s*['\"]?[^\s'\"&;,]+"
+    ),
 )
+
+_REDACTED = "[redacted]"
+
+
+def _scrub(match: re.Match[str]) -> str:
+    """Keep the recognisable head of a match (`?`, `://`, `Cookie:`) and replace the rest."""
+    text = match.group(0)
+    for head in ("://", "?"):
+        if text.startswith(head):
+            return head + _REDACTED + ("@" if head == "://" else "")
+    if text.lower().startswith("cookie:"):
+        return "Cookie: " + _REDACTED
+    return _REDACTED
 
 
 def redact_error(exc: BaseException, limit: int = _MAX_LEN) -> str:
@@ -44,7 +66,7 @@ def redact_error(exc: BaseException, limit: int = _MAX_LEN) -> str:
     message = str(exc)
     first_line = message.splitlines()[0] if message else ""
     for pattern in _SECRET_PATTERNS:
-        first_line = pattern.sub("[redacted]", first_line)
+        first_line = pattern.sub(_scrub, first_line)
     text = f"{type(exc).__name__}: {first_line}" if first_line else type(exc).__name__
     if len(text) > limit:
         text = text[: limit - 1] + "…"

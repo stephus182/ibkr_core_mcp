@@ -180,8 +180,13 @@ def _format_coverage(cov: dict[str, Any]) -> list[str]:
 #: DATABASE          writes the SQLite store
 #: ACCOUNT_STATE     mutates IBKR server-side state that is not an order (alerts, watchlists)
 #: ORDER_PREVIEW     the whatif endpoint — simulates, never executes
-#: ORDER_EXECUTION   places, modifies, cancels or confirms an order — no tool may declare it
 #: SANDBOX_EXECUTION runs model-written code in the RestrictedPython child process
+#:
+#: ORDER_EXECUTION is deliberately NOT a member. Order writes exist only as `IBKRClient`
+#: methods behind two human gates; a tool must never be able to declare them, so the
+#: forbidden capability has no legal spelling — a definition that tries fails the
+#: "unknown capability" check by construction (review 2026-09-13), and
+#: `tests/security/test_order_write_boundary.py` holds that no handler reaches the methods.
 CAPABILITIES: frozenset[str] = frozenset(
     {
         "READ_ONLY",
@@ -193,10 +198,12 @@ CAPABILITIES: frozenset[str] = frozenset(
         "DATABASE",
         "ACCOUNT_STATE",
         "ORDER_PREVIEW",
-        "ORDER_EXECUTION",
         "SANDBOX_EXECUTION",
     }
 )
+
+#: Capabilities that change nothing outside the process (LOCAL_IO reads only).
+READ_LIKE_CAPABILITIES: frozenset[str] = frozenset({"READ_ONLY", "COMPUTE", "LOCAL_IO"})
 
 TOOL_DEFINITIONS = [
     {
@@ -1161,17 +1168,24 @@ TOOL_DEFINITIONS = [
 ]
 
 
-def tool_capabilities() -> dict[str, frozenset[str]]:
-    """Tool name → declared capabilities, for every tool the MCP server and the toolkit expose."""
-    from ibkr_core_mcp.mcp_server import _ALL_TOOL_DEFS
-
-    return {str(t["name"]): frozenset(t["capabilities"]) for t in _ALL_TOOL_DEFS}
-
-
 def public_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
     """The schema as the model sees it: `capabilities` is this package's metadata, not the
     API's — the Anthropic tool schema rejects unknown keys."""
     return {k: v for k, v in tool.items() if k != "capabilities"}
+
+
+#: `TOOL_DEFINITIONS` as handed to the Anthropic API, computed once — `ClaudeToolkit.tools`
+#: is read on every request by the host app (review 2026-09-13).
+PUBLIC_TOOL_DEFINITIONS: list[dict[str, Any]] = [public_tool_schema(t) for t in TOOL_DEFINITIONS]
+
+#: Tool name → declared capabilities for the toolkit's own tools. The MCP server's two
+#: server-local tools are declared beside their definitions in `mcp_server.py`.
+TOOL_CAPABILITIES: dict[str, frozenset[str]] = {str(t["name"]): frozenset(t["capabilities"]) for t in TOOL_DEFINITIONS}
+
+
+def tool_capabilities() -> dict[str, frozenset[str]]:
+    """Tool name → declared capabilities for every toolkit tool (see `TOOL_CAPABILITIES`)."""
+    return dict(TOOL_CAPABILITIES)
 
 
 def _safe_error(tool: str, exc: Exception) -> str:
@@ -1415,7 +1429,7 @@ class ClaudeToolkit:
     def tools(self) -> list[dict[str, Any]]:
         """The tool schemas to hand to Claude, in `TOOL_DEFINITIONS` order, without the
         package-internal `capabilities` field."""
-        return [public_tool_schema(t) for t in TOOL_DEFINITIONS]
+        return PUBLIC_TOOL_DEFINITIONS
 
     def execute(self, name: str, inputs: dict[str, Any]) -> tuple[str, None]:
         """Execute a tool call by name. Returns (text_result, None).
@@ -2381,13 +2395,13 @@ class ClaudeToolkit:
         try:
             result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol)
         except BacktestError as exc:
-            # Sandbox errors are errors in code the LLM itself wrote — the detail
-            # is required for self-correction and contains nothing internal, so it
-            # is returned here rather than redacted by _safe_error (which stays as
-            # the conservative fallback for anything else).
+            # Sandbox errors are errors in code the LLM itself wrote — the detail is
+            # required for self-correction. The child already redacted and capped its
+            # line; the wider limit here keeps a multi-violation RestrictedPython list
+            # whole instead of cutting it a second time (review 2026-09-13).
             cols = ", ".join(str(c) for c in df.columns)
             return (
-                f"Backtest failed: {redact_error(exc)}\n"
+                f"Backtest failed: {redact_error(exc, limit=1000)}\n"
                 f"  Available df columns: {cols}\n"
                 "  Contract: strategy code receives df (raw OHLCV — indicators are "
                 "NOT pre-computed; derive them in the code) and must set "

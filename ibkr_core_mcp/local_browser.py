@@ -413,6 +413,28 @@ async def _reject_private_requests(route: Any, request: Any) -> None:
         await route.continue_()
 
 
+async def _reject_private_httpx_request(request: Any) -> None:
+    """The httpx request hook: refuse any request whose host is private/loopback/link-local/
+    reserved — `search_site`'s per-request layer, the httpx form of `_reject_private_requests`.
+
+    `search_site` has no browser: crawl4ai's `AsyncUrlSeeder` fetches robots.txt, sitemaps,
+    nested sitemap indexes and (with `extract_head`) every listed page with its own httpx
+    client. Until 2026-09-13 only the bare domain was validated, so a sitemap listing
+    `http://169.254.169.254/…` or redirecting to loopback was fetched from the operator's
+    machine and its `<title>` came back as a search result. httpx runs request hooks on
+    every request it sends, redirect hops included; raising here aborts that one request and
+    the seeder moves on.
+
+    Args:
+        request: The `httpx.Request` about to be sent.
+    """
+    import httpx
+
+    host = (request.url.host or "").lower()
+    if host and is_private_host(host):
+        raise httpx.RequestError(f"search_site: refusing to fetch a private address ({host})", request=request)
+
+
 async def _install_ssrf_guard(page: Any, **_kwargs: Any) -> None:
     """Crawl4AI `on_page_context_created` hook: register _reject_private_requests
     as the route handler for every request the page makes."""
@@ -850,7 +872,8 @@ def search_site_detailed(
     not to retry. That is true only of the third row.
 
     Args:
-        domain: Bare hostname. Caller SSRF-validates first, as for `search_site`.
+        domain: Bare hostname. Caller SSRF-validates first, as for `search_site`; every
+            request the seeder then makes is re-checked by `_reject_private_httpx_request`.
         query: Free-text query; must be non-empty.
         limit: Maximum matches to return. Clamped to [1, 50].
         source: "sitemap", "cc", or "sitemap+cc".
@@ -890,6 +913,9 @@ def search_site_detailed(
             max_urls=_SEED_MAX_URLS,
         )
         async with AsyncUrlSeeder() as seeder:
+            # Layer 2 for the seeder: the same host classification, on every httpx request
+            # it makes (the seeder's own client keeps its headers and timeouts).
+            seeder.client.event_hooks = {"request": [_reject_private_httpx_request]}
             # The vendor ships no type information, so this is Any at the boundary;
             # naming the shape here is the one place it gets asserted.
             seeded: list[dict[str, Any]] = await seeder.urls(domain, config)

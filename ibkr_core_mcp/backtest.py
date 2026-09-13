@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import threading
 import types
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from typing import Any
@@ -17,6 +18,7 @@ from RestrictedPython.Limits import limited_range
 
 from ibkr_core_mcp import analytics as _analytics
 from ibkr_core_mcp.exceptions import BacktestError, BacktestRuntimeError, BacktestSyntaxError
+from ibkr_core_mcp.redaction import redact_error
 
 _MAX_CODE_LEN = 4096
 _EXEC_TIMEOUT = 10  # seconds
@@ -101,7 +103,7 @@ _PANDAS_ALLOWED_ATTRS: frozenset[str] = frozenset(
         "groupby", "rolling", "expanding", "ewm", "resample",
         # --- in-memory converters (no path, no buffer) ---
         "to_numpy", "to_list", "tolist", "to_frame", "to_series", "to_dict", "to_period",
-        "to_timestamp", "to_pydatetime", "from_dict", "from_records", "item",
+        "to_timestamp", "to_pydatetime", "item", "isoformat", "timestamp",
         # --- .dt / DatetimeIndex ---
         "year", "month", "day", "hour", "minute", "second", "microsecond", "nanosecond",
         "dayofweek", "day_of_week", "weekday", "dayofyear", "day_of_year", "quarter", "date",
@@ -137,77 +139,114 @@ _NUMPY_ALLOWED_ATTRS: frozenset[str] = frozenset(
 # must face the same allowlist whether it arrives as an attribute or as a string.
 _STRING_FUNC_METHODS = frozenset({"apply", "agg", "aggregate", "transform"})
 
-_MAX_ERROR_TEXT = 300
+# numpy ufuncs (`np.maximum`, `np.abs`, …) are exposed on purpose; their methods are pure
+# computation — `np.maximum.accumulate` is the standard running-peak idiom.
+_UFUNC_ALLOWED_ATTRS: frozenset[str] = frozenset({"accumulate", "reduce", "reduceat", "outer", "at", "nin", "nout"})
 
 
-def _is_pandas_or_numpy(obj: object) -> bool:
-    """True for instances and classes whose defining module is pandas or numpy."""
+def _allowlist_for(obj: object) -> frozenset[str] | None:
+    """The attribute allowlist that governs `obj`, or None for objects outside pandas/numpy."""
+    if isinstance(obj, np.ufunc):
+        return _UFUNC_ALLOWED_ATTRS
     cls = obj if isinstance(obj, type) else type(obj)
-    module = getattr(cls, "__module__", "") or ""
-    return module == "pandas" or module.startswith(("pandas.", "numpy"))
+    module = cls.__module__ or ""
+    if module == "pandas" or module.startswith("pandas."):
+        return _PANDAS_ALLOWED_ATTRS
+    if module.startswith("numpy"):
+        return _NUMPY_ALLOWED_ATTRS
+    return None
+
+
+def _is_column_label(obj: object, name: str) -> bool:
+    """`df.close` is data, not a capability: a column label that no DataFrame method shadows."""
+    return isinstance(obj, pd.DataFrame) and name in obj.columns and not hasattr(pd.DataFrame, name)
 
 
 def _check_func_names(func: object) -> None:
-    """Reject a string (or nested strings) naming a method outside the allowlist."""
+    """Reject a string — or any list-like of strings — naming a method outside the allowlist.
+
+    Positional function specs: a string, a list/tuple/set of them, a dict of them, or any
+    other list-like pandas would iterate (dict views and generators reached pandas untouched
+    until the 2026-09-13 review). Callables (restricted lambdas, allowed bound methods) and
+    None pass; pandas objects are not function specs and are not iterated.
+    """
+    if func is None or (callable(func) and not isinstance(func, str)):
+        return
     if isinstance(func, str):
         if func not in _PANDAS_ALLOWED_ATTRS:
             raise AttributeError(f"backtest sandbox: {func!r} is not available to strategy code")
-    elif isinstance(func, (list, tuple, set, frozenset)):
-        for item in func:
-            _check_func_names(item)
-    elif isinstance(func, dict):
+        return
+    if isinstance(func, dict):
         for item in func.values():
             _check_func_names(item)
+        return
+    if isinstance(func, (pd.DataFrame, pd.Series, pd.Index, np.ndarray, bytes)):
+        raise AttributeError("backtest sandbox: a pandas or numpy object is not a function name")
+    if hasattr(func, "__iter__"):
+        for item in list(func):
+            _check_func_names(item)
+
+
+def _check_named_aggregation(value: object) -> None:
+    """One keyword of `agg(out=…)`: a function name, or pandas' `(column, function)` pair.
+
+    Only the function faces the allowlist — the column is data. The first fix checked both
+    elements and refused every column name (review 2026-09-13).
+    """
+    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str):
+        _check_func_names(value[1])
+    else:
+        _check_func_names(value)
 
 
 def _guard_string_func(method: Any, name: str) -> Any:
-    """Wrap an `apply`/`agg`/`transform` bound method so a string func faces the allowlist."""
+    """Wrap a bound `apply`/`agg`/`transform` so any function named by string faces the allowlist.
+
+    With a positional function (or `func=`), every other keyword is that function's own
+    option (`agg("quantile", interpolation="nearest")`) and is left alone. With no function
+    at all, `agg`/`aggregate` is pandas named aggregation and every keyword *is* a function.
+    """
 
     def guarded(*args: Any, **kwargs: Any) -> Any:
-        _check_func_names(args[0] if args else kwargs.get("func"))
-        if name in ("agg", "aggregate"):
-            # Named aggregation: every keyword is a function — agg(out="func") on a Series,
-            # agg(out=("column", "func")) on a frame or groupby. Check each value whole; a
-            # string, a tuple's elements and any nesting all face the same allowlist
-            # (`Series.agg(out="to_csv")` reached the writer by name after the first fix —
-            # no path can travel that way, but the name should never resolve).
+        func = args[0] if args else kwargs.get("func")
+        if func is not None:
+            _check_func_names(func)
+        elif name in ("agg", "aggregate"):
             for value in kwargs.values():
-                _check_func_names(value)
+                _check_named_aggregation(value)
         return method(*args, **kwargs)
 
     return guarded
 
 
-def _sandboxed_getattr(obj: object, name: str, default: object = None) -> object:
+_MISSING = object()
+
+
+def _sandboxed_getattr(obj: object, name: str, default: object = _MISSING) -> object:
+    """RestrictedPython's `_getattr_` hook: the allowlist, then `safer_getattr`.
+
+    A missing attribute raises `AttributeError` like ordinary Python. Until 2026-09-13 the
+    hook passed a `None` default through, so `obj.typo` silently evaluated to `None` and
+    the failure surfaced later as `'NoneType' object is not callable`.
+    """
     if name in _DENIED_ATTRS:
         raise AttributeError(
             f"backtest sandbox: access to {name!r} is blocked — pandas' own "
             "eval/query expression engine is not sandboxed by RestrictedPython"
         )
-    if _is_pandas_or_numpy(obj):
-        module = (obj if isinstance(obj, type) else type(obj)).__module__ or ""
-        allowed = _NUMPY_ALLOWED_ATTRS if module.startswith("numpy") else _PANDAS_ALLOWED_ATTRS
-        if name not in allowed:
-            raise AttributeError(f"backtest sandbox: {name!r} is not available to strategy code")
-    value = safer_getattr(obj, name, default)  # type: ignore[no-untyped-call]
+    allowed = _allowlist_for(obj)
+    if allowed is not None and name not in allowed and not _is_column_label(obj, name):
+        raise AttributeError(f"backtest sandbox: {name!r} is not available to strategy code")
+    # safer_getattr's own default is None, so a missing attribute must be detected with a
+    # sentinel and raised here, or `obj.typo` evaluates to None.
+    value = safer_getattr(obj, name, _MISSING)  # type: ignore[no-untyped-call]
+    if value is _MISSING:
+        if default is not _MISSING:
+            return default
+        raise AttributeError(f"{type(obj).__name__!r} object has no attribute {name!r}")
     if name in _STRING_FUNC_METHODS and callable(value):
         return _guard_string_func(value, name)
     return value
-
-
-def _error_text(exc: BaseException) -> str:
-    """One bounded line for the runtime-error channel.
-
-    The text is returned to the model un-redacted so it can correct code it wrote itself
-    (`ClaudeToolkit._run_backtest`). Un-redacted must not mean unbounded: with the file
-    reads above closed, this is still the only channel from the sandbox back to the model,
-    so it carries the exception type and the first line of its message, capped, and never
-    a newline — a raised string cannot become a bulk transfer.
-    """
-    message = str(exc)
-    first_line = message.splitlines()[0] if message else ""
-    text = f"{type(exc).__name__}: {first_line}"
-    return text[: _MAX_ERROR_TEXT - 1] + "…" if len(text) > _MAX_ERROR_TEXT else text
 
 
 # Safe numpy namespace — math/array operations only, no file I/O
@@ -245,10 +284,29 @@ _SAFE_NP = types.SimpleNamespace(
     argmin=np.argmin,
 )
 
-# Safe pandas namespace — in-memory constructors only, no read_*/to_* I/O
+
+def _constructor(cls: type[Any]) -> Callable[..., Any]:
+    """A plain function that builds `cls` — so the CLASS itself never enters the sandbox.
+
+    Review 2026-09-13: with `pd.DataFrame` exposed as a real class, `pd.DataFrame.apply(df,
+    "to_csv", path_or_buf=p)` read an allowlisted method off the class, and the string-function
+    guard — which inspects the first argument — saw `df`, not `"to_csv"`. Four files were
+    written that way. A constructor function has no methods to read, so every pandas
+    callable strategy code can obtain is a *bound* method with a known argument layout.
+    """
+
+    def make(*args: Any, **kwargs: Any) -> Any:
+        return cls(*args, **kwargs)
+
+    make.__name__ = cls.__name__
+    make.__qualname__ = cls.__name__
+    return make
+
+
+# Safe pandas namespace — in-memory constructors only, no read_*/to_* I/O, no classes
 _SAFE_PD = types.SimpleNamespace(
-    DataFrame=pd.DataFrame,
-    Series=pd.Series,
+    DataFrame=_constructor(pd.DataFrame),
+    Series=_constructor(pd.Series),
     concat=pd.concat,
     to_datetime=pd.to_datetime,
     isna=pd.isna,
@@ -355,7 +413,7 @@ def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> Non
     try:
         exec(byte_code, sandbox)  # noqa: S102
     except Exception as e:
-        conn.send(("runtime_error", _error_text(e)))
+        conn.send(("runtime_error", redact_error(e)))
         return
 
     conn.send(("ok", sandbox.get("df", df)))

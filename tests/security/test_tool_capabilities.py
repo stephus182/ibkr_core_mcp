@@ -16,8 +16,8 @@ import ast
 
 import pytest
 
-from ibkr_core_mcp.claude_tools import CAPABILITIES, TOOL_DEFINITIONS, tool_capabilities
-from ibkr_core_mcp.mcp_server import _ALL_TOOL_DEFS
+from ibkr_core_mcp.claude_tools import CAPABILITIES, READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS, tool_capabilities
+from ibkr_core_mcp.mcp_server import _ALL_TOOL_DEFS, build_server
 
 from .structural import PACKAGE_DIR, attribute_names_referenced, function_named, names_referenced
 from .test_order_write_boundary import ORDER_WRITE_NAMES
@@ -28,16 +28,11 @@ CLAUDE_TOOLS = (PACKAGE_DIR / "claude_tools.py").read_text()
 
 # Categories that change state somewhere; READ_ONLY may share a declaration with none of
 # them (LOCAL_IO — reading browser cookies or a saved profile — is the one companion).
-MUTATING = {
-    "GOOGLE_DRIVE",
-    "DATABASE",
-    "ACCOUNT_STATE",
-    "ORDER_PREVIEW",
-    "ORDER_EXECUTION",
-    "SANDBOX_EXECUTION",
-    "WEB_FETCH",
-    "NETWORK",
-}
+# Derived, so a capability added to the vocabulary is mutating until proven otherwise.
+MUTATING = CAPABILITIES - READ_LIKE_CAPABILITIES
+
+#: Every tool the MCP server lists: the toolkit's 44 plus the two server-local ones.
+ALL_CAPABILITIES = {str(t["name"]): frozenset(t["capabilities"]) for t in _ALL_TOOL_DEFS}
 
 # What a referenced name implies about the handler that references it. Keys are attribute
 # or bare names as they appear in the handler's own source; helper methods that hide a
@@ -122,12 +117,56 @@ def test_every_registered_tool_declares_a_non_empty_known_capability_set():
         assert caps <= CAPABILITIES, f"{tool['name']} declares unknown capabilities {caps - CAPABILITIES}"
 
 
-def test_no_tool_declares_order_execution():
-    assert {name for name, caps in tool_capabilities().items() if "ORDER_EXECUTION" in caps} == set()
+def test_order_execution_has_no_legal_spelling():
+    """The forbidden capability is not in the vocabulary, so declaring it fails the
+    unknown-capability check by construction — a stronger guarantee than an empty set."""
+    assert "ORDER_EXECUTION" not in CAPABILITIES
+    assert {name for name, caps in ALL_CAPABILITIES.items() if "ORDER_EXECUTION" in caps} == set()
+
+
+def test_the_toolkit_map_is_the_toolkit_half_of_the_server_map():
+    assert tool_capabilities() == {
+        k: v for k, v in ALL_CAPABILITIES.items() if k in {t["name"] for t in TOOL_DEFINITIONS}
+    }
+    assert len(ALL_CAPABILITIES) == len(TOOL_DEFINITIONS) + 2
+
+
+def test_every_dispatchable_handler_has_a_definition_and_vice_versa():
+    """`execute()`'s dispatch dict and `TOOL_DEFINITIONS` are two registries; a handler in
+    one but not the other either has no declaration or can never be called."""
+    execute = function_named(CLAUDE_TOOLS, "execute")
+    dispatched = set()
+    for node in ast.walk(execute):
+        if isinstance(node, ast.Dict):
+            dispatched |= {k.value for k in node.keys if isinstance(k, ast.Constant)}
+    assert dispatched == {t["name"] for t in TOOL_DEFINITIONS}
+
+
+async def test_list_tools_carries_annotations_derived_from_the_declaration(mock_config):
+    """The MCP-native hints exist for clients that gate confirmation prompts on them."""
+    from unittest.mock import MagicMock
+
+    from mcp.types import ListToolsRequest, ListToolsResult
+
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+    from ibkr_core_mcp.store import SQLiteStore
+
+    server = build_server(ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), mock_config), SQLiteStore(mock_config))
+    req = ListToolsRequest(method="tools/list")
+    result = await server.request_handlers[type(req)](req)
+    assert isinstance(result.root, ListToolsResult)
+    hints = {}
+    for tool in result.root.tools:
+        assert tool.annotations is not None, tool.name
+        hints[tool.name] = tool.annotations
+    assert hints["get_positions"].readOnlyHint is True and hints["get_positions"].destructiveHint is False
+    assert hints["delete_cache"].readOnlyHint is False and hints["delete_cache"].destructiveHint is True
+    assert hints["fetch_page"].openWorldHint is True and hints["get_positions"].openWorldHint is False
+    assert hints["run_backtest"].readOnlyHint is False and hints["run_backtest"].destructiveHint is False
 
 
 def test_read_only_tools_declare_no_mutating_capability():
-    for name, caps in tool_capabilities().items():
+    for name, caps in ALL_CAPABILITIES.items():
         if "READ_ONLY" in caps:
             assert not caps & MUTATING, f"{name} is READ_ONLY yet declares {caps & MUTATING}"
 
@@ -148,14 +187,14 @@ def test_the_schemas_handed_to_the_model_carry_no_capabilities_key(mock_config):
 
 @pytest.mark.parametrize("tool", [t["name"] for t in TOOL_DEFINITIONS])
 def test_every_sink_a_handler_touches_is_declared(tool):
-    declared = tool_capabilities()[tool]
+    declared = ALL_CAPABILITIES[tool]
     implied = _implied(_handler_source(tool))
     assert implied <= declared, f"{tool} touches {sorted(implied - declared)} but declares only {sorted(declared)}"
 
 
 def test_the_mutating_tool_list_is_the_documented_one():
     """The answer to "which tools mutate state?", frozen. Update SECURITY.md with it."""
-    mutating = {name for name, caps in tool_capabilities().items() if caps & MUTATING}
+    mutating = {name for name, caps in ALL_CAPABILITIES.items() if caps & MUTATING}
     assert mutating == {
         "fetch_market_data",
         "delete_cache",

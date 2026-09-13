@@ -43,13 +43,23 @@ def test_a_foreign_host_header_is_rejected_before_any_session_lookup(app):
     assert resp.status_code == 421
 
 
+def test_a_loopback_origin_without_a_port_is_accepted(app):
+    """Review 2026-09-13: the allowlists held only `host:*` wildcards, which the SDK matches
+    with `startswith(base + ":")` — a port-less Host (`--port 80`) or Origin was refused."""
+    with TestClient(app) as client:
+        resp = _post(client, Host="127.0.0.1", Origin="http://127.0.0.1")
+    assert resp.status_code == 404
+
+
 def test_a_foreign_origin_is_rejected(app):
     with TestClient(app) as client:
         resp = _post(client, Host="127.0.0.1:5174", Origin="https://attacker.example")
     assert resp.status_code == 403
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1:5174", "localhost:5174", "127.0.0.1:9999"])
+@pytest.mark.parametrize(
+    "host", ["127.0.0.1:5174", "localhost:5174", "127.0.0.1:9999", "127.0.0.1", "localhost", "[::1]:5174"]
+)
 def test_loopback_hosts_reach_the_session_layer(app, host):
     """The check must stop rebinding, not the real client: a loopback Host passes the
     security layer and fails later on the unknown session id (404), proving it got through."""
