@@ -12,6 +12,7 @@ from `config.py` and loads the repository's real `.env` into `os.environ` — pr
 from __future__ import annotations
 
 import os
+import re
 import socket
 from pathlib import Path
 
@@ -20,17 +21,36 @@ from pytest_socket import SocketBlockedError
 
 from ibkr_core_mcp.config import Config
 
+from .structural import PACKAGE_DIR
+
 pytestmark = pytest.mark.security
 
-SECRET_ENV_VARS = (
-    "ANTHROPIC_API_KEY",
-    "FIRECRAWL_API_KEY",
-    "IBKR_FLEX_TOKEN",
-    "GDRIVE_TOKEN_FILE",
-    "GDRIVE_CREDENTIALS_FILE",
-    "GOOGLE_DRIVE_FOLDER_ID",
-    "GDRIVE_WEB_DOCS_FOLDER_ID",
-)
+_ENV_READ = re.compile(r"""os\.(?:environ\.get|getenv|environ\[)\(?\s*["']([A-Z0-9_]+)["']""")
+
+
+def _variables_the_package_reads() -> set[str]:
+    """Every environment variable named in package source — derived, so a new one is
+    covered the day it is added (the first version was a hand-typed 7-name subset that
+    already missed IBKR_AUTH_BROWSER; review 2026-09-13)."""
+    names: set[str] = set()
+    for path in PACKAGE_DIR.rglob("*.py"):
+        names |= set(_ENV_READ.findall(path.read_text()))
+    return names
+
+
+SECRET_ENV_VARS = sorted(_variables_the_package_reads())
+
+
+def test_the_variable_scan_finds_the_known_readers():
+    found = set(SECRET_ENV_VARS)
+    assert {
+        "ANTHROPIC_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "IBKR_FLEX_TOKEN",
+        "IBKR_AUTH_BROWSER",
+        "GDRIVE_TOKEN_FILE",
+    } <= found
+    assert len(found) >= 15
 
 
 def test_name_resolution_is_blocked_inside_a_unit_test():

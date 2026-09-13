@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import re
 from collections.abc import Iterable, Iterator
+from functools import lru_cache
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parents[2] / "ibkr_core_mcp"
@@ -26,6 +27,19 @@ def package_sources() -> Iterator[tuple[Path, str]]:
     """Every `.py` under the package, as (path, source)."""
     for path in sorted(PACKAGE_DIR.rglob("*.py")):
         yield path, path.read_text()
+
+
+@lru_cache(maxsize=64)
+def _tree(source: str) -> ast.Module:
+    """Parse once per distinct source text: the security tests re-read the same two large
+    modules dozens of times per session (review 2026-09-13)."""
+    return ast.parse(source)
+
+
+def callee_name(call: ast.Call) -> str | None:
+    """The name a call invokes — bare (`f(...)`) or the last attribute (`a.b.f(...)`)."""
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
 
 
 def _template(node: ast.expr) -> str | None:
@@ -61,7 +75,7 @@ def functions_using_url_templates(source: str, patterns: Iterable[str]) -> dict[
     match any of `patterns` (regexes over the `{}`-templated form)."""
     compiled = [re.compile(p) for p in patterns]
     found: dict[str, set[str]] = {}
-    for fn in _functions(ast.parse(source)):
+    for fn in _functions(_tree(source)):
         for stmt in _body_without_docstring(fn):
             for node in ast.walk(stmt):
                 if isinstance(node, ast.expr):
@@ -73,27 +87,17 @@ def functions_using_url_templates(source: str, patterns: Iterable[str]) -> dict[
 
 def attribute_names_referenced(source: str) -> set[str]:
     """Every `<something>.<attr>` attribute name read or called anywhere in `source`."""
-    return {node.attr for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Attribute)}
+    return {node.attr for node in ast.walk(_tree(source)) if isinstance(node, ast.Attribute)}
 
 
 def names_referenced(source: str) -> set[str]:
     """Every bare `Name` (loads, stores, calls) anywhere in `source`."""
-    return {node.id for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Name)}
+    return {node.id for node in ast.walk(_tree(source)) if isinstance(node, ast.Name)}
 
 
 def functions_calling(source: str, callee: str) -> set[str]:
     """Names of functions whose body calls `callee` (as a bare name or an attribute)."""
-    owners: set[str] = set()
-    for fn in _functions(ast.parse(source)):
-        for stmt in _body_without_docstring(fn):
-            for node in ast.walk(stmt):
-                if isinstance(node, ast.Call):
-                    f = node.func
-                    if (isinstance(f, ast.Name) and f.id == callee) or (
-                        isinstance(f, ast.Attribute) and f.attr == callee
-                    ):
-                        owners.add(fn.name)
-    return owners
+    return {fn.name for fn in _functions(_tree(source)) if call_lines(fn, (callee,))}
 
 
 def call_lines(fn: ast.FunctionDef | ast.AsyncFunctionDef, callees: Iterable[str]) -> list[int]:
@@ -102,16 +106,13 @@ def call_lines(fn: ast.FunctionDef | ast.AsyncFunctionDef, callees: Iterable[str
     lines: list[int] = []
     for stmt in _body_without_docstring(fn):
         for node in ast.walk(stmt):
-            if isinstance(node, ast.Call):
-                f = node.func
-                name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
-                if name in wanted:
-                    lines.append(node.lineno)
+            if isinstance(node, ast.Call) and callee_name(node) in wanted:
+                lines.append(node.lineno)
     return sorted(lines)
 
 
 def function_named(source: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
-    for fn in _functions(ast.parse(source)):
+    for fn in _functions(_tree(source)):
         if fn.name == name:
             return fn
     raise KeyError(name)
@@ -126,7 +127,7 @@ def spawn_sites(source: str) -> set[str]:
     an `os.system`/`os.popen`/`os.spawn*`/`os.exec*`/`os.fork*` attribute, or an
     `asyncio.create_subprocess_*` call."""
     sites: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(_tree(source)):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".")[0]
@@ -148,7 +149,7 @@ def spawn_sites(source: str) -> set[str]:
 def shell_true_keywords(source: str) -> list[int]:
     """Line numbers of any call passing `shell=True`."""
     lines: list[int] = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(_tree(source)):
         if isinstance(node, ast.Call):
             for kw in node.keywords:
                 if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:

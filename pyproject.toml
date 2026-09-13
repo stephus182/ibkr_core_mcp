@@ -53,7 +53,10 @@ server = [
     # clean install of mcp==2.0.0 on 2026-07-28: both Server attributes are simply absent, so
     # mcp_server.py raises at registration time — this is a runtime break, not a typing one.
     # Remove the cap only together with a port of mcp_server.py to the 2.x API.
-    "mcp>=1.0,<2",
+    # Floor raised to 1.10 on 2026-09-13: `mcp.server.transport_security` (the Host/Origin
+    # validation `build_sse_app` passes to SseServerTransport) first shipped in 1.10.0 —
+    # verified against the 1.9.4 wheel, which has no such module.
+    "mcp>=1.10,<2",
     "starlette>=0.40",
     "uvicorn>=0.30",
 ]
@@ -97,6 +100,9 @@ markers = [
     "security: the security-invariant regression suite under tests/security/ (docs/audits/security-architecture-audit-2026-09-13.md)",
 ]
 asyncio_mode = "auto"
+# pytest-socket: the AF_UNIX allowance for its `disable_socket` marker path, which
+# tests/conftest.py applies to every non-integration test (asyncio's self-pipe is a socketpair).
+addopts = "--allow-unix-socket"
 # scripts/ is not a package and has no __init__.py — the four Flex CLIs are imported by
 # tests/scripts/ as bare module names. Putting the directory on sys.path here is what
 # makes them testable at all; until 2026-08-10 they had zero tests, which is precisely

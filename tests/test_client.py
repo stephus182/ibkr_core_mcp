@@ -7,18 +7,7 @@ import pytest
 
 from ibkr_core_mcp.exceptions import HumanAuthError
 
-
-@pytest.fixture
-def client(mock_config):
-    from ibkr_core_mcp.auth import NoAuth
-    from ibkr_core_mcp.client import IBKRClient
-
-    c = IBKRClient(mock_config, auth=NoAuth())
-    # Pre-mark accounts as initialized so existing order/auth tests below don't need
-    # to also mock the /iserver/accounts prerequisite call. Tests for
-    # _ensure_accounts_initialized() itself reset this flag explicitly.
-    c._accounts_initialized = True
-    return c
+# The `client` fixture lives in tests/conftest.py (shared with tests/security/).
 
 
 def test_ping_returns_false_on_401(client):

@@ -124,16 +124,6 @@ def test_the_ordering_probe_sees_a_network_call_before_a_gate():
 # ── The body the dialog showed is the body that is sent ────────────────────────
 
 
-@pytest.fixture
-def client(mock_config):
-    from ibkr_core_mcp.auth import NoAuth
-    from ibkr_core_mcp.client import IBKRClient
-
-    c = IBKRClient(mock_config, auth=NoAuth())
-    c._accounts_initialized = True
-    return c
-
-
 @pytest.mark.parametrize("method", ["place_order", "modify_order"])
 def test_a_body_mutated_after_the_dialog_is_not_the_body_sent(client, method):
     """Gate 2 renders the caller's dict; the request body was then built from that same

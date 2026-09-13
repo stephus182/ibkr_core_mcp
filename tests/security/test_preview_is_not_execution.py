@@ -23,16 +23,6 @@ CLAUDE_TOOLS = (PACKAGE_DIR / "claude_tools.py").read_text()
 WHATIF = r"/iserver/account/\{\}/orders/whatif$"
 
 
-@pytest.fixture
-def client(mock_config):
-    from ibkr_core_mcp.auth import NoAuth
-    from ibkr_core_mcp.client import IBKRClient
-
-    c = IBKRClient(mock_config, auth=NoAuth())
-    c._accounts_initialized = True
-    return c
-
-
 def test_get_order_preview_posts_only_to_whatif(client):
     with patch.object(client, "_post", return_value={}) as post:
         client.get_order_preview("U1234567", {"conid": 1, "side": "BUY", "quantity": 1, "orderType": "MKT"})

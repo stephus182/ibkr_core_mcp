@@ -71,21 +71,24 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install the full dependency tree
-        # Every extra, because the audit is of what a user installs — the scraper extra
-        # pulls in the largest tree (crawl4ai, playwright, nltk) and is where findings
-        # have surfaced. pip itself is audited too, so it is upgraded first.
+      - name: Install pip-audit
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,server,scraper]" pip-audit
+          pip install pip-audit
 
       - name: pip-audit
+        # Requirements mode: pip-audit resolves `.[dev,server,scraper]` — every extra,
+        # because the audit is of what a user installs, and the scraper extra is where
+        # findings have surfaced — with `pip install --dry-run --report` in a throwaway
+        # venv (pip upgraded there first, so pip itself is still audited) and installs
+        # nothing. Verified locally 2026-09-13 against the same tree the install mode saw.
         # --strict: a dependency that cannot be audited is a failure, not a skip.
         # Ignores come only from security/pip-audit-ignores.txt (reason + re-check date
         # per line); a finding with a fixed release is never ignored — bump the floor.
         run: |
+          printf '.[dev,server,scraper]\n' > /tmp/audit-requirements.txt
           IGNORES=$(sed 's/#.*//' security/pip-audit-ignores.txt | awk 'NF { printf "--ignore-vuln %s ", $1 }')
-          pip-audit --strict --desc --vulnerability-service osv --progress-spinner off $IGNORES
+          pip-audit --strict --desc --vulnerability-service osv --progress-spinner off $IGNORES -r /tmp/audit-requirements.txt
 
   secret-scan:
     name: Secret scan (gitleaks)

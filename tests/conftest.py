@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 
@@ -73,14 +75,10 @@ _REAL_DNS_EXEMPT_TESTS = {
 
 
 def pytest_configure(config):
-    """Block sockets from the moment the session starts, not from each test's setup.
-
-    `_no_real_io` below arms pytest-socket per test, which leaves module import and
-    collection uncovered: a module that resolved a name at import time would have done so
-    before any fixture ran (docs/audits/security-architecture-audit-2026-09-13.md, C).
-    Blocking here closes that; the fixture then *enables* sockets only for the tests that
-    are entitled to them.
-    """
+    """Block sockets from the moment the session starts, so module import and collection
+    are covered too. From the first test on, pytest-socket's own per-test hooks take over
+    (see `pytest_collection_modifyitems`); its teardown re-enables sockets after every
+    test, which is why this call alone is not the per-test guarantee."""
     from pytest_socket import disable_socket
 
     disable_socket(allow_unix_socket=True)
@@ -92,53 +90,62 @@ def pytest_unconfigure(config):
     enable_socket()
 
 
+def pytest_collection_modifyitems(config, items):
+    """Give every test pytest-socket's own marker, so the block is applied by the plugin's
+    `pytest_runtest_setup` — which runs BEFORE any fixture, module-scoped ones included.
+
+    Review 2026-09-13: a session-wide `disable_socket()` plus a function-scoped fixture that
+    re-enabled sockets for integration tests left the first live module's module-scoped
+    `live_client` fixture blocked; `ping()` swallowed the `SocketBlockedError` and the whole
+    module skipped as "gateway not reachable" with a green summary. The plugin's marker path
+    enables or disables at the right moment for every scope. Integration tests and the
+    DNS-exempt tests get `enable_socket`; everything else gets `disable_socket`
+    (`--allow-unix-socket` in `addopts` keeps asyncio's self-pipe working).
+    """
+    for item in items:
+        if item.get_closest_marker("integration") or item.name in _REAL_DNS_EXEMPT_TESTS:
+            item.add_marker(pytest.mark.enable_socket)
+        else:
+            item.add_marker(pytest.mark.disable_socket)
+
+
 @pytest.fixture(autouse=True)
 def _no_real_io(request, monkeypatch):
-    """Block real sleeps and real network I/O in every non-integration test.
+    """Block real sleeps in every non-integration test.
 
-    Added after discovering 3 claude_tools tests and 6 client.py tests were
-    silently paying real wall-clock time (unmocked time.sleep) or making a
-    real network call (unmocked Crawl4AI construction) despite being "unit"
-    tests. Exempts anything marked `integration`, which intentionally hits
-    a real gateway/network, plus the pre-existing SSRF/DNS tests in
-    _REAL_DNS_EXEMPT_TESTS above. allow_unix_socket=True is required so
-    asyncio's internal self-pipe (socket.socketpair, AF_UNIX) keeps working —
-    per pytest-socket's own docs, this is the documented pattern for async
-    test suites, not a network hole (AF_INET/DNS stays blocked).
-
-    Since 2026-09-13 the session-wide block from `pytest_configure` is the default
-    state; this fixture opens a window for the exempt tests and re-closes it after.
+    Added after discovering 3 claude_tools tests and 6 client.py tests were silently paying
+    real wall-clock time (unmocked time.sleep) or making a real network call (unmocked
+    Crawl4AI construction) despite being "unit" tests. The network half now lives in
+    `pytest_collection_modifyitems` above (pytest-socket markers); this fixture keeps only
+    the sleep stub, and exempts the same tests.
     """
-    from pytest_socket import disable_socket, enable_socket
-
     if request.node.get_closest_marker("integration") or request.node.name in _REAL_DNS_EXEMPT_TESTS:
-        enable_socket()
         yield
-        disable_socket(allow_unix_socket=True)
         return
     monkeypatch.setattr("time.sleep", lambda seconds: None)
-    disable_socket(allow_unix_socket=True)
     yield
 
 
-# Secret-named variables that must never be visible to a unit test. A test that needs one
-# sets a fake with monkeypatch.setenv; nothing here may read the operator's.
-_SECRET_ENV_VARS = (
-    "ANTHROPIC_API_KEY",
-    "FIRECRAWL_API_KEY",
-    "IBKR_FLEX_TOKEN",
-    "IBKR_FLEX_QUERY_ID",
-    "GDRIVE_TOKEN_FILE",
-    "GDRIVE_CREDENTIALS_FILE",
-    "GOOGLE_DRIVE_FOLDER_ID",
-    "GDRIVE_WEB_DOCS_FOLDER_ID",
-    "GDRIVE_CACHE_FOLDER_ID",
-    "GDRIVE_DB_FOLDER_ID",
-    "GDRIVE_ACCOUNT_FOLDER_ID",
-    "IBKR_GATEWAY_URL",
-    "IBKR_SQLITE_PATH",
-    "CRAWL4AI_PROFILES_DIR",
-)
+@pytest.fixture
+def client(mock_config):
+    """An `IBKRClient` with no auth and the accounts pre-initialised — shared by
+    `tests/test_client.py` and `tests/security/` (was copied in three places)."""
+    from ibkr_core_mcp.auth import NoAuth
+    from ibkr_core_mcp.client import IBKRClient
+
+    c = IBKRClient(mock_config, auth=NoAuth())
+    # Pre-mark accounts as initialized so order/auth tests don't need to also mock the
+    # /iserver/accounts prerequisite call. Tests for _ensure_accounts_initialized() itself
+    # reset this flag explicitly.
+    c._accounts_initialized = True
+    return c
+
+
+# Every variable this package reads carries one of these prefixes (`Config.from_env`,
+# `IBKR_AUTH_BROWSER` in claude_tools, `CRAWL4AI_PROFILES_DIR`). Scrubbing by prefix, not by
+# a hand-kept list: the first version listed 14 names, the test that checked them listed 7,
+# and neither had `IBKR_AUTH_BROWSER` (review 2026-09-13).
+_SECRET_ENV_PREFIXES = ("IBKR_", "GDRIVE_", "GOOGLE_", "FIRECRAWL_", "ANTHROPIC_", "CRAWL4AI_")
 
 
 @pytest.fixture(autouse=True)
@@ -151,13 +158,16 @@ def _no_real_secrets(request, monkeypatch):
     in a unit test's environment (docs/audits/security-architecture-audit-2026-09-13.md,
     B6). pytest-socket stops that key from reaching the network, but a test asserting on
     `os.environ` or calling `Config.from_env()` would silently use real values and pass
-    for the wrong reason. `load_dotenv` becomes a no-op and the secret names are removed;
-    tests/security/test_no_live_io.py holds this.
+    for the wrong reason. `load_dotenv` becomes a no-op at every import site and every
+    variable with a package prefix is removed; tests/security/test_no_live_io.py holds this.
     """
     if request.node.get_closest_marker("integration"):
         yield
         return
-    monkeypatch.setattr("ibkr_core_mcp.config.load_dotenv", lambda *args, **kwargs: False)
-    for name in _SECRET_ENV_VARS:
+    noop = lambda *args, **kwargs: False  # noqa: E731
+    monkeypatch.setattr("ibkr_core_mcp.config.load_dotenv", noop)
+    monkeypatch.setattr("dotenv.load_dotenv", noop)
+    monkeypatch.setattr("dotenv.main.load_dotenv", noop)
+    for name in [k for k in os.environ if k.startswith(_SECRET_ENV_PREFIXES)]:
         monkeypatch.delenv(name, raising=False)
     yield

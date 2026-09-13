@@ -31,18 +31,42 @@ CLAUDIA = Path("/Users/steph/Claude_Projects/claudia_ui")
 MSG: list[MessageParam] = [{"role": "user", "content": "hello"}]
 
 
+def _public_definitions(node: ast.expr) -> list[dict[str, object]]:
+    """`ast.literal_eval` of TOOL_DEFINITIONS with each entry's `capabilities` dropped.
+
+    The field (2026-09-13) is a `frozenset(...)` call — not a literal — and is stripped by
+    `ClaudeToolkit.tools` before the schema reaches the API, so the text and token counts
+    measured here stay those of the real payload.
+    """
+    assert isinstance(node, ast.List)
+    public: list[dict[str, object]] = []
+    for entry in node.elts:
+        assert isinstance(entry, ast.Dict)
+        kept = [
+            (k, v)
+            for k, v in zip(entry.keys, entry.values, strict=True)
+            if not (isinstance(k, ast.Constant) and k.value == "capabilities")
+        ]
+        public.append(ast.literal_eval(ast.Dict(keys=[k for k, _ in kept], values=[v for _, v in kept])))
+    return public
+
+
 def literal_assign(py_file: Path, name: str) -> Any:
     """Extract a module-level literal assignment (handles both x = ... and x: T = ...)."""
     tree = ast.parse(py_file.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             if node.target.id == name and node.value is not None:
-                return ast.literal_eval(node.value)
+                return _evaluate(node.value, name)
         elif isinstance(node, ast.Assign) and len(node.targets) == 1:
             t = node.targets[0]
             if isinstance(t, ast.Name) and t.id == name:
-                return ast.literal_eval(node.value)
+                return _evaluate(node.value, name)
     raise SystemExit(f"{name} not found as a literal in {py_file}")
+
+
+def _evaluate(node: ast.expr, name: str) -> Any:
+    return _public_definitions(node) if name == "TOOL_DEFINITIONS" else ast.literal_eval(node)
 
 
 def main() -> None:
