@@ -35,7 +35,7 @@ integration); ruff, `ruff format`, mypy strict clean on both.
 | B4 | Sandbox exposure not frozen | — | **Enforced** | `c4b4ba8` | `…::test_sandbox_globals_are_exactly_the_documented_set` and the two namespace tests |
 | B5 | Three error channels bypass redaction; Flex token in `requests` text | — | **Fixed** | `f35f960` | `test_error_redaction.py` (ModuleNotFoundError before; structural probe) |
 | B6 | Unit tests load the real `.env` | — | **Fixed** | `8c2594c` | `test_no_live_io.py::test_constructing_a_config_does_not_load_the_repository_dotenv`, `…from_env_sees_only_what_the_test_set` |
-| B7 | `100.64.0.0/10` unblocked; octal divergence; `search_site` single-layer | — | **Fixed / documented** | `a023e03` | `test_ssrf_boundary.py` — 6 rows red |
+| B7 | `100.64.0.0/10` unblocked; octal divergence; `search_site` single-layer | — | **Fixed** (the seeder hook came from Addendum D) | `a023e03` + review commit | `test_ssrf_boundary.py` — 6 rows red; seeder hook tests red |
 | B8 | New subprocess sites invisible to lint | — | **Enforced** | `80ad561` | structural |
 | B9 | Body shown ≠ body sent (TOCTOU) | Low | **Fixed** | `c603d17` | `test_order_write_boundary.py::test_a_body_mutated_after_the_dialog_is_not_the_body_sent[2]` |
 | C | Import-time socket block; `read_resource` redaction; `to_clipboard` | — | **Done** | `3bc7d69`; `f35f960`; `c4b4ba8` | covered above |
@@ -517,6 +517,47 @@ commit reported nltk `PYSEC-2026-3740`. The difference is the scope: Dependabot 
 manifest's *direct* dependencies; `pip-audit` audits the *resolved* tree, transitive
 dependencies included, freshly resolved at run time. They are complementary and both stay. No
 version-update PRs: the floors are unpinned by design, so update PRs would be churn.
+
+## Addendum D (2026-09-13, post-merge) — Fresh-eye review of the remediation
+
+The owner asked for the implementation to be reviewed "with a fresh eye". A six-angle code
+review (line-by-line, removed behaviour, cross-file tracing, root-cause depth, reuse,
+efficiency, conventions) was run over `b028518..e57aabb`; every candidate was reproduced by the
+reviewer before being reported, and every accepted finding was fixed with the reproducing test
+written first. Findings, verbatim in substance:
+
+| # | Finding (reviewer's reproduction) | Disposition |
+|---|---|---|
+| D1 | **A2 still open through the exposed classes.** `pd.Series.apply(df['close'], 'to_csv', args=(p,))`, `pd.DataFrame.apply(df, 'to_csv', path_or_buf=p)`, `df.pipe(pd.DataFrame.apply, 'to_csv', …)` wrote files: the guard inspected `args[0]`, which is the object when the method is read off the class | Fixed. `pd.DataFrame`/`pd.Series` are constructor *functions*; no class is reachable, so every pandas callable is a bound method. 14 forms in the test, 5 end to end |
+| D2 | Dict views and generators as function specs (`df.apply({'to_csv': 1}.keys(), …)`) bypassed `_check_func_names`, which recursed only into list/tuple/set/dict | Fixed: any non-callable iterable is recursed |
+| D3 | The named-aggregation patch (`b97f2ec`) refused `df.agg(avg=('close','mean'))` (column checked as a function) and `agg('quantile', interpolation='nearest')` (option checked as a function); `df.close` was refused outright | Fixed: positional function present → keywords are options; absent → named aggregation, function half only; column labels pass as data when no method shadows them |
+| D4 | `np.maximum.accumulate` and `Timestamp.isoformat()` blocked by the module-keyed allowlist | Fixed: ufunc method allowlist; two Timestamp names |
+| D5 | A missing attribute evaluated to `None` (`safer_getattr`'s own default) and surfaced as `'NoneType' object is not callable` | Fixed with a sentinel; missing attributes raise `AttributeError` |
+| D6 | The transport allowlists held only `host:*` wildcards; a port-less `Host`/`Origin` (`--port 80`) was refused with 421 | Fixed: bare loopback entries added, test parametrised |
+| D7 | `redact_error` anchored `\b` before `token`/`key`/`secret`: `refresh_token=`, `client_secret=`, `access_token=`, userinfo `user:pass@`, quoted values and lowercase `bearer` all survived; the structural probe missed `%`, `.format`, `.args`, `log.exception`, `exc_info` | Fixed: shape-based rules (whole query strings, userinfo, any credential-word identifier); probe extended; 14 secret shapes in the test |
+| D8 | `search_site` handed crawl4ai's seeder an unguarded httpx client; a sitemap listing a loopback URL was fetched — the audit had filed this as "documented" | Fixed: `_reject_private_httpx_request` installed as a request hook on the seeder's client; httpx runs hooks per request, redirects included |
+| D9 | The session-wide `disable_socket()` ran before module-scoped fixtures, and pytest-socket's own teardown re-enabled sockets after the first test, so the first live module's `live_client` fixture ran blocked, `ping()` returned False, and the module skipped silently | Fixed: pytest-socket's `enable_socket`/`disable_socket` markers applied at collection; the plugin's setup hook runs before any fixture |
+| D10 | The secret-variable list was hand-kept twice (14 vs 7 names) and missed `IBKR_AUTH_BROWSER`; `load_dotenv` was stubbed at one import site | Fixed: scrub by package prefix, stub at every site, test derives the set from source |
+| D11 | `tool_capabilities()` imported `mcp_server` from the "portable" toolkit — a reverse dependency raising `ImportError` without the `[server]` extra | Fixed: toolkit-scoped constant; the two server tools declared beside their definitions |
+| D12 | `ORDER_EXECUTION` was a legal capability held out only by a test; the dispatch dict and the definitions were two registries | Fixed: removed from the vocabulary (unspellable); registry-agreement test |
+| D13 | `mcp>=1.0` admitted releases without `transport_security` (first shipped 1.10.0; verified against the 1.9.4 wheel) | Fixed: floor 1.10 |
+| D14 | `frozenset(...)` in the definitions broke `ast.literal_eval` in the two audit scripts | Fixed: the scripts drop the field before evaluating |
+| D15 | `_error_text` duplicated `redact_error`; the sandbox line was capped twice (child + handler), losing the tail of multi-violation errors | Fixed: child sends `redact_error`; the handler uses a 1,000-char limit for that channel |
+| D16 | MCP `ToolAnnotations` were never derived from the declaration, so clients that gate prompts on `readOnlyHint`/`destructiveHint` saw nothing | Fixed: derived in `tools/list` |
+| D17 | Efficiency: 19 sandbox tests each spawned a child (~6.5 s); the AST parsed the same modules dozens of times; `tools` rebuilt 44 dicts per request | Fixed: in-process probes for the allowlist (5 kept end to end), `lru_cache` on the parse, precomputed public schemas |
+| D18 | The live web-tools run CLAUDE.md requires after a scraper change had not been run for the SSRF rewrite | Run: 11 passed in 25 s, recorded in `docs/web-scraper-reference.md` § 11 |
+| D19 | CLAUDE.md still said "four steps" and the endpoint checklist lacked the `capabilities` step | Fixed |
+| D20 | Root-cause: a package-wide `logging.Filter` for the loggers outside the model layer | **Rejected with a reason**: a filter on the `ibkr_core_mcp` logger does not apply to child loggers, and handler filters belong to the host; recorded as a known limit |
+| D21 | Root-cause: DNS pinning against TTL-0 rebinding between layer 1 and the fetcher's resolver | **Deferred**: the per-request hooks re-check at send time; pinning needs a custom transport and Chromium resolver rules; recorded as a known limit |
+
+Two lessons for the method, not just the code: a *structural* fix (the allowlist) was defeated
+by an *exposure* the audit had not enumerated (the class objects in the safe namespace), which
+is why the namespace is now class-free rather than the guard cleverer; and the first patch on
+review (named aggregation) fixed one arity of one method and broke two idioms — the deeper rule
+(positional function vs named aggregation) was cheaper than the patch.
+
+After the review: 1,218 unit tests (167 `security`), 93 integration; ruff, `ruff format`, mypy
+strict clean; live web suite 11/11.
 
 ## Addendum C (2026-09-13) — Environment notes verified
 

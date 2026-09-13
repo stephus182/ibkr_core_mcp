@@ -87,13 +87,15 @@ ruff format --check .     # formatting — must be clean
 mypy                      # type check — must be clean (files= covers ibkr_core_mcp/, tests/ and scripts/)
 ```
 
-**Run the whole line before pushing, in this order — CI runs these four steps and stops at
-the first red one.** Run 34082479743 (2026-09-07) failed at `ruff format --check` on four
+**Run the whole line before pushing, in this order — CI's test job runs these four steps and
+stops at the first red one; two further jobs (`dependency-audit`, `secret-scan`) run in parallel
+and need the network, so they are CI-only.** Run 34082479743 (2026-09-07) failed at `ruff format --check` on four
 files, and that red step hid two real mypy errors CI never reached; they surfaced only when
 the formatting was fixed. A green `ruff check` says nothing about `ruff format`, and a red
 `ruff format` says nothing about mypy or pytest. The same four steps, in the same order, are
-claudia_ui's CI (`.github/workflows/ci.yml` in both repos, aligned 2026-09-08), and they are
-`.githooks/pre-push` in both repos, which refuses a push that would go red — enabled once per
+claudia_ui's CI (`.github/workflows/ci.yml` in both repos, aligned 2026-09-08; the two
+2026-09-13 jobs exist here only — claudia_ui's file still mirrors the four-step test job), and
+they are `.githooks/pre-push` in both repos, which refuses a push that would go red — enabled once per
 clone by `git config core.hooksPath .githooks` (Dev Setup); `git push --no-verify` bypasses it
 on purpose. Branch protection cannot do this for a direct-push workflow: a required status
 check rejects every push whose commit has not already passed CI, which a direct push never has.
@@ -397,6 +399,12 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 1. **`client.py`** — add method, return typed model
 2. **`models.py`** — add Pydantic model for response if new shape
 3. **`claude_tools.py`** — add tool definition to `TOOL_DEFINITIONS` + handler method to `ClaudeToolkit`
+   - Declare `"capabilities": frozenset({...})` from `CAPABILITIES` on the definition — every sink the
+     handler touches (IBKR write → `ACCOUNT_STATE`, store write → `DATABASE`, Drive write →
+     `GOOGLE_DRIVE`, browser/seeder → `WEB_FETCH`, remote service → `NETWORK`) must be declared or
+     `tests/security/test_tool_capabilities.py` fails; `ORDER_EXECUTION` cannot be declared at all.
+     If the tool mutates state, add it to that test's frozen mutating-tool list and to `SECURITY.md`'s
+     capability table.
    - If the handler needs an account ID, use `self._first_account_id()` (single) or `self._all_account_ids()` (all). Do **not** inline `get_accounts()` — the helpers centralise the `"accountId"` / `"id"` key fallback.
    - If the handler needs a `conid`, use `contracts[0].get("conid") or contracts[0].get("con_id")` to match `_fetch_market_data`.
    - Register the handler in the `execute()` dispatch dict.

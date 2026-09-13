@@ -20,12 +20,12 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 | `SQLiteStore` | Local SQLite store — trade history, price alerts, session log |
 | `GDriveCache` | Google Drive Parquet cache for OHLCV data |
 | `streaming` | IBKR WebSocket live quotes + price alert engine |
-| `backtest` | Safe sandboxed strategy backtester |
+| `backtest` | Strategy backtester in a RestrictedPython sandbox — attribute allowlist, child process, 10 s watchdog |
 | `indicators` | Technical indicators (RSI, MACD, Bollinger, ATR, VWAP, …) |
 | `analytics` | Portfolio analytics — drawdown, Sharpe, Sortino, Calmar, CAGR, win rate, profit factor |
 | `pinescript` | PineScript v5 generator |
 | `web_scraper` / `local_browser` | Whole-web search (Firecrawl) + the local Crawl4AI browser for anything with a URL, and the `web_docs/` Drive archive |
-| `mcp_server` | MCP server (stdio + SSE) exposing all 46 tools to any MCP client |
+| `mcp_server` | MCP server (stdio + SSE with Host/Origin validation) exposing all 46 tools to any MCP client |
 
 ---
 
@@ -237,9 +237,13 @@ Expose all 44 tools (+ 2 MCP-only alert tools = 46 total) to any MCP-compatible 
 # stdio transport (Claude Desktop / Cursor)
 python -m ibkr_core_mcp.mcp_server
 
-# SSE transport with live streaming
+# SSE transport with live streaming — binds 127.0.0.1 and accepts loopback Host/Origin only
 python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 ```
+
+Every tool carries a declared `capabilities` set (read-only, compute, Drive, SQLite, IBKR
+account state, sandbox, web fetch, …); no tool declares order execution, and the test suite
+asserts it. See [`docs/security-architecture.md`](docs/security-architecture.md) § 2 and § 6.8.
 
 ---
 
@@ -284,8 +288,13 @@ result = run_backtest(code=code, df=bars_dataframe, strategy_name="EMA crossover
 print(result.sharpe, result.max_drawdown, result.total_return)
 ```
 
-Strategy code runs in a `RestrictedPython` sandbox — no file system or network access.
-4096-character limit; 10-second timeout. Available: `df`, `pd`, `np`.
+Strategy code runs in a `RestrictedPython` sandbox inside a child process — no imports, no
+file system, no network, no subprocess. `df`, `pd` and `np` expose an **allowlist** of the
+vectorised-strategy vocabulary (arithmetic, rolling/ewm/expanding/groupby, indexing, `.str`/`.dt`,
+in-memory converters); every `to_*` writer, `style`, `plot` and pandas' expression engine are
+unreachable, and the string form of `apply`/`agg`/`transform` faces the same list. 4,096-character
+limit; 10-second watchdog. Rationale and the audit that motivated the allowlist:
+[SECURITY.md](SECURITY.md#code-execution-security--backtest-sandbox).
 
 ---
 
@@ -392,14 +401,14 @@ Implemented in `human_auth.py` using the macOS `LocalAuthentication` framework v
 
 If `pyobjc-framework-LocalAuthentication` is not installed, or if the Mac hardware does not support biometrics (e.g. a Mac mini without a Touch ID keyboard attached), the gate raises `HumanAuthError` and the order is never submitted.
 
-### Gate 2 — Visual confirmation dialog (tkinter)
+### Gate 2 — Visual confirmation dialog
 
 Implemented in `order_confirm.py`.
 
-- Full order details displayed in a modal window
-- 60-second countdown timer — dialog auto-cancels on timeout
-- **Enter key disabled** — confirmation requires a deliberate mouse click on the "Confirm" button
-- Runs on the main thread; the tkinter event loop is driven internally
+- Full order details displayed in a modal: on macOS an AppKit dialog run in a subprocess (banner colour-coded by side — green BUY, red SELL, dark red CANCEL, amber when the side is unknown), with an `osascript` fallback; `tkinter` on other platforms
+- 60-second timeout — the dialog auto-cancels unattended
+- **Enter key disabled** — confirmation requires a deliberate mouse click on the button named for the action (SEND TO IBKR, MODIFY ORDER, CANCEL ORDER, CONFIRM REPLY); the default button is the abandon one
+- The body the dialog shows is the body sent: the order dict is copied before the gates
 
 Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a "Stage this order" button click in its Panel UI) before `place_order`/`place_order_and_confirm` is ever invoked.
 
@@ -407,7 +416,27 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 
 **Web scraping (`search_site`, `crawl_site`, `fetch_page`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
 
-See [SECURITY.md](SECURITY.md) for the full security model.
+### Machine-checked, not just documented
+
+Since the 2026-09-13 security architecture audit, the properties above are enforced by tests
+that read the source, not only by convention (`pytest -m security`, ~10 s, part of every unit
+run and of CI):
+
+- the three order-write endpoints are built only inside the four gated methods, each runs a gate before its first network call, and the tool layer never references an order write;
+- the whatif preview is the only ungated order path;
+- every tool declares its `capabilities`, none declares `ORDER_EXECUTION`, and a handler that touches an undeclared sink fails;
+- strategy code cannot read or write a file, spawn a process or reach the network (canary tests), and what it may touch is a frozen allowlist;
+- every model-supplied URL is checked before the fetch and on every browser request, against a tested table of local and reserved address forms;
+- every exception the tool layer shows or logs passes one redaction function;
+- unit tests cannot open sockets, resolve names or see the operator's credentials;
+- processes are spawned only from three named modules, never through a shell;
+- the SSE transport rejects foreign `Host`/`Origin` values.
+
+CI adds `pip-audit` over the full installed tree and `gitleaks` over every pushed range. The
+design — principals, privilege tiers, the trust-boundary map, each invariant with its enforcing
+test, the decision log, change recipes — is [`docs/security-architecture.md`](docs/security-architecture.md);
+the control inventory is [SECURITY.md](SECURITY.md); the audit with its probe evidence is
+[`docs/audits/security-architecture-audit-2026-09-13.md`](docs/audits/security-architecture-audit-2026-09-13.md).
 
 ---
 
@@ -525,10 +554,16 @@ pytest -m "not integration"
 # All tests (requires running IBKR gateway + credentials)
 pytest
 
+# Security invariants only (~10 s)
+pytest -m security
+
 # Lint + type check
 ruff check .            # includes pydocstyle D — every public definition needs a docstring
 ruff format --check .
 mypy
+
+# Dependency audit (network; the same command CI runs, minus the ignore-file flags)
+pip-audit --strict --desc --vulnerability-service osv
 ```
 
 Docstring coverage is enforced in CI: `ruff`'s `pydocstyle` (`D`) rules are enabled, so a new

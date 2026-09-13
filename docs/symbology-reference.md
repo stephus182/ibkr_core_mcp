@@ -136,7 +136,7 @@ round trip; the alternative costs a decision made on a price from another countr
   can therefore price the wrong *issuer*, not merely the wrong venue or currency.
 
 - **FIXED 2026-07-28 — two live defects, one root cause: the model is told only what the
-  tool *description* says.** `tools` returns `TOOL_DEFINITIONS` verbatim and nothing
+  tool *description* says.** `tools` returns `TOOL_DEFINITIONS` (minus the package-internal `capabilities` field, since 2026-09-13) and nothing
   appends `__doc__`, so a rule written in a handler docstring never reaches Claude. The
   description named `_data_status` and `_quote_time` and said *"Always report both"* — and
   ClaudIA reported both in every single answer. `_currency` appeared nowhere in it, only in

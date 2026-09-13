@@ -21,16 +21,18 @@ You will receive an acknowledgement within 48 hours. Critical findings will be p
 
 ## Threat Model
 
-`ibkr_core_mcp` sits at the boundary between an LLM agent (Claude) and a live IBKR brokerage account. Two principals operate the system with different trust levels:
+`ibkr_core_mcp` sits at the boundary between an LLM agent (Claude) and a live IBKR brokerage account. The principals, and what each is trusted for:
 
 | Principal | Trusted for | Explicitly not trusted for |
 |---|---|---|
-| **Human operator** | Configuration, credential management, order approval | Unattended automation of order writes |
-| **LLM / Claude agent** | Read operations, analysis, strategy generation | Order execution, credential access, arbitrary code execution |
+| **Human operator** | Configuration, credential management, approving each order write at the keyboard | Unattended automation of order writes |
+| **LLM / Claude agent** | Read operations, analysis, strategy generation, proposing orders | Order execution, credential access, unconfined code execution, reaching the local network |
+| **Web content** returned by the four web tools | Nothing — it is the prompt-injection vector | Anything |
+| **A future coding agent** editing this repository | Producing lint-clean, typed, green changes | Preserving a boundary it never saw named — which is why each boundary has a test that reads the source (§ Security Regression Suite) |
 
-This separation is enforced **architecturally**, not by policy. No combination of prompt, tool call, or LLM-generated input can bypass the human-in-the-loop controls — they require physical presence at the machine.
+This separation is enforced **architecturally**, not by policy, and since 2026-09-13 it is also **machine-checked**: no combination of prompt, tool call, or LLM-generated input can bypass the human-in-the-loop controls — they require physical presence at the machine — and a change that would open such a path fails `pytest -m security`. In-process code (the host application, a dependency) is not a principal this package defends against; it already has everything the process has.
 
-The secondary threat surface is the LLM tool boundary: data flowing from external APIs (IBKR, Flex XML) back to the LLM must be sanitized to prevent injection attacks.
+The secondary threat surface is the LLM tool boundary: data flowing from external APIs (IBKR, Flex XML) and from web pages back to the LLM must be sanitized to prevent injection attacks, and error text must never carry a secret. The full model, with privilege tiers and the trust-boundary map, is `docs/security-architecture.md` §§ 1–3.
 
 ---
 
@@ -40,12 +42,12 @@ The following table maps each attack class from the [MCP Security Best Practices
 
 | MCP Attack Class | ibkr_core_mcp Control | Location |
 |---|---|---|
-| **Confused Deputy** | LLM has no order-write tools; `account_id` regex blocks path manipulation | `claude_tools.py`, `_validate_account_id` |
-| **Token Passthrough** | `_safe_error` maps all exceptions to controlled strings; raw API responses never forwarded to LLM | `claude_tools.py`, `_safe_error` |
-| **SSRF** | Flex `<Url>` validated against domain allowlist before any HTTP request | `flex_query.py`, `_ALLOWED_URL_PREFIX` |
-| **Session Hijacking** | Session cookie re-read from browser on each use; gateway bound to localhost; no persistent session store | `auth.py`, `client.py` |
-| **Local Server Compromise** | RestrictedPython sandbox with safe namespaces, 4 096-char limit, 10-second execution timeout | `backtest.py` |
-| **Scope Minimization** | Claude tool surface is read-only; order writes require biometric + visual human confirmation | `claude_tools.py`, `client.py` |
+| **Confused Deputy** | LLM has no order-write tools (asserted: `ORDER_EXECUTION` is not in the capability vocabulary, so no tool can declare it, and the model layer never references an order-write method); `account_id` / `order_id` / `alert_id` / `reply_id` regexes block path manipulation | `claude_tools.py`, `client.py` validators, `tests/security/test_order_write_boundary.py`, `test_tool_capabilities.py` |
+| **Token Passthrough** | `_safe_error` maps exception types to fixed sentences; `redact_error` is the one path for any detail shown or logged, secrets scrubbed | `claude_tools.py`, `redaction.py`, `tests/security/test_error_redaction.py` |
+| **SSRF** | Flex `<Url>` validated against a host-prefix allowlist before any HTTP request; every model-supplied URL reaching the local browser is checked before the fetch and on every browser request | `flex_query.py` `_ALLOWED_URL_PREFIXES`; `claude_tools._validate_public_url`, `local_browser.is_private_host` / `_reject_private_requests` |
+| **Session Hijacking** | Session cookie re-read from the browser on each use; gateway bound to loopback; cookie only ever sent to a loopback host (`IBKRClient`, `IBKRWebSocket` both refuse others); no persistent session store | `auth.py`, `client.py`, `streaming.py` |
+| **Local Server Compromise** | RestrictedPython sandbox: safe namespaces, **attribute allowlist** on every pandas/numpy object, child process, 4,096-char limit, 10-second watchdog; SSE transport validates `Host`/`Origin` | `backtest.py`, `mcp_server.build_sse_app` |
+| **Scope Minimization** | Every tool declares its capabilities; the model's maximum scope is READ / COMPUTE / EXTERNAL IO / LOCAL SENSITIVE IO / ACCOUNT STATE; order writes require biometric + visual human confirmation and are unreachable from any tool | `claude_tools.CAPABILITIES`, `client.py` |
 
 Each of these is detailed in the sections below.
 
@@ -72,8 +74,8 @@ Each of these is detailed in the sections below.
 
 | Property | Value |
 |---|---|
-| Mechanism | `tkinter` modal displaying full order details and a live-order disclaimer |
-| Confirmation | Explicit mouse click on "Confirm" — Enter key does not confirm |
+| Mechanism | On macOS an AppKit `NSAlert` run in a subprocess (`_order_dialog.py`, banner colour-coded by side: green BUY, red SELL, dark red CANCEL, amber when the side is unknown), falling back to an `osascript` dialog if that subprocess fails; a `tkinter` modal on other platforms. All three show the typed order rows and a live-order disclaimer |
+| Confirmation | Explicit mouse click on the confirm button (labelled for the action: SEND TO IBKR / MODIFY ORDER / CANCEL ORDER / CONFIRM REPLY) — Enter key does not confirm; the default button is the abandon one |
 | Auto-cancel | 60-second countdown ticker; raises `HumanAuthError` on expiry |
 | Rationale for timeout | Prevents an unattended dialog on a locked screen from being confirmed by physical access |
 | Location | `ibkr_core_mcp/order_confirm.py` |
@@ -84,10 +86,18 @@ Both gates are applied at the **innermost call site** inside `IBKRClient`, not a
 
 ```
 place_order()   ──► require_touch_id() ──► confirm_dialog() ──► POST /iserver/account/{id}/orders
-modify_order()  ──► require_touch_id() ──► modify_dialog()  ──► POST /iserver/account/{id}/orders/{orderId}
+modify_order()  ──► require_touch_id() ──► modify_dialog()  ──► POST /iserver/account/{id}/order/{orderId}
 cancel_order()  ──► require_touch_id() ──► cancel_dialog()  ──► DELETE /iserver/account/{id}/order/{orderId}
 reply_order()   ──► require_touch_id() ──► reply_dialog()   ──► POST /iserver/reply/{replyId}
 ```
+
+`place_order_and_confirm` / `modify_order_and_confirm` run the write's gates once and then, for
+each precaution reply IBKR returns, the reply dialog (covered by the write's
+`OrderWriteAuthorization`, so no second fingerprint). The order dict is copied at method entry,
+so the body the dialog shows is the body sent. Since 2026-09-13 this whole shape is read from
+the source by `tests/security/test_order_write_boundary.py`: those five functions are the only
+ones that may build an order-write URL, each must call a gate before its first network call,
+and `claude_tools.py` / `mcp_server.py` may not name any of them.
 
 ### Gated vs. Ungated Endpoints
 
@@ -116,8 +126,9 @@ reply_order()   ──► require_touch_id() ──► reply_dialog()   ──�
 
 `ClaudeToolkit` exposes **44 tools** to the LLM (46 through the MCP server, which adds two
 local price-alert tools). **None of them can place, modify, cancel or confirm an order** —
-`tests/security/test_tool_capabilities.py` asserts that the set of tools declaring
-`ORDER_EXECUTION` is empty. They are *not* all read-only, and until 2026-09-13 this section
+`tests/security/test_tool_capabilities.py` asserts that `ORDER_EXECUTION` is not even a legal
+capability — it is absent from the vocabulary, so a definition that tries fails the
+unknown-capability check by construction. They are *not* all read-only, and until 2026-09-13 this section
 said "42 read-only tools" while eight of them mutated state outside the machine
 (docs/audits/security-architecture-audit-2026-09-13.md, B3). The complete tool surface is:
 
@@ -127,12 +138,12 @@ said "42 read-only tools" while eight of them mutated state outside the machine
 | Contracts | `search_contract`, `get_contract_info`, `get_option_chain`, `get_futures` |
 | Account | `get_account_summary`, `get_positions`, `get_ledger`, `get_allocation`, `get_pnl` |
 | Trades | `get_trades`, `sync_flex_trades`, `sync_flex_archive`, `check_flex_coverage`, `import_flex_file`, `verify_flex_import` |
-| Orders (read-only) | `get_live_orders`, `preview_order`, `get_order_status`, `diagnose_orders` |
+| Orders (read, plus the whatif preview) | `get_live_orders`, `preview_order`, `get_order_status`, `diagnose_orders` |
 | Scheduling | `get_trading_schedule` |
 | Watchlists | `get_watchlists` |
 | Scanners | `run_scanner` |
 | Notifications | `get_notifications` |
-| Price alerts (local) | `create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert`, `get_alerts` |
+| Price alerts (IBKR server-side — `ACCOUNT_STATE`) | `create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert`, `get_alerts` |
 | Analytics & backtest | `add_indicators`, `run_backtest`, `generate_pinescript`, `get_analytics` |
 | PA reporting | `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` |
 | Web scraping | `firecrawl_search`, `search_site`, `crawl_site`, `fetch_page` |
@@ -141,11 +152,16 @@ said "42 read-only tools" while eight of them mutated state outside the machine
 
 Every tool definition carries a `capabilities` frozenset drawn from `claude_tools.CAPABILITIES`
 (`READ_ONLY`, `COMPUTE`, `NETWORK`, `WEB_FETCH`, `LOCAL_IO`, `GOOGLE_DRIVE`, `DATABASE`,
-`ACCOUNT_STATE`, `ORDER_PREVIEW`, `ORDER_EXECUTION`, `SANDBOX_EXECUTION`); `ClaudeToolkit.tools`
-strips the field before schemas reach the Anthropic API, and `tool_capabilities()` returns the
-map. The test suite checks three things: every tool declares a non-empty known set; no tool
-declares `ORDER_EXECUTION`; and every sink a handler's own source touches (an IBKR write, a
-store write, a Drive write, the sandbox, the browser, Firecrawl, Flex) is declared. The tools
+`ACCOUNT_STATE`, `ORDER_PREVIEW`, `SANDBOX_EXECUTION` — and deliberately not `ORDER_EXECUTION`);
+`ClaudeToolkit.tools` strips the field before schemas reach the Anthropic API, and
+`tool_capabilities()` returns the toolkit's map (the two server-local tools are declared beside
+their definitions in `mcp_server.py`). The MCP server derives the protocol-native
+`ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `openWorldHint`) from the same set, so an
+MCP client that gates its confirmation prompts on those hints sees them. The test suite checks
+four things: every tool declares a non-empty known set; `ORDER_EXECUTION` has no legal spelling;
+the `execute()` dispatch dict and `TOOL_DEFINITIONS` name the same tools; and every sink a
+handler's own source touches (an IBKR write, a store write, a Drive write, the sandbox, the
+browser, Firecrawl, Flex) is declared. The tools
 that mutate state, as that test freezes them:
 
 | Capability | Tools |
@@ -187,14 +203,14 @@ All tool errors go through `_safe_error`, which maps exception types to controll
 ```python
 def _safe_error(tool: str, exc: Exception) -> str:
     if isinstance(exc, IBKRAuthError):
-        return f"Tool '{tool}' failed: IBKR session not authenticated. ..."
-    if isinstance(exc, BacktestError):
-        return f"Tool '{tool}' failed: {exc}"   # BacktestError messages are authored by us
-    if isinstance(exc, FlexQueryError):
-        return f"Tool '{tool}' failed: Flex query error."
+        return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
     if isinstance(exc, IBKRAPIError):
-        return f"Tool '{tool}' failed: IBKR API error."
-    ...
+        return f"Tool '{tool}' failed: IBKR gateway returned an error (HTTP {exc.status_code})."
+    if isinstance(exc, BacktestRuntimeError):
+        return f"Tool '{tool}' failed: strategy raised a runtime error."
+    if isinstance(exc, FlexQueryError):
+        return f"Tool '{tool}' failed: Flex Web Service error. Check IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID, or retry — ..."
+    ...  # one fixed sentence per exception type; the status code is the only value interpolated
     return f"Tool '{tool}' encountered an unexpected error."
 ```
 
@@ -203,11 +219,15 @@ Adversarial strategy code that raises exceptions with embedded payloads cannot i
 Where a handler must show the model *detail* — the sandbox error it has to fix, a browser
 failure it can act on, a resource handler's reason — it goes through one function,
 `redaction.redact_error`: exception type plus the first line of the message, secret-shaped
-material scrubbed (Bearer headers, `sk-ant-`/`fc-` keys, `t=`/`token=`/`key=` query parameters,
-Cookie headers), one line, 300 characters. A `requests` exception carries the full request URL,
+material scrubbed by *shape* — Authorization and Cookie values, `sk-ant-`/`fc-` keys, URL
+userinfo, every URL query string whole, and any `identifier=value` whose identifier contains
+token/secret/password/session/credential/auth or names an API, access, secret or private key
+(the first version anchored on exact words and let `refresh_token=` through; review
+2026-09-13) — one line, 300 characters. A `requests` exception carries the full request URL,
 and the Flex token travels in `?t=…` — probed 2026-09-13, verbatim in the text — which is why
-every `{exc}`, `str(exc)` and log call in `claude_tools.py` and `mcp_server.py` is routed
-through it and `tests/security/test_error_redaction.py` fails on any that is not.
+every `{exc}`, `str(exc)`, `%`/`.format` interpolation, `.args` read, log call, `log.exception`
+and `exc_info=` in `claude_tools.py` and `mcp_server.py` is routed through it and
+`tests/security/test_error_redaction.py` fails on any that is not.
 
 ---
 
@@ -244,8 +264,14 @@ vectorised-strategy vocabulary (arithmetic, reductions, indexing, rolling/ewm/ex
 windows, reshaping, `.str`/`.dt`, in-memory `to_numpy`/`to_list`/`to_frame`/`to_dict`). No
 `to_*` writer, no `style`, no `plot`, no `info`, no `attrs`. The string-function argument of
 `apply`/`agg`/`aggregate`/`transform` faces the same list, because pandas resolves that name
-with its own unguarded `getattr`. The runtime-error text returned to the model is one line
-capped at 300 characters.
+with its own unguarded `getattr`. `pd.DataFrame` and `pd.Series` are exposed as constructor
+*functions*, not classes: a class hands out unbound methods whose first argument is the object,
+which the string-function guard could not see — `pd.Series.apply(df['close'], 'to_csv', …)`
+wrote a file after the first fix (fresh-eye review, 2026-09-13). Positional function specs of
+any list-like shape are checked (dict views and generators reached pandas untouched); named
+aggregation checks the function half of `(column, func)`; a column label (`df.close`) passes as
+data when no DataFrame method shadows it. The runtime-error text returned to the model is one
+line capped at 300 characters.
 
 Why an allowlist: the 2026-09-13 audit demonstrated, by execution, that the previous two-name
 denylist (`eval`, `query`) left `df.style.from_custom_template(dir, file)` rendering **any file**
@@ -275,7 +301,7 @@ with the operator's uid and no OS-level confinement, so the allowlist is the bou
 OS-level second layer (`sandbox-exec` on macOS) is the next step if that ever proves
 insufficient.
 
-**`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/audits/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook now denies `eval`/`query` by name before falling through to `safer_getattr`. Any future DataFrame method found to accept and internally evaluate a string as code (rather than treat it as data) should be added to `backtest.py`'s `_DENIED_ATTRS`.
+**`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/audits/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook denies `eval`/`query` by name with a specific message. Since 2026-09-13 that denylist is superseded in effect by the attribute allowlist above — neither name is on it — and the rule for a newly discovered string-evaluating method is the inverse: it is blocked unless someone adds it to `_PANDAS_ALLOWED_ATTRS`, which is the security change.
 
 **Thread timeout non-termination (fixed 2026-07-16)** — The sandbox previously ran in a `ThreadPoolExecutor` thread; `Future.cancel()` cannot stop a thread that is already executing, so strategy code containing `while True: pass` survived the 10-second timeout and kept consuming CPU in a background thread. This was worse than "unbounded CPU consumption" alone: `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit, unable to terminate cleanly without a forced kill. The sandbox now runs strategy code (both `compile_restricted` and `exec`) in an isolated `multiprocessing.Process` (spawn context) communicating results back over a `multiprocessing.Pipe`. A daemon watchdog thread enforces the execution timeout directly: if the deadline passes, it escalates `terminate()` (SIGTERM), then `kill()` (SIGKILL) after a short grace period if the process hasn't exited — a real OS process can be forcibly stopped, unlike a thread. Killing the process is also what reliably unblocks the parent's read of the result pipe no matter what state it's in (waiting for the first byte, or partway through a large payload), since a `multiprocessing.Connection.recv()` call has no timeout of its own once any bytes are readable. The watchdog itself is a daemon thread with a provably bounded lifetime, so — unlike the `ThreadPoolExecutor` it replaced — it can never become an unkillable, process-exit-blocking thread. See `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
 
@@ -304,12 +330,12 @@ reads the source or drives the code, and a `security` marker (`pytest -m securit
 | `test_order_write_boundary.py` | The three order-write endpoints are built only inside the gated methods; each runs a gate before its first network call; the model layer never names an order write; `OrderWriteAuthorization` is minted in one function; the body Gate 2 shows is the body sent |
 | `test_preview_is_not_execution.py` | `/orders/whatif` is built only by `get_order_preview`, which runs no gate; `preview_order` touches no other order method |
 | `test_tool_capabilities.py` | Every tool declares capabilities; none declares `ORDER_EXECUTION`; `READ_ONLY` never shares a declaration with a mutating capability; every sink a handler touches is declared |
-| `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
-| `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser-reaching handler validates first; both crawler entry points install the per-request guard |
-| `test_error_redaction.py` | Secret-shaped material never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `str()`'d or logged raw |
-| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no secret variable is visible; `Config()` loads no `.env` |
+| `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
+| `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
+| `test_error_redaction.py` | Secret-shaped material (14 forms, userinfo and OAuth parameters included) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
+| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
-| `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback |
+| `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback, with or without a port |
 
 Each structural file also feeds its checker a deliberately-violating snippet, so the guard is
 proven able to fire. The properties, as a constitution: **(1)** no order reaches IBKR except
@@ -337,7 +363,7 @@ Mitigations against [session hijacking](https://modelcontextprotocol.io/docs/tut
 
 - `BrowserCookieAuth` re-reads the session cookie from Chrome's store on each client instantiation — there is no persistent server-side session store that can be enumerated or guessed.
 - `TokenAuth` (headless mode) holds the cookie as a Python `str` in process memory. It is not written to disk.
-- The cookie is not logged or included in any `repr()` output.
+- The cookie is not logged or included in any `repr()` output, and it is only ever sent to a loopback host: `IBKRClient.__init__` and `IBKRWebSocket.connect` both refuse a non-loopback gateway URL before attaching it.
 - The gateway validates the session server-side on every request; a stale or invalid cookie returns HTTP 401, which is surfaced as `IBKRAuthError` immediately (see rate limiter below — 401 is **never** retried).
 
 ### Browser Allowlist
@@ -425,7 +451,7 @@ The Docker layer cache means the download only occurs on the first `docker build
 
 `manager.py` calls `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)` at module import time. This is a **process-global** side effect: it suppresses `InsecureRequestWarning` for all `requests` calls in the same Python process, not only gateway health-check calls.
 
-This is intentional — the only `verify=False` calls anywhere in the package are the gateway health and auth polls (`is_gateway_reachable`, `is_authenticated`), which connect to a known self-signed certificate on loopback. No external IBKR or third-party call uses `verify=False`. The warning suppression prevents console noise from expected behaviour; it does not weaken any other connection's actual TLS verification.
+This is intentional. Exactly three code paths disable certificate verification, and every one is pinned to loopback before it can run: the gateway health and auth polls in `manager.py` (`requests.get(..., verify=False)` against `https://localhost:{port}`), the `IBKRClient` session (`self._session.verify = False`, permitted only because the constructor raises `ConfigError` for any non-loopback `gateway_url`), and `IBKRWebSocket.connect` (`ssl.CERT_NONE`, after the same loopback check). No external IBKR or third-party call disables verification; `client.py` also calls `urllib3.disable_warnings` at import. The warning suppression prevents console noise from expected behaviour; it does not weaken any other connection's actual TLS verification.
 
 ---
 
@@ -433,29 +459,34 @@ This is intentional — the only `verify=False` calls anywhere in the package ar
 
 ### API Keys and Tokens in Config
 
-`anthropic_api_key` and `flex_token` are declared `field(repr=False)` in the `Config` dataclass:
+`anthropic_api_key`, `flex_token` and `firecrawl_api_key` are declared `field(repr=False)` in the `Config` dataclass:
 
 ```python
 @dataclass
 class Config:
     anthropic_api_key: str = field(repr=False)
     flex_token:        str = field(default="", repr=False)
+    firecrawl_api_key: str = field(default="", repr=False)
 ```
 
-Both fields are excluded from `repr()`, preventing accidental exposure in logs, tracebacks, and debug output.
+All three are excluded from `repr()`, preventing accidental exposure in logs, tracebacks, and debug output. Exception text is the other channel a key can travel through — a `requests` failure carries the full request URL, Flex token included — which is why every exception the model layer shows or logs passes through `redaction.redact_error` (§ Token Passthrough Prevention).
 
 ### Credentials Never in Version Control
 
-`.env`, `token.json`, and `credentials.json` must never be committed to the repository. The package loads credentials from environment variables only — never hardcoded defaults.
+`.env`, `token.json`, and `credentials.json` must never be committed to the repository. The package loads credentials from environment variables only — never hardcoded defaults. Two checks stand behind the rule: `gitleaks` scans every pushed range in CI (`.gitleaks.toml`), and the unit-test suite never sees the operator's values — `tests/conftest.py` makes `load_dotenv` a no-op and removes every secret-named variable, so a test cannot pass on a real key by accident (`tests/security/test_no_live_io.py`).
 
 ### OAuth Token File Permissions
 
 The Google Drive OAuth refresh token file is written with `0o600` permissions immediately after creation:
 
 ```python
-Path(self._config.gdrive_token_file).write_text(creds.to_json())
-os.chmod(self._config.gdrive_token_file, 0o600)
+fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as fh:
+    fh.write(creds.to_json())
+os.chmod(token_path, 0o600)   # O_CREAT's mode applies only on creation; the chmod covers an existing file
 ```
+
+(`gdrive_auth.persist_credentials`, and the same sequence in `cache.GDriveCache._get_service` and `web_scraper.WebDocsStore._get_service`.)
 
 This restricts read access to the file owner, preventing other local users from reading the refresh token.
 
@@ -474,9 +505,9 @@ The IBKR Flex Web Service returns a `<Url>` element used in a subsequent HTTP re
 Mitigation — strict allowlist prefix check before any request is made:
 
 ```python
-_ALLOWED_URL_PREFIX = "https://ndcdyn.interactivebrokers.com/"
+_ALLOWED_URL_PREFIXES = ("https://ndcdyn.interactivebrokers.com/", ...)   # IBKR's Flex hosts, https only
 
-if not url.startswith(_ALLOWED_URL_PREFIX):
+if not any(url.startswith(p) for p in _ALLOWED_URL_PREFIXES):
     raise FlexQueryError(f"Flex SendRequest returned unexpected URL: {url!r}")
 ```
 
@@ -484,10 +515,10 @@ This directly addresses the [SSRF attack class](https://modelcontextprotocol.io/
 
 ### SSRF Prevention (Web Scraping — the local browser)
 
-Three of the four web tools — `fetch_page`, `crawl_site` and `search_site` — drive a **local**
-headless Chromium via Playwright, fetching directly from the host machine. That is a materially
-different risk profile from `firecrawl_search`, where a remote API does the fetching and no
-local network is reachable at all.
+Three of the four web tools fetch **from the host machine**: `fetch_page` and `crawl_site` drive
+a local Chromium via Playwright, and `search_site` drives crawl4ai's httpx sitemap seeder. That
+is a materially different risk profile from `firecrawl_search`, where a remote API does the
+fetching and no local network is reachable at all.
 
 The exposure is not only the URL the operator typed. `crawl_site` follows same-host links it
 discovers as it goes, and `search_site` resolves a domain the model supplied — attacker-
@@ -541,9 +572,10 @@ non-canonical literal locally with `socket.inet_aton` before asking DNS — deci
 **octal** (`0177.0.0.1`, which the system resolver reads as public 177.0.0.1 and Chromium as
 127.0.0.1) and short forms — and blocks the RFC 6598 shared range `100.64.0.0/10` (CGNAT,
 Tailscale) and the IPv4 inside an IPv4-mapped IPv6 address. `tests/security/test_ssrf_boundary.py`
-holds a table of twenty forms, none needing DNS. **`search_site` has layer 1 only**: it drives
-crawl4ai's httpx sitemap seeder, not a browser, so no per-request guard exists there; the
-exposure is limited to what a sitemap/robots/`<head>` parse can return. Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack, which routes redirects and subresources through the same request-interception path as the initial navigation.
+holds a table of twenty forms, none needing DNS. **`search_site` gets the same per-request layer in httpx form**: `_reject_private_httpx_request`
+is installed as a request hook on the seeder's own client, so every robots/sitemap/`<head>`
+fetch and every redirect hop is re-checked at the moment it is sent (fresh-eye review 2026-09-13;
+until then the seeder had layer 1 only, and a sitemap listing a loopback URL was fetched). Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack, which routes redirects and subresources through the same request-interception path as the initial navigation.
 
 **Path-traversal hardening (defense in depth):** the domain extracted from a URL is used to build a filesystem path (`profiles_dir / domain`, for locating and writing saved login profiles). `local_browser._safe_domain` explicitly rejects any domain containing `..`, `/`, or `\`, or that is empty, before it reaches a path join — independent of upstream URL validation, so it can't be silently reopened by a future change elsewhere.
 
@@ -553,7 +585,8 @@ exposure is limited to what a sitemap/robots/`<head>` parse can return. Verified
 
 | Connection | TLS verification |
 |---|---|
-| IBKR Client Portal Gateway (`localhost:5055`) — Python | `verify=False` — intentional; self-signed cert on loopback only |
+| IBKR Client Portal Gateway (`localhost:5055`) — Python REST (`IBKRClient`, `GatewayManager` polls) | `verify=False` — intentional; self-signed cert on loopback only; the client constructor refuses any non-loopback URL |
+| IBKR Client Portal Gateway — WebSocket (`IBKRWebSocket`) | `ssl.CERT_NONE` — same certificate; `connect()` refuses any non-loopback URL before sending the cookie |
 | IBKR Client Portal Gateway — container-internal (`healthcheck.sh`) | `curl -sk` — verification disabled; self-signed cert on loopback within the Docker network |
 | IBKR Flex Web Service (`ndcdyn.interactivebrokers.com`) | Standard TLS, no overrides |
 | Google Drive API | Standard TLS via Google client library |
@@ -588,17 +621,9 @@ conn.execute(query, params)
 
 LLM-supplied `symbol`, `start`, and `end` values from `get_trades` are passed as bind parameters only. `account_id` is validated via regex before reaching any query.
 
-### External API Response Validation
+### External API Response Handling
 
-All IBKR API responses consumed by the package are validated through Pydantic v2 schemas in `models.py` before further processing:
-
-```python
-contract = Contract.model_validate(raw_dict)   # strict field types, alias normalization
-position = Position.model_validate(raw_dict)
-summary  = AccountSummary.model_validate(raw_dict)
-```
-
-This provides a typed boundary between untrusted external data and internal business logic.
+`IBKRClient` returns IBKR's JSON as plain dicts; the Pydantic v2 models in `models.py` (`Contract`, `Position`, `Trade`, `Order`, `AccountSummary`, `Notification`) are available to callers that want a typed shape, and `bars_to_dataframe` normalises history bars. Until 2026-09-13 this section claimed every response was validated through those models; nothing in the package calls `model_validate`, so the claim was false. The actual boundary controls on response data are: identifiers that come *back* from IBKR and are re-used in URLs pass the same regexes as model-supplied ones; reply messages rendered on Gate 2 are HTML-stripped; `IBKRAPIError` carries at most 400 bytes of a gateway body and never reaches the model except through `_safe_error` (status code only); web content is never parsed as instructions by this package — it is returned to the model, which is why the four web tools flag thin or blocked pages (`assess_quality`) rather than presenting them as content.
 
 ### XML Parsing
 
@@ -647,15 +672,17 @@ No single control is the sole barrier. Each threat has layered mitigations:
 
 | Threat | Primary control | Secondary control |
 |---|---|---|
-| LLM triggers order execution | No order-write tools in `ClaudeToolkit` | Two-gate human auth enforced at innermost call site |
+| LLM triggers order execution | No order-write tools in `ClaudeToolkit` — asserted by `test_tool_capabilities.py` (no `ORDER_EXECUTION`) and `test_order_write_boundary.py` (no reference in the model layer) | Two-gate human auth enforced at innermost call site, its shape read from the source by the same test |
 | LLM supplies malicious account ID | `_validate_account_id` regex (`^[A-Z0-9]{4,12}$`) | `_safe_error` prevents exception details reaching LLM |
-| Prompt injection via exception messages | `_safe_error` maps all exceptions to controlled strings | `BacktestError` messages authored by the package itself |
-| Sandbox escape via file I/O | Safe `SimpleNamespace` wrappers for `pd`/`np` | Custom `_write_guard` blocks namespace mutation |
+| Prompt injection via exception messages | `_safe_error` maps all exceptions to controlled strings | `redact_error` bounds and scrubs the channels that need detail; `test_error_redaction.py` finds any raw `{exc}` |
+| Sandbox escape via file I/O | Attribute allowlist on every pandas/numpy object and class (`_sandboxed_getattr`) — no `to_*` writer, no `style`, no `plot` | Safe `SimpleNamespace` wrappers for `pd`/`np`; `_write_guard` blocks namespace mutation; child process; canary tests |
+| Browser tab drives the MCP server (DNS rebinding) | SSE transport bound to `127.0.0.1` | `TransportSecuritySettings`: foreign `Host` → 421, foreign `Origin` → 403 |
 | Sandbox DoS (infinite loop / large allocation) | 10-second execution timeout | 4,096-character code length cap |
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
-| SSRF via the local browser (`fetch_page` / `crawl_site` / `search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved hosts before a browser is launched, applied to every URL reaching `Crawl4AIScraper.scrape()`/`scrape_batch()` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level, closing the DNS-rebinding and redirect-bypass gaps a pre-fetch check alone can't. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
+| SSRF via the local browser (`fetch_page` / `crawl_site`) or the seeder (`search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved/shared-range hosts before anything is constructed, parsing decimal/hex/octal literals locally; the validate-before-reach order is asserted by `test_ssrf_boundary.py` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level; `_reject_private_httpx_request` does the same on the seeder's httpx client for `search_site`. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
-| Credential exposure in logs | `repr=False` on `anthropic_api_key`, `flex_token` | Credentials loaded from env vars only, never hardcoded |
+| Credential exposure in logs or tool results | `repr=False` on `anthropic_api_key`, `flex_token`, `firecrawl_api_key`; every logged or shown exception passes `redact_error` | Credentials loaded from env vars only, never hardcoded; `gitleaks` in CI; unit tests never load `.env` |
+| Vulnerable dependency in the resolved tree | `pip-audit` over `[dev,server,scraper]`, per push and weekly, fixable findings block | Dependabot alerts on the manifest's direct dependencies |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |
 | Trade store readable by other users | `SQLiteStore._connect()` holds `store.db` and both WAL sidecars at `0600` on every connection — self-healing, so installs created before 2026-08-05 are repaired rather than left at `0644` | `__init__` holds the `~/.ibkr_core/` parent at `0700`, covering the Flex XML archive and the Drive OAuth token in the same directory |
 | XML bomb DoS | `defusedxml` blocks entity expansion | Flex polling bounded to 5 retries |
@@ -675,11 +702,14 @@ The following rules are enforced at PR review. Any PR that violates them will be
 1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
 2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`.
 3. **Never make an authorization global or persistent, and never let a reply skip its dialog** — one biometric per order write, one dialog per message. The device-password fallback under `LAPolicyDeviceOwnerAuthentication` is Apple's recovery path and stays.
-4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution.
-5. **Never forward raw exception messages to the LLM** — use `_safe_error` for all tool error returns.
+4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution. Every new tool declares its `capabilities`; `ORDER_EXECUTION` may never appear, and a handler that touches a sink its declaration omits fails `tests/security/test_tool_capabilities.py`.
+5. **Never forward raw exception messages to the LLM or a log** — `_safe_error` for tool error returns; `redact_error` wherever detail is needed. `tests/security/test_error_redaction.py` fails on a bare `{exc}`, `str(exc)` or `log.warning(..., exc)` in `claude_tools.py` / `mcp_server.py`.
 6. **Never pass unsanitized LLM input to URLs or SQL** — validate with `_validate_account_id` or equivalent before use.
 7. **Never use string concatenation in SQL queries** — all user-supplied values must be passed as bind parameters.
 8. **Never use stdlib `xml.etree.ElementTree` for external XML** — use `defusedxml.ElementTree`.
+9. **Never widen the sandbox by accident** — a name added to `backtest._PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS`, or an object added to `build_sandbox()`, is a security change: check it accepts no path, buffer, callable or string resolved as a name, and update the frozen sets in `tests/security/test_sandbox_boundary.py` in the same commit.
+10. **Never spawn a process outside `order_confirm`, `gateway/manager` and `backtest`** without adding the module to `tests/security/test_subprocess_boundary.py` with the reason; never `shell=True`.
+11. **Never let a fetch reach a model-supplied host before `_validate_public_url`**, and install `_install_ssrf_guard` on every browser this package opens.
 
 ---
 
@@ -694,6 +724,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 | 2026-06-10 | `6d246ab` | Publish readiness pass | 3 new Medium findings resolved (stream-loop logger leak S-1, `max_results` unbound S-2, `urllib3` CVE floor S-3). Backtest sandbox docstring corrected (S-4). PyPI metadata complete; LICENSE added; CI workflow added; GatewayManager tests added; account_id and PineScript injection tests added. |
 | 2026-06-27 | `pending` | v1.0 pre-release full audit — all 22 source files across 12 attack categories | 6 findings: 4 Medium, 2 Low. 4 fixed in code (path traversal in `import_flex_file`, SSRF decimal/hex IP bypass, `FlexQueryError` message leakage, `preview_order` input validation). 1 documented residual (backtest thread non-termination — architectural, tracked for v2.0). 1 confirmed mitigated (DataFrame I/O in sandbox — write-only OHLCV, already in residual risk section). No Critical or High findings. All SQL injection, command injection, shell=True, pickle, credential logging, and MCP order gate bypass checks passed. |
 | 2026-07-01 | `eece77b` | New Crawl4AI fallback surface — `local_browser.py` (new), `claude_tools.py` (`_validate_public_url`, `_scrape_with_fallback`) | 2 candidate SSRF findings identified, each independently re-verified against the actual code by a separate filtering pass: DNS-rebinding TOCTOU between `_validate_public_url`'s validation-time DNS resolution and Crawl4AI/Chromium's independent fetch-time resolution (confidence 7/10); unvalidated-redirect-based bypass (confidence 3/10, downgraded per open-redirect precedent but confirmed as a real code gap on read-through). Both fixed in code rather than accepted as residual risk — see `_reject_private_requests` in the SSRF Prevention section above (Playwright-level per-request guard via Crawl4AI's `on_page_context_created` hook, closing both gaps at the actual fetch layer). Path-traversal via a crafted hostname (`profiles_dir / domain`) also hardened: `_safe_domain` now explicitly rejects `..`/`/`/`\`, replacing what had been an incidental block via `_validate_public_url`'s IDNA-encoding failure. No credential exposure or command injection issues found. |
+| 2026-09-13 | `c4b4ba8..e57aabb` | Security *architecture* audit — whether the boundaries are enforceable and whether a lint-clean, typed, green change (possibly by a coding agent) could violate one silently. Read-only trace of every tool to its sinks, then live probes. | 3 confirmed: sandbox arbitrary file **read** (`Styler.from_custom_template` through the un-redacted error channel) and **write** (`to_csv` and five by-name forms) from strategy code — both demonstrated by execution, fixed with an attribute allowlist; SSE transport without Host/Origin validation (SDK default) — fixed. 9 architectural weaknesses closed with structural tests: `tests/security/` (9 files, 138 tests, each structural checker proven to fire on a violating snippet), `capabilities` on all 46 tools, `redact_error`, `.env` isolation, `inet_aton` literal parsing + `100.64.0.0/10`, dict copy before the gates, subprocess allowlist. CI gained `pip-audit` (first run caught nltk PYSEC-2026-3740, no fix, ignored with re-check) and `gitleaks`. GitHub's default CodeQL setup evaluated on its record and kept as a non-gate. Design written up as `docs/security-architecture.md`. A fresh-eye multi-angle code review the same day found the first sandbox fix still reachable through the exposed classes (`pd.Series.apply(series, 'to_csv', …)`) and through dict views, and two pandas idioms it had broken (`df.close`, named aggregation); the transport allowlist refusing a port-less `Host`; the redaction rules letting `refresh_token=` through; the seeder with no per-request guard; the session-wide socket block skipping the first live module's fixtures; and the `mcp` floor too low for `transport_security`. All fixed the same day with the reproducing tests first (audit Addendum D). |
 | 2026-07-11 | `4e38655..e587695` | Full codebase — 6-agent parallel audit (one per risk cluster: auth/order gates; backtest sandbox + store; network/SSRF/Drive/Flex; IBKR client + MCP server; `claude_tools.py` LLM-tool layer; gateway Docker/shell infra), every finding independently re-verified by a second adversarial agent before inclusion | 6 findings, all fixed: 4 High — RCE via `DataFrame.eval`/`.query` in the backtest sandbox (H-1); `order_id`/`alert_id` path traversal letting the ungated `delete_alert` tool's URL collapse to `cancel_order`'s (bypassing Touch ID + confirmation dialog) (H-2); gateway Docker container published on all host interfaces instead of loopback (H-3); SSRF guard's IPv4-only DNS resolution failing open on AAAA-only hosts (H-4). 2 Medium — gateway IP allowlist matching full `/8` blocks instead of actual RFC 1918 ranges (M-1); `import_flex_file`'s path-prefix check admitting sibling directories via string-prefix matching instead of a path-boundary check (M-2). 1 candidate finding (Gate-2 dialog/order-dict TOCTOU in `place_order`/`modify_order`) investigated and dropped at verification — no reachable caller in this repo. Each fix went through implementer + independent spec-compliance + independent code-quality review before acceptance; two review rounds found real follow-up issues (a Unicode-digit regex gap in H-2's `_ORDER_ID_RE`, a second stale doc reference for H-3), both fixed forward in separate commits rather than folded silently into the original ones. |
 
-Full audit reports: [`docs/audits/security-audit-2026-05-25.md`](docs/audits/security-audit-2026-05-25.md) · [`docs/audits/security-audit-2026-06-10.md`](docs/audits/security-audit-2026-06-10.md) · [`docs/audits/security-audit-2026-07-11.md`](docs/audits/security-audit-2026-07-11.md)
+Full audit reports: [`docs/audits/security-audit-2026-05-25.md`](docs/audits/security-audit-2026-05-25.md) · [`docs/audits/security-audit-2026-06-10.md`](docs/audits/security-audit-2026-06-10.md) · [`docs/audits/security-audit-2026-07-11.md`](docs/audits/security-audit-2026-07-11.md) · [`docs/audits/security-architecture-audit-2026-09-13.md`](docs/audits/security-architecture-audit-2026-09-13.md). The living design behind these controls: [`docs/security-architecture.md`](docs/security-architecture.md).

@@ -891,8 +891,9 @@ already have made the request.
 
 Every definition in `TOOL_DEFINITIONS` carries a `capabilities` frozenset — `READ_ONLY`,
 `COMPUTE`, `NETWORK`, `WEB_FETCH`, `LOCAL_IO`, `GOOGLE_DRIVE`, `DATABASE`, `ACCOUNT_STATE`,
-`ORDER_PREVIEW`, `ORDER_EXECUTION`, `SANDBOX_EXECUTION` — stripped by `ClaudeToolkit.tools`
-before the schema reaches the model and returned by `claude_tools.tool_capabilities()`. No tool
-declares `ORDER_EXECUTION`, and `tests/security/test_tool_capabilities.py` fails if a handler's
-source touches a sink its declaration omits. The per-capability list of mutating tools is in
+`ORDER_PREVIEW`, `SANDBOX_EXECUTION` — stripped by `ClaudeToolkit.tools` before the schema
+reaches the model and returned by `claude_tools.tool_capabilities()`. `ORDER_EXECUTION` is not in
+the vocabulary at all, so no tool can declare it; the MCP server derives `ToolAnnotations` from
+the set; and `tests/security/test_tool_capabilities.py` fails if a handler's source touches a
+sink its declaration omits or if `execute()` dispatches a name with no definition. The per-capability list of mutating tools is in
 `SECURITY.md` § Capability declarations.

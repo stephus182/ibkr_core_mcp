@@ -121,5 +121,14 @@ See: https://github.com/tradesdontlie/tradingview-mcp
 the MCP SDK's `TransportSecuritySettings` (loopback on any port). Without those settings the SDK
 disables its DNS-rebinding protection, which would let a web page in the operator's browser
 drive every tool once its DNS answer flipped to 127.0.0.1. A foreign `Host` receives 421, a
-foreign `Origin` 403; `tests/security/test_transport_security.py` exercises both. Detail:
-`SECURITY.md` § MCP Transport.
+foreign `Origin` 403, and loopback passes with or without a port; `tests/security/test_transport_security.py`
+exercises all three. Detail: `SECURITY.md` § MCP Transport.
+
+## Tool annotations (2026-09-13)
+
+`tools/list` carries MCP `ToolAnnotations` for every tool, derived from its declared
+`capabilities`: `readOnlyHint` when the tool touches nothing but reads and in-process compute,
+`destructiveHint` when it writes or deletes on Drive or mutates IBKR account state,
+`openWorldHint` when it reaches a remote service or the web. Clients that gate confirmation
+prompts on those hints (Claude Desktop and others) therefore see the same classification the
+test suite enforces.

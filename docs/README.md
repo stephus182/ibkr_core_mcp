@@ -135,7 +135,7 @@ the script's `--md-out` / `--json-out` defaults, so moving one means moving the 
 
 ## Coverage check
 
-Everything under `docs/` is indexed above: **17 reference documents** (16 at `docs/` root
-plus the generated Flex schema report under `audits/`), **11 audits**, and the plans index
-with its 6 archive themes. Nothing is orphaned. Last verified 2026-08-11 — if you add a
+Everything under `docs/` is indexed above: **18 reference documents** (17 at `docs/` root
+plus the generated Flex schema report under `audits/`), **12 audits**, and the plans index
+with its 6 archive themes. Nothing is orphaned. Last verified 2026-09-13 — if you add a
 document here, add its row too.

@@ -36,6 +36,22 @@ failed before its fix:
   socket block is armed from session start (`test_no_live_io.py`).
 - **The body Gate 2 shows is the body sent**: `place_order`/`modify_order`/`get_order_preview`
   copy the order dict at entry (`test_order_write_boundary.py`).
+- **Fresh-eye review of the above, same day (six angles), each finding fixed test-first:** the
+  sandbox still reached writers through the exposed classes (`pd.Series.apply(series, 'to_csv',
+  …)`) and through dict views/generators — `pd.DataFrame`/`pd.Series` are now constructor
+  functions and every list-like function spec is checked; the first named-aggregation fix had
+  broken `df.close` and `agg(avg=('close', 'mean'))` — column labels pass as data and only the
+  function half of a named-aggregation pair is checked; numpy ufunc methods
+  (`np.maximum.accumulate`) and `Timestamp.isoformat` are allowed; a missing attribute raises
+  `AttributeError` instead of evaluating to `None`; the SSE allowlists accept a port-less `Host`/
+  `Origin`; `redact_error` scrubs by shape (`refresh_token=`, `client_secret=`, userinfo, whole
+  query strings) and the structural probe also catches `%`/`.format`/`.args`/`log.exception`/
+  `exc_info`; `search_site`'s seeder gets an httpx request hook — the browser paths' layer 2 in
+  httpx form; the unit-test socket block moved to pytest-socket's own markers applied at
+  collection (the session block had left the first live module's fixtures blocked and skipping
+  silently); the secret scrub is by prefix and the checked variable set is derived from source;
+  the `mcp` floor is 1.10 (`transport_security` did not exist before); the audit scripts parse
+  the definitions again; the CI audit uses pip-audit's requirements mode and installs nothing.
 
 ### Added
 - **Tool capability registry**: every `TOOL_DEFINITIONS` entry and both server-local tools carry
@@ -49,6 +65,12 @@ failed before its fix:
 - **CI gates 5 and 6**: `pip-audit` over `[dev,server,scraper]` (per push and weekly; ignores
   only from `security/pip-audit-ignores.txt`) and `gitleaks` over the pushed range
   (`.gitleaks.toml`). `pip-audit` joins the `dev` extra.
+- **MCP `ToolAnnotations`** on every listed tool, derived from its capabilities
+  (`mcp_server.tool_annotations`), and `claude_tools.PUBLIC_TOOL_DEFINITIONS` /
+  `TOOL_CAPABILITIES` as precomputed constants.
+- **`docs/security-architecture.md`** — the living design; `SECURITY.md` corrected against the
+  code (Gate 2 mechanism, endpoint path, the `_safe_error` and OAuth snippets, the Flex
+  allowlist constant, the `verify=False` inventory, a false Pydantic-validation claim).
 - `get_futures`: the front-month row carries `_contract` (local symbol, month, expiry, name,
   multiplier) from the per-conid identity cache — one contract-info call for the row the
   model quotes. Closes claudia_ui gap #37 residual (a): the model had derived `ESU6` from
