@@ -162,9 +162,45 @@ def _format_coverage(cov: dict[str, Any]) -> list[str]:
     return lines
 
 
+#: The capability vocabulary every tool definition declares from (2026-09-13, audit B3).
+#: The question "which tools can mutate state?" had no machine answer — SECURITY.md said
+#: "42 read-only tools" while the registry held 46, eight of them writing outside the
+#: machine. Each entry of `TOOL_DEFINITIONS` (and the two server-local definitions in
+#: `mcp_server.py`) now carries a `capabilities` frozenset, and
+#: `tests/security/test_tool_capabilities.py` checks three things: the declaration exists,
+#: no tool declares ORDER_EXECUTION, and every sink a handler's source touches is declared.
+#:
+#: READ_ONLY         reads IBKR, Drive or SQLite; changes nothing anywhere
+#: COMPUTE           in-process computation on already-fetched data
+#: NETWORK           talks to a remote service other than the local gateway (Flex, Firecrawl)
+#: WEB_FETCH         drives the local browser or the sitemap seeder at a model-supplied host
+#: LOCAL_IO          reads local files, browser cookies or saved browser profiles
+#: GOOGLE_DRIVE      writes or deletes on Drive
+#: DATABASE          writes the SQLite store
+#: ACCOUNT_STATE     mutates IBKR server-side state that is not an order (alerts, watchlists)
+#: ORDER_PREVIEW     the whatif endpoint — simulates, never executes
+#: ORDER_EXECUTION   places, modifies, cancels or confirms an order — no tool may declare it
+#: SANDBOX_EXECUTION runs model-written code in the RestrictedPython child process
+CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "READ_ONLY",
+        "COMPUTE",
+        "NETWORK",
+        "WEB_FETCH",
+        "LOCAL_IO",
+        "GOOGLE_DRIVE",
+        "DATABASE",
+        "ACCOUNT_STATE",
+        "ORDER_PREVIEW",
+        "ORDER_EXECUTION",
+        "SANDBOX_EXECUTION",
+    }
+)
+
 TOOL_DEFINITIONS = [
     {
         "name": "fetch_market_data",
+        "capabilities": frozenset({"GOOGLE_DRIVE"}),
         "description": (
             "Fetch OHLCV historical data for a symbol from IBKR. "
             "Checks Google Drive cache first; only calls IBKR on a cache miss. "
@@ -183,6 +219,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "check_cache",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Check whether data for a symbol/timeframe/period/end combination is "
             "already cached in Google Drive. Diagnostic only — fetch_market_data "
@@ -201,11 +238,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "list_cache",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": "List all datasets currently cached in Google Drive.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_account_summary",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Retrieve account net liquidation value, cash balance, gross position "
             "value, and buying power from IBKR — a single aggregate snapshot for "
@@ -217,6 +256,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_positions",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get all open positions for the IBKR account — symbol, quantity, "
             "market value, and unrealized P&L per position. For account-wide "
@@ -227,6 +267,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_trades",
+        "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Get trade history. source='live' queries IBKR directly (last 7 days max — current day "
             "plus 6 previous). source='store' queries the local SQLite store — unlimited history, "
@@ -249,6 +290,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "sync_flex_archive",
+        "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Download all Flex XML files from the 'ibkr_flex_archive' Google Drive subfolder "
             "and import them into the local SQLite trade store. Use for historical backfill: "
@@ -259,6 +301,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "import_flex_file",
+        "capabilities": frozenset({"LOCAL_IO", "DATABASE"}),
         "description": (
             "Import a locally downloaded IBKR Flex XML file into the SQLite trade store. "
             "Use for historical backfill: download year-by-year XMLs from the IBKR website "
@@ -276,6 +319,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "check_flex_coverage",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Report the trade activity date range from the local SQLite store: "
             "oldest trade, newest trade, total record count, and periods of 45+ calendar days "
@@ -286,6 +330,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "verify_flex_import",
+        "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Verify Flex import completeness by comparing source XML archives in Google Drive "
             "account_data/ against the local SQLite trades table. For each XML file, extracts "
@@ -298,6 +343,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "sync_flex_trades",
+        "capabilities": frozenset({"NETWORK", "GOOGLE_DRIVE", "DATABASE"}),
         "description": (
             "Fetch the full historical trade history from IBKR Flex Web Service and store it in "
             "the local SQLite database and Google Drive cache. Requires IBKR_FLEX_TOKEN and "
@@ -317,6 +363,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_live_orders",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get ALL non-terminal orders for the account regardless of origin — "
             "includes orders placed via IBKR mobile, TWS, web portal, or ClaudIA staging. "
@@ -330,6 +377,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "diagnose_orders",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Return the raw unfiltered IBKR orders API response for debugging. "
             "Use when get_live_orders returns empty but the user believes they have open orders. "
@@ -340,6 +388,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_ledger",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get cash balance and ledger information broken out per currency for "
             "the IBKR account — differs from get_account_summary's single "
@@ -349,6 +398,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_allocation",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get portfolio allocation breakdown by asset class, industry, and "
             "category (aggregated percentages, not per-position detail — for "
@@ -358,11 +408,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pa_periods",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": "Get the list of valid period strings for get_pa_performance queries. Call this first if unsure which period to use.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_pa_performance",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get portfolio NAV performance from IBKR Portfolio Analyst. Use "
             "get_pa_periods first to discover valid period strings. Returns your "
@@ -382,6 +434,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pa_transactions",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get transaction history from IBKR Portfolio Analyst for one symbol "
             "(all origins: mobile, TWS, API — not session-scoped). IBKR only "
@@ -406,6 +459,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_contract_info",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get full contract details for a symbol (conid, exchange, currency, "
             "trading hours, etc.) — resolves the conid internally, so you don't "
@@ -427,6 +481,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_option_chain",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get the option chain for an underlying symbol: all available expiry months "
             "plus call and put strike prices for one month (default: nearest expiry). "
@@ -448,6 +503,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "run_scanner",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Run an IBKR market scanner to find instruments matching criteria "
             "(stocks by default; set instrument + location_code together for "
@@ -476,6 +532,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_notifications",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Retrieve IBKR system notifications (FYI messages — e.g. dividend, "
             "margin, or account notices) and their unread count. Not the same as "
@@ -491,6 +548,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "add_indicators",
+        "capabilities": frozenset({"COMPUTE"}),
         "description": (
             "Load cached market data for a symbol and compute all technical indicators "
             "(RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, Williams %R, and Volume Ratio). "
@@ -509,6 +567,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "run_backtest",
+        "capabilities": frozenset({"SANDBOX_EXECUTION", "DATABASE"}),
         "description": (
             "Execute a Python strategy in a sandboxed environment against cached market data. "
             "Strategy code receives a pandas DataFrame `df` with OHLCV columns and must set "
@@ -530,6 +589,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "generate_pinescript",
+        "capabilities": frozenset({"COMPUTE"}),
         "description": (
             "Generate a PineScript v5 script for TradingView. source='indicators' (default) "
             "emits an indicator study from a list of indicators; source='backtest' emits a "
@@ -568,6 +628,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_analytics",
+        "capabilities": frozenset({"COMPUTE"}),
         "description": (
             "Compute full portfolio/strategy analytics on cached OHLCV data: "
             "Sharpe ratio, Sortino ratio, Calmar ratio, CAGR, max drawdown, and drawdown duration. "
@@ -591,6 +652,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "preview_order",
+        "capabilities": frozenset({"ORDER_PREVIEW"}),
         "description": (
             "Preview an order using IBKR's whatif endpoint — returns estimated cost, "
             "commission, margin impact, and buying power effect WITHOUT placing the order. "
@@ -626,6 +688,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pnl",
+        "capabilities": frozenset({"READ_ONLY", "LOCAL_IO"}),
         "description": (
             "Get real-time daily and unrealized P&L for the IBKR account, one summary "
             "row per account/model partition — NOT broken down by position or symbol "
@@ -637,6 +700,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "search_contract",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Resolve a ticker to exactly ONE contract, with its currency. For STK it "
             "returns a single {conid, currency, exchange} — never a list to choose from. "
@@ -669,6 +733,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_futures",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Look up futures contracts for one or more symbols. "
             "Returns available expiry months, conids, and exchange info, sorted by expiry per "
@@ -692,6 +757,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_market_snapshot",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get market data snapshot for one or more symbols. Each quote carries the "
             "price fields by name — last, bid, ask, high, low, change, change_pct, volume "
@@ -765,6 +831,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_trading_schedule",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": (
             "Get the trading schedule and session hours for a symbol: "
             "regular trading hours, pre/post-market sessions, and next trading date. "
@@ -788,11 +855,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_alerts",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": "List all IBKR price alerts configured on the account.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "create_price_alert",
+        "capabilities": frozenset({"ACCOUNT_STATE"}),
         "description": (
             "Create a native IBKR price alert for a symbol. "
             "The alert fires server-side (even when the app is closed) when the price "
@@ -840,6 +909,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "delete_alert",
+        "capabilities": frozenset({"ACCOUNT_STATE"}),
         "description": "Delete an IBKR price alert by its alert ID. Use get_alerts first to find the ID.",
         "input_schema": {
             "type": "object",
@@ -851,6 +921,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "activate_alert",
+        "capabilities": frozenset({"ACCOUNT_STATE"}),
         "description": "Activate or deactivate an existing IBKR price alert without deleting it.",
         "input_schema": {
             "type": "object",
@@ -866,6 +937,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "modify_price_alert",
+        "capabilities": frozenset({"ACCOUNT_STATE"}),
         "description": (
             "Modify an existing IBKR price alert. Fetches the current alert by ID and "
             "applies only the fields you provide, leaving others unchanged. "
@@ -897,11 +969,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_watchlists",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": "List all IBKR watchlists and their contents.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_order_status",
+        "capabilities": frozenset({"READ_ONLY"}),
         "description": "Get the status and details of a specific order by its order ID.",
         "input_schema": {
             "type": "object",
@@ -913,6 +987,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "delete_cache",
+        "capabilities": frozenset({"GOOGLE_DRIVE"}),
         "description": (
             "Delete a specific dataset from the Google Drive cache. "
             "Use when cached data is stale and needs to be re-fetched."
@@ -930,6 +1005,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "firecrawl_search",
+        "capabilities": frozenset({"NETWORK", "GOOGLE_DRIVE"}),
         "description": (
             "Search the web using Firecrawl and return full page content as markdown. "
             "Use for research, news, or fetching technical documentation. "
@@ -976,6 +1052,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "crawl_site",
+        "capabilities": frozenset({"WEB_FETCH", "LOCAL_IO", "GOOGLE_DRIVE"}),
         "description": (
             "Archive a website to Drive: crawl from a root URL with a real browser and "
             "save every page under web_docs/{url-slug}/. Free — the local browser, no "
@@ -1012,6 +1089,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "search_site",
+        "capabilities": frozenset({"WEB_FETCH"}),
         "description": (
             "Search WITHIN one website: give a domain and a query, get back that site's "
             "most relevant page URLs, ranked. Free — it reads the site's sitemap and the "
@@ -1053,6 +1131,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "fetch_page",
+        "capabilities": frozenset({"WEB_FETCH", "LOCAL_IO"}),
         "description": (
             "Fetch ONE web page with a real browser and return it as markdown. "
             "Use for JavaScript-heavy sites that come back empty or truncated, and for "
@@ -1079,6 +1158,19 @@ TOOL_DEFINITIONS = [
         },
     },
 ]
+
+
+def tool_capabilities() -> dict[str, frozenset[str]]:
+    """Tool name → declared capabilities, for every tool the MCP server and the toolkit expose."""
+    from ibkr_core_mcp.mcp_server import _ALL_TOOL_DEFS
+
+    return {str(t["name"]): frozenset(t["capabilities"]) for t in _ALL_TOOL_DEFS}
+
+
+def public_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    """The schema as the model sees it: `capabilities` is this package's metadata, not the
+    API's — the Anthropic tool schema rejects unknown keys."""
+    return {k: v for k, v in tool.items() if k != "capabilities"}
 
 
 def _safe_error(tool: str, exc: Exception) -> str:
@@ -1320,8 +1412,9 @@ class ClaudeToolkit:
 
     @property
     def tools(self) -> list[dict[str, Any]]:
-        """The tool schemas to hand to Claude, in `TOOL_DEFINITIONS` order."""
-        return TOOL_DEFINITIONS
+        """The tool schemas to hand to Claude, in `TOOL_DEFINITIONS` order, without the
+        package-internal `capabilities` field."""
+        return [public_tool_schema(t) for t in TOOL_DEFINITIONS]
 
     def execute(self, name: str, inputs: dict[str, Any]) -> tuple[str, None]:
         """Execute a tool call by name. Returns (text_result, None).

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 _ADD_ALERT_DEF: dict[str, Any] = {
     "name": "add_price_alert",
+    "capabilities": frozenset({"DATABASE"}),
     "description": (
         "Create a price alert that fires when a symbol crosses a threshold. direction must be 'above' or 'below'."
     ),
@@ -48,6 +49,7 @@ _ADD_ALERT_DEF: dict[str, Any] = {
 
 _GET_ALERTS_DEF: dict[str, Any] = {
     "name": "get_price_alerts",
+    "capabilities": frozenset({"READ_ONLY"}),
     "description": "List price alerts. active_only=true returns only untriggered alerts.",
     "input_schema": {
         "type": "object",
