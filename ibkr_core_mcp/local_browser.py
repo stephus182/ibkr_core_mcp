@@ -123,36 +123,69 @@ def is_private_host(host: str) -> bool:
     import ipaddress
     import socket
 
+    host = host.rstrip(".")  # `localhost.` is the same name, fully qualified
     # S104 false positive: "0.0.0.0" here is a *blocklist entry* in the SSRF
     # guard (rejecting requests to the all-interfaces address), not a bind.
     if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("169.254."):  # noqa: S104
         return True
     try:
-        addr = ipaddress.ip_address(host)
-        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+        return _is_blocked_address(ipaddress.ip_address(host))
     except ValueError:
-        # Not a literal IP — resolve via DNS and re-check. Catches decimal
-        # (2130706433) and hex (0x7f000001) encoded IPs as well as ordinary
-        # hostnames that happen to resolve to a private address.
-        #
-        # getaddrinfo (not gethostbyname) so AAAA-only hosts can't bypass this
-        # by having no A record — gethostbyname is IPv4-only and used to treat
-        # "unresolvable via IPv4" as "safe," which is wrong for a host that
-        # resolves fine via IPv6. See docs/audits/security-audit-2026-07-11.md H-4.
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except socket.gaierror:
-            return False
-        for info in infos:
-            sockaddr = info[4]
-            ip_str = sockaddr[0]
-            try:
-                addr = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                return True
+        pass
+    # Not a canonical literal. Before asking DNS, parse it the way the C library and
+    # Chromium do: `inet_aton` accepts decimal (2130706433), hex (0x7f000001), OCTAL
+    # (0177.0.0.1) and short (127.1) forms. Until 2026-09-13 those went to the system
+    # resolver, which reads `0177.0.0.1` as decimal 177.0.0.1 — public — while Chromium
+    # canonicalises it to 127.0.0.1; only the browser-level guard caught the divergence,
+    # and `search_site` has no browser-level guard. Parsing locally also needs no network,
+    # so the unit suite can cover every form (docs/audits/security-architecture-audit-
+    # 2026-09-13.md, B7).
+    try:
+        return _is_blocked_address(ipaddress.ip_address(socket.inet_aton(host)))
+    except OSError:
+        pass
+    # getaddrinfo (not gethostbyname) so AAAA-only hosts can't bypass this
+    # by having no A record — gethostbyname is IPv4-only and used to treat
+    # "unresolvable via IPv4" as "safe," which is wrong for a host that
+    # resolves fine via IPv6. See docs/audits/security-audit-2026-07-11.md H-4.
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
         return False
+    for info in infos:
+        sockaddr = info[4]
+        ip_str = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if _is_blocked_address(addr):
+            return True
+    return False
+
+
+# RFC 6598 shared address space (CGNAT — and Tailscale's tailnet range). `ipaddress`
+# does not count it as private, so `http://100.x.y.z/` reached tailnet peers from a
+# Tailscale host until 2026-09-13.
+_SHARED_ADDRESS_SPACE = None  # built lazily below; ipaddress is imported inside the guard
+
+
+def _is_blocked_address(addr: object) -> bool:
+    """True for any address a local browser must never fetch from: loopback, private,
+    link-local, reserved, unspecified, the RFC 6598 shared range, and the IPv4 an
+    IPv4-mapped IPv6 address wraps."""
+    import ipaddress
+
+    global _SHARED_ADDRESS_SPACE
+    if _SHARED_ADDRESS_SPACE is None:
+        _SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+    if not isinstance(addr, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return _is_blocked_address(addr.ipv4_mapped)
+    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_unspecified:
+        return True
+    return isinstance(addr, ipaddress.IPv4Address) and addr in _SHARED_ADDRESS_SPACE
 
 
 class Crawl4AIUnavailableError(Exception):
