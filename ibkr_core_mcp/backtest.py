@@ -166,10 +166,13 @@ def _guard_string_func(method: Any, name: str) -> Any:
     def guarded(*args: Any, **kwargs: Any) -> Any:
         _check_func_names(args[0] if args else kwargs.get("func"))
         if name in ("agg", "aggregate"):
-            # Named aggregation: agg(out=("column", "func")) — the func is the last element.
+            # Named aggregation: every keyword is a function — agg(out="func") on a Series,
+            # agg(out=("column", "func")) on a frame or groupby. Check each value whole; a
+            # string, a tuple's elements and any nesting all face the same allowlist
+            # (`Series.agg(out="to_csv")` reached the writer by name after the first fix —
+            # no path can travel that way, but the name should never resolve).
             for value in kwargs.values():
-                if isinstance(value, tuple) and value:
-                    _check_func_names(value[-1])
+                _check_func_names(value)
         return method(*args, **kwargs)
 
     return guarded

@@ -123,6 +123,14 @@ def test_a_function_named_by_string_or_class_cannot_reach_a_denied_method(ohlcv,
     assert "to_csv" in text
 
 
+def test_a_named_aggregation_keyword_faces_the_allowlist_too(ohlcv):
+    """`Series.agg(out="to_csv")` is pandas named aggregation: every keyword value is a
+    function name resolved with pandas' own getattr. Found by probe after the first fix —
+    no path can travel that way, so nothing was written, but the name reached the writer."""
+    text = _blocked("r = df['close'].agg(out='to_csv')\nraise ValueError(repr(r))\n", ohlcv)
+    assert "to_csv" in text and "close" not in text  # the allowlist message, not the CSV text
+
+
 def test_a_string_named_function_may_still_name_an_allowed_method(ohlcv):
     """The guard checks names, it does not ban strings: `agg("mean")` is ordinary pandas."""
     code = "m = df['close'].agg('mean')\nlst = df[['close', 'volume']].agg(['mean', 'std'])\ndf['signal'] = (df['close'] > m).astype(int)\n"

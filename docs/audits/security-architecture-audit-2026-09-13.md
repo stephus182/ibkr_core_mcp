@@ -346,6 +346,21 @@ raise ValueError(cls(df).to_html())
 [df-apply-kw] …              exists: True     df.apply('to_csv', path_or_buf=p)
 ```
 
+### Probe 8 — after the allowlist (critical re-check before merge, 2026-09-13)
+
+Fourteen further forms were tried against the fixed sandbox: named aggregation on a frame
+(`df.agg(out=("close", "to_csv"))`), on a groupby, dict-of-lists aggregation, writers reached
+through `df.index.to_series()`, `df.dtypes`, a numpy scalar (`.max().tofile`), a resampled
+frame, the `.str` accessor, a rolling result, and `transform({"close": "to_csv"})`. All blocked
+with `'to_csv' is not available to strategy code`, no file written. One form got through by
+name only: `df["close"].agg(out="to_csv")` — pandas named aggregation on a Series treats every
+keyword as a function name, and the guard checked only tuple-valued keywords. No path can travel
+that way (the writer ran with no arguments and returned CSV text), so nothing was written; the
+guard now checks every keyword value of `agg`/`aggregate`, and
+`test_a_named_aggregation_keyword_faces_the_allowlist_too` failed before that change. The
+stale editable install (`build/__editable__…` snapshot missing `redaction.py`) that first made
+this probe fail is an environment note: after adding a module, re-run `pip install -e .`.
+
 ### Probe 4 — SSE transport default
 
 ```python
