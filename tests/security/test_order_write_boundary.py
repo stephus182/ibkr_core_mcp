@@ -119,3 +119,47 @@ def test_the_ordering_probe_sees_a_network_call_before_a_gate():
     snippet = 'def bad(self):\n    self._post("/x")\n    require_touch_id("later")\n'
     fn = function_named(snippet, "bad")
     assert min(call_lines(fn, NETWORK_CALLS)) < min(call_lines(fn, GATE_CALLS))
+
+
+# ── The body the dialog showed is the body that is sent ────────────────────────
+
+
+@pytest.fixture
+def client(mock_config):
+    from ibkr_core_mcp.auth import NoAuth
+    from ibkr_core_mcp.client import IBKRClient
+
+    c = IBKRClient(mock_config, auth=NoAuth())
+    c._accounts_initialized = True
+    return c
+
+
+@pytest.mark.parametrize("method", ["place_order", "modify_order"])
+def test_a_body_mutated_after_the_dialog_is_not_the_body_sent(client, method):
+    """Gate 2 renders the caller's dict; the request body was then built from that same
+    dict *after* the dialog returned. A caller mutating it in that window — a concurrent
+    proposal update, a bug — would send what the human never saw. The 2026-07-11 audit
+    noted it and dropped it as unreachable; the fix is one copy (audit 2026-09-13, B9)."""
+    from unittest.mock import patch
+
+    order = {"conid": 1, "side": "BUY", "quantity": 1, "orderType": "MKT", "tif": "DAY"}
+    shown = {}
+
+    def dialog(*args, **kwargs):
+        shown.update(args[1] if method == "modify_order" else args[0])
+        order["quantity"] = 999  # the CALLER's dict changes while the human is looking
+
+    with (
+        patch("ibkr_core_mcp.client.require_touch_id"),
+        patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=dialog),
+        patch("ibkr_core_mcp.client.confirm_modify_dialog", side_effect=dialog),
+        patch.object(client, "_post", return_value={}) as post,
+    ):
+        if method == "place_order":
+            client.place_order("U1234567", order)
+            sent = post.call_args.args[1]["orders"][0]
+        else:
+            client.modify_order("U1234567", "123", order)
+            sent = post.call_args.args[1]
+    assert shown["quantity"] == 1
+    assert sent["quantity"] == 1, "the body sent is not the body the dialog showed"

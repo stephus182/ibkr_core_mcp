@@ -1414,6 +1414,10 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
+        # The body the dialog shows is the body that is sent: a private copy, so a caller
+        # mutating its dict between the dialog and the POST changes nothing here (audit
+        # 2026-09-13, B9; noted and dropped as unreachable 2026-07-11).
+        order = dict(order)
         # Gate 1. A chain started by place_order_and_confirm already earned an
         # authorization for exactly this body; anything else — a direct call, an expired
         # window, a body that no longer matches — prompts. Fails closed. (2026-09-11)
@@ -1454,6 +1458,7 @@ class IBKRClient:
         _validate_account_id(account_id)
         _validate_order_id(order_id)
         self._ensure_accounts_initialized()
+        order = dict(order)  # the body shown is the body sent — see place_order
         # Gate 1 — the same rule as place_order: covered by the chain's authorization for
         # exactly this body and order id, or prompt. Fails closed. (2026-09-11)
         scope = _order_write_scope("modify", order, order_id=order_id)
@@ -1694,6 +1699,7 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
+        order = dict(order)
         # Strip display-only fields (underscore-prefixed) — same convention as place_order.
         # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
