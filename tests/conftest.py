@@ -72,6 +72,26 @@ _REAL_DNS_EXEMPT_TESTS = {
 }
 
 
+def pytest_configure(config):
+    """Block sockets from the moment the session starts, not from each test's setup.
+
+    `_no_real_io` below arms pytest-socket per test, which leaves module import and
+    collection uncovered: a module that resolved a name at import time would have done so
+    before any fixture ran (docs/audits/security-architecture-audit-2026-09-13.md, C).
+    Blocking here closes that; the fixture then *enables* sockets only for the tests that
+    are entitled to them.
+    """
+    from pytest_socket import disable_socket
+
+    disable_socket(allow_unix_socket=True)
+
+
+def pytest_unconfigure(config):
+    from pytest_socket import enable_socket
+
+    enable_socket()
+
+
 @pytest.fixture(autouse=True)
 def _no_real_io(request, monkeypatch):
     """Block real sleeps and real network I/O in every non-integration test.
@@ -85,16 +105,20 @@ def _no_real_io(request, monkeypatch):
     asyncio's internal self-pipe (socket.socketpair, AF_UNIX) keeps working —
     per pytest-socket's own docs, this is the documented pattern for async
     test suites, not a network hole (AF_INET/DNS stays blocked).
+
+    Since 2026-09-13 the session-wide block from `pytest_configure` is the default
+    state; this fixture opens a window for the exempt tests and re-closes it after.
     """
-    if request.node.get_closest_marker("integration") or request.node.name in _REAL_DNS_EXEMPT_TESTS:
-        yield
-        return
-    monkeypatch.setattr("time.sleep", lambda seconds: None)
     from pytest_socket import disable_socket, enable_socket
 
+    if request.node.get_closest_marker("integration") or request.node.name in _REAL_DNS_EXEMPT_TESTS:
+        enable_socket()
+        yield
+        disable_socket(allow_unix_socket=True)
+        return
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
     disable_socket(allow_unix_socket=True)
     yield
-    enable_socket()
 
 
 # Secret-named variables that must never be visible to a unit test. A test that needs one

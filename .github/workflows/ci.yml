@@ -5,10 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly dependency audit. The base dependencies float upward on purpose, so the
+    # resolved tree can acquire a known vulnerability without a single commit landing.
+    - cron: "0 6 * * 1"
 
 jobs:
   test:
     name: Python ${{ matrix.python-version }}
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,3 +53,52 @@ jobs:
 
       - name: Test (pytest, unit only)
         run: pytest -m "not integration" -v
+
+  # Gates 5 and 6 (docs/audits/security-architecture-audit-2026-09-13.md, "Proposed CI
+  # design"). Each detects a failure class none of the four steps above can see: a
+  # vulnerable *resolved* dependency, and a committed secret. Both block merges.
+
+  dependency-audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the full dependency tree
+        # Every extra, because the audit is of what a user installs — the scraper extra
+        # pulls in the largest tree (crawl4ai, playwright, nltk) and is where findings
+        # have surfaced. pip itself is audited too, so it is upgraded first.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,server,scraper]" pip-audit
+
+      - name: pip-audit
+        # --strict: a dependency that cannot be audited is a failure, not a skip.
+        # Ignores come only from security/pip-audit-ignores.txt (reason + re-check date
+        # per line); a finding with a fixed release is never ignored — bump the floor.
+        run: |
+          IGNORES=$(sed 's/#.*//' security/pip-audit-ignores.txt | awk 'NF { printf "--ignore-vuln %s ", $1 }')
+          pip-audit --strict --desc --vulnerability-service osv --progress-spinner off $IGNORES
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # the action diffs the pushed / PR range, which needs history
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

@@ -1,0 +1,29 @@
+# gitleaks configuration — CI secret scan (docs/audits/security-architecture-audit-2026-09-13.md, Phase 3).
+#
+# Default rules plus the two key shapes this package handles that the defaults do not
+# name. Scans the pushed / PR commit range in CI (.github/workflows/ci.yml, `secret-scan`);
+# run `gitleaks git --redact` locally for the full history.
+
+title = "ibkr_core_mcp"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "firecrawl-api-key"
+description = "Firecrawl API key (fc-…)"
+regex = '''\bfc-[A-Za-z0-9]{20,}\b'''
+keywords = ["fc-"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (sk-ant-…)"
+regex = '''\bsk-ant-[A-Za-z0-9_\-]{20,}'''
+keywords = ["sk-ant-"]
+
+[allowlist]
+description = "Placeholder credential fixtures — every value is a literal like 'tok' or 'SECRET-…'"
+paths = [
+  '''tests/test_web_scraper\.py''',
+  '''tests/security/test_error_redaction\.py''',
+]

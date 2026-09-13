@@ -1,0 +1,10 @@
+# Vulnerability IDs pip-audit may ignore in CI — one per line, with the reason.
+#
+# Format:   <ID>   # <why it does not apply or cannot be fixed>; added YYYY-MM-DD; re-check YYYY-MM-DD
+# Example:  PYSEC-2026-0000   # no fixed release yet, code path unused (pathsec); added 2026-09-13; re-check 2026-10-13
+#
+# Rules (docs/audits/security-architecture-audit-2026-09-13.md, Phase 3):
+#   * A finding WITH a fixed release is never ignored — bump the dependency floor instead.
+#   * A finding with NO fixed release is ignored here with a re-check date, and removed
+#     the moment a fix ships.
+#   * The CI step reads this file verbatim; an entry without a reason is a review finding.
