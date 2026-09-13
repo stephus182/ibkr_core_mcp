@@ -29,6 +29,15 @@ pip install -e ".[dev,server]"
 git config core.hooksPath .githooks   # the four CI gates as a pre-push hook (see Linting & Type Checking)
 ```
 
+**Editable-install mode matters.** `pip install -e .` installs setuptools' *lenient* mode: the
+`.pth` finder maps `ibkr_core_mcp` to the source directory and new modules are visible at once.
+A *strict*-mode install (`--config-settings editable_mode=strict`) instead builds a tree of
+per-file symlinks under `build/__editable__…/` and a module added afterwards is invisible to any
+interpreter not started from the repo root — on 2026-09-13 that hid a new module from a probe
+script until the package was reinstalled. If a script outside the repo cannot import something
+that exists, check `site-packages/__editable___*_finder.py`'s `MAPPING`, reinstall, and delete
+the stale `build/` tree.
+
 **Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`) — invoke the
 versioned binary (`python3.11 -m venv`), not bare `python3`, since Homebrew may resolve that
 to a newer, unsupported interpreter.
@@ -128,6 +137,12 @@ git tag vX.Y.Z                             # semver — bump patch/minor/major a
 git push origin vX.Y.Z
 ```
 Consumers pin to: `pip install git+https://github.com/stephus182/ibkr_core_mcp.git@vX.Y.Z`
+
+**Reading a CI run.** `gh run view <id> --json conclusion,jobs`, or `gh run watch <id>
+--exit-status` with **no pipe** — `… | tail` returns `tail`'s exit status and reported a failed
+run as green on 2026-09-13. The two GitHub-side scanners (CodeQL default setup, Dependabot
+alerts) run outside `ci.yml` and are not merge gates; what each can and cannot see is in
+`docs/security-architecture.md` § 7.
 
 ---
 
@@ -408,5 +423,8 @@ not `@import`s, so they don't load into every session's context automatically.
   per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
 - Scraping *method* — approaching an unfamiliar host, the four-way matrix, reading a blocked
   page, and where we stop on the anti-bot ladder: `docs/web-scraping-methodology.md`
+- Security architecture — principals, privilege tiers, the trust-boundary map, the ten
+  invariants with their tests, subsystem designs, CI gates, the decision log, change recipes:
+  `docs/security-architecture.md`
 - Consuming projects: `docs/consumers.md`
 - Charting/quant/stats package landscape (what we have vs. gaps vs. duplicative-of-existing-code): `docs/python-package-landscape.md`

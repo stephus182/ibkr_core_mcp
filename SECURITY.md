@@ -1,6 +1,6 @@
 # Security Policy — ibkr_core_mcp
 
-This document describes the security model, threat mitigations, and responsible disclosure process for `ibkr_core_mcp`. The package connects a Claude AI agent to live brokerage infrastructure; security is treated as a first-class architectural concern throughout, not an afterthought.
+This document describes the security model, threat mitigations, and responsible disclosure process for `ibkr_core_mcp`. It is the **control inventory**; the design behind it — principals, privilege tiers, the trust-boundary map, the invariants and the tests that enforce them, the decision log — is `docs/security-architecture.md`, and the dated evidence is in `docs/audits/`. The package connects a Claude AI agent to live brokerage infrastructure; security is treated as a first-class architectural concern throughout, not an afterthought.
 
 ---
 

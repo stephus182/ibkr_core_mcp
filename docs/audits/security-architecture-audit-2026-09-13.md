@@ -126,6 +126,26 @@ mutate state outside the machine. Corrected in the same branch.
 
 ---
 
+## Phase 4 — Enforcement mechanisms chosen and rejected
+
+For every property held by convention, the question was "can this become machine-enforced,
+and with the least machinery?" The choices, with the alternatives that were considered:
+
+| Property | Chosen mechanism | Rejected alternatives | Why |
+|---|---|---|---|
+| Order boundary (B1) | stdlib `ast` test over `client.py` templates and call order; name scan of the model layer | Import-boundary layering (move `_post` to a private module); runtime assertion in `_post` checking the caller's frame | Layering can be bypassed by importing the private module; frame inspection is fragile and costs every call; the AST test sees a new call site whether or not anything runs it |
+| Preview/execute (B2) | Literal ownership + mock-client reach test | Separate `PreviewClient` class | A class split still shares the body builder; the literal is the actual difference, so pin the literal |
+| Capabilities (B3) | `frozenset` on each definition + source-honesty test | `Enum` + decorator registry; a YAML manifest | The registry is already a list of dicts consumed by two callers; a field and a filter is the smallest change; honesty comes from reading handler source, which no manifest can do |
+| Sandbox exposure (B4) | Allowlist + frozen namespace sets + canaries | Denylist growth; OS sandbox first | Two escapes through ordinary names proved the denylist unbounded; the OS layer is heavier and platform-bound — kept as the next layer, not the first |
+| Redaction (B5) | One function + structural scan for raw `exc` | Logging filter; wrapping every handler in a try/except | A filter misses return values; wrapping every handler duplicates `execute()`; the scan finds the copy-paste before it ships |
+| Test isolation (B6/7) | Session-wide pytest-socket + fixture windows + `load_dotenv` stub | `--disable-socket` CLI flag in `pyproject` | The flag blocks integration tests too; the fixture window model keeps one policy for both |
+| SSRF ranges (B7) | `inet_aton` + explicit ranges + literal table | DNS-pinning (resolve once, connect by IP) | Pinning would need a custom transport under Chromium; layer 2 already re-checks per request, and local parsing removes the resolver divergence at layer 1 |
+| Subprocess (B8) | AST import allowlist | Re-enabling ruff S603/S607 | Those rules fire on every existing call and say nothing about *where*; the allowlist says where |
+| Transport (A3) | SDK settings + Starlette TestClient test | Reverse proxy; auth token on the SSE endpoint | The SDK already implements the check; a token would need a client-side story the host app does not have |
+
+Property-based tests, dependency-direction tests and a capability *enum* were also considered
+and not used: none would have caught the demonstrated failures, and each adds machinery.
+
 ## Phase 5 — Findings (as found)
 
 ### A. Confirmed vulnerabilities
@@ -446,6 +466,77 @@ the gate exists to see — the dev venv had drifted a version behind six fixes w
 touching any of them.
 
 ---
+
+## Addendum A (2026-09-13, post-merge) — GitHub default CodeQL setup, evaluated
+
+Discovered at push time (§ Evidence): GitHub's default CodeQL setup runs on this repository
+outside `ci.yml`. The owner had enabled it to explore, with the stated rule "keep it only if it
+adds real value versus noise". The evaluation, on the repository's own data:
+
+| Fact | Value | Source |
+|---|---|---|
+| Repository visibility | public — CodeQL is free, no Advanced Security licence | `gh repo view` |
+| Configuration | default setup, languages `python` + `actions`, query suite `default`, threat model `remote`, weekly + on push, last changed 2026-07-21 | `code-scanning/default-setup` |
+| Rules evaluated | Python 43, Actions 17 | `code-scanning/analyses` |
+| Results per analysis (last 3 pushes) | Python 1 (the dismissed false positive below), Actions 0 | same |
+| Alerts, all time | 8 fixed, 1 dismissed, 0 open | `code-scanning/alerts` |
+| The 8 fixed | 7 × `py/incomplete-url-substring-sanitization` in **test** files (2026-06-27, fixed same day); 1 × `actions/missing-workflow-permissions` in `ci.yml` (2026-06-12 → fixed 2026-06-27) | same |
+| The 1 dismissed | `py/weak-sensitive-data-hashing` on a test fixture reproducing Drive's own `md5Checksum`; dismissed as false positive with a reason matching the `# noqa: S324` at the same line | same |
+| Run cost | ~2–3 min per push, in parallel, not a required check | `gh run list --workflow CodeQL` |
+
+**What it can and cannot see here.** CodeQL's strength is taint tracking from *remote flow
+sources* (Flask/Django request objects, `sys.argv` under the `local` threat model, …). This
+package's untrusted input is a `dict` argument to a handler method; under threat model
+`remote` nothing marks it as a source, so `py/path-injection`, `py/command-line-injection`,
+`py/full-ssrf` and the other injection queries **cannot fire on the model boundary at all**.
+The two confirmed sandbox escapes (A1/A2) and the SSE gap (A3) were invisible to it, as
+expected — they are architecture, not patterns. What it did catch was real and pattern-shaped:
+a workflow without `permissions:` (genuine; fixed) and a family of `"x" in url` checks in
+tests (weak but true).
+
+**Value versus noise, measured:** one true positive in production config, seven low-impact true
+positives in tests, one false positive dismissed with a reason, zero recurring noise, zero
+maintenance, zero cost. That is a positive balance, narrowly.
+
+**Recommendation — keep, unchanged, as a non-gate.** Do not switch to `security-extended`: it
+adds lower-precision queries that would re-open `verify=False` (two loopback sites, each with a
+`noqa` and a reason), the test-suite `assert`s and the `random` uses as recurring dismissals.
+Do not move to advanced setup to model `inputs` as a taint source: that is exactly what the
+`tests/security/` suite does with a hundred lines and no CodeQL configuration to maintain. Do
+not make it a required check: the four code gates plus the two new jobs are the merge bar; CodeQL
+is a weekly second opinion on the pattern classes it knows. **Read its zero correctly:** it is
+partly blindness. The audit's Phase 3 said "do not add CodeQL"; the accurate statement is "it was
+already on, it earns its keep as configured, and it is not coverage of the model boundary".
+
+## Addendum B (2026-09-13) — Dependabot alerts versus pip-audit
+
+Dependabot alerts are enabled (`vulnerability-alerts` → 204), no `dependabot.yml` exists, and
+the "Dependency Graph / Graph Update: pip" run on each push builds the graph from
+`pyproject.toml`. Zero open Dependabot alerts on 2026-09-13 — while `pip-audit` on the same
+commit reported nltk `PYSEC-2026-3740`. The difference is the scope: Dependabot evaluates the
+manifest's *direct* dependencies; `pip-audit` audits the *resolved* tree, transitive
+dependencies included, freshly resolved at run time. They are complementary and both stay. No
+version-update PRs: the floors are unpinned by design, so update PRs would be churn.
+
+## Addendum C (2026-09-13) — Environment notes verified
+
+Two things surfaced during the work and were checked before being written down:
+
+- **Editable install mode.** On 2026-09-11 the package had been installed in setuptools'
+  *strict* editable mode: `build/__editable__.ibkr_core_mcp-1.2.2-py3-none-any/` held a tree of
+  29 per-file symlinks, and the `.pth` finder mapped the package to that tree. A module added
+  after that install (`redaction.py`) was invisible to any interpreter not started from the
+  repository root — which is what first broke Probe 8. The 2026-09-13 `pip install -e
+  ".[dev,server]"` (pip 26.1.2, setuptools 83) installed the default *lenient* mode: the finder's
+  `MAPPING` now points at `ibkr_core_mcp/` itself, an import from `/tmp` resolves the new module,
+  and the stale link tree was deleted (`build/` is gitignored). Rule: after adding a module, if
+  a script outside the repo cannot import it, re-run `pip install -e .` and check that
+  `site-packages/__editable___*_finder.py`'s `MAPPING` names the source directory, not `build/`.
+- **Reading CI results.** `gh run watch <id> --exit-status` and `gh run view <id> --exit-status`
+  both exit 1 on a failed run (verified against run 34772667943). Through a pipe without
+  `set -o pipefail`, the shell reports the last command's status — which is how the first run
+  was misread as green. Rule: read `gh run view <id> --json conclusion,jobs`, or use
+  `--exit-status` with no pipe.
 
 ## Rejected or deferred recommendations
 
