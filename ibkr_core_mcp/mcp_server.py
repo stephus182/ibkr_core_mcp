@@ -178,9 +178,15 @@ async def _run_stdio(server: Server) -> None:
         )
 
 
-async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
-    import uvicorn
+def build_sse_app(server: Server) -> Any:
+    """The Starlette app behind `--transport sse`: `/sse` for the stream, `/messages/` for posts.
+
+    Factored out of `_run_sse` so the transport's construction is a testable value
+    (tests/security/test_transport_security.py) rather than a line inside a coroutine that
+    only runs under uvicorn.
+    """
     from mcp.server.sse import SseServerTransport
+    from mcp.server.transport_security import TransportSecuritySettings
     from starlette.applications import Starlette
     from starlette.responses import Response
     from starlette.routing import Mount, Route
@@ -194,20 +200,39 @@ async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeTo
         ),
     )
 
-    sse_transport = SseServerTransport("/messages/")
+    # DNS-rebinding protection (2026-09-13, audit A3). Without `security_settings` the SDK
+    # substitutes `enable_dns_rebinding_protection=False` "for backwards compatibility",
+    # so Host and Origin were never checked. uvicorn's 127.0.0.1 bind stops the LAN, not
+    # the operator's own browser: a page whose DNS answer flips to 127.0.0.1 becomes
+    # same-origin with this server and can drive every tool from an unattended tab. The
+    # allowed values are the only ones a real local client ever sends; any port, because
+    # `--port` is a flag.
+    sse_transport = SseServerTransport(
+        "/messages/",
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+        ),
+    )
 
     async def handle_sse(request: Any) -> Response:
         async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
             await server.run(streams[0], streams[1], init_opts)
         return Response()
 
-    app = Starlette(
+    return Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse_transport.handle_post_message),
         ]
     )
 
+
+async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
+    import uvicorn
+
+    app = build_sse_app(server)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     uv_server = uvicorn.Server(config)
 
