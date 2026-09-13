@@ -95,3 +95,45 @@ def _no_real_io(request, monkeypatch):
     disable_socket(allow_unix_socket=True)
     yield
     enable_socket()
+
+
+# Secret-named variables that must never be visible to a unit test. A test that needs one
+# sets a fake with monkeypatch.setenv; nothing here may read the operator's.
+_SECRET_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "IBKR_FLEX_TOKEN",
+    "IBKR_FLEX_QUERY_ID",
+    "GDRIVE_TOKEN_FILE",
+    "GDRIVE_CREDENTIALS_FILE",
+    "GOOGLE_DRIVE_FOLDER_ID",
+    "GDRIVE_WEB_DOCS_FOLDER_ID",
+    "GDRIVE_CACHE_FOLDER_ID",
+    "GDRIVE_DB_FOLDER_ID",
+    "GDRIVE_ACCOUNT_FOLDER_ID",
+    "IBKR_GATEWAY_URL",
+    "IBKR_SQLITE_PATH",
+    "CRAWL4AI_PROFILES_DIR",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_secrets(request, monkeypatch):
+    """Keep the operator's `.env` and environment out of every non-integration test.
+
+    Constructing `Config(...)` runs `load_dotenv()` through the `crawl4ai_profiles_dir`
+    default factory, which walks up from `config.py` and loads the repository's real
+    `.env` into `os.environ` — probed 2026-09-13: FIRECRAWL_API_KEY and GDRIVE_* appeared
+    in a unit test's environment (docs/audits/security-architecture-audit-2026-09-13.md,
+    B6). pytest-socket stops that key from reaching the network, but a test asserting on
+    `os.environ` or calling `Config.from_env()` would silently use real values and pass
+    for the wrong reason. `load_dotenv` becomes a no-op and the secret names are removed;
+    tests/security/test_no_live_io.py holds this.
+    """
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+    monkeypatch.setattr("ibkr_core_mcp.config.load_dotenv", lambda *args, **kwargs: False)
+    for name in _SECRET_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    yield
