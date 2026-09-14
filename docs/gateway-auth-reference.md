@@ -2,6 +2,14 @@
 
 The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate. No cloud deployment possible.
 
+Three things here have each cost a real debugging session, and each is drawn below because it
+is shape, not prose: what `startup()` will and will not destroy, where a session can be, and
+which side of the container boundary may renew it.
+
+---
+
+## First login
+
 `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`. On first use:
 
 1. Start the gateway using the built-in `GatewayManager` (see below)
@@ -33,24 +41,146 @@ from ibkr_core_mcp import IBKRClient, TokenAuth, Config
 client = IBKRClient(Config.from_env(), auth=TokenAuth("cookie_string_here"))
 ```
 
-**Session constraints:**
+---
 
-- Session expires without activity, and **nothing in the container renews it — you must run
-  your own keepalive.** This paragraph said the opposite until 2026-08-07: that a bundled
-  `tickler.sh` POSTed `/tickle` every 60 s so callers did not need one. That was the
-  reassuring half of the claim, and a caller who believed it ran no keepalive and watched
-  sessions expire with nothing to explain why. The in-container tickler was removed on
-  2026-08-06 and the script deleted on 2026-08-07; the same false claim was corrected in
-  `gateway/__init__.py` on 2026-08-06 and this page was missed.
-  Renewal cannot live in the container: a loop in there cannot see the host-side suspend
-  flag that coordinates a login, and on 2026-08-05 three such ticklers renewed a **borrowed**
-  session every 60 s, defeating every attempt to clear it — `POST /logout` could not, only
-  `docker restart` could. Call `client.tickle()` from the host, and pause it while a login
-  is in flight.
-- Rate limit: IBKR's documented global limit is **10 requests/second** for any endpoint not in
-  its per-endpoint table (several endpoints are far stricter — e.g. `/iserver/account/orders`
-  and `/iserver/account/trades` are 1 req/5s, `/tickle` is 1 req/s). `rate_limiter.py` does not
-  proactively pace requests to this limit; it reactively retries 429/503 with exponential
-  backoff (1s, 2s, 4s over 3 attempts) and raises `IBKRRateLimitError` if still failing.
-  Source: https://www.interactivebrokers.com/docs/web-api/v1/pacing-limitations
-  (full per-endpoint table in `rate_limiter.py`'s docstring).
+## What `startup()` will and will not destroy
+
+```mermaid
+flowchart TB
+    classDef safe fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+    classDef destr fill:#fde3e1,stroke:#b42318,color:#111827
+
+    S["startup()"] --> P{"Running AND<br/>authenticated?"}
+    P -->|yes| FAST["Return at once.<br/>Session preserved, no 2FA"]
+    P -->|no| R{"Container running?"}
+    R -->|yes| SKIP["Leave it alone"]
+    R -->|no| ST["start()<br/>removes any container,<br/>builds the image only if absent"]
+    SKIP --> W["wait_for_gateway<br/>GET /tickle, 120 s"]
+    ST --> W
+    W --> L["Open the login page;<br/>the human does 2FA"]
+    L --> V{"wait_for_auth<br/>60 s, then one manual retry"}
+    V -->|yes| OK["Authenticated"]
+    V -->|no| DEG["Returns False — tools<br/>error until you log in"]
+
+    class FAST,OK safe
+    class P,R guard
+    class ST,DEG destr
+```
+
+The two diamonds are the whole point. `start()` removes any existing container, and the session
+lives in that container's Java process — so calling it throws the session away and forces a
+fresh 2FA. Until 2026-08-06 it ran on **every** launch where the gateway was not already
+authenticated, discarding sessions a pre-flight would have found perfectly usable. A container
+that is absent or stopped cannot hold a session, so recreating one is free; a *running* one is
+left alone.
+
+**A rebuild is not automatic.** `start()` builds the image only when it is absent, so after
+changing anything that ships into it (`Dockerfile`, `conf.yaml`, `run_gateway.sh`,
+`healthcheck.sh`) you must `docker rmi ibkr-core-gateway` first — a restart alone keeps running
+the old image. That is exactly how the in-container tickler survived its own removal for a day.
+
+---
+
+## Where a session can be
+
+```mermaid
+stateDiagram-v2
+    [*] --> Down
+    Down --> Reachable: start(), wait_for_gateway
+    Reachable --> Authenticated: browser login + 2FA
+    Authenticated --> Reachable: idle timeout, POST /logout
+    Reachable --> Down: stop()
+    Authenticated --> Down: stop(), restart()
+
+    note right of Down
+        GET /tickle raises
+    end note
+    note right of Reachable
+        GET /tickle answers, often 401:
+        reachable TRUE, authenticated false
+    end note
+    note right of Authenticated
+        nothing in the container renews this
+    end note
+```
+
+**Reachable is not authenticated, and 401 is good news.** `is_gateway_reachable` counts any
+status from 200 to 599 as up: a 401 means the Java process is answering and holds no session,
+which is the best possible moment to log in. Treating it as "down" told a user to start a
+gateway that was running perfectly (measured 2026-08-05).
+
+**An idle timeout lands you in `Reachable`, not `Down`.** The container is still up and the
+port still answers; only the session is gone. That is a browser login away, not a restart.
+
+Both probes are **GET**, not POST, since 2026-08-06: `/tickle` is documented as "pings the
+server to prevent the session from ending", so a POST is a session-affecting write dressed as a
+health check — and `wait_for_gateway` calls it in a loop. Merely asking "is it up?" renewed the
+keepalive timer, which is the exact traffic the suspend flag below exists to stop.
+
+---
+
+## Keeping the session alive
+
+```mermaid
+flowchart TB
+    classDef host fill:#e4eefc,stroke:#1849a9,color:#111827
+    classDef cont fill:#f3f4f6,stroke:#6b7280,color:#111827
+    classDef dead fill:#fde3e1,stroke:#b42318,color:#111827,stroke-dasharray:4 3
+
+    FLAG[("~/.ibkr_core/session.suspend<br/>set by SuspendLock during a login<br/>or a deliberate session-clear")]
+
+    subgraph HOST["Host — can read the flag"]
+        KA["ibkr-keepalive.sh, under launchd<br/>GET /tickle, holds caffeinate"]
+        APP["Your code — client.tickle(),<br/>and every other request"]
+    end
+
+    subgraph CT["Container — cannot read the flag"]
+        RG["run_gateway.sh<br/>starts Java, waits. Nothing else."]
+        DEAD["tickler.sh<br/>removed 2026-08-06"]
+    end
+
+    FLAG -->|"honoured: goes quiet"| KA
+    FLAG -.->|"not reachable from in here"| DEAD
+    KA --> GW["The IBKR session"]
+    APP --> GW
+    DEAD -. "renewed a borrowed session every 60 s;<br/>POST /logout could not clear it,<br/>only docker restart" .-> GW
+    RG --> GW
+
+    class KA,APP host
+    class RG cont
+    class DEAD dead
+```
+
+**The session expires without activity, and nothing in the container renews it — you must run
+your own keepalive.** This page said the opposite until 2026-08-07: that a bundled `tickler.sh`
+POSTed `/tickle` every 60 s so callers did not need one. That was the reassuring half of the
+claim, and a caller who believed it ran no keepalive and watched sessions expire with nothing to
+explain why. The in-container tickler was removed on 2026-08-06 and the script deleted on
+2026-08-07; the same false claim was corrected in `gateway/__init__.py` on 2026-08-06 and this
+page was missed.
+
+Renewal cannot live in the container, and the diagram is the reason: the flag that coordinates a
+login or a deliberate session-clear is `~/.ibkr_core/session.suspend`, written host-side by
+`claudia/gateway_session.py :: SuspendLock`, and nothing inside the container can read it. IBKR
+renews a session on **any** request, not just `/tickle`, so one un-silenceable renewer defeats
+every attempt to clear a session — on 2026-08-05 three such ticklers renewed a **borrowed**
+session every 60 s, and `POST /logout` could not clear it, only `docker restart` could.
+
+Call `client.tickle()` from the host, and pause it while a login is in flight. claudia_ui does
+this with `scripts/ibkr-keepalive.sh` under launchd (`RunAtLoad` + `KeepAlive`, installed by
+`scripts/install-ibkr-keepalive-daemon.sh`); it honours the suspend flag and holds the
+`caffeinate` assertion that stops the Mac sleeping the session away. **If that daemon is not
+installed, nothing renews an idle session.**
+
+---
+
+## Rate limits
+
+IBKR's documented global limit is **10 requests/second** for any endpoint not in
+its per-endpoint table (several endpoints are far stricter — e.g. `/iserver/account/orders`
+and `/iserver/account/trades` are 1 req/5s, `/tickle` is 1 req/s). `rate_limiter.py` does not
+proactively pace requests to this limit; it reactively retries 429/503 with exponential
+backoff (1s, 2s, 4s over 3 attempts) and raises `IBKRRateLimitError` if still failing.
+Source: https://www.interactivebrokers.com/docs/web-api/v1/pacing-limitations
+(full per-endpoint table in `rate_limiter.py`'s docstring).
