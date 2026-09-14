@@ -20,7 +20,7 @@ import json as _json
 import re
 import subprocess
 import sys
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -233,6 +233,34 @@ def price_text(value: Any) -> str:
     return f"{number:,.{places}f}"
 
 
+def price_text_safe(value: Any) -> str:
+    """`price_text`, but total: a value it cannot parse comes back unchanged.
+
+    Every *display* surface needs this form. A render that raises while formatting a price
+    is how a proposal card disappears, and the values that reach a display are not the
+    schema-typed ones: an order-status payload can carry a string that already has a
+    thousands separator, and a `number`-typed field admits NaN. The strict `price_text` is
+    for a caller that must refuse to print a non-number; this is for one that must print
+    *something* and must not lie about it, so the fallback is the value as it was sent.
+
+    One definition, both repos. Before 2026-09-14 there were three implementations of this
+    rule: this one, `claudia/execution_listener._plain_number` for the fill line, and a
+    numbro format string for the dashboard's browser-side tables — which disagreed on
+    trailing zeros and on how many decimals survive. The first two are now this function;
+    the third cannot be (it runs in the browser) and is documented as its twin.
+
+    Args:
+        value: A price, from a proposal or from any IBKR payload.
+
+    Returns:
+        The price exactly, or `str(value)` when it is not a finite number.
+    """
+    try:
+        return price_text(value)
+    except (TypeError, ValueError, DecimalException):
+        return str(value)
+
+
 def change_value_text(field: str, value: Any) -> str:
     """One rendering of a changed field's value, shared by every surface that shows a diff.
 
@@ -261,10 +289,7 @@ def change_value_text(field: str, value: Any) -> str:
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if field in _PRICE_CHANGE_FIELDS:
-        try:
-            return price_text(value)
-        except (TypeError, ValueError, InvalidOperation):
-            return str(value)
+        return price_text_safe(value)
     if field == "quantity":
         return _quantity_text(value)
     return str(value)

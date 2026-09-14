@@ -1053,6 +1053,29 @@ def test_a_price_is_shown_to_its_own_precision_not_rounded_to_cents():
     assert change_value_text("limit_price", "100.5") == "100.50"
 
 
+def test_price_text_safe_is_the_total_form_of_the_same_rule():
+    """One definition of "render a broker price exactly", for every surface in both repos.
+
+    `price_text` raises, deliberately, so a caller that must not print a non-number can say
+    so. Every *display* surface needs the opposite: a render that dies is how a card
+    disappears. Rather than each caller writing its own try/except — claudia_ui had two
+    private copies of this rule and the dashboard a third — the total form lives here beside
+    the strict one, and `change_value_text` is defined in terms of it.
+    """
+    from ibkr_core_mcp.order_confirm import price_text_safe
+
+    # Exact where it can be.
+    assert price_text_safe(1.08455) == "1.08455"
+    assert price_text_safe(110.171875) == "110.171875"
+    assert price_text_safe(6100.0) == "6,100.00"
+    # Unchanged where it cannot: an IBKR string that already carries a separator, and the
+    # non-numbers a `number`-typed field admits.
+    assert price_text_safe("7,900.00") == "7,900.00"
+    assert price_text_safe(float("nan")) == "nan"
+    assert price_text_safe("n/a") == "n/a"
+    assert price_text_safe("") == ""
+
+
 def test_the_dialog_does_not_claim_an_order_type_requires_a_price():
     """Naming the gap is right; naming a requirement is a second false claim.
 
