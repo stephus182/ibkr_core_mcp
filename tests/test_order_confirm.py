@@ -1030,6 +1030,64 @@ def test_a_futures_price_is_not_a_currency_amount():
     assert stk["Price"] == "150.00 USD" and stk["Total (est.)"] == "1,500.00 USD"
 
 
+def test_a_price_is_shown_to_its_own_precision_not_rounded_to_cents():
+    """Two decimals is a currency habit, and most traded instruments do not tick in cents.
+
+    `f"{float(v):,.2f}"` made a 6E limit of 1.08455 read `1.08`, a ZN 1/64 tick of
+    110.171875 read `110.17`, and two NG prices a full tick apart render identically —
+    on the last screen before Touch ID, while the body carried the full value
+    (claudia_ui audit 2026-09-13, finding A-3). Two decimals stay the floor, so every
+    round figure reads as it always did.
+    """
+    from ibkr_core_mcp.order_confirm import change_value_text
+
+    assert change_value_text("limit_price", 1.08455) == "1.08455"
+    assert change_value_text("limit_price", 110.171875) == "110.171875"
+    assert change_value_text("stop_price", 4.1235) == "4.1235"
+    assert change_value_text("stop_price", 4.1249) == "4.1249"
+    # A full NG tick apart: these used to be the same string on screen.
+    assert change_value_text("limit_price", 3.001) != change_value_text("limit_price", 3.002)
+    # The floor and the separator are unchanged.
+    assert change_value_text("limit_price", 6100.0) == "6,100.00"
+    assert change_value_text("stop_price", 7950) == "7,950.00"
+    assert change_value_text("limit_price", "100.5") == "100.50"
+
+
+def test_a_priced_order_type_without_a_price_is_never_labelled_market():
+    """`Price: MARKET` beside `Order Type: LMT` described an order the body did not carry.
+
+    The fallback was written for MKT, which legitimately sends no price, and applied to
+    every type (claudia_ui audit 2026-09-13, finding A-2). The dialog is the last human
+    surface before Touch ID, so it names the gap rather than guessing an order type.
+    claudia_ui now rejects such a proposal before the button is drawn; this is the
+    independent half, for every other caller of `place_order`.
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    for order_type in ("LMT", "STP", "STOP_LIMIT"):
+        rows = _order_rows(
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 10,
+                "orderType": order_type,
+                "tif": "DAY",
+                "_currency": "USD",
+            },
+            "U1",
+        )
+        assert rows["Price"] != "MARKET", f"{order_type} with no price was labelled MARKET"
+        assert order_type in rows["Price"], f"the {order_type} row does not name the type"
+        assert rows["Total (est.)"] != "Market", f"{order_type} totalled as a market order"
+
+    market = _order_rows(
+        {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": "MKT", "tif": "DAY"},
+        "U1",
+    )
+    assert market["Price"] == "MARKET", "a real market order must still read MARKET"
+    assert market["Total (est.)"] == "Market"
+
+
 def test_dialog_bolds_the_values_not_the_labels():
     """User read of the first smoke (2026-09-11): bold is right, but for the values only —
     `Action:` regular, `BUY` bold — so each row is two runs, joined by regular newlines."""

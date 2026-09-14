@@ -20,6 +20,7 @@ import json as _json
 import re
 import subprocess
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -103,7 +104,17 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # the quotation unit, and "points" would be wrong for crude or a bond future.
     is_future = multiplier is not None or bool(order.get("_multiplier_unknown"))
     price_ccy = "" if is_future else ccy
-    price_str = f"{change_value_text('limit_price', price)}{price_ccy}" if price is not None else "MARKET"
+    # "MARKET" belongs to the one order type that legitimately sends no price. Applied to
+    # every type, it described an order the body did not carry: a LMT with a null price read
+    # `Price: MARKET` four rows under `Order Type: LMT` (claudia_ui audit 2026-09-13, A-2).
+    # The dialog names the gap instead of guessing, the same rule as the unknown multiplier.
+    is_market = str(order_type).strip().upper() in ("MKT", "MARKET")
+    if price is not None:
+        price_str = f"{change_value_text('limit_price', price)}{price_ccy}"
+    elif is_market:
+        price_str = "MARKET"
+    else:
+        price_str = f"— (no price sent; a {order_type} order needs one)"
     try:
         if order.get("_multiplier_unknown"):
             # A futures order whose multiplier the caller could not learn. price × qty here
@@ -116,8 +127,10 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
             total_str = f"{notional:,.2f}{ccy} (×{multiplier:g} multiplier)"
         elif price is not None:
             total_str = f"{float(price) * float(qty):,.2f}{ccy}"
-        else:
+        elif is_market:
             total_str = "Market"
+        else:
+            total_str = "—"
     except (TypeError, ValueError):
         total_str = "—"
     rows = {
@@ -167,6 +180,40 @@ def _yes_no(value: Any) -> Any:
 _PRICE_CHANGE_FIELDS = ("limit_price", "stop_price")
 
 
+def price_text(value: Any) -> str:
+    """A price as it should be read by a human about to authorise it: exactly.
+
+    Thousands separators and a floor of two decimals, but never a ceiling of two. The
+    2026-09-14 correction (claudia_ui audit 2026-09-13, finding A-3): `f"{float(v):,.2f}"`
+    silently rounded every price on the last screen before Touch ID, while the body carried
+    the full value. Most of what this account trades does not tick in cents — 6E is
+    0.00005, NG 0.001, ZN a 1/64 of a point — so `1.08455` read `1.08` and two prices a
+    full tick apart rendered as the same string.
+
+    `Decimal(str(value))` rather than `Decimal(value)`: `str()` of a float is its shortest
+    round-tripping form, so a price parsed from the model's JSON literal renders as the
+    literal rather than as the binary expansion (`0.1` stays `0.10`, not `0.1000…0055511`).
+
+    Args:
+        value: A number, or a numeric string (IBKR sends both).
+
+    Returns:
+        The value with a comma group separator and its own number of decimals, minimum two.
+
+    Raises:
+        InvalidOperation: `value` is not numeric, or is NaN/Infinity — callers fall back to
+            `str(value)` rather than printing a number-shaped non-number.
+    """
+    number = Decimal(str(value))
+    exponent = number.as_tuple().exponent
+    if not isinstance(exponent, int):
+        # NaN or Infinity: `as_tuple().exponent` is 'n'/'N'/'F' there, and a price row
+        # reading "NaN" would be worse than one reading the raw value the caller sent.
+        raise InvalidOperation(f"{value!r} is not a finite price")
+    places = max(2, -exponent)
+    return f"{number:,.{places}f}"
+
+
 def change_value_text(field: str, value: Any) -> str:
     """One rendering of a changed field's value, shared by every surface that shows a diff.
 
@@ -178,10 +225,10 @@ def change_value_text(field: str, value: Any) -> str:
     model's replacement. Public so claudia_ui's approval text uses this definition rather
     than a third copy, the same reason `reply_message_text` is public.
 
-    Prices take the thousands-and-two-decimals form the rest of the approval text already
-    uses; a whole quantity loses its `.0`; booleans read Yes/No; None renders `?` rather
-    than the string "None", matching `_format_changes`'s rule that an unknown is never a
-    guess.
+    Prices go through `price_text`: thousands separators and **at least** two decimals, more
+    when the instrument ticks finer than a cent; a whole quantity loses its `.0`; booleans
+    read Yes/No; None renders `?` rather than the string "None", matching `_format_changes`'s
+    rule that an unknown is never a guess.
 
     Args:
         field: The changed field's name, from `propose_modify`'s `changes[].field` enum.
@@ -196,8 +243,8 @@ def change_value_text(field: str, value: Any) -> str:
         return "Yes" if value else "No"
     if field in _PRICE_CHANGE_FIELDS:
         try:
-            return f"{float(value):,.2f}"
-        except (TypeError, ValueError):
+            return price_text(value)
+        except (TypeError, ValueError, InvalidOperation):
             return str(value)
     if field == "quantity":
         return _quantity_text(value)
