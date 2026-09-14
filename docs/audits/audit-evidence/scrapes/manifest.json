@@ -78,5 +78,45 @@
     "method": "firecrawl",
     "status": "ok",
     "bytes": 86068
+  },
+  {
+    "url": "https://genai.owasp.org/resource/a-practical-guide-for-secure-mcp-server-development/",
+    "retrieved_at": "2026-09-14T16:22:02Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 6507,
+    "note": "OWASP landing page; scraped with --format markdown,links to obtain the guide's Download URL (/download/52676/). Saved as owasp-mcp-guide-landing.md (the markdown field of that scrape, verbatim)"
+  },
+  {
+    "url": "https://genai.owasp.org/download/52676/?tmstv=1771286427",
+    "retrieved_at": "2026-09-14T16:22:47Z",
+    "method": "curl",
+    "status": "failed",
+    "bytes": 842509,
+    "note": "curl -sSL of the Download link returned an HTML document, not the PDF (file(1): 'HTML document text'); the Firecrawl parse below is the copy used"
+  },
+  {
+    "url": "https://genai.owasp.org/download/52676/?tmstv=1771286427",
+    "retrieved_at": "2026-09-14T16:22:29Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 20398,
+    "note": "OWASP GenAI Security Project, 'A Practical Guide for Secure MCP Server Development' v1.0 (February 2026), complete: title page, CC BY-SA 4.0 licence, TOC, all 8 sections, minimum-bar checklist, acknowledgements, sponsors, supporters. Licensed CC BY-SA 4.0 \u2014 kept verbatim, licence block included. Saved as owasp-secure-mcp-server-development-v1.md"
+  },
+  {
+    "url": "https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices",
+    "retrieved_at": "2026-09-14T16:23:50Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 46902,
+    "note": "--only-main-content; served as the 2026-07-28 revision, in which 'Session Hijacking' has become 'State Handle Hijacking' and 'Scope Minimization' concerns OAuth token scopes"
+  },
+  {
+    "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+    "retrieved_at": "2026-09-14T16:23:50Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 15609,
+    "note": "--only-main-content; carries the Security Warning (Origin validation MUST, localhost bind SHOULD, authentication SHOULD)"
   }
 ]

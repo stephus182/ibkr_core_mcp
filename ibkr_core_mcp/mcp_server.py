@@ -11,8 +11,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
+import os
+import secrets
 from typing import TYPE_CHECKING, Any
 
 from mcp.server import NotificationOptions, Server
@@ -26,6 +29,7 @@ from ibkr_core_mcp.claude_tools import READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS,
 from ibkr_core_mcp.redaction import redact_error
 
 if TYPE_CHECKING:
+    from ibkr_core_mcp.config import Config
     from ibkr_core_mcp.store import SQLiteStore
 
 logger = logging.getLogger(__name__)
@@ -127,7 +131,11 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
             for t in _ALL_TOOL_DEFS
         ]
 
-    @server.call_tool()
+    # `validate_input=True` is the SDK's default; it is written out so the property is this
+    # package's own statement rather than an inherited one, and so a reader of `build_server`
+    # sees that arguments are schema-checked before `_dispatch` runs (invariant 11,
+    # tests/security/test_tool_input_validation.py).
+    @server.call_tool(validate_input=True)
     async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
         text = _dispatch(name, arguments or {}, toolkit, store)
         return [TextContent(type="text", text=text)]
@@ -200,12 +208,108 @@ async def _run_stdio(server: Server) -> None:
         )
 
 
-def build_sse_app(server: Server) -> Any:
+class _BearerTokenGate:
+    """ASGI middleware requiring `Authorization: Bearer <token>` on every HTTP request.
+
+    Wraps the whole SSE app — `/sse`, where a client reads its session id, and `/messages/`,
+    where it posts JSON-RPC — so an unauthenticated caller is refused before any MCP
+    machinery runs, the SDK's own Host/Origin check included. Gating only `/messages/` would
+    leave the more interesting half open.
+
+    Pure ASGI on purpose: a Starlette `BaseHTTPMiddleware` buffers the response, which breaks
+    the `/sse` event stream. This reads `scope["headers"]` directly (ASGI guarantees
+    lowercased byte names) and either passes the call through untouched or writes the 401
+    itself. Non-HTTP scopes — lifespan — pass through.
+
+    The comparison is `hmac.compare_digest` over the entire header value, scheme included, so
+    a prefix of the token is not distinguishable from a wrong one by response timing.
+    """
+
+    def __init__(self, app: Any, token: str) -> None:
+        """Wrap `app`, admitting only requests that present `token` as a bearer credential."""
+        self._app = app
+        self._expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Answer 401, or hand the call to the wrapped app unchanged."""
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+        presented = b""
+        for name, value in scope.get("headers", ()):
+            if name == b"authorization":
+                presented = bytes(value)
+                break
+        if not hmac.compare_digest(presented, self._expected):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"www-authenticate", b"Bearer")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"Unauthorized"})
+            return
+        await self._app(scope, receive, send)
+
+
+def _issue_sse_token(config: Config) -> str:
+    """Mint this launch's SSE bearer token and write it to a 0600 file for local clients.
+
+    A fresh `secrets.token_urlsafe(32)` every launch: nothing to configure, nothing to
+    rotate, and a credential that stops working when the server does. It is written under
+    `~/.ibkr_core/` — the directory `SQLiteStore` already holds at 0700 — rather than printed,
+    because a terminal is scrolled, screen-shared and often captured; only the path is logged,
+    never the value.
+
+    Why it exists: the loopback bind and the Host/Origin check stop the LAN and the browser,
+    not another process on this machine, which needs no DNS trick — it can simply open the
+    port. OWASP §1 ("if you must use local HTTP … still utilize explicit
+    authorization/authentication"), the MCP best-practices page ("require an authorization
+    token") and the transports specification ("SHOULD implement proper authentication") all
+    name the step. See SECURITY.md § MCP Transports.
+
+    Args:
+        config: Supplies `sqlite_path`, whose parent is the `~/.ibkr_core/` directory.
+
+    Returns:
+        The token to hand to `build_sse_app`.
+    """
+    token = secrets.token_urlsafe(32)
+    path = config.sqlite_path.parent / "mcp_sse_token"
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # O_CREAT's mode applies only when the file is created, so a token file left by an
+    # earlier launch would keep its old mode — hence the explicit chmod, as in gdrive_auth.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(token + "\n")
+    os.chmod(path, 0o600)
+    logger.warning(
+        "ibkr-core-mcp: SSE bearer token for this launch written to %s — clients must send "
+        "'Authorization: Bearer <token>'. It is replaced on every launch.",
+        path,
+    )
+    return token
+
+
+def build_sse_app(server: Server, token: str) -> Any:
     """The Starlette app behind `--transport sse`: `/sse` for the stream, `/messages/` for posts.
+
+    `token` is this launch's bearer credential (`_issue_sse_token`). It is a required
+    argument rather than an optional one so that an unauthenticated server cannot be built by
+    forgetting to pass it — the same reasoning that removed `ORDER_EXECUTION` from the
+    capability vocabulary instead of asserting that nobody declares it.
 
     Factored out of `_run_sse` so the transport's construction is a testable value
     (tests/security/test_transport_security.py) rather than a line inside a coroutine that
     only runs under uvicorn.
+
+    Args:
+        server: The configured MCP server to serve.
+        token: The bearer token every request must present.
+
+    Returns:
+        An ASGI application: the bearer gate wrapping the Starlette routes.
     """
     from mcp.server.sse import SseServerTransport
     from mcp.server.transport_security import TransportSecuritySettings
@@ -222,7 +326,9 @@ def build_sse_app(server: Server) -> Any:
         ),
     )
 
-    # DNS-rebinding protection (2026-09-13, audit A3). Without `security_settings` the SDK
+    # DNS-rebinding protection (2026-09-13, audit A3) — the browser half of the transport's
+    # defence; `_BearerTokenGate` above is the local-process half (2026-09-14). Without
+    # `security_settings` the SDK
     # substitutes `enable_dns_rebinding_protection=False` "for backwards compatibility",
     # so Host and Origin were never checked. uvicorn's 127.0.0.1 bind stops the LAN, not
     # the operator's own browser: a page whose DNS answer flips to 127.0.0.1 becomes
@@ -253,18 +359,21 @@ def build_sse_app(server: Server) -> Any:
             await server.run(streams[0], streams[1], init_opts)
         return Response()
 
-    return Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages/", app=sse_transport.handle_post_message),
-        ]
+    return _BearerTokenGate(
+        Starlette(
+            routes=[
+                Route("/sse", endpoint=handle_sse),
+                Mount("/messages/", app=sse_transport.handle_post_message),
+            ]
+        ),
+        token,
     )
 
 
 async def _run_sse(server: Server, port: int, streaming: bool, toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
     import uvicorn
 
-    app = build_sse_app(server)
+    app = build_sse_app(server, _issue_sse_token(toolkit._config))
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     uv_server = uvicorn.Server(config)
 

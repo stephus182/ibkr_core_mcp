@@ -150,6 +150,14 @@ from `raw.githubusercontent.com/unclecode/crawl4ai/main/CHANGELOG.md`): the entr
 class for dedicated browser profile management` — matching the PyPI-wheel finding
 exactly and dating the introduction precisely.
 
+**Security baselines** (`SECURITY.md`, `docs/security-architecture.md`, `mcp_server.py`)
+
+| Topic | URL |
+|---|---|
+| **OWASP GenAI Security Project — *A Practical Guide for Secure MCP Server Development*, v1.0, February 2026** (the principal external security baseline since 2026-09-14; the guide is the PDF behind the page's *Download* link — retrieved in full with Firecrawl on 2026-09-14, 8 sections + a minimum-bar checklist; mapped item by item in `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`) | https://genai.owasp.org/resource/a-practical-guide-for-secure-mcp-server-development/ |
+| **MCP security best practices** (supporting, protocol-specific reference — a companion to the MCP Authorization spec; served as the `2026-07-28` revision on 2026-09-14, in which *Session Hijacking* became *State Handle Hijacking* and *Scope Minimization* concerns OAuth token scopes; cited here only for SSRF and local-server hardening) | https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices |
+| **MCP transports specification — security warning** (Origin validation MUST; loopback bind SHOULD; authentication SHOULD — the requirements behind `build_sse_app`) | https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#security-warning |
+
 ---
 
 ## Missing URLs / known gaps (live-verification pass, 2026-07-14)

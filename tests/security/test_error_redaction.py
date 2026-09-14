@@ -13,6 +13,8 @@ probed: the Flex token in `?t=…` appears verbatim in the exception text
 from __future__ import annotations
 
 import ast
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -72,6 +74,43 @@ def test_ordinary_error_text_is_kept_for_the_model():
     assert text == "KeyError: 'rsi'"
     text = redact_error(ValueError("Strategy must set df['signal'] (1=long, 0=flat, -1=short)"))
     assert "df['signal']" in text and "1=long" in text
+
+
+# ── The operator's home directory is not part of a message ────────────────────
+
+
+def test_the_home_directory_is_collapsed_to_a_tilde():
+    """OWASP §6 lists filesystem paths beside tokens and stack traces in what must not reach
+    the model. The username is exactly the part an absolute path adds that the model never
+    needs — the Flex import's root is documented to it as `~/.ibkr_core` — and the 2026-07-11
+    audit had already noted the blocked-path message "discloses the exact home-directory path
+    on any invalid probe" without fixing it (H-2 write-up)."""
+    home = str(Path.home())
+    text = redact_error(FileNotFoundError(f"{home}/.ibkr_core/flex/missing.xml: not found"))
+    assert home not in text
+    assert "~/.ibkr_core/flex/missing.xml" in text, text
+
+
+def test_a_blocked_flex_import_names_its_root_without_the_username(mock_config, tmp_path):
+    """The one model-facing path message that is built by hand rather than from an exception,
+    so `redact_error` never saw it: `_import_flex_file`'s refusal names the allowed root."""
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+
+    toolkit = ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), mock_config)
+    text, _ = toolkit.execute("import_flex_file", {"path": str(tmp_path / "elsewhere.xml")})
+
+    assert text.startswith("Blocked:"), text
+    assert str(Path.home()) not in text, text
+    assert "~/.ibkr_core" in text, text
+
+
+def test_a_home_of_one_character_is_left_alone(monkeypatch):
+    """A pathological `HOME=/` must not turn every separator into a tilde: the guard is the
+    difference between a shortened message and an unreadable one."""
+    from ibkr_core_mcp.redaction import collapse_home
+
+    monkeypatch.setenv("HOME", "/")
+    assert collapse_home("/usr/local/share/x.xml") == "/usr/local/share/x.xml"
 
 
 # ── Structural: every `except … as exc` interpolation in the model layer is redacted ───

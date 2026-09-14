@@ -146,12 +146,23 @@ def spawn_sites(source: str) -> set[str]:
     return sites
 
 
-def shell_true_keywords(source: str) -> list[int]:
-    """Line numbers of any call passing `shell=True`."""
+def keyword_literal_lines(source: str, keyword: str, value: object) -> list[int]:
+    """Line numbers of every call passing `keyword=<value>` as a literal.
+
+    The general form of `shell_true_keywords`: "nothing in the package passes this dangerous
+    keyword" is one check whether the keyword is `shell=True` on a subprocess call or
+    `validate_input=False` on the MCP call-tool decorator. The comparison is identity, so
+    `value` is meant to be a singleton — `True`, `False`, `None`.
+    """
     lines: list[int] = []
     for node in ast.walk(_tree(source)):
         if isinstance(node, ast.Call):
             for kw in node.keywords:
-                if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                if kw.arg == keyword and isinstance(kw.value, ast.Constant) and kw.value.value is value:
                     lines.append(node.lineno)
-    return lines
+    return sorted(lines)
+
+
+def shell_true_keywords(source: str) -> list[int]:
+    """Line numbers of any call passing `shell=True`."""
+    return keyword_literal_lines(source, "shell", True)

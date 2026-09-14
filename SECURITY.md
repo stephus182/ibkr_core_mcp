@@ -1,6 +1,6 @@
 # Security Policy — ibkr_core_mcp
 
-This document describes the security model, threat mitigations, and responsible disclosure process for `ibkr_core_mcp`. It is the **control inventory**; the design behind it — principals, privilege tiers, the trust-boundary map, the invariants and the tests that enforce them, the decision log — is `docs/security-architecture.md`, and the dated evidence is in `docs/audits/`. The package connects a Claude AI agent to live brokerage infrastructure; security is treated as a first-class architectural concern throughout, not an afterthought.
+This document describes the security model, threat mitigations, and responsible disclosure process for `ibkr_core_mcp`. It is the **control inventory**; the design behind it — principals, privilege tiers, the trust-boundary map, the invariants and the tests that enforce them, the decision log — is `docs/security-architecture.md`, and the dated evidence is in `docs/audits/`. The external baseline it is measured against is the OWASP GenAI Security Project's *A Practical Guide for Secure MCP Server Development* (v1.0, February 2026); the section-by-section applicability decision is `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. The package connects a Claude AI agent to live brokerage infrastructure; security is treated as a first-class architectural concern throughout, not an afterthought.
 
 ---
 
@@ -16,6 +16,37 @@ Include:
 - The affected version(s) and component(s)
 
 You will receive an acknowledgement within 48 hours. Critical findings will be patched on a priority basis.
+
+---
+
+## Security Scope and Deployment Model
+
+`ibkr_core_mcp` is built for **one operator on one personal workstation**. Everything it
+protects sits on that machine:
+
+- **Local processes only.** The MCP server, the Claude client (Claude Desktop, Claude Code, or
+  a host app such as `claudia_ui`) and the IBKR Client Portal Gateway (Docker, published on
+  loopback) all run on the operator's machine. The server runs as the operator's own user
+  because its two strongest controls cannot run anywhere else: Gate 1 is Touch ID on that
+  machine, Gate 2 is a dialog on that screen, and the IBKR session is read from that user's
+  browser cookie store.
+- **stdio is the trust path.** The default transport hands the server its pipes from the
+  process that spawned it; there is no network surface and no third party to authenticate.
+- **SSE is optional and lower-trust.** `--transport sse` binds `127.0.0.1`, validates `Host`
+  and `Origin`, and requires this launch's bearer token — the browser, the LAN and any other
+  local process each have to get past one of those (§ MCP Transports). Prefer stdio; start SSE
+  only for a local consumer that needs it.
+- **Not this deployment:** a public or remote MCP endpoint; more than one tenant or user;
+  delegated or enterprise identities; a shared service account; Kubernetes or a service
+  mesh; a marketplace of third-party tools loaded at runtime. The tool set is the installed
+  package version.
+
+Read every control below, and every external baseline, through that model. OWASP
+recommendations whose failure class cannot arise here — OAuth/OIDC client authentication,
+tenant-scoped authorization and session isolation, token brokerage, network policy, SIEM
+feeds, workload identity, signed tool manifests and registries, AIBOM, policy engines — are
+classified **not applicable** in `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`,
+and that is a security conclusion, not a backlog.
 
 ---
 
@@ -36,20 +67,41 @@ The secondary threat surface is the LLM tool boundary: data flowing from externa
 
 ---
 
-## MCP Security Best Practices — Mapping
+## External Baselines — OWASP (Principal), MCP (Supporting)
 
-The following table maps each attack class from the [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices) to the controls implemented in `ibkr_core_mcp`.
+The principal external baseline is the OWASP GenAI Security Project's
+[*A Practical Guide for Secure MCP Server Development*, v1.0, February 2026](https://genai.owasp.org/resource/a-practical-guide-for-secure-mcp-server-development/)
+— the PDF behind that page's *Download* link, cited by section below. It was retrieved in
+full on 2026-09-14 and mapped item by item in
+`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. The summary:
 
-| MCP Attack Class | ibkr_core_mcp Control | Location |
+| OWASP domain | Standing here | Where in this document |
 |---|---|---|
-| **Confused Deputy** | LLM has no order-write tools (asserted: `ORDER_EXECUTION` is not in the capability vocabulary, so no tool can declare it, and the model layer never references an order-write method); `account_id` / `order_id` / `alert_id` / `reply_id` regexes block path manipulation | `claude_tools.py`, `client.py` validators, `tests/security/test_order_write_boundary.py`, `test_tool_capabilities.py` |
-| **Token Passthrough** | `_safe_error` maps exception types to fixed sentences; `redact_error` is the one path for any detail shown or logged, secrets scrubbed | `claude_tools.py`, `redaction.py`, `tests/security/test_error_redaction.py` |
-| **SSRF** | Flex `<Url>` validated against a host-prefix allowlist before any HTTP request; every model-supplied URL reaching the local browser is checked before the fetch and on every browser request | `flex_query.py` `_ALLOWED_URL_PREFIXES`; `claude_tools._validate_public_url`, `local_browser.is_private_host` / `_reject_private_requests` |
-| **Session Hijacking** | Session cookie re-read from the browser on each use; gateway bound to loopback; cookie only ever sent to a loopback host (`IBKRClient`, `IBKRWebSocket` both refuse others); no persistent session store | `auth.py`, `client.py`, `streaming.py` |
-| **Local Server Compromise** | RestrictedPython sandbox: safe namespaces, **attribute allowlist** on every pandas/numpy object, child process, 4,096-char limit, 10-second watchdog; SSE transport validates `Host`/`Origin` | `backtest.py`, `mcp_server.build_sse_app` |
-| **Scope Minimization** | Every tool declares its capabilities; the model's maximum scope is READ / COMPUTE / EXTERNAL IO / LOCAL SENSITIVE IO / ACCOUNT STATE; order writes require biometric + visual human confirmation and are unreachable from any tool | `claude_tools.CAPABILITIES`, `client.py` |
+| Landscape — tool poisoning, code injection, credential leakage, excessive permissions | Covered; code execution and permissions are *stronger* than the guide asks (an attribute allowlist in a child process; a mechanical honesty test instead of manual review) | § LLM / AI Boundary Controls, § Backtest Sandbox |
+| Landscape — rug pulls; §2 signed manifests; §7 signing | Not applicable — architecture: no tool is loaded at runtime; integrity is the pinned git tag | — |
+| Landscape / §1 — session, identity and tenant isolation; lifecycle; per-session quotas | Not applicable — deployment model: one principal. Compute isolation applies and holds | § Backtest Sandbox |
+| §1 — local transport: prefer stdio; bind loopback; validate Origin; authenticate clients | All four: stdio is the default and preferred; SSE binds loopback, validates `Host`/`Origin`, and requires this launch's bearer token | § MCP Transports |
+| §2 — descriptions match behaviour; minimal fields to the model | Held by test, from source, on every run | § Capability declarations |
+| §3 — input schemas; output schemas; sanitization; size limits | Inputs validated against `inputSchema` on the MCP transport (invariant 11, tested since 2026-09-14); outputs are text, with a rule for future structured tools; sanitization covered; sizes measured, no page cap by decision | § Tool inputs and outputs |
+| §4 — structured invocation; human-in-the-loop for high-risk actions | Covered; the order-write checkpoint is *stronger* than an MCP elicitation (out-of-band, server-side, cannot be answered by a client) | § Two-Gate System |
+| §5 — OAuth 2.1/OIDC, delegation, token lifetimes | Not applicable — no remote server, no client token. "Sessions are state, not identity" and "centralize enforcement" hold | § Session Security |
+| §6 — secrets, containers, segmentation, supply chain, CI gates, error handling | CI gates, `pip-audit`, `gitleaks` and error redaction covered — including the filesystem paths on OWASP's list, collapsed to `~` since 2026-09-14; vault, container and segmentation not applicable (loopback binds; a server that must run as the operator; `.env` read once and never logged, though its 0600 mode is the operator's doing, not something this package sets); Actions SHA-pinning declined while CI holds no secret | § Secrets Management, § Security Regression Suite |
+| §7 — governance: review, audit logs, non-human identities | Review is a standing practice for one maintainer; the client transcript is the audit trail; NHI not applicable | — |
+| §8 — SAST/SCA, runtime protection, SIEM, Scorecard | ruff `S`, CodeQL, `ast` tests, `pip-audit`; OS-level confinement is the documented next layer for the sandbox; SIEM and Scorecard not applicable | § Security Regression Suite |
 
-Each of these is detailed in the sections below.
+The official [MCP security best practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)
+page is a **supporting, protocol-specific reference**, not a second framework. It is written
+as a companion to the MCP Authorization specification, and most of its sections
+(confused-deputy OAuth proxies, token passthrough, state-handle hijacking, scope minimization
+of OAuth tokens) describe conditions this deployment does not have. Two of its sections are
+more specific than the OWASP guide and are cited where they apply: SSRF (redirect targets,
+encoding tricks, DNS time-of-check/time-of-use — § Network Security) and local server
+hardening (stdio, or a token / IPC for HTTP — § MCP Transports), together with the
+[transports specification's security warning](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#security-warning)
+(Origin validation MUST; loopback bind and authentication SHOULD). Until 2026-09-14 this
+document carried a six-row mapping onto that page; it is retired because the OWASP guide
+covers the same ground more broadly, and two of the rows had come to cite sections that now
+mean something else.
 
 ---
 
@@ -122,7 +174,7 @@ and `claude_tools.py` / `mcp_server.py` may not name any of them.
 
 ## LLM / AI Boundary Controls
 
-### Scope Minimization — No Order Writes in Tool Surface
+### No order writes in the tool surface
 
 `ClaudeToolkit` exposes **44 tools** to the LLM (46 through the MCP server, which adds two
 local price-alert tools). **None of them can place, modify, cancel or confirm an order** —
@@ -176,11 +228,11 @@ that mutate state, as that test freezes them:
 
 Order placement must go through `IBKRClient` directly, which enforces both gates; `tests/security/test_order_write_boundary.py` asserts that `claude_tools.py` and `mcp_server.py` never reference an order-write method, `_post`, `_session` or `OrderWriteAuthorization`.
 
-This directly implements the [MCP scope minimization principle](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#scope-minimization): the LLM's initial and maximum scope covers only low-risk read/analysis operations; order-write elevation requires out-of-band human authentication that the LLM cannot trigger.
+This is OWASP's *Excessive Permissions* item and its §4 human-in-the-loop checkpoint in the strong form: the model's maximum scope is the five reachable tiers, and the order-write elevation is an out-of-band human act inside the server that no tool call — and no MCP client answering an elicitation on the user's behalf — can perform.
 
-### Confused Deputy Prevention
+### The model as a confused deputy
 
-The [confused deputy attack](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#confused-deputy-problem) occurs when a trusted intermediary is manipulated into using its elevated privileges on behalf of an attacker. In this system:
+A confused deputy is a trusted intermediary manipulated into using its privileges on an attacker's behalf; here the deputy is the model and the attacker is whatever it read. (The MCP best-practices page's section of that name is about OAuth proxy servers, a condition this deployment does not have.) In this system:
 
 - The LLM (deputy) has no path to order execution regardless of instruction — no tool exists for it to call.
 - `account_id`, `order_id`/`alert_id`, and `reply_id` values from LLM-generated tool input are validated with strict regexes before use in URLs, preventing path-manipulation attacks:
@@ -194,9 +246,9 @@ _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
   (`order_id`/`alert_id` validation was added 2026-07-11 after an audit found `delete_alert(alert_id="../order/<id>")` could collapse to `cancel_order`'s URL — see `docs/audits/security-audit-2026-07-11.md` H-2. `account_id` alone was not sufficient; every path-interpolated identifier needs the same treatment.)
 
-### Token Passthrough Prevention
+### Error text and raw payloads reach the model only through redaction
 
-The [token passthrough anti-pattern](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#token-passthrough) applies here as **data passthrough**: raw API responses, exception messages, and external service errors must not be forwarded to the LLM without sanitization, as they may contain attacker-controlled content from IBKR responses or strategy code.
+OWASP §6 (*Safe Error Handling*: no stack traces, tokens, filesystem paths or tool internals in what the model or client sees) and §3 (sanitize outputs) are the baseline. Raw API responses, exception messages and external service errors are never forwarded to the model unsanitized: they may carry attacker-controlled content from an IBKR response or from strategy code, and a `requests` exception carries the full request URL. (Until 2026-09-14 this section was framed as the MCP page's *token passthrough* anti-pattern, which is about forwarding a client's OAuth token downstream — a different thing, and one that cannot arise here because the server receives no client token.)
 
 All tool errors go through `_safe_error`, which maps exception types to controlled strings:
 
@@ -229,11 +281,72 @@ every `{exc}`, `str(exc)`, `%`/`.format` interpolation, `.args` read, log call, 
 and `exc_info=` in `claude_tools.py` and `mcp_server.py` is routed through it and
 `tests/security/test_error_redaction.py` fails on any that is not.
 
+OWASP's list also names **filesystem paths**, and the username an absolute path carries is
+exactly what the model never needs: the Flex import's root is documented to it as
+`~/.ibkr_core`, while the refusal message spelled out `/Users/<name>/.ibkr_core` in full —
+something the 2026-07-11 audit noted in passing ("discloses the exact home-directory path on
+any invalid probe") and left. Since 2026-09-14 one function, `redaction.collapse_home`,
+rewrites the home directory as `~`, and both surfaces use it: `redact_error` applies it before
+the length cap, and `_import_flex_file` builds its refusal from it. One definition of "show a
+path", the way `price_text_safe` is one definition of showing a broker price.
+
+### Tool inputs and outputs
+
+**Inputs (invariant 11).** On the MCP transport an argument set that fails the tool's
+`inputSchema` never reaches a handler: the SDK runs `jsonschema.validate` before calling
+`handle_call_tool`, and `build_server` now says `validate_input=True` explicitly rather than
+inheriting it. Until 2026-09-14 the property was the SDK's default and nothing more — no test
+sent a malformed argument — which matters because `mcp` is the one dependency with a hard
+ceiling (`mcp<2`: 2.0 removed the decorator carrying that default), so a port could drop the
+check while every existing test stayed green.
+`tests/security/test_tool_input_validation.py` now drives four malformed sets (wrong type,
+missing required, enum violation, and the same on a server-local tool) through the real
+request handler and asserts `_dispatch` — the single funnel behind every tool call — is never
+reached; that no call anywhere in the package passes `validate_input=False`; and, because the
+SDK validates only tools it has listed, that every name `_dispatch` routes is a listed tool.
+A probe proves all four cases reach the handler once validation is switched off.
+On the Anthropic-API path (`ClaudeToolkit.execute`) there is no schema step: handlers coerce
+what they read and any exception becomes one fixed `_safe_error` sentence.
+
+**Outputs.** All 46 tools return unstructured text; none declares an `outputSchema`, so there
+is nothing to validate and none was invented. Rule: a future tool that returns structured
+content declares an `outputSchema` and lets the SDK validate it. Output size was measured
+rather than capped. List outputs are bounded: 50 rows from `get_trades`' store branch, 20 from
+its CP-API-session branch, 50 from `get_pa_transactions`, 10 page URLs from `crawl_site`. The
+sandbox's error channel is capped twice — the child sends one `redact_error` line of 300
+characters, and the handler re-caps at 1,000 so a multi-violation RestrictedPython list is not
+cut a second time. `fetch_page` returns the whole page (typically 5–35 KB; 144,125 characters
+is the largest on record, `docs/web-scraper-reference.md` § 5). No cap is imposed there — the page is untrusted at
+any size, and a silent clip would hide content from the operator. If a host ever reports
+context exhaustion, the fix is explicit, marked truncation, not silent clipping.
+
+### Tool composition under prompt injection
+
+The capability registry classifies tools one at a time; it is not a composition control, so
+OWASP's warning about chained calls was checked against concrete chains
+(`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` § Phase 3 E). One is real: a
+fetched page can instruct the model to read account data (`get_positions`,
+`get_account_summary`, `get_trades`, `get_pnl`) and then call `fetch_page` or `crawl_site`
+with that data in the URL — exfiltration to an attacker-chosen public host through two
+individually permitted tools. It is not closable inside this package without breaking the web
+tools, because any public URL can carry data, hostname labels included. The other two web
+tools are weaker channels, not equivalent ones: `firecrawl_search` sends its query to
+Firecrawl, not to a host the page chooses, and `search_site` ranks locally with BM25 and takes
+a domain rather than a path — a domain the attacker controls is still a channel, but a much
+narrower one.
+What bounds it: no credential leaves (no tool returns one; `test_error_redaction.py`), no
+order is placed (`test_order_write_boundary.py`), every fetch tool carries
+`openWorldHint=true` for clients that confirm outbound calls, and the URL is visible in the
+transcript. **Accepted, 2026-09-14.** The other chains checked — alert writes, cache
+deletion, archiving hostile content to Drive, sandboxed compute, re-importing the operator's
+own Flex archive — add no privilege beyond their declarations, and no chain reaches an order
+write.
+
 ---
 
 ## Code Execution Security — Backtest Sandbox
 
-Agent-submitted strategy code runs in a `RestrictedPython` sandbox. This implements the [MCP local server compromise mitigations](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#local-mcp-server-compromise): restricted file system access, restricted network access, and explicit resource limits.
+Model-written strategy code runs in a `RestrictedPython` sandbox inside a child process — OWASP's *Code Injection & Unsafe Execution* item and §1's "run in isolated subprocesses": restricted file system access, restricted network access, and explicit resource limits.
 
 ### What is blocked
 
@@ -303,11 +416,13 @@ insufficient.
 
 **`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/audits/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook denies `eval`/`query` by name with a specific message. Since 2026-09-13 that denylist is superseded in effect by the attribute allowlist above — neither name is on it — and the rule for a newly discovered string-evaluating method is the inverse: it is blocked unless someone adds it to `_PANDAS_ALLOWED_ATTRS`, which is the security change.
 
-**Thread timeout non-termination (fixed 2026-07-16)** — The sandbox previously ran in a `ThreadPoolExecutor` thread; `Future.cancel()` cannot stop a thread that is already executing, so strategy code containing `while True: pass` survived the 10-second timeout and kept consuming CPU in a background thread. This was worse than "unbounded CPU consumption" alone: `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit, unable to terminate cleanly without a forced kill. The sandbox now runs strategy code (both `compile_restricted` and `exec`) in an isolated `multiprocessing.Process` (spawn context) communicating results back over a `multiprocessing.Pipe`. A daemon watchdog thread enforces the execution timeout directly: if the deadline passes, it escalates `terminate()` (SIGTERM), then `kill()` (SIGKILL) after a short grace period if the process hasn't exited — a real OS process can be forcibly stopped, unlike a thread. Killing the process is also what reliably unblocks the parent's read of the result pipe no matter what state it's in (waiting for the first byte, or partway through a large payload), since a `multiprocessing.Connection.recv()` call has no timeout of its own once any bytes are readable. The watchdog itself is a daemon thread with a provably bounded lifetime, so — unlike the `ThreadPoolExecutor` it replaced — it can never become an unkillable, process-exit-blocking thread. See `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
+**Thread timeout non-termination (fixed 2026-07-16)** — The sandbox once ran strategy code in a `ThreadPoolExecutor` thread, which `Future.cancel()` cannot stop: `while True: pass` outlived the 10-second timeout and could hang the host at exit. It now runs in a `multiprocessing` spawn child with a `Pipe` for the result and a daemon watchdog that escalates SIGTERM → SIGKILL at the deadline — a process can be killed, a thread cannot, and killing it is also what unblocks the parent's pipe read. Design and review record: `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
 
 ---
 
-## MCP Transport — Host and Origin Validation
+## MCP Transports — stdio Preferred; SSE Loopback-Bound, Validated and Authenticated
+
+**stdio is the default and the preferred transport** (OWASP §1 "prefer STDIO"; the MCP best-practices page's "use the stdio transport to limit access to just the MCP client"). The client is the process that spawned the server; there is no HTTP surface and no third party to authenticate.
 
 `--transport sse` serves HTTP on `127.0.0.1:5174`. That bind stops the LAN, not the operator's
 own browser: a page whose DNS answer flips to 127.0.0.1 becomes same-origin with the server,
@@ -317,13 +432,51 @@ are passed** ("for backwards compatibility"), which is how `SseServerTransport("
 until 2026-09-13 (audit A3). `mcp_server.build_sse_app` now passes `TransportSecuritySettings`
 allowing only loopback `Host` and `Origin` values on any port; a foreign `Host` gets 421, a
 foreign `Origin` 403. `tests/security/test_transport_security.py` drives the Starlette app both
-ways. The stdio transport (the default) has no HTTP surface.
+ways; the SDK applies the same check to the `GET /sse` handshake and to `POST /messages/`.
+
+### The per-launch bearer token (2026-09-14)
+
+Host/Origin validation keeps out the browser and the LAN. It does nothing about another
+*process* on the same machine, which needs no DNS trick and no browser — a second user
+account, or a sandboxed app allowed loopback access, can simply `GET /sse`, read the session
+id from the `endpoint` event, and call every tool. OWASP §1 ("if you must use local HTTP …
+still utilize explicit authorization/authentication"), the MCP best-practices page ("require
+an authorization token", "use unix domain sockets") and the
+[transports specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#security-warning)
+("SHOULD implement proper authentication") all name the step.
+
+Every SSE request must now present `Authorization: Bearer <token>`:
+
+| Property | Value |
+|---|---|
+| Token | `secrets.token_urlsafe(32)`, fresh on every launch — nothing to configure, nothing to rotate, and it stops working when the server does |
+| Where it goes | `~/.ibkr_core/mcp_sse_token`, mode 0600, in the directory `SQLiteStore` already holds at 0700. Only the path is logged, never the value: a terminal is scrolled, screen-shared and often captured |
+| What is gated | The whole app — `/sse` as well as `/messages/`. Gating only the POST route would leave the half that hands out session ids open |
+| Comparison | `hmac.compare_digest` over the entire header value, scheme included, so a prefix of the token is not distinguishable by timing |
+| Order | Before the SDK's Host/Origin check, so an unauthenticated caller learns nothing about the loopback policy |
+| Mechanism | `_BearerTokenGate`, pure ASGI — a Starlette `BaseHTTPMiddleware` buffers the response and would break the event stream |
+| Not optional | `build_sse_app(server, token)` takes the token as a required argument, so an unauthenticated server cannot be built by forgetting one |
+
+This was first written down, the same day, as an accepted residual with the fix "presented for
+the owner's decision" on the belief that existing SSE clients would break. The review checked
+the premise instead of repeating it: there are no SSE consumers — `claudia_ui` does not run
+this server, desktop clients use stdio, nothing starts it from a launch agent — and the SDK's
+own `mcp.client.sse.sse_client` already accepts `headers=`. With the cost at zero, the
+standing rule applies: fix it rather than document it.
+
+A client reads the token from the file; anything running as the operator can read that file,
+which is the same boundary as the `.env` and the browser cookie store. The gate defends
+against *other* local principals, not against code running as the operator. stdio remains the
+preferred transport and needs none of this.
 
 ## Security Regression Suite — `tests/security/`
 
 The 2026-09-13 audit's conclusion was that the important properties held by convention, and a
 lint-clean, fully typed change could violate any of them silently. Each now has a test that
-reads the source or drives the code, and a `security` marker (`pytest -m security`, ~10 s):
+reads the source or drives the code, and a `security` marker (`pytest -m security`, ~10 s).
+The last row, and the bearer-token half of the transport row, came from the 2026-09-14 OWASP
+recalibration (`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`); the rest from the
+2026-09-13 audit:
 
 | File | Property held |
 |---|---|
@@ -335,7 +488,8 @@ reads the source or drives the code, and a `security` marker (`pytest -m securit
 | `test_error_redaction.py` | Secret-shaped material (14 forms, userinfo and OAuth parameters included) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
-| `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback, with or without a port |
+| `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback, with or without a port; it answers 401 to an absent, wrong, prefix, case-altered or scheme-altered bearer credential on both routes, and lets the real token through |
+| `test_tool_input_validation.py` | On the MCP transport an argument set that fails the tool's `inputSchema` never reaches `_dispatch`; a well-formed one does; no call in the package passes `validate_input=False`; every name the dispatcher routes is a listed tool (the SDK validates no other); the probe reaches the handler for all four sets with validation off |
 
 Each structural file also feeds its checker a deliberately-violating snippet, so the guard is
 proven able to fire. The properties, as a constitution: **(1)** no order reaches IBKR except
@@ -345,8 +499,10 @@ not execution; **(3)** every tool declares its capabilities and none declares `O
 frozen; **(5)** every externally derived URL is checked before the fetch and on every browser
 request; **(6)** error text reaching the model or a log passes one redaction function; **(7)**
 unit tests cannot open sockets, resolve names or see credentials; **(8)** processes are spawned
-only from three named modules, never through a shell; **(9)** every path-interpolated identifier
-passes its regex; **(10)** the HTTP transport validates `Host` and `Origin`.
+only from three named modules, never through a shell; **(9)** every
+path-interpolated identifier passes its regex; **(10)** the HTTP transport validates `Host`
+and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
+transport an argument set that fails the tool's `inputSchema` never reaches a handler.
 
 CI adds two gates the four code gates cannot provide: `pip-audit` over the full installed tree
 (`[dev,server,scraper]`, weekly as well as per push, ignores only from
@@ -359,7 +515,7 @@ pushed range (`.gitleaks.toml`: default rules plus the Firecrawl and Anthropic k
 
 The IBKR Client Portal Gateway is bound to `localhost` by design — no cloud deployment is supported. This limits the session hijacking surface: an attacker must have local machine access.
 
-Mitigations against [session hijacking](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#session-hijacking):
+The MCP page's hijacking section (now *State Handle Hijacking*, about server-minted handles presented as tool arguments) does not apply: this server mints no handles and serves one principal. The session that matters locally is IBKR's:
 
 - `BrowserCookieAuth` re-reads the session cookie from Chrome's store on each client instantiation — there is no persistent server-side session store that can be enumerated or guessed.
 - `TokenAuth` (headless mode) holds the cookie as a Python `str` in process memory. It is not written to disk.
@@ -469,7 +625,7 @@ class Config:
     firecrawl_api_key: str = field(default="", repr=False)
 ```
 
-All three are excluded from `repr()`, preventing accidental exposure in logs, tracebacks, and debug output. Exception text is the other channel a key can travel through — a `requests` failure carries the full request URL, Flex token included — which is why every exception the model layer shows or logs passes through `redaction.redact_error` (§ Token Passthrough Prevention).
+All three are excluded from `repr()`, preventing accidental exposure in logs, tracebacks, and debug output. Exception text is the other channel a key can travel through — a `requests` failure carries the full request URL, Flex token included — which is why every exception the model layer shows or logs passes through `redaction.redact_error` (§ Error text and raw payloads reach the model only through redaction).
 
 ### Credentials Never in Version Control
 
@@ -511,7 +667,7 @@ if not any(url.startswith(p) for p in _ALLOWED_URL_PREFIXES):
     raise FlexQueryError(f"Flex SendRequest returned unexpected URL: {url!r}")
 ```
 
-This directly addresses the [SSRF attack class](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#server-side-request-forgery-ssrf) described in the MCP security guide, where attacker-controlled metadata is used to redirect HTTP requests to internal or credential-harvesting endpoints.
+The MCP best-practices page's [SSRF section](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices#server-side-request-forgery-ssrf) is the specific reference for this class — attacker-influenced metadata redirecting a request — and its notes on redirect targets, encoding tricks and DNS time-of-check/time-of-use are why the browser path below has a second, per-request layer. (The OWASP guide has no SSRF section; this is the one place the MCP page is the more specific source.)
 
 ### SSRF Prevention (Web Scraping — the local browser)
 
@@ -677,10 +833,14 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Prompt injection via exception messages | `_safe_error` maps all exceptions to controlled strings | `redact_error` bounds and scrubs the channels that need detail; `test_error_redaction.py` finds any raw `{exc}` |
 | Sandbox escape via file I/O | Attribute allowlist on every pandas/numpy object and class (`_sandboxed_getattr`) — no `to_*` writer, no `style`, no `plot` | Safe `SimpleNamespace` wrappers for `pd`/`np`; `_write_guard` blocks namespace mutation; child process; canary tests |
 | Browser tab drives the MCP server (DNS rebinding) | SSE transport bound to `127.0.0.1` | `TransportSecuritySettings`: foreign `Host` → 421, foreign `Origin` → 403 |
+| Another local process drives the SSE server | `_BearerTokenGate`: every request to `/sse` and `/messages/` presents this launch's token or gets 401, checked with `hmac.compare_digest` before Host/Origin | stdio is the default and has no HTTP surface at all; SSE is opt-in and loopback-only; order execution and credentials stay unreachable whatever the caller |
+| A fetched page instructs the model to send account data to an attacker's host | No credential or order capability is reachable by any chain (`test_tool_capabilities.py`, `test_order_write_boundary.py`) | Every fetch tool carries `openWorldHint=true` for clients that confirm outbound calls; the URL is visible in the transcript — accepted composition risk (§ Tool composition) |
+| Malformed tool arguments reach a handler over MCP | `inputSchema` validation before `_dispatch`, `validate_input=True` stated explicitly and held by `test_tool_input_validation.py`, which also holds that every routed name is a listed one | Handlers coerce what they read and `_safe_error` bounds any failure |
 | Sandbox DoS (infinite loop / large allocation) | 10-second execution timeout | 4,096-character code length cap |
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
 | SSRF via the local browser (`fetch_page` / `crawl_site`) or the seeder (`search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved/shared-range hosts before anything is constructed, parsing decimal/hex/octal literals locally; the validate-before-reach order is asserted by `test_ssrf_boundary.py` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level; `_reject_private_httpx_request` does the same on the seeder's httpx client for `search_site`. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
+| The operator's username leaks through a path in a tool result | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error` and by `_import_flex_file`'s refusal | Canaries in `test_error_redaction.py`, including the real handler's blocked-path message |
 | Credential exposure in logs or tool results | `repr=False` on `anthropic_api_key`, `flex_token`, `firecrawl_api_key`; every logged or shown exception passes `redact_error` | Credentials loaded from env vars only, never hardcoded; `gitleaks` in CI; unit tests never load `.env` |
 | Vulnerable dependency in the resolved tree | `pip-audit` over `[dev,server,scraper]`, per push and weekly, fixable findings block | Dependabot alerts on the manifest's direct dependencies |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |
@@ -710,6 +870,9 @@ The following rules are enforced at PR review. Any PR that violates them will be
 9. **Never widen the sandbox by accident** — a name added to `backtest._PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS`, or an object added to `build_sandbox()`, is a security change: check it accepts no path, buffer, callable or string resolved as a name, and update the frozen sets in `tests/security/test_sandbox_boundary.py` in the same commit.
 10. **Never spawn a process outside `order_confirm`, `gateway/manager` and `backtest`** without adding the module to `tests/security/test_subprocess_boundary.py` with the reason; never `shell=True`.
 11. **Never let a fetch reach a model-supplied host before `_validate_public_url`**, and install `_install_ssrf_guard` on every browser this package opens.
+12. **Never register the MCP call handler with `validate_input=False`**, and add every new server-local tool to `_ALL_TOOL_DEFS` as well as to `_dispatch` — the SDK validates only tools it has listed. Give any future tool that returns structured content an `outputSchema`. `tests/security/test_tool_input_validation.py` holds the first two; the third is a rule until a structured tool exists.
+13. **Never give `build_sse_app`'s `token` a default, and never print the token** — a default makes an unauthenticated server reachable by forgetting an argument, and a terminal is not a secret store. The file is 0600 under `~/.ibkr_core/`; only its path is logged.
+14. **Never show the model an absolute path built from `Path.home()`** — pass it through `redaction.collapse_home` so the message names the root, not the account.
 
 ---
 
@@ -725,6 +888,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 | 2026-06-27 | `pending` | v1.0 pre-release full audit — all 22 source files across 12 attack categories | 6 findings: 4 Medium, 2 Low. 4 fixed in code (path traversal in `import_flex_file`, SSRF decimal/hex IP bypass, `FlexQueryError` message leakage, `preview_order` input validation). 1 documented residual (backtest thread non-termination — architectural, tracked for v2.0). 1 confirmed mitigated (DataFrame I/O in sandbox — write-only OHLCV, already in residual risk section). No Critical or High findings. All SQL injection, command injection, shell=True, pickle, credential logging, and MCP order gate bypass checks passed. |
 | 2026-07-01 | `eece77b` | New Crawl4AI fallback surface — `local_browser.py` (new), `claude_tools.py` (`_validate_public_url`, `_scrape_with_fallback`) | 2 candidate SSRF findings identified, each independently re-verified against the actual code by a separate filtering pass: DNS-rebinding TOCTOU between `_validate_public_url`'s validation-time DNS resolution and Crawl4AI/Chromium's independent fetch-time resolution (confidence 7/10); unvalidated-redirect-based bypass (confidence 3/10, downgraded per open-redirect precedent but confirmed as a real code gap on read-through). Both fixed in code rather than accepted as residual risk — see `_reject_private_requests` in the SSRF Prevention section above (Playwright-level per-request guard via Crawl4AI's `on_page_context_created` hook, closing both gaps at the actual fetch layer). Path-traversal via a crafted hostname (`profiles_dir / domain`) also hardened: `_safe_domain` now explicitly rejects `..`/`/`/`\`, replacing what had been an incidental block via `_validate_public_url`'s IDNA-encoding failure. No credential exposure or command injection issues found. |
 | 2026-09-13 | `c4b4ba8..e57aabb` | Security *architecture* audit — whether the boundaries are enforceable and whether a lint-clean, typed, green change (possibly by a coding agent) could violate one silently. Read-only trace of every tool to its sinks, then live probes. | 3 confirmed: sandbox arbitrary file **read** (`Styler.from_custom_template` through the un-redacted error channel) and **write** (`to_csv` and five by-name forms) from strategy code — both demonstrated by execution, fixed with an attribute allowlist; SSE transport without Host/Origin validation (SDK default) — fixed. 9 architectural weaknesses closed with structural tests: `tests/security/` (9 files, 138 tests, each structural checker proven to fire on a violating snippet), `capabilities` on all 46 tools, `redact_error`, `.env` isolation, `inet_aton` literal parsing + `100.64.0.0/10`, dict copy before the gates, subprocess allowlist. CI gained `pip-audit` (first run caught nltk PYSEC-2026-3740, no fix, ignored with re-check) and `gitleaks`. GitHub's default CodeQL setup evaluated on its record and kept as a non-gate. Design written up as `docs/security-architecture.md`. A fresh-eye multi-angle code review the same day found the first sandbox fix still reachable through the exposed classes (`pd.Series.apply(series, 'to_csv', …)`) and through dict views, and two pandas idioms it had broken (`df.close`, named aggregation); the transport allowlist refusing a port-less `Host`; the redaction rules letting `refresh_token=` through; the seeder with no per-request guard; the session-wide socket block skipping the first live module's fixtures; and the `mcp` floor too low for `transport_security`. All fixed the same day with the reproducing tests first (audit Addendum D). |
+| 2026-09-14 | `(uncommitted at the time of writing)` | Security guidance recalibration against the OWASP GenAI Security Project's *A Practical Guide for Secure MCP Server Development* v1.0 (Feb 2026), retrieved in full with Firecrawl and archived under `docs/audits/audit-evidence/scrapes/`; the official MCP best-practices page re-read as served (2026-07-28 revision) | 49 OWASP items classified: 21 apply and are covered or exceeded, 8 apply in part, 20 do not apply to a local single-operator deployment. OWASP adopted as the principal external baseline; the six-row MCP mapping retired — two of its rows had come to cite sections that now mean something else (OAuth token scopes; a renamed hijacking section about server-minted handles). Three changes, each test-first. **Invariant 11** (new): MCP argument validation against `inputSchema` held only by SDK default and untested, with `mcp<2` capped because 2.0 removes the decorator carrying that default — now asserted through `_dispatch`, together with the fact the SDK validates only listed tools. **Invariant 10** (widened): the SSE transport gained a per-launch bearer token, first written down as an accepted residual and implemented the same day once the review found no consumer that would break. **Path disclosure**: `redaction.collapse_home` rewrites the operator's home directory as `~` for every model-facing message, closing something the 2026-07-11 audit had noted and left. The read-then-fetch exfiltration chain under prompt injection was investigated and accepted, with what bounds it named. Full matrix, including everything rejected and why: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. |
 | 2026-07-11 | `4e38655..e587695` | Full codebase — 6-agent parallel audit (one per risk cluster: auth/order gates; backtest sandbox + store; network/SSRF/Drive/Flex; IBKR client + MCP server; `claude_tools.py` LLM-tool layer; gateway Docker/shell infra), every finding independently re-verified by a second adversarial agent before inclusion | 6 findings, all fixed: 4 High — RCE via `DataFrame.eval`/`.query` in the backtest sandbox (H-1); `order_id`/`alert_id` path traversal letting the ungated `delete_alert` tool's URL collapse to `cancel_order`'s (bypassing Touch ID + confirmation dialog) (H-2); gateway Docker container published on all host interfaces instead of loopback (H-3); SSRF guard's IPv4-only DNS resolution failing open on AAAA-only hosts (H-4). 2 Medium — gateway IP allowlist matching full `/8` blocks instead of actual RFC 1918 ranges (M-1); `import_flex_file`'s path-prefix check admitting sibling directories via string-prefix matching instead of a path-boundary check (M-2). 1 candidate finding (Gate-2 dialog/order-dict TOCTOU in `place_order`/`modify_order`) investigated and dropped at verification — no reachable caller in this repo. Each fix went through implementer + independent spec-compliance + independent code-quality review before acceptance; two review rounds found real follow-up issues (a Unicode-digit regex gap in H-2's `_ORDER_ID_RE`, a second stale doc reference for H-3), both fixed forward in separate commits rather than folded silently into the original ones. |
 
-Full audit reports: [`docs/audits/security-audit-2026-05-25.md`](docs/audits/security-audit-2026-05-25.md) · [`docs/audits/security-audit-2026-06-10.md`](docs/audits/security-audit-2026-06-10.md) · [`docs/audits/security-audit-2026-07-11.md`](docs/audits/security-audit-2026-07-11.md) · [`docs/audits/security-architecture-audit-2026-09-13.md`](docs/audits/security-architecture-audit-2026-09-13.md). The living design behind these controls: [`docs/security-architecture.md`](docs/security-architecture.md).
+Full audit reports: [`docs/audits/security-audit-2026-05-25.md`](docs/audits/security-audit-2026-05-25.md) · [`docs/audits/security-audit-2026-06-10.md`](docs/audits/security-audit-2026-06-10.md) · [`docs/audits/security-audit-2026-07-11.md`](docs/audits/security-audit-2026-07-11.md) · [`docs/audits/security-architecture-audit-2026-09-13.md`](docs/audits/security-architecture-audit-2026-09-13.md) · [`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`](docs/audits/owasp-mcp-guide-applicability-2026-09-14.md). The living design behind these controls: [`docs/security-architecture.md`](docs/security-architecture.md).

@@ -122,7 +122,36 @@ the MCP SDK's `TransportSecuritySettings` (loopback on any port). Without those 
 disables its DNS-rebinding protection, which would let a web page in the operator's browser
 drive every tool once its DNS answer flipped to 127.0.0.1. A foreign `Host` receives 421, a
 foreign `Origin` 403, and loopback passes with or without a port; `tests/security/test_transport_security.py`
-exercises all three. Detail: `SECURITY.md` § MCP Transport.
+exercises all three. Detail: `SECURITY.md` § MCP Transports.
+
+## SSE bearer token (2026-09-14)
+
+Host/Origin validation keeps out the browser and the LAN, not another process on the machine —
+which needs no DNS trick, just the port. Every SSE request must therefore present this launch's
+bearer token:
+
+```bash
+python -m ibkr_core_mcp.mcp_server --transport sse --port 5174
+# ibkr-core-mcp: SSE bearer token for this launch written to
+#   /Users/<you>/.ibkr_core/mcp_sse_token — clients must send 'Authorization: Bearer <token>'.
+```
+
+The token is a fresh `secrets.token_urlsafe(32)` per launch, written 0600 and never printed.
+A client reads the file and sends the header:
+
+```python
+from mcp.client.sse import sse_client
+
+token = (Path.home() / ".ibkr_core" / "mcp_sse_token").read_text().strip()
+async with sse_client("http://localhost:5174/sse", headers={"Authorization": f"Bearer {token}"}) as (r, w):
+    ...
+```
+
+Anything else gets 401 on both `/sse` and `/messages/`, checked before Host and Origin so an
+unauthenticated caller learns nothing about the loopback policy. SSE is still the lower-trust
+transport — prefer stdio, where the client is the process that spawned the server, and start SSE
+only for a local consumer that needs it. Reasoning and sources: `SECURITY.md` § MCP Transports;
+applicability decision: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` § Phase 3 A.
 
 ## Tool annotations (2026-09-13)
 

@@ -60,7 +60,7 @@ pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 
-# Security regression suite — the ten properties of SECURITY.md § Security Regression Suite,
+# Security regression suite — the eleven properties of SECURITY.md § Security Regression Suite,
 # each read from the source or driven with canaries; ~10 s. Part of the unit run and of CI.
 pytest -m security
 
@@ -256,7 +256,7 @@ Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` mu
 | Gate | Mechanism | Behaviour |
 |---|---|---|
 | **Gate 1 — Touch ID** | Apple `LocalAuthentication` (`LAPolicyDeviceOwnerAuthentication`) | Touch ID/Face ID first, falls back to the device's system password on a failed/cancelled biometric scan. 60-second timeout. |
-| **Gate 2 — Visual confirmation** | tkinter modal dialog with full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
+| **Gate 2 — Visual confirmation** | On macOS an AppKit `NSAlert` in a subprocess (`osascript` if that fails); a `tkinter` modal elsewhere. Full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
 
 If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and the IBKR endpoint is never contacted.
 
@@ -287,7 +287,7 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 - Never move the gates out of `IBKRClient` — enforcement must be at the innermost call site.
 - The required policy is `LAPolicyDeviceOwnerAuthentication` (Touch ID/Face ID, falling back to the device's system password on a failed/cancelled biometric scan) — Apple's own recovery path for a genuinely-failed biometric read, not a bypass this library adds. The stricter biometrics-only policy was evaluated and rejected: a failed scan under it has no recovery path at all. Don't change this policy without updating both this file and `README.md`'s Security section in the same PR.
 - Any PR that weakens these gates *beyond* the documented policy above — e.g. skipping `require_touch_id`/`confirm_order_dialog` entirely, caching a prior success, or adding a fallback beyond the OS's own password prompt — will be rejected.
-- **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate, or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audit that produced them: `docs/audits/security-architecture-audit-2026-09-13.md`.
+- **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate, or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audits that produced them: `docs/audits/security-architecture-audit-2026-09-13.md` (invariants 1–10) and `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` (invariant 11, and the SSE bearer token in 10).
 
 ---
 
@@ -431,8 +431,10 @@ not `@import`s, so they don't load into every session's context automatically.
   per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
 - Scraping *method* — approaching an unfamiliar host, the four-way matrix, reading a blocked
   page, and where we stop on the anti-bot ladder: `docs/web-scraping-methodology.md`
-- Security architecture — principals, privilege tiers, the trust-boundary map, the ten
+- Security architecture — principals, privilege tiers, the trust-boundary map, the eleven
   invariants with their tests, subsystem designs, CI gates, the decision log, change recipes:
-  `docs/security-architecture.md`
+  `docs/security-architecture.md`; the OWASP MCP-guide applicability decision (2026-09-14, the
+  principal external baseline, section by section): `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`,
+  whose retrieved sources are archived under `docs/audits/audit-evidence/scrapes/`
 - Consuming projects: `docs/consumers.md`
 - Charting/quant/stats package landscape (what we have vs. gaps vs. duplicative-of-existing-code): `docs/python-package-landscape.md`

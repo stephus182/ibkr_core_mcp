@@ -16,6 +16,7 @@ See docs/audits/security-architecture-audit-2026-09-13.md, B5.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 _MAX_LEN = 300
 
@@ -42,6 +43,40 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 _REDACTED = "[redacted]"
 
 
+def collapse_home(text: str) -> str:
+    """Rewrite the operator's home directory as `~` wherever it appears in `text`.
+
+    One definition of "show a path" for every surface that shows one to the model or a log,
+    the way `order_confirm.price_text_safe` is one definition of rendering a broker price.
+    What the model needs — which file, under which root — survives; the account name it does
+    not need does not.
+
+    OWASP's *A Practical Guide for Secure MCP Server Development* v1.0 §6 (Safe Error
+    Handling) lists filesystem paths beside tokens and stack traces in what must not be
+    returned to the model or client, and the 2026-07-11 audit had already observed in passing
+    that `_import_flex_file` "discloses the exact home-directory path on any invalid probe".
+    Both were closed on 2026-09-14; the applicability decision is
+    docs/audits/owasp-mcp-guide-applicability-2026-09-14.md § Phase 1, §6 row.
+
+    A home path shorter than two characters (a pathological `HOME=/`) is left alone:
+    substituting every separator would destroy the message this exists to keep readable.
+    An unresolvable home is left alone for the same reason.
+
+    Args:
+        text: Any message about to be shown to the model or written to a log.
+
+    Returns:
+        The same text with the home directory written as `~`.
+    """
+    try:
+        home = str(Path.home())
+    except (OSError, RuntimeError):  # no resolvable home directory
+        return text
+    if len(home) < 2:
+        return text
+    return text.replace(home, "~")
+
+
 def _scrub(match: re.Match[str]) -> str:
     """Keep the recognisable head of a match (`?`, `://`, `Cookie:`) and replace the rest."""
     text = match.group(0)
@@ -56,6 +91,9 @@ def _scrub(match: re.Match[str]) -> str:
 def redact_error(exc: BaseException, limit: int = _MAX_LEN) -> str:
     """`TypeName: first line of the message`, secrets scrubbed, bounded, no newline.
 
+    The home directory is collapsed to `~` (`collapse_home`, 2026-09-14) before the length
+    cap, so the shortening buys message rather than spending it.
+
     Args:
         exc: The exception whose text is about to be shown to the model or logged.
         limit: Maximum length of the returned text.
@@ -67,6 +105,7 @@ def redact_error(exc: BaseException, limit: int = _MAX_LEN) -> str:
     first_line = message.splitlines()[0] if message else ""
     for pattern in _SECRET_PATTERNS:
         first_line = pattern.sub(_scrub, first_line)
+    first_line = collapse_home(first_line)
     text = f"{type(exc).__name__}: {first_line}" if first_line else type(exc).__name__
     if len(text) > limit:
         text = text[: limit - 1] + "…"

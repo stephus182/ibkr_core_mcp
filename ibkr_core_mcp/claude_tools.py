@@ -40,7 +40,7 @@ from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
-from ibkr_core_mcp.redaction import redact_error
+from ibkr_core_mcp.redaction import collapse_home, redact_error
 from ibkr_core_mcp.store import SQLiteStore
 from ibkr_core_mcp.streaming import SNAPSHOT_FIELD_NAMES
 
@@ -1867,7 +1867,10 @@ class ClaudeToolkit:
         allowed_root = Path.home() / ".ibkr_core"
         resolved = Path(path).expanduser().resolve()
         if resolved != allowed_root and not resolved.is_relative_to(allowed_root):
-            return f"Blocked: import path must be under {allowed_root}.", None
+            # `collapse_home`, not str(allowed_root): the root is documented to the model as
+            # `~/.ibkr_core` (this tool's own description), and the username is the only thing
+            # the expanded form adds — noted by the 2026-07-11 audit, fixed 2026-09-14.
+            return f"Blocked: import path must be under {collapse_home(str(allowed_root))}.", None
         if not resolved.exists():
             return f"File not found: {path}", None
         flex = FlexQueryClient(self._config, self._store, self._cache)

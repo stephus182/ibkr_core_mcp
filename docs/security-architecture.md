@@ -10,7 +10,7 @@ than intended.
 |---|---|---|
 | `SECURITY.md` | Policy and control inventory (the GitHub-conventional file, public-facing) | "What controls exist, where, and how do I report a vulnerability?" |
 | **`docs/security-architecture.md`** (this file) | Living design | "Where are the boundaries, what must stay true, what enforces it, why was it built this way, and how do I change it without breaking it?" |
-| `docs/audits/security-architecture-audit-2026-09-13.md` and earlier audits | Point-in-time evidence, never retroactively edited | "What was found on that day, what was proven, what was done?" |
+| `docs/audits/security-architecture-audit-2026-09-13.md`, earlier audits, and `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` (the external-baseline mapping) | Point-in-time evidence, never retroactively edited | "What was found on that day, what was proven, what was done?" |
 
 When a control changes, `SECURITY.md` and this file change together; the audit that motivated
 the change stays as it was.
@@ -24,6 +24,7 @@ the change stays as it was.
 | **Human operator** | Configuration, credentials, approving each order write at the keyboard | Unattended automation of order writes (by design: every write needs a fingerprint and a click) | `.env`, the CLI, the two gates |
 | **The model** (Claude, through `ClaudeToolkit` or the MCP server) | Reads, analysis, strategy code, proposing orders | Executing orders, reading credentials, reaching the local network, running unconfined code | Tool `inputs` dicts, resource URIs |
 | **Web content** returned by `fetch_page`, `crawl_site`, `search_site`, `firecrawl_search` | Nothing | Anything — it is the prompt-injection vector | Back into the model context |
+| **Another local process** (SSE transport only) | Nothing — it must present this launch's bearer token to be heard at all (§ 6.6) | Anything: with the token it has the full tool surface, and still never an order write (inv. 1) or a credential (inv. 6) | `GET /sse`, `POST /messages/` on 127.0.0.1 |
 | **IBKR gateway** (localhost) | Market and account data | Rendering: reply messages are shown on Gate 2 and are HTML-stripped first | `IBKRClient._get/_post`, `IBKRWebSocket` |
 | **Flex Web Service, Firecrawl, Google** | Their own data | Redirecting us: Flex statement URLs are allowlisted by prefix | `flex_query.py`, `web_scraper.py`, `cache.py` |
 | **In-process code** (the host app, a dependency) | Everything the process can do | — this package does not defend the process against itself | Direct calls |
@@ -32,6 +33,18 @@ the change stays as it was.
 The last row is the one the 2026-09-13 audit was about. The question it asked of every
 boundary was: *could a perfectly linted, perfectly typed, fully tested change violate this
 silently?* Where the answer was yes, the boundary now has a test that reads the source.
+
+**The deployment this is drawn for.** One operator, one personal workstation, local processes
+only. The MCP server runs as the operator's own user because two of its controls cannot run
+anywhere else — Gate 1 is Touch ID on that machine, Gate 2 is a dialog on that screen — and a
+third, the IBKR session, is read from that user's browser cookie store. stdio is the natural
+trust path: the client is the process that spawned the server. `--transport sse` is optional,
+binds loopback, and since 2026-09-14 authenticates its client (§ 6.6). There is no remote
+endpoint, no second tenant, no delegated identity, no shared service account, and no tool
+loaded at runtime — the tool set is the installed package version. Every boundary below is
+drawn for that picture; the control-level statement of the same thing is `SECURITY.md`
+§ Security Scope and Deployment Model, and the external baseline read through it is
+`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`.
 
 **Out of scope, on purpose.** OS-level compromise of the operator's machine; an attacker with
 the operator's browser session and physical presence; in-process code that monkeypatches the
@@ -112,7 +125,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 
 ---
 
-## 5. The ten invariants and their enforcement
+## 5. The eleven invariants and their enforcement
 
 Each row is a property that must stay true regardless of implementation. "Mechanism" is the
 code that makes it true; "Enforcement" is the test that fails when it stops being true;
@@ -129,7 +142,8 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 | 7 | Unit tests cannot open sockets, resolve names, or see credentials | pytest-socket's own `disable_socket`/`enable_socket` markers applied at collection (so the block lands before any fixture, module-scoped included) plus a session block for import time; `_no_real_secrets` stubs `load_dotenv` at every import site and removes every package-prefixed variable | `test_no_live_io.py` (the variable set is derived from source); `test_conftest_hygiene.py` for the exemption list | A test that needs DNS goes in `_REAL_DNS_EXEMPT_TESTS` with the reason; one that needs a secret sets a fake with `monkeypatch.setenv` |
 | 8 | Processes are spawned only from three named modules, never through a shell | List-form `subprocess.run`; JSON on stdin for the dialog | `test_subprocess_boundary.py`: import allowlist; no `shell=True` | Add the module to `ALLOWED_SPAWN_MODULES` with the reason, in the same commit |
 | 9 | Every path-interpolated identifier passes its regex | `_ACCOUNT_ID_RE`, `_ORDER_ID_RE`, `_REPLY_ID_RE` applied in every URL-building method | Existing `test_client.py` cases; the 2026-07-11 audit's H-2 | New URL with an interpolated id: validate it in the method, whichever module builds the URL |
-| 10 | The HTTP transport validates `Host` and `Origin` | `TransportSecuritySettings` in `build_sse_app`, bare and wildcard loopback entries | `test_transport_security.py`: 421 / 403 / loopback passes with and without a port | Adding a host means adding it to both allowlists; the test names the accepted set |
+| 10 | The HTTP transport validates `Host` and `Origin`, and admits only the holder of this launch's bearer token (widened 2026-09-14) | `TransportSecuritySettings` in `build_sse_app`, bare and wildcard loopback entries; `_BearerTokenGate` wrapping the whole app, `token` a required argument of `build_sse_app`; `_issue_sse_token` mints one `secrets.token_urlsafe(32)` per launch into a 0600 file | `test_transport_security.py`: 421 / 403 / loopback passes with and without a port; 401 for an absent, wrong, prefix, case-altered or scheme-altered credential, on `/messages/` and on `/sse`; a valid token reaches the SDK's own check; the signature has no token default | Adding a host means adding it to both allowlists; the test names the accepted set. The token stays required — an optional one makes an unauthenticated server the default again |
+| 11 | On the MCP transport an argument set that fails the tool's `inputSchema` never reaches a handler (added 2026-09-14) | The SDK's `call_tool(validate_input=True)`, written out explicitly in `build_server`; every name `_dispatch` routes is a listed tool, so the SDK's `if validate_input and tool` never falls through | `test_tool_input_validation.py`: four malformed sets never reach `_dispatch`, a well-formed one does, no package call passes `validate_input=False`, the routed names are a subset of the listed ones, and the probe reaches the handler for all four sets with validation off | Never pass `validate_input=False`; a port to an SDK without the flag keeps that test green by adding its own validation step. A new server-local tool is added to `_ALL_TOOL_DEFS` as well as `_dispatch` |
 
 `pytest -m security` runs the whole set in about ten seconds; it is also part of every
 unit run, of the pre-push hook, and of CI.
@@ -182,7 +196,7 @@ Strategy code is model-written, so it is treated as hostile. Four layers:
    class-free namespace and the list-like recursion came from the fresh-eye review the same
    day, which reached the writer through `pd.Series.apply(series, 'to_csv', …)`.
 3. **Process isolation**: `multiprocessing` spawn child, `Pipe` result, daemon watchdog that
-   `SIGTERM`s then `SIGKILL`s at 10 s, 4,096-char code limit.
+   `SIGTERM`s at 10 s and `SIGKILL`s 1 s later if the child has not exited, 4,096-char code limit.
 4. **A bounded error channel**: the child sends one line, capped at 300 chars — enough for the
    model to fix its own code, not enough to be a transfer.
 
@@ -226,6 +240,29 @@ stdio is the default and has no HTTP surface. `--transport sse` binds `127.0.0.1
 port, or none — the SDK matches `host:*` wildcards by prefix, so bare entries are listed too). Without those settings the MCP SDK disables its DNS-rebinding protection, which is how
 it ran until 2026-09-13.
 
+Host/Origin validation stops the browser and the LAN. It says nothing about another
+*process* on the machine, which needs no DNS trick and no browser — it can simply open the
+port, start a session and drive every tool. **`_BearerTokenGate` closes that half**
+(2026-09-14): `_issue_sse_token` mints one `secrets.token_urlsafe(32)` per launch, writes it
+0600 into `~/.ibkr_core/mcp_sse_token` and logs only the path; the gate wraps the whole app,
+so `/sse` — where a client reads its session id — is refused as surely as `/messages/`.
+`build_sse_app` takes the token as a **required** argument, for the same reason
+`ORDER_EXECUTION` was removed from the capability vocabulary rather than asserted to be
+unused: a default cannot be forgotten into existence. The comparison is
+`hmac.compare_digest` over the whole header value, scheme included, and the gate is pure ASGI
+because a Starlette `BaseHTTPMiddleware` buffers the response and would break the event
+stream.
+
+The token check runs before the SDK's Host/Origin check, so an unauthenticated caller learns
+nothing about the loopback policy. OWASP §1 ("if you must use local HTTP … still utilize
+explicit authorization/authentication"), the MCP best-practices page ("require an
+authorization token") and the transports specification ("SHOULD implement proper
+authentication") all name the step; it was documented as a residual on 2026-09-14 and closed
+the same day, once a consumer check found nothing that would break (§ 8).
+
+stdio remains the preferred transport and needs none of this: the client is the process that
+spawned the server.
+
 ### 6.7 Test isolation
 
 `pytest_collection_modifyitems` gives every test one of pytest-socket's own markers —
@@ -262,7 +299,7 @@ same set, so an MCP client that gates confirmation prompts on those hints sees t
 | ruff check (incl. `S`) | Known-bad calls: `shell=True`, `verify=False` without a reason, `assert`, weak hashes | Architecture; anything list-form | yes |
 | ruff format | — | — | yes |
 | mypy strict | Type errors, unstubbed dependencies | Everything typed correctly and wrong | yes |
-| pytest unit, including `tests/security/` | Behaviour, and the ten invariants above (structural and canary) | Anything without a test | yes |
+| pytest unit, including `tests/security/` | Behaviour, and the eleven invariants above (structural and canary) | Anything without a test | yes |
 | **pip-audit** (`dependency-audit` job) | A known-vulnerable version in the **resolved** tree, `[dev,server,scraper]`, fresh resolution in requirements mode (`pip install --dry-run --report`, nothing installed), per push and weekly | Unknown vulnerabilities | yes for fixable; no-fix findings go in `security/pip-audit-ignores.txt` with a reason and a re-check date |
 | **gitleaks** (`secret-scan` job) | A committed secret in the pushed range | History before the scan started (run `gitleaks git --redact` locally) | yes |
 | **CodeQL default setup** (GitHub, outside `ci.yml`) | Actions-workflow injection and permissions; a fixed set of Python patterns (URL-substring checks, weak hashing, insecure protocols, …) | **Taint from this codebase's untrusted source** — tool `inputs` dicts are not "remote flow sources" under the `remote` threat model, so its injection queries cannot fire here; not a merge gate | no |
@@ -297,6 +334,15 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-13 | Test isolation on pytest-socket's own markers, applied at collection | A session block plus a per-test fixture left module-scoped live fixtures blocked (silent skips) and unit-scope fixtures uncovered; the plugin's setup hook runs before every fixture | — |
 | 2026-09-13 | The seeder gets an httpx request hook rather than "documented as layer 1 only" | The seeder accepts a client and httpx runs hooks per request including redirects — the browser's layer 2 in httpx form, for one function | — |
 | 2026-09-13 | No package-wide logging filter | A `logging.Filter` on the `ibkr_core_mcp` logger would not apply to child loggers (`ibkr_core_mcp.flex_query` …) — logger filters do not propagate; a handler filter belongs to the host that owns the handlers. `redact_error` on the model layer's own log calls is the achievable part | The host app installs a redacting handler filter (claudia_ui) |
+| 2026-09-14 | The OWASP *Practical Guide for Secure MCP Server Development* v1.0 is the principal external baseline; the MCP best-practices page is a supporting protocol reference | The MCP page is a companion to the Authorization spec and most of its sections describe OAuth conditions this deployment lacks; two rows of the old six-row mapping had come to cite sections that mean something else. Mapping: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` | The guide is superseded, or the deployment gains a remote transport |
+| 2026-09-14 | No signed tool manifests | No load-time trust decision exists; the honesty test attests code against declaration on every run, which a signature cannot | Dynamic or third-party tool loading is introduced |
+| 2026-09-14 | SSE requires a **per-launch bearer token**, written 0600, never printed | First recorded as "presented, not implemented" on the belief that consumers would break. The review checked: there are none — claudia_ui does not run this server, desktop clients use stdio, no launch agent starts it — and `mcp.client.sse.sse_client` already takes `headers=`. With the cost at zero the rule applies: fix it, do not document it | A consumer appears that cannot send a header (then a unix socket, not a weaker token) |
+| 2026-09-14 | MCP argument validation is **invariant 11**, not a widening of 9 | First folded into 9, which is specifically about path-interpolated identifiers; the two fail independently, live in different files and have different change recipes, so one row would have carried two of everything | — |
+| 2026-09-14 | The operator's home directory is collapsed to `~` in every message shown to the model | OWASP §6 names filesystem paths beside tokens; the 2026-07-11 audit had already noted the Flex import "discloses the exact home-directory path on any invalid probe" and left it. One definition (`redaction.collapse_home`) for both surfaces, as `price_text_safe` is one definition of rendering a price | A surface needs the real path — then it is not a model-facing surface |
+| 2026-09-14 | No output size cap; no `outputSchema` for text tools | Measured: lists are bounded, pages are whole (144,125 characters is the largest on record, `docs/web-scraper-reference.md` § 5); a silent clip hides content; nothing structured exists to validate | A host reports context exhaustion (then explicit, marked truncation); a structured tool is added (then it declares a schema) |
+| 2026-09-14 | No per-invocation audit log | The client transcript is the operator's trail; a parameter log would carry model-supplied URLs and paths into a channel `redact_error` does not cover | A host without a transcript consumes the server |
+| 2026-09-14 | GitHub Actions stay tag-pinned, not SHA-pinned | `gh secret list` is empty and every job is `contents: read` on a public repository; a moved tag gains nothing | CI holds a write-capable secret (a publish token) |
+| 2026-09-14 | The read-then-fetch exfiltration chain under prompt injection is accepted, not blocked | Any public URL can carry data, so a filter is theatre; what the chain cannot reach — credentials, order execution — is held by test; fetch tools carry `openWorldHint` for clients that confirm outbound calls | A host consumes the server without per-call confirmation, or the tools gain a credential-bearing read |
 
 ---
 
@@ -317,6 +363,14 @@ Dated, so a future reader can tell a decision from a default.
   and `streaming` log through their own loggers; a logger-level filter would not reach them
   (§ 8). The redaction guarantee is for what reaches the model and for the model layer's own
   log calls; a host that ships logs elsewhere should filter at its handlers.
+- **Read-then-fetch exfiltration under prompt injection (2026-09-14).** A hostile page can
+  have the model read account data and send it to a public host through a fetch tool. Accepted:
+  no credential or order is reachable; every fetch tool is `openWorldHint=true`; the URL is in
+  the transcript (§ 8; `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` § Phase 3 E).
+- **The SSE token is a bearer credential on a local file.** Anything running as the operator
+  can read `~/.ibkr_core/mcp_sse_token`, which is the same boundary as the `.env` and the
+  browser cookie store: the gate defends against *other* local principals, not against code
+  running as the operator (§ 6.6).
 - **Resolver divergence between layer 1 and the fetcher.** Layer 1 and the per-request hooks
   each resolve names independently of Chromium's or httpx's resolver; a TTL-0 rebinding name
   that answers public to the guard and private to the fetcher is still theoretically possible.
@@ -359,6 +413,7 @@ date added, re-check date.
 - Controls and disclosure: `SECURITY.md`
 - Contributor rules: `CLAUDE.md` § Security & Fingerprint Authentication
 - The audit that produced this document, with probe evidence: `docs/audits/security-architecture-audit-2026-09-13.md`
+- The external baseline (OWASP MCP guide v1.0), mapped section by section: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`
 - Earlier security audits: `docs/audits/security-audit-2026-07-11.md` and predecessors
 - Order flow examples: `docs/order-management-examples.md`
 - Web scraper boundaries: `docs/web-scraper-reference.md`, `docs/web-scraping-methodology.md`

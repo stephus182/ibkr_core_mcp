@@ -10,6 +10,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Security
+Findings of the 2026-09-14 recalibration against the OWASP GenAI Security Project's
+*A Practical Guide for Secure MCP Server Development* v1.0
+(`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`), each test-first:
+- **SSE transport: no client authentication (Medium, local).** `--transport sse` bound loopback
+  and validated `Host`/`Origin`, which stops the browser and the LAN but not another process on
+  the machine — it needs no DNS trick, just the port, and could open a session and call every
+  tool (never an order write, never a credential). Every request must now present this launch's
+  bearer token: a fresh `secrets.token_urlsafe(32)` written 0600 to `~/.ibkr_core/mcp_sse_token`
+  and never printed, checked with `hmac.compare_digest` before `Host`/`Origin`, on `/sse` as
+  well as `/messages/`. `build_sse_app(server, token)` takes the token as a **required**
+  argument. **Breaking for SSE clients**, which must now send `Authorization: Bearer <token>`
+  (`docs/mcp-server-reference.md` § SSE bearer token); stdio is unaffected. Invariant 10 widened.
+- **The operator's home directory appeared in model-facing messages.** `_import_flex_file`'s
+  refusal named `/Users/<name>/.ibkr_core` in full, and `redact_error` passed absolute paths
+  through — a disclosure the 2026-07-11 audit had noted and left. `redaction.collapse_home`
+  rewrites the home directory as `~`, and both surfaces use it; OWASP §6 lists filesystem paths
+  beside tokens and stack traces.
+- **MCP argument validation was an SDK default with no test (invariant 11, new).** An argument
+  set failing a tool's `inputSchema` never reaches a handler, but nothing in this package said
+  so and no test sent a malformed argument — while `mcp<2` is capped precisely because 2.0
+  removes the decorator carrying that default. `build_server` now states `validate_input=True`,
+  and the suite holds that malformed sets never reach `_dispatch`, that no call passes
+  `validate_input=False`, and that every name the dispatcher routes is a listed tool (the SDK
+  validates no others).
+
 Findings of the 2026-09-13 security architecture audit
 (`docs/audits/security-architecture-audit-2026-09-13.md`), each with the regression test that
 failed before its fix:
@@ -59,8 +84,8 @@ failed before its fix:
   before schemas reach the API; `tool_capabilities()` returns the map. The suite asserts the set
   declaring `ORDER_EXECUTION` is empty and that every sink a handler's source touches is
   declared — which reclassified `verify_flex_import` (it writes the import manifest).
-- **`tests/security/`** — nine files, `security` marker, structural (AST) and canary tests for
-  the ten properties in `SECURITY.md` § Security Regression Suite; each structural checker is
+- **`tests/security/`** — ten files, `security` marker, structural (AST) and canary tests for
+  the eleven properties in `SECURITY.md` § Security Regression Suite; each structural checker is
   proven able to fire on a violating snippet.
 - **CI gates 5 and 6**: `pip-audit` over `[dev,server,scraper]` (per push and weekly; ignores
   only from `security/pip-audit-ignores.txt`) and `gitleaks` over the pushed range
@@ -157,7 +182,7 @@ failed before its fix:
 - `FirecrawlClient.search()`/`.crawl()` were annotated `-> list[dict[str, str]]`, but both methods' own docstrings already documented a `"metadata": dict` field returned alongside the `str` fields — the annotation didn't match the method's own contract. Widened to `list[dict[str, Any]]` (4 sites in `web_scraper.py`); no behavior change, Python never enforced the narrower type at runtime. Found during the 2026-07-22 code-quality audit — see `docs/audits/2026-07-22-code-quality-audit.md`.
 - `get_account_summary` no longer claims `/portfolio/{accountId}/summary` carries P&L fields — that endpoint's ~90-key response never includes `unrealizedpnl`/`realizedpnl` (live-verified 2026-07-17, confirmed against official docs); the tool description and formatter now point to `get_ledger`/`get_pnl` instead. See `docs/plans/2026-07-17-account-pnl-display-fixes.md` in the sibling `claudia_ui` repo.
 - `get_pnl` (`/iserver/account/pnl/partitioned`) returned an empty `{"upnl": {}}` on a cold gateway session — even with open positions and real P&L — until something subscribed to the `spl` WebSocket topic at least once (live-verified 2026-07-17; same undocumented warm-up class as `/iserver/marketdata/snapshot`). `_get_pnl` now self-primes: on an empty first response it does a best-effort `spl` subscribe/unsubscribe touch and retries once, never raising on failure.
-- Backtest sandbox strategy code that timed out (e.g. `while True: pass`) survived the 10-second timeout indefinitely in an orphaned `ThreadPoolExecutor` thread — `Future.cancel()` cannot stop a thread already executing. Worse, `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit. The sandbox now runs strategy code in an isolated `multiprocessing.Process`, with a daemon watchdog thread that force-kills the child (SIGTERM, then SIGKILL after a grace period) if the timeout elapses — a real OS process can be forcibly stopped, unlike a thread. `run_backtest()`'s public signature and exception contract are unchanged. See `SECURITY.md`'s "Thread timeout non-termination" entry for the full mechanism.
+- Backtest sandbox strategy code that timed out (e.g. `while True: pass`) survived the 10-second timeout indefinitely in an orphaned `ThreadPoolExecutor` thread — `Future.cancel()` cannot stop a thread already executing. Worse, `concurrent.futures.thread` registers a non-daemon-thread join in its interpreter-shutdown hook, so a host process that ever hit this path could hang indefinitely on exit. The sandbox now runs strategy code in an isolated `multiprocessing.Process`, with a daemon watchdog thread that force-kills the child (SIGTERM, then SIGKILL after a grace period) if the timeout elapses — a real OS process can be forcibly stopped, unlike a thread. `run_backtest()`'s public signature and exception contract are unchanged. Full mechanism, including why `concurrent.futures.thread`'s shutdown hook could hang the host and why killing the child is what unblocks the parent's pipe read: `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
 
 ### Changed
 - `[tool.mypy]` now sets `files = ["ibkr_core_mcp", "tests"]` — `tests/` (39 modules, 747 tests) had never actually been type-checked by CI or locally, only `ibkr_core_mcp/` was. A narrow `tests.*` override relaxes `disallow_untyped_defs`/`disallow_incomplete_defs`/`disallow_untyped_calls` (this codebase's tests have zero signature annotations by established convention) while every other `strict` check, including body-level `check_untyped_defs`, stays on. Surfaced 183 real findings across 12 test files, all fixed; CI's `mypy` step updated to match. Full inventory and triage: `docs/audits/2026-07-22-code-quality-audit.md`.
