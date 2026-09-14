@@ -1053,6 +1053,83 @@ def test_a_price_is_shown_to_its_own_precision_not_rounded_to_cents():
     assert change_value_text("limit_price", "100.5") == "100.50"
 
 
+def test_the_dialog_does_not_claim_an_order_type_requires_a_price():
+    """Naming the gap is right; naming a requirement is a second false claim.
+
+    The first version of the A-2 fix read `— (no price sent; a {type} order needs one)`,
+    which is untrue of every type that legitimately carries none. MIDPRICE is the one this
+    package documents itself: `claude_tools.py` calls `limit_price` an optional price cap
+    for it, and `_preview_order` builds exactly that body. TRAIL and MOC are the same shape.
+    Found by review 2026-09-14, and it is the defect A-2 fixed pointed the other way — the
+    dialog stating something about the order that the order does not say.
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    for order_type in ("MIDPRICE", "TRAIL", "MOC", "LMT"):
+        rows = _order_rows(
+            {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": order_type},
+            "U1",
+        )
+        assert "needs one" not in rows["Price"], f"{order_type}: dialog asserted a requirement"
+        assert "requires" not in rows["Price"], f"{order_type}: dialog asserted a requirement"
+        assert order_type not in rows["Price"], f"{order_type}: the claim names the type"
+
+
+def test_a_body_with_no_order_type_is_not_read_as_a_market_order():
+    """`MARKET` was the default for a field the caller never sent.
+
+    Harmless while it only filled a label; A-2 made it load-bearing, because `is_market`
+    now decides whether a missing price is normal or a gap. A body IBKR would reject for
+    having no `orderType` rendered as a complete market order (review 2026-09-14).
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    for body in (
+        {"ticker": "AAPL", "side": "BUY", "quantity": 10},
+        {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": None},
+        {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": ""},
+    ):
+        rows = _order_rows(body, "U1")
+        assert rows["Order Type"] != "MARKET", f"{body} was labelled a market order"
+        assert rows["Price"] != "MARKET", f"{body} was priced as a market order"
+        assert rows["Total (est.)"] != "Market"
+
+
+def test_price_text_refuses_a_non_finite_price():
+    """The one branch that stops `NaN` appearing on an order dialog had no test.
+
+    Both A-3 tests reach `price_text` through `change_value_text`, which swallows
+    `InvalidOperation` — so the guard could have been deleted with the suite green
+    (review 2026-09-14, W1).
+    """
+    from decimal import InvalidOperation
+
+    import pytest as _pytest
+
+    from ibkr_core_mcp.order_confirm import change_value_text, price_text
+
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with _pytest.raises(InvalidOperation):
+            price_text(bad)
+    # And the caller that is meant to survive it still does.
+    assert change_value_text("limit_price", float("nan")) == "nan"
+
+
+def test_price_text_does_not_render_an_unbounded_string():
+    """A string price can carry any exponent; the row it becomes is read by a human.
+
+    `price_text("1e-10000000")` returned a ten-million-character string, which
+    `change_value_text` would have handed to the dialog as one row (review 2026-09-14).
+    """
+    from ibkr_core_mcp.order_confirm import price_text
+
+    rendered = price_text("1e-10000000")
+    assert len(rendered) < 40, f"{len(rendered)} characters reached the dialog"
+    # The cap must not disturb anything a real instrument quotes.
+    assert price_text(110.171875) == "110.171875"
+    assert price_text(1.08455) == "1.08455"
+
+
 def test_a_priced_order_type_without_a_price_is_never_labelled_market():
     """`Price: MARKET` beside `Order Type: LMT` described an order the body did not carry.
 
@@ -1077,7 +1154,7 @@ def test_a_priced_order_type_without_a_price_is_never_labelled_market():
             "U1",
         )
         assert rows["Price"] != "MARKET", f"{order_type} with no price was labelled MARKET"
-        assert order_type in rows["Price"], f"the {order_type} row does not name the type"
+        assert "no price" in rows["Price"], f"the {order_type} row does not name the gap"
         assert rows["Total (est.)"] != "Market", f"{order_type} totalled as a market order"
 
     market = _order_rows(

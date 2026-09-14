@@ -82,7 +82,12 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # `Side`; a pre-built row set says `Action`. All three feed the banner colour.
     side = order.get("side", order.get("Side", order.get("Action", "?")))
     qty = order.get("quantity", "?")
-    order_type = order.get("orderType", order.get("order_type", "MARKET"))
+    # No default of "MARKET": that filled in a field the caller never sent, and since the
+    # 2026-09-14 price change it decides whether a missing price is normal or a gap — so a
+    # body IBKR would reject for having no `orderType` rendered as a complete market order
+    # (review 2026-09-14). An absent type is shown as absent, like every other unknown here.
+    order_type = order.get("orderType", order.get("order_type")) or None
+    order_type_str = str(order_type) if order_type is not None else "— (not sent)"
     price = order.get("price")
     aux_price = order.get("auxPrice")
     tif = order.get("tif", order.get("timeInForce", "DAY"))
@@ -108,13 +113,19 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # every type, it described an order the body did not carry: a LMT with a null price read
     # `Price: MARKET` four rows under `Order Type: LMT` (claudia_ui audit 2026-09-13, A-2).
     # The dialog names the gap instead of guessing, the same rule as the unknown multiplier.
-    is_market = str(order_type).strip().upper() in ("MKT", "MARKET")
+    #
+    # It names the gap and nothing else. The first version of this fix read `a {type} order
+    # needs one`, which is untrue of every type that legitimately carries no price — MIDPRICE
+    # above all, whose `limit_price` this package documents as an optional cap, and which
+    # `_preview_order` builds without one. Asserting a requirement about the order is the
+    # same defect A-2 fixed, pointed the other way (review 2026-09-14).
+    is_market = str(order_type).strip().upper() in ("MKT", "MARKET") if order_type else False
     if price is not None:
         price_str = f"{change_value_text('limit_price', price)}{price_ccy}"
     elif is_market:
         price_str = "MARKET"
     else:
-        price_str = f"— (no price sent; a {order_type} order needs one)"
+        price_str = "— (no price sent)"
     try:
         if order.get("_multiplier_unknown"):
             # A futures order whose multiplier the caller could not learn. price × qty here
@@ -140,7 +151,7 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
         # Size sits with size (claudia_ui gap #45): the multiplier belongs beside the
         # quantity it scales, not on the Symbol line where it read as part of the name.
         "Quantity": _quantity_text(qty) + _contract_size_suffix(order, multiplier),
-        "Order Type": order_type,
+        "Order Type": order_type_str,
         "Price": price_str,
     }
     if aux_price is not None:
@@ -179,6 +190,10 @@ def _yes_no(value: Any) -> Any:
 
 _PRICE_CHANGE_FIELDS = ("limit_price", "stop_price")
 
+# Past every instrument quoted anywhere: the finest tick handled here is 6E at five
+# decimals. It exists to bound a hostile or malformed *string* price, not to round.
+_MAX_PRICE_DECIMALS = 12
+
 
 def price_text(value: Any) -> str:
     """A price as it should be read by a human about to authorise it: exactly.
@@ -210,7 +225,11 @@ def price_text(value: Any) -> str:
         # NaN or Infinity: `as_tuple().exponent` is 'n'/'N'/'F' there, and a price row
         # reading "NaN" would be worse than one reading the raw value the caller sent.
         raise InvalidOperation(f"{value!r} is not a finite price")
-    places = max(2, -exponent)
+    # Capped: a *string* price carries any exponent it likes, and `price_text("1e-10000000")`
+    # returned a ten-million-character string that `change_value_text` would have handed to
+    # the dialog as one row (review 2026-09-14). Twelve decimals is far past every quoted
+    # instrument — the finest here is 6E at five — so the cap never rounds a real price.
+    places = min(max(2, -exponent), _MAX_PRICE_DECIMALS)
     return f"{number:,.{places}f}"
 
 
