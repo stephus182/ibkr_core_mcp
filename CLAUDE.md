@@ -273,13 +273,28 @@ If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised im
 
 `place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step.
 
-**Explicitly ungated (read-only, no execution risk):**
+**Explicitly ungated.** What these share is not that they read — it is that none can place,
+modify, cancel or confirm an order. They are *not* all read-only.
+
+*Read-only and simulation:*
 
 | Method | Reason |
 |---|---|
 | `get_order_preview` | IBKR `whatif` — simulates, never executes |
 | `get_live_orders` / `get_order_status` / `get_orders_raw` | Read-only |
-| `create_alert` / `delete_alert` / `activate_alert` | Price notifications, not order execution |
+
+*Ungated non-order `ACCOUNT_STATE` mutations* — real writes to IBKR's servers, ungated
+deliberately because a price notification is not an execution path:
+
+| Method | What it changes |
+|---|---|
+| `create_alert` | `POST` — creates a price alert (given an existing alert id, modifies it) |
+| `delete_alert` | `DELETE` — removes a price alert permanently |
+| `activate_alert` | `POST` — enables or disables an existing alert |
+
+The three alert writes were listed as "read-only, no execution risk" until 2026-09-14, while the
+capability registry had them correctly as `ACCOUNT_STATE` all along (`SECURITY.md` § Capability
+declarations). Documentation only — no gate or classification changed.
 
 **Rules for contributors:**
 

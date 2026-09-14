@@ -63,7 +63,7 @@ and that is a security conclusion, not a backlog.
 
 This separation is enforced **architecturally**, not by policy, and since 2026-09-13 it is also **machine-checked**: no combination of prompt, tool call, or LLM-generated input can bypass the human-in-the-loop controls — they require physical presence at the machine — and a change that would open such a path fails `pytest -m security`. In-process code (the host application, a dependency) is not a principal this package defends against; it already has everything the process has.
 
-The secondary threat surface is the LLM tool boundary: data flowing from external APIs (IBKR, Flex XML) and from web pages back to the LLM must be sanitized to prevent injection attacks, and error text must never carry a secret. The full model, with privilege tiers and the trust-boundary map, is `docs/security-architecture.md` §§ 1–3.
+The secondary threat surface is the LLM tool boundary. External content is treated as untrusted: controls bound the privileged effects it can reach — no credential, no order write, no unconfined execution — while prompt-injection-driven composition remains a documented residual risk (§ Tool composition under prompt injection; `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` § Phase 3 E; `docs/security-architecture.md` § 9). Syntactic injection into a URL or a SQL statement is a separate, closable problem and is closed by validation at each sink; semantic prompt injection is not, and no sanitiser here claims to neutralise it. Error text must never carry a secret. The full model, with privilege tiers and the trust-boundary map, is `docs/security-architecture.md` §§ 1–3.
 
 ---
 
@@ -162,13 +162,33 @@ and `claude_tools.py` / `mcp_server.py` may not name any of them.
 | `cancel_order` | Cancellation confirmation |
 | `reply_order` | IBKR reply confirmation |
 
-**Explicitly ungated (read-only; no execution risk):**
+**Explicitly ungated.** What these have in common is not that they read — it is that none of
+them can place, modify, cancel or confirm an order. That is the property the gates protect, and
+it is held by construction: `ORDER_EXECUTION` is not a capability any tool can declare
+(§ Capability declarations). They are *not* all read-only.
+
+*Read-only and simulation:*
 
 | `IBKRClient` method | Reason |
 |---|---|
 | `get_order_preview` | IBKR `whatif` endpoint — simulates, never executes |
 | `get_live_orders` / `get_order_status` | Read-only |
-| `create_alert` / `delete_alert` / `activate_alert` | Price notifications, not order execution |
+
+*Ungated non-order `ACCOUNT_STATE` mutations* — these do change state on IBKR's servers. They are
+ungated deliberately: a price notification is not an execution path, and the two gates are
+reserved for order writes.
+
+| `IBKRClient` method | What it changes |
+|---|---|
+| `create_alert` | `POST` — creates a price alert (given an existing alert id, modifies it) |
+| `delete_alert` | `DELETE` — removes a price alert permanently |
+| `activate_alert` | `POST` — enables or disables an existing alert |
+
+Until 2026-09-14 this table was headed "read-only; no execution risk" for all six methods, which
+was wrong for the three alert writes. The capability registry had them right the whole time —
+`create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert` are the
+`ACCOUNT_STATE` row of § Capability declarations — so this is a documentation correction only;
+no classification, gate or behaviour changed.
 
 ---
 
