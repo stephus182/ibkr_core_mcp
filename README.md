@@ -387,7 +387,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they re-run both gates automatically for every reply in the chain (see [CLAUDE.md — Security & Fingerprint Authentication](CLAUDE.md#security--fingerprint-authentication)):
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it (see [CLAUDE.md — Security & Fingerprint Authentication](CLAUDE.md#security--fingerprint-authentication)):
 
 ### Gate 1 — Touch ID (macOS LocalAuthentication)
 

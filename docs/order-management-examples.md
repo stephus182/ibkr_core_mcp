@@ -39,9 +39,11 @@ print(f"Estimated cost: {preview.get('equity', '?')}")
 **Place a live order — Gate 1 (Touch ID) + Gate 2 (confirmation dialog), full reply chain resolved automatically:**
 ```python
 try:
-    # place_order_and_confirm() is the recommended entry point: it calls
-    # place_order(), then loops Touch ID + a dialog showing the real IBKR
-    # message through every chained reply, until a terminal response.
+    # place_order_and_confirm() is the recommended entry point: one Touch ID
+    # up front covers the whole chain (an OrderWriteAuthorization bound to this
+    # body's hash, 300 s), then it calls place_order() and loops a dialog
+    # showing the real IBKR message through every chained reply, until a
+    # terminal response. One fingerprint, one dialog per reply.
     # Verified live 2026-07-06: a single order needed 3 sequential replies
     # (price-band %, no-market-data, mandatory-cap-price) before Submitted.
     # Declining any reply mid-chain POSTs {"confirmed": False} to IBKR before

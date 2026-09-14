@@ -15,6 +15,13 @@ than intended.
 When a control changes, `SECURITY.md` and this file change together; the audit that motivated
 the change stays as it was.
 
+**The six diagrams.** §2 (what the model can reach), §3 (the trust-boundary map), §6.1 (an
+order write, end to end), §6.3 (the sandbox), §6.4 (the two SSRF layers) and §7 (the gates a
+push passes). Each carries the part of its section that is hard to hold in the head, and each
+is a control drawing, not decoration: when the control moves, the diagram moves with it in the
+same commit. Where a diagram and the prose beside it disagree, the prose and the test it names
+are the authority — the diagram is the one that is wrong.
+
 ---
 
 ## 1. Principals and threat model
@@ -73,34 +80,137 @@ mechanism (§ 6.3).
 The machine form of this table is the `capabilities` frozenset on every tool definition
 (`claude_tools.CAPABILITIES`; § 5, invariant 3).
 
+The shape that matters is the gap between the two boxes: the sixth tier is not guarded against
+the model, it is *unreachable by* it. There is no tool, and the capability name it would have to
+declare does not exist in the vocabulary — so a tool that tried to claim it would fail the
+unknown-capability check rather than pass a review.
+
+```mermaid
+flowchart TB
+    classDef reach fill:#e4eefc,stroke:#1849a9,color:#111827
+    classDef norch fill:#fbd9d3,stroke:#912018,color:#111827,stroke-width:2px
+    classDef actor fill:#f3f4f6,stroke:#374151,color:#111827
+
+    M(["The model<br/>ClaudeToolkit or an MCP client"])
+    H(["The human operator<br/>at this keyboard"])
+
+    subgraph REACH["Reachable through the 46 tools"]
+        direction LR
+        T1["READ<br/>get_positions<br/>get_market_snapshot"]
+        T2["COMPUTE<br/>add_indicators<br/>get_analytics"]
+        T3["EXTERNAL IO<br/>fetch_market_data<br/>crawl_site"]
+        T4["LOCAL SENSITIVE IO<br/>get_pnl · fetch_page<br/>import_flex_file"]
+        T5["ACCOUNT STATE<br/>price alerts — a real<br/>write, never an order"]
+        T6["SANDBOX EXECUTION<br/>run_backtest — model<br/>code, in a child process"]
+    end
+
+    subgraph NOREACH["Unreachable — no tool, and no legal spelling"]
+        T7["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order"]
+    end
+
+    M --> REACH
+    M -. "the name is absent from claude_tools.CAPABILITIES, so a<br/>definition declaring it fails the unknown-capability check" .-x T7
+    H == "Gate 1 · Touch ID, then Gate 2 · an explicit click —<br/>once per write, with a dialog for every reply" ==> T7
+
+    class T1,T2,T3,T4,T5,T6 reach
+    class T7 norch
+    class M,H actor
+```
+
 ---
 
 ## 3. Trust-boundary map
 
-```
-SOURCE                  VALIDATION / NORMALISATION            SERVICE                         PRIVILEGED SINK
-──────                  ──────────────────────────            ───────                         ───────────────
-model tool inputs ────► input allowlists (preview),           ClaudeToolkit handler ────────► IBKRClient reads          [READ]
-                        identifier regexes (client.py),                                  ──► IBKRClient alert writes   [ACCOUNT STATE]
-                        cache-key regexes (cache.py),                                    ──► GDriveCache / WebDocsStore [EXTERNAL IO]
-                        path-under-root (import_flex_file),                              ──► SQLiteStore               [EXTERNAL IO]
-                        compile_restricted + attribute        backtest.run_backtest ────────► spawn child, exec         [SANDBOX]
-                          allowlist (run_backtest),
-                        _validate_public_url (layer 1) ───►   local_browser.scrape/crawl ──► Chromium + route guard    [EXTERNAL IO]
-                                                              search_site_detailed ────────► httpx seeder + request hook
+Every column is a rank: a source is validated, reaches a service, and only then a sink. Read it
+for what is *missing* as much as for what is drawn — there is no edge from model tool inputs to
+the order-execution sink, and that absence is invariant 1.
 
-MCP HTTP request ─────► TransportSecuritySettings ───────────► SseServerTransport ─────────► every tool above
-                        (Host / Origin loopback only)
+```mermaid
+flowchart LR
+    classDef src fill:#fde3e1,stroke:#b42318,color:#111827
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+    classDef svc fill:#e4eefc,stroke:#1849a9,color:#111827
+    classDef sink fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef danger fill:#fbd9d3,stroke:#912018,color:#111827,stroke-width:2px
 
-web page content ─────► assess_quality (honesty flag) ───────► back into the model context    (no sink; the model is the sink)
+    subgraph SRC["1 · Source"]
+        direction TB
+        S1["Model tool inputs<br/>inputs dict, resource URI"]
+        S2["MCP HTTP request<br/>SSE transport only"]
+        S3["Web page content"]
+        S4["IBKR reply message"]
+        S5["Exception, any origin"]
+        S6["Host app, in-process"]
+    end
 
-IBKR reply message ───► reply_message_text (HTML strip) ─────► Gate 2 dialog                  (rendered to the human)
+    subgraph VAL["2 · Validation / normalisation"]
+        direction TB
+        V1["Input allowlists; identifier,<br/>cache-key and slug regexes;<br/>path-under-root"]
+        V2["compile_restricted +<br/>attribute allowlist"]
+        V3["_validate_public_url<br/>layer 1"]
+        V4["_BearerTokenGate, then<br/>TransportSecuritySettings"]
+        V5["assess_quality<br/>flags a dishonest fetch;<br/>does not sanitise an injection"]
+        V6["reply_message_text<br/>HTML stripped"]
+        V7["_validate_account_id /<br/>_order_id"]
+        V8["_safe_error / redact_error"]
+    end
 
-host app (in-process) ► _validate_account_id/_order_id ──────► IBKRClient.place_order ───────► Gate 1 ─► Gate 2 ─► POST /orders  [ORDER EXECUTION]
-                                                              IBKRClient.get_order_preview ──► POST /orders/whatif  [ORDER PREVIEW, ungated]
+    subgraph SVC["3 · Service"]
+        direction TB
+        C1["ClaudeToolkit handler"]
+        C2["backtest.run_backtest"]
+        C3["local_browser scrape / crawl"]
+        C4["search_site_detailed"]
+        C5["SseServerTransport"]
+        C6["IBKRClient order writes<br/>the four gated methods"]
+        C7["IBKRClient.get_order_preview"]
+    end
 
-exceptions (any) ─────► _safe_error (type → sentence)  ──────► tool result
-                        redact_error (detail, scrubbed) ─────► tool result / log
+    subgraph SNK["4 · Privileged sink"]
+        direction TB
+        K1["IBKRClient reads · READ"]
+        K2["IBKR alert writes · ACCOUNT STATE"]
+        K3["GDriveCache / WebDocsStore · EXTERNAL IO"]
+        K4["SQLiteStore · EXTERNAL IO"]
+        K5["spawn child + exec · SANDBOX"]
+        K6["Chromium + route guard · EXTERNAL IO"]
+        K7["httpx seeder + request hook · EXTERNAL IO"]
+        K8["POST /iserver/…/orders · ORDER EXECUTION"]
+        K9["POST /iserver/…/orders/whatif<br/>ungated: it simulates"]
+        K10["Back into the model context<br/>the model is the sink"]
+        K11["Gate 2 dialog<br/>rendered to the human"]
+        K12["Tool result / log"]
+    end
+
+    S1 --> V1 --> C1
+    S1 --> V2 --> C2
+    S1 --> V3
+    V3 --> C3
+    V3 --> C4
+    S2 --> V4 --> C5
+    S3 --> V5 --> K10
+    S4 --> V6 --> K11
+    S5 --> V8 --> K12
+    S6 --> V7
+    V7 --> C6
+    V7 --> C7
+
+    C1 --> K1
+    C1 --> K2
+    C1 --> K3
+    C1 --> K4
+    C2 --> K5
+    C3 --> K6
+    C4 --> K7
+    C5 -. "then every tool above" .-> C1
+    C6 == "Gate 1 · Touch ID,<br/>then Gate 2 · click" ==> K8
+    C7 --> K9
+
+    class S1,S2,S3,S4,S5,S6 src
+    class V1,V2,V3,V4,V5,V6,V7,V8 guard
+    class C1,C2,C3,C4,C5,C6,C7 svc
+    class K1,K2,K3,K4,K5,K6,K7,K9,K10,K11,K12 sink
+    class K8 danger
 ```
 
 The full tool-by-tool classification (validation, service, sink, declared capabilities) is
@@ -168,6 +278,49 @@ dialog. The value is minted only by `_authorize_order_write`, right after Touch 
 the AST test holds that to one function. The body the dialog shows is a private copy taken at
 method entry, so the caller's dict cannot change what is sent.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as The model
+    participant App as Host app
+    participant C as IBKRClient
+    participant G1 as Gate 1 · Touch ID
+    participant G2 as Gate 2 · dialog
+    participant IB as IBKR gateway
+
+    M--xC: no tool exists, and claude_tools.py / mcp_server.py<br/>may not even name these methods (invariant 1)
+
+    App->>C: place_order_and_confirm(account_id, order)
+    C->>C: scope = SHA-256 of the canonical body
+    C->>G1: require_touch_id — once, for the whole chain
+    G1-->>C: granted — otherwise HumanAuthError, and nothing is sent
+    C->>C: _authorize_order_write mints OrderWriteAuthorization<br/>bound to scope, 300 s, frame-local, expiring closed
+    C->>C: place_order takes a private copy of the body,<br/>authorization covers scope, so no second fingerprint
+    C->>G2: confirm_order_dialog(order, account_id)
+    G2-->>C: an explicit click — Enter does not confirm
+    C->>IB: POST /iserver/account/{acct}/orders
+    IB-->>C: precaution reply — id and message
+
+    loop every chained reply, until a terminal response
+        C->>C: authorization.covers(scope)? if not, Gate 1 again
+        C->>G2: confirm_reply_dialog with the real IBKR text,<br/>HTML-stripped by reply_message_text
+        alt confirmed
+            G2-->>C: click
+            C->>IB: POST /iserver/reply/{id} — confirmed true
+            IB-->>C: the next reply, or the terminal response
+        else declined
+            G2-->>C: HumanAuthError
+            C->>IB: POST /iserver/reply/{id} — confirmed false
+            C-->>App: HumanAuthError
+        end
+    end
+    C-->>App: terminal order status
+```
+
+The first line is the whole point of the picture: the model has no arrow into this diagram at
+all. What follows is the human's path, and neither gate can be reached out of order — Gate 1
+runs before the authorization exists, and the authorization is checked again at every reply.
+
 What this does not defend against: in-process code constructing an authorization by hand, or
 monkeypatching `require_touch_id`. That code already has `_post`. The gates defend against the
 model and against unattended automation, not against the process.
@@ -200,6 +353,40 @@ Strategy code is model-written, so it is treated as hostile. Four layers:
 4. **A bounded error channel**: the child sends one line, capped at 300 chars — enough for the
    model to fix its own code, not enough to be a transfer.
 
+```mermaid
+flowchart TB
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+    classDef proc fill:#e4eefc,stroke:#1849a9,color:#111827
+    classDef out fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
+
+    CODE["Model-written strategy code<br/>refused above 4,096 characters"]
+    CR["Layer 1 · compile_restricted<br/>no import, no _-prefixed name,<br/>no open / eval / exec builtin,<br/>attribute access routed through a guard"]
+    SPAWN["Layer 3 · multiprocessing spawn"]
+    CODE --> CR
+    CR -. "BacktestSyntaxError" .-> ERR
+    CR --> SPAWN
+
+    subgraph CHILD["The child — its own interpreter, the operator's uid, no shared memory"]
+        direction TB
+        NS["build_sandbox() — a frozen namespace.<br/>pd.DataFrame and pd.Series are constructor<br/>functions, so no class, and therefore no<br/>unbound method, is ever reachable"]
+        GA["Layer 2 · _sandboxed_getattr<br/>_PANDAS_ALLOWED_ATTRS · _NUMPY_ALLOWED_ATTRS ·<br/>_UFUNC_ALLOWED_ATTRS. A column label passes as<br/>data when no method shadows it. The same list<br/>faces the string function spec of apply / agg /<br/>aggregate / transform, in any list-like shape,<br/>and the function half of every named aggregation"]
+        EX["exec"]
+        NS --> EX
+        GA --> EX
+    end
+
+    SPAWN --> CHILD
+    WD["Daemon watchdog<br/>SIGTERM at 10 s,<br/>SIGKILL 1 s later"] -. "kills the child; the parent's recv never hangs" .-> CHILD
+    EX -- "ok, DataFrame — over a Pipe" --> RES["Result to the caller"]
+    EX -- "runtime_error, redact_error(exc)" --> ERR["Layer 4 · one line, 300 characters:<br/>enough for the model to fix its own code,<br/>not enough to be a transfer"]
+
+    class CR,GA,WD guard
+    class SPAWN,NS,EX proc
+    class RES out
+    class ERR stop
+```
+
 The namespace is a value (`build_sandbox()`), so the test suite pins its key set and the two
 safe namespaces. The child still runs with the operator's uid; an OS-level sandbox
 (`sandbox-exec`) is the next layer if the allowlist ever proves insufficient (§ 9).
@@ -223,6 +410,35 @@ seeder, not a browser; `_reject_private_httpx_request` is installed as a request
 seeder's own client, and httpx runs request hooks on every request including redirect hops.
 Until the 2026-09-13 review the seeder had layer 1 only, and a sitemap listing a loopback URL
 was fetched from the operator's machine.
+
+```mermaid
+flowchart TB
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+    classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
+    classDef ok fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef proc fill:#e4eefc,stroke:#1849a9,color:#111827
+
+    U["A URL from the model"] --> L1{"Layer 1 · _validate_public_url<br/>scheme is http or https · hostname present ·<br/>localhost, 0.0.0.0, 127.*, 169.254.* short-circuit ·<br/>every other literal parsed with socket.inet_aton<br/>(decimal, hex, octal, short forms — the C library's<br/>rules, which are Chromium's) · then DNS"}
+    L1 -->|"private, loopback, link-local, reserved,<br/>unspecified, 100.64.0.0/10, or the IPv4<br/>inside an IPv4-mapped IPv6 address"| X["Refused — nothing is opened"]
+    L1 -->|"public"| F{"Which fetcher?"}
+    F -->|"fetch_page, crawl_site"| PW["Chromium, via Playwright"]
+    F -->|"search_site"| HX["crawl4ai's httpx sitemap seeder"]
+    PW --> R1["Layer 2 · _reject_private_requests<br/>a route handler re-checking every navigation,<br/>every redirect and every subresource"]
+    HX --> R2["Layer 2 · _reject_private_httpx_request<br/>a request hook on the seeder's own client;<br/>httpx runs hooks on redirect hops too"]
+    R1 -->|"still public at the moment of sending"| NET["Fetch"]
+    R2 -->|"still public at the moment of sending"| NET
+    R1 -->|"now private"| X
+    R2 -->|"now private"| X
+
+    class L1,R1,R2 guard
+    class X stop
+    class NET ok
+    class PW,HX,F proc
+```
+
+Both branches reach layer 2, which is the whole reason the second check exists: layer 1 judges a
+name once, and a TTL-0 rebinding answer or a redirect can make that judgement stale between the
+check and the socket. Layer 2 re-asks at the moment of sending.
 
 ### 6.5 Error text — two functions, one rule
 
@@ -304,6 +520,42 @@ same set, so an MCP client that gates confirmation prompts on those hints sees t
 | **gitleaks** (`secret-scan` job) | A committed secret in the pushed range | History before the scan started (run `gitleaks git --redact` locally) | yes |
 | **CodeQL default setup** (GitHub, outside `ci.yml`) | Actions-workflow injection and permissions; a fixed set of Python patterns (URL-substring checks, weak hashing, insecure protocols, …) | **Taint from this codebase's untrusted source** — tool `inputs` dicts are not "remote flow sources" under the `remote` threat model, so its injection queries cannot fire here; not a merge gate | no |
 | **Dependabot alerts** (GitHub) | Advisories against the *manifest's* direct dependencies | Transitive dependencies (the nltk advisory was seen by pip-audit only) | no |
+
+```mermaid
+flowchart TB
+    classDef gate fill:#e4eefc,stroke:#1849a9,color:#111827
+    classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
+    classDef soft fill:#f3f4f6,stroke:#6b7280,color:#111827,stroke-dasharray:4 3
+
+    DEV["git push"] --> HOOK{".githooks/pre-push<br/>the same four steps, in the same order,<br/>stopping at the first red one"}
+    HOOK -->|"any step red"| STOP["Push refused.<br/>git push --no-verify bypasses it on purpose"]
+    HOOK -->|"all four green"| CI["GitHub Actions · ci.yml"]
+
+    subgraph TESTJOB["test · Python 3.11 and 3.12 · blocking · stops at the first red step"]
+        direction TB
+        A1["ruff check<br/>known-bad calls; blind to architecture"] --> A2["ruff format --check<br/>a green ruff check says nothing about this"]
+        A2 --> A3["mypy strict<br/>blind to everything typed correctly and wrong"]
+        A3 --> A4["pytest -m 'not integration'<br/>including tests/security — the eleven invariants"]
+    end
+
+    DA["dependency-audit · blocking<br/>pip-audit over the resolved [dev,server,scraper] tree,<br/>per push and weekly; ignores only from<br/>security/pip-audit-ignores.txt, each with a re-check date"]
+    SS["secret-scan · blocking<br/>gitleaks over the pushed range; blind to<br/>history from before the scan started"]
+
+    CI --> A1
+    CI --> DA
+    CI --> SS
+
+    subgraph OUT["Outside ci.yml · never merge gates"]
+        direction TB
+        CQ["CodeQL default setup<br/>cannot model a tool inputs dict as a remote flow<br/>source, so its injection queries cannot fire here:<br/>read its zero as blindness, not as coverage"]
+        DB["Dependabot alerts<br/>the manifest's direct dependencies only —<br/>the nltk advisory was seen by pip-audit alone"]
+    end
+    CI -. "reported, not enforced" .-> OUT
+
+    class HOOK,A1,A2,A3,A4,DA,SS gate
+    class STOP stop
+    class CQ,DB soft
+```
 
 Two facts to keep straight when reading results: CodeQL's zero open alerts is partly blindness,
 not cleanliness — the `tests/security/` suite is the coverage for the model-input boundary; and

@@ -251,23 +251,30 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR. `place_order_and_confirm` / `modify_order_and_confirm` run the same two gates again for every chained reply IBKR asks for, not just once. Full usage examples: `docs/order-management-examples.md`
+Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR.
+
+`place_order_and_confirm` / `modify_order_and_confirm` take **one Touch ID for the whole chain** and show **a dialog for every chained reply**. The fingerprint is taken once, up front, and mints an `OrderWriteAuthorization` bound to the SHA-256 of that write's own body (300 s, frame-local, expiring closed); the write and every chained reply re-check *that* value instead of prompting again, and Gate 2 runs unskipped at each step. This is the 2026-09-11 rule — IBKR Mobile and TWS also ask once per placement — and it is stated correctly in `SECURITY.md` § Two-Gate System and `docs/security-architecture.md` § 6.1. **This file said "the same two gates again for every chained reply" until 2026-09-14**, which was wrong about Gate 1 and right about Gate 2. Full usage examples: `docs/order-management-examples.md`
 
 | Gate | Mechanism | Behaviour |
 |---|---|---|
 | **Gate 1 — Touch ID** | Apple `LocalAuthentication` (`LAPolicyDeviceOwnerAuthentication`) | Touch ID/Face ID first, falls back to the device's system password on a failed/cancelled biometric scan. 60-second timeout. |
 | **Gate 2 — Visual confirmation** | On macOS an AppKit `NSAlert` in a subprocess (`osascript` if that fails); a `tkinter` modal elsewhere. Full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
 
-If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and the IBKR endpoint is never contacted.
+If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and no order is placed, modified or cancelled.
+
+One deliberate exception, and it is not an execution path: a reply declined inside
+`place_order_and_confirm` / `modify_order_and_confirm` POSTs `{"confirmed": false}` to tell IBKR
+the human said no, and only then raises (`_resolve_one_reply`). The standalone `reply_order`
+contacts nothing on a decline.
 
 **Gated endpoints:**
 
 | Method | Gates |
 |---|---|
 | `place_order` | Touch ID → confirm dialog |
-| `place_order_and_confirm` | `place_order`'s gates, then Touch ID → reply dialog (showing the real IBKR message) per chained reply, until a terminal response |
+| `place_order_and_confirm` | One Touch ID for the whole chain, taken here — so `place_order` does not prompt a second time — then its confirm dialog, then a reply dialog per chained reply (showing the real IBKR message), until a terminal response |
 | `modify_order` | Touch ID → modify dialog |
-| `modify_order_and_confirm` | `modify_order`'s gates, then Touch ID → reply dialog per chained reply, until a terminal response |
+| `modify_order_and_confirm` | The same, for modify: one Touch ID for the chain, then the modify dialog, then a reply dialog per chained reply, until a terminal response |
 | `cancel_order` | Touch ID → cancel dialog |
 | `reply_order` | Touch ID → reply dialog |
 
