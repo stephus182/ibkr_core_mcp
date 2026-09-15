@@ -40,27 +40,35 @@ flowchart LR
     classDef paid fill:#fff3d6,stroke:#b54708,color:#111827
     classDef free fill:#e3f5e8,stroke:#1a7f37,color:#111827
     classDef gone fill:#f3f4f6,stroke:#b42318,color:#111827,stroke-dasharray:5 4
+    classDef start fill:#f3f4f6,stroke:#374151,color:#111827
 
-    subgraph FIND["Find — neither returns page text, deliberately"]
+    Q(["What do you<br/>already have?"])
+
+    subgraph FIND["Find — neither returns page text"]
         direction TB
-        FS["firecrawl_search<br/>Firecrawl · ~1 credit<br/>anywhere on the web"]
-        SS["search_site<br/>Crawl4AI · free<br/>one site, BM25-ranked"]
+        FS["firecrawl_search<br/>Firecrawl · ~1 credit<br/>the whole web"]
+        SS["search_site<br/>free · one site<br/>BM25-ranked"]
     end
 
     subgraph READ["Read"]
         direction TB
-        FP["fetch_page<br/>free · one page as markdown,<br/>opens paywalls with a saved login"]
-        CS["crawl_site<br/>free · archives a site to Drive"]
+        FP["fetch_page<br/>free · one page as markdown,<br/>paywalls with a saved login"]
+        CS["crawl_site<br/>free · a site to Drive"]
     end
 
-    FS -->|"a URL to go read"| FP
-    SS -->|"a URL to go read"| FP
+    Q -->|"a query"| FS
+    Q -->|"site + query"| SS
+    Q -->|"a URL"| FP
+    Q -->|"a whole site"| CS
+    FS -->|"a URL to read"| FP
+    SS -->|"a URL to read"| FP
 
-    GONE["Deleted 2026-07-30: the ladder.<br/>Firecrawl first, Crawl4AI only underneath it —<br/>~900 lines of arbitration and an LLM judge.<br/>Measured, the 'fallback' was bigger, ~10x faster<br/>and free, so the ladder ran the worse engine first."]
+    GONE["Deleted 2026-07-30: the ladder —<br/>Firecrawl first, Crawl4AI beneath it.<br/>~900 lines of arbitration and an LLM judge,<br/>for a 'fallback' that measured bigger,<br/>~10x faster and free."]
 
     class FS paid
     class SS,FP,CS free
     class GONE gone
+    class Q start
 ```
 
 Nothing connects the two engines, and that absence is the design — the box on the right is

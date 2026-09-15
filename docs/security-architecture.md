@@ -87,12 +87,11 @@ mechanism (§ 6.3).
 The machine form of this table is the `capabilities` frozenset on every tool definition
 (`claude_tools.CAPABILITIES`; § 5, invariant 3).
 
-The shape that matters is the gap between the two boxes: ORDER EXECUTION is not *guarded
-against* the model, it is **unreachable by** it. There is no tool, and the capability name a tool
-would have to declare does not exist in the vocabulary — so one that tried to claim it would fail
-the unknown-capability check rather than have to be caught in review. (The left box holds six
-entries, not five: the five reachable tiers plus `SANDBOX_EXECUTION`, which the paragraph above
-explains is carried as its own capability rather than as a tier.)
+**The shape that matters is what is not drawn: the model has no arrow into the red box.**
+ORDER EXECUTION is not *guarded against* the model, it is **unreachable by** it — so there is no
+edge to guard. (The left column holds six entries rather than five: the five reachable tiers plus
+`SANDBOX_EXECUTION`, which the paragraph above carries as its own capability rather than as a
+tier.)
 
 ```mermaid
 flowchart TB
@@ -113,16 +112,13 @@ flowchart TB
         T6["SANDBOX EXECUTION<br/>run_backtest — model<br/>code, in a child process"]
     end
 
-    subgraph NOREACH["Unreachable — no tool, and no legal spelling"]
-        T7["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order"]
-    end
+    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
 
     M --> REACH
-    M -. "the name is absent from claude_tools.CAPABILITIES, so a<br/>definition declaring it fails the unknown-capability check" .-x T7
-    H == "Gate 1 · Touch ID, then Gate 2 · an explicit click —<br/>once per write, with a dialog for every reply" ==> T7
+    H == "Gate 1 · Touch ID, then Gate 2 · an explicit click —<br/>once per write, with a dialog for every reply" ==> OE
 
     class T1,T2,T3,T4,T5,T6 reach
-    class T7 norch
+    class OE norch
     class M,H actor
 ```
 
