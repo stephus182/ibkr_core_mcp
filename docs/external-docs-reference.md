@@ -40,6 +40,40 @@
 > Firecrawl's `waitFor`/`proxy` options, which the client does not expose, and it fails
 > silently rather than signalling the block. Use the `.md` / `llms.txt` routes instead.
 
+## Verifying a documentation URL before citing it
+
+```mermaid
+flowchart TB
+    classDef ok fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+
+    Q["A URL you are about to cite"] --> A{"Its PATH is in llms.txt?<br/>compare by path, not by host"}
+    A -->|"yes"| REAL["Real. Cite the v1/ form."]
+    A -->|"no"| B["Absence proves nothing —<br/>changelog is real and not indexed"]
+    B --> C{"Fetch the URL + .md<br/>v1/ prefix only"}
+    C -->|"a real body"| REAL
+    C -->|"# Page Not Found"| D["firecrawl_search — the one job<br/>the local browser cannot do"]
+    CTRL["Every batch carries a fabricated control<br/>URL that must come back Not Found"] -.-> C
+
+    class REAL,D ok
+    class A,C,CTRL guard
+```
+
+**The control URL is the method, not a nicety.** A check that cannot fail proves nothing — one
+that could not once graded 73 of 74 links "broken" on a parser bug, and the fabricated control
+is what exposes it. Put one in every batch.
+
+**Three signals look like they answer the question and do not.**
+
+| Signal | Why it cannot decide |
+|---|---|
+| The **HTML page** | JavaScript-rendered, so a real page and a URL invented on the spot return byte-identical empty output |
+| The **HTTP status** | The new site answers 200 for pages that do not exist; old `cpapi-v1` URLs also answer 200, while silently dropping the `#anchor` |
+| The **byte size** | A weak proxy at best — `unread-bulletins` is a real page at 576 B, and a `# Page Not Found` body is ~1,000 B |
+
+Only the `.md` body discriminates, and only on the `v1/` prefix — appending `.md` to an
+old-prefix URL fails even for a page that genuinely exists.
+
 **IBKR Client Portal API** (`client.py`, `rate_limiter.py`, `claude_tools.py`)
 
 | Topic | URL |

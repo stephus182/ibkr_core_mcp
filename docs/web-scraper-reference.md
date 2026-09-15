@@ -35,6 +35,37 @@ back empty.
 | `crawl_site` | Crawl4AI | free | **Archive a site** to Drive under `web_docs/{url-slug}/`. |
 | `fetch_page` | Crawl4AI | free | **Read one page** as markdown. Opens paywalled sites with a saved login. |
 
+```mermaid
+flowchart LR
+    classDef paid fill:#fff3d6,stroke:#b54708,color:#111827
+    classDef free fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef gone fill:#f3f4f6,stroke:#b42318,color:#111827,stroke-dasharray:5 4
+
+    subgraph FIND["Find — neither returns page text, deliberately"]
+        direction TB
+        FS["firecrawl_search<br/>Firecrawl · ~1 credit<br/>anywhere on the web"]
+        SS["search_site<br/>Crawl4AI · free<br/>one site, BM25-ranked"]
+    end
+
+    subgraph READ["Read"]
+        direction TB
+        FP["fetch_page<br/>free · one page as markdown,<br/>opens paywalls with a saved login"]
+        CS["crawl_site<br/>free · archives a site to Drive"]
+    end
+
+    FS -->|"a URL to go read"| FP
+    SS -->|"a URL to go read"| FP
+
+    GONE["Deleted 2026-07-30: the ladder.<br/>Firecrawl first, Crawl4AI only underneath it —<br/>~900 lines of arbitration and an LLM judge.<br/>Measured, the 'fallback' was bigger, ~10x faster<br/>and free, so the ladder ran the worse engine first."]
+
+    class FS paid
+    class SS,FP,CS free
+    class GONE gone
+```
+
+Nothing connects the two engines, and that absence is the design — the box on the right is
+drawn detached because there is no edge left to draw.
+
 Read that table as a pipeline: the first two *find*, the last two *read*. `search_site` and
 `firecrawl_search` both end by telling you to call `fetch_page` on whichever result you
 want — because none of the finders returns page text, deliberately.

@@ -916,6 +916,37 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/log
 
 ## Error Handling
 
+Every call takes the same path, and the table below is the set of places it can leave it.
+
+```mermaid
+flowchart TB
+    classDef ok fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef err fill:#fde3e1,stroke:#b42318,color:#111827
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+
+    M["An IBKRClient method"] --> V{"_validate_account_id /<br/>_order_id / _reply_id"}
+    V -->|"malformed"| CE["ConfigError — raised before the id<br/>ever reaches an f-string URL"]
+    V -->|"ok"| G{"An order write?"}
+    G -->|"yes"| GATES["Gate 1 Touch ID, then Gate 2 dialog<br/>see Order Management below"]
+    G -->|"no"| RT["with_retry — up to 3 attempts"]
+    GATES --> RT
+    RT --> REQ["self._session request, 30 s timeout.<br/>The session already carries the localhost<br/>cookie the auth strategy applied"]
+    REQ --> S{"HTTP status"}
+    S -->|"2xx"| OK["dict or list"]
+    S -->|"401"| AE["IBKRAuthError — never retried;<br/>the session must be re-established"]
+    S -->|"429 or 503"| B{"attempts left?"}
+    B -->|"yes"| SLEEP["sleep 1s, then 2s, then 4s"]
+    SLEEP --> RT
+    B -->|"no"| RE["IBKRRateLimitError"]
+    S -->|"other 4xx / 5xx"| AP["IBKRAPIError<br/>.status_code + 400 chars of body"]
+
+    PT["ping() and tickle() bypass all of this:<br/>a direct session call, 5 s, catch<br/>everything, return a bool"] -.-> REQ
+
+    class OK ok
+    class CE,AE,RE,AP err
+    class V,G,GATES,B guard
+```
+
 | Exception | When raised |
 |-----------|-------------|
 | `IBKRAuthError` | HTTP 401 — session expired or not authenticated |

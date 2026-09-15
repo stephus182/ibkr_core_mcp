@@ -115,6 +115,36 @@ Source: <https://docs.crawl4ai.com/advanced/undetected-browser/>
 | **Stealth mode** (`BrowserConfig(enable_stealth=True)`) | `navigator.webdriver`, plugin emulation, navigator properties, common automation leaks. Partial CDP detection | ❌ not used |
 | **Undetected browser** (`UndetectedAdapter`) | Deep browser patches, full CDP detection. Vendor names **Cloudflare and DataDome** explicitly | ❌ **deliberately not used** |
 
+```mermaid
+flowchart TB
+    classDef use fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef notuse fill:#f3f4f6,stroke:#6b7280,color:#111827,stroke-dasharray:4 3
+    classDef note fill:#fff3d6,stroke:#b54708,color:#111827
+
+    subgraph OURS["What we use"]
+        direction TB
+        T1["Regular browser — nothing special"]
+        ID["Your own paid login, visible browser.<br/>Not stealth: it makes a session consistent<br/>with the browser that created it"]
+    end
+
+    LINE{"We stop here — a scope decision,<br/>not a technical limit"}
+
+    subgraph THEIRS["Ships in Crawl4AI · deliberately unused"]
+        direction TB
+        T2["Stealth mode — navigator.webdriver,<br/>plugin emulation, partial CDP"]
+        T3["Undetected browser — deep patches,<br/>full CDP. Vendor names DataDome"]
+    end
+
+    OURS --> LINE
+    LINE -. "never climbed" .-> THEIRS
+    WHY["A treadmill, and evasion as its own goal<br/>rather than a side effect of reading<br/>something you pay for"]
+    LINE --- WHY
+
+    class T1,ID use
+    class T2,T3 notuse
+    class WHY note
+```
+
 **An honest correction to our own docs.** [`web-scraper-reference.md`](web-scraper-reference.md)
 §8's host table said of `wsj.com` "nothing works from here". What is actually true is *nothing
 we are willing to do* works from here. Crawl4AI ships a mode aimed precisely at DataDome; we
