@@ -87,10 +87,12 @@ mechanism (§ 6.3).
 The machine form of this table is the `capabilities` frozenset on every tool definition
 (`claude_tools.CAPABILITIES`; § 5, invariant 3).
 
-The shape that matters is the gap between the two boxes: the sixth tier is not guarded against
-the model, it is *unreachable by* it. There is no tool, and the capability name it would have to
-declare does not exist in the vocabulary — so a tool that tried to claim it would fail the
-unknown-capability check rather than pass a review.
+The shape that matters is the gap between the two boxes: ORDER EXECUTION is not *guarded
+against* the model, it is **unreachable by** it. There is no tool, and the capability name a tool
+would have to declare does not exist in the vocabulary — so one that tried to claim it would fail
+the unknown-capability check rather than have to be caught in review. (The left box holds six
+entries, not five: the five reachable tiers plus `SANDBOX_EXECUTION`, which the paragraph above
+explains is carried as its own capability rather than as a tier.)
 
 ```mermaid
 flowchart TB
