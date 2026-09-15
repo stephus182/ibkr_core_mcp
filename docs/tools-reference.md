@@ -12,6 +12,45 @@ Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`N
 
 Pass `toolkit.tools` directly to the Anthropic SDK `tools=` parameter. Route responses through `toolkit.execute(block.name, block.input)`.
 
+**What each family needs before it can work.** All 44 are always advertised; a missing
+prerequisite surfaces as an error string from `execute()`, not as an absent tool — so this is
+the map for reading one of those errors.
+
+```mermaid
+flowchart LR
+    classDef need fill:#fff3d6,stroke:#b54708,color:#111827
+    classDef fam fill:#e4eefc,stroke:#1849a9,color:#111827
+    classDef free fill:#e3f5e8,stroke:#1a7f37,color:#111827
+
+    GW["Authenticated gateway<br/>Docker + browser login"]
+    GD["Google OAuth token<br/>+ a folder id"]
+    FX["IBKR_FLEX_TOKEN +<br/>IBKR_FLEX_QUERY_ID"]
+    SC["the [scraper] extra"]
+    FC["FIRECRAWL_API_KEY"]
+    NONE["nothing at all"]
+
+    GW --> A["Portfolio · Orders · Contracts ·<br/>Snapshots · Alerts · Watchlists"]
+    GW --> MD["fetch_market_data"]
+    GD --> MD
+    GD --> CS["crawl_site"]
+    SC --> CS
+    SC --> FP["fetch_page · search_site"]
+    FC --> FS["firecrawl_search"]
+    FX --> FL["sync_flex_trades<br/>check_flex_coverage"]
+    GD -. "archive only — a failure here<br/>is logged, not raised" .-> FL
+    NONE --> CO["add_indicators · get_analytics ·<br/>generate_pinescript · run_backtest"]
+
+    class GW,GD,FX,SC,FC need
+    class A,MD,CS,FP,FS,FL fam
+    class NONE,CO free
+```
+
+Two tools have two prerequisites rather than one: `fetch_market_data` reads the Drive cache
+*and* falls through to the gateway on a miss, and `crawl_site` drives the local browser *and*
+archives to Drive. The single dashed edge is the one place a missing prerequisite is survivable
+— a Flex sync writes SQLite before it touches Drive, so an archive failure is logged and the
+sync still succeeds.
+
 **IBKR API source:** https://www.interactivebrokers.com/docs/web-api/v1/introduction
 
 ---

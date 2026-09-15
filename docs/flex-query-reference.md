@@ -47,6 +47,52 @@ A Drive archive/manifest failure is logged but does not abort a successful SQLit
 are already upserted by that point). Run `flex.fetch_trades()` daily (cron or agent schedule)
 to keep the store current.
 
+## What one `fetch_trades` actually does
+
+```mermaid
+flowchart TB
+    classDef ok fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef err fill:#fde3e1,stroke:#b42318,color:#111827
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+
+    A["fetch_trades(account_id)"] --> S1["Step 1 · POST SendRequest<br/>ndcdyn · token + query id"]
+    S1 --> URL{"Statement URL on<br/>the allowlist?"}
+    URL -->|"no"| E1["FlexQueryError.<br/>The URL is data from IBKR,<br/>not a constant — IBKR<br/>answers with a gdcdyn host"]
+    URL -->|"yes"| S2["Step 2 · GET GetStatement<br/>reference code · 5 attempts"]
+    S2 --> ST{"Status"}
+    ST -->|"WhenAvailable<br/>or Warn 1019"| W["Not ready — sleep 3 s.<br/>1019 means 'generating'"]
+    W --> S2
+    ST -->|"Fail, other Warn"| E2["FlexQueryError with the code's<br/>remedy. 1001 is transient —<br/>retry, not a rate limit"]
+    ST -->|"ready"| G{"Contains a<br/>FlexStatement element?"}
+    G -->|"no"| E3["Refused. A non-statement was once<br/>imported as a valid 0-trade sync"]
+    G -->|"yes"| P["parse"]
+    P --> T1["upsert into trades<br/>10 legacy fields"]
+    P --> T2["full archive — one table per<br/>element, one column per attribute"]
+    T1 --> D{"Drive: raw XML +<br/>SHA-256 manifest"}
+    T2 --> D
+    D -->|"fails"| NF["Logged, not raised —<br/>trades are already in SQLite"]
+    D -->|"ok"| R["return trades"]
+    NF --> R
+
+    class R,P ok
+    class E1,E2,E3 err
+    class URL,ST,G,D guard
+```
+
+Three things in that path are easy to get wrong and have been:
+
+- **It is a two-request protocol across two hosts.** `SendRequest` goes to `ndcdyn`; the
+  statement URL IBKR hands back is on `gdcdyn`. That URL is *data from IBKR*, not a constant,
+  so it is checked against an allowlist before it is fetched.
+- **`1001` is transient, not a rate limit.** Retry it. Diagnosing it as pacing cost several
+  failed syncs (`CLAUDE.md` § API Docs First). `1019` and `WhenAvailable` both mean "still
+  generating" and are what the five-attempt poll is for.
+- **A 200 with no `FlexStatement` element is refused.** On 2026-07-02 such a document was
+  parsed as a legitimate zero-trade import, and the sync looked successful.
+
+The Drive branch is the only non-fatal one: trades are in SQLite before the upload is
+attempted, so an archive or manifest failure is logged and the sync still succeeds.
+
 ## Complete capture (2026-08-04)
 
 `fetch_trades` / `import_from_file` write **two** representations of every statement:

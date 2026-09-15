@@ -49,7 +49,7 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 The server binds to `127.0.0.1` only — never exposed to external networks.
 Connect MCP clients to `http://localhost:5174/sse`.
 
-## Tools (44)
+## Tools (46)
 
 All 44 `ClaudeToolkit` tools plus:
 - `add_price_alert` — register a threshold alert (persisted to SQLite)
@@ -152,6 +152,37 @@ unauthenticated caller learns nothing about the loopback policy. SSE is still th
 transport — prefer stdio, where the client is the process that spawned the server, and start SSE
 only for a local consumer that needs it. Reasoning and sources: `SECURITY.md` § MCP Transports;
 applicability decision: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` § Phase 3 A.
+
+## What a call passes through before it reaches a handler
+
+```mermaid
+flowchart TB
+    classDef pass fill:#e3f5e8,stroke:#1a7f37,color:#111827
+    classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
+    classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
+
+    STDIO["stdio — the default.<br/>The client is the process<br/>that spawned the server"] --> V
+    SSE["--transport sse<br/>binds 127.0.0.1"] --> T{"Bearer token for<br/>this launch?"}
+    T -->|"absent or wrong"| E401["401 — checked FIRST, so a caller<br/>learns nothing about loopback policy"]
+    T -->|"ok"| H{"Host is loopback?"}
+    H -->|"no"| E421["421"]
+    H -->|"yes"| O{"Origin is loopback?"}
+    O -->|"no"| E403["403"]
+    O -->|"yes"| V
+
+    V{"Arguments valid against<br/>the tool's inputSchema?"}
+    V -->|"no"| EV["Rejected by the SDK.<br/>The handler never runs"]
+    V -->|"yes"| HAN["_dispatch → the handler"]
+
+    class HAN,STDIO pass
+    class E401,E421,E403,EV stop
+    class T,H,O,V guard
+```
+
+The order is deliberate: the token is checked **before** `Host` and `Origin`, so an
+unauthenticated caller cannot learn the loopback policy from the response it gets. stdio skips
+all three because the client is the process that spawned the server — which is why it stays the
+preferred transport, and SSE is started only for a local consumer that needs it.
 
 ## Tool annotations (2026-09-13)
 
