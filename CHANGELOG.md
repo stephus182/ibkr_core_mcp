@@ -171,6 +171,23 @@ asserted shapes and bounds only — `bb_upper >= bb_mid` holds for any non-negat
 deviation, so it holds whichever `ddof` you pass — which is the same "control that cannot
 fail" pattern this audit found in the live suite and the order-write boundary.
 
+### Fixed
+- **The per-request SSRF guard could raise from its own failure path, intermittently
+  killing a crawl.** When a page tears down mid-request, Playwright resolves the
+  outstanding route itself; `route.fetch` then raises, the handler's `except` branch called
+  `route.abort()`, and abort raised `Route.abort: Route is already handled!` — *from inside
+  the except block*, where nothing catches it. It escaped `_reject_private_requests` and
+  Playwright re-raised it at teardown as `Browser.close: Route.abort: Route is already
+  handled!`.
+
+  This was the intermittent live failure first seen on 2026-09-16 (1 run in 5) and recorded
+  then as unidentified, and **it was introduced by that same day's redirect fix** in this
+  module. Captured in a full integration sweep by `test_crawl_site_saves_pages_to_drive`.
+  Every abort is now best-effort (`_abort_quietly`), logging at debug rather than swallowing
+  silently. The SSRF property is unchanged: host checks run before anything is fetched or
+  served, so a request that reaches an abort has never been fulfilled. A guard whose failure
+  path can itself throw is not a guard.
+
 ### Added
 - **`rate_limiter.EndpointPacer` — requests are now paced before they are sent.** The module
   was named for pacing and three documents described it as doing token-bucket pacing; it only

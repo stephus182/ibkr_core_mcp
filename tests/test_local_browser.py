@@ -1405,3 +1405,87 @@ def test_crawl_site_installs_the_per_request_ssrf_guard(monkeypatch, tmp_path):
     assert hooks.get("on_page_context_created") is _install_ssrf_guard, (
         "sub-page fetches would be unguarded against SSRF"
     )
+
+
+class _TornDownRoute(_FakeRoute):
+    """A Route whose page is closing: every operation raises the way Playwright's does.
+
+    Playwright resolves outstanding routes itself during teardown, so a handler still
+    in flight finds the route already handled and every call on it raises. Reproduces
+    `Route.abort: Route is already handled!`.
+    """
+
+    def __init__(self, *, fetch_raises=True, fulfill_raises=False):
+        super().__init__()
+        self._fetch_raises = fetch_raises
+        self._fulfill_raises = fulfill_raises
+        self.abort_attempts = 0
+
+    async def abort(self):
+        self.abort_attempts += 1
+        raise RuntimeError("Route.abort: Route is already handled!")
+
+    async def fetch(self, *, url=None, method=None, max_redirects=None):
+        if self._fetch_raises:
+            raise RuntimeError("Route.fetch: Target page, context or browser has been closed")
+        return await super().fetch(url=url, method=method, max_redirects=max_redirects)
+
+    async def fulfill(self, *, response=None):
+        if self._fulfill_raises:
+            raise RuntimeError("Route.fulfill: Target page, context or browser has been closed")
+        await super().fulfill(response=response)
+
+
+@pytest.mark.asyncio
+async def test_guard_survives_a_route_the_browser_already_resolved(monkeypatch):
+    """The fallback abort must not become the exception that escapes the handler.
+
+    Captured live 2026-09-16 in `test_crawl_site_saves_pages_to_drive`, and this is the
+    intermittent live failure recorded as unidentified after the 2026-09-16 SSRF fix —
+    the fix introduced it. When the page is tearing down, `route.fetch` raises, the
+    `except` branch calls `route.abort()`, Playwright has already resolved the route, and
+    abort raises *from inside the except block*. That second exception is not caught by
+    anything, escapes the handler, and Playwright re-raises it at teardown:
+
+        crawl_site failed: Error: Browser.close: Route.abort: Route is already handled!
+
+    A guard whose failure path can itself throw is not a guard.
+    """
+    import ibkr_core_mcp.local_browser as lb
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    # A public host, asserted as such rather than resolved: this test is about teardown,
+    # and a real DNS lookup is both blocked under pytest-socket and beside the point.
+    monkeypatch.setattr(lb, "is_private_host", lambda host: False)
+    route = _TornDownRoute()
+
+    await _reject_private_requests(route, _FakeRequest("https://example.com/page"))
+
+    assert route.abort_attempts >= 1, "the handler must still try to fail closed"
+
+
+@pytest.mark.asyncio
+async def test_guard_survives_a_teardown_during_fulfill(monkeypatch):
+    """The other order: the fetch succeeds and the page closes while serving the body."""
+    import ibkr_core_mcp.local_browser as lb
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(lb, "is_private_host", lambda host: False)
+    route = _TornDownRoute(fetch_raises=False, fulfill_raises=True)
+
+    await _reject_private_requests(route, _FakeRequest("https://example.com/page"))
+
+
+@pytest.mark.asyncio
+async def test_a_failing_abort_still_never_serves_private_content():
+    """Swallowing the abort error must not soften the security property. A private host
+    is rejected before anything is fetched, so an abort that cannot complete leaves the
+    request unserved either way — never fulfilled."""
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    route = _TornDownRoute()
+
+    await _reject_private_requests(route, _FakeRequest("http://127.0.0.1:5055/secrets"))
+
+    assert route.fulfilled is None, "private content must never be served"
+    assert route.fetched == [], "a private host must not even be fetched"

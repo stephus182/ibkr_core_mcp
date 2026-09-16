@@ -53,6 +53,7 @@ PyPI wheel for crawl4ai==0.5.0 and crawl4ai==0.9.0 on 2026-06-30 — see the
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import sys
 import threading
@@ -389,8 +390,44 @@ def _resolve_profile_dir(profiles_dir: Path, url_or_domain: str) -> Path | None:
 # `_reject_private_requests` will resolve before refusing. Ten matches the limit Chromium
 # and curl both use; the point of the bound is that a redirect loop must terminate in a
 # refusal rather than spin.
+log = logging.getLogger(__name__)
+
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECT_HOPS = 10
+
+
+async def _abort_quietly(route: Any) -> None:
+    """Abort a route, tolerating one the browser has already finished with.
+
+    Playwright resolves outstanding routes itself while a page or browser closes, so a
+    handler still in flight can find its route already handled — and then `route.abort()`
+    raises `Route.abort: Route is already handled!`. When that happened inside
+    `_reject_private_requests`' `except` block, the new exception was raised *from inside
+    the handler for the old one*, so nothing caught it; it escaped the handler and
+    Playwright surfaced it at teardown as
+    `Browser.close: Route.abort: Route is already handled!`.
+
+    That was the intermittent live failure first seen on 2026-09-16 and recorded as
+    unidentified, reproduced and captured on 2026-09-16 in
+    `test_crawl_site_saves_pages_to_drive`. It was introduced by the redirect fix in this
+    same module: a guard whose failure path can itself throw is not a guard.
+
+    Swallowing the error does not soften the SSRF property. The host checks run *before*
+    anything is fetched or served, so a request that reaches an abort has never been
+    fulfilled; if the abort cannot complete it is because the request is already being
+    torn down, which is the same outcome.
+
+    Args:
+        route: Playwright `Route` object, possibly already resolved.
+    """
+    try:
+        await route.abort()
+    except Exception as exc:
+        # Already handled, or the page is gone. Either way the request is not served, so
+        # this is not an error — but it is logged rather than silently dropped, because a
+        # sudden run of these would mean routes are being resolved out from under the
+        # guard, which is worth seeing.
+        log.debug("SSRF guard: route already resolved, abort skipped (%s)", exc)
 
 
 async def _reject_private_requests(route: Any, request: Any) -> None:
@@ -434,7 +471,7 @@ async def _reject_private_requests(route: Any, request: Any) -> None:
         return bool(host) and is_private_host(host)
 
     if _is_private(url):
-        await route.abort()
+        await _abort_quietly(route)
         return
 
     try:
@@ -453,14 +490,16 @@ async def _reject_private_requests(route: Any, request: Any) -> None:
             if response.status in (301, 302, 303) and method != "HEAD":
                 method = "GET"
             if _is_private(url):
-                await route.abort()
+                await _abort_quietly(route)
                 return
         # Ran out of hops. Refuse rather than follow an unbounded chain.
-        await route.abort()
+        await _abort_quietly(route)
     except Exception:
         # A route handler that raises leaves the request hanging until it times out.
         # Fail closed instead: the caller sees a failed fetch, never private content.
-        await route.abort()
+        # `_abort_quietly`, not `route.abort()`: during teardown the route is already
+        # resolved and a bare abort raises from inside this handler, escaping it.
+        await _abort_quietly(route)
 
 
 async def _reject_private_httpx_request(request: Any) -> None:

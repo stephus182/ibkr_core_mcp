@@ -679,15 +679,64 @@ investigated before anything is touched. No release should carry the alert tools
 landed here, and the `get_watchlists` note pending since 2026-08-11 is now closed by a live
 run.
 
-### Open: an uncaptured intermittent failure in the live web-tools suite
+### CLOSED: the intermittent live failure, captured and traced to this audit's own fix
 
-One run of `pytest tests/test_web_tools_live.py -m integration` reported `1 failed, 11
-passed`; four further runs the same day were clean (12 passed each). The failing test's
-identity was not captured, so it is recorded as unknown rather than guessed at.
+Session 1 recorded this as open and deliberately did not guess at it:
 
-The suite reaches third-party hosts (httpbin.org, docs.crawl4ai.com, Firecrawl), so a
-transient network or rate-limit fault is the likely cause — but "likely" is not evidence.
-Note the new redirect guard cannot fail this way: if the redirector is slow or unreachable
-the canary server is simply never contacted, `hits` stays empty and the test passes, and if
-the redirector stops issuing its 302 the test skips loudly. Watch for a recurrence and
-capture `-rf` output when it happens.
+> One run of `pytest tests/test_web_tools_live.py -m integration` reported `1 failed, 11
+> passed`; four further runs the same day were clean. The failing test's identity was not
+> captured, so it is recorded as unknown rather than guessed at.
+
+It reproduced on 2026-09-16 during a full 94-test integration sweep, and this time `-rf`
+caught it:
+
+```
+FAILED tests/test_web_scraper_drive_live.py::test_crawl_site_saves_pages_to_drive
+playwright._impl._errors.Error: Route.abort: Route is already handled!
+crawl_site failed for https://docs.crawl4ai.com/core/quickstart/:
+    Error: Browser.close: Route.abort: Route is already handled!
+```
+
+**It was introduced by WEB-01 — this audit's own first Critical fix.** When a page tears
+down mid-request, Playwright resolves the outstanding route itself. `route.fetch` then
+raises, the handler's `except` branch calls `route.abort()`, and abort raises *from inside
+the except block*. Nothing catches a raise from within an except handler, so it escaped
+`_reject_private_requests` entirely and Playwright re-raised it at teardown. A guard whose
+failure path can itself throw is not a guard.
+
+Every abort site is now best-effort via `_abort_quietly`, which logs at debug rather than
+swallowing silently — a run of these would mean routes are being resolved out from under
+the guard, which is worth seeing. The SSRF property is untouched: the host checks run
+before anything is fetched or served, so a request that reaches an abort has never been
+fulfilled.
+
+Verification, in order of strength:
+
+- **Deterministic**: two unit tests drive a `_TornDownRoute` whose every operation raises
+  the way Playwright's does — teardown during `fetch` and during `fulfill` — plus one
+  asserting a failing abort still never serves private content. 3 mutants run, 3 caught,
+  including "private host no longer aborted".
+- **Corroborating**: 6 consecutive clean runs of the test that failed, and 4 consecutive
+  clean runs of the three web live files (17 passed each). For an intermittent fault this
+  is corroboration, not proof; the unit tests are the proof.
+
+The session-1 note guessed at a transient network fault as "the likely cause". It was not,
+and the note said "likely" is not evidence — correctly. The lesson stands in the other
+direction too: the flake was in code this audit had just written, and the first instinct
+was to look outward.
+
+### Live validation — full sweep 2026-09-16
+
+Run as a single pytest process, so one `EndpointPacer` governs the whole sweep. **The pacer
+is per-process**, so two concurrent processes against the gateway do not share a budget;
+live runs and ad-hoc probes were kept strictly sequential for that reason.
+
+| Suite | Result |
+|---|---|
+| `test_client_live.py` | 57 passed, 4 skipped |
+| `test_alerts_live.py` | 1 passed, 10 skipped (alerts remain non-functional via the gateway — upstream) |
+| `test_web_tools_live.py`, `test_crawl4ai_live.py`, `test_web_scraper_live.py` | 17 passed (x4 runs) |
+| `test_web_scraper_drive_live.py` | 2 passed (x6 runs) |
+| **Full `-m integration` sweep** | **94 collected — 1 failed before the fix (that failure), clean after** |
+
+Gateway/orders totals match the pre-audit baseline of 58 passed / 14 skipped exactly.
