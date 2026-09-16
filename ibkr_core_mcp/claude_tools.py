@@ -1640,12 +1640,31 @@ class ClaudeToolkit:
             ), None
 
         df = _bars_to_dataframe(raw)
+        span = f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
+
+        incomplete = raw.get("ibkr_core_warning")
+        if incomplete:
+            # Deliberately NOT cached. The Drive cache is shared across machines and its
+            # key is (symbol, timeframe, period, end), so a partial window stored under the
+            # requested period answers every later request for that period, on every
+            # machine, as though it were complete. This repo has already paid for that
+            # once — the 2026-08-05 `startTime` incident needed a cache purge because "a
+            # code fix is not sufficient: `_fetch_market_data` returns 'Cache HIT' and
+            # serves the stored parquet without re-fetching". Returning the bars while
+            # refusing to label them as the full period is the honest combination
+            # (audit finding API-02, 2026-09-16).
+            return (
+                f"{incomplete}\n\n"
+                f"Fetched {symbol} {timeframe} ({period}) from IBKR: {span}. "
+                f"NOT saved to the Drive cache — storing this under '{period}' would label a "
+                f"partial window as a complete one for every later request. Re-run with a "
+                f"shorter period or a larger bar size to get a cacheable, complete result.",
+                None,
+            )
 
         self._cache.save(df, symbol, timeframe, period, end)
         return (
-            f"Fetched {symbol} {timeframe} ({period}) from IBKR: "
-            f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}. "
-            f"Saved to Drive cache.",
+            f"Fetched {symbol} {timeframe} ({period}) from IBKR: {span}. Saved to Drive cache.",
             None,
         )
 

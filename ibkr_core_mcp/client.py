@@ -600,6 +600,7 @@ class IBKRClient:
         # Advancing by the response cannot lose data whatever the size estimate does — it
         # only takes more requests.
         cursor: datetime | None = None  # None == "now"
+        truncation_warning: str | None = None
         for _ in range(_MAX_CHUNKS):
             params: dict[str, Any] = {
                 "conid": conid,
@@ -639,6 +640,20 @@ class IBKRClient:
             if oldest <= target:
                 break
         else:
+            # The loop ran to exhaustion: every chunk returned data and the target was
+            # never reached, so the answer is well-formed and covers less than was asked.
+            # A log line reaches no caller, no model and no cache — measured against the
+            # truncating stub, `180d/1min` comes back with 46% of its span and `1y/5min`
+            # with 33%, and a backtest labelled "1 year" that silently saw four months
+            # draws a conclusion about a period it never had. So the response says so, in
+            # the response (audit finding API-02, 2026-09-16).
+            truncated_at = cursor.strftime("%Y-%m-%d") if cursor is not None else "an unknown date"
+            truncation_warning = (
+                f"INCOMPLETE: asked for {period} of {bar} bars but stopped at the "
+                f"{_MAX_CHUNKS}-chunk safety guard. The data returned goes back only to "
+                f"{truncated_at}, not the full {period}. Request a shorter period, or a "
+                f"larger bar size, to cover the whole span."
+            )
             log.warning(
                 "market history pagination hit the %d-chunk guard (conid=%s period=%s bar=%s); "
                 "returned data starts at %s, not the full requested span",
@@ -660,7 +675,11 @@ class IBKRClient:
                 seen.add(t)
                 unique.append(b)
 
-        return {**envelope, "data": unique}
+        result_envelope = dict(envelope)
+        if truncation_warning is not None:
+            # Namespaced so it can never collide with a field IBKR adds to its own envelope.
+            result_envelope["ibkr_core_warning"] = truncation_warning
+        return {**result_envelope, "data": unique}
 
     def get_market_snapshot(self, conids: list[int], fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Live quote snapshot for one or more contracts. Returns [] if response is not a list.

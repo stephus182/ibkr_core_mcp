@@ -996,3 +996,54 @@ def test_add_indicators_prints_a_vwap_number_on_intraday_bars(toolkit):
     vwap_line = next(line for line in text.splitlines() if "VWAP" in line)
     assert "n/a" not in vwap_line.lower(), vwap_line
     assert any(ch.isdigit() for ch in vwap_line.split("VWAP")[1]), vwap_line
+
+
+def _history_payload(n_bars, start_ms, step_ms, warning=None):
+    """A get_market_history_paginated return value, optionally flagged incomplete."""
+    payload = {
+        "data": [{"t": start_ms + i * step_ms, "o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "v": 1.0} for i in range(n_bars)]
+    }
+    if warning:
+        payload["ibkr_core_warning"] = warning
+    return payload
+
+
+def test_fetch_market_data_refuses_to_cache_a_truncated_window(toolkit):
+    """A partial window saved under the requested period is the dangerous half of API-02.
+
+    The Drive cache is shared across machines and long-lived, and its key is
+    (symbol, timeframe, period, end) — so 33% of a year stored under '1y' answers every
+    later request for a year, on every machine, with no second chance to notice. This
+    repo has already paid for that once: the 2026-08-05 `startTime` incident needed a
+    cache purge because "a code fix is not sufficient — `_fetch_market_data` returns
+    'Cache HIT' and serves the stored parquet without re-fetching".
+
+    So a flagged-incomplete result is reported and NOT saved.
+    """
+    warning = "INCOMPLETE: asked for 1y of 5min bars but stopped at the 120-chunk safety guard."
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _history_payload(
+        500, 1_700_000_000_000, 300_000, warning=warning
+    )
+
+    text, _ = toolkit.execute(
+        "fetch_market_data", {"symbol": "AAPL", "period": "1y", "bar": "5min", "end": "2026-09-16"}
+    )
+
+    assert "INCOMPLETE" in text, text
+    toolkit._cache.save.assert_not_called()
+    assert "not" in text.lower() and "cache" in text.lower(), text
+
+
+def test_fetch_market_data_still_caches_a_complete_window(toolkit):
+    """The counter-case: without it, "never cache" would satisfy the test above."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _history_payload(500, 1_700_000_000_000, 300_000)
+
+    text, _ = toolkit.execute(
+        "fetch_market_data", {"symbol": "AAPL", "period": "5d", "bar": "5min", "end": "2026-09-16"}
+    )
+
+    assert "INCOMPLETE" not in text, text
+    toolkit._cache.save.assert_called_once()
+    assert "Saved to Drive cache" in text, text

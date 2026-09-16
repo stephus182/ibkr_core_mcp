@@ -2324,3 +2324,42 @@ def test_get_live_orders_still_reports_a_genuine_empty_after_priming(client):
 
     assert result == []
     assert len(_orders_paths(mock_get, client)) == 3, "must prime exactly once, then stop"
+
+
+def test_paginated_history_declares_it_when_the_chunk_guard_truncates(client):
+    """`_MAX_CHUNKS` produced a well-formed short answer and only a log line.
+
+    A `log.warning` reaches no caller, no model and no cache. Measured against the
+    IBKR-accurate truncating stub, the shortfall is not marginal:
+
+        180d/1min  ->  120 chunks, 83.2 of 180 days  =  46% of what was asked
+        1y/5min    ->  120 chunks, 119.6 of 365 days =  33%
+
+    A backtest labelled "1 year" that silently covers four months draws a conclusion
+    about a period it never saw. The response must say so in the response.
+    """
+    fake, calls = _capped_get(bar_seconds=60, bars_per_day=1440.0)
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="180d", bar="1min")
+
+    from ibkr_core_mcp.client import _MAX_CHUNKS
+
+    assert len(calls) == _MAX_CHUNKS, "this request must actually hit the guard"
+    assert out.get("data"), "bars still come back — they are real, just fewer"
+    warning = out.get("ibkr_core_warning")
+    assert warning, "a truncated result must carry a warning the caller can read"
+    assert "180d" in warning, warning
+    assert str(_MAX_CHUNKS) in warning, warning
+
+
+def test_paginated_history_says_nothing_when_it_covered_the_whole_request(client):
+    """The counter-case. A warning on every response is a warning on none, and
+    "always warn" would satisfy the test above."""
+    fake, calls = _capped_get(bar_seconds=60, bars_per_day=1440.0)
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="30d", bar="1min")
+
+    from ibkr_core_mcp.client import _MAX_CHUNKS
+
+    assert len(calls) < _MAX_CHUNKS, "this request must NOT hit the guard"
+    assert "ibkr_core_warning" not in out, f"unexpected warning: {out.get('ibkr_core_warning')}"

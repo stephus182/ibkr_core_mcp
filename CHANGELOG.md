@@ -172,6 +172,23 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Fixed
+- **A wide intraday history request returned a short answer and only logged it (API-02).**
+  `get_market_history_paginated` stops at `_MAX_CHUNKS = 120`; past that it returned a
+  well-formed result covering less than asked, announced by a `log.warning` that reaches no
+  caller, no model and no cache.
+
+  Verified live 2026-09-16 on AAPL: `1y`/`5min` hit the guard at exactly 120 chunks and
+  returned **9,344 bars covering 174 of 365 days — 47.7%**. A backtest labelled "1 year"
+  that silently saw under six months draws a conclusion about a period it never had. The
+  control in the same session, `90d`/`1min`, finished in 62 chunks at 100.2% coverage and
+  correctly carried no warning.
+
+  The response now carries `ibkr_core_warning` naming the period requested, the guard, and
+  the date actually reached. **`fetch_market_data` refuses to cache a flagged result**,
+  which is the half that mattered: the Drive cache is shared across machines and keyed by
+  (symbol, timeframe, period, end), so a partial window stored under `1y` answers every
+  later request for a year as though complete — the same persistence that made the
+  2026-08-05 `startTime` incident require a cache purge rather than just a code fix.
 - **The per-request SSRF guard could raise from its own failure path, intermittently
   killing a crawl.** When a page tears down mid-request, Playwright resolves the
   outstanding route itself; `route.fetch` then raises, the handler's `except` branch called

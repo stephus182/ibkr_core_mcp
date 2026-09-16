@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**108 findings, 21 closed, 87 open**. The
+**108 findings, 22 closed, 86 open**. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -678,6 +678,64 @@ still open (Pydantic return types across 74 client methods) and TOOL-07, which i
 investigated before anything is touched. No release should carry the alert tools without the honesty fix that
 landed here, and the `get_watchlists` note pending since 2026-08-11 is now closed by a live
 run.
+
+## Phase 3 — API-02: a short answer announced only to a log file
+
+`_MAX_CHUNKS = 120` is a runaway guard. Past it, `get_market_history_paginated` returned a
+well-formed result covering less than was asked and said so only via `log.warning` — which
+reaches no caller, no model and no cache.
+
+### A correction to my own first estimate
+
+The first pass modelled chunk demand at 1,440 bars per calendar day, i.e. a continuously
+traded instrument, and produced a table saying `90d/1min` needs 130 chunks and `1y/5min`
+returns 33%. **Measured live, `90d/1min` finished in 62 chunks at 100.2% coverage and
+correctly raised no warning.** IBKR's step table caps `1min`/`5min` requests at a one-day
+period, so for RTH equity data a chunk covers one *trading* day and the guard bites at
+roughly 120 trading days (~5.5 calendar months), not 90 calendar days. The stub-derived
+percentages were pessimistic for stocks; they remain right for a 24-hour instrument, where
+a chunk covers one calendar day.
+
+The finding survives the correction — it just bites later than first stated.
+
+### Live evidence
+
+Both runs on conid 265598 (AAPL), `outside_rth=False`, 2026-09-16:
+
+| request | chunks | bars | covered | warning |
+|---|---:|---:|---|---|
+| `90d`/`1min` | 62 of 120 | 24,097 | 90.2 of 90 days = **100.2%** | none — correct |
+| `1y`/`5min` | **120 of 120** | 9,344 | 174 of 365 days = **47.7%** | fires, naming 2026-03-26 |
+
+The control matters as much as the finding: a guard that warned on both would be useless.
+
+Both runs measured **29.3–29.9 requests/min** against the published 50/min ceiling, i.e.
+network-bound rather than pacer-bound — proactive pacing costs nothing on this endpoint in
+practice.
+
+### The half that mattered
+
+The silent short answer is bad; persisting it is worse. `fetch_market_data` saved the result
+to the **Drive cache**, which is shared across machines and keyed by
+(symbol, timeframe, period, end) — so 47.7% of a year stored under `1y` answers every later
+request for a year, on every machine, reporting a confident "Cache HIT". This repo has
+already paid for exactly that shape: the 2026-08-05 `startTime` incident needed a cache
+purge because "a code fix is not sufficient".
+
+So a flagged result is returned but **not cached**, with the reason stated to the model and
+actionable guidance (shorter period, or larger bar). Two options were rejected: a cache-HIT
+heuristic comparing stored span against requested period cannot distinguish truncation from
+a recently-listed instrument, and recording coverage in the Drive manifest would change a
+cross-machine schema out of proportion to the finding.
+
+### Verification
+
+Five mutants, all caught — including both "flag every response" and "never cache anything",
+the two mutations that a one-sided test suite would miss. The first attempt at the
+"never flag truncation" mutant produced a syntax error rather than a behaviour change and
+was re-run cleanly before being counted.
+
+---
 
 ### CLOSED: the intermittent live failure, captured and traced to this audit's own fix
 
