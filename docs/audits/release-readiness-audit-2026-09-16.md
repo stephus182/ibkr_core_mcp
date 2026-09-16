@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**119 findings, 46 closed, 73 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are now **closed**, along with SEC-03, SEC-04 and SEC-12; SEC-11 (`_REPLY_ID_RE` never checked against a real reply id) is **open** and needs a live order; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
+**119 findings, 47 closed, 72 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are now **closed**, along with SEC-03, SEC-04 and SEC-12; SEC-11 is **closed** — `_REPLY_ID_RE` was checked against 24 reply IDs IBKR really sent, recovered from claudia_ui's decision store; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -1452,3 +1452,61 @@ control run is green. Gates: ruff, ruff format, mypy (117 files), pytest 1,399 p
 **Not live-verified.** The gateway session expired during the pause and API-20's live check is
 the opt-in write above, awaiting the owner. The unit tests pin verb, path and body against the
 documented shapes; nothing here claims a live round trip.
+
+---
+
+## Phase 3 — SEC-11 closed by evidence that existed all along
+
+**I recorded SEC-11 as "no reply id IBKR actually sent exists anywhere in this repository,
+because exercising one means placing a real order." The second half was wrong.** The owner
+pointed out that real orders have been placed and executed, and that claudia_ui holds the
+records. It does. I had searched one repository and written a conclusion about the world.
+
+`docs/order-api-reference.md` § *IBKR's reply chain — what it has actually sent* says exactly
+where: since 2026-09-10 (`ibkr_core_mcp 882231a` + `claudia_ui d732c44`),
+`place_order_and_confirm` / `modify_order_and_confirm` take a `reply_log=`, and `order_flow`
+persists it as `ibkr_replies` in the decision metadata. **24 distinct reply IDs** were
+recovered from 25 such rows, spanning real orders placed 2026-09-10 and 2026-09-11.
+
+### What the measurement says
+
+| | Result |
+|---|---|
+| Reply IDs recovered | **24**, from real orders on 2026-09-10/11 |
+| Matching `_REPLY_ID_RE` (`^[0-9a-fA-F-]{1,64}$`) | **24 of 24** |
+| Shape | Standard lowercase UUID, 36 chars, **8-4-4-4-12**, every one |
+| Characters ever seen | `-0123456789abcdef` — no uppercase |
+| IBKR's *documented* example | `a12b34c5-d678-9e012f-3456-7a890b12cd3e` — **8-4-6-4-12, not a valid UUID** |
+
+The last row is the interesting one. **The example IBKR publishes is malformed relative to
+what IBKR sends.** A pattern written as a UUID would accept all 24 real IDs and reject the
+only example the documentation gives; the charset-and-length pattern accepts both. The
+original decision to "match on charset/length, not exact segment structure" was right, and
+now has a reason behind it rather than a hunch.
+
+### What changed
+
+`_resolve_one_reply` now calls `_validate_reply_id`, the same strict check `reply_order` has
+used since 2026-07-11. The reason for the weaker `_validate_path_segment` — that the regex was
+an inference and a false rejection mid-chain would leave a placed order unconfirmed — is void,
+so the weaker check and its regex are **deleted rather than left in place**: an unused control
+is one nothing can exercise.
+
+The 39 test fixtures spelling reply IDs `"RPL1"` now carry the shape IBKR actually sends. That
+those fixtures were unrealistic is what made the strict check look like a regression when it
+was first applied, and it is why the first attempt reached for the weaker guard.
+
+Three tests pin the measurement: the regex accepts the observed UUID shape, still accepts
+IBKR's non-UUID documented example, and rejects eight traversal and malformed forms. Tightening
+it to a UUID fails the second; loosening it fails the third. **The 24 IDs are deliberately not
+committed** — this repository is public and they are the account holder's, so the shape is
+recorded and the values are not.
+
+### The lesson, which is not the finding
+
+The finding was closed in twenty minutes once the owner said where to look. The cost was
+writing "no evidence exists" from a one-repository search — the same shape as every
+control-that-cannot-fail in this audit, inverted: not a check that could not fail, but a
+conclusion that could not be contradicted by the place I chose to look. **Absence of evidence
+in one repository is not evidence of absence**, and this package's own consuming project is
+the first place to look for live evidence about it.

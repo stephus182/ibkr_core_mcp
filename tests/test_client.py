@@ -377,17 +377,27 @@ def test_place_order_and_confirm_one_reply(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response([{"id": "RPL1", "message": ["Order price is outside of the Price Band."]}]),
+            _make_ok_response(
+                [
+                    {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "message": ["Order price is outside of the Price Band."],
+                    }
+                ]
+            ),
             _make_ok_response([{"order_status": "Submitted"}]),
         ]
         result = client.place_order_and_confirm("U1234567", order)
     assert result == [{"order_status": "Submitted"}]
     assert mock_post.call_count == 2
     mock_reply_dlg.assert_called_once_with(
-        "RPL1", "Order price is outside of the Price Band.", None, order_label="BUY 10 AAPL"
+        "11111111-1111-4111-8111-111111111111",
+        "Order price is outside of the Price Band.",
+        None,
+        order_label="BUY 10 AAPL",
     )
     confirm_call = mock_post.call_args_list[1]
-    assert confirm_call[0][0] == f"{client._base}/iserver/reply/RPL1"
+    assert confirm_call[0][0] == f"{client._base}/iserver/reply/11111111-1111-4111-8111-111111111111"
     assert confirm_call.kwargs.get("json") == {"confirmed": True}
     # One Gate 1 for the write; the reply rode on it (2026-09-11). Before that day this
     # line read `== 2` — the write's gate plus one reply gate — which is the defect.
@@ -404,24 +414,47 @@ def test_place_order_and_confirm_three_chained_replies(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response([{"id": "RPL1", "message": ["Price is outside of the Price Band."]}]),
-            _make_ok_response([{"id": "RPL2", "message": ["No market data for this contract."]}]),
-            _make_ok_response([{"id": "RPL3", "message": ["This order requires a mandatory cap price."]}]),
+            _make_ok_response(
+                [{"id": "11111111-1111-4111-8111-111111111111", "message": ["Price is outside of the Price Band."]}]
+            ),
+            _make_ok_response(
+                [{"id": "22222222-2222-4222-8222-222222222222", "message": ["No market data for this contract."]}]
+            ),
+            _make_ok_response(
+                [
+                    {
+                        "id": "33333333-3333-4333-8333-333333333333",
+                        "message": ["This order requires a mandatory cap price."],
+                    }
+                ]
+            ),
             _make_ok_response([{"order_status": "Submitted"}]),
         ]
         result = client.place_order_and_confirm("U1234567", order)
     assert result == [{"order_status": "Submitted"}]
     assert mock_post.call_count == 4
     assert mock_reply_dlg.call_args_list == [
-        call("RPL1", "Price is outside of the Price Band.", None, order_label="BUY 10 AAPL"),
-        call("RPL2", "No market data for this contract.", None, order_label="BUY 10 AAPL"),
-        call("RPL3", "This order requires a mandatory cap price.", None, order_label="BUY 10 AAPL"),
+        call(
+            "11111111-1111-4111-8111-111111111111",
+            "Price is outside of the Price Band.",
+            None,
+            order_label="BUY 10 AAPL",
+        ),
+        call(
+            "22222222-2222-4222-8222-222222222222", "No market data for this contract.", None, order_label="BUY 10 AAPL"
+        ),
+        call(
+            "33333333-3333-4333-8333-333333333333",
+            "This order requires a mandatory cap price.",
+            None,
+            order_label="BUY 10 AAPL",
+        ),
     ]
     urls = [c[0][0] for c in mock_post.call_args_list]
     assert urls[1:] == [
-        f"{client._base}/iserver/reply/RPL1",
-        f"{client._base}/iserver/reply/RPL2",
-        f"{client._base}/iserver/reply/RPL3",
+        f"{client._base}/iserver/reply/11111111-1111-4111-8111-111111111111",
+        f"{client._base}/iserver/reply/22222222-2222-4222-8222-222222222222",
+        f"{client._base}/iserver/reply/33333333-3333-4333-8333-333333333333",
     ]
 
 
@@ -434,11 +467,21 @@ def test_place_order_and_confirm_passes_message_options(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response([{"id": "RPL1", "message": ["Confirm?"], "messageOptions": ["Yes", "No"]}]),
+            _make_ok_response(
+                [
+                    {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "message": ["Confirm?"],
+                        "messageOptions": ["Yes", "No"],
+                    }
+                ]
+            ),
             _make_ok_response([{"order_status": "Submitted"}]),
         ]
         client.place_order_and_confirm("U1234567", order)
-    mock_reply_dlg.assert_called_once_with("RPL1", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL")
+    mock_reply_dlg.assert_called_once_with(
+        "11111111-1111-4111-8111-111111111111", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL"
+    )
 
 
 def test_place_order_and_confirm_decline_mid_chain(client):
@@ -456,14 +499,14 @@ def test_place_order_and_confirm_decline_mid_chain(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response([{"id": "RPL1", "message": ["Price band warning."]}]),
+            _make_ok_response([{"id": "11111111-1111-4111-8111-111111111111", "message": ["Price band warning."]}]),
             _make_ok_response({"confirmed": False}),
         ]
         with pytest.raises(HumanAuthError):
             client.place_order_and_confirm("U1234567", order)
     assert mock_post.call_count == 2
     decline_call = mock_post.call_args_list[1]
-    assert decline_call[0][0] == f"{client._base}/iserver/reply/RPL1"
+    assert decline_call[0][0] == f"{client._base}/iserver/reply/11111111-1111-4111-8111-111111111111"
     assert decline_call.kwargs.get("json") == {"confirmed": False}
 
 
@@ -490,16 +533,26 @@ def test_modify_order_and_confirm_chained_replies(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
-            _make_ok_response({"id": "RPL2", "message": ["No market data."]}),
+            _make_ok_response({"id": "11111111-1111-4111-8111-111111111111", "message": ["Price band warning."]}),
+            _make_ok_response({"id": "22222222-2222-4222-8222-222222222222", "message": ["No market data."]}),
             _make_ok_response({"order_status": "Submitted"}),
         ]
         result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_status": "Submitted"}
     assert mock_post.call_count == 3
     assert mock_reply_dlg.call_args_list == [
-        call("RPL1", "Price band warning.", None, order_label="? ? UNKNOWN (order 1234567890)"),
-        call("RPL2", "No market data.", None, order_label="? ? UNKNOWN (order 1234567890)"),
+        call(
+            "11111111-1111-4111-8111-111111111111",
+            "Price band warning.",
+            None,
+            order_label="? ? UNKNOWN (order 1234567890)",
+        ),
+        call(
+            "22222222-2222-4222-8222-222222222222",
+            "No market data.",
+            None,
+            order_label="? ? UNKNOWN (order 1234567890)",
+        ),
     ]
 
 
@@ -512,14 +565,14 @@ def test_modify_order_and_confirm_decline_mid_chain(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
+            _make_ok_response({"id": "11111111-1111-4111-8111-111111111111", "message": ["Price band warning."]}),
             _make_ok_response({"confirmed": False}),
         ]
         with pytest.raises(HumanAuthError):
             client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert mock_post.call_count == 2
     decline_call = mock_post.call_args_list[1]
-    assert decline_call[0][0] == f"{client._base}/iserver/reply/RPL1"
+    assert decline_call[0][0] == f"{client._base}/iserver/reply/11111111-1111-4111-8111-111111111111"
     assert decline_call.kwargs.get("json") == {"confirmed": False}
 
 
@@ -550,7 +603,7 @@ def test_as_reply_list_wraps_a_bare_dict():
 def test_as_reply_list_passes_through_a_list():
     from ibkr_core_mcp.client import _as_reply_list
 
-    data = [{"id": "RPL1", "message": ["warn"]}]
+    data = [{"id": "11111111-1111-4111-8111-111111111111", "message": ["warn"]}]
     assert _as_reply_list(data) == data
 
 
@@ -575,7 +628,7 @@ def test_as_reply_dict_unwraps_a_single_element_list():
 def test_as_reply_dict_passes_through_a_bare_dict():
     from ibkr_core_mcp.client import _as_reply_dict
 
-    data = {"id": "RPL1", "message": ["warn"]}
+    data = {"id": "11111111-1111-4111-8111-111111111111", "message": ["warn"]}
     assert _as_reply_dict(data) == data
 
 
@@ -599,7 +652,7 @@ def test_modify_order_and_confirm_handles_ibkr_documented_list_shaped_reply(clie
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response({"id": "RPL1", "message": ["Price band warning."]}),
+            _make_ok_response({"id": "11111111-1111-4111-8111-111111111111", "message": ["Price band warning."]}),
             _make_ok_response([{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]),
         ]
         result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
@@ -1472,18 +1525,23 @@ def test_place_order_and_confirm_records_each_reply_in_the_callers_log(client):
             _make_ok_response(
                 [
                     {
-                        "id": "RPL1",
+                        "id": "11111111-1111-4111-8111-111111111111",
                         "message": ["Value estimate of 395,000 USD exceeds", "the Total Value Limit."],
                         "messageOptions": ["ok"],
                     }
                 ]
             ),
-            _make_ok_response([{"id": "RPL2", "message": ["Stop Variant&nbsp;Order Confirmation"]}]),
+            _make_ok_response(
+                [{"id": "22222222-2222-4222-8222-222222222222", "message": ["Stop Variant&nbsp;Order Confirmation"]}]
+            ),
             _make_ok_response([{"order_id": "975324733", "order_status": "PreSubmitted"}]),
         ]
         result = client.place_order_and_confirm("U1234567", order, reply_log=reply_log)
     assert result == [{"order_id": "975324733", "order_status": "PreSubmitted"}]
-    assert [r["reply_id"] for r in reply_log] == ["RPL1", "RPL2"]
+    assert [r["reply_id"] for r in reply_log] == [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ]
     assert reply_log[0]["message"] == "Value estimate of 395,000 USD exceeds the Total Value Limit."
     assert reply_log[0]["message_options"] == ["ok"]
     assert reply_log[1]["message"] == "Stop Variant&nbsp;Order Confirmation"  # raw, never cleaned
@@ -1507,13 +1565,16 @@ def test_place_order_and_confirm_logs_a_declined_reply_as_not_confirmed(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response([{"id": "RPL1", "message": ["first"]}]),
-            _make_ok_response([{"id": "RPL2", "message": ["second"]}]),
+            _make_ok_response([{"id": "11111111-1111-4111-8111-111111111111", "message": ["first"]}]),
+            _make_ok_response([{"id": "22222222-2222-4222-8222-222222222222", "message": ["second"]}]),
             _make_ok_response({"confirmed": False}),
         ]
         with pytest.raises(HumanAuthError):
             client.place_order_and_confirm("U1234567", order, reply_log=reply_log)
-    assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [("RPL1", True), ("RPL2", False)]
+    assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [
+        ("11111111-1111-4111-8111-111111111111", True),
+        ("22222222-2222-4222-8222-222222222222", False),
+    ]
     assert mock_post.call_args_list[2].kwargs.get("json") == {"confirmed": False}
 
 
@@ -1527,7 +1588,7 @@ def test_place_order_and_confirm_without_a_log_is_unchanged(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response([{"id": "RPL1", "message": ["x"]}]),
+            _make_ok_response([{"id": "11111111-1111-4111-8111-111111111111", "message": ["x"]}]),
             _make_ok_response([{"order_status": "Submitted"}]),
         ]
         assert client.place_order_and_confirm("U1234567", order) == [{"order_status": "Submitted"}]
@@ -1543,12 +1604,12 @@ def test_modify_order_and_confirm_records_replies_too(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response({"id": "RPL9", "message": ["price band"]}),
+            _make_ok_response({"id": "99999999-9999-4999-8999-999999999999", "message": ["price band"]}),
             _make_ok_response({"order_id": "1", "order_status": "Submitted"}),
         ]
         result = client.modify_order_and_confirm("U1234567", "1", {"side": "BUY"}, reply_log=reply_log)
     assert result == {"order_id": "1", "order_status": "Submitted"}
-    assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [("RPL9", True)]
+    assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [("99999999-9999-4999-8999-999999999999", True)]
 
 
 def test_modify_order_strips_display_only_keys_before_posting(client):
@@ -1609,9 +1670,15 @@ def test_order_label_is_side_quantity_symbol_from_either_spelling():
 def _three_reply_chain():
     """The live-verified shape: reply → reply → reply → terminal."""
     return [
-        _make_ok_response([{"id": "RPL1", "message": ["Price is outside of the Price Band."]}]),
-        _make_ok_response([{"id": "RPL2", "message": ["No market data for this contract."]}]),
-        _make_ok_response([{"id": "RPL3", "message": ["This order requires a mandatory cap price."]}]),
+        _make_ok_response(
+            [{"id": "11111111-1111-4111-8111-111111111111", "message": ["Price is outside of the Price Band."]}]
+        ),
+        _make_ok_response(
+            [{"id": "22222222-2222-4222-8222-222222222222", "message": ["No market data for this contract."]}]
+        ),
+        _make_ok_response(
+            [{"id": "33333333-3333-4333-8333-333333333333", "message": ["This order requires a mandatory cap price."]}]
+        ),
         _make_ok_response([{"order_status": "Submitted"}]),
     ]
 
@@ -1644,7 +1711,7 @@ def test_a_reply_with_no_authorization_still_prompts(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.return_value = _make_ok_response([{"order_status": "Submitted"}])
-        client._resolve_one_reply({"id": "RPL1", "message": ["x"]})
+        client._resolve_one_reply({"id": "11111111-1111-4111-8111-111111111111", "message": ["x"]})
     touch_id.assert_called_once()
 
 
@@ -1663,7 +1730,9 @@ def test_a_reply_with_an_expired_or_foreign_authorization_prompts_again(client):
             _patch.object(client._session, "post") as mock_post,
         ):
             mock_post.return_value = _make_ok_response([{"order_status": "Submitted"}])
-            client._resolve_one_reply({"id": "RPL1", "message": ["x"]}, authorization=auth, scope="place:x")
+            client._resolve_one_reply(
+                {"id": "11111111-1111-4111-8111-111111111111", "message": ["x"]}, authorization=auth, scope="place:x"
+            )
         touch_id.assert_called_once()
 
 
@@ -1748,7 +1817,7 @@ def test_modify_order_and_confirm_asks_for_one_fingerprint(client):
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.side_effect = [
-            _make_ok_response({"id": "RPL1", "message": ["Confirm?"]}),
+            _make_ok_response({"id": "11111111-1111-4111-8111-111111111111", "message": ["Confirm?"]}),
             _make_ok_response({"order_id": "42", "order_status": "Submitted"}),
         ]
         client.modify_order_and_confirm("U1234567", "42", order)

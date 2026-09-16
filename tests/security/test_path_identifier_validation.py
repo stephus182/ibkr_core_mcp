@@ -26,7 +26,6 @@ VALIDATORS = frozenset(
         "_validate_reply_id",
         "_validate_conid",
         "_validate_page",
-        "_validate_path_segment",
         "_validate_notification_id",
         "_validate_delivery_option",
     }
@@ -91,3 +90,63 @@ def test_every_allowed_exemption_still_exists():
     stale = [key for key in ALLOWED if key not in live]
 
     assert not stale, f"ALLOWED lists interpolations that no longer exist: {stale}"
+
+
+# ---------------------------------------------------------------------------
+# _REPLY_ID_RE — measured, not inferred (SEC-11, closed 2026-09-16)
+# ---------------------------------------------------------------------------
+
+
+def test_reply_id_regex_accepts_the_shape_ibkr_actually_sends():
+    """Checked against 24 reply IDs IBKR really sent, before this test was written.
+
+    They came from the persisted reply logs of real orders placed 2026-09-10/11, in the
+    consuming project's decision store — not in this repository, which is public, and the
+    IDs are the account holder's. All 24 matched `_REPLY_ID_RE`. Every one was a standard
+    lowercase UUID: 36 characters, 8-4-4-4-12.
+
+    The IDs are not reproduced; the measured *shape* is, so that tightening the pattern
+    to something that rejects a real reply fails here. A rejection would land in the
+    middle of a reply chain and leave a placed order unconfirmed at IBKR.
+    """
+    from ibkr_core_mcp.client import _REPLY_ID_RE
+
+    observed_shape = "d1f448d8-d821-47d1-80b6-0be54afb32ec".replace("d1f448d8", "0" * 8)
+    assert len(observed_shape) == 36
+    assert [len(part) for part in observed_shape.split("-")] == [8, 4, 4, 4, 12]
+
+    assert _REPLY_ID_RE.fullmatch(observed_shape)
+
+
+def test_reply_id_regex_still_accepts_ibkrs_own_documented_example():
+    """IBKR's published example is **not** a valid UUID — its third group is six characters.
+
+    So a pattern written as a UUID would reject the only example IBKR gives, while a
+    charset pattern accepts both it and the 24 real IDs. That is why this matches on
+    characters and length rather than on structure.
+    """
+    from ibkr_core_mcp.client import _REPLY_ID_RE
+
+    documented = "a12b34c5-d678-9e012f-3456-7a890b12cd3e"
+    assert [len(part) for part in documented.split("-")] == [8, 4, 6, 4, 12], "not the documented example"
+
+    assert _REPLY_ID_RE.fullmatch(documented)
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "../order/987654321",
+        "../../iserver/auth/status",
+        "abc/def",
+        "abc?x=1",
+        "abc#frag",
+        "abc%2f..%2f",
+        "",
+        "not-hex-zzzz",
+    ],
+)
+def test_reply_id_regex_rejects_anything_that_would_leave_its_path_segment(hostile):
+    from ibkr_core_mcp.client import _REPLY_ID_RE
+
+    assert not _REPLY_ID_RE.fullmatch(hostile)

@@ -89,10 +89,6 @@ _ORDER_ID_RE = re.compile(r"^[0-9]+$")
 # _ORDER_ID_RE.
 _NUMERIC_PATH_SEGMENT_RE = re.compile(r"^[0-9]+$")
 
-# Anything that would stop an interpolated value being a single path segment. Used where
-# the value is IBKR's own rather than a caller's — see `_validate_path_segment`.
-_UNSAFE_PATH_SEGMENT_RE = re.compile(r"[/\\?#%\s]|\.\.")
-
 # The two delivery channels IBKR documents, and the only two values that form a real path.
 _DELIVERY_OPTIONS = frozenset({"device", "email"})
 
@@ -101,6 +97,15 @@ _DELIVERY_OPTIONS = frozenset({"device", "email"})
 # UUID grouping (not 8-4-4-4-12), so match on charset/length, not exact
 # segment structure. Source: docs/audits/audit-evidence/scrapes/cpapi-v1.md
 # (https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md)
+#
+# **Measured 2026-09-16 against 24 reply IDs IBKR actually sent**, recovered from the
+# persisted `ibkr_replies` reply logs of real orders placed 2026-09-10/11 (claudia_ui's
+# decision store, which is not part of this repository). All 24 matched. Every one was a
+# standard lowercase UUID — 36 characters, 8-4-4-4-12 — which the *documented example is
+# not*: its third group is six characters. Matching on charset rather than on UUID
+# structure is what lets this accept both, and tightening it to a UUID pattern would
+# reject the only example IBKR publishes. The IDs themselves are deliberately not
+# reproduced here: this repository is public and they are the account holder's.
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
 # ---------------------------------------------------------------------------
@@ -331,26 +336,6 @@ def _validate_reply_id(reply_id: str) -> None:
     """Raise ConfigError if reply_id is not a plausible IBKR reply ID."""
     if not reply_id or not _REPLY_ID_RE.fullmatch(reply_id):
         raise ConfigError(f"Invalid reply_id {reply_id!r}: must be a hex/hyphen string.")
-
-
-def _validate_path_segment(value: str, label: str) -> None:
-    """Raise ConfigError if `value` could change the shape of the URL it is placed in.
-
-    This checks the property invariant 9 exists to protect — that an interpolated value
-    stays one path segment — rather than asserting a format. Use it where the value comes
-    from IBKR's own response rather than from a caller.
-
-    That distinction is deliberate. `_REPLY_ID_RE` is inferred from a **single documented
-    example** (`a12b34c5-d678-9e012f-3456-7a890b12cd3e`) and has never been checked against
-    a reply id IBKR actually sent, because exercising one means placing a real order. If
-    that inference is wrong, a strict check here would reject a legitimate id **in the
-    middle of a reply chain**, leaving a placed order unconfirmed at IBKR — a worse outcome
-    than the traversal it would prevent, on a value the caller never supplied. Recorded as
-    audit finding SEC-11; `reply_order`, whose reply id *is* caller-supplied, keeps the
-    strict check it has had since 2026-07-11.
-    """
-    if not value or not isinstance(value, str) or _UNSAFE_PATH_SEGMENT_RE.search(value):
-        raise ConfigError(f"Invalid {label} {value!r}: must be a single URL path segment.")
 
 
 def _require_numeric(value: object, label: str) -> None:
@@ -1956,10 +1941,9 @@ class IBKRClient:
         """
         reply_id = entry["id"]
         # Invariant 9: this URL is built here as well as in `reply_order`, and only that
-        # one validated (audit finding SEC-03). Path-safety rather than `_REPLY_ID_RE`,
-        # because the value is IBKR's own and the regex is an inference — see
-        # `_validate_path_segment` for why a false rejection here is the worse failure.
-        _validate_path_segment(reply_id, "reply_id")
+        # one validated (audit finding SEC-03). The same strict regex is used in both, now
+        # that it rests on measurement rather than on IBKR's example — see `_REPLY_ID_RE`.
+        _validate_reply_id(reply_id)
         message = " ".join(entry.get("message", []))
         options = entry.get("messageOptions")
         record: dict[str, Any] = {

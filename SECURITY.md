@@ -262,7 +262,6 @@ _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 _ORDER_ID_RE = re.compile(r"^[0-9]+$")
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 _NUMERIC_PATH_SEGMENT_RE = re.compile(r"^[0-9]+$")
-_UNSAFE_PATH_SEGMENT_RE = re.compile(r"[/\\?#%\s]|\.\.")
 # Blocks values like "../../iserver/auth/status", "../order/987654321", etc.
 ```
 
@@ -271,14 +270,18 @@ _UNSAFE_PATH_SEGMENT_RE = re.compile(r"[/\\?#%\s]|\.\.")
 that do not survive into the interpolation — and `/iserver/secdef/search` returns `conid`
 as a **string** — so a string there is an ordinary value, not a hypothetical misuse.
 
-`_UNSAFE_PATH_SEGMENT_RE` backs `_validate_path_segment`, which asserts only that a value
-stays one path segment rather than asserting its format. It is used where the value comes
-from **IBKR's own response** instead of a caller: `_resolve_one_reply`'s reply id.
-`_REPLY_ID_RE` is inferred from a single documented example and has never been checked
-against a reply id IBKR actually sent, so a strict check there could reject a legitimate
-id mid-chain and leave a placed order unconfirmed — a worse outcome than the traversal it
-would prevent, on a value no caller supplied. `reply_order`, whose reply id *is*
-caller-supplied, keeps the strict check. Recorded as audit finding SEC-11.
+`_REPLY_ID_RE` is applied in both places that build `/iserver/reply/{id}` — `reply_order`
+and `_resolve_one_reply`. Only the first validated until 2026-09-16 (SEC-03).
+
+**It is measured, not inferred.** The pattern was drawn from IBKR's single documented
+example; on 2026-09-16 it was checked against **24 reply IDs IBKR actually sent**,
+recovered from the persisted reply logs of real orders placed 2026-09-10/11 in the
+consuming project's decision store. All 24 matched. Every one was a standard lowercase
+UUID (36 characters, 8-4-4-4-12) — which the documented example is **not**: its third
+group is six characters. Matching on charset rather than on UUID structure is what accepts
+both, and tightening this to a UUID pattern would reject the only example IBKR publishes.
+The IDs are not reproduced here: this repository is public and they are the account
+holder's.
 
 One path segment is not a regex at all: `update_delivery_option`'s `option` is checked
 against `_DELIVERY_OPTIONS = frozenset({"device", "email"})`, the two channels IBKR

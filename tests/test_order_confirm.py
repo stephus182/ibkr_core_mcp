@@ -788,7 +788,7 @@ def test_confirm_reply_dialog_shows_the_cleaned_message():
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
         from ibkr_core_mcp.order_confirm import confirm_reply_dialog
 
-        confirm_reply_dialog("RPL1", "Confirm&nbsp;Mandatory Cap Price<br/>")
+        confirm_reply_dialog("11111111-1111-4111-8111-111111111111", "Confirm&nbsp;Mandatory Cap Price<br/>")
     assert mock_show.call_args.kwargs["details"]["Message"] == "Confirm\xa0Mandatory Cap Price"
 
 
@@ -928,10 +928,10 @@ def test_reply_dialog_title_names_the_order_when_told():
     from ibkr_core_mcp.order_confirm import confirm_reply_dialog
 
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
-        confirm_reply_dialog("RPL1", "Confirm?", None, order_label="BUY 1 ES")
+        confirm_reply_dialog("11111111-1111-4111-8111-111111111111", "Confirm?", None, order_label="BUY 1 ES")
     assert mock_show.call_args.kwargs["title"] == "⚠  CONFIRM ORDER REPLY — BUY 1 ES"
     with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
-        confirm_reply_dialog("RPL1", "Confirm?")
+        confirm_reply_dialog("11111111-1111-4111-8111-111111111111", "Confirm?")
     assert mock_show.call_args.kwargs["title"] == "⚠  CONFIRM ORDER REPLY"
 
 

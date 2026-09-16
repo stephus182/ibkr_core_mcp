@@ -184,9 +184,15 @@ built the model's input by hand.
   account id in the same URL. `tests/security/test_path_identifier_validation.py` now holds the
   property per value, with written exemptions; new validators cover conids, page indices,
   notification ids and the delivery-option allowlist.
-  `_resolve_one_reply` validates path-safety rather than `_REPLY_ID_RE`, because that regex is
-  inferred from one documented example and rejecting a legitimate id mid-chain would leave a
-  placed order unconfirmed (SEC-11, open).
+  `_resolve_one_reply` applies `_validate_reply_id`, the same check `reply_order` has used
+  since 2026-07-11.
+- **`_REPLY_ID_RE` is now measured, not inferred** (SEC-11). It was drawn from IBKR's single
+  documented example; it has now been checked against **24 reply IDs IBKR actually sent**,
+  recovered from the persisted reply logs of real orders placed 2026-09-10/11. All 24 matched,
+  and every one was a standard lowercase UUID (8-4-4-4-12) — which the documented example is
+  **not**, its third group being six characters. Matching on charset rather than UUID structure
+  is what accepts both; tightening it would reject the only example IBKR publishes. Tests pin
+  both directions. The IDs are not committed: this repository is public.
 - **A failing unread count no longer discards the notification list** (TOOL-12).
   `/fyi/unreadnumber` returned `HTTP 423 {"status":"waiting for reply"}` on four consecutive
   attempts against a healthy gateway while `/fyi/notifications` answered normally; the handler
