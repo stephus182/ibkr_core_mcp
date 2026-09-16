@@ -424,6 +424,7 @@ def run_backtest(
     df: pd.DataFrame,
     strategy_name: str = "",
     symbol: str = "",
+    periods: int = 252,
 ) -> BacktestResult:
     """Execute strategy code in a RestrictedPython sandbox and return performance metrics.
 
@@ -434,6 +435,14 @@ def run_backtest(
     df.eval()/df.query() (pandas' own unsandboxed expression engine).
     Not blocked: other DataFrame public methods (df.to_csv etc.) — accepted
     residual risk, documented in SECURITY.md §Residual risk.
+
+    `periods` is the bars-per-year used to annualise Sharpe and Sortino. It defaults to
+    252 (daily), and callers holding a bar size should pass
+    `analytics.periods_for_timeframe(timeframe)` — which is what `get_analytics` does.
+    Until 2026-09-16 this function hardcoded 252 whatever the bars were, so a 5-minute
+    backtest reported a Sharpe sqrt(19656/252) = 8.8x too small while `get_analytics`,
+    on the same bars, reported the correct one. `docs/plans/2026-06-27-architecture-notes.md`
+    item 2 records that defect class being fixed for `full_report()`; this path was missed.
 
     Raises:
         BacktestSyntaxError: If the strategy code exceeds the size limit or will not
@@ -554,7 +563,7 @@ def run_backtest(
     if "signal" not in result_df.columns:
         raise BacktestRuntimeError("Strategy must set df['signal'] (1=long, 0=flat, -1=short)")
 
-    return _compute_metrics(result_df, strategy_name=strategy_name, symbol=symbol)
+    return _compute_metrics(result_df, strategy_name=strategy_name, symbol=symbol, periods=periods)
 
 
 def _segment_trades(sig: pd.Series, strategy_returns: pd.Series) -> list[float]:
@@ -584,7 +593,7 @@ def _segment_trades(sig: pd.Series, strategy_returns: pd.Series) -> list[float]:
     return trades
 
 
-def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> BacktestResult:
+def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str, periods: int = 252) -> BacktestResult:
     sig = df["signal"].fillna(0).shift(1).fillna(0)  # trade on next bar open
     price_returns = df["close"].pct_change().fillna(0)
     strategy_returns = sig * price_returns
@@ -631,8 +640,8 @@ def _compute_metrics(df: pd.DataFrame, strategy_name: str, symbol: str) -> Backt
         symbol=symbol,
         strategy_name=strategy_name,
         total_return=total_return,
-        sharpe=_analytics.sharpe(strategy_returns),
-        sortino=_analytics.sortino(strategy_returns),
+        sharpe=_analytics.sharpe(strategy_returns, periods=periods),
+        sortino=_analytics.sortino(strategy_returns, periods=periods),
         max_drawdown=_analytics.max_drawdown(strategy_returns),
         num_trades=num_trades,
         win_rate=wr,

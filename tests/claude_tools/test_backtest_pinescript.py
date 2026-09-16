@@ -193,3 +193,49 @@ def test_run_backtest_missing_signal_shows_contract(toolkit):
     )
     assert "df['signal']" in text
     assert "1=long" in text or "1 = long" in text
+
+
+def test_run_backtest_annualises_with_the_requested_timeframe(toolkit):
+    """One strategy, one set of bars, two tools — they must not disagree.
+
+    `_run_backtest` reads `timeframe` to locate the cached bars and then dropped it, so the
+    metrics were always annualised as if daily. `_get_analytics` threads
+    `periods_for_timeframe(timeframe)`, so asking the two tools about the same 5-minute
+    backtest returned Sharpe figures sqrt(19656/252) = 8.8x apart.
+
+    Asserted as the scaling law between two timeframes rather than a fixed number, so the
+    test states the property and not the arithmetic of the metric.
+    """
+    import math
+    import re
+
+    from ibkr_core_mcp.analytics import periods_for_timeframe
+
+    df = _ohlcv_df(120)
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = df
+    toolkit._store.save_backtest.return_value = 1
+
+    code = "df['signal'] = (df['close'] > df['close'].shift(1)).astype(int)"
+
+    def _sharpe_for(timeframe):
+        text, _ = toolkit.execute(
+            "run_backtest",
+            {"code": code, "symbol": "TEST", "timeframe": timeframe, "period": "1Y", "end": "2026-01-01"},
+        )
+        assert_tool_succeeded(text)
+        match = re.search(r"Sharpe[^\-\d]*(-?\d+\.\d+)", text)
+        assert match, f"no Sharpe in tool output: {text[:300]}"
+        return float(match.group(1))
+
+    daily = _sharpe_for("1d")
+    intraday = _sharpe_for("5min")
+
+    assert daily != 0, "degenerate fixture — the ratio below would be vacuous"
+    intraday_periods = periods_for_timeframe("5min")
+    assert intraday_periods is not None, "unrecognised bar size — the comparison would be vacuous"
+    expected = math.sqrt(intraday_periods / 252)
+    assert intraday / daily == pytest.approx(expected, rel=1e-2), (
+        f"5min Sharpe {intraday} vs daily {daily}: ratio {intraday / daily:.3f}, "
+        f"expected {expected:.3f}. The handler is not threading the bar size."
+    )

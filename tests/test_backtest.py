@@ -582,3 +582,49 @@ def test_backtest_still_reports_a_genuine_all_flat_strategy():
     result = run_backtest("df['signal'] = 0", df, strategy_name="t", symbol="X")
     assert result.num_trades == 0
     assert result.total_return == 0.0
+
+
+def test_backtest_annualises_with_the_bar_size_it_is_given(ohlcv):
+    """Sharpe and Sortino must scale with the bar timeframe, as they do everywhere else.
+
+    `run_backtest` annualised with `periods=252` unconditionally, so an intraday backtest
+    reported a figure sqrt(19656/252) = 8.8x too small — while `get_analytics`, on the very
+    same bars, reported the correct one, because it threads
+    `analytics.periods_for_timeframe(timeframe)`. The model could therefore ask two tools
+    about one strategy and get two different answers, and the wrong one is persisted by
+    `save_backtest` and re-emitted in the generated PineScript header.
+
+    `docs/plans/2026-06-27-architecture-notes.md` item 2 and `CHANGELOG.md` record this
+    defect class being fixed for `full_report()`. The backtest path was never named.
+
+    The assertion is the scaling law rather than a fixed number: annualised Sharpe is
+    proportional to sqrt(periods), so the ratio between two runs is checkable exactly
+    without restating how the metric is computed.
+    """
+    import math
+
+    from ibkr_core_mcp.analytics import periods_for_timeframe
+    from ibkr_core_mcp.backtest import run_backtest
+
+    code = "df['signal'] = (df['close'] > df['close'].shift(1)).astype(int)"
+    intraday = periods_for_timeframe("5min")
+    assert intraday is not None, "unrecognised bar size — the comparison below would be vacuous"
+
+    daily_result = run_backtest(code, ohlcv, symbol="TEST", periods=252)
+    intraday_result = run_backtest(code, ohlcv, symbol="TEST", periods=intraday)
+
+    assert daily_result.sharpe != 0, "degenerate fixture — the ratio below would be vacuous"
+    expected = math.sqrt(intraday / 252)
+    assert intraday_result.sharpe / daily_result.sharpe == pytest.approx(expected, rel=1e-9)
+    assert intraday_result.sortino / daily_result.sortino == pytest.approx(expected, rel=1e-9)
+
+
+def test_backtest_defaults_to_daily_annualisation(ohlcv):
+    """The counter-case: omitting `periods` must keep the long-standing daily default,
+    so the fix cannot silently move every existing daily backtest's numbers."""
+    from ibkr_core_mcp.backtest import run_backtest
+
+    code = "df['signal'] = 1"
+    assert (
+        run_backtest(code, ohlcv, symbol="TEST").sharpe == run_backtest(code, ohlcv, symbol="TEST", periods=252).sharpe
+    )

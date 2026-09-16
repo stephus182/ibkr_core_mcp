@@ -2395,8 +2395,20 @@ class ClaudeToolkit:
         if not self._cache.check(symbol, timeframe, period, end):
             return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
         df = self._cache.load(symbol, timeframe, period, end)
+        # Annualise with the bar size actually backtested, the same way _get_analytics
+        # does. Hardcoding 252 here made run_backtest and get_analytics disagree by
+        # sqrt(periods/252) on identical bars — 8.8x for 5-minute data — and the wrong
+        # figure was then persisted and re-emitted in the PineScript header (2026-09-16).
+        periods = _analytics.periods_for_timeframe(timeframe)
+        caveat = None
+        if periods is None:
+            periods = 252
+            caveat = (
+                f"  NOTE: timeframe '{timeframe}' not recognized — annualised metrics "
+                "computed with the daily default (252 periods/yr)."
+            )
         try:
-            result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol)
+            result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol, periods=periods)
         except BacktestError as exc:
             # Sandbox errors are errors in code the LLM itself wrote — the detail is
             # required for self-correction. The child already redacted and capped its
@@ -2426,6 +2438,8 @@ class ClaudeToolkit:
             f"  Expectancy:    {result.expectancy:+.2%} per trade",
             f"  Profit Factor: {'n/a — no losing trade' if result.profit_factor is None else f'{result.profit_factor:.2f}'}",
         ]
+        if caveat:
+            lines.append(caveat)
         return "\n".join(lines), None
 
     def _generate_pinescript(self, inputs: dict[str, Any]) -> tuple[str, Any]:
