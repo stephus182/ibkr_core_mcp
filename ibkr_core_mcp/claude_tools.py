@@ -3399,7 +3399,35 @@ class ClaudeToolkit:
         return json.dumps(result, indent=2), None
 
     def _modify_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Update price, operator, name, or TIF on an existing alert (patch — unset fields unchanged)."""
+        """Update price, operator, name, or TIF on an existing alert (patch — unset fields unchanged).
+
+        **UNVERIFIED AND PROBABLY WRONG — audit finding TOOL-01, 2026-09-16.** This posts the
+        GET-detail response back to the create/modify endpoint with three camelCase keys set
+        on top of it. Per IBKR's documentation the two endpoints do not share a vocabulary:
+
+        - `GET /iserver/account/alert/{order_id}` returns snake_case — 34 keys in the
+          documented example, none camelCase (`order_id`, `alert_name`, `alert_message`,
+          `condition_outside_rth`, `conditions[].condition_operator`, …).
+        - The create/modify body is camelCase — 19 documented fields, none snake_case
+          (`orderId`, `alertName`, `alertMessage`, `outsideRth`, `conditions[].operator`, …).
+        - **Exactly three names appear in both: `conditions`, `conidex`, `tif`.**
+
+        `orderId` is not one of them, and it is the field that decides what the call means:
+        "omitted or 0 creates, an existing alert id modifies that alert" (see
+        `IBKRClient.create_alert`). The detail response supplies `order_id`. So this most
+        likely performs a CREATE, leaving the original alert untouched and adding a second.
+
+        Why it is documented rather than fixed. It cannot be exercised: the gateway 403s any
+        alert write whose body contains `>=` or `<=`, which are the only operators IBKR's
+        alert engine accepts (`docs/ibkr-api-behaviors-reference.md` § Price alerts), and the
+        account holds no alerts created elsewhere, so even `get_alert`'s real shape cannot be
+        observed. What the live gateway returns — this build is dated 2023-04-24, the docs are
+        current — and whether IBKR rejects or tolerates the present body are both unknown.
+        Rewriting a write path from documentation alone, with no way to run it, would be an
+        untested change to the exact kind of code this audit keeps finding defects in.
+
+        Fix this together with the upstream operator block, and verify against a real alert.
+        """
         account_id, err = self._first_account_id()
         if err:
             return err, None

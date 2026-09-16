@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**109 findings, 31 closed, 78 open** (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
+**109 findings, 31 closed, 78 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -734,6 +734,59 @@ Five mutants, all caught — including both "flag every response" and "never cac
 the two mutations that a one-sided test suite would miss. The first attempt at the
 "never flag truncation" mutant produced a syntax error rather than a behaviour change and
 was re-run cleanly before being counted.
+
+---
+
+## Phase 3 — TOOL-01: documented, deliberately not fixed
+
+### A correction to my own claim, first
+
+Mid-investigation I wrote that "it's not just `orderId`, the entire body is the wrong
+shape". That was a lead stated as a fact, from eyeballing two documentation pages. I also
+said the detail page's field descriptions "use camelCase" — that is **one** field out of 35
+(`alertName`, where the example says `alert_name`), i.e. a typo in IBKR's page, and I
+generalised from it. Counted properly:
+
+| | count | cross-case |
+|---|---:|---|
+| detail response, documented example keys | 34 | **0** camelCase |
+| detail page, field descriptions | 35 | 1 camelCase (`alertName`) — a doc typo |
+| create/modify request fields | 19 | **0** snake_case |
+| **names present in both** | **3** | `conditions`, `conidex`, `tif` |
+
+The defensible statement is "3 of the 19 request field names appear in the detail
+response", not the hand-wave.
+
+### What is established
+
+`_modify_price_alert` posts the GET-detail response back to the create/modify endpoint with
+three camelCase keys written on top of it. Per IBKR's documentation the two endpoints do not
+share a vocabulary, and `orderId` is not among the three shared names. `orderId` is what
+decides the call's meaning — "omitted or 0 creates, an existing alert id modifies that
+alert" — and the detail response supplies `order_id`. On the documented shapes this performs
+a **create**, leaving the original alert in place and adding a second.
+
+Sources, both fetched 2026-09-16 with a fabricated control in the same batch:
+`…/v1/endpoints/alerts/get-details-of-a-specific-alert.md` and
+`…/api-reference/trading/trading-alerts/create-alert.md`. (The `v1/endpoints/alerts/`
+create page returns "# Page Not Found" — that is TOOL-08/API-07, already closed.)
+
+### What is NOT established, and why it stays open
+
+- **What the live gateway actually returns.** This container is the 2023-04-24 build; the
+  documentation is current. Only the doc's example has been read, never a real response.
+- **Whether IBKR rejects or tolerates the present body.** Untested either way.
+
+It cannot be tested. The gateway 403s any alert write whose body contains `>=` or `<=` —
+the only operators IBKR's alert engine accepts — and the account holds no alerts created
+elsewhere, so `get_alert` itself cannot be observed. A translator written from documentation
+alone, for a write path that cannot be run, would be an untested rewrite of exactly the kind
+of code this audit keeps finding defects in. **Owner-visible decision: record, annotate the
+handler, do not fix blind.** It should be fixed together with the upstream operator block and
+verified against a real alert.
+
+The handler now carries the full finding in its docstring, so the next person to open it
+sees the landmine before the code.
 
 ---
 
