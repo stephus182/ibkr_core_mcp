@@ -1792,6 +1792,7 @@ def _capped_get(bar_seconds: int, max_points: int = 1000, bars_per_day: float = 
     `bars_per_day` defaults to a continuously-traded instrument (a 24h futures session),
     which is the worst case and the one that must not lose data.
     """
+    import calendar
     from datetime import datetime, timedelta
 
     calls: list[dict[str, Any]] = []
@@ -1813,8 +1814,16 @@ def _capped_get(bar_seconds: int, max_points: int = 1000, bars_per_day: float = 
             stamps.append(t)
             t -= step
         stamps = stamps[:max_points]  # IBKR keeps the NEWEST 1000 and drops the rest
+        # `stamps` are naive datetimes holding UTC, matching client.py's `datetime.utcnow()`.
+        # `.timestamp()` would read them as LOCAL time and shift every bar by the machine's
+        # UTC offset, while client.py decodes with the naive-UTC `utcfromtimestamp` — the two
+        # then disagree by that offset, silently, and the disagreement is zero on a UTC CI
+        # runner. `calendar.timegm` is the naive-UTC inverse and keeps the double honest.
         return {
-            "data": [{"t": int(s.timestamp() * 1000), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1} for s in sorted(stamps)]
+            "data": [
+                {"t": calendar.timegm(s.timetuple()) * 1000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+                for s in sorted(stamps)
+            ]
         }
 
     return _fake, calls
@@ -1919,3 +1928,101 @@ def test_intraday_bars_per_day_are_sized_for_a_24h_session_not_equity_hours():
         assert _BARS_PER_CALENDAR_DAY[bar] == pytest.approx(1440 / minutes), (
             f"{bar} must scale with the 1-minute figure over a 24h session"
         )
+
+
+def test_paged_single_chunk_intraday_still_reaches_back_the_full_period(client):
+    """The branch `2a228d7` did not reach: a request that fits in ONE chunk width but not
+    in one 1000-point call.
+
+    `_chunk_days_for_bar("1min")` floors at 1 day, and one day of 1-minute bars is 1440
+    points against a 1000-point cap. Because `total_days <= chunk_days` is then true, the
+    method short-circuited to a single un-paginated `get_market_history` — bypassing the
+    very loop whose cursor makes correctness independent of the size estimate — and
+    returned the newest 1000 bars with no error and no warning: 69.4% of the day.
+
+    `1min` is the only bar size whose one-day floor exceeds the cap, and it is the most
+    used intraday size. The 2026-09-15 live verification used 5d/1min and 30d/5min, both
+    of which take the loop, so this branch was never exercised.
+
+    The fast path is an optimisation, and it is only sound when a single call demonstrably
+    fits. That is what this test pins.
+    """
+    from datetime import datetime, timedelta
+
+    fake, calls = _capped_get(bar_seconds=60)
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="1d", bar="1min")
+
+    stamps = sorted(b["t"] for b in out.get("data", []))
+    assert stamps, "no bars returned at all"
+    oldest = datetime.utcfromtimestamp(stamps[0] / 1000)
+    short_by = (oldest - (datetime.utcnow() - timedelta(days=1))).total_seconds() / 86400
+    assert short_by < 0.05, (
+        f"1d of 1-minute bars requested, oldest bar is only {1 - short_by:.2f}d back "
+        f"({len(stamps)} bars in {len(calls)} request(s)). The single-chunk fast path "
+        "returned one capped call instead of paginating."
+    )
+
+
+def test_paged_daily_bars_that_fit_in_one_call_are_not_paginated(client):
+    """The counter-case that stops the fix becoming "always paginate".
+
+    A request whose whole span fits inside one 1000-point call must still cost exactly one
+    request — 1 day of DAILY bars is one bar, and paginating it would both waste a request
+    and over-fetch, since the loop asks for a full `chunk_days` width (1000 days here).
+    """
+    fake, calls = _capped_get(bar_seconds=86400, bars_per_day=1.0)
+    with patch.object(client, "_get", side_effect=fake):
+        client.get_market_history_paginated(265598, period="1d", bar="1d")
+
+    assert len(calls) == 1, f"a one-bar request should cost one call, took {len(calls)}: {calls}"
+    assert "startTime" not in calls[0], "a single-call request must not paginate"
+    # The over-fetch assertion, and the one with teeth: the loop asks for a full
+    # `chunk_days` width (1000d for daily bars), so a fix that simply always paginated
+    # would still cost one call here while silently requesting a thousand days of history
+    # for a one-day question. Counting calls alone does not catch that.
+    assert calls[0]["period"] == "1d", f"asked IBKR for {calls[0]['period']!r}, caller asked for '1d'"
+
+
+def test_capped_get_stub_timestamps_are_utc_regardless_of_local_timezone():
+    """The pagination doubles must not shift with the developer's timezone.
+
+    `_capped_get` builds bars from `datetime.utcnow()` — a naive datetime holding UTC —
+    and encodes them with `.timestamp()`, which interprets a naive datetime as LOCAL time.
+    `client.py` decodes with `datetime.utcfromtimestamp()`, which is naive-UTC. The two
+    disagree by the local UTC offset, so every coverage assertion in this file silently
+    moved by that offset: on a UTC runner (CI) the skew is zero, on UTC-4 it is four hours.
+
+    That is how a test can be "green everywhere it runs" and still be measuring something
+    other than what it claims. Found 2026-09-16 while sweeping the period/bar matrix, where
+    it made eight correct combinations look short.
+    """
+    import os
+    import time
+    from datetime import datetime
+
+    # Pin a non-UTC zone for the duration. Without this the test is vacuous on a UTC
+    # runner — which is exactly why CI never noticed, and why asserting it only on the
+    # developer's machine would be no guard at all.
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    try:
+        fake, _ = _capped_get(bar_seconds=60)
+        result = fake("/iserver/marketdata/history", {"conid": 1, "period": "1d", "bar": "1min"})
+        newest = max(b["t"] for b in result["data"])
+
+        # Decode exactly as client.py does, and compare to the clock the stub itself read.
+        decoded = datetime.utcfromtimestamp(newest / 1000)
+        skew_hours = abs((decoded - datetime.utcnow()).total_seconds()) / 3600
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+    assert skew_hours < 1.0, (
+        f"stub bars land {skew_hours:.1f}h from UTC now — the double disagrees with the "
+        "code it stands in for, by exactly the local UTC offset"
+    )

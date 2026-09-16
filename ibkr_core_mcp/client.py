@@ -186,6 +186,29 @@ def _chunk_days_for_bar(bar: str) -> int:
     return max(1, min(1000, by_points, by_step))
 
 
+def _fits_in_one_call(total_days: float, bar: str) -> bool:
+    """Whether a whole request can be served by a single un-paginated call.
+
+    The pagination loop's cursor advances to the oldest bar that actually ARRIVED, so once
+    inside it correctness no longer depends on any size estimate. The fast path skips that
+    loop, and therefore does depend on one — which is only safe when the estimate says the
+    request fits inside the endpoint's 1000-point cap with the same safety margin every
+    chunk width uses.
+
+    Guarding the fast path on `total_days <= chunk_days` alone was not enough: chunk widths
+    are floored at one day, and one day of 1-minute bars is 1440 points. `1min` is the only
+    bar size whose floor exceeds the cap, and `period="1d", bar="1min"` therefore returned
+    the newest 1000 bars — 69.4% of the day — with no error (found 2026-09-16; the loop
+    itself was fixed in 2a228d7, whose live checks used 5d/1min and 30d/5min, both of which
+    take the loop).
+
+    Under-estimating is the safe direction here: it costs an extra request, never data.
+
+    Source for the cap: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    """
+    return total_days * _BARS_PER_CALENDAR_DAY.get(bar.lower(), 0.69) <= _MAX_POINTS * _CHUNK_SAFETY
+
+
 log = logging.getLogger(__name__)
 
 
@@ -556,7 +579,11 @@ class IBKRClient:
         total_days = _parse_period_days(period)
         chunk_days = _chunk_days_for_bar(bar)
 
-        if total_days is None or total_days <= chunk_days:
+        # The fast path is an optimisation and is only sound when ONE call can carry the
+        # whole span: a width that fits in a chunk still overflows the 1000-point cap for
+        # 1-minute bars (see _fits_in_one_call). When in doubt, take the loop — it costs a
+        # request and cannot lose data.
+        if total_days is None or (total_days <= chunk_days and _fits_in_one_call(total_days, bar)):
             return self.get_market_history(conid, period, bar, outside_rth)
 
         all_bars: list[dict[str, Any]] = []
