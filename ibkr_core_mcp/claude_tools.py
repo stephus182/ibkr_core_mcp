@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
@@ -1437,6 +1438,79 @@ def _alert_write_error(exc: Exception) -> str | None:
     if status == 403 or "403" in str(exc):
         return _ALERT_WRITE_403
     return None
+
+
+# GET /iserver/account/alert/{order_id} and POST /iserver/account/{accountId}/alert do not
+# share a vocabulary. Measured against a live gateway 2026-09-16 (build 2023-04-24) using a
+# real alert created on IBKR Mobile: the detail response carries 26 top-level keys, none
+# camelCase; the create/modify request documents 19 fields, none snake_case; exactly two
+# names — `conditions` and `tif` — appear in both.
+#
+# Detail field -> request field. Read-only detail fields (order_status, alert_triggered,
+# fg_color, bg_color, alert_mta_*, tool_id, condition_size, account, …) have no request
+# counterpart and are deliberately absent: IBKR never asked for them.
+_ALERT_DETAIL_TO_REQUEST: dict[str, str] = {
+    "order_id": "orderId",  # omitted or 0 creates; an existing id MODIFIES. The whole point.
+    "alert_name": "alertName",
+    "alert_message": "alertMessage",
+    "alert_repeatable": "alertRepeatable",
+    "condition_outside_rth": "outsideRth",
+    "tif": "tif",
+    "expire_time": "expireTime",
+    "alert_email": "email",
+    "alert_send_message": "sendMessage",
+    "alert_show_popup": "showPopup",
+    "itws_orders_only": "iTWSOrdersOnly",
+}
+
+_ALERT_CONDITION_TO_REQUEST: dict[str, str] = {
+    "conidex": "conidex",
+    "condition_type": "type",
+    "condition_operator": "operator",
+    "condition_value": "value",
+    "condition_logic_bind": "logicBind",
+    "condition_trigger_method": "triggerMethod",
+    "condition_time_zone": "timeZone",
+}
+
+
+def _alert_detail_to_request(detail: Mapping[str, Any]) -> dict[str, Any]:
+    """Translate an alert-detail response into a create/modify request body.
+
+    Without this, `modify_price_alert` posted the detail response straight back with three
+    camelCase keys written on top, so seventeen of the nineteen documented request fields
+    were absent by name — and `orderId` among them, which is what decides whether the call
+    modifies the alert or creates a second one (audit finding TOOL-01, 2026-09-16).
+
+    A null optional field is dropped rather than sent as an explicit null: present-but-null
+    is not the same request as absent, and `expireTime` in particular is documented as
+    meaningful only with `tif="GTD"`.
+
+    Args:
+        detail: The body returned by `IBKRClient.get_alert`, in IBKR's snake_case shape.
+
+    Returns:
+        A request body in the documented camelCase shape, carrying `orderId` so the call is
+        a modify.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert
+    """
+    body: dict[str, Any] = {}
+    for source, target in _ALERT_DETAIL_TO_REQUEST.items():
+        value = detail.get(source)
+        if value is not None:
+            body[target] = value
+
+    conditions: list[dict[str, Any]] = []
+    for condition in detail.get("conditions") or []:
+        translated = {
+            target: condition[source]
+            for source, target in _ALERT_CONDITION_TO_REQUEST.items()
+            if condition.get(source) is not None
+        }
+        conditions.append(translated)
+    body["conditions"] = conditions
+    return body
 
 
 class ClaudeToolkit:
@@ -3410,9 +3484,10 @@ class ClaudeToolkit:
     def _modify_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Update price, operator, name, or TIF on an existing alert (patch — unset fields unchanged).
 
-        **UNVERIFIED AND PROBABLY WRONG — audit finding TOOL-01, 2026-09-16.** This posts the
-        GET-detail response back to the create/modify endpoint with three camelCase keys set
-        on top of it. Per IBKR's documentation the two endpoints do not share a vocabulary:
+        **FIXED 2026-09-16 (audit finding TOOL-01), verified against a live gateway.** This
+        used to post the GET-detail response back to the create/modify endpoint with three
+        camelCase keys set on top of it. The two endpoints do not share a vocabulary —
+        measured against a real alert, not just documented:
 
         - `GET /iserver/account/alert/{order_id}` returns snake_case — 34 keys in the
           documented example, none camelCase (`order_id`, `alert_name`, `alert_message`,
@@ -3426,16 +3501,19 @@ class ClaudeToolkit:
         `IBKRClient.create_alert`). The detail response supplies `order_id`. So this most
         likely performs a CREATE, leaving the original alert untouched and adding a second.
 
-        Why it is documented rather than fixed. It cannot be exercised: the gateway 403s any
-        alert write whose body contains `>=` or `<=`, which are the only operators IBKR's
-        alert engine accepts (`docs/ibkr-api-behaviors-reference.md` § Price alerts), and the
-        account holds no alerts created elsewhere, so even `get_alert`'s real shape cannot be
-        observed. What the live gateway returns — this build is dated 2023-04-24, the docs are
-        current — and whether IBKR rejects or tolerates the present body are both unknown.
-        Rewriting a write path from documentation alone, with no way to run it, would be an
-        untested change to the exact kind of code this audit keeps finding defects in.
+        `_alert_detail_to_request` performs the translation and the caller's patch is applied
+        to the translated body, so an unset field is carried across unchanged rather than
+        left behind under its old name.
 
-        Fix this together with the upstream operator block, and verify against a real alert.
+        **The write still fails, for a different reason.** Posting the corrected body against
+        a real alert returned `HTTP 403 - Access Denied` — the `>=`/`<=` operator block
+        (`docs/ibkr-api-behaviors-reference.md` § Alerts). That test was worth running: it
+        eliminates body shape as the cause of the block, which until then was an equally
+        plausible explanation for every 403 this package had seen on an alert write.
+
+        Do NOT try the obvious control of resending with a non-blocked operator against an
+        alert you want to keep: the body carries `orderId`, so it modifies in place, and
+        restoring the original requires `<=`, which 403s.
         """
         account_id, err = self._first_account_id()
         if err:
@@ -3444,22 +3522,26 @@ class ClaudeToolkit:
         existing = self._client.get_alert(alert_id)
         if not existing:
             return f"Alert {alert_id} not found.", None
-        # Apply only the fields provided — leave everything else unchanged
+        # Translate FIRST, then patch. The detail response and the request body do not share
+        # a vocabulary, so setting `alertName` on the raw response added a key beside the
+        # stale `alert_name` instead of replacing it, and `orderId` — which is what makes
+        # this a modify rather than a create — was never present at all (TOOL-01).
+        body = _alert_detail_to_request(existing)
         if "name" in inputs:
-            existing["alertName"] = inputs["name"]
+            body["alertName"] = inputs["name"]
         if "tif" in inputs:
-            existing["tif"] = inputs["tif"]
+            body["tif"] = inputs["tif"]
         if "outside_rth" in inputs:
-            existing["outsideRth"] = inputs["outside_rth"]
+            body["outsideRth"] = inputs["outside_rth"]
         if "price" in inputs or "operator" in inputs:
-            conditions = existing.get("conditions", [])
+            conditions = body.get("conditions", [])
             if conditions:
                 if "price" in inputs:
                     conditions[0]["value"] = str(inputs["price"])
                 if "operator" in inputs:
                     conditions[0]["operator"] = inputs["operator"]
         try:
-            result = self._client.create_alert(account_id, existing)
+            result = self._client.create_alert(account_id, body)
         except Exception as exc:
             honest = _alert_write_error(exc)
             if honest:

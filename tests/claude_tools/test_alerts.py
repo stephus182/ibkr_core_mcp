@@ -1,6 +1,6 @@
 import pytest
 
-from .conftest import assert_tool_failed
+from .conftest import assert_tool_failed, assert_tool_succeeded
 
 pytestmark = pytest.mark.alerts
 
@@ -212,3 +212,168 @@ def test_create_price_alert_explains_the_gateway_operator_block_on_403(toolkit):
     assert "NOT an account permissions problem" in text, text
     assert ">=" in text and "<=" in text, "the blocked operators are not named"
     assert "ibkr-api-behaviors-reference" in text, "the reader is not pointed at the evidence"
+
+
+# The LIVE response from GET /iserver/account/alert/1331320792, captured 2026-09-16 from an
+# authenticated Client Portal Gateway (build 2023-04-24) against a real alert created on
+# IBKR Mobile. Not a documentation example — this is what the gateway actually returns, and
+# it is snake_case throughout: 26 top-level keys, none camelCase.
+_LIVE_ALERT_DETAIL = {
+    "account": "U1675699",
+    "order_id": 1331320792,
+    "alert_name": "AAPL <= 1.00",
+    "tif": "GTC",
+    "expire_time": None,
+    "alert_active": 1,
+    "alert_repeatable": 0,
+    "alert_email": "trader@example.com",
+    "alert_send_message": 1,
+    "alert_message": "$MESSAGE$",
+    "alert_show_popup": 0,
+    "alert_play_audio": None,
+    "order_status": "Submitted",
+    "alert_triggered": False,
+    "fg_color": "#FFFFFF",
+    "bg_color": "#0000CC",
+    "order_not_editable": False,
+    "itws_orders_only": 0,
+    "alert_mta_currency": None,
+    "alert_mta_defaults": "9:STATE=0,MIN=-10000",
+    "tool_id": None,
+    "time_zone": None,
+    "alert_default_type": None,
+    "condition_size": 1,
+    "condition_outside_rth": 1,
+    "conditions": [
+        {
+            "condition_type": 1,
+            "conidex": "265598@SMART",
+            "contract_description_1": "AAPL",
+            "condition_operator": "<=",
+            "condition_trigger_method": "2",
+            "condition_value": "1.00",
+            "condition_logic_bind": "n",
+            "condition_time_zone": None,
+        }
+    ],
+}
+
+# Every field the create/modify endpoint documents. Anything else is a field IBKR never asked
+# for. https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert
+_REQUEST_KEYS = {
+    "alertName",
+    "alertMessage",
+    "alertRepeatable",
+    "outsideRth",
+    "tif",
+    "conditions",
+    "orderId",
+    "email",
+    "expireTime",
+    "iTWSOrdersOnly",
+    "sendMessage",
+    "showPopup",
+}
+_CONDITION_KEYS = {"conidex", "logicBind", "operator", "triggerMethod", "type", "value", "timeZone"}
+_REQUIRED_KEYS = {"alertName", "alertMessage", "alertRepeatable", "outsideRth", "tif", "conditions"}
+_REQUIRED_CONDITION_KEYS = {"conidex", "logicBind", "operator", "triggerMethod", "type", "value"}
+
+
+def test_alert_detail_translates_into_the_documented_request_shape():
+    """TOOL-01. The GET and POST shapes share almost no field name, and the handler posted
+    the GET response back with three camelCase keys written on top of it.
+
+    Measured against the live gateway 2026-09-16: the detail response has 26 top-level keys,
+    none camelCase; the request schema has 19 fields, none snake_case; exactly two names
+    (`conditions`, `tif`) appear in both. Seventeen of the nineteen request fields were
+    therefore absent by name from what we sent.
+    """
+    from ibkr_core_mcp.claude_tools import _alert_detail_to_request
+
+    body = _alert_detail_to_request(_LIVE_ALERT_DETAIL)
+
+    assert set(body) >= _REQUIRED_KEYS, f"missing required fields: {sorted(_REQUIRED_KEYS - set(body))}"
+    assert body["alertName"] == "AAPL <= 1.00"
+    assert body["alertMessage"] == "$MESSAGE$"
+    assert body["alertRepeatable"] == 0
+    assert body["outsideRth"] == 1
+    assert body["tif"] == "GTC"
+    assert body["email"] == "trader@example.com"
+    assert body["sendMessage"] == 1
+    assert body["showPopup"] == 0
+    assert body["iTWSOrdersOnly"] == 0
+
+    condition = body["conditions"][0]
+    assert set(condition) >= _REQUIRED_CONDITION_KEYS
+    assert condition["conidex"] == "265598@SMART"
+    assert condition["operator"] == "<="
+    assert condition["value"] == "1.00"
+    assert condition["type"] == 1
+    assert condition["logicBind"] == "n"
+    assert condition["triggerMethod"] == "2"
+
+
+def test_the_translated_body_carries_orderId_so_it_is_a_modify():
+    """The sharpest consequence, stated on its own because it changes what the call MEANS.
+
+    `IBKRClient.create_alert`: "orderId distinguishes create from modify: omitted or 0
+    creates, an existing alert id modifies that alert". The detail response supplies
+    `order_id`; the body needs `orderId`. Without the translation a modify silently became a
+    create — leaving the original alert untouched and adding a second one.
+    """
+    from ibkr_core_mcp.claude_tools import _alert_detail_to_request
+
+    body = _alert_detail_to_request(_LIVE_ALERT_DETAIL)
+
+    assert body["orderId"] == 1331320792
+
+
+def test_the_translated_body_carries_no_field_ibkr_did_not_document():
+    """The stale snake_case keys must be gone, not shadowed.
+
+    `order_status`, `alert_triggered`, `fg_color`, `alert_mta_defaults`,
+    `contract_description_1` and the rest are read-only detail fields. Asserted against
+    IBKR's documented request schema rather than a list of keys that happen to be wrong now.
+    """
+    from ibkr_core_mcp.claude_tools import _alert_detail_to_request
+
+    body = _alert_detail_to_request(_LIVE_ALERT_DETAIL)
+
+    assert not set(body) - _REQUEST_KEYS, f"undocumented fields: {sorted(set(body) - _REQUEST_KEYS)}"
+    extra = set(body["conditions"][0]) - _CONDITION_KEYS
+    assert not extra, f"undocumented condition fields: {sorted(extra)}"
+
+
+def test_translation_omits_optional_fields_that_are_null():
+    """`expire_time` and `condition_time_zone` are null on this alert and both map to
+    optional request fields. An optional field present-but-null is not the same request as
+    one that is absent, and `expireTime` is documented as meaningful only with tif=GTD —
+    this alert is GTC."""
+    from ibkr_core_mcp.claude_tools import _alert_detail_to_request
+
+    body = _alert_detail_to_request(_LIVE_ALERT_DETAIL)
+
+    assert "expireTime" not in body
+    assert "timeZone" not in body["conditions"][0]
+
+
+def test_modify_price_alert_sends_a_translated_modify_body(toolkit):
+    """End to end: the handler must post the translated shape, carrying `orderId`, with the
+    caller's patch applied to the TRANSLATED field names rather than beside the stale ones."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1675699"}]
+    toolkit._client.get_alert.return_value = dict(_LIVE_ALERT_DETAIL)
+    toolkit._client.create_alert.return_value = {"success": True, "order_id": 1331320792}
+
+    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "1331320792", "name": "AAPL audit", "price": 2.50})
+
+    assert_tool_succeeded(text)
+    account_id, body = toolkit._client.create_alert.call_args[0]
+    assert account_id == "U1675699"
+    assert body["orderId"] == 1331320792, "a modify without orderId creates a second alert"
+    assert body["alertName"] == "AAPL audit"
+    # `str(2.50)` is "2.5" — the handler stringifies the caller's float as-is, which is
+    # pre-existing behaviour and what IBKR receives. Asserted as it is, not as it looks.
+    assert body["conditions"][0]["value"] == "2.5"
+    assert body["conditions"][0]["operator"] == "<=", "an unset field must be carried unchanged"
+    assert not set(body) - _REQUEST_KEYS, f"undocumented fields: {sorted(set(body) - _REQUEST_KEYS)}"
+    assert "alert_name" not in body and "condition_outside_rth" not in body

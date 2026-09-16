@@ -11,6 +11,41 @@ These are verified against official sources — not guesses:
 - **Flex endpoint** — the initial `SendRequest` call goes to `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest`, matching official docs. The follow-up `GetStatement` URL that IBKR returns in the `SendRequest` response, however, is observed live pointing at **`gdcdyn`**, not `ndcdyn` — both are legitimate IBKR Flex subdomains and both are allowlisted by the SSRF guard in `flex_query.py` (`_ALLOWED_URL_PREFIXES`). Treating `gdcdyn` as categorically wrong was itself a past incident (see CLAUDE.md's Flex endpoint URL row) — the earlier bug was assuming the *wrong path* (`gdcdyn.../Universal/servlet/...`) for the *first* call, not that `gdcdyn` never legitimately appears. Requires a `User-Agent` header for programmatic access. Observed live 2026-06-26.
 - **`/md/regsnapshot` (Regulatory Snapshot) — permanently removed by IBKR.** Announced via the official [Web API Changelog](https://www.interactivebrokers.com/docs/web-api/changelog), dated **2026-02-11**, tagged `warning`: *"The /md/regsnapshot endpoint is no longer supported for users to query a regulatory snapshot via API."* Enforcement was not immediate — the endpoint still returned real live NBBO data (with the documented $0.01 charge) as recently as the 2026-07-08 integration baseline, and only started returning `HTTP 404: Resource not found` sometime between 2026-07-08 and 2026-07-22 (no separate changelog entry marks the exact cutover date). `get_regulatory_snapshot()` was removed from `client.py` accordingly (dead API surface, not an entitlement gap on the calling account) — see `docs/audits/live-test-log.md` run `2026-07-22-1` for the full investigation.
 
+## Alerts: the detail response and the write body are different vocabularies
+
+Measured against a live gateway (build 2023-04-24) on 2026-09-16, using a real alert created
+on IBKR Mobile (`AAPL <= 1.00`, GTC, order_id 1331320792):
+
+- `GET /iserver/account/alert/{order_id}` returns **26 top-level keys, none camelCase** —
+  `order_id`, `alert_name`, `alert_message`, `condition_outside_rth`, and
+  `conditions[].condition_operator` / `condition_value` / `condition_logic_bind` /
+  `condition_trigger_method`. The live shape matches IBKR's documented example key for key.
+- `POST /iserver/account/{accountId}/alert` documents **19 fields, none snake_case** —
+  `orderId`, `alertName`, `alertMessage`, `outsideRth`, and `conditions[].operator` /
+  `value` / `logicBind` / `triggerMethod`.
+- **Exactly two top-level names appear in both: `conditions` and `tif`.**
+
+`orderId` decides what the call means — "omitted or 0 creates, an existing alert id modifies
+that alert" — and the detail response supplies `order_id`. Posting the detail response back
+therefore reads as a *create*. `claude_tools._alert_detail_to_request` translates between the
+two shapes; before it existed, `modify_price_alert` set three camelCase keys on the raw
+detail response and sent the rest through untouched (audit finding TOOL-01).
+
+### The 403 is the operator, not the body shape
+
+This had been confounded. Alert writes were known to 403, and the explanation on record was
+the `>=`/`<=` operator block — but "our body was malformed" was an equally live explanation
+and nothing distinguished them.
+
+Settled 2026-09-16: a **well-formed** body — documented shape, `orderId` present, every
+required field supplied, verified against the live detail response — still returns
+`HTTP 403 - Access Denied`. Body shape is eliminated as the cause. The operator block stands.
+
+Note for anyone tempted by the obvious control (resend the same body with a non-blocked
+operator, holding everything else constant): **do not run it against an alert you want to
+keep.** The body carries `orderId`, so it modifies in place, and restoring the original
+requires `<=` — which 403s. The alert cannot be put back.
+
 ## Response shape: several endpoints wrap the array in an object
 
 Reading these as a bare list reports **"no data" for data that arrived** — silently, with no

@@ -172,6 +172,18 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Fixed
+- **`modify_price_alert` sent a body IBKR never asked for, and it read as a create (TOOL-01).**
+  The alert-detail response and the create/modify request body are different vocabularies —
+  measured live against a real alert: 26 snake_case keys out, 19 camelCase fields expected in,
+  and exactly two top-level names (`conditions`, `tif`) in common. The handler posted the
+  detail response back with three camelCase keys written on top, so 17 of the 19 documented
+  fields were absent by name — `orderId` among them, which is what distinguishes a modify
+  from a create. `_alert_detail_to_request` now translates between the shapes, and the
+  caller's patch applies to the translated body rather than beside the stale keys.
+
+  Verified live: the translated body posts cleanly and still returns HTTP 403, which
+  **eliminates body shape as the cause of the alert-write block** and confirms the `>=`/`<=`
+  operator block independently. The owner's alert was unchanged and no duplicate was created.
 - **SECURITY.md documented a weaker order-id mitigation than the code implements.** The
   control inventory printed `_ORDER_ID_RE = re.compile(r"^\d+$")` while `client.py`
   compiles `r"^[0-9]+$"`. Python's `\d` matches Unicode decimal digits and `int()` accepts

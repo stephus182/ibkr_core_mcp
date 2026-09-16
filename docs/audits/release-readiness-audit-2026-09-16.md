@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**110 findings, 34 closed, 76 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
+**110 findings, 35 closed, 75 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -807,7 +807,7 @@ flake did not recur.
 
 ---
 
-## Phase 3 — TOOL-01: documented, deliberately not fixed
+## Phase 3 — TOOL-01: unblocked by a real alert, then fixed and live-tested
 
 ### A correction to my own claim, first
 
@@ -855,8 +855,49 @@ of code this audit keeps finding defects in. **Owner-visible decision: record, a
 handler, do not fix blind.** It should be fixed together with the upstream operator block and
 verified against a real alert.
 
-The handler now carries the full finding in its docstring, so the next person to open it
-sees the landmine before the code.
+**UNBLOCKED 2026-09-16.** The owner created a real alert on IBKR Mobile (`AAPL <= 1.00`,
+GTC, order_id 1331320792), which made the read path observable and changed the decision from
+"do not fix blind" to "fix, then test".
+
+### The live shape settles it
+
+`get_alert` against this gateway build returns **26 top-level keys, none camelCase**, matching
+IBKR's documented example key for key. So the documentation-based reasoning held, and the
+counts are now measured rather than inferred:
+
+| | count | cross-case |
+|---|---:|---|
+| live detail top-level keys | 26 | **0** camelCase |
+| create/modify request fields | 19 | **0** snake_case |
+| shared top-level names | **2** | `conditions`, `tif` |
+
+`orderId` is absent from what was posted, so the call read as a create. 17 of 19 request
+fields were missing by name. `_alert_detail_to_request` now translates, with the live
+response as the test fixture rather than the doc example, and the caller's patch applies to
+the translated body.
+
+### The result that was worth the round trip
+
+A **well-formed** body — documented shape, `orderId` present, every required field supplied —
+still returns `HTTP 403 - Access Denied`.
+
+That separates two hypotheses which had been confounded since the alert investigation began.
+The 403 was attributed to the `>=`/`<=` operator block, but "our body was malformed" was an
+equally live explanation and nothing distinguished them. Body shape is now eliminated. The
+operator block stands on its own evidence.
+
+The owner's alert was unchanged by the test (same id, name, operator, value, TIF, active,
+untriggered) and no duplicate was created — both verified after the call.
+
+### A control deliberately not run
+
+The obvious next step is to resend the identical body with a non-blocked operator, holding
+everything else constant. **Not run against a real alert**: the body carries `orderId`, so it
+modifies in place, and restoring the original needs `<=` — which 403s. The alert could not be
+put back. Recorded here so the idea is not revived without the trap attached.
+
+The handler's docstring carries the finding, so the next person to open it sees it before the
+code.
 
 ---
 
