@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**115 findings, 41 closed, 74 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
+**117 findings, 41 closed, 76 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are **open**; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -1293,3 +1293,83 @@ Live verification (gateway authenticated, single process): all seven endpoints r
 records, **zero passthrough rows**, `dict(model) == model.raw` on every one.
 `get_live_orders` returned `order_id='1986940574'` from a raw `int` — the exact value that
 raised before the fix.
+
+---
+
+## Phase 3 — SEC-03/04 investigated; two new endpoint defects found on the way
+
+**Investigated, not yet fixed.** Recorded here so the evidence survives the pause; no code
+changed. Picked up after API-11 because the remaining SEC findings are the highest-severity
+items left, and because SEC-03 and SEC-04 interlock: invariant 9 is **claimed, untested, and
+false**.
+
+### SEC-03 and SEC-04 — confirmed independently
+
+Invariant 9 reads *"Every path-interpolated identifier passes its regex —
+`_ACCOUNT_ID_RE`, `_ORDER_ID_RE`, `_REPLY_ID_RE` applied in every URL-building method"*
+(`docs/security-architecture.md:193`). An AST enumeration of `client.py` found **36 path
+interpolations, 12 with no validator called in the enclosing method**:
+
+| Interpolation | Assessment |
+|---|---|
+| `_resolve_one_reply` ← `reply_id` (twice) | **Real gap.** `reply_order` validates the same value; this path does not |
+| `mark_notification_read` ← `notification_id` | **Real gap.** Caller-supplied string, straight into the path |
+| `update_delivery_option` ← `option` | **Real gap**, and worse than hygiene — see API-21 |
+| `get_contract_info`, `get_contract_info_and_rules`, `get_contract_algos`, `get_positions_by_conid`, `get_position` ← `conid` | Annotated `int`, but annotations are not enforced and this is public library API. `/iserver/secdef/search` returns `conid` as a **string** (`"265598"`), so a string conid is an ordinary value here, not a hypothetical |
+| `get_positions` ← `page` | Same: annotated `int`, unvalidated |
+| `ping`, `tickle`, `delete_watchlist` ← `self._base` | Not an identifier — the base URL |
+| `get_live_orders` ← `type(orders).__name__` | **Not a URL at all.** An error message that begins `/iserver/account/orders returned …`. The first version of the checker reported it, which is why the committed one requires the literal to contain no whitespace |
+
+SEC-04 is confirmed by construction: there is no `security`-marked test for invariant 9, and
+writing the enumeration above is what exposed the three real gaps. The fix is one test that
+requires every interpolation to be either validated or in an explicit allowlist with a stated
+reason, so the exceptions are visible rather than absent.
+
+### API-20 — **High**: `mark_notification_read` uses the wrong verb and the wrong path
+
+```
+code: POST /fyi/notifications/{notification_id}/read
+docs: PUT  /fyi/notifications/{notificationId}          (empty JSON body)
+```
+
+Both of IBKR's documentation families agree, and they are independent pages:
+`v1/endpoints/fy-is-and-notifications/mark-notification-read.md` (1,100 B) and
+`api-reference/trading/trading-fy-is-and-notifications/read-fyi-notification.md` (5,313 B),
+each fetched with a fabricated control URL in the same batch (451 B / 502 B
+`# Page Not Found`). The method's own docstring cites the first of them. The API-reference
+page also documents the 400: *"Missing, empty, **non-numeric**, or out-of-range parameter"* —
+so the identifier is numeric, which settles the regex SEC-03 needs.
+
+**The live test could not have caught it.** `test_mark_notification_read_noop` accepts a
+successful result, HTTP 400, HTTP 404 **and** HTTP 423 — every outcome the call can produce.
+Its docstring says "Verify mark_notification_read is callable"; it passes whether or not the
+endpoint exists. The fourth test-that-cannot-fail this audit has found.
+
+### API-21 — **High**: `update_delivery_option` conflates two different endpoints
+
+```
+code: POST /fyi/deliveryoptions/{option}   body {"deviceId": …, "enabled": …}
+```
+
+IBKR documents two endpoints here, and they differ in verb *and* in how parameters are passed:
+
+| `option` | Method | Path | Parameters |
+|---|---|---|---|
+| `device` | POST | `/fyi/deliveryoptions/device` | JSON body: `deviceName`, `deviceId`, `uiName`, `enabled` |
+| `email` | **PUT** | `/fyi/deliveryoptions/email` | **query** `enabled=true\|false` |
+
+So the `device` call sends 2 of the 4 documented fields — the same defect shape as TOOL-01's
+alert body — and the `email` call is wrong in both verb and parameter style and cannot work.
+Any other `option` value is not a documented path at all, which is why the unvalidated
+interpolation is more than hygiene: the set of valid values is exactly two and the code
+accepts anything.
+
+The two families disagree on whether the `device` body fields are required (`v1/endpoints`
+says all four Required; `api-reference` says optional). That disagreement is recorded rather
+than resolved — sending all four satisfies both readings.
+
+Neither method is exposed as a tool, so the blast radius is the library API and any consumer
+calling it directly. Both are `ACCOUNT_STATE` writes in the capability registry, correctly.
+
+**Not verified live.** Confirming API-20 means marking one of the owner's real notifications
+read, and this package has no method to mark one unread again. Deferred to the owner.
