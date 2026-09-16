@@ -2,6 +2,9 @@
 
 Conventions (verified against sources 2026-07-02; see each function's docstring):
 - Annualisation uses `periods` = bars per YEAR (derive via periods_for_timeframe()).
+- `max_drawdown`/`max_drawdown_duration` measured from the FIRST BAR's equity, not the
+  starting capital, until 2026-09-16 — see `_equity_curve`. Figures stored before that
+  date are understated or exact, never overstated.
 - `sortino` implements the simplified discrete variant, not canonical target
 downside deviation; `calmar` is whole-series (formally the MAR-ratio convention),
 not Young's trailing-36-month Calmar. Both variants are widespread, but numbers
@@ -141,20 +144,66 @@ def sortino(returns: pd.Series, risk_free: float = 0.0, periods: int = 252) -> f
     return float(excess.mean() / downside * np.sqrt(periods))
 
 
+def _equity_curve(returns: pd.Series) -> pd.Series:
+    """Cumulative equity from a per-bar return series, STARTING AT THE INITIAL CAPITAL.
+
+    The leading 1.0 is the whole point. `(1 + returns).cumprod()` begins at the first
+    bar's value, so the starting capital is never a peak and any drawdown that begins on
+    bar 1 is invisible. Measured before this was fixed:
+
+        returns               max_drawdown()    correct
+        [-0.50, 0, 0, 0]          0.0000       -0.5000   halved on bar 1, reported flat
+        [-0.50, +1.0, 0, 0]       0.0000       -0.5000   halved, then fully recovered
+        [-0.10] * 4              -0.2710       -0.3439   understated by 21%
+
+    The first case reported CAGR -1.0 beside a drawdown of 0.0, which cannot both be true.
+    Drawdown is a risk measure and this understated it, which is the dangerous direction.
+
+    Investopedia's worked example is explicit that the series begins at the portfolio's
+    initial value — "an investment portfolio has an initial value of $500,000" — and
+    `test_max_drawdown_reproduces_the_investopedia_worked_example` pins it.
+    https://www.investopedia.com/terms/m/maximum-drawdown-mdd.asp
+
+    Args:
+        returns: Per-bar return series.
+
+    Returns:
+        Equity series of length `len(returns) + 1`, opening at 1.0.
+    """
+    return pd.concat([pd.Series([1.0]), (1 + returns).cumprod()], ignore_index=True)
+
+
 def max_drawdown(returns: pd.Series) -> float:
     """Maximum peak-to-trough drawdown as a negative fraction (e.g. -0.25 = -25 %).
 
-    Returns 0.0 for an empty series.
+    "The MDD formula compares the peak value of an investment to its trough value,
+    expressed as a percentage loss from the peak" — and the peak may be the starting
+    capital, which is why the curve comes from `_equity_curve`. Only the highest prior
+    peak counts: an interim recovery that does not make a new high is not a peak, and a
+    later new high does not end the drawdown measured from the earlier one.
+
+    Source: https://www.investopedia.com/terms/m/maximum-drawdown-mdd.asp
+
+    Args:
+        returns: Per-bar return series.
+
+    Returns:
+        Negative fraction, or 0.0 for an empty series or one that never fell.
     """
-    equity = (1 + returns).cumprod()
+    equity = _equity_curve(returns)
     peak = equity.cummax().replace(0, float("nan"))
     dd = (equity - peak) / peak
     return float(dd.min()) if len(dd) > 0 else 0.0
 
 
 def max_drawdown_duration(returns: pd.Series) -> int:
-    """Longest consecutive streak of bars spent below a prior equity peak, in bars."""
-    equity = (1 + returns).cumprod()
+    """Longest consecutive streak of bars spent below a prior equity peak, in bars.
+
+    Counts from the starting capital for the same reason as `max_drawdown`: a strategy
+    under water from its first bar previously spent zero bars in drawdown, because bar 1
+    was treated as its own peak.
+    """
+    equity = _equity_curve(returns)
     peak = equity.cummax()
     in_dd = (equity < peak).astype(int)
     max_dur = 0

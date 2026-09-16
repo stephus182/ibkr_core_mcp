@@ -172,6 +172,30 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Fixed
+- **Max drawdown ignored any fall that began on the first bar.** `(1 + returns).cumprod()`
+  starts the equity curve at the first bar's value, so the starting capital was never a
+  peak. Measured:
+
+  | returns | reported | correct |
+  |---|---|---|
+  | `[-0.50, 0, 0, 0]` | **0.0000** | −0.5000 |
+  | `[-0.50, +1.0, 0, 0]` | **0.0000** | −0.5000 |
+  | `[-0.10] * 4` | −0.2710 | −0.3439 |
+
+  A strategy that halved on its first bar reported **zero drawdown beside a CAGR of
+  −100%**, which cannot both be true. `calmar` returns 0.0 when drawdown is 0.0, so that
+  strategy also scored the same Calmar as one that never drew down, and
+  `max_drawdown_duration` reported 0 bars under water instead of 4.
+
+  Drawdown is a risk measure and this understated it — the dangerous direction.
+  Prepending the initial capital can only raise an early peak, so **every figure computed
+  before this fix is understated or exact, never overstated**; 7 stored backtests are
+  affected and are not comparable with new ones on this metric.
+
+  Peak *selection* was already correct and is now pinned to Investopedia's published
+  worked example (500k → 750k → 400k → 600k → 350k → 800k ⇒ −53.33%, where the interim
+  600k peak is not used). That example passes both before and after, which is what makes
+  it a usable control.
 - **Price alerts could never fire under `--stream` (API-09).** `_stream_loop` subscribed to
   an alert's conid only from inside its `isinstance(item, LiveQuote)` branch. A `LiveQuote`
   is parsed only from an `smd+` frame, and the gateway sends `smd+` only after an

@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**108 findings, 23 closed, 85 open**. The
+**109 findings, 24 closed, 85 open** (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -734,6 +734,73 @@ Five mutants, all caught — including both "flag every response" and "never cac
 the two mutations that a one-sided test suite would miss. The first attempt at the
 "never flag truncation" mutant produced a syntax error rather than a behaviour change and
 was re-run cleanly before being counted.
+
+---
+
+## Phase 3 — the data/quant layer, re-derived
+
+**The Phase 1 detail for DATA-03/04/05 was never written into this report** — it lived in
+the agent output and is gone. Rather than guess at three findings, the domain was
+re-audited directly, the same way the indicator sweep was run.
+
+`analytics.py` was the obvious target: every test for `sharpe`, `max_drawdown`, `cagr` and
+`calmar` was a shape or sign assertion ("positive returns → greater than zero", "flat is
+zero"), so none could detect a wrong formula. Only `sortino` had ever been pinned to an
+outside worked example. That is the same pattern the indicator sweep found.
+
+### DATA-25 — **High**: max drawdown ignored any fall beginning on the first bar
+
+`(1 + returns).cumprod()` starts the equity curve at the first bar's value, so the starting
+capital was never a peak:
+
+| returns | reported | correct |
+|---|---|---|
+| `[-0.50, 0, 0, 0]` | **0.0000** | −0.5000 |
+| `[-0.50, +1.0, 0, 0]` | **0.0000** | −0.5000 |
+| `[-0.10] × 4` | −0.2710 | −0.3439 (understated 21%) |
+| peak occurs mid-series | −0.5000 | −0.5000 ✓ |
+
+The first case reported **zero drawdown beside a CAGR of −100%**, which cannot both be
+true. `calmar` returns 0.0 when drawdown is zero, so that strategy scored the same Calmar
+as one that never drew down; `max_drawdown_duration` reported 0 bars under water, not 4.
+
+Drawdown is a risk measure and this understated it — the dangerous direction. The fix is
+one line (`_equity_curve` prepends 1.0) and carries a useful invariant: prepending can only
+**raise** an early peak, so a computed drawdown can only become more negative or stay equal.
+**Every figure produced before the fix is therefore understated or exact, never
+overstated.**
+
+Persistence: `save_backtest` writes `max_drawdown` as a column, so the 7 stored backtests
+carry the old figures and are not comparable with new ones on this metric. One of them
+(#2, `AAPL RSI MeanReversion`) is doubly affected — `max_drawdown=0.0` **and** `sharpe=0.0`,
+computed before today's RSI fix.
+
+### The control that makes the finding trustworthy
+
+Peak *selection* was already correct, and is now pinned to Investopedia's published worked
+example — 500k → 750k → 400k → 600k → 350k → 800k ⇒ −53.33%, with the interim 600k peak
+deliberately not used. **That test passes both before and after the fix**, which is exactly
+why it is worth having: it proves the new tests discriminate between "the peak is chosen
+wrongly" and "the starting capital is missing", rather than failing everything.
+https://www.investopedia.com/terms/m/maximum-drawdown-mdd.asp
+
+Four mutants run, four caught (equity origin, cummax→cummin, min→max, `<`→`<=`).
+
+### Verified correct, unchanged
+
+- **`sharpe`** — `E[Ra−Rb]/σ` annualised by √periods, sample standard deviation, risk-free
+  de-annualised by `/periods`. Matches the ex-post definition.
+- **`cagr`** — `total^(1/years) − 1` over the compounded product.
+- **`calmar`** — the MAR-ratio (whole-series) form, an owner decision from 2026-07-07, kept.
+
+### Recorded, not fixed
+
+`profit_factor` and `avg_win_loss_ratio` return `float("inf")` when there are no losing
+trades. `json.dumps` emits `Infinity`, which **RFC 8259 does not permit** and a strict
+parser rejects (`allow_nan=False` raises). Not currently reachable as a break: neither
+metric is persisted — `save_backtest` stores only `total_return`, `sharpe`, `sortino`,
+`max_drawdown`, `num_trades`, `win_rate` as columns plus a `metadata` blob — and the
+model-facing path renders text. Left as-is; graded Low.
 
 ---
 

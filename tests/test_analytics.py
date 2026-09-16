@@ -309,3 +309,84 @@ def test_is_intraday_timeframe_agrees_with_periods_for_timeframe():
     for tf in ("banana", "", "0min", "0h"):
         assert not is_intraday_timeframe(tf), tf
         assert periods_for_timeframe(tf) is None, tf
+
+
+def test_max_drawdown_reproduces_the_investopedia_worked_example():
+    """Pins peak SELECTION against a published example, which the current code gets right.
+
+    "Assume an investment portfolio has an initial value of $500,000. The portfolio
+    increases to $750,000 ... before plunging to $400,000 ... It then rebounds to
+    $600,000, before dropping again to $350,000. Subsequently, it more than doubles to
+    $800,000." → MDD = (350,000 − 750,000) / 750,000 = −53.33%, because "the initial peak
+    of $750,000 is used ... The interim peak of $600,000 is not used, since it does not
+    represent a new high", and the trough taken is $350,000 rather than the first dip to
+    $400,000.
+    https://www.investopedia.com/terms/m/maximum-drawdown-mdd.asp
+
+    This is the control for the test below: the two differ only in whether the peak is the
+    starting capital, so a fix for one must not break the other.
+    """
+    import itertools
+
+    import pandas as pd
+
+    from ibkr_core_mcp.analytics import max_drawdown
+
+    values = [500_000, 750_000, 400_000, 600_000, 350_000, 800_000]
+    returns = pd.Series([b / a - 1 for a, b in itertools.pairwise(values)])
+
+    assert max_drawdown(returns) == pytest.approx(-0.5333, abs=1e-4)
+
+
+def test_max_drawdown_counts_a_fall_from_the_starting_capital():
+    """The equity curve began at the FIRST BAR's value, so the starting capital was never
+    a peak and any drawdown beginning on bar 1 was invisible.
+
+    Measured before the fix:
+
+        returns              impl      true
+        [-0.50, 0, 0, 0]    0.0000   -0.5000   halved on bar 1, reported as no drawdown
+        [-0.50, +1.0, 0, 0] 0.0000   -0.5000   halved then fully recovered
+        [-0.10] * 4        -0.2710   -0.3439   understated by 21%
+
+    The first case also reported CAGR −1.0 beside a drawdown of zero, which cannot both be
+    true. Drawdown is a RISK measure, and this understates it — the dangerous direction.
+    Investopedia's example above is explicit that the series starts at the portfolio's
+    initial value.
+    """
+    import pandas as pd
+
+    from ibkr_core_mcp.analytics import max_drawdown
+
+    halved_then_flat = pd.Series([-0.50, 0.0, 0.0, 0.0])
+    assert max_drawdown(halved_then_flat) == pytest.approx(-0.50)
+
+    halved_then_recovered = pd.Series([-0.50, 1.0, 0.0, 0.0])
+    assert max_drawdown(halved_then_recovered) == pytest.approx(-0.50)
+
+    steady_decline = pd.Series([-0.10] * 4)
+    assert max_drawdown(steady_decline) == pytest.approx(-0.3439, abs=1e-4)
+
+
+def test_max_drawdown_duration_counts_bars_below_the_starting_capital():
+    """Same blind spot in the duration: a strategy under water from its first bar spent
+    zero bars in drawdown, because bar 1 was its own peak."""
+    import pandas as pd
+
+    from ibkr_core_mcp.analytics import max_drawdown_duration
+
+    assert max_drawdown_duration(pd.Series([-0.50, 0.0, 0.0, 0.0])) == 4
+    assert max_drawdown_duration(pd.Series([-0.50, 1.0, 0.0, 0.0])) == 1
+
+
+def test_calmar_is_not_zero_for_a_strategy_that_only_lost_money():
+    """`calmar` returns 0.0 when max drawdown is 0.0, so a strategy that halved on its
+    first bar scored the same Calmar as one that never drew down at all — while its CAGR
+    said −100%."""
+    import pandas as pd
+
+    from ibkr_core_mcp.analytics import calmar
+
+    ruined = pd.Series([-0.50, 0.0, 0.0, 0.0])
+
+    assert calmar(ruined) < 0.0, "a total loss must not score Calmar 0.0"
