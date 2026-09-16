@@ -419,6 +419,28 @@ async def _stream_loop_with_retry(toolkit: ClaudeToolkit, store: SQLiteStore) ->
             attempt += 1
 
 
+async def _reconcile_alert_subscriptions(ws: Any, store: SQLiteStore, subscribed: set[int]) -> None:
+    """Make the live market-data subscriptions match the active price alerts.
+
+    Subscribes to conids that gained an alert and unsubscribes from those that lost one,
+    mutating `subscribed` in place. Unsubscribing matters on a long-lived server: a
+    triggered or deleted alert would otherwise leave its subscription behind for the life
+    of the process.
+
+    Args:
+        ws: Connected `IBKRWebSocket`.
+        store: SQLite store holding the alert rows written by `add_price_alert`.
+        subscribed: Conids currently subscribed; updated in place.
+    """
+    active = {int(a["conid"]) for a in store.get_alerts(active_only=True)}
+    for conid in active - subscribed:
+        await ws.subscribe(conid)
+        subscribed.add(conid)
+    for conid in subscribed - active:
+        await ws.unsubscribe(conid)
+        subscribed.discard(conid)
+
+
 async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
     """Single-attempt WebSocket loop: connect, stream quotes/executions/P&L, fire alerts."""
     import requests as _requests
@@ -446,18 +468,19 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
         await ws.subscribe_executions()
         await ws.subscribe_pnl()
         subscribed: set[int] = set()
+        # Before the loop, not inside it. Reconciling only on a LiveQuote was a deadlock:
+        # a LiveQuote is parsed only from an `smd+` frame, and the gateway sends `smd+`
+        # only after an `smd+{conid}` subscription — so no subscription meant no quote,
+        # and no quote meant no subscription. The two subscriptions made above are
+        # executions and P&L, neither of which is a LiveQuote. Every price alert was
+        # therefore silently dead under `--stream` (audit finding API-09, 2026-09-16).
+        await _reconcile_alert_subscriptions(ws, store, subscribed)
         async for item in ws.listen():
+            # On every message, whatever its type, so an alert added while the server is
+            # running is picked up by the next tick rather than only by a quote for a
+            # contract we are not yet watching. P&L ticks alone are enough to drive this.
+            await _reconcile_alert_subscriptions(ws, store, subscribed)
             if isinstance(item, LiveQuote):
-                active_conids = {a["conid"] for a in store.get_alerts(active_only=True)}
-                # Subscribe to newly-added alert conids.
-                for cid in active_conids - subscribed:
-                    await ws.subscribe(cid)
-                    subscribed.add(cid)
-                # Unsubscribe from conids that no longer have active alerts to avoid
-                # accumulating stale subscriptions after alerts are triggered/removed.
-                for cid in subscribed - active_conids:
-                    await ws.unsubscribe(cid)
-                    subscribed.discard(cid)
                 triggered = manager.check_quote(item)
                 for alert in triggered:
                     logger.warning(

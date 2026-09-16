@@ -402,3 +402,114 @@ async def test_read_resource_still_returns_real_data(toolkit, store):
     payload = json.loads(await _read_resource_text(server, "ibkr://positions/current"))
 
     assert payload[0]["conid"] == 265598
+
+
+# ── _stream_loop — price alerts actually reaching the wire ────────────────────
+
+
+class _FakeStreamWS:
+    """A stand-in for IBKRWebSocket that records subscriptions and serves a script.
+
+    The loop body had no test at all — `test_stream_loop_retry_on_error` patches
+    `_stream_loop` out entirely — which is how a deadlock survived inside it.
+    """
+
+    def __init__(self, items):
+        self._items = list(items)
+        self.subscribed: list[int] = []
+        self.unsubscribed: list[int] = []
+        self.executions_subscribed = False
+        self.pnl_subscribed = False
+        self.disconnected = False
+
+    async def connect(self):
+        return None
+
+    async def subscribe(self, conid, fields=None):
+        self.subscribed.append(conid)
+
+    async def unsubscribe(self, conid):
+        self.unsubscribed.append(conid)
+
+    async def subscribe_executions(self, realtime_updates_only=False, days=1):
+        self.executions_subscribed = True
+
+    async def subscribe_pnl(self):
+        self.pnl_subscribed = True
+
+    async def disconnect(self):
+        self.disconnected = True
+
+    async def listen(self):
+        for item in self._items:
+            yield item
+
+
+def _alert_row(conid=265598, symbol="AAPL"):
+    return {
+        "id": 1,
+        "conid": conid,
+        "symbol": symbol,
+        "threshold": 100.0,
+        "direction": "above",
+        "triggered_at": None,
+        "created_at": "2026-09-16T00:00:00+00:00",
+    }
+
+
+@pytest.mark.asyncio
+async def test_stream_loop_subscribes_to_alert_conids_before_any_quote_arrives():
+    """A price alert could never fire under `--stream`, because subscribing to its
+    conid happened only inside the `isinstance(item, LiveQuote)` branch.
+
+    A LiveQuote is parsed only from a `smd+` frame, and the gateway sends `smd+` only
+    after an `smd+{conid}` subscription. So: no subscription, no quote; no quote, no
+    subscription. The only subscriptions made before the loop are executions and P&L,
+    neither of which enters that branch. The alerts are local SQLite rows written by
+    `add_price_alert`, nothing to do with IBKR's own alert API, so this is a working
+    feature that was silently dead.
+
+    Here the stream carries only a P&L tick — exactly what a real session looks like
+    before any market-data subscription exists.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from ibkr_core_mcp.mcp_server import _stream_loop
+    from ibkr_core_mcp.streaming import PnLUpdate
+
+    store = MagicMock()
+    store.get_alerts.return_value = [_alert_row()]
+    fake_ws = _FakeStreamWS([PnLUpdate(account="U1", row_type=1, dpl=1.0)])
+
+    with (
+        patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=fake_ws),
+        patch("ibkr_core_mcp.auth.BrowserCookieAuth", return_value=MagicMock()),
+    ):
+        await _stream_loop(MagicMock(), store)
+
+    assert 265598 in fake_ws.subscribed, "no market-data subscription was ever sent, so the alert can never trigger"
+
+
+@pytest.mark.asyncio
+async def test_stream_loop_drops_a_subscription_once_its_alert_is_gone():
+    """The counter-case, and the reason the reconcile cannot simply be "subscribe to
+    everything once at startup": a triggered or deleted alert must release its
+    subscription, or a long-lived server accumulates stale ones."""
+    from unittest.mock import MagicMock, patch
+
+    from ibkr_core_mcp.mcp_server import _stream_loop
+    from ibkr_core_mcp.streaming import PnLUpdate
+
+    store = MagicMock()
+    # Present on the first reconcile, gone on the second.
+    store.get_alerts.side_effect = [[_alert_row()], [], [], []]
+    fake_ws = _FakeStreamWS([PnLUpdate(account="U1", row_type=1, dpl=1.0)])
+
+    with (
+        patch("ibkr_core_mcp.streaming.IBKRWebSocket", return_value=fake_ws),
+        patch("ibkr_core_mcp.auth.BrowserCookieAuth", return_value=MagicMock()),
+    ):
+        await _stream_loop(MagicMock(), store)
+
+    assert 265598 in fake_ws.subscribed
+    assert 265598 in fake_ws.unsubscribed, "a stale subscription was never released"

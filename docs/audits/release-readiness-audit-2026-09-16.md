@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**108 findings, 22 closed, 86 open**. The
+**108 findings, 23 closed, 85 open**. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -734,6 +734,44 @@ Five mutants, all caught — including both "flag every response" and "never cac
 the two mutations that a one-sided test suite would miss. The first attempt at the
 "never flag truncation" mutant produced a syntax error rather than a behaviour change and
 was re-run cleanly before being counted.
+
+---
+
+## Phase 3 — API-09: a deadlock that made every `--stream` price alert dead
+
+The one-line finding was "in `--stream` mode the server never subscribes to any alert's
+conid". Reading the loop shows why it is stronger than that — it is a deadlock, not an
+omission:
+
+```python
+async for item in ws.listen():
+    if isinstance(item, LiveQuote):
+        for cid in active_conids - subscribed:
+            await ws.subscribe(cid)      # only reachable from inside a LiveQuote
+```
+
+A `LiveQuote` is produced only from `topic.startswith("smd+")`, and the gateway sends
+`smd+` only after an `smd+{conid}` subscription. No subscription, no quote; no quote, no
+subscription. The only subscriptions made before the loop are executions and P&L, neither
+of which enters that branch.
+
+**Not moot, unlike TOOL-01.** These alerts are local SQLite rows written by
+`add_price_alert` and checked by `AlertManager`; they have nothing to do with IBKR's own
+alert API, which this audit separately proved unusable through the gateway. So this was a
+feature that worked end to end apart from one unreachable line.
+
+**Why it survived.** `_stream_loop` had no test. `test_stream_loop_retry_on_error` and
+`test_stream_loop_cancelled_propagates` both patch `_stream_loop` out and exercise only the
+retry wrapper around it, so the entire loop body — including this deadlock — was untested.
+The same shape as the other Criticals: a control that could not fail.
+
+Worth noting that `docs/mcp-server-reference.md`'s own programmatic example subscribes
+before it listens, i.e. the documentation was right and the server code was not.
+
+Reconciliation now runs before the loop and again on every message regardless of type, and
+still releases a subscription when its alert is triggered or deleted. Two tests, three
+mutants, all caught — including "reconcile only inside the LiveQuote branch", which is the
+original defect.
 
 ---
 

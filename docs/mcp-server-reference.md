@@ -64,6 +64,25 @@ All 44 `ClaudeToolkit` tools plus:
 | `ibkr://trades/recent` | Last 100 trades from SQLite |
 | `ibkr://pnl/live` | Latest account P&L snapshot (WebSocket `spl` topic, `--stream` only) |
 
+### How `--stream` drives alerts
+
+The stream loop reconciles its market-data subscriptions against the active alert rows —
+before the listen loop starts, and again on every message it receives, whatever the type.
+Both matter:
+
+- **Before the loop**, because a `LiveQuote` is parsed only from an `smd+` frame and the
+  gateway sends `smd+` only after an `smd+{conid}` subscription. Until 2026-09-16 the
+  reconcile lived *inside* the `LiveQuote` branch, so no subscription meant no quote and no
+  quote meant no subscription — every price alert was silently dead under `--stream`. The
+  only subscriptions made up front are executions and P&L, neither of which is a quote.
+  (The programmatic example below never had this problem: it subscribes before it listens.)
+- **On every message**, so an alert added while the server is running is picked up by the
+  next tick rather than only by a quote for a contract nobody is watching yet. P&L ticks
+  alone are enough to drive it.
+
+A triggered or deleted alert releases its subscription, so a long-lived server does not
+accumulate stale ones.
+
 ## Price alerts (programmatic)
 
 ```python

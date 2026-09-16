@@ -172,6 +172,20 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Fixed
+- **Price alerts could never fire under `--stream` (API-09).** `_stream_loop` subscribed to
+  an alert's conid only from inside its `isinstance(item, LiveQuote)` branch. A `LiveQuote`
+  is parsed only from an `smd+` frame, and the gateway sends `smd+` only after an
+  `smd+{conid}` subscription — so no subscription meant no quote, and no quote meant no
+  subscription. The two subscriptions made before the loop are executions and P&L, neither
+  of which enters that branch.
+
+  These are local SQLite alerts written by `add_price_alert`, independent of IBKR's own
+  alert API (which is separately broken through the gateway), so this was a working feature
+  that was silently dead. Reconciliation now runs before the loop and on every message
+  regardless of type, and still releases the subscription when an alert is triggered or
+  deleted. The loop body had no test at all — `test_stream_loop_retry_on_error` patches
+  `_stream_loop` out entirely — which is how this survived; it now has two, and three
+  mutants are caught.
 - **`EndpointPacer`'s budget is per process; IBKR's limit is per IP (documented, not fixed).**
   Demonstrated on 2026-09-16: a run of short-lived probe scripts against the live gateway,
   each starting with an empty budget, earned HTTP 429 and the documented fifteen-minute
