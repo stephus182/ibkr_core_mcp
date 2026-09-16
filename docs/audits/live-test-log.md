@@ -13,6 +13,89 @@ When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30
 
 ---
 
+<a id="run-2026-09-16-2"></a>
+## Run: 2026-09-16 — market-data evidence sweep (release-readiness audit)
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-16 (market open, ~14:50–15:40 ET, so today's session was partial) |
+| Purpose | API-01 had been graded **Critical** and verified only against a STUB. A stub encodes what we believe the endpoint does; it cannot discover the belief is wrong, which is how API-01 happened. Establish the market-data properties against the real endpoint. |
+| Auth method | `BrowserCookieAuth` |
+| Instruments | AAPL 265598, MSFT 272093, SPY 756733, QQQ 320227571, IWM 9579970, NVDA 4815747 |
+| Result | **85 pass · 14 skip · 0 fail** over the whole `-m integration` sweep (99 collected) |
+| Reproduce | `scripts/audit/market_data_live_evidence.py` |
+
+### What was established, against the endpoint rather than the docs
+
+| Claim | Evidence |
+|---|---|
+| A single call is capped at 1000 points, silently | `2d/1min` and `5d/1min` both returned **exactly 1000** bars over an identical window, bar size preserved, no error |
+| API-01: pagination gets past the cap | raw `5d/1min` = 1000 (capped) vs paginated **3534**, **zero** bars lost — 3.53x |
+| The requested bar size is served | modal interval matched the request for every combination tried (1min/5min/1h/1d/1w) |
+| Coverage meets the request | `1d/1min` 122%, `5d/5min` 104%, `30d/5min` 101%, `1y/1d` 99%, `5y/1w` 140% — over-fetch is safe, under-fetch is the defect |
+| Uppercase units are the hazard the code guards | straight at the endpoint, `period='5d'` → 4 daily bars; `period='5D'` → **84** bars back to 2026-05-18. `client.py` lowercases both, and the count matches the "~84-bar default" its docstring predicted |
+| Uppercase **bar** units are NOT a hazard | `1MIN`≡`1min`, `1D`≡`1d`, `5MIN`≡`5min` — identical results. The documented warning applies to `period`, not `bar` |
+
+### Correction: `direction=1` does not universally fail
+
+`docs/ibkr-api-behaviors-reference.md` recorded (2026-08-05, conid 756733) that
+`direction=1` returns `Chart data unavailable` and "the documented forward direction does
+not work". **The original result reproduced exactly** — so IBKR changed nothing — but the
+rule was generalised from one instrument and is wrong:
+
+| instrument | type / exchange | `direction=1` |
+|---|---|---|
+| AAPL, MSFT, NVDA | stock / NASDAQ | forward window returned |
+| IWM 9579970 | **ETF / ARCA** | forward window returned |
+| SPY 756733 | ETF / ARCA | **HTTP 500** in all 4 anchor/period combinations |
+| QQQ 320227571 | ETF / NASDAQ | **HTTP 500** |
+
+Neither security type nor exchange: IWM and SPY are both ARCA ETFs and differ. No code path
+is affected — `get_market_history_paginated` sends `direction=-1`, which worked on all six,
+and end-to-end pagination was identical for all six (`5d/5min`: 299 bars, 5.2d span, 0 dupes).
+
+### Finding: the rate-limit pacer is per PROCESS, IBKR's limit is per IP
+
+**Earned HTTP 429 and the documented fifteen-minute penalty box during this sweep.** No
+single process exceeded 50 requests/minute; a sequence of short-lived probe scripts each
+started with an empty budget and together broke the limit. Recovery was clean after the
+window (`auth status` stayed True throughout; a history probe succeeded again afterwards).
+
+This is how the package is normally used — a pytest run, a script and an MCP server are
+three processes on one IP — so it is recorded as a real limitation of `EndpointPacer`, not
+as test hygiene. Closing it needs cross-process state and has not been done. Documented in
+`rate_limiter.py` and `docs/gateway-auth-reference.md`; practical rule is **do not run live
+suites concurrently**.
+
+### Finding: de-duplication cannot be tested live
+
+Chunk seams do not overlap in practice — `5d/5min` returned 299 bars from the chunks and
+299 unique; `5d/1min`, 1495 and 1495. So a mutant removing the de-duplication **survives**
+the live suite. It was also only accidentally caught in the unit suite (its early return
+skipped an unrelated API-02 assertion), i.e. de-duplication had no real coverage at all.
+`tests/test_client.py::test_paginated_history_removes_bars_repeated_across_a_chunk_seam`
+now forces an overlapping seam and kills both the de-dup and sort-order mutants.
+
+Note on that test: a first version used `30d`/`1d`, which satisfies `_fits_in_one_call` and
+takes the **un-paginated fast path** — the stub's chunks came straight back and the test
+measured nothing. That is the same fast-path blind spot as API-01, met again while testing
+for it.
+
+### New permanent live guards
+
+Added to `tests/test_client_live.py`, all mutation-tested against the live gateway
+(3 of 4 mutants caught; the de-dup mutant survives by design, see above):
+
+- `test_a_single_history_call_is_capped_at_1000_points`
+- `test_paginated_history_recovers_what_the_point_cap_drops` — with a vacuity guard, because
+  a first version used `1d/1min` and mid-session that returns 654 bars, under the cap, so the
+  single call lost nothing and the comparison proved nothing
+- `test_paginated_history_returns_the_requested_bar_size_without_duplicates`
+- `test_pagination_works_on_instruments_where_the_forward_direction_does_not`
+- `test_an_uppercase_period_is_normalised_before_it_reaches_ibkr`
+
+---
+
 <a id="run-2026-07-22-1"></a>
 ## Run: 2026-07-22 — full integration suite re-verify (post code-quality audit)
 

@@ -2363,3 +2363,68 @@ def test_paginated_history_says_nothing_when_it_covered_the_whole_request(client
 
     assert len(calls) < _MAX_CHUNKS, "this request must NOT hit the guard"
     assert "ibkr_core_warning" not in out, f"unexpected warning: {out.get('ibkr_core_warning')}"
+
+
+def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
+    """De-duplication had no test of its own, and live data cannot supply one.
+
+    Measured against the real gateway 2026-09-16, consecutive chunks came back with no
+    overlap at all (5d/5min: 299 bars from the chunks, 299 unique; 5d/1min: 1495 and
+    1495), so the live suite cannot exercise this — a mutant removing the de-dup survives
+    there. In the unit suite that mutant was "caught" only by accident: the early return
+    it introduced also skipped the API-02 truncation warning, so an unrelated test failed.
+    That is not coverage, which is why this exists.
+
+    `get_market_history_paginated` anchors each chunk at the previous chunk's OLDEST
+    timestamp, so a boundary bar returned by both chunks is exactly what the cursor
+    protocol invites.
+
+    Note the parameters: `30d`/`1min` is chosen because it does NOT satisfy
+    `_fits_in_one_call`, so the pagination loop actually runs. A first attempt used
+    `30d`/`1d`, which takes the un-paginated fast path — the stub's chunks came straight
+    back untouched and the test was measuring nothing. That is the same fast-path blind
+    spot as API-01.
+    """
+    import calendar
+    import pathlib
+    from datetime import datetime, timedelta
+
+    from ibkr_core_mcp.client import IBKRClient
+    from ibkr_core_mcp.config import Config
+
+    cfg = Config(
+        gateway_url="https://localhost:5055/v1/api",
+        anthropic_api_key="x",
+        gdrive_folder_id="x",
+        sqlite_path=pathlib.Path("/tmp/x.db"),
+        gdrive_token_file=pathlib.Path("/tmp/t.json"),
+        gdrive_credentials_file=pathlib.Path("/tmp/c.json"),
+    )
+    c = IBKRClient(cfg)
+
+    def ms(dt):
+        return calendar.timegm(dt.timetuple()) * 1000
+
+    # Recent bars, so the loop does not stop on its first chunk for being past the target.
+    now = datetime.utcnow()
+    minute = timedelta(minutes=1)
+
+    def chunk(first, count):
+        return {
+            "data": [
+                {"t": ms(now - (first + i) * minute), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1} for i in range(count)
+            ]
+        }
+
+    # The second chunk repeats the first's oldest bar — the shared seam.
+    served = iter([chunk(0, 500), chunk(499, 500), {"data": []}])
+
+    with patch.object(c, "_get", side_effect=lambda *a, **k: next(served, {"data": []})):
+        out = c.get_market_history_paginated(265598, period="30d", bar="1min")
+
+    stamps = [b["t"] for b in out["data"]]
+    assert len(stamps) > 900, f"the pagination loop did not run — only {len(stamps)} bars"
+    assert len(stamps) == len(set(stamps)), (
+        f"the shared boundary bar survived: {len(stamps)} bars, {len(set(stamps))} unique"
+    )
+    assert stamps == sorted(stamps), "bars must come back in ascending time order"

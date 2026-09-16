@@ -100,6 +100,19 @@ class EndpointPacer:
     The window is sliding, not fixed: a request that falls outside the window costs
     nothing, so ordinary spaced-out usage never pays for pacing at all.
 
+    **KNOWN LIMITATION — the budget is per PROCESS, and IBKR's is per IP.** Nothing here
+    is shared between interpreters, so N concurrent or rapidly-repeated processes can each
+    stay inside the limit while together breaking it. This is not theoretical: on
+    2026-09-16, a sequence of short-lived probe scripts against the live gateway — each
+    starting with an empty budget — earned HTTP 429 and the documented fifteen-minute
+    penalty box, while no single process had exceeded 50 requests in a minute.
+
+    It matters because that is how this package is actually used: a pytest run, a script,
+    and an MCP server are three processes sharing one IP. Closing it needs cross-process
+    state (a lock file or a small broker), which is a larger change than the in-process
+    pacer and has not been made. Until then: do not run live suites concurrently, and
+    treat back-to-back script invocations as sharing one budget.
+
     Thread-safe. The lock is deliberately held across the sleep — two threads sharing a
     budget must queue, or the pacing is decorative.
 

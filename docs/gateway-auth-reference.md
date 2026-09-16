@@ -199,6 +199,16 @@ requests at **284/minute** against a published ceiling of 50, and its 120-chunk 
 have completed in ~25 seconds — 2.4x a minute's allowance inside half a minute — against a
 reactive retry budget of seven seconds.
 
+**The pacer's budget is per process; IBKR's limit is per IP.** Nothing is shared between
+interpreters, so several processes can each stay inside the limit while together breaking
+it. Demonstrated on 2026-09-16: a run of short-lived probe scripts against the live gateway,
+each starting with an empty budget, earned HTTP 429 and the fifteen-minute penalty box
+although no single process exceeded 50 requests in a minute. This is how the package is
+normally used — a pytest run, a script and an MCP server are three processes on one IP — so
+treat it as a real gap, not a corner case. Closing it needs cross-process state and has not
+been done. Practical rule: **do not run live suites concurrently, and treat back-to-back
+script invocations as sharing one budget.**
+
 **The pacer never blocks longer than `_MAX_PACING_WAIT` (65 s).** The 1-req/15-mins
 endpoints are why: blocking a tool call for 900 s would be worse than the 429 being
 avoided, and failing the call outright would break a request that succeeds today. Past the

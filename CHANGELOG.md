@@ -172,6 +172,26 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Fixed
+- **`EndpointPacer`'s budget is per process; IBKR's limit is per IP (documented, not fixed).**
+  Demonstrated on 2026-09-16: a run of short-lived probe scripts against the live gateway,
+  each starting with an empty budget, earned HTTP 429 and the documented fifteen-minute
+  penalty box although no single process exceeded 50 requests in a minute. A pytest run, a
+  script and an MCP server are three processes on one IP, so this is how the package is
+  normally used. Closing it needs cross-process state and has not been done; the limitation
+  is now stated in `rate_limiter.py` and `docs/gateway-auth-reference.md`, with the
+  practical rule: do not run live suites concurrently.
+- **`direction=1` was documented as universally broken; it is instrument-specific.** The
+  original conid-756733 measurement reproduced exactly, so IBKR changed nothing — but the
+  rule had been generalised from one instrument. Re-measured across six: AAPL, MSFT, NVDA
+  and IWM return proper forward windows; SPY and QQQ return HTTP 500 in every anchor/period
+  combination tried. It is neither security type nor exchange — IWM and SPY are both ARCA
+  ETFs. No code path is affected: `get_market_history_paginated` sends `direction=-1`,
+  which worked on all six.
+- **De-duplication in `get_market_history_paginated` had no real test.** Live chunk seams do
+  not overlap (`5d/5min`: 299 bars from the chunks, 299 unique), so the live suite cannot
+  exercise it, and in the unit suite a mutant removing it was caught only by accident — its
+  early return also skipped an unrelated API-02 assertion. A test that forces an overlapping
+  seam now kills both the de-dup and sort-order mutants.
 - **A wide intraday history request returned a short answer and only logged it (API-02).**
   `get_market_history_paginated` stops at `_MAX_CHUNKS = 120`; past that it returned a
   well-formed result covering less than asked, announced by a `log.warning` that reaches no
@@ -206,6 +226,13 @@ fail" pattern this audit found in the live suite and the order-write boundary.
   path can itself throw is not a guard.
 
 ### Added
+- **Five live market-data regression tests** (`tests/test_client_live.py`). API-01 was graded
+  Critical and verified only against a stub; a stub encodes what we believe the endpoint does
+  and cannot discover the belief is wrong, which is how API-01 happened. These assert the
+  properties against the endpoint: the 1000-point cap, that pagination recovers what the cap
+  drops (raw 1000 vs paginated 3534, zero lost), bar-size fidelity, that instruments which
+  reject `direction=1` still paginate, and that an uppercase period is normalised before it
+  reaches IBKR. Reproducible standalone via `scripts/audit/market_data_live_evidence.py`.
 - **`rate_limiter.EndpointPacer` — requests are now paced before they are sent.** The module
   was named for pacing and three documents described it as doing token-bucket pacing; it only
   ever retried a 429 after earning one (audit finding API-04). That was not academic.

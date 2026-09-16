@@ -29,6 +29,8 @@ Explicit exclusions:
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -976,3 +978,146 @@ def test_get_bond_filters(live_client):
         if any(c in str(e) for c in ("400", "404", "500")):
             pytest.skip(f"get_bond_filters: {e} — bond inventory may not be available at test time")
         raise
+
+
+# ---------------------------------------------------------------------------
+# Market data — properties that only a real gateway can establish
+#
+# API-01 (`1d`/`1min` silently returning 69.4% of a trading day) was graded
+# Critical and fixed on 2026-09-16 against a STUB that truncates the way IBKR was
+# measured truncating. A stub encodes what we believe the endpoint does; it cannot
+# discover that the belief is wrong, which is the failure mode this package keeps
+# finding. These tests assert the same properties against the endpoint itself.
+#
+# Nothing here asserts an absolute bar count. The suite must pass mid-session,
+# when a trading day is partial, so every expectation is relative to something the
+# endpoint itself returned.
+# ---------------------------------------------------------------------------
+
+_AAPL = 265598
+
+
+@pytest.mark.integration
+def test_a_single_history_call_is_capped_at_1000_points(live_client):
+    """The cap the whole pagination design exists for, asserted rather than quoted.
+
+    IBKR does not error when a request exceeds it — it returns the newest 1000 bars
+    and drops the rest silently, which is why `get_market_history_paginated` cannot
+    trust a request's width and advances by what actually arrived.
+
+    Measured 2026-09-16: `2d`/`1min` and `5d`/`1min` both returned exactly 1000 bars
+    over an identical window, with the bar size preserved.
+    """
+    from ibkr_core_mcp.client import _MAX_POINTS
+
+    wide = live_client.get_market_history(_AAPL, period="5d", bar="1min", outside_rth=True)
+    stamps = sorted(b["t"] for b in (wide.get("data") or []))
+
+    assert len(stamps) == _MAX_POINTS, f"expected the {_MAX_POINTS}-point cap, got {len(stamps)}"
+    deltas = [(b - a) // 1000 for a, b in itertools.pairwise(stamps)]
+    assert max(set(deltas), key=deltas.count) == 60, "the cap must not change the bar size"
+
+
+@pytest.mark.integration
+def test_paginated_history_recovers_what_the_point_cap_drops(live_client):
+    """API-01, live: pagination must be a SUPERSET of one un-paginated call, and the
+    single call must actually be losing something or the comparison proves nothing.
+
+    The window matters. A first version used `1d`/`1min`, and run mid-session that
+    returned 654 bars — comfortably under the 1000-point cap — so the single call lost
+    nothing and the superset held trivially. `5d`/`1min` caps the raw call at exactly
+    1000 every time, whatever the hour: measured 2026-09-16, raw 1000 against paginated
+    3534, a 3.53x difference. The first assertion below is the vacuity guard that keeps
+    it that way.
+
+    This is the check the stub could not make: it encodes what we believe IBKR does,
+    and the belief is what API-01 got wrong.
+    """
+    from ibkr_core_mcp.client import _MAX_POINTS
+
+    raw = live_client.get_market_history(_AAPL, period="5d", bar="1min", outside_rth=True)
+    raw_stamps = {b["t"] for b in (raw.get("data") or [])}
+    assert len(raw_stamps) == _MAX_POINTS, (
+        f"the single call returned {len(raw_stamps)} bars, not the {_MAX_POINTS}-point cap — "
+        "it is losing nothing, so this comparison cannot fail"
+    )
+
+    paged = live_client.get_market_history_paginated(_AAPL, period="5d", bar="1min", outside_rth=True)
+    paged_stamps = {b["t"] for b in (paged.get("data") or [])}
+
+    assert not (raw_stamps - paged_stamps), (
+        f"pagination lost {len(raw_stamps - paged_stamps)} bars the single call returned"
+    )
+    assert len(paged_stamps) > _MAX_POINTS, (
+        f"pagination returned {len(paged_stamps)} bars — it did not get past the cap at all"
+    )
+
+
+@pytest.mark.integration
+def test_paginated_history_returns_the_requested_bar_size_without_duplicates(live_client):
+    """A substituted bar size, and chunks overlapping at their seams — both produce a
+    well-formed frame that is wrong.
+
+    Honest limitation: only the bar-size half of this can fail against live data.
+    Measured 2026-09-16, the chunks came back with no overlap at all (5d/5min: 299 bars
+    from the chunks, 299 unique; 5d/1min: 1495 and 1495), so de-duplication is defensive
+    rather than exercised here and a mutant removing it survives THIS test. Do not read a
+    pass here as evidence that de-duplication works; that is
+    `test_paginated_history_removes_bars_repeated_across_a_chunk_seam` in
+    tests/test_client.py, which forces an overlapping seam and kills both the de-dup and
+    the sort-order mutants.
+
+    Kept anyway: a seam overlap becomes real the moment IBKR changes its boundary
+    behaviour, and this is the only place that would notice.
+    """
+    out = live_client.get_market_history_paginated(_AAPL, period="5d", bar="5min", outside_rth=False)
+    stamps = sorted(b["t"] for b in (out.get("data") or []))
+    assert len(stamps) > 100, "too few bars to judge"
+
+    assert len(stamps) == len(set(stamps)), "duplicate timestamps across chunk seams"
+    deltas = [(b - a) // 1000 for a, b in itertools.pairwise(stamps)]
+    assert max(set(deltas), key=deltas.count) == 300, "IBKR served a different bar size"
+
+
+@pytest.mark.integration
+def test_pagination_works_on_instruments_where_the_forward_direction_does_not(live_client):
+    """`direction=1` fails on some instruments and works on others, with no pattern.
+
+    Measured 2026-09-16 with `startTime=20260601`, `period=10d`, `bar=1d`: AAPL, MSFT,
+    NVDA and IWM returned forward windows; **SPY (756733) and QQQ (320227571) returned
+    HTTP 500 "Chart data unavailable"** — and IWM is an ARCA ETF like SPY, so it is
+    neither security type nor exchange.
+
+    `get_market_history_paginated` sends `direction=-1`, which worked on all six. This
+    pins that: the two instruments that break the forward direction must still paginate.
+    """
+    for conid in (756733, 320227571):  # SPY, QQQ
+        out = live_client.get_market_history_paginated(conid, period="5d", bar="5min", outside_rth=False)
+        stamps = sorted(b["t"] for b in (out.get("data") or []))
+        assert len(stamps) > 100, f"conid {conid} returned {len(stamps)} bars"
+        assert len(stamps) == len(set(stamps)), f"conid {conid}: duplicate timestamps"
+
+
+@pytest.mark.integration
+def test_an_uppercase_period_is_normalised_before_it_reaches_ibkr(live_client):
+    """IBKR does not reject an uppercase unit — it silently substitutes a wide default.
+
+    Measured 2026-09-16 straight at the endpoint: `period='5d'` returned 4 daily bars
+    (2026-09-11 .. 2026-09-16) while `period='5D'` returned **84** bars reaching back to
+    2026-05-18 — four months of data answering a five-day request. `client.py` lowercases
+    both period and bar for exactly this reason, and the count matches the "~84-bar
+    default" its docstring predicted.
+
+    A unit test covers the lowercasing; this covers the reason it has to exist.
+    """
+    lower = live_client.get_market_history_paginated(_AAPL, period="5d", bar="1d", outside_rth=False)
+    upper = live_client.get_market_history_paginated(_AAPL, period="5D", bar="1d", outside_rth=False)
+
+    lower_stamps = sorted(b["t"] for b in (lower.get("data") or []))
+    upper_stamps = sorted(b["t"] for b in (upper.get("data") or []))
+
+    assert lower_stamps, "no data from the gateway"
+    assert lower_stamps == upper_stamps, (
+        f"'5D' returned {len(upper_stamps)} bars where '5d' returned {len(lower_stamps)} — "
+        "the uppercase unit reached IBKR unnormalised"
+    )
