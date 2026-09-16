@@ -35,6 +35,7 @@ from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.models import (
     AccountSummary,
     Contract,
+    IBKRResponse,
     Notification,
     Order,
     Position,
@@ -72,6 +73,7 @@ __all__ = [
     "NoAuth",
     # Models
     "Contract",
+    "IBKRResponse",
     "Position",
     "Trade",
     "Order",

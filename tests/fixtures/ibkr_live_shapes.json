@@ -1,0 +1,2046 @@
+{
+  "account_allocation": {
+    "assetClass": {
+      "long": {
+        "CASH": 21985.98,
+        "STK": 30069.67
+      },
+      "short": {}
+    },
+    "group": {
+      "long": {
+        "Others": 30069.67
+      },
+      "short": {}
+    },
+    "sector": {
+      "long": {
+        "Others": 30069.67
+      },
+      "short": {}
+    }
+  },
+  "account_ledger": {
+    "BASE": {
+      "acctcode": "U1234567",
+      "cashbalance": 21985.98,
+      "cashbalancefxsegment": 0.0,
+      "commoditymarketvalue": 0.0,
+      "corporatebondsmarketvalue": 0.0,
+      "currency": "BASE",
+      "dividends": 0.0,
+      "exchangerate": 1,
+      "funds": 0.0,
+      "futuremarketvalue": 0.0,
+      "futureoptionmarketvalue": 0.0,
+      "futuresonlypnl": 0.0,
+      "interest": -1.5,
+      "issueroptionsmarketvalue": 0.0,
+      "key": "LedgerList",
+      "moneyfunds": 0.0,
+      "netliquidationvalue": 52054.15,
+      "realizedpnl": 0.0,
+      "secondkey": "BASE",
+      "sessionid": 1,
+      "settledcash": 21985.98,
+      "severity": 0,
+      "stockmarketvalue": 30069.67,
+      "stockoptionmarketvalue": 0.0,
+      "tbillsmarketvalue": 0.0,
+      "tbondsmarketvalue": 0.0,
+      "timestamp": 1789588758,
+      "unrealizedpnl": 1145.5,
+      "warrantsmarketvalue": 0.0
+    },
+    "USD": {
+      "acctcode": "U1234567",
+      "cashbalance": 21985.98,
+      "cashbalancefxsegment": 0.0,
+      "commoditymarketvalue": 0.0,
+      "corporatebondsmarketvalue": 0.0,
+      "currency": "USD",
+      "dividends": 0.0,
+      "endofbundle": 1,
+      "exchangerate": 1,
+      "funds": 0.0,
+      "futuremarketvalue": 0.0,
+      "futureoptionmarketvalue": 0.0,
+      "futuresonlypnl": 0.0,
+      "interest": -1.5,
+      "issueroptionsmarketvalue": 0.0,
+      "key": "LedgerList",
+      "moneyfunds": 0.0,
+      "netliquidationvalue": 52054.15,
+      "realizedpnl": 0.0,
+      "secondkey": "USD",
+      "sessionid": 1,
+      "settledcash": 21985.98,
+      "severity": 0,
+      "stockmarketvalue": 30069.67,
+      "stockoptionmarketvalue": 0.0,
+      "tbillsmarketvalue": 0.0,
+      "tbondsmarketvalue": 0.0,
+      "timestamp": 1789588758,
+      "unrealizedpnl": 1145.5,
+      "warrantsmarketvalue": 0.0
+    }
+  },
+  "account_meta": {
+    "PrepaidCrypto-P": false,
+    "PrepaidCrypto-Z": false,
+    "accountAlias": null,
+    "accountId": "U1234567",
+    "accountStatus": 1453093200000,
+    "accountTitle": "Stephane G Menard",
+    "accountVan": "U1234567",
+    "acctCustType": "INDIVIDUAL",
+    "brokerageAccess": false,
+    "businessType": "INDEPENDENT",
+    "category": "",
+    "clearingStatus": "O",
+    "covestor": false,
+    "currency": "USD",
+    "desc": "U1234567",
+    "displayName": "Stephane G Menard",
+    "faclient": false,
+    "ibEntity": "IBLLC-US",
+    "id": "U1234567",
+    "noClientTrading": false,
+    "parent": {
+      "accountId": "",
+      "isMChild": false,
+      "isMParent": false,
+      "isMultiplex": false,
+      "mmc": []
+    },
+    "trackVirtualFXPortfolio": false,
+    "tradingType": "STKNOPT",
+    "type": "INDIVIDUAL"
+  },
+  "account_summary": {
+    "accountcode": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "U1234567"
+    },
+    "accountready": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "true"
+    },
+    "accounttype": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "INDIVIDUAL"
+    },
+    "accruedcash": {
+      "amount": -1.5,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "accruedcash-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "accruedcash-s": {
+      "amount": -1.5,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "accrueddividend": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "accrueddividend-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "accrueddividend-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "availablefunds": {
+      "amount": 44160.859375,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "availablefunds-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "availablefunds-s": {
+      "amount": -194.58999633789062,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "billable": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "billable-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "billable-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "buyingpower": {
+      "amount": 176643.4375,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "columnprio-c": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "2"
+    },
+    "columnprio-s": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "1"
+    },
+    "cushion": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "1"
+    },
+    "depositoncredithold": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "null"
+    },
+    "equitywithloanvalue": {
+      "amount": 52054.1484375,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "equitywithloanvalue-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "equitywithloanvalue-s": {
+      "amount": 7698.7001953125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "excessliquidity": {
+      "amount": 44536.73046875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "excessliquidity-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "excessliquidity-s": {
+      "amount": 181.27999877929688,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullavailablefunds": {
+      "amount": 44160.859375,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullavailablefunds-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullavailablefunds-s": {
+      "amount": -194.58999633789062,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullexcessliquidity": {
+      "amount": 44536.73046875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullexcessliquidity-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullexcessliquidity-s": {
+      "amount": 181.27999877929688,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullinitmarginreq": {
+      "amount": 7893.2900390625,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullinitmarginreq-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullinitmarginreq-s": {
+      "amount": 7893.2900390625,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullmaintmarginreq": {
+      "amount": 7517.419921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullmaintmarginreq-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "fullmaintmarginreq-s": {
+      "amount": 7517.419921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "grosspositionvalue": {
+      "amount": 30069.669921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "grosspositionvalue-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "grosspositionvalue-s": {
+      "amount": 30069.669921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "guarantee": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "guarantee-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "guarantee-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "highestseverity": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "null"
+    },
+    "incentivecoupons": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "incentivecoupons-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "incentivecoupons-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "indianstockhaircut": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "indianstockhaircut-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "indianstockhaircut-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "initmarginreq": {
+      "amount": 7893.2900390625,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "initmarginreq-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "initmarginreq-s": {
+      "amount": 7893.2900390625,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "leverage-c": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "0.0"
+    },
+    "leverage-s": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "0.58"
+    },
+    "lookaheadavailablefunds": {
+      "amount": 44160.859375,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadavailablefunds-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadavailablefunds-s": {
+      "amount": -194.58999633789062,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadexcessliquidity": {
+      "amount": 44536.73046875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadexcessliquidity-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadexcessliquidity-s": {
+      "amount": 181.27999877929688,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadinitmarginreq": {
+      "amount": 7893.2900390625,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadinitmarginreq-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadinitmarginreq-s": {
+      "amount": 7893.2900390625,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadmaintmarginreq": {
+      "amount": 7517.419921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadmaintmarginreq-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadmaintmarginreq-s": {
+      "amount": 7517.419921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "lookaheadnextchange": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "1789588800"
+    },
+    "maintmarginreq": {
+      "amount": 7517.419921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "maintmarginreq-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "maintmarginreq-s": {
+      "amount": 7517.419921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "netliquidation": {
+      "amount": 52054.1484375,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "netliquidation-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "netliquidation-s": {
+      "amount": 7698.7001953125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "netliquidationuncertainty": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "nlvandmargininreview": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "false"
+    },
+    "pasharesvalue": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "pasharesvalue-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "pasharesvalue-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "physicalcertificatevalue": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "physicalcertificatevalue-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "physicalcertificatevalue-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "postexpirationexcess": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "postexpirationexcess-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "postexpirationexcess-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "postexpirationmargin": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "postexpirationmargin-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "postexpirationmargin-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "regtequity": {
+      "amount": 7698.7001953125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "regtequity-s": {
+      "amount": 7698.7001953125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "regtmargin": {
+      "amount": 15034.830078125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "regtmargin-s": {
+      "amount": 15034.830078125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "segmenttitle-c": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "US Commodities"
+    },
+    "segmenttitle-s": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "US Securities"
+    },
+    "settledcashbydate": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "20260916:21985.98"
+    },
+    "settledcashbydate-c": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "20260916:44355.45"
+    },
+    "settledcashbydate-s": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "20260916:-22369.47"
+    },
+    "sma": {
+      "amount": 2234.77001953125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "sma-s": {
+      "amount": 2234.77001953125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "totalcashvalue": {
+      "amount": 21985.98046875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "totalcashvalue-c": {
+      "amount": 44355.44921875,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "totalcashvalue-s": {
+      "amount": -22369.470703125,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "totaldebitcardpendingcharges": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "totaldebitcardpendingcharges-c": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "totaldebitcardpendingcharges-s": {
+      "amount": 0.0,
+      "currency": "USD",
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": null
+    },
+    "tradingtype-s": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "STKNOPT"
+    },
+    "whatifpmenabled": {
+      "amount": 0.0,
+      "currency": null,
+      "isNull": false,
+      "severity": 0,
+      "timestamp": 1789588758000,
+      "value": "true"
+    }
+  },
+  "accounts": [
+    {
+      "PrepaidCrypto-P": false,
+      "PrepaidCrypto-Z": false,
+      "accountAlias": null,
+      "accountId": "U1234567",
+      "accountStatus": 1453093200000,
+      "accountTitle": "Stephane G Menard",
+      "accountVan": "U1234567",
+      "acctCustType": "INDIVIDUAL",
+      "brokerageAccess": true,
+      "businessType": "INDEPENDENT",
+      "category": "",
+      "clearingStatus": "O",
+      "covestor": false,
+      "currency": "USD",
+      "desc": "U1234567",
+      "displayName": "Stephane G Menard",
+      "faclient": false,
+      "ibEntity": "IBLLC-US",
+      "id": "U1234567",
+      "noClientTrading": false,
+      "parent": {
+        "accountId": "",
+        "isMChild": false,
+        "isMParent": false,
+        "isMultiplex": false,
+        "mmc": []
+      },
+      "trackVirtualFXPortfolio": false,
+      "tradingType": "STKNOPT",
+      "type": "INDIVIDUAL"
+    }
+  ],
+  "alerts": [
+    {
+      "account": "U1234567",
+      "alert_active": 1,
+      "alert_name": "AAPL <= 1.00",
+      "alert_repeatable": 0,
+      "alert_triggered": false,
+      "order_id": 1331320792,
+      "order_time": "20260916-19:42:45"
+    }
+  ],
+  "auth_status": {
+    "MAC": "06:85:84:B4:41:AE",
+    "authenticated": true,
+    "competing": false,
+    "connected": true,
+    "established": true,
+    "fail": "",
+    "hardware_info": "a8db0528|06:85:84:B4:41:AE",
+    "message": "",
+    "serverInfo": {
+      "serverName": "JisfN2118",
+      "serverVersion": "Build 10.49.1b, Sep 1, 2026 5:34:20 PM"
+    }
+  },
+  "brokerage_accounts": {
+    "accounts": [
+      "U1234567"
+    ],
+    "acctProps": {
+      "U1234567": {
+        "allowCustomerTime": false,
+        "autoFx": false,
+        "hasChildAccounts": false,
+        "isProp": false,
+        "liteUnderPro": false,
+        "noFXConv": false,
+        "supportsCashQty": true,
+        "supportsFractions": false
+      }
+    },
+    "aliases": {
+      "U1234567": "U1234567"
+    },
+    "allowFeatures": {
+      "allowCrypto": true,
+      "allowDynAccount": false,
+      "allowEventContract": true,
+      "allowEventTrading": true,
+      "allowFA": false,
+      "allowFXConv": true,
+      "allowFinancialLens": false,
+      "allowLiteUnderPro": false,
+      "allowMTA": true,
+      "allowTypeAhead": true,
+      "allowedAssetTypes": "STK,CFD,OPT,FOP,WAR,FUT,BAG,PDC,CASH,IND,BOND,BILL,FUND,SLB,News,CMDTY,IOPT,ICU,ICS,PHYSS,CRYPTO",
+      "debugPnl": true,
+      "liteUser": false,
+      "research": true,
+      "restrictTradeSubscription": false,
+      "showEUCostReport": false,
+      "showGFIS": true,
+      "showImpactDashboard": true,
+      "showTaxOpt": true,
+      "showUkUserLabels": false,
+      "showWebNews": true,
+      "sideBySide": true,
+      "snapshotRefreshTimeout": 30
+    },
+    "chartPeriods": {
+      "BOND": [
+        "*"
+      ],
+      "CASH": [
+        "*"
+      ],
+      "CFD": [
+        "*"
+      ],
+      "CMDTY": [
+        "*"
+      ],
+      "CRYPTO": [
+        "*"
+      ],
+      "FOP": [
+        "2h",
+        "1d",
+        "2d",
+        "1w",
+        "1m"
+      ],
+      "FUND": [
+        "*"
+      ],
+      "FUT": [
+        "*"
+      ],
+      "IND": [
+        "*"
+      ],
+      "IOPT": [
+        "*"
+      ],
+      "OPT": [
+        "2h",
+        "1d",
+        "2d",
+        "1w",
+        "1m"
+      ],
+      "PHYSS": [
+        "*"
+      ],
+      "STK": [
+        "*"
+      ],
+      "WAR": [
+        "*"
+      ]
+    },
+    "groups": [],
+    "isFT": false,
+    "isPaper": false,
+    "profiles": [],
+    "selectedAccount": "U1234567",
+    "serverInfo": {
+      "serverName": "JisfN2118",
+      "serverVersion": "Build 10.49.1b, Sep 1, 2026 5:34:20 PM"
+    },
+    "sessionId": "6aaa17ac.00000115"
+  },
+  "combo_positions": [],
+  "contract_info": {
+    "allow_sell_long": false,
+    "category": "Computers",
+    "cfi_code": "",
+    "classifier": null,
+    "company_name": "APPLE INC",
+    "con_id": 265598,
+    "contract_clarification_type": null,
+    "contract_month": null,
+    "currency": "USD",
+    "cusip": null,
+    "exchange": "SMART",
+    "expiry_full": null,
+    "has_related_contracts": true,
+    "industry": "Computers",
+    "instrument_type": "STK",
+    "is_zero_commission_security": false,
+    "local_symbol": "AAPL",
+    "maturity_date": null,
+    "multiplier": null,
+    "r_t_h": true,
+    "smart_available": true,
+    "symbol": "AAPL",
+    "text": null,
+    "trading_class": "NMS",
+    "underlying_con_id": 0,
+    "underlying_issuer": null,
+    "valid_exchanges": "SMART,AMEX,NYSE,CBOE,PHLX,ISE,CHX,ARCA,NASDAQ,DRCTEDGE,BEX,BATS,EDGEA,BYX,IEX,EDGX,FOXRIVER,PEARL,NYSENAT,LTSE,MEMX,IBEOS,OVERNIGHT,TPLUS0,PSX,T24X,TXSE"
+  },
+  "currency_pairs": [
+    {
+      "ccyPair": "SGD",
+      "conid": 37928772,
+      "symbol": "USD.SGD"
+    },
+    {
+      "ccyPair": "RON",
+      "conid": 38231133,
+      "symbol": "USD.RON"
+    },
+    {
+      "ccyPair": "CZK",
+      "conid": 34838409,
+      "symbol": "USD.CZK"
+    },
+    {
+      "ccyPair": "OMR",
+      "conid": 725805002,
+      "symbol": "USD.OMR"
+    },
+    {
+      "ccyPair": "BGN",
+      "conid": 42292715,
+      "symbol": "BGN.USD"
+    },
+    {
+      "ccyPair": "RON",
+      "conid": 38231128,
+      "symbol": "RON.USD"
+    },
+    {
+      "ccyPair": "BGN",
+      "conid": 42292708,
+      "symbol": "USD.BGN"
+    },
+    {
+      "ccyPair": "NOK",
+      "conid": 37971206,
+      "symbol": "USD.NOK"
+    },
+    {
+      "ccyPair": "CHF",
+      "conid": 12087820,
+      "symbol": "USD.CHF"
+    },
+    {
+      "ccyPair": "QAR",
+      "conid": 725804992,
+      "symbol": "USD.QAR"
+    },
+    {
+      "ccyPair": "MXN",
+      "conid": 35045199,
+      "symbol": "USD.MXN"
+    },
+    {
+      "ccyPair": "SAR",
+      "conid": 541448258,
+      "symbol": "USD.SAR"
+    },
+    {
+      "ccyPair": "SEK",
+      "conid": 37893486,
+      "symbol": "USD.SEK"
+    },
+    {
+      "ccyPair": "AUD",
+      "conid": 14433401,
+      "symbol": "AUD.USD"
+    },
+    {
+      "ccyPair": "CNH",
+      "conid": 113342317,
+      "symbol": "USD.CNH"
+    },
+    {
+      "ccyPair": "BHD",
+      "conid": 725809669,
+      "symbol": "USD.BHD"
+    },
+    {
+      "ccyPair": "KRW",
+      "conid": 36363302,
+      "symbol": "USD.KRW"
+    },
+    {
+      "ccyPair": "ILS",
+      "conid": 44495102,
+      "symbol": "USD.ILS"
+    },
+    {
+      "ccyPair": "PLN",
+      "conid": 34831481,
+      "symbol": "USD.PLN"
+    },
+    {
+      "ccyPair": "JPY",
+      "conid": 15016059,
+      "symbol": "USD.JPY"
+    },
+    {
+      "ccyPair": "EUR",
+      "conid": 12087792,
+      "symbol": "EUR.USD"
+    },
+    {
+      "ccyPair": "ZAR",
+      "conid": 44984973,
+      "symbol": "USD.ZAR"
+    },
+    {
+      "ccyPair": "AED",
+      "conid": 541448250,
+      "symbol": "USD.AED"
+    },
+    {
+      "ccyPair": "HKD",
+      "conid": 12345777,
+      "symbol": "USD.HKD"
+    },
+    {
+      "ccyPair": "DKK",
+      "conid": 34808964,
+      "symbol": "USD.DKK"
+    },
+    {
+      "ccyPair": "CHF",
+      "conid": 12087802,
+      "symbol": "CHF.USD"
+    },
+    {
+      "ccyPair": "CAD",
+      "conid": 15016062,
+      "symbol": "USD.CAD"
+    },
+    {
+      "ccyPair": "KWD",
+      "conid": 725804997,
+      "symbol": "USD.KWD"
+    },
+    {
+      "ccyPair": "HUF",
+      "conid": 34831484,
+      "symbol": "USD.HUF"
+    },
+    {
+      "ccyPair": "GBP",
+      "conid": 12087797,
+      "symbol": "GBP.USD"
+    },
+    {
+      "ccyPair": "TRY",
+      "conid": 41628998,
+      "symbol": "USD.TRY"
+    },
+    {
+      "ccyPair": "NZD",
+      "conid": 39453441,
+      "symbol": "NZD.USD"
+    },
+    {
+      "ccyPair": "RUB",
+      "conid": 28454968,
+      "symbol": "USD.RUB"
+    }
+  ],
+  "delivery_options": {
+    "E": [
+      {
+        "A": 1,
+        "I": "gcm://sdsa@cTC12NhliEg:APA91bGXqVOmUXaQOJQs7rFSYWqYoqnzEpgohee9xeXk2OfYmftnbORga8h1hJ5rxsBFva4Gnsdf_C43nWBtuxhUvYJRVJSFX08xYS9x_3sWzyrFvmqpfsHie-V1BPx7pADA-nm1vzzZ",
+        "NM": "Google Pixel 4",
+        "UI": "gcm://sdsa@cTC12NhliEg:APA91bGXqVOmUXaQOJQs7rFSYWqYoqnzEpgohee9xeXk2OfYmftnbORga8h1hJ5rxsBFva4Gnsdf_C43nWBtuxhUvYJRVJSFX08xYS9x_3sWzyrFvmqpfsHie-V1BPx7pADA-nm1vzzZ"
+      },
+      {
+        "A": 1,
+        "I": "gcm://sdsa@eMfIyWWBT8mxKUnGCzO-Cc:APA91bFEKiCPxvciQBmVvTVYT5U8UbBNOaHas1L1DcMNlYB6BSt0ehZdNTEJ51SjdIpbdWLqy7OzyC0B2edw_54VTraR-8x9da0803bkqxLVj7nB-pyq5pMBl9D0qt9h1f6wlvWPSrAo",
+        "NM": "Google Pixel 7",
+        "UI": "gcm://sdsa@eMfIyWWBT8mxKUnGCzO-Cc:APA91bFEKiCPxvciQBmVvTVYT5U8UbBNOaHas1L1DcMNlYB6BSt0ehZdNTEJ51SjdIpbdWLqy7OzyC0B2edw_54VTraR-8x9da0803bkqxLVj7nB-pyq5pMBl9D0qt9h1f6wlvWPSrAo"
+      }
+    ],
+    "M": 1
+  },
+  "live_orders": [
+    {
+      "account": "U1234567",
+      "acct": "U1234567",
+      "auxPrice": "",
+      "bgColor": "#000000",
+      "cashCcy": "USD",
+      "companyName": "APPLE INC",
+      "conid": 265598,
+      "conidex": "265598",
+      "description1": "AAPL",
+      "fgColor": "#00F000",
+      "filledQuantity": 0.0,
+      "isEventTrading": "0",
+      "lastExecutionTime": "260723190006",
+      "lastExecutionTime_r": 1784833206000,
+      "listingExchange": "NASDAQ.NMS",
+      "orderDesc": "Buy 1 AAPL Limit 150.00, GTC",
+      "orderId": 1986940574,
+      "orderType": "Limit",
+      "order_ccp_status": "Replaced",
+      "order_ref": "CLAUDIA-1784833069457",
+      "origOrderType": "LIMIT",
+      "outsideRTH": false,
+      "price": "150.00",
+      "remainingQuantity": 1.0,
+      "secType": "STK",
+      "side": "BUY",
+      "sizeAndFills": "0/1",
+      "status": "Submitted",
+      "stop_price": "",
+      "supportsTaxOpt": "1",
+      "ticker": "AAPL",
+      "timeInForce": "GTC",
+      "totalSize": 1.0
+    }
+  ],
+  "market_snapshot": [
+    {
+      "conid": 265598,
+      "conidEx": "265598"
+    }
+  ],
+  "notifications": [
+    {
+      "D": "1789580611.0",
+      "FC": "SM",
+      "HT": 0,
+      "ID": "2026091616556319",
+      "MD": "<html><div>There are pending items on your account that require your attention.</div><div><br /></div><div> - Document Submission <br /></div><div><br /></div><div><a href=\"sso://action=DOC&amp;service=AM.LOGIN&amp;webaccess=true\" target=\"_blank\">Complete Pending Items</a></div></html>",
+      "MS": "IBKR FYI: Complete Pending Items",
+      "R": 0
+    },
+    {
+      "D": "1789524632.0",
+      "FC": "SM",
+      "HT": 0,
+      "ID": "2026091599476950",
+      "MD": "<html><div>There are pending items on your account that require your attention.</div><div><br /></div><div> - Document Submission <br /></div><div><br /></div><div><a href=\"sso://action=DOC&amp;service=AM.LOGIN&amp;webaccess=true\" target=\"_blank\">Complete Pending Items</a></div></html>",
+      "MS": "IBKR FYI: Complete Pending Items",
+      "R": 0
+    },
+    {
+      "D": "1789488999.0",
+      "FC": "AA",
+      "HT": 0,
+      "ID": "2026091595608557",
+      "MD": "<html>Dear Client,<br /><br />Your withdrawal request for USD 5000.00 from your U****5699 account was processed. The funds should be arriving in your bank account at JPMORGAN CHASE BANK on approximately 2026-09-16.<br /><br /><strong>Still waiting for funds to arrive?</strong><br /><br />Funds may be delayed due to additional processing or review by your bank.</html>",
+      "MS": "Withdrawal Activity",
+      "R": 0
+    }
+  ],
+  "pa_periods": [
+    "1D",
+    "7D",
+    "MTD",
+    "1M",
+    "YTD",
+    "1Y"
+  ],
+  "pnl": {
+    "upnl": {
+      "U1234567.Core": {
+        "dpl": -179.0,
+        "el": 44540.0,
+        "mv": 30080.0,
+        "nl": 52050.0,
+        "rowType": 1,
+        "uel": 44536.73,
+        "upl": 1160.0
+      }
+    }
+  },
+  "positions": [
+    {
+      "acctId": "U1234567",
+      "allExchanges": "AMEX,NYSE,CBOE,PHLX,CHX,ARCA,ISLAND,ISE,IDEAL,NASDAQQ,DRCTEDGE,BEX,BATS,NITEECN,EDGEA,CSFBALGO,TRADEWEB,PSX,BYX,PDQ,IBKRATS,CITADEL,NYSEDARK,MIAX,IBDARK,CITADELDP,NASDDARK,IEX,SUMMER,FINRA,UBSDARK,BTIG,VIRTU,JEFF,OPCO,DBK,JPMC,EDGX,JANE,FRACSHARE,RBCALGO,VIRTUDP,FOXRIVER,NITEEXST,PEARL,NITERTL,NYSENAT,IEXMID,HRT,FLOWTRADE,HRTDP,JANELP,PEAK6,CTDLZERO,HRTMID,JANEZERO,HRTEXST,IMCLP,LTSE,SOCGENDP,MEMX,INTELCROS,VIRTUBYIN,JUMPTRADE,NITEZERO,XTXEXST,XTXDP,XTXMID,COWENLP,BARCDP,JUMPLP,OLDMCLP,RBCCMALP,WALLBETH,IBEOS,JONES,GSLP,BLUEOCEAN,USIBSILP,OVERNIGHT,JANEMID,IBATSEOS,HRTZERO,VIRTUALGO,G1XLP,VIRTUMID,GLOBALXLP,CTDLMID,TPLUS0,JUMPMID,CLOSEOUT,T24X,OMCDP,OMCMID,TXSE,MOON,BRUCE",
+      "assetClass": "STK",
+      "avgCost": 383.215004,
+      "avgPrice": 383.215004,
+      "baseAvgCost": 383.215004,
+      "baseAvgPrice": 383.215004,
+      "baseMktPrice": 391.5655823,
+      "baseMktValue": 19578.28,
+      "baseRealizedPnl": 0.0,
+      "baseUnrealizedPnl": 417.53,
+      "chineseName": "SPDR&#x9EC4;&#x91D1;&#x4FE1;&#x6258;",
+      "conExchMap": [],
+      "conid": 51529211,
+      "contractDesc": "GLD",
+      "countryCode": "US",
+      "currency": "USD",
+      "displayRule": {
+        "displayRuleStep": [
+          {
+            "decimalDigits": 2,
+            "lowerEdge": 0.0,
+            "wholeDigits": 4
+          }
+        ],
+        "magnification": 0
+      },
+      "exchs": null,
+      "exerciseStyle": null,
+      "expiry": null,
+      "fullName": "GLD",
+      "group": null,
+      "hasOptions": true,
+      "incrementRules": [
+        {
+          "increment": 0.01,
+          "lowerEdge": 0.0
+        }
+      ],
+      "isEventContract": false,
+      "isUS": true,
+      "lastTradingDay": null,
+      "listingExchange": "ARCA",
+      "mktPrice": 391.5655823,
+      "mktValue": 19578.28,
+      "model": "",
+      "multiplier": 0.0,
+      "name": "SPDR GOLD SHARES",
+      "pageSize": 100,
+      "position": 50.0,
+      "putOrCall": null,
+      "realizedPnl": 0.0,
+      "sector": null,
+      "sectorGroup": null,
+      "strike": "0",
+      "ticker": "GLD",
+      "time": 31,
+      "type": "ETF",
+      "undConid": 0,
+      "unrealizedPnl": 417.53
+    },
+    {
+      "acctId": "U1234567",
+      "allExchanges": "AMEX,NYSE,CBOE,PHLX,CHX,ARCA,ISLAND,IDEAL,NASDAQQ,DRCTEDGE,BEX,BATS,EDGEA,CSFBALGO,TRADEWEB,PSX,BYX,IBKRATS,CITADEL,NYSEDARK,MIAX,IBDARK,NASDDARK,IEX,FINRA,UBSDARK,BTIG,VIRTU,JEFF,OPCO,EDGX,FRACSHARE,VIRTUDP,FOXRIVER,PEARL,NYSENAT,HRT,FLOWTRADE,HRTDP,JANELP,PEAK6,CTDLZERO,HRTMID,JANEZERO,HRTEXST,IMCLP,LTSE,SOCGENDP,MEMX,INTELCROS,VIRTUBYIN,JUMPTRADE,NITEZERO,XTXEXST,XTXDP,XTXMID,COWENLP,BARCDP,JUMPLP,OLDMCLP,RBCCMALP,WALLBETH,IBEOS,JONES,GSLP,BLUEOCEAN,USIBSILP,OVERNIGHT,IBATSEOS,HRTZERO,VIRTUALGO,G1XLP,VIRTUMID,GLOBALXLP,TPLUS0,JUMPMID,CLOSEOUT,T24X,OMCDP,OMCMID,TXSE,MOON,BRUCE",
+      "assetClass": "STK",
+      "avgCost": 97.634216,
+      "avgPrice": 97.634216,
+      "baseAvgCost": 97.634216,
+      "baseAvgPrice": 97.634216,
+      "baseMktPrice": 104.9138794,
+      "baseMktValue": 10491.39,
+      "baseRealizedPnl": 0.0,
+      "baseUnrealizedPnl": 727.97,
+      "chineseName": "iShares&#x5B89;&#x7855;&#x5317;&#x7F8E;&#x79D1;&#x6280;&#x8F6F;&#x4EF6;ETF",
+      "conExchMap": [],
+      "conid": 12658199,
+      "contractDesc": "IGV",
+      "countryCode": "US",
+      "currency": "USD",
+      "displayRule": {
+        "displayRuleStep": [
+          {
+            "decimalDigits": 2,
+            "lowerEdge": 0.0,
+            "wholeDigits": 4
+          }
+        ],
+        "magnification": 0
+      },
+      "exchs": null,
+      "exerciseStyle": null,
+      "expiry": null,
+      "fullName": "IGV",
+      "group": null,
+      "hasOptions": true,
+      "incrementRules": [
+        {
+          "increment": 0.01,
+          "lowerEdge": 0.0
+        }
+      ],
+      "isEventContract": false,
+      "isUS": true,
+      "lastTradingDay": null,
+      "listingExchange": "BATS",
+      "mktPrice": 104.9138794,
+      "mktValue": 10491.39,
+      "model": "",
+      "multiplier": 0.0,
+      "name": "ISHARES EXPANDED TECH-SOFTWA",
+      "pageSize": 100,
+      "position": 100.0,
+      "putOrCall": null,
+      "realizedPnl": 0.0,
+      "sector": null,
+      "sectorGroup": null,
+      "strike": "0",
+      "ticker": "IGV",
+      "time": 28,
+      "type": "ETF",
+      "undConid": 0,
+      "unrealizedPnl": 727.97
+    }
+  ],
+  "positions_by_conid": [],
+  "scanner_params": {
+    "__truncated__": "first 2 entries of every list; see README",
+    "filter_list": [
+      {
+        "code": "afterHoursChangeAbove",
+        "display_name": "After-Hours Change Above",
+        "group": "afterHoursChangeAbove",
+        "type": "non-range"
+      },
+      {
+        "code": "afterHoursChangeBelow",
+        "display_name": "After-Hours Change Below",
+        "group": "afterHoursChangeBelow",
+        "type": "non-range"
+      }
+    ],
+    "instrument_list": [
+      {
+        "display_name": "US Stocks",
+        "filters": [
+          "afterHoursChange",
+          "afterHoursChangePerc"
+        ],
+        "type": "STK"
+      },
+      {
+        "display_name": "US Equity ETFs",
+        "filters": [
+          "afterHoursChange",
+          "afterHoursChangePerc"
+        ],
+        "type": "ETF.EQ.US"
+      }
+    ],
+    "location_tree": [
+      {
+        "display_name": "US Stocks",
+        "locations": [
+          {
+            "display_name": "Listed/NASDAQ",
+            "locations": [],
+            "type": "STK.US.MAJOR"
+          },
+          {
+            "display_name": "OTCMarkets",
+            "locations": [],
+            "type": "STK.US.MINOR"
+          }
+        ],
+        "type": "STK"
+      },
+      {
+        "display_name": "US Equity ETFs",
+        "locations": [
+          {
+            "display_name": "Listed/NASDAQ",
+            "locations": [],
+            "type": "ETF.EQ.US.MAJOR"
+          }
+        ],
+        "type": "ETF.EQ.US"
+      }
+    ],
+    "scan_type_list": [
+      {
+        "code": "TOP_PERC_GAIN",
+        "display_name": "Top % Gainers",
+        "instruments": [
+          "STK",
+          "ETF.EQ.US"
+        ]
+      },
+      {
+        "code": "TOP_PERC_LOSE",
+        "display_name": "Top % Losers",
+        "instruments": [
+          "STK",
+          "ETF.EQ.US"
+        ]
+      }
+    ]
+  },
+  "search_contract": [
+    {
+      "companyHeader": "APPLE INC - NASDAQ",
+      "companyName": "APPLE INC",
+      "conid": "265598",
+      "description": "NASDAQ",
+      "restricted": "CFD,IOPT",
+      "sections": [
+        {
+          "secType": "STK"
+        },
+        {
+          "exchange": "SMART;AMEX;BATS;BOX;CBOE;CBOE2;EDGX;EMERALD;GEMINI;IBUSOPT;ISE;MEMX;MERCURY;MIAX;NASDAQBX;NASDAQOM;PEARL;PHLX;PSE;SAPPHIRE",
+          "months": "SEP26;OCT26;NOV26;DEC26;JAN27;FEB27;MAR27;APR27;JUN27;SEP27;DEC27;JAN28;MAR28;DEC28;JAN29",
+          "secType": "OPT"
+        },
+        {
+          "exchange": "BVME;EBS;FWB;GETTEX;SBF;SEHK;SWB",
+          "months": "AUG26;SEP26;OCT26;NOV26;DEC26;JAN27;FEB27;MAR27;JUN27;SEP27;DEC27;JAN28;MAR28;JUN28;SEP28;DEC28;JAN29;JUN29;DEC29;JAN30",
+          "secType": "WAR"
+        },
+        {
+          "secType": "IOPT"
+        },
+        {
+          "conid": "120549942",
+          "exchange": "SMART",
+          "secType": "CFD"
+        },
+        {
+          "secType": "BAG"
+        }
+      ],
+      "symbol": "AAPL"
+    },
+    {
+      "companyHeader": "APPLE INC-CDR - TSE",
+      "companyName": "APPLE INC-CDR",
+      "conid": "532640894",
+      "description": "TSE",
+      "restricted": "OPT,STK",
+      "sections": [
+        {
+          "secType": "STK"
+        },
+        {
+          "exchange": "CDE",
+          "months": "SEP26;OCT26;NOV26;DEC26;JAN27;FEB27;MAR27;JUN27;SEP27",
+          "secType": "OPT"
+        },
+        {
+          "secType": "BAG"
+        }
+      ],
+      "symbol": "AAPL"
+    },
+    {
+      "companyHeader": "APPLE INC - MEXI",
+      "companyName": "APPLE INC",
+      "conid": "38708077",
+      "description": "MEXI",
+      "restricted": "FUT,STK",
+      "sections": [
+        {
+          "exchange": "MEXI;",
+          "secType": "STK"
+        },
+        {
+          "exchange": "MEXDER",
+          "months": "SEP26;DEC26;MAR27;JUN27",
+          "secType": "FUT",
+          "showPrips": true
+        },
+        {
+          "exchange": "MEXDER",
+          "legSecType": "FUT",
+          "secType": "BAG"
+        }
+      ],
+      "symbol": "AAPL"
+    },
+    {
+      "companyHeader": "APPLE INC - EBS",
+      "companyName": "APPLE INC",
+      "conid": "273982664",
+      "description": "EBS",
+      "restricted": null,
+      "sections": [
+        {
+          "secType": "STK"
+        }
+      ],
+      "symbol": "AAPL"
+    },
+    {
+      "bondid": 4,
+      "companyHeader": "Corporate Fixed Income",
+      "companyName": null,
+      "conid": "2147483647",
+      "description": null,
+      "issuers": [
+        {
+          "id": "e1432232",
+          "name": "Apple Inc"
+        }
+      ],
+      "restricted": null,
+      "sections": [
+        {
+          "secType": "BOND"
+        }
+      ],
+      "symbol": null
+    }
+  ],
+  "secdef": [
+    {
+      "allExchanges": "AMEX,NYSE,CBOE,PHLX,CHX,ARCA,ISLAND,ISE,IDEAL,NASDAQQ,NASDAQ,DRCTEDGE,BEX,BATS,NITEECN,EDGEA,CSFBALGO,NYSENASD,PSX,BYX,PDQ,IBKRATS,CITADEL,NYSEDARK,MIAX,IBDARK,CITADELDP,NASDDARK,IEX,SUMMER,FINRA,UBSDARK,BTIG,VIRTU,JEFF,OPCO,DBK,JPMC,EDGX,JANE,FRACSHARE,RBCALGO,VIRTUDP,FOXRIVER,NITEEXST,PEARL,GSDARK,NITERTL,NYSENAT,IEXMID,HRT,FLOWTRADE,HRTDP,JANELP,PEAK6,CTDLZERO,HRTMID,JANEZERO,HRTEXST,IMCLP,LTSE,SOCGENDP,MEMX,INTELCROS,VIRTUBYIN,JUMPTRADE,NITEZERO,XTXEXST,XTXDP,XTXMID,COWENLP,BARCDP,JUMPLP,OLDMCLP,RBCCMALP,WALLBETH,IBEOS,JONES,GSLP,BLUEOCEAN,USIBSILP,OVERNIGHT,JANEMID,IBATSEOS,HRTZERO,VIRTUALGO,G1XLP,VIRTUMID,GLOBALXLP,CTDLMID,TPLUS0,JUMPMID,CLOSEOUT,T24X,OMCDP,OMCMID,TXSE,MOON,BRUCE",
+      "assetClass": "STK",
+      "chineseName": "&#x82F9;&#x679C;&#x516C;&#x53F8;",
+      "conid": 265598,
+      "countryCode": "US",
+      "currency": "USD",
+      "displayRule": {
+        "displayRuleStep": [
+          {
+            "decimalDigits": 2,
+            "lowerEdge": 0.0,
+            "wholeDigits": 4
+          }
+        ],
+        "magnification": 0
+      },
+      "expiry": null,
+      "fullName": "AAPL",
+      "group": "Computers",
+      "hasOptions": true,
+      "incrementRules": [
+        {
+          "increment": 0.01,
+          "lowerEdge": 0.0
+        }
+      ],
+      "isEventContract": false,
+      "isUS": true,
+      "lastTradingDay": null,
+      "listingExchange": "NASDAQ",
+      "multiplier": 0.0,
+      "name": "APPLE INC",
+      "pageSize": 100,
+      "putOrCall": null,
+      "sector": "Technology",
+      "sectorGroup": "Computers",
+      "strike": "0",
+      "ticker": "AAPL",
+      "time": 31,
+      "type": "COMMON",
+      "undConid": 0
+    }
+  ],
+  "stocks": [
+    {
+      "assetClass": "STK",
+      "chineseName": "&#x82F9;&#x679C;&#x516C;&#x53F8;",
+      "contracts": [
+        {
+          "conid": 265598,
+          "exchange": "NASDAQ",
+          "isUS": true
+        },
+        {
+          "conid": 38708077,
+          "exchange": "MEXI",
+          "isUS": false
+        },
+        {
+          "conid": 273982664,
+          "exchange": "EBS",
+          "isUS": false
+        }
+      ],
+      "name": "APPLE INC"
+    },
+    {
+      "assetClass": "STK",
+      "chineseName": "&#x82F9;&#x679C;&#x516C;&#x53F8;",
+      "contracts": [
+        {
+          "conid": 532640894,
+          "exchange": "TSE",
+          "isUS": false
+        }
+      ],
+      "name": "APPLE INC-CDR"
+    }
+  ],
+  "trades": [
+    {
+      "account": "U1234567",
+      "accountCode": "U1234567",
+      "account_allocation_name": "U1234567",
+      "clearing_id": "IB",
+      "clearing_name": "IB",
+      "commission": "2.24",
+      "company_name": "E-mini S&P 500",
+      "conid": 515416632,
+      "conidEx": "515416632@CME",
+      "contract_description_1": "Dec18 '26",
+      "exchange": "CME",
+      "execution_id": "00010181.6aa8c7de.01.01",
+      "is_event_trading": "0",
+      "liquidation_trade": "0",
+      "listing_exchange": "CME",
+      "net_amount": 382925.0,
+      "order_description": "Bot 1 @ 7658.5 on CME",
+      "order_id": 2061969510,
+      "price": "7658.5",
+      "sec_type": "FUT",
+      "side": "B",
+      "size": 1.0,
+      "supports_tax_opt": "1",
+      "symbol": "ES",
+      "trade_time": "20260915-15:41:46",
+      "trade_time_r": 1789486906000
+    },
+    {
+      "account": "U1234567",
+      "accountCode": "U1234567",
+      "account_allocation_name": "U1234567",
+      "clearing_id": "IB",
+      "clearing_name": "IB",
+      "commission": "2.24",
+      "company_name": "E-mini S&P 500",
+      "conid": 649180671,
+      "conidEx": "649180671@CME",
+      "contract_description_1": "Sep18 '26",
+      "exchange": "CME",
+      "execution_id": "00010181.6aa798a8.01.01",
+      "is_event_trading": "0",
+      "liquidation_trade": "0",
+      "listing_exchange": "CME",
+      "net_amount": 382400.0,
+      "order_description": "Sold 1 @ 7648.0 on CME",
+      "order_id": 626641664,
+      "price": "7648.0",
+      "sec_type": "FUT",
+      "side": "S",
+      "size": 1.0,
+      "supports_tax_opt": "1",
+      "symbol": "ES",
+      "trade_time": "20260914-16:48:32",
+      "trade_time_r": 1789404512000
+    },
+    {
+      "account": "U1234567",
+      "accountCode": "U1234567",
+      "account_allocation_name": "U1234567",
+      "clearing_id": "IB",
+      "clearing_name": "IB",
+      "commission": "2.24",
+      "company_name": "E-mini S&P 500",
+      "conid": 649180671,
+      "conidEx": "649180671@CME",
+      "contract_description_1": "Sep18 '26",
+      "exchange": "CME",
+      "execution_id": "00010181.6aa87622.01.01",
+      "is_event_trading": "0",
+      "liquidation_trade": "0",
+      "listing_exchange": "CME",
+      "net_amount": 380000.0,
+      "order_description": "Bot 1 @ 7600.0 on CME",
+      "order_id": 626641665,
+      "price": "7600.0",
+      "sec_type": "FUT",
+      "side": "B",
+      "size": 1.0,
+      "supports_tax_opt": "1",
+      "symbol": "ES",
+      "trade_time": "20260915-05:08:55",
+      "trade_time_r": 1789448935000
+    },
+    {
+      "account": "U1234567",
+      "accountCode": "U1234567",
+      "account_allocation_name": "U1234567",
+      "clearing_id": "IB",
+      "clearing_name": "IB",
+      "commission": "2.24",
+      "company_name": "E-mini S&P 500",
+      "conid": 515416632,
+      "conidEx": "515416632@CME",
+      "contract_description_1": "Dec18 '26",
+      "exchange": "CME",
+      "execution_id": "00010181.6aa88a86.01.01",
+      "is_event_trading": "0",
+      "liquidation_trade": "0",
+      "listing_exchange": "CME",
+      "net_amount": 383800.0,
+      "order_description": "Sold 1 @ 7676.0 on CME",
+      "order_id": 1358484956,
+      "price": "7676.0",
+      "sec_type": "FUT",
+      "side": "S",
+      "size": 1.0,
+      "supports_tax_opt": "1",
+      "symbol": "ES",
+      "trade_time": "20260915-10:54:19",
+      "trade_time_r": 1789469659000
+    }
+  ],
+  "trading_schedule": [],
+  "unread_count": 0,
+  "watchlists": [
+    {
+      "id": "105",
+      "is_open": false,
+      "modified": 1789339866566,
+      "name": "(1) Commodity Futures",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "103",
+      "is_open": false,
+      "modified": 1789339565093,
+      "name": "Favorites",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "106",
+      "is_open": false,
+      "modified": 1789046626251,
+      "name": "FX",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "10",
+      "is_open": false,
+      "modified": 1784256766414,
+      "name": "Favorites",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "104",
+      "is_open": false,
+      "modified": 1781477302498,
+      "name": "Index Futures",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "-7171512622707682541",
+      "is_open": false,
+      "modified": 1770388250140,
+      "name": "us",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "-2848335496026461312",
+      "is_open": false,
+      "modified": 1770388250130,
+      "name": "Favoris",
+      "read_only": false,
+      "type": "watchlist"
+    },
+    {
+      "id": "101",
+      "is_open": false,
+      "modified": 1765494055600,
+      "name": "Futures",
+      "read_only": false,
+      "type": "watchlist"
+    }
+  ]
+}
