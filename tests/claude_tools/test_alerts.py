@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from .conftest import assert_tool_failed, assert_tool_succeeded
@@ -38,10 +40,13 @@ def test_execute_create_price_alert_resolves_symbol(toolkit):
     toolkit._client.search_contract.assert_not_called()
     toolkit._client.create_alert.assert_called_once()
     call_alert = toolkit._client.create_alert.call_args[0][1]
-    assert call_alert["conditions"][0]["conid"] == 265598
+    # conidex, not conid+exchange — IBKR documents one concatenated field (TOOL-02).
+    assert call_alert["conditions"][0]["conidex"] == "265598@SMART"
     assert call_alert["conditions"][0]["operator"] == ">="
     assert call_alert["conditions"][0]["value"] == "200.0"
-    assert call_alert["conditions"][0]["conditionType"] == "Price"
+    # `conditionType` is gone: IBKR documents no such field, and `type: 1` means Price.
+    assert call_alert["conditions"][0]["type"] == 1
+    assert "conditionType" not in call_alert["conditions"][0]
     assert fig is None
 
 
@@ -58,7 +63,7 @@ def test_execute_create_price_alert_futures_resolves_via_get_futures(toolkit):
     toolkit._client.search_contract.assert_not_called()
     toolkit._client.get_futures.assert_called_once_with(["CL"])
     call_alert = toolkit._client.create_alert.call_args[0][1]
-    assert call_alert["conditions"][0]["conid"] == 12345  # front month (earliest expiration)
+    assert call_alert["conditions"][0]["conidex"] == "12345@SMART"  # front month (earliest expiration)
 
 
 def test_execute_create_price_alert_fx_resolves_via_currency_pairs(toolkit):
@@ -70,7 +75,7 @@ def test_execute_create_price_alert_fx_resolves_via_currency_pairs(toolkit):
     toolkit._client.search_contract.assert_not_called()
     toolkit._client.get_currency_pairs.assert_called_once_with("EUR")
     call_alert = toolkit._client.create_alert.call_args[0][1]
-    assert call_alert["conditions"][0]["conid"] == 99999
+    assert call_alert["conditions"][0]["conidex"] == "99999@SMART"
 
 
 def test_execute_create_price_alert_invalid_conid_returns_error(toolkit):
@@ -377,3 +382,139 @@ def test_modify_price_alert_sends_a_translated_modify_body(toolkit):
     assert body["conditions"][0]["operator"] == "<=", "an unset field must be carried unchanged"
     assert not set(body) - _REQUEST_KEYS, f"undocumented fields: {sorted(set(body) - _REQUEST_KEYS)}"
     assert "alert_name" not in body and "condition_outside_rth" not in body
+
+
+def _stub_alert_client(toolkit):
+    """A toolkit whose conid resolution and alert write are stubbed, for body assertions."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
+    toolkit._client.get_stocks.return_value = [
+        {"name": "APPLE INC", "assetClass": "STK", "contracts": [{"conid": 265598, "exchange": "NASDAQ", "isUS": True}]}
+    ]
+    toolkit._client.create_alert.return_value = {"order_id": 1, "success": True}
+    toolkit._client.create_alert.reset_mock()
+    return toolkit
+
+
+# ---------------------------------------------------------------------------
+# TOOL-02 — the create body's condition used field names IBKR does not document
+# ---------------------------------------------------------------------------
+
+
+def test_create_price_alert_sends_the_documented_condition_fields(toolkit):
+    """IBKR documents six Required condition fields; this sent four, two of them wrong.
+
+    From IBKR's own capture (`docs/audits/audit-evidence/scrapes/cpapi-v1.md`, the
+    create/modify alert body): `conidex` ("conid@exchange"), `logicBind`, `operator`,
+    `triggerMethod`, `type`, `value` — plus `timeZone` for MTA alerts only.
+
+    This handler sent `conid` and `exchange` as two separate keys, omitted `logicBind`
+    and `triggerMethod` entirely, and added `conditionType: "Price"`, which appears
+    nowhere in IBKR's documentation — `type: 1` already means Price. Corroborated by the
+    account holder's own alert, whose GET detail returns `conidex`,
+    `condition_logic_bind` and `condition_trigger_method`.
+
+    The live page is `api-reference/trading/trading-alerts/create-alert.md` (28,399 B,
+    fetched 2026-09-16 alongside a fabricated control that returned "# Page Not Found").
+    It is **absent from `llms.txt`**, which is why the index cannot find it, and the
+    `v1/endpoints/alerts/create-or-modify-alert.md` that five files cited returns
+    "# Page Not Found". Both it and the archived capture agree on these six fields.
+    """
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
+    toolkit._client.get_stocks.return_value = [
+        {"name": "APPLE INC", "assetClass": "STK", "contracts": [{"conid": 265598, "exchange": "NASDAQ", "isUS": True}]}
+    ]
+    toolkit._client.create_alert.return_value = {"order_id": 1, "success": True}
+
+    toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">", "price": 250.0})
+
+    condition = toolkit._client.create_alert.call_args.args[1]["conditions"][0]
+    assert condition["conidex"] == "265598@SMART"
+    assert condition["logicBind"] == "n", "END — a single-condition alert binds to nothing after it"
+    assert condition["triggerMethod"] == "0", "IBKR: 'Pass the string representation of zero'"
+    assert condition["type"] == 1
+    assert condition["operator"] == ">"
+    assert condition["value"] == "250.0"
+    assert "conid" not in condition and "exchange" not in condition, "conidex replaces both"
+    assert "conditionType" not in condition, "not a field IBKR documents"
+
+
+def test_create_price_alert_body_carries_only_documented_fields(toolkit):
+    """`isSizeCondition` appears in neither the live page nor the archived capture.
+
+    It is the same class as `conditionType`: a field invented alongside the real ones.
+    Checked against `api-reference/trading/trading-alerts/create-alert.md` (28,399 B,
+    fetched 2026-09-16 with a fabricated control that returned "# Page Not Found") and
+    against `docs/audits/audit-evidence/scrapes/cpapi-v1.md`; zero occurrences in both.
+    """
+    _stub_alert_client(toolkit)
+
+    toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 250.0})
+
+    body = toolkit._client.create_alert.call_args.args[1]
+    documented = {
+        "alertName",
+        "alertMessage",
+        "alertRepeatable",
+        "outsideRth",
+        "tif",
+        "conditions",
+        "orderId",
+        "email",
+        "expireTime",
+        "iTWSOrdersOnly",
+        "sendMessage",
+        "showPopup",
+    }
+    assert set(body) <= documented, f"fields IBKR does not document: {sorted(set(body) - documented)}"
+
+
+def test_create_price_alert_sends_enum_numbers_not_python_bools(toolkit):
+    """IBKR documents `outsideRth` and `alertRepeatable` as enums of 0 and 1.
+
+    `alertRepeatable` was already `int(...)`; `outsideRth` was passed straight through as a
+    Python bool, which serialises to `true`/`false`, not `1`/`0`. The account holder's own
+    alert returns `condition_outside_rth: 0` — an int.
+    """
+    _stub_alert_client(toolkit)
+
+    toolkit.execute(
+        "create_price_alert",
+        {"symbol": "AAPL", "operator": ">=", "price": 250.0, "outside_rth": True, "repeat": True},
+    )
+
+    body = toolkit._client.create_alert.call_args.args[1]
+    assert body["outsideRth"] == 1 and not isinstance(body["outsideRth"], bool)
+    assert body["alertRepeatable"] == 1 and not isinstance(body["alertRepeatable"], bool)
+
+
+def test_create_price_alert_tif_offers_only_what_ibkr_documents(toolkit):
+    """IBKR's `tif` enum is GTC and GTD. The schema offered GTC and **DAY**.
+
+    `DAY` appears nowhere in IBKR's alert documentation, and the schema described it as
+    "expires at market close" — a behaviour no page states.
+    """
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    schema: Any = next(t for t in TOOL_DEFINITIONS if t["name"] == "create_price_alert")
+    assert schema["input_schema"]["properties"]["tif"]["enum"] == ["GTC", "GTD"]
+
+
+def test_create_price_alert_refuses_gtd_without_an_expiry(toolkit):
+    """IBKR: `expireTime` is "Used with a tif of GTD only", and GTD means nothing without it."""
+    _stub_alert_client(toolkit)
+
+    text, _ = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 250.0, "tif": "GTD"})
+
+    assert "expire_time" in text
+    toolkit._client.create_alert.assert_not_called()
+
+
+def test_create_price_alert_passes_an_expiry_through_for_gtd(toolkit):
+    _stub_alert_client(toolkit)
+
+    toolkit.execute(
+        "create_price_alert",
+        {"symbol": "AAPL", "operator": ">=", "price": 250.0, "tif": "GTD", "expire_time": "20270101-12:00:00"},
+    )
+
+    assert toolkit._client.create_alert.call_args.args[1]["expireTime"] == "20270101-12:00:00"

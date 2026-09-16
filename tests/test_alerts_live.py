@@ -168,7 +168,7 @@ def test_toolkit_get_alerts(live_toolkit):
 def test_toolkit_alert_price_above(live_toolkit):
     """Create AAPL >= $99999 (never fires), confirm orderId in response, delete.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
     """
     text, alert_id = _create_alert(live_toolkit, symbol="AAPL", operator=">=", price=99999.0)
     assert alert_id, f"No alert ID in create response: {text!r}"
@@ -183,7 +183,7 @@ def test_toolkit_alert_price_above(live_toolkit):
 def test_toolkit_alert_price_below(live_toolkit):
     """Create AAPL <= $0.01 (never fires) — verifies the '<=' operator path.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
     """
     text, alert_id = _create_alert(live_toolkit, symbol="AAPL", operator="<=", price=0.01)
     assert alert_id, f"No alert ID: {text!r}"
@@ -207,7 +207,7 @@ def test_toolkit_alert_custom_name(live_toolkit):
 def test_toolkit_alert_outside_rth(live_toolkit):
     """Alert with outside_rth=True (extended hours) is accepted by IBKR.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
     """
     text, alert_id = _create_alert(live_toolkit, outside_rth=True)
     assert alert_id, f"No alert ID: {text!r}"
@@ -255,7 +255,7 @@ def test_toolkit_alert_modify_price(live_toolkit):
     """modify_price_alert updates the trigger price — response is a valid JSON dict.
 
     Modify uses IBKR's create_alert endpoint (same as create — patch semantics):
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
     """
     _, alert_id = _create_alert(live_toolkit, price=99999.0)
     assert alert_id

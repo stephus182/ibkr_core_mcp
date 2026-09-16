@@ -118,8 +118,12 @@ prerequisite `GET /iserver/accounts` first, or `tickle`, changes nothing.
 Recorded as unknown rather than guessed.
 
 **The consequence.** IBKR documents `operator` as an enum of `>=`, `<=`, `>`, `<`, `==`, and
-its own sample body uses `"<="`. Three of the five are usable through the gateway; the two
-the API leads with are not.
+its own sample body uses `"<="`. **None of the five can create an alert.** `>=` and `<=`
+never arrive; `>`, `<` and `==` arrive and are refused by IBKR's own engine
+(`can't recognize fix [>]`, the table below). This paragraph read "Three of the five are
+usable through the gateway" until 2026-09-16 — contradicting that table twelve lines down,
+and reading as though an alert could be created with `>`. It cannot. "Not blocked by the
+403 filter" is not "usable".
 
 **This is why alert writes have always "skipped".** `tests/test_client_live.py` and
 `tests/test_alerts_live.py` recorded the 403 as "alert write requires trading session

@@ -907,8 +907,19 @@ TOOL_DEFINITIONS = [
                 "price": {"type": "number", "description": "Price threshold"},
                 "tif": {
                     "type": "string",
-                    "enum": ["GTC", "DAY"],
-                    "description": "Time in force: 'GTC' (good till cancelled, default) or 'DAY' (expires at market close)",
+                    "enum": ["GTC", "GTD"],
+                    "description": (
+                        "Time in force: 'GTC' (good till cancelled, default) or 'GTD' (good till date, "
+                        "which requires expire_time). These are the only two values IBKR documents; the "
+                        "schema offered 'DAY' until 2026-09-16, which appears in no IBKR alert page."
+                    ),
+                },
+                "expire_time": {
+                    "type": "string",
+                    "description": (
+                        "Required when tif is 'GTD': when the alert terminates if never triggered. "
+                        "Format 'YYYYMMDD-HH:mm:ss', e.g. '20270101-12:00:00'. Ignored for GTC."
+                    ),
                 },
                 "outside_rth": {
                     "type": "boolean",
@@ -3472,6 +3483,14 @@ class ClaudeToolkit:
         operator = inputs["operator"]
         price = inputs["price"]
         tif = inputs.get("tif", "GTC")
+        expire_time = inputs.get("expire_time", "")
+        if tif == "GTD" and not expire_time:
+            return (
+                "tif='GTD' needs an expire_time — IBKR documents expireTime as "
+                '"Used with a tif of GTD only", and a GTD alert with no expiry is not a '
+                "request IBKR can act on. Pass expire_time as 'YYYYMMDD-HH:mm:ss', or use "
+                "tif='GTC'."
+            ), None
         outside_rth = inputs.get("outside_rth", False)
         repeat = inputs.get("repeat", False)
         resolved = self._resolve_snapshot_conid(symbol, sec_type, None)
@@ -3484,18 +3503,40 @@ class ClaudeToolkit:
             "orderId": 0,
             "alertName": name,
             "alertMessage": "",
+            # IBKR documents alertRepeatable and outsideRth as enums of 0 and 1. A Python
+            # bool serialises to true/false, which is not what the enum says; alertRepeatable
+            # was already cast and outsideRth was not (audit finding TOOL-02). The account
+            # holder's own alert returns `condition_outside_rth: 0` — an int.
             "alertRepeatable": int(repeat),
-            "expireTime": "",
+            "expireTime": expire_time,
             "tif": tif,
-            "outsideRth": outside_rth,
-            "isSizeCondition": False,
+            "outsideRth": int(outside_rth),
+            # `isSizeCondition` was sent here until 2026-09-16 and appears in neither the
+            # live create-alert page nor the archived capture — the same class of invention
+            # as the `conditionType` removed from the condition below.
             "conditions": [
                 {
-                    "type": 1,  # 1 = Price per IBKR Client Portal API
-                    "conid": conid_int,
-                    "exchange": exchange,
-                    "conditionType": "Price",
+                    # IBKR documents six Required condition fields: conidex, logicBind,
+                    # operator, triggerMethod, type, value (timeZone for MTA only). Until
+                    # 2026-09-16 this sent `conid` and `exchange` as two keys, omitted
+                    # logicBind and triggerMethod, and added `conditionType: "Price"`,
+                    # which IBKR documents nowhere — `type: 1` already means Price
+                    # (audit finding TOOL-02). The account holder's own alert corroborates
+                    # it: its GET detail returns conidex, condition_logic_bind and
+                    # condition_trigger_method.
+                    #
+                    # Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
+                    # (28,399 B, fetched 2026-09-16 with a fabricated control that returned
+                    # "# Page Not Found"), corroborated by the archived body in
+                    # docs/audits/audit-evidence/scrapes/cpapi-v1.md. That page is absent
+                    # from llms.txt, which is why the index cannot find it; the
+                    # v1/endpoints/alerts/create-or-modify-alert.md that five files cited
+                    # is gone (TOOL-08, API-07).
+                    "type": 1,  # 1 = Price
+                    "conidex": f"{conid_int}@{exchange}",
+                    "logicBind": "n",  # END — nothing follows a single condition
                     "operator": operator,
+                    "triggerMethod": "0",  # IBKR: "the string representation of zero"
                     "value": str(price),
                 }
             ],

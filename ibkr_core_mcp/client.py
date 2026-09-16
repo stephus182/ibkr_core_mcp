@@ -2105,8 +2105,14 @@ class IBKRClient:
         id modifies that alert ("optional; used in case of modification and represent Alert
         Id"). `conditions[].operator` is an enum of `>=`, `<=`, `>`, `<`, `==` — but see
         `docs/ibkr-api-behaviors-reference.md`: a body containing `>=` or `<=` is rejected
-        before it reaches IBKR with an opaque HTML `403 Access Denied`, so only `>`, `<` and
-        `==` are usable through the gateway (measured 2026-09-16).
+        before it reaches IBKR with an opaque HTML `403 Access Denied`, and **none of the five can
+        create an alert through the gateway**: `>=` and `<=` never arrive, while `>`, `<` and
+        `==` arrive and are refused by IBKR's own engine,
+        `{"error":"Condition #1:can't recognize fix [>]"}` (measured 2026-09-16).
+
+        This said "only `>`, `<` and `==` are usable through the gateway" until 2026-09-16.
+        They are not usable; they are merely *not blocked by the 403 filter*, which is a
+        different claim and sends a reader down a dead end.
 
         The citation below is NOT the `v1/endpoints/alerts/` page the rest of this section
         uses — that page (`create-or-modify-alert.md`) returns "# Page Not Found", and no

@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**119 findings, 47 closed, 72 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are now **closed**, along with SEC-03, SEC-04 and SEC-12; SEC-11 is **closed** — `_REPLY_ID_RE` was checked against 24 reply IDs IBKR really sent, recovered from claudia_ui's decision store; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
+**120 findings, 51 closed, 69 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are now **closed**, along with SEC-03, SEC-04 and SEC-12; SEC-11 is **closed** — `_REPLY_ID_RE` was checked against 24 reply IDs IBKR really sent, recovered from claudia_ui's decision store; TOOL-02, TOOL-08, API-07 and the new DOCA-19 are **closed** by the alert-body pass; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -1510,3 +1510,85 @@ control-that-cannot-fail in this audit, inverted: not a check that could not fai
 conclusion that could not be contradicted by the place I chose to look. **Absence of evidence
 in one repository is not evidence of absence**, and this package's own consuming project is
 the first place to look for live evidence about it.
+
+---
+
+## Phase 3 — TOOL-02, TOOL-08 and API-07: the alert create body, against the page that does exist
+
+### The page was found by a previous session and I re-searched anyway
+
+`create-or-modify-alert.md` is dead and absent from `llms.txt`, so I ran `firecrawl_search` —
+which returned only general Web API pages, a third-party GitHub client and a YouTube video.
+Then I checked this repository's own docs, where `docs/ibkr-api-behaviors-reference.md`
+already recorded the answer: the live page is
+`api-reference/trading/trading-alerts/create-alert.md` (28,399 B, re-fetched 2026-09-16 with
+a fabricated control returning "# Page Not Found"), found by an earlier session of this same
+audit. **Check the repository's own notes before searching the web** — the same lesson as
+SEC-11, one step smaller.
+
+Byte size was useless here and would have misled: the real `alerts/introduction.md` is
+**313 B**, smaller than the 394 B "# Page Not Found" body. Content, not size, is what
+discriminates, exactly as CLAUDE.md says.
+
+### TOOL-02 — the condition carried four wrong fields of six
+
+IBKR documents six Required condition fields. Measured against the live page and the
+archived capture, which agree:
+
+| IBKR documents | We sent |
+|---|---|
+| `conidex` — `"265598@SMART"` | `conid` and `exchange` as **two** separate keys |
+| `logicBind` — `a`/`o`/`n` | **missing** |
+| `triggerMethod` — `"0"` | **missing** |
+| `type`, `operator`, `value` | correct |
+| *(no such field)* | `conditionType: "Price"` — invented; `type: 1` already means Price |
+
+Corroborated by the account holder's own alert, whose GET detail returns `conidex`,
+`condition_logic_bind` and `condition_trigger_method`.
+
+### Three more found in the same body, none of them in the original finding
+
+- **`isSizeCondition`** — zero occurrences in the live page and zero in the archived
+  capture. The same class of invention as `conditionType`.
+- **`outsideRth` was a Python bool** where IBKR documents an enum of `0`/`1`. `alertRepeatable`
+  beside it was already cast with `int()`; this one was not, so it serialised as
+  `true`/`false`. The account holder's alert returns `condition_outside_rth: 0`.
+- **The `tif` enum offered `GTC` and `DAY`.** IBKR documents `GTC` and `GTD` only; `DAY`
+  appears in no alert page, and the schema described it as "expires at market close", a
+  behaviour nothing states. Now `GTC`/`GTD`, with a new `expire_time` input — IBKR documents
+  `expireTime` as "Used with a tif of GTD only", and GTD without one is not a request IBKR
+  can act on, so it is refused with that explanation rather than sent.
+
+### DOCA-19 — **Medium**: "usable through the gateway" was false, and self-contradicting
+
+`client.py` and `docs/ibkr-api-behaviors-reference.md` both said that after the `>=`/`<=`
+block, "only `>`, `<` and `==` are usable through the gateway". **Twelve lines below its own
+sentence**, that same file's elimination table records what actually happens:
+
+```
+>  <  ==     reach IBKR and are refused by its own engine:
+             {"error":"Condition #1:can't recognize fix [>]"}
+>=  <=       never arrive (403 HTML)
+```
+
+So **none of the five documented operators can create an alert**. "Not blocked by the 403
+filter" is not "usable", and the difference is the whole question — a reader or a model
+following that sentence would try `>` and get a different, equally dead end. `docs/audits/
+live-test-log.md` had it right all along; two files repeating the wrong gloss is what made it
+look settled. Both corrected, with the old wording quoted so the correction is visible.
+
+This does not change the standing conclusion: alert creation remains impossible through the
+gateway. It changes *why* a reader thinks so.
+
+### Status
+
+TOOL-02, TOOL-08 and API-07 closed; DOCA-19 raised and closed. Five stale citations of the
+dead page repointed (`docs/api-reference.md`, four in `tests/test_alerts_live.py`); the
+remaining mentions are prose warnings that the page is gone, which is the point.
+
+**None of this can be live-verified**, and not because the gateway session expired: the
+gateway refuses every operator, so a correct body cannot be proven correct here. What the
+fixes remove is a *second* reason the call would fail, exactly as the TOOL-01 round trip did
+— the value is in eliminating confounds, not in a green result.
+
+Six mutations, each reverting one fix; every one turns a test red.

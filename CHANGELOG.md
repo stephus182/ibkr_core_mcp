@@ -166,6 +166,25 @@ built the model's input by hand.
   titles, read state always wrong. Its test stubbed `{"id", "title", "body", "isRead"}`, a
   payload invented to match the guess. This predates the model work: the handler read raw
   dicts and guessed their keys, the same guess `Notification` made.
+- **The price-alert create body was wrong in seven ways** (TOOL-02, widened). IBKR documents
+  six Required condition fields; four were wrong or missing: `conid`+`exchange` went as two
+  keys where IBKR documents one concatenated `conidex`, `logicBind` and `triggerMethod` were
+  absent, and `conditionType: "Price"` was invented (`type: 1` already means Price). Three more
+  in the same body: `isSizeCondition` appears in no IBKR page, `outsideRth` was a Python bool
+  where IBKR documents an enum of 0/1, and the `tif` enum offered `DAY`, which IBKR does not
+  document — it is now `GTC`/`GTD` with a new `expire_time` input, since IBKR documents
+  `expireTime` as "Used with a tif of GTD only". **Breaking:** `tif="DAY"` is no longer
+  accepted, and `tif="GTD"` now requires `expire_time`.
+- **Five files cited a documentation page that no longer exists** (TOOL-08, API-07).
+  `v1/endpoints/alerts/create-or-modify-alert.md` returns "# Page Not Found"; the live page is
+  `api-reference/trading/trading-alerts/create-alert.md`, which is absent from `llms.txt` and
+  so invisible to the index.
+- **"Only `>`, `<` and `==` are usable through the gateway" was false** (DOCA-19). It appeared
+  in `client.py` and in `docs/ibkr-api-behaviors-reference.md` — twelve lines above that same
+  file's table showing those three operators being refused by IBKR with
+  `can't recognize fix [>]`. **None of the five documented operators can create an alert**;
+  "not blocked by the 403 filter" is not "usable". The standing conclusion is unchanged, only
+  the reason a reader would give for it.
 - **Two FYI write endpoints contradicted the pages they cite.** `mark_notification_read` sent
   `POST /fyi/notifications/{id}/read`; both of IBKR's documentation families document
   `PUT /fyi/notifications/{notificationId}` with an empty body (API-20). The live test meant to

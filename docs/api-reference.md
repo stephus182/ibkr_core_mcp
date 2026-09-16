@@ -691,7 +691,7 @@ Use `ClaudeToolkit.execute("create_price_alert", ...)` instead — it resolves c
 exchange automatically.
 
 **Endpoint:** `POST /iserver/account/{accountId}/alert`
-Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
 
 ---
 
