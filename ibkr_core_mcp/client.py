@@ -773,6 +773,9 @@ class IBKRClient:
         Endpoint: GET /iserver/contract/{conid}/algos
         """
         data = self._get(f"/iserver/contract/{conid}/algos")
+        if isinstance(data, dict):
+            rows = data.get("algos")
+            return rows if isinstance(rows, list) else []
         return data if isinstance(data, list) else []
 
     def get_secdef_info(self, conid: int) -> dict[str, Any]:
@@ -1052,6 +1055,14 @@ class IBKRClient:
         Endpoint: GET /portfolio/positions/{conid}
         """
         data = self._get(f"/portfolio/positions/{conid}")
+        if isinstance(data, dict):
+            # Keyed by account id, one bucket per account holding the contract, so the
+            # key names are account-specific and cannot be looked up by a fixed name.
+            rows: list[dict[str, Any]] = []
+            for bucket in data.values():
+                if isinstance(bucket, list):
+                    rows.extend(r for r in bucket if isinstance(r, dict))
+            return rows
         return data if isinstance(data, list) else []
 
     def get_position(self, account_id: str, conid: int) -> dict[str, Any]:
@@ -1335,6 +1346,9 @@ class IBKRClient:
         if days is not None:
             body["days"] = days
         data = self._post("/pa/transactions", body)
+        if isinstance(data, dict):
+            rows = data.get("transactions")
+            return rows if isinstance(rows, list) else []
         return data if isinstance(data, list) else []
 
     # ------------------------------------------------------------------

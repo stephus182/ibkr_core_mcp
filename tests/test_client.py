@@ -2026,3 +2026,141 @@ def test_capped_get_stub_timestamps_are_utc_regardless_of_local_timezone():
         f"stub bars land {skew_hours:.1f}h from UTC now — the double disagrees with the "
         "code it stands in for, by exactly the local UTC offset"
     )
+
+
+# ---------------------------------------------------------------------------
+# The "object wrapping the array" class of silent empty.
+#
+# `return data if isinstance(data, list) else []` reports "none" for a response that is
+# an OBJECT keying the array under a name. Found and fixed three times already —
+# get_currency_pairs (2026-06-30), get_secdef (2026-07-28), get_watchlists (found live
+# 2026-07-23, fixed 2026-08-11) — and never swept. These three are the remaining live
+# instances, each confirmed against a real gateway on 2026-09-16 with real data being
+# discarded: 10 algos, an open position, and 11 transactions.
+# ---------------------------------------------------------------------------
+
+
+def test_get_contract_algos_reads_the_algos_array_out_of_its_wrapper(client):
+    """`{"algos": [...]}` — documented as "algos: Array of objects", measured live at 10.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id.md
+    """
+    payload = {"algos": [{"id": "Adaptive", "name": "Adaptive"}, {"id": "TWAP", "name": "TWAP"}]}
+    with patch.object(client, "_get", return_value=payload):
+        assert client.get_contract_algos(51529211) == payload["algos"]
+
+
+def test_get_positions_by_conid_flattens_the_account_keyed_wrapper(client):
+    """Live 2026-09-16 the gateway returned `{"<acct>": [...], "<acct>C": [...]}`.
+
+    The published sample shows a bare array instead, so both shapes are accepted — the
+    documented one and the one the gateway actually sends. Recorded as a verified-not-
+    assumed divergence in docs/ibkr-api-behaviors-reference.md.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/positions-by-conid.md
+    """
+    payload = {
+        "U1111111": [{"acctId": "U1111111", "conid": 51529211, "position": 10.0}],
+        "U1111111C": [{"acctId": "U1111111C", "conid": 51529211, "position": 4.0}],
+    }
+    with patch.object(client, "_get", return_value=payload):
+        rows = client.get_positions_by_conid(51529211)
+    assert len(rows) == 2, "both account buckets must survive"
+    assert {r["acctId"] for r in rows} == {"U1111111", "U1111111C"}
+
+
+def test_get_positions_by_conid_still_accepts_the_documented_bare_array(client):
+    """The counter-case: the published sample is a bare array, so it must keep working."""
+    rows = [{"acctId": "U1111111", "conid": 265598, "position": 614.2639}]
+    with patch.object(client, "_get", return_value=rows):
+        assert client.get_positions_by_conid(265598) == rows
+
+
+def test_get_pa_transactions_reads_the_transactions_array_out_of_its_wrapper(client):
+    """`{"transactions": [...], "rpnl": {...}, "currency": ..., "from": ..., "to": ...}`.
+
+    The endpoint is documented as returning an object and never a bare array, so the
+    `isinstance(data, list)` check could not match on any response: the method returned
+    `[]` for every account, always. Measured live 2026-09-16 against an account holding
+    the queried contract: 11 transactions returned by IBKR, 0 by this method.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio-analyst/transaction-history.md
+    """
+    txns = [{"acctid": "U1111111", "conid": 51529211, "amt": "-100.0", "date": "20260804", "type": "BUY"}]
+    payload = {
+        "id": "getTransactions",
+        "currency": "USD",
+        "from": 1757980800000,
+        "to": 1789516800000,
+        "nd": 366,
+        "rpnl": {"amt": 1.0, "data": []},
+        "transactions": txns,
+    }
+    with patch.object(client, "_post", return_value=payload):
+        assert client.get_pa_transactions(["U1111111"], [51529211], "USD", 365) == txns
+
+
+# Endpoints whose top-level response is a BARE ARRAY, so `data if isinstance(data, list)
+# else []` is correct for them. Every entry was checked twice on 2026-09-16: against the
+# published response sample (the `.md` variant of its doc page, with a deliberately
+# fabricated control URL in the same batch), and against a live authenticated gateway.
+#
+# The value is the evidence. Do not add a name here without both checks.
+_BARE_ARRAY_ENDPOINTS = {
+    "get_market_snapshot": "market-data/live-market-data-snapshot.md — sample `[`; live: list",
+    "search_contract": "contract/search-contract-by-symbol.md — sample `[`; live: list of 3",
+    "get_accounts": "portfolio/portfolio-accounts.md — sample `[`; live: list of 1",
+    "get_subaccounts": "portfolio/portfolio-subaccounts.md — sample `[`; live: list of 1",
+    "get_positions": "portfolio/positions.md — sample `[`; live: list of 2",
+    "get_combo_positions": "portfolio/combination-positions.md — sample `[`; live: HTTP 500, no combo positions held",
+    "get_trades": "order-monitoring/trades.md — sample `[`; live: list of 4",
+    "get_alerts": "alerts/get-a-list-of-available-alerts.md — sample `[`; live: list (empty, account has no alerts)",
+    "get_notifications": "live: list of 3; doc page not located in llms.txt under the guessed path",
+    "get_event_contracts": "UNVERIFIED — GET /events/contracts returned HTTP 404 live and is absent from llms.txt",
+    "place_order": "orders/place-order.md — BOTH the normal and the Alternate (reply-required) samples are `[`; never called in a test",
+    "reply_order": "orders/place-order-reply-confirmation.md — sample `[`; never called in a test",
+}
+
+
+def test_no_new_endpoint_silently_discards_an_object_response():
+    """Guard against a defect class this repo has now fixed four times.
+
+    `return data if isinstance(data, list) else []` turns "the response was an object"
+    into "there was no data" — silently, with no error and no log. It has been found and
+    fixed in `get_currency_pairs` (2026-06-30), `get_secdef` (2026-07-28), `get_watchlists`
+    (found live 2026-07-23, fixed 2026-08-11) and, on 2026-09-16, in `get_contract_algos`,
+    `get_positions_by_conid` and `get_pa_transactions` — the last of which had returned an
+    empty list for every account since it was written, while IBKR was returning 11
+    transactions.
+
+    Four point-fixes and no sweep is what let the fourth happen, so this is the sweep made
+    permanent: a method may use the bare pattern only if its endpoint is on
+    `_BARE_ARRAY_ENDPOINTS` with the evidence that says why. A new method using it fails
+    here until someone checks the actual response shape — which is the whole point, because
+    every instance of this bug was invisible until somebody looked at a real payload.
+    """
+    import ast
+    import pathlib
+
+    source = pathlib.Path("ibkr_core_mcp/client.py").read_text()
+    lines = source.splitlines()
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        if "isinstance(data, list) else []" not in body:
+            continue
+        if "isinstance(data, dict)" in body:
+            continue  # already unwraps an object before falling back
+        if node.name not in _BARE_ARRAY_ENDPOINTS:
+            offenders.append(f"{node.name} (line {node.lineno})")
+
+    assert not offenders, (
+        "These methods collapse an object response to [] without unwrapping it, and are "
+        "not recorded as returning a bare array:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nCheck the endpoint's real response against a live gateway AND its published "
+        "sample. If it truly returns a bare array, add it to _BARE_ARRAY_ENDPOINTS with "
+        "that evidence. If it returns an object, unwrap the array — see get_secdef."
+    )
