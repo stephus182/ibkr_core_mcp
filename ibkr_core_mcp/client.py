@@ -79,27 +79,81 @@ _UNIT_TO_DAYS: dict[str, float] = {
     "m": 30,
     "y": 365,
 }
-# Conservative bars-per-calendar-day estimates (US equity trading hours).
-# Used only for pagination chunk sizing — not exposed to callers.
+# Bars per calendar day, used only for pagination chunk sizing — not exposed to callers.
+#
+# These are deliberately the WORST CASE: a continuously-traded instrument (a ~24h futures
+# session) with `outsideRth=true`. Sizing for US equity regular hours under-counts a futures
+# day by ~3.7x, and an under-count is what silently loses data.
+#
+# The previous table claimed "US equity trading hours" and was wrong for every intraday
+# size. Measured live 2026-09-15 (GLD, outsideRth=true), requesting exactly one chunk width
+# and comparing what arrived:
+#
+#     bar     old value   chunk asked   actually spanned   implied true bpd
+#     1min    135.0       7d            1.03d              ~971
+#     5min    27.0        29d           7.14d              ~140
+#     30min   4.5         177d          43.15d             ~23
+#     1h      3.25        246d          89.25d             ~11
+#     4h      0.8         1000d         331d               ~3
+#     1d      0.69        1000d         1456d              0.687   <- correct
+#     1w      0.143       1000d         1454d              0.144   <- correct
+#
+# Only the daily and weekly entries were right. Note also that bars-per-*calendar*-day is
+# not a constant: it falls as a window covers more weekends. That is why correctness cannot
+# rest on this table at all — `get_market_history_paginated` advances its cursor by the data
+# it actually received, and these values only decide how many requests that takes.
 _BARS_PER_CALENDAR_DAY: dict[str, float] = {
-    "1min": 135.0,
-    "2min": 67.5,
-    "3min": 45.0,
-    "5min": 27.0,
-    "10min": 13.5,
-    "15min": 9.0,
-    "30min": 4.5,
-    "1h": 3.25,
-    "2h": 1.6,
-    "3h": 1.1,
-    "4h": 0.8,
-    "8h": 0.4,
+    "1min": 1440.0,
+    "2min": 720.0,
+    "3min": 480.0,
+    "5min": 288.0,
+    "10min": 144.0,
+    "15min": 96.0,
+    "30min": 48.0,
+    "1h": 24.0,
+    "2h": 12.0,
+    "3h": 8.0,
+    "4h": 6.0,
+    "8h": 3.0,
     "1d": 0.69,
     "1w": 0.143,
     "1m": 0.033,
 }
+
+# The largest `period` for which IBKR permits each `bar`, in calendar days.
+#
+# From the official Step Size table ("the permitted minimum and maximum bar size for any
+# given period"), scraped 2026-09-15 from
+# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+#
+#     period      1min  1h        1d        1w          1m       3m       6m       1y      2y/3y    15y
+#     bar         1min  1min-8h   1min-8h   10min-1w    1h-1m    2h-1m    4h-1m    8h-1m   1d-1m    1w-1m
+#
+# A request outside the table is NOT rejected. Measured 2026-09-15, `7d/1min` returned real
+# 1-minute bars, merely capped at 1000 — but the documented contract does not promise that,
+# and the same class of out-of-range input (uppercase units) is already known to make this
+# endpoint silently substitute a different bar size. Staying inside the table is what keeps
+# the returned bar size the one that was asked for.
+_MAX_PERIOD_DAYS_FOR_BAR: dict[str, float] = {
+    "1min": 1,
+    "2min": 1,
+    "3min": 1,
+    "5min": 1,
+    "10min": 7,
+    "15min": 7,
+    "30min": 7,
+    "1h": 30,
+    "2h": 90,
+    "3h": 90,
+    "4h": 180,
+    "8h": 365,
+    "1d": 1095,
+    "1w": 5475,
+    "1m": 5475,
+}
 _MAX_POINTS = 1000
 _CHUNK_SAFETY = 0.80  # target 80% of limit per chunk
+_MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
 
 
 def _parse_period_days(period: str) -> float | None:
@@ -111,10 +165,25 @@ def _parse_period_days(period: str) -> float | None:
 
 
 def _chunk_days_for_bar(bar: str) -> int:
-    """Max calendar days per request chunk that stays safely under 1000 data points."""
-    bpd = _BARS_PER_CALENDAR_DAY.get(bar.lower(), 0.69)
-    days = int(_MAX_POINTS * _CHUNK_SAFETY / bpd)
-    return max(7, min(1000, days))
+    """Calendar days per request chunk: under the point cap AND inside IBKR's step table.
+
+    Two independent ceilings, both of which the previous version ignored:
+
+    1. **The 1000-point cap.** Exceeding it does not error — the endpoint returns the newest
+       1000 bars and drops the rest silently.
+    2. **The permitted period for this bar size** (`_MAX_PERIOD_DAYS_FOR_BAR`). A 1-minute
+       bar is only offered for periods up to 1d, however few points that is.
+
+    The old floor of `max(7, ...)` made the result at least a week for every bar size, which
+    for `1min` is ~10,000 points against a 1000-point cap — so every intraday chunk asked for
+    roughly an order of magnitude more than could come back. Now floored at one day, which is
+    the smallest period this function can express.
+    """
+    b = bar.lower()
+    bpd = _BARS_PER_CALENDAR_DAY.get(b, 0.69)
+    by_points = int(_MAX_POINTS * _CHUNK_SAFETY / bpd)
+    by_step = int(_MAX_PERIOD_DAYS_FOR_BAR.get(b, 1000))
+    return max(1, min(1000, by_points, by_step))
 
 
 log = logging.getLogger(__name__)
@@ -493,33 +562,65 @@ class IBKRClient:
         all_bars: list[dict[str, Any]] = []
         envelope: dict[str, Any] = {}
         now = datetime.utcnow()
-        total = int(total_days)
-        offset = 0
+        target = now - timedelta(days=total_days)
 
-        while offset < total:
-            n = min(chunk_days, total - offset)
+        # The cursor is the END of the next window, and it advances to the OLDEST bar that
+        # actually arrived — never by the width that was requested. That distinction is the
+        # whole correctness argument: a chunk that hits the 1000-point cap covers less ground
+        # than it asked for, and the endpoint says so only by returning fewer bars. Advancing
+        # by the request width opened an unannounced hole between every pair of chunks
+        # (measured 2026-09-15: 30d/1min returned ~15% of its bars, in five islands).
+        # Advancing by the response cannot lose data whatever the size estimate does — it
+        # only takes more requests.
+        cursor: datetime | None = None  # None == "now"
+        for _ in range(_MAX_CHUNKS):
             params: dict[str, Any] = {
                 "conid": conid,
-                "period": f"{n}d",
+                "period": f"{chunk_days}d",
                 "bar": bar,
                 "outsideRth": str(outside_rth).lower(),
             }
-            if offset:
+            if cursor is not None:
                 # `startTime` is the END of the window (see the method docstring), so the
                 # anchor is where this chunk stops, not where it starts.
-                params["startTime"] = (now - timedelta(days=offset)).strftime("%Y%m%d-%H:%M:%S")
+                params["startTime"] = cursor.strftime("%Y%m%d-%H:%M:%S")
                 params["direction"] = -1
-            # offset == 0 sends NO startTime: "If omitted, the current time is used"
+            # The first chunk sends NO startTime: "If omitted, the current time is used"
             # (IBKR's OpenAPI spec). Measured 2026-08-05 on SPY 30d/1d — omitted reached
             # 2026-08-05, an explicit timestamp of the same moment reached 08-04, and
             # midnight-today reached 08-03. Only the omitted form returns today's bar,
             # and on a trading surface today is the bar that matters most.
             result = self._get("/iserver/marketdata/history", params)
-            if result:
-                if not envelope:
-                    envelope = {k: v for k, v in result.items() if k != "data"}
-                all_bars.extend(result.get("data") or [])
-            offset += n
+            if not result:
+                break
+            if not envelope:
+                envelope = {k: v for k, v in result.items() if k != "data"}
+            bars = result.get("data") or []
+            if not bars:
+                break
+            all_bars.extend(bars)
+
+            stamps = [b["t"] for b in bars if b.get("t") is not None]
+            if not stamps:
+                break
+            oldest = datetime.utcfromtimestamp(min(stamps) / 1000)
+            if cursor is not None and oldest >= cursor:
+                # No progress: the window did not move back. Stopping beats looping.
+                log.warning("market history pagination stalled at %s (conid=%s bar=%s)", oldest, conid, bar)
+                break
+            cursor = oldest
+            if oldest <= target:
+                break
+        else:
+            log.warning(
+                "market history pagination hit the %d-chunk guard (conid=%s period=%s bar=%s); "
+                "returned data starts at %s, not the full requested span",
+                _MAX_CHUNKS,
+                conid,
+                period,
+                bar,
+                cursor,
+            )
 
         if not all_bars:
             return {}

@@ -1,3 +1,4 @@
+import itertools
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -1185,15 +1186,35 @@ def test_get_pa_periods_raw_posts_account_ids(client):
 # days ago and nothing said so.
 
 
+_BAR_SECONDS = {
+    "1min": 60,
+    "2min": 120,
+    "3min": 180,
+    "5min": 300,
+    "10min": 600,
+    "15min": 900,
+    "30min": 1800,
+    "1h": 3600,
+    "2h": 7200,
+    "4h": 14400,
+    "8h": 28800,
+    "1d": 86400,
+    "1w": 604800,
+}
+
+
 def _paged_calls(client, period, bar, monkeypatch_now=None):
-    """Run the paged fetch against a stub and return the params of each request."""
-    calls = []
+    """Run the paged fetch against a faithful stub; return the params of each request.
 
-    def _fake_get(path, params=None):
-        calls.append(params or {})
-        return {"data": [{"t": 1_000 * len(calls), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]}
-
-    with patch.object(client, "_get", side_effect=_fake_get):
+    The stub used to return a single bar stamped at epoch ~0 for every call. That made the
+    double far weaker than the endpoint it stood for: it could never reach the 1000-point
+    cap, so it could not express the truncation that silently dropped ~85% of the bars on
+    any intraday request (see the block below). It also meant the cursor-advancing loop had
+    nothing real to advance along. `_capped_get` returns dated bars and truncates the way
+    IBKR does.
+    """
+    fake, calls = _capped_get(bar_seconds=_BAR_SECONDS.get(bar.lower(), 86400))
+    with patch.object(client, "_get", side_effect=fake):
         client.get_market_history_paginated(265598, period=period, bar=bar)
     return calls
 
@@ -1213,24 +1234,34 @@ def test_paged_newest_chunk_omits_starttime_so_it_reaches_today(client):
     assert "direction" not in calls[0]
 
 
-def test_paged_chunks_tile_backwards_without_gaps(client):
-    """Each anchor is the end of its own window and the start of the previous one, so the
-    windows abut. A gap here is missing bars in the middle of a chart; an overlap is
-    wasted requests against a rate-limited endpoint."""
-    from datetime import datetime, timedelta
+def test_paged_chunks_anchor_on_delivered_data_not_on_requested_width(client):
+    """Each anchor must be where the previous response actually ended, not where it was
+    asked to end.
 
-    now = datetime.utcnow()
+    This replaces a test that asserted anchors sat at cumulative *requested* day offsets.
+    That held only while every chunk returned everything it asked for — exactly the
+    assumption the 1000-point cap breaks. The property that matters is unchanged (windows
+    abut, no hole between them); only the thing it is measured against has moved from the
+    request to the response.
+    """
+    from datetime import datetime
+
     calls = _paged_calls(client, "5y", "1d")
-    widths = [int(c["period"].rstrip("d")) for c in calls]
+    assert len(calls) > 1, "5y/1d must paginate, or this test proves nothing"
 
-    # chunk 0 ends at "now" (no anchor sent); chunk i>0 ends where chunk i-1 began
-    expected_offset = 0
+    fake, _ = _capped_get(bar_seconds=86400)
+    prev_oldest = None
     for i, params in enumerate(calls):
         if i:
             anchor = datetime.strptime(params["startTime"], "%Y%m%d-%H:%M:%S")
-            drift = abs((now - timedelta(days=expected_offset) - anchor).total_seconds())
-            assert drift < 120, f"chunk {i} anchored {drift / 86400:.2f}d from where chunk {i - 1} began"
-        expected_offset += widths[i]
+            assert prev_oldest is not None
+            drift = abs((anchor - prev_oldest).total_seconds())
+            assert drift < 120, (
+                f"chunk {i} anchored {drift / 86400:.2f}d away from the oldest bar "
+                f"chunk {i - 1} returned — that difference is missing data"
+            )
+        resp = fake("/iserver/marketdata/history", params)
+        prev_oldest = datetime.utcfromtimestamp(min(b["t"] for b in resp["data"]) / 1000)
 
 
 def test_paged_requests_state_the_direction_explicitly(client):
@@ -1244,10 +1275,22 @@ def test_paged_requests_state_the_direction_explicitly(client):
 
 
 def test_paged_covers_the_whole_requested_span(client):
-    """The sum of the chunk widths must reach back the full period."""
-    calls = _paged_calls(client, "5y", "1d")
-    covered = sum(int(c["period"].rstrip("d")) for c in calls)
-    assert covered >= 5 * 365 - 2, f"5y requested, only {covered}d covered"
+    """Coverage is what came back, not what was asked for.
+
+    The old assertion summed the `period=` values across chunks. Under truncation those
+    two quantities diverge completely — the request widths still summed to 5 years while
+    the delivered bars covered a fraction of it.
+    """
+    from datetime import datetime, timedelta
+
+    fake, _ = _capped_get(bar_seconds=86400)
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="5y", bar="1d")
+
+    stamps = sorted(b["t"] for b in out.get("data", []))
+    oldest = datetime.utcfromtimestamp(stamps[0] / 1000)
+    shortfall = (oldest - (datetime.utcnow() - timedelta(days=5 * 365))).total_seconds() / 86400
+    assert shortfall < 2, f"5y requested, oldest delivered bar is {shortfall:.1f}d short"
 
 
 def test_paged_single_chunk_requests_are_not_paginated(client):
@@ -1708,3 +1751,171 @@ def test_cancel_order_logs_its_gate1_grant(client, caplog):
         mock_del.return_value = _make_ok_response({"msg": "Request was submitted", "order_id": 9876543210})
         client.cancel_order("U1234567", "9876543210")
     assert "Gate 1: granted for cancel:9876543210" in caplog.text
+
+
+# ============================================================================
+# Paginated history must not silently truncate — measured defect, 2026-09-15
+# ============================================================================
+#
+# The endpoint returns at most 1000 data points per request (officially documented:
+# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+# "This endpoint provides a maximum of 1000 data points"). It does NOT error when a
+# window would exceed that — it silently returns the newest 1000 and drops the rest.
+#
+# `_chunk_days_for_bar` sized chunks from `_BARS_PER_CALENDAR_DAY`, which was wrong for
+# every intraday bar size, and then floored the result at 7 days. Measured live against a
+# real gateway on 2026-09-15 (GLD, outsideRth=true), asking for exactly one chunk width:
+#
+#     bar     declared bpd   chunk asked   actually spanned   true bpd
+#     1min    135            7d            1.03d              ~971
+#     5min    27             29d           7.14d              ~140
+#     30min   4.5            177d          43.15d             ~23
+#     1h      3.25           246d          89.25d             ~11
+#     4h      0.8            1000d         331d               ~3
+#     1d      0.69           1000d         1456d              0.687   (correct)
+#     1w      0.143          1000d         1454d              0.144   (correct)
+#
+# Only the daily and weekly entries were calibrated. Every intraday size was wrong by
+# 2.7x to 7x, so the loop advanced its cursor a full chunk width while the response
+# covered a fraction of it — leaving an unannounced hole between every pair of chunks.
+# `get_market_history_paginated(conid, period="30d", bar="1min")` returned a well-formed
+# result missing roughly 85% of its bars.
+#
+# It stayed green because the existing stub returns ONE bar per call and therefore never
+# reaches the cap — a double easier than the real thing. The stub below caps like the
+# real endpoint does, which is the whole point of it.
+
+
+def _capped_get(bar_seconds: int, max_points: int = 1000, bars_per_day: float = 86400.0):
+    """A `_get` double that truncates like IBKR: newest `max_points` bars, silently.
+
+    `bars_per_day` defaults to a continuously-traded instrument (a 24h futures session),
+    which is the worst case and the one that must not lose data.
+    """
+    from datetime import datetime, timedelta
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        params = params or {}
+        calls.append(params)
+        end = (
+            datetime.strptime(params["startTime"], "%Y%m%d-%H:%M:%S") if params.get("startTime") else datetime.utcnow()
+        )
+        days = float(str(params["period"]).rstrip("dhwmy") or 0)
+        unit = str(params["period"]).lstrip("0123456789.")
+        days = days / 24.0 if unit == "h" else days
+        start = end - timedelta(days=days)
+        step = timedelta(seconds=bar_seconds)
+        stamps: list[datetime] = []
+        t = end
+        while t > start and len(stamps) < 10 * max_points:
+            stamps.append(t)
+            t -= step
+        stamps = stamps[:max_points]  # IBKR keeps the NEWEST 1000 and drops the rest
+        return {
+            "data": [{"t": int(s.timestamp() * 1000), "o": 1, "h": 1, "l": 1, "c": 1, "v": 1} for s in sorted(stamps)]
+        }
+
+    return _fake, calls
+
+
+def test_paged_intraday_leaves_no_gap_when_the_endpoint_caps_at_1000(client):
+    """The defect, stated as a property: no hole may open between chunks.
+
+    A chunk that hits the 1000-point cap covers less ground than it asked for. If the
+    loop still advances by the requested width, the difference is lost silently. This is
+    the assertion the old day-counting loop cannot satisfy for any intraday bar.
+    """
+    fake, _ = _capped_get(bar_seconds=60)
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="30d", bar="1min")
+
+    stamps = sorted(b["t"] for b in out.get("data", []))
+    assert stamps, "no bars returned at all"
+    gaps = [(b - a) / 1000 for a, b in itertools.pairwise(stamps) if b - a > 60_000]
+    assert not gaps, (
+        f"{len(gaps)} gap(s) in a 1-minute series; largest {max(gaps) / 3600:.1f}h. "
+        "A chunk hit the 1000-point cap and the cursor advanced past what it returned."
+    )
+
+
+def test_paged_intraday_reaches_back_the_full_requested_period(client):
+    """Coverage measured in delivered bars, not in requested chunk widths.
+
+    The old test summed `period=` values across chunks, which is what the caller asked
+    for, not what arrived. Under truncation those two diverge completely.
+    """
+    from datetime import datetime, timedelta
+
+    fake, _ = _capped_get(bar_seconds=60)
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="30d", bar="1min")
+
+    stamps = sorted(b["t"] for b in out.get("data", []))
+    oldest = datetime.utcfromtimestamp(stamps[0] / 1000)
+    wanted = datetime.utcnow() - timedelta(days=30)
+    short_by = (oldest - wanted).total_seconds() / 86400
+    assert short_by < 1.0, f"30d requested, oldest bar is only {30 - short_by:.1f}d back"
+
+
+def test_chunk_width_never_exceeds_ibkrs_permitted_period_for_that_bar():
+    """Staying inside the Step Size table is a correctness property, not tidiness.
+
+    A period outside the permitted range for a bar is not rejected — and this endpoint is
+    already known to answer an out-of-range input by silently substituting a *different*
+    bar size (measured for uppercase units: `6M` returned ~84 bars where `6m` returned six
+    months). A chunk wider than the table allows is therefore a request whose returned bar
+    size is not guaranteed to be the one asked for.
+
+    Source, scraped 2026-09-15:
+    https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    """
+    from ibkr_core_mcp.client import _MAX_PERIOD_DAYS_FOR_BAR, _chunk_days_for_bar
+
+    for bar, permitted in _MAX_PERIOD_DAYS_FOR_BAR.items():
+        assert _chunk_days_for_bar(bar) <= permitted, (
+            f"{bar}: chunk of {_chunk_days_for_bar(bar)}d exceeds IBKR's permitted "
+            f"maximum period of {permitted}d for that bar size"
+        )
+
+
+def test_chunk_width_stays_within_the_1000_point_cap():
+    """Over the cap the newest 1000 bars come back and the rest are dropped with no error.
+
+    Because the loop advances by what it *receives*, a truncated chunk is safe — and for the
+    finest bars it is actually optimal: `1d/1min` on a 24h instrument asks for 1440 and gets
+    a full 1000, advancing further per request than any narrower window could. There is no
+    `{n}d` period below one day, so that case is a floor, not a miscalculation.
+
+    What is a defect is a chunk over the cap for a bar where a narrower period **does**
+    exist — the old behaviour asked seven days of 1-minute bars, ~10,000 points against a
+    cap of 1000, when a 1-day window was available and fits far better.
+    """
+    from ibkr_core_mcp.client import _BARS_PER_CALENDAR_DAY, _MAX_POINTS, _chunk_days_for_bar
+
+    for bar, bpd in _BARS_PER_CALENDAR_DAY.items():
+        days = _chunk_days_for_bar(bar)
+        points = days * bpd
+        assert points <= _MAX_POINTS or days == 1, (
+            f"{bar}: a {days}d chunk implies {points:.0f} points against a "
+            f"{_MAX_POINTS}-point cap, and a narrower period was available"
+        )
+
+
+def test_intraday_bars_per_day_are_sized_for_a_24h_session_not_equity_hours():
+    """The regression that produced the defect: the table was calibrated for US equity
+    regular hours, so every futures request under-counted by ~3.7x and over-asked by the
+    same factor. Measured live 2026-09-15 — GLD with `outsideRth=true` returns ~960
+    one-minute bars per calendar day, and a 24h future would return 1440.
+    """
+    from ibkr_core_mcp.client import _BARS_PER_CALENDAR_DAY
+
+    assert _BARS_PER_CALENDAR_DAY["1min"] >= 960, (
+        "1-minute bars must be sized for a continuously-traded session; "
+        "anything lower under-counts a futures day and silently over-asks"
+    )
+    for bar, minutes in (("5min", 5), ("15min", 15), ("1h", 60)):
+        assert _BARS_PER_CALENDAR_DAY[bar] == pytest.approx(1440 / minutes), (
+            f"{bar} must scale with the 1-minute figure over a 24h session"
+        )
