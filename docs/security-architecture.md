@@ -161,7 +161,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 
 | Sink | Only through | Guarded by |
 |---|---|---|
-| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths |
+| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
 | `POST …/orders/whatif` | `get_order_preview` | AST test that only it builds the path and it calls no gate |
 | IBKR alerts / watchlists / FYI / account switch | `IBKRClient` ungated writers | Identifier regexes; capability declaration `ACCOUNT_STATE` |
 | Google Drive | `GDriveCache`, `WebDocsStore` | Cache-key regexes, slugs `[a-z0-9-]`, OAuth token file 0600 |
@@ -182,7 +182,7 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 
 | # | Invariant | Mechanism | Enforcement (`tests/security/`) | To change deliberately |
 |---|---|---|---|---|
-| 1 | No order reaches IBKR except through the four gated `IBKRClient` methods, and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set; gate before first network call; `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
+| 1 | No order reaches IBKR except through the four gated `IBKRClient` methods, and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before first network call; `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
 | 2 | Preview is not execution | `get_order_preview` posts to `/orders/whatif`, calls no gate | `test_preview_is_not_execution.py`: path asserted; literal built once; `preview_order` touches only `get_order_preview` | None foreseeable |
 | 3 | Every tool declares its capabilities; `ORDER_EXECUTION` has no legal spelling | `capabilities` on all 46 definitions from a vocabulary that omits `ORDER_EXECUTION`; `tools` strips the field; the MCP server derives `ToolAnnotations` from the same set | `test_tool_capabilities.py`: declared, known, non-empty; the forbidden name absent from the vocabulary; `READ_ONLY` exclusive; dispatch dict and definitions name the same tools; every sink the handler's source touches is declared; annotations derived | New tool: declare; new sink in an existing handler: add to the declaration **and** the mutating-tool list in the test |
 | 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open/import; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
@@ -198,6 +198,23 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 unit run, of the pre-push hook, and of CI.
 
 ---
+
+> **Scope correction, 2026-09-16.** Invariant 1's AST probe reconstructed only string
+> literals and f-strings, in function bodies. Every other ordinary way of building the same
+> URL — `"/iserver/account/" + acct + "/orders"`, the `%` form, `"/".join([...])`, a
+> module-level constant formatted at the call site, or a path assembled over two statements
+> — was invisible to it, so a new gate-free order-write call site written in any of them
+> would have passed `pytest -m security` silently. That is the one thing this invariant
+> exists to prevent, and the limitation was recorded nowhere; the rows above stated the
+> property without qualification.
+>
+> It survived because the probe's own guard-on-guard used an f-string in both of its cases —
+> the form `client.py` happens to use — so it proved the probe fires for the shape already
+> there and nothing else. `_template` now also reconstructs `+`, `%`, `.format`, `str.join`,
+> module-level constants and locals assigned earlier in the same function, and the
+> guard-on-guard is parametrised over all six spellings, each verified missed beforehand.
+> Re-run against the real `client.py`, the owner set is still exactly the five gated
+> methods — the widening adds no false positives.
 
 ## 6. Subsystem designs
 

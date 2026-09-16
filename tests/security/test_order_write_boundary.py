@@ -110,6 +110,64 @@ def test_the_endpoint_probe_sees_a_new_call_site():
     assert set(functions_using_url_templates(sneaky, ORDER_WRITE_PATTERNS)) == {"sneaky", "also_sneaky"}
 
 
+# Both cases above build the URL with an f-string, which is the form client.py happens to
+# use today — so on their own they prove only that the probe fires for the shape already
+# there. The property this suite claims is stronger: that an order-write URL built ANYWHERE
+# outside the gated set is seen. These are the ordinary Python spellings of the same URL.
+# Each was verified missed before the probe was widened on 2026-09-16.
+_SNEAKY_SPELLINGS = {
+    "concatenation": (
+        "class C:\n"
+        "    def sneaky(self, account_id, body):\n"
+        '        return self._post("/iserver/account/" + account_id + "/orders", body)\n'
+    ),
+    "percent-format": (
+        "class C:\n"
+        "    def sneaky(self, account_id, body):\n"
+        '        return self._post("/iserver/account/%s/orders" % account_id, body)\n'
+    ),
+    "str.format": (
+        "class C:\n"
+        "    def sneaky(self, account_id, body):\n"
+        '        return self._post("/iserver/account/{}/orders".format(account_id), body)\n'
+    ),
+    "str.join": (
+        "class C:\n"
+        "    def sneaky(self, account_id, body):\n"
+        '        return self._post("/".join(["/iserver/account", account_id, "orders"]), body)\n'
+    ),
+    "module-level constant": (
+        '_PLACE = "/iserver/account/{}/orders"\n'
+        "class C:\n"
+        "    def sneaky(self, account_id, body):\n"
+        "        return self._post(_PLACE.format(account_id), body)\n"
+    ),
+    "built over two statements": (
+        "class C:\n"
+        "    def sneaky(self, account_id, body):\n"
+        '        path = "/iserver/account/" + account_id\n'
+        '        return self._post(path + "/orders", body)\n'
+    ),
+}
+
+
+@pytest.mark.parametrize("spelling", sorted(_SNEAKY_SPELLINGS))
+def test_the_endpoint_probe_sees_a_call_site_however_the_url_is_spelled(spelling):
+    """A gate-free order write must be visible whatever string idiom builds its URL.
+
+    Until 2026-09-16 the probe reconstructed only `ast.Constant` and `ast.JoinedStr`, in
+    function bodies. Every spelling below was therefore invisible, and a new order-write
+    call site written in any of them would have passed `pytest -m security` silently —
+    which is the single thing this test exists to prevent. The f-string cases above passed
+    throughout, so the suite looked green and specific while covering one member of a class.
+
+    The limitation was recorded nowhere: `docs/security-architecture.md` § 5 states the
+    property as "endpoint templates only in the gated set", unqualified.
+    """
+    seen = functions_using_url_templates(_SNEAKY_SPELLINGS[spelling], ORDER_WRITE_PATTERNS)
+    assert "sneaky" in seen, f"a {spelling} order-write URL is invisible to the probe"
+
+
 def test_the_reference_probe_sees_an_order_write_in_a_handler():
     snippet = "def _auto_cancel(self, inputs):\n    return self._client.cancel_order(inputs['a'], inputs['o'])\n"
     assert attribute_names_referenced(snippet) & ORDER_WRITE_NAMES == {"cancel_order"}

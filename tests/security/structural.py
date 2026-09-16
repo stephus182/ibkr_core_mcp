@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -42,10 +42,32 @@ def callee_name(call: ast.Call) -> str | None:
     return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
 
 
-def _template(node: ast.expr) -> str | None:
-    """A string literal or f-string as a template, `{}` standing for each interpolation."""
+_PERCENT_PLACEHOLDER = re.compile(r"%[-+ #0-9.*]*[hlL]?[diouxXeEfFgGcrsa%]")
+
+
+def _template(node: ast.expr, names: Mapping[str, str] | None = None, depth: int = 0) -> str | None:
+    """A string expression rendered as a template, `{}` standing for each interpolation.
+
+    Handles the ordinary Python spellings of "build a URL", not just the one this codebase
+    happens to use. Until 2026-09-16 only `ast.Constant` and `ast.JoinedStr` were
+    reconstructed, so `"/iserver/account/" + acct + "/orders"`, the `%` form, `str.join`
+    and a module-level constant were all invisible to
+    `functions_using_url_templates` — and therefore to the test asserting that order-write
+    URLs are built only inside the gated methods. A new gate-free call site written in any
+    of them would have passed `pytest -m security` silently. `names` carries module-level
+    and already-assigned local string constants so a URL built across two statements is
+    still seen.
+
+    Returns None when the node is not a string-shaped expression, so a caller can tell
+    "not a string" from "a string with no literal parts".
+    """
+    if depth > 10:  # pathological nesting; refuse rather than recurse forever
+        return None
+    names = names or {}
+
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+
     if isinstance(node, ast.JoinedStr):
         parts = []
         for value in node.values:
@@ -54,7 +76,51 @@ def _template(node: ast.expr) -> str | None:
             else:
                 parts.append("{}")
         return "".join(parts)
+
+    if isinstance(node, ast.Name):
+        return names.get(node.id)
+
+    # "a" + x + "b"
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _template(node.left, names, depth + 1)
+        right = _template(node.right, names, depth + 1)
+        if left is None and right is None:
+            return None
+        return (left if left is not None else "{}") + (right if right is not None else "{}")
+
+    # "a%sb" % x
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        left = _template(node.left, names, depth + 1)
+        if left is None:
+            return None
+        return _PERCENT_PLACEHOLDER.sub(lambda m: "%" if m.group(0) == "%%" else "{}", left)
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        owner = _template(node.func.value, names, depth + 1)
+        # "sep".join([...])
+        if node.func.attr == "join" and owner is not None and node.args:
+            seq = node.args[0]
+            if isinstance(seq, (ast.List, ast.Tuple)):
+                parts = [_template(e, names, depth + 1) or "{}" for e in seq.elts]
+                return owner.join(parts)
+            return None
+        # "a{}b".format(x) — the literal already carries its own placeholders
+        if node.func.attr == "format" and owner is not None:
+            return owner
+
     return None
+
+
+def _string_assignments(statements: Iterable[ast.stmt], names: dict[str, str]) -> None:
+    """Record `NAME = <string expression>` into `names`, in statement order."""
+    for stmt in statements:
+        if isinstance(stmt, ast.Assign):
+            rendered = _template(stmt.value, names)
+            if rendered is None:
+                continue
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    names[target.id] = rendered
 
 
 def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -74,12 +140,23 @@ def functions_using_url_templates(source: str, patterns: Iterable[str]) -> dict[
     """Map each function name to the URL templates in its body (docstring excluded) that
     match any of `patterns` (regexes over the `{}`-templated form)."""
     compiled = [re.compile(p) for p in patterns]
+    tree = _tree(source)
+    # Module-level string constants are visible to every function, so a URL parked in one
+    # and formatted inside a method is still that method's call site.
+    module_names: dict[str, str] = {}
+    _string_assignments(getattr(tree, "body", []), module_names)
+
     found: dict[str, set[str]] = {}
-    for fn in _functions(_tree(source)):
-        for stmt in _body_without_docstring(fn):
+    for fn in _functions(tree):
+        names = dict(module_names)
+        body = _body_without_docstring(fn)
+        for stmt in body:
+            # Resolve assignments as they are reached, so a URL assembled across several
+            # statements is reconstructed rather than lost at the first local variable.
+            _string_assignments([stmt], names)
             for node in ast.walk(stmt):
                 if isinstance(node, ast.expr):
-                    template = _template(node)
+                    template = _template(node, names)
                     if template is not None and any(c.search(template) for c in compiled):
                         found.setdefault(fn.name, set()).add(template)
     return found
