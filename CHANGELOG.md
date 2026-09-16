@@ -172,12 +172,46 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Added
-- `indicators.true_range` — True Range as a public function, shared with `atr` so the two
-  cannot drift apart.
+- **`rate_limiter.EndpointPacer` — requests are now paced before they are sent.** The module
+  was named for pacing and three documents described it as doing token-bucket pacing; it only
+  ever retried a 429 after earning one (audit finding API-04). That was not academic.
+  Measured live against the gateway on 2026-09-16, `get_market_history_paginated` issued chunk
+  requests at **284 per minute** against a published ceiling of 50, and its 120-chunk runaway
+  guard would have completed in **~25 seconds** — 2.4x a minute's allowance inside half a
+  minute. IBKR answers that with HTTP 429 and a **fifteen-minute penalty box on the IP that
+  applies to every endpoint**, against a reactive retry budget of 1 + 2 + 4 = 7 seconds.
+
+  A sliding window per endpoint, wired into every call site through `with_retry(..., path=)`.
+  Spaced-out usage never waits. **Bounded by `_MAX_PACING_WAIT` (65 s)**: the 1-req/15-minutes
+  endpoints would otherwise block a tool call for 900 s, which is worse than the 429 being
+  avoided, and failing outright would break a call that succeeds today — past the cap it warns,
+  naming the endpoint and how early the call is, and sends it. Exercised live: the `/pa/transactions`
+  warning fired during the integration run and the test passed.
 - `analytics.is_intraday_timeframe` — shares `periods_for_timeframe`'s bar-size vocabulary
   and parsing, so the two cannot disagree about what `1m` means (a month, in IBKR notation).
+- `indicators.true_range` — True Range as a public function, shared with `atr` so the two
+  cannot drift apart.
 
 ### Changed
+- **`get_live_orders` / `get_orders_raw` read first and prime only on an empty result.** Both
+  sent `/iserver/account/orders?force=true` before **every** read, spending two slots of a
+  1-req/5-secs endpoint to answer one question. The warmup is real — a fresh brokerage session's
+  first read returns an empty array — but it is a **per-session** need that was being paid
+  **per call**, and the sibling `get_trades` already handled the identical warmup on
+  `/iserver/account/trades` by reading first and retrying on empty.
+
+  Measured live 2026-09-16 on a warm session: three consecutive plain reads, with no
+  `force=true` ahead of them, each returned the open order. With pacing enforced,
+  `get_live_orders()` went from **5.17 s to 0.35 s**, and from 10.07 s to ~5.0 s when called
+  twice back to back — the residue being the published limit itself, which no implementation
+  can go under. A cold session still primes; that path is tested in both directions.
+- **The per-endpoint rate-limit table moved out of prose and into `rate_limiter.ENDPOINT_LIMITS`.**
+  IBKR changed `/iserver/marketdata/history` from "5 concurrent requests" to "10 req/sec or 50
+  req/min" at the 2026-08 documentation move, and the link-repointing pass updated the citation
+  URL without re-reading the page behind it — leaving a wrong value with a correct-looking source
+  beside it (audit finding API-03). Re-read and diffed row by row: **25 of 26 rows agreed and
+  that one did not**. There is now one executable table and deliberately no prose copy, with a
+  test that fails if a second copy reappears.
 - `get_market_snapshot`: the price fields reach the model **by name** (`last`, `bid`, `ask`,
   `high`, `low`, `change`, `change_pct`, `volume`, `volume_raw`) from the package's one map,
   `streaming.SNAPSHOT_FIELD_NAMES`; IBKR's numeric codes and server bookkeeping (`server_id`,

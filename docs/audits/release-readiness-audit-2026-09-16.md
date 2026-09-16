@@ -558,10 +558,117 @@ configurable `anchor`.
 
 ---
 
+## Phase 3 — Fixes completed (session 3): rate limiting
+
+Starting from API-03, a one-line claim that a cited limit was wrong. Verifying it pulled in
+two neighbouring findings and produced a new one that is worse than all three.
+
+### API-03 — confirmed, with a root cause
+
+The docstring said `/iserver/marketdata/history GET 5 concurrent requests`. The page it cited
+says `10 req/sec or 50 req/min`. Fetched with the `.md` variant and a deliberately-fabricated
+control URL in the same batch (`…/pacing-limitations-xyzzy-not-real.md` → 355 B `# Page Not
+Found` against 3,017 B of real content, so the check can fail), then **all 26 rows were diffed
+programmatically**: 25 agreed, 1 did not. The 25 matches are what make the 1 mismatch
+trustworthy.
+
+Root cause, from this repo's own archived evidence: the **old** cpapi-v1 page
+(`docs/audits/audit-evidence/scrapes/cpapi-v1.md:1035`) really did say "5 concurrent requests".
+IBKR changed the value at the 2026-08 documentation move. The 2026-08-11 repointing pass
+updated the citation URL without re-reading the page behind it — leaving a stale value with a
+*correct-looking source beside it*, which is harder to catch than an uncited claim.
+
+### The new finding — the reason this stopped being a documentation fix
+
+The corrected limit introduced a rate we were already exceeding. Measured live, bounded to 4
+requests so the measurement could not itself provoke a ban:
+
+```
+observed rate      : 284.3 requests/min
+official limit     :  50 requests/min   -> EXCEEDS by 5.7x
+min gap            : 0.113 s
+120 chunks (the _MAX_CHUNKS guard) would complete in 25.3 s
+```
+
+IBKR's published consequence is HTTP 429 and a **fifteen-minute penalty box on the IP,
+applying to every endpoint** — so one wide history request denies service to orders, positions
+and tickle alike. The reactive retry budget against that is 1 + 2 + 4 = 7 seconds.
+`rate_limiter.py` was named for pacing, and API-04 recorded that three documents described it
+as doing token-bucket pacing. It did not. **Owner decision: implement the real per-endpoint
+pacer** rather than pace only pagination or correct the documents.
+
+### What implementing it exposed
+
+Turning pacing on made two latent problems measurable immediately.
+
+**The unit suite went from 33 s to 76 s, and the cause was diagnostic rather than noise.**
+Every `test_get_live_orders_*` took exactly 5.00 s — `/iserver/account/orders` is 1 req/5 secs
+and the process-wide pacer was correctly serialising them. That is API-14 ("deliberate
+double-call on a 1-req/5-s endpoint", graded Low) showing its real cost for the first time.
+
+**A bug in my own wiring.** The path handed to the pacer included the query string, so
+`/iserver/account/orders?force=true` did not match the table entry and fell through to the
+laxer global default — the warmup pair escaped the very limit the pacer existed to enforce.
+Caught by writing the test before assuming the wiring was right, and now pinned.
+
+### API-14, re-graded and fixed at the root
+
+The warmup is real: a fresh brokerage session's first read returns an empty array. But it is a
+**per-session** need that was being paid **per call**, and `get_trades` already handled the
+identical warmup on `/iserver/account/trades` by reading first and retrying on empty —
+`get_live_orders` was the outlier, not the pattern.
+
+Settled by measurement, not by reading the code. On a warm session, three consecutive plain
+reads with no `force=true` ahead of them each returned the open order (conid 265598, orderId
+1986940574):
+
+```
+plain read #1: 0.10s  n=1  ids=[1986940574]
+plain read #2: 4.97s  n=1  ids=[1986940574]   <- the 5 s is our own pacing
+plain read #3: 5.02s  n=1  ids=[1986940574]
+```
+
+| `get_live_orders()` | before | after |
+|---|---|---|
+| first call | 5.17 s | **0.35 s** |
+| called twice back to back | 10.07 s | **~5.0 s** |
+
+The residual 5 s is the published limit itself and no implementation can go under it. What
+changed is that we no longer spend two slots to answer one question.
+
+### Findings
+
+| ID | Sev | Outcome |
+|---|---|---|
+| API-03 | **High** | Confirmed and fixed; root cause traced to the 2026-08-11 repointing pass |
+| API-04 | Medium | Closed — the pacing three documents described now exists |
+| API-14 | Low → **re-graded High** | Fixed at the root; 15x faster first call and half the traffic on a rate-limited endpoint |
+| API-16 | **High**, new | Pagination burst at 5.7x the published limit, risking a 15-minute IP-wide ban |
+
+### Verification
+
+Seven mutants run; **one survived and that was the valuable one**. "Window never expires"
+passed the whole file, because with a 1-request limit `history[0] + window - now` is already
+non-positive at the boundary — so a fixed window and a sliding one are indistinguishable there.
+The real consequence appears only once a full budget is spent, the window passes, and a second
+full budget is spent inside the new one: without expiry the limit silently stops applying and
+the deque grows without bound. Two tests were added for exactly that and the mutant is now
+caught. A first attempt at the leak test asserted the wrong bound and failed against correct
+code — calls 2 s apart still sit inside history's 60-second window, where 30 of them
+legitimately coexist.
+
+Live: 58 passed / 14 skipped across `test_client_live.py` and `test_alerts_live.py`, matching
+the pre-change baseline exactly. The `/pa/transactions` pacing warning fired during the run and
+the test passed — the `_MAX_PACING_WAIT` escape hatch working under real conditions rather than
+in theory.
+
+---
+
 ### Release readiness — current view
 
-**Not ready.** The indicator sweep raised 5 findings beyond the 102 of Phase 1 (DATA-20
-through DATA-24), so the register now stands at **107 findings, 17 closed, 90 open**. The
+**Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
+DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
+**108 findings, 21 closed, 87 open**. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in

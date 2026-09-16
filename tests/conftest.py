@@ -171,3 +171,38 @@ def _no_real_secrets(request, monkeypatch):
     for name in [k for k in os.environ if k.startswith(_SECRET_ENV_PREFIXES)]:
         monkeypatch.delenv(name, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _pacer_on_a_fake_clock(request, monkeypatch):
+    """Unit tests exercise the real pacing logic without spending real seconds.
+
+    `EndpointPacer` is process-wide, which is right in production and wrong in a test
+    session: `/iserver/account/orders` is 1 req/5 secs, so the eight `get_live_orders`
+    tests queued behind one another and added ~35 s to the suite. Swapping the clock,
+    rather than disabling the pacer, keeps every decision it makes observable — the
+    waits still happen, they just cost nothing.
+
+    INTEGRATION TESTS ARE DELIBERATELY EXCLUDED. They talk to the real gateway, where
+    pacing is the thing standing between a live run and a fifteen-minute penalty box on
+    this machine's IP, and a fake clock there would remove the protection precisely
+    where it matters. A test that wants to assert on pacing builds its own pacer.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+
+    from ibkr_core_mcp import rate_limiter
+
+    now = [0.0]
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        rate_limiter,
+        "_pacer",
+        rate_limiter.EndpointPacer(clock=clock, sleep=sleep),
+    )

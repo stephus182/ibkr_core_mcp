@@ -177,10 +177,36 @@ installed, nothing renews an idle session.**
 
 ## Rate limits
 
-IBKR's documented global limit is **10 requests/second** for any endpoint not in
-its per-endpoint table (several endpoints are far stricter — e.g. `/iserver/account/orders`
-and `/iserver/account/trades` are 1 req/5s, `/tickle` is 1 req/s). `rate_limiter.py` does not
-proactively pace requests to this limit; it reactively retries 429/503 with exponential
-backoff (1s, 2s, 4s over 3 attempts) and raises `IBKRRateLimitError` if still failing.
+IBKR's documented global limit is **10 requests/second** for any endpoint not in its
+per-endpoint table (several are far stricter — `/iserver/account/orders` and
+`/iserver/account/trades` are 1 req/5s, `/pa/*` and `/iserver/scanner/params` are 1 req/15
+mins, `/tickle` is 1 req/s). Exceeding a limit returns HTTP 429 and puts the **IP** in a
+fifteen-minute penalty box that applies to every endpoint, not only the one that broke the
+limit. Repeat violators can be blocked permanently.
+
+`rate_limiter.py` now does two things:
+
+- **`EndpointPacer` paces proactively**, before the request goes out, against a sliding
+  window per endpoint. The limits live in `rate_limiter.ENDPOINT_LIMITS` — one executable
+  table, deliberately with no prose copy anywhere, because the prose copy is what went
+  stale (see below). Ordinary spaced-out usage never waits.
+- **`with_retry` reacts**, retrying 429/503 with exponential backoff (1s, 2s, 4s over 3
+  attempts) and raising `IBKRRateLimitError` if still failing.
+
+Until 2026-09-16 only the second existed, while this file and two others described the
+first. It was not academic: `get_market_history_paginated` was measured issuing chunk
+requests at **284/minute** against a published ceiling of 50, and its 120-chunk guard would
+have completed in ~25 seconds — 2.4x a minute's allowance inside half a minute — against a
+reactive retry budget of seven seconds.
+
+**The pacer never blocks longer than `_MAX_PACING_WAIT` (65 s).** The 1-req/15-mins
+endpoints are why: blocking a tool call for 900 s would be worse than the 429 being
+avoided, and failing the call outright would break a request that succeeds today. Past the
+cap it emits a `UserWarning` naming the endpoint and how early the call is, and sends it.
+
+**The per-endpoint table moved into code because the prose copy went stale.** IBKR changed
+`/iserver/marketdata/history` from "5 concurrent requests" to "10 req/sec or 50 req/min" at
+the 2026-08 documentation move; the link-repointing pass updated the citation URL without
+re-reading the page behind it, so the wrong value survived with a correct-looking source
+beside it. Re-read and diffed row by row 2026-09-16: 25 of 26 rows agreed, that one did not.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/pacing-limitations
-(full per-endpoint table in `rate_limiter.py`'s docstring).

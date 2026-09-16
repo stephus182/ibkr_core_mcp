@@ -230,7 +230,7 @@ ibkr_core_mcp/
 ├── web_scraper.py        # FirecrawlClient (whole-web search) + WebDocsStore — Drive snapshots
 ├── local_browser.py      # Crawl4AI local browser (Playwright) + SSRF guard — fetch/crawl/search a site
 ├── pinescript.py         # PineScript v5 generation from strategies and indicators
-├── rate_limiter.py       # Token-bucket rate limiter + exponential backoff on 429
+├── rate_limiter.py       # Proactive per-endpoint pacing (sliding window) + backoff on 429
 ├── config.py             # Config dataclass loaded from environment variables
 ├── gdrive_auth.py        # Shared Google OAuth token/refresh helper (used by cache + web_scraper)
 └── gateway/
@@ -315,7 +315,7 @@ declarations). Documentation only — no gate or classification changed.
 
 ## Gateway Authentication & Session
 
-The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit 10 requests/second globally (lower per-endpoint limits apply to some endpoints — see `docs/gateway-auth-reference.md`), handled transparently by `rate_limiter.py`. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
+The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit 10 requests/second globally, with much stricter per-endpoint limits — see `docs/gateway-auth-reference.md`. Handled transparently by `rate_limiter.py`, which since 2026-09-16 **paces proactively** (`EndpointPacer`, sliding window, limits in `ENDPOINT_LIMITS`) as well as retrying 429s. Exceeding a limit costs a fifteen-minute penalty box on the IP across every endpoint, so prevention is the part that matters. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
 
 ---
 

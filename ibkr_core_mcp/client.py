@@ -355,12 +355,12 @@ class IBKRClient:
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self._base}{path}"
-        resp = with_retry(lambda: self._session.get(url, params=params, timeout=30))
+        resp = with_retry(lambda: self._session.get(url, params=params, timeout=30), path=path)
         return resp.json()
 
     def _post(self, path: str, body: dict[str, Any] | None = None) -> Any:
         url = f"{self._base}{path}"
-        resp = with_retry(lambda: self._session.post(url, json=body or {}, timeout=30))
+        resp = with_retry(lambda: self._session.post(url, json=body or {}, timeout=30), path=path)
         return resp.json()
 
     # ------------------------------------------------------------------
@@ -1140,6 +1140,32 @@ class IBKRClient:
         }
     )
 
+    def _read_live_orders(self) -> Any:
+        """One plain read of /iserver/account/orders, unwrapped from its envelope."""
+        data = self._get("/iserver/account/orders")
+        return data.get("orders", data) if isinstance(data, dict) else data
+
+    def _prime_orders_subscription(self) -> None:
+        """Instantiate the orders subscription, for a session that has not read yet.
+
+        "A fresh brokerage session returns an EMPTY list on the first call" — the same
+        warmup `get_trades` handles by re-reading. `force=true` is IBKR's documented way
+        to "clear saved information and make a fresh request for orders", and its own
+        response is expected to be blank:
+
+            "Force the system to clear saved information and make a fresh request for
+             orders. Submission will appear as a blank array."
+            https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
+
+        This used to run before EVERY read, which spent two slots of a 1-req/5-secs
+        endpoint to answer one question. Measured live 2026-09-16 on a warm session,
+        three consecutive plain reads each returned the open order without it, while the
+        unconditional pair made `get_live_orders()` take 5.17 s and 10.07 s back to back
+        once pacing was honoured (audit finding API-14).
+        """
+        self._get("/iserver/account/orders?force=true")
+        time.sleep(1)
+
     def get_live_orders(self) -> list[dict[str, Any]]:
         """Working orders only (PreSubmitted, Submitted, ApiPending, PendingSubmit, PendingCancel, Inactive).
 
@@ -1168,10 +1194,13 @@ class IBKRClient:
                 caller can tell "the gateway did not answer" from "nothing is working".
         """
         self._ensure_accounts_initialized()
-        self._get("/iserver/account/orders?force=true")  # instantiate subscription
-        time.sleep(1)
-        data = self._get("/iserver/account/orders")  # retrieve actual data
-        orders = data.get("orders", data) if isinstance(data, dict) else data
+        orders = self._read_live_orders()
+        if isinstance(orders, list) and not orders:
+            # Empty may mean "no live orders" or "subscription not primed yet", and the
+            # two are indistinguishable in the response. Prime and read once more; if it
+            # was genuinely empty this costs one extra call and still returns [].
+            self._prime_orders_subscription()
+            orders = self._read_live_orders()
         if not isinstance(orders, list):
             raise IBKRAPIError(
                 f"/iserver/account/orders returned {type(orders).__name__}, not the documented "
@@ -1192,9 +1221,12 @@ class IBKRClient:
         Endpoint: GET /iserver/account/orders
         """
         self._ensure_accounts_initialized()
-        self._get("/iserver/account/orders?force=true")  # instantiate subscription
-        time.sleep(1)
-        return self._get("/iserver/account/orders")
+        data = self._get("/iserver/account/orders")
+        orders = data.get("orders", data) if isinstance(data, dict) else data
+        if isinstance(orders, list) and not orders:
+            self._prime_orders_subscription()
+            data = self._get("/iserver/account/orders")
+        return data
 
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         """Full order details for a specific order ID.
@@ -1683,8 +1715,9 @@ class IBKRClient:
         # the log must still witness the fingerprint (2026-09-11: 8 of 12 prompts logged).
         log.info("Gate 1: granted for cancel:%s", order_id)
         confirm_cancel_dialog(order_id, account_id, order_details)
-        url = f"{self._base}/iserver/account/{account_id}/order/{order_id}"
-        resp = with_retry(lambda: self._session.delete(url, timeout=30))
+        path = f"/iserver/account/{account_id}/order/{order_id}"
+        url = f"{self._base}{path}"
+        resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
         return resp.json()
 
     def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict[str, Any]]:
@@ -1943,8 +1976,9 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         _validate_order_id(alert_id)
-        url = f"{self._base}/iserver/account/{account_id}/alert/{alert_id}"
-        resp = with_retry(lambda: self._session.delete(url, timeout=30))
+        path = f"/iserver/account/{account_id}/alert/{alert_id}"
+        url = f"{self._base}{path}"
+        resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
         return resp.json()
 
     def activate_alert(self, account_id: str, alert_id: str, activate: bool = True) -> dict[str, Any]:
@@ -1978,7 +2012,10 @@ class IBKRClient:
         Endpoint: DELETE /iserver/watchlist
         """
         url = f"{self._base}/iserver/watchlist"
-        resp = with_retry(lambda: self._session.delete(url, params={"id": watchlist_id}, timeout=30))
+        resp = with_retry(
+            lambda: self._session.delete(url, params={"id": watchlist_id}, timeout=30),
+            path="/iserver/watchlist",
+        )
         return resp.json()
 
     # ------------------------------------------------------------------

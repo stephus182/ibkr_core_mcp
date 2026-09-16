@@ -1146,18 +1146,38 @@ def test_get_option_chain_raises_when_no_opt_section(client):
 # ---------------------------------------------------------------------------
 
 
-def test_get_orders_raw_uses_two_call_pattern_and_returns_unfiltered(client):
-    """Raw diagnostic dump: same documented two-call warmup as get_live_orders,
-    but no status filtering — terminal orders must survive."""
+def test_get_orders_raw_returns_unfiltered_without_re_priming(client):
+    """Raw diagnostic dump: no status filtering — terminal orders must survive — and,
+    since 2026-09-16, no unconditional `force=true` ahead of the read.
+
+    This asserted the old force-first pair. That pair spent two slots of a 1-req/5-secs
+    endpoint on every call to answer one question, and a warm session does not need it
+    (measured live: three consecutive plain reads each returned the open order).
+    """
     payload = {"orders": [{"orderId": 1, "status": "Filled"}]}
     with (
-        patch.object(client, "_get", side_effect=[None, payload]) as mock_get,
+        patch.object(client, "_get", side_effect=[payload]) as mock_get,
         patch("ibkr_core_mcp.client.time.sleep"),
     ):
         raw = client.get_orders_raw()
     assert raw == payload  # unfiltered — Filled order retained
-    assert "force=true" in mock_get.call_args_list[0][0][0]
-    assert mock_get.call_args_list[1][0][0] == "/iserver/account/orders"
+    assert [c[0][0] for c in mock_get.call_args_list] == ["/iserver/account/orders"]
+
+
+def test_get_orders_raw_primes_when_the_read_comes_back_empty(client):
+    """The cold-session path the warmup exists for, kept for the diagnostic dump too."""
+    payload = {"orders": [{"orderId": 1, "status": "Filled"}]}
+    with (
+        patch.object(client, "_get", side_effect=[{"orders": []}, None, payload]) as mock_get,
+        patch("ibkr_core_mcp.client.time.sleep"),
+    ):
+        raw = client.get_orders_raw()
+    assert raw == payload
+    assert [c[0][0] for c in mock_get.call_args_list] == [
+        "/iserver/account/orders",
+        "/iserver/account/orders?force=true",
+        "/iserver/account/orders",
+    ]
 
 
 def test_get_pa_periods_raw_posts_account_ids(client):
@@ -2235,3 +2255,72 @@ def test_place_order_still_returns_the_documented_array_unchanged(client):
     ):
         mock_post.return_value = _make_ok_response(payload)
         assert client.place_order("U1234567", order) == payload
+
+
+def _orders_paths(mock_get, client):
+    """Just the /iserver/account/orders request paths, in order."""
+    return [
+        call[0][0].replace(client._base, "")
+        for call in mock_get.call_args_list
+        if "/iserver/account/orders" in call[0][0]
+    ]
+
+
+def test_get_live_orders_does_not_re_prime_when_the_first_read_returns_orders(client):
+    """The `force=true` call was made before EVERY read. It is a subscription warmup —
+    "A fresh brokerage session returns an EMPTY list on the first call" — so it is needed
+    once per session, not once per call, and the sibling `get_trades` already reads first
+    and only retries on empty.
+
+    Measured live 2026-09-16 on a warm session: three consecutive plain reads with no
+    `force=true` ahead of them each returned the open order. Meanwhile the endpoint is
+    published at 1 req/5 secs, so the unconditional pair cost a full extra slot of a
+    rate-limited endpoint every single time — `get_live_orders()` took 5.17 s, and 10.07 s
+    when called twice in a row.
+    """
+    client._accounts_initialized = True
+    orders = [{"orderId": 1, "ticker": "AAPL", "status": "Submitted"}]
+    with patch.object(client._session, "get") as mock_get, patch("time.sleep"):
+        mock_get.return_value = _make_ok_response({"orders": orders})
+        result = client.get_live_orders()
+
+    paths = _orders_paths(mock_get, client)
+    assert result and result[0]["orderId"] == 1
+    assert paths == ["/iserver/account/orders"], f"expected one plain read, got {paths}"
+    assert not any("force=true" in p for p in paths), "warmup fired despite data arriving"
+
+
+def test_get_live_orders_primes_the_subscription_when_the_first_read_is_empty(client):
+    """The counter-case, and the reason the warmup exists at all. Without it, "read once
+    and trust the empty" would satisfy the test above while breaking a cold session —
+    which is the exact bug the unconditional warmup was guarding against.
+    """
+    client._accounts_initialized = True
+    orders = [{"orderId": 7, "ticker": "SPY", "status": "PreSubmitted"}]
+    with patch.object(client._session, "get") as mock_get, patch("time.sleep"):
+        mock_get.side_effect = [
+            _make_ok_response({"orders": []}),  # cold session
+            _make_ok_response({"orders": []}),  # force=true, documented to return blank
+            _make_ok_response({"orders": orders}),  # primed
+        ]
+        result = client.get_live_orders()
+
+    paths = _orders_paths(mock_get, client)
+    assert result and result[0]["orderId"] == 7
+    assert paths == [
+        "/iserver/account/orders",
+        "/iserver/account/orders?force=true",
+        "/iserver/account/orders",
+    ], paths
+
+
+def test_get_live_orders_still_reports_a_genuine_empty_after_priming(client):
+    """An empty list is a real answer — "that empty is an answer". Priming must not turn
+    "no live orders" into an error or an endless retry."""
+    client._accounts_initialized = True
+    with patch.object(client._session, "get") as mock_get, patch("time.sleep"):
+        mock_get.return_value = _make_ok_response({"orders": []})
+        result = client.get_live_orders()
+
+    assert result == []
+    assert len(_orders_paths(mock_get, client)) == 3, "must prime exactly once, then stop"

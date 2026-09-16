@@ -806,7 +806,18 @@ No external IBKR or third-party connections are made with verification disabled.
 
 ### Rate Limiting and Retry Safety
 
-The `with_retry` wrapper in `rate_limiter.py` provides two safety properties relevant to security:
+`rate_limiter.py` provides these properties relevant to security:
+
+0. **Requests are paced before they are sent** — `EndpointPacer` holds each endpoint to
+   IBKR's published limit using a sliding window, so the package does not earn the 429 in
+   the first place. This matters beyond politeness: a 429 puts the **IP** in a
+   fifteen-minute penalty box covering every endpoint, so one component's burst denies
+   service to all the others. Added 2026-09-16, after `get_market_history_paginated` was
+   measured at 284 requests/minute against a published ceiling of 50. It is bounded — see
+   `_MAX_PACING_WAIT` — so it degrades to a warning rather than becoming a self-inflicted
+   hang.
+
+The `with_retry` wrapper adds:
 
 1. **401 is never retried** — an unauthenticated response raises `IBKRAuthError` immediately. This prevents credential stuffing or accidental brute-force against the gateway.
 2. **429/503 use exponential backoff** — bounded at `max_retries` (default 3) with `backoff = 1.0 × 2^attempt` seconds. This protects IBKR from accidental DoS.
