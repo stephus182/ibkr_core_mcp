@@ -53,3 +53,7 @@ docs/superpowers/
 
 # Plans are personal working documents — local + Drive, never committed (user rule 2026-07-24).
 docs/plans/
+
+# Firecrawl CLI scratch output — search caches, not evidence. Committed evidence
+# belongs under docs/audits/audit-evidence/.
+.firecrawl/
