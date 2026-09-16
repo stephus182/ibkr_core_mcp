@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**110 findings, 35 closed, 75 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
+**115 findings, 41 closed, 74 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -1141,3 +1141,155 @@ live runs and ad-hoc probes were kept strictly sequential for that reason.
 | **Full `-m integration` sweep** | **94 collected — 1 failed before the fix (that failure), clean after** |
 
 Gateway/orders totals match the pre-audit baseline of 58 passed / 14 skipped exactly.
+
+---
+
+## Phase 3 — API-11: the Nit that was hiding five defects
+
+API-11 was filed Low/Nit: *"zero of 74 methods return a Pydantic model."* The owner put the
+fix in scope — thread Pydantic return types through all 74 methods. Before writing any of
+that, the six models `models.py` already published were measured against responses captured
+from the live gateway. **None of them worked.**
+
+| Model | Endpoint | Result before the fix |
+|---|---|---|
+| `Order` | `/iserver/account/orders` | **raised** — `orderId` arrives `int`, the field declared `str` |
+| `Contract` | `/trsrv/secdef` | **raised** — those rows carry `ticker`, not `symbol` |
+| `Notification` | `/fyi/notifications` | validated with **every field empty** — IBKR sends `D/ID/FC/MD/MS/R` |
+| `Trade` | `/iserver/account/trades` | `time` always `""` — the key is `trade_time` |
+| `Position` | `/portfolio/{id}/positions` | kept 7 of 51 keys |
+| `AccountSummary` | `/portfolio/{id}/summary` | kept 4 of 108, and published P&L the endpoint does not |
+
+All six passed `tests/test_models.py` throughout. That file builds each model's input by
+hand, so every test asserted that the model agreed with itself — the same shape as API-01's
+stub-verified Critical and TOOL-01's fabricated alert body. **A fixture whose shape you chose
+cannot tell you whether the shape is right.** The models are exported from `__init__.py` and
+were never used by `client.py`, `claude_tools.py` or `mcp_server.py`, which is why two of them
+could raise on real data for the package's whole life without anyone noticing.
+
+`Notification` is the clearest case. IBKR's page for `/fyi/notifications` documents
+`D` date, `ID` identifier, `FC` FYI code, `MD` content, `MS` title, `R` read flag. The model
+declared `id`, `date`, `headline`, `body`, `isRead` — **zero overlap** — and validated anyway,
+because every field had a default. Each notification came back fully populated with nothing.
+
+### Two findings raised by the measurement
+
+**API-18 — Medium: `AccountSummary` asserted P&L the endpoint does not publish.**
+`unrealized_pnl` and `realized_pnl` read `0.0` on every call. The 108-key capture contains no
+key matching *pnl*, and `portfolio-summary.md` documents none — it describes an open key/value
+structure of "45-135 unique values" and never mentions profit and loss. Zero is a number a
+reader will act on; absence is not. The four amounts are now `float | None`, and a key that
+was not sent reads `None`. Whether some other account or segment publishes one is **not
+established**, so the model reports what it found rather than generalising from one account.
+Realised and unrealised P&L come from `/iserver/account/pnl/partitioned` — `get_pnl()`,
+`upnl.{account}.{upl,dpl}`.
+
+**API-19 — Nit: every `_normalize` before-validator was dead code.** Each mapped a declared
+alias onto its own field, which `populate_by_name` already did. Found by mutation, not by
+reading: breaking `Trade`'s `trade_time` alias left the entire suite green, because the
+validator silently covered for it. The genuinely multi-spelling cases (`ticker`/`symbol`,
+`assetClass`/`secType`, `con_id`/`conid`, `listingExchange`/`exchange`, `name`/`companyName`)
+are now `AliasChoices`, the validators are gone — 60 lines — and each spelling is individually
+mutation-killed.
+
+### The design constraint the evidence set
+
+A typed return that narrows a 51-key position to seven fields would be a worse defect than
+the missing types, and the same defect this audit already found three times: silently
+truncated market history, the alert modify body missing 17 of 19 fields, three endpoints
+returning `[]` for data that had arrived. So the models are **views over the payload, never a
+replacement for it**. `IBKRResponse` snapshots the response before any normaliser runs and
+serves it through the mapping protocol, so `position.mkt_value` is the typed view while
+`position["mktValue"]`, `dict(position)` and `len(position)` are exactly what IBKR sent.
+Live-verified lossless on all seven endpoints.
+
+Two further rules came from real records rather than from design taste:
+
+- **A `null` is "not applicable", not a malformed value.** Searching for AAPL returns four
+  equity listings and a bond aggregate whose `symbol`, `companyName` and `description` are
+  all `null` (`{"bondid": 4, "companyHeader": "Corporate Fixed Income", "conid": "2147483647"}`).
+  A null now falls back to the field default and stays readable as `contract["symbol"]`.
+- **A record that will not validate is passed through, never dropped.** Hence
+  `list[Position | dict[str, Any]]` rather than `list[Position]`. Dropping the row would
+  answer "what do I hold?" with a confident, incomplete list.
+
+### Two more, found by feeding the handlers the real thing
+
+Threading typed returns into `client.py` is only safe if the layers above survive them. The
+suite could not answer that: `toolkit._client` is a `MagicMock`, so every existing test hands
+its handler whatever the test itself wrote — always a dict. Driving the handlers with models
+built from the captured response found two defects, one new and one old.
+
+**TOOL-11 — Medium: `ibkr://positions/current` would have stopped carrying positions,
+silently.** The resource `json.dumps` the client's return directly, and its handler catches
+every exception and answers with an error object. A `Position` is not JSON-serialisable, so
+the resource would have kept answering successfully with
+`{"error": "Object of type Position is not JSON serializable"}` — the third time in this audit
+that a failure would have worn a success's shape, and the second on this exact resource
+(the 2026-09-16 `text = "[]"` finding was the first). `models.json_default` is now passed at
+both serialising call sites, and each is mutation-killed.
+
+**TOOL-10 — Medium: the `get_notifications` tool has never shown a notification.** Its
+renderer reads `n.get("isRead")` and `n.get("headline") or n.get("title")`. IBKR sends
+`R`, `MS`, `MD`, `D`, `ID`, `FC` and none of those three, so every notification rendered as
+`- [UNREAD] ?` — correct count, no titles, read state always wrong. Live, against three real
+notifications:
+
+```
+FYI Notifications (3 unread):
+- [UNREAD] ?
+- [UNREAD] ?
+- [UNREAD] ?
+```
+
+This predates the model work entirely; the handler read raw dicts and guessed their keys, the
+same guess `Notification` made. `tests/claude_tools/test_account.py` stubbed
+`{"id", "title", "body", "isRead"}` — a payload invented to match the guess — and asserted the
+title appeared, so the test passed on data that cannot occur. The stub is now IBKR's
+documented shape and the renderer reads `MS`/`R`. It reads them through the mapping rather
+than through the model's attributes, deliberately, so a record that failed validation and
+arrived as a plain dict still renders.
+
+**TOOL-12 — Low: a failing unread count discarded a notification list that had arrived.**
+Found while verifying TOOL-10 live. `/fyi/unreadnumber` returned
+`HTTP 423 {"status":"waiting for reply"}` on four consecutive attempts against a healthy,
+authenticated gateway while `/fyi/notifications` answered normally throughout. The handler
+called it unguarded, so the list — the actual answer — would have been thrown away for the
+sake of a decoration. The count now degrades to "unread count unavailable".
+
+**On `R`'s polarity, and the limit of the evidence.** IBKR documents `R` as "Return if the
+notification was read or not. Value Format: 0: Disabled; 1: Enabled". Measured, three
+notifications all carried `R: 0` while `/fyi/unreadnumber` reported 3 — consistent with 0
+meaning unread. **`R: 1` was never observed**, so the read branch rests on the documentation
+alone, and the code says so rather than implying the polarity was verified. The first live run
+after the fix printed "(0 unread)" beside three `[UNREAD]` rows, which looked like a
+contradiction in the flag; it was the count endpoint failing, and re-measuring rather than
+reasoning from the inconsistency is what separated the two.
+
+### Status
+
+Six of 74 methods now return models — `search_contract`, `get_secdef` (`Contract`),
+`get_positions`, `get_trades`, `get_live_orders`, `get_account_summary`, `get_notifications`.
+`client.py`'s module docstring claimed typed returns from the day it was written; the claim is
+now an enumerated list, so it can be checked. **The remaining 68 are still open under API-11**
+— they need the same treatment endpoint by endpoint, each shape verified against a captured
+response and its `.md` page, and several of them (`get_scanner_params`, `get_contract_rules`,
+`get_secdef_info`) publish open structures where a model would assert more than IBKR does.
+
+### Evidence
+
+`tests/fixtures/ibkr_live_shapes.json` — 27 endpoints captured verbatim from an authenticated
+gateway on 2026-09-16, account numbers rewritten in keys and values, nothing else altered.
+Reproduce with `scripts/audit/capture_live_response_shapes.py`. Every documentation fetch ran
+a fabricated control URL in the same batch (`portfolio-summary.md` 2,391 B against 411 B
+`# Page Not Found`).
+
+Every new test was mutation-tested. **Two mutants survived the first pass, and both were real
+gaps rather than noise:** `Position`'s typed fields had no test at all — the losslessness
+tests read the raw payload and nothing read the typed view — and the documented null-`amount`
+branch was unexercised. Both now have one, and all sixteen mutations die.
+
+Live verification (gateway authenticated, single process): all seven endpoints returned typed
+records, **zero passthrough rows**, `dict(model) == model.raw` on every one.
+`get_live_orders` returned `order_id='1986940574'` from a raw `int` — the exact value that
+raised before the fix.

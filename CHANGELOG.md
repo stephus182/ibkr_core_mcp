@@ -121,6 +121,61 @@ failed before its fix:
   `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
 
 ### Fixed
+**Every response model was wrong against real IBKR data** (audit finding API-11, filed as a
+Nit: "zero of 74 methods return a Pydantic model"). Measuring the six models that already
+existed against responses captured from a live gateway found something larger — none of them
+worked. `Order` **raised** on a real live order (`orderId` arrives as an `int`, the field
+declared `str`); `Contract` **raised** on a `/trsrv/secdef` row (those carry `ticker`, not
+`symbol`); `Notification` validated with **every field empty**, because `/fyi/notifications`
+returns `D/ID/FC/MD/MS/R` and the model declared `id/date/headline/body/isRead` — zero
+overlap; `Trade.time` was always `""` (the key is `trade_time`); `Position` kept 7 of 51 keys
+and `AccountSummary` 4 of 108. All six passed their unit tests throughout, because each test
+built the model's input by hand.
+- **Models are now views over the payload, never a replacement for it.** The new
+  `IBKRResponse` base keeps the response exactly as it arrived and serves it through the
+  mapping protocol: `position.mkt_value` is the typed, alias-normalised view, while
+  `position["mktValue"]`, `dict(position)`, `len(position)` and `for k in position` are what
+  IBKR sent. A typed return therefore cannot narrow a 51-key position to seven fields.
+  One dict behaviour does not carry over: `model == {...}` is False — compare `dict(model)`.
+- **Six methods now return models**: `search_contract` and `get_secdef` (`Contract`),
+  `get_positions` (`Position`), `get_trades` (`Trade`), `get_live_orders` (`Order`),
+  `get_account_summary` (`AccountSummary`), `get_notifications` (`Notification`). The other 68
+  are unchanged and still return the decoded response. `client.py`'s module docstring claimed
+  typed returns from the day it was written; it now enumerates them, so the claim is checkable.
+- **A record that will not validate is passed through as the dict it arrived as, never
+  dropped** — hence `list[Position | dict[str, Any]]`. And a `null` is IBKR's "not
+  applicable", not a malformed value: a search for AAPL returns a bond aggregate whose
+  `symbol`, `companyName` and `description` are all null, so a null now falls back to the
+  field default and stays readable as `contract["symbol"]`.
+- **`AccountSummary` no longer reports P&L the endpoint does not publish** (API-18). The four
+  amounts are `float | None`; a key IBKR did not send reads `None`, not `0.0`. Neither
+  `unrealizedpnl` nor `realizedpnl` appeared in a 108-key capture and the endpoint's page
+  documents none. P&L comes from `get_pnl()` — `/iserver/account/pnl/partitioned`,
+  `upnl.{account}.{upl,dpl}`.
+- **Every `_normalize` before-validator was dead code** (API-19): each mapped a declared alias
+  onto its own field, which `populate_by_name` already did. Found by mutation — breaking
+  `Trade`'s alias left the whole suite green. The multi-spelling cases are now `AliasChoices`
+  and the validators are gone, 60 lines.
+- New: `tests/fixtures/ibkr_live_shapes.json`, 27 endpoints captured verbatim from an
+  authenticated gateway (account numbers rewritten, nothing else), plus
+  `scripts/audit/capture_live_response_shapes.py` to re-capture. Models are tested against it
+  rather than against hand-built dicts.
+- **The `get_notifications` tool has never shown a notification** (TOOL-10). Its renderer read
+  `isRead` and `headline`/`title`; `/fyi/notifications` sends `R`, `MS`, `MD`, `D`, `ID`, `FC`
+  and none of those three, so every notification came out as `- [UNREAD] ?` — right count, no
+  titles, read state always wrong. Its test stubbed `{"id", "title", "body", "isRead"}`, a
+  payload invented to match the guess. This predates the model work: the handler read raw
+  dicts and guessed their keys, the same guess `Notification` made.
+- **A failing unread count no longer discards the notification list** (TOOL-12).
+  `/fyi/unreadnumber` returned `HTTP 423 {"status":"waiting for reply"}` on four consecutive
+  attempts against a healthy gateway while `/fyi/notifications` answered normally; the handler
+  called it unguarded. The count now degrades to "unread count unavailable".
+- **`ibkr://positions/current` would have stopped carrying positions, silently** (TOOL-11).
+  The resource `json.dumps` the client's return and its handler catches every exception, so a
+  `Position` reaching it would have produced a successful response reading
+  `{"error": "Object of type Position is not JSON serializable"}`. `models.json_default` is
+  now passed wherever a response is serialised.
+
 Four technical indicators disagreed with the definitions they cite. Found by the
 2026-09-16 release-readiness audit, which re-derived every one of the 14 against its
 source authority instead of checking shapes and bounds. Each divergence below is

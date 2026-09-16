@@ -33,6 +33,8 @@ import itertools
 
 import pytest
 
+from ibkr_core_mcp.models import AccountSummary
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -350,11 +352,18 @@ def test_get_brokerage_accounts(live_client):
 @pytest.mark.integration
 def test_get_account_summary(live_client, account_id):
     result = live_client.get_account_summary(account_id)
-    assert isinstance(result, dict)
+    assert isinstance(result, AccountSummary)
     # Net liquidation is the number a human opens this for; an empty summary is a failure
     # wearing a success's shape.
     assert result, "empty account summary"
     assert any(k.lower().startswith("netliquidation") for k in result), sorted(result)[:10]
+    # The typed view must agree with the payload it was built from, live and not only in
+    # the captured fixture, and must not have narrowed it on the way through.
+    assert result.net_liquidation == result["netliquidation"]["amount"]
+    assert len(result) > 40, f"typed summary narrowed the response to {len(result)} keys"
+    # This endpoint publishes no P&L key; absent must read as absent, never as zero.
+    assert not [k for k in result if "pnl" in k.lower()]
+    assert result.unrealized_pnl is None and result.realized_pnl is None
 
 
 @pytest.mark.integration

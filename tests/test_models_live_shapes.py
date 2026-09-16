@@ -238,3 +238,42 @@ def test_account_summary_treats_a_null_amount_as_absent(live):
     summary = AccountSummary.model_validate(documented_null)
 
     assert summary.net_liquidation is None
+
+
+def test_a_null_field_falls_back_to_the_default(live):
+    """IBKR sends `null` for "not applicable", and that must not fail the whole record.
+
+    Searching /iserver/secdef/search for AAPL returns four equity listings and a bond
+    aggregate — `{"bondid": 4, "companyHeader": "Corporate Fixed Income",
+    "conid": "2147483647", "symbol": null, "companyName": null, ...}`. A null is the
+    absence of a value, so the typed attribute takes its default; IBKR's null stays
+    readable through the mapping protocol.
+    """
+    rows = live["search_contract"]
+    bond = next((r for r in rows if r.get("symbol") is None), None)
+    assert bond is not None, "fixture no longer contains a row with a null field"
+
+    contract = Contract.model_validate(bond)
+
+    assert contract.symbol == ""
+    assert contract.description == ""
+    assert contract["symbol"] is None, "the null IBKR sent must stay readable"
+    assert contract.conid == 2147483647
+
+
+@pytest.mark.parametrize(("model", "endpoint"), LOSSLESS_CASES, ids=lambda v: getattr(v, "__name__", v))
+def test_iterating_a_model_yields_ibkrs_keys(live, model, endpoint):
+    """`for k in model` must mean what it means for the dict the model replaced.
+
+    Pydantic's BaseModel iterates `(name, value)` pairs, which made `sorted(summary)` a
+    list of tuples and broke a live test that had read the endpoint's keys that way for
+    months. Everything else here — `in`, `len`, `keys`, `get`, `[]` — already spoke the
+    mapping protocol, so iteration disagreeing with all of them was a trap.
+    """
+    raw = _first(live, endpoint)
+
+    parsed = model.model_validate(raw)
+
+    assert list(parsed) == list(raw)
+    assert sorted(parsed) == sorted(raw)
+    assert {k: parsed[k] for k in parsed} == raw

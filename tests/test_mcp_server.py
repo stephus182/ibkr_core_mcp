@@ -543,3 +543,35 @@ async def test_positions_resource_resolves_an_account_row_that_has_only_id(toolk
     positions = json.loads(content)
     assert positions[0]["symbol"] == "GLD"
     toolkit._client.get_positions.assert_called_once_with("U9999999")
+
+
+@pytest.mark.asyncio
+async def test_positions_resource_serialises_the_typed_return(toolkit, store):
+    """`ibkr://positions/current` json.dumps the client's return directly.
+
+    `IBKRClient.get_positions` returns `Position` models as of 2026-09-16. They are
+    mappings over IBKR's payload, so every `.get`/`[]`/`in` in the tool layer carries
+    over — but `json.dumps` does not know them, and this handler catches every exception
+    and answers with an error object. A serialisation failure would therefore not crash:
+    the resource would quietly stop carrying positions while still looking like it
+    worked, which is the failure this file already guards against twice above.
+
+    The payload is a real portfolio row from tests/fixtures/ibkr_live_shapes.json.
+    """
+    import json
+    from pathlib import Path
+
+    from ibkr_core_mcp.mcp_server import build_server
+    from ibkr_core_mcp.models import Position, parse_many
+
+    raw = json.loads((Path(__file__).parent / "fixtures" / "ibkr_live_shapes.json").read_text())["positions"]
+    typed = parse_many(Position, raw)
+    assert all(isinstance(p, Position) for p in typed), "fixture no longer exercises the typed path"
+
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
+    toolkit._client.get_positions.return_value = typed
+    server = build_server(toolkit, store)
+
+    content = await _read_resource_text(server, "ibkr://positions/current")
+
+    assert json.loads(content) == raw, "the resource must emit every key IBKR sent"

@@ -883,7 +883,8 @@ def test_get_secdef_still_accepts_a_bare_list(client):
     mock_resp.json.return_value = [{"conid": 265598, "currency": "USD"}]
     with patch.object(client._session, "get", return_value=mock_resp):
         result = client.get_secdef([265598])
-    assert result == [{"conid": 265598, "currency": "USD"}]
+    # A typed return compares by payload, not by literal: a model is never == a dict.
+    assert [dict(c) for c in result] == [{"conid": 265598, "currency": "USD"}]
 
 
 # ── get_live_orders filtering ─────────────────────────────────────────────────
@@ -1025,7 +1026,7 @@ def test_get_trades_retries_once_when_first_call_empty(client):
     ):
         client._accounts_initialized = True
         result = client.get_trades()
-    assert result == trades
+    assert [dict(t) for t in result] == trades
     assert mock_get.call_count == 2
 
 
@@ -1035,7 +1036,7 @@ def test_get_trades_single_call_when_data_returned(client):
     with patch.object(client._session, "get", return_value=_make_ok_response(trades)) as mock_get:
         client._accounts_initialized = True
         result = client.get_trades()
-    assert result == trades
+    assert [dict(t) for t in result] == trades
     assert mock_get.call_count == 1
 
 

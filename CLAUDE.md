@@ -422,8 +422,22 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 
 ## Adding a New IBKR Endpoint
 
-1. **`client.py`** — add method, return typed model
-2. **`models.py`** — add Pydantic model for response if new shape
+1. **`client.py`** — add method. Return a model from `models.py` when the response has a
+   shape worth naming; otherwise return the decoded response and annotate it as such. This
+   step said "return typed model" while **zero of 74 methods did** (audit finding API-11,
+   2026-09-16); six do now, and `client.py`'s module docstring lists them by name so the
+   claim can be checked rather than believed.
+2. **`models.py`** — add a Pydantic model for the response if it is a new shape. Derive from
+   `IBKRResponse`, never from `BaseModel` directly: that base keeps the payload IBKR sent and
+   serves it through the mapping protocol, so a typed return can never narrow a 51-key
+   position to seven fields. Return it via `parse_one`/`parse_many`, which pass an
+   unparseable record through as the dict it arrived as instead of dropping it.
+   **Then add the endpoint to `tests/fixtures/ibkr_live_shapes.json`** — re-capture with
+   `scripts/audit/capture_live_response_shapes.py` against a live gateway — and test the model
+   against that. Every model in this package was once tested against a dict written by hand
+   to match it; two of the six raised on real data and two returned empty objects, for the
+   package's whole life, behind a green suite. A fixture whose shape you chose cannot tell
+   you whether the shape is right.
 3. **`claude_tools.py`** — add tool definition to `TOOL_DEFINITIONS` + handler method to `ClaudeToolkit`
    - Declare `"capabilities": frozenset({...})` from `CAPABILITIES` on the definition — every sink the
      handler touches (IBKR write → `ACCOUNT_STATE`, store write → `DATABASE`, Drive write →

@@ -39,14 +39,32 @@ def test_get_account_summary_omits_pnl_fields(toolkit):
 
 
 def test_execute_get_notifications(toolkit):
+    """The payload is /fyi/notifications' documented shape, not a plausible one.
+
+    This stub used to read `{"id", "title", "body", "isRead"}` — none of which IBKR
+    sends. The endpoint returns `D` date, `ID` identifier, `FC` code, `MD` content,
+    `MS` title and `R` read flag, so the handler rendered "- [UNREAD] ?" for every real
+    notification while this test passed (audit finding TOOL-10, 2026-09-16).
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-notifications.md
+    """
     toolkit._client.get_notifications.return_value = [
-        {"id": "1", "title": "Test alert", "body": "Something happened", "isRead": False}
+        {
+            "R": 0,
+            "D": "1702469440.0",
+            "MS": "IBKR FYI: Option Expiration Notification",
+            "MD": "One or more option contracts in your portfolio are set to expire shortly.",
+            "ID": "2023121370119463",
+            "HT": 0,
+            "FC": "OE",
+        }
     ]
     toolkit._client.get_unread_count.return_value = 1
     text, fig = toolkit.execute("get_notifications", {})
     assert_tool_succeeded(text)
     assert fig is None
-    assert "Test alert" in text
+    assert "IBKR FYI: Option Expiration Notification" in text
+    assert "UNREAD" in text, "R=0 is unread — 3 unread notifications all carried R=0 live"
 
 
 def test_get_positions_empty(toolkit):

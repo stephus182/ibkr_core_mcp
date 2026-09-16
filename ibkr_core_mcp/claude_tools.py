@@ -40,6 +40,7 @@ from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
+from ibkr_core_mcp.models import Trade, json_default
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.redaction import collapse_home, redact_error
 from ibkr_core_mcp.store import SQLiteStore
@@ -1315,7 +1316,7 @@ def _money_signed(v: float | None) -> str:
 _SIDE_MAP = {"B": "BUY", "S": "SELL", "BUY": "BUY", "SELL": "SELL"}
 
 
-def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _parse_live_trades(raw: list[Trade | dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Validate and normalise raw IBKR live trade records into store schema.
 
     Mirrors the integrity guarantees of FlexQueryClient._parse_trades:
@@ -1323,6 +1324,9 @@ def _parse_live_trades(raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
     - Never falls back to a loop index for execution_id (would cause cross-call collisions).
     - Normalises side: B→BUY, S→SELL.
     - Applies abs() to commission (IBKR reports negative values).
+
+    Accepts `Trade` models or the plain dicts `IBKRClient.get_trades` returns for a
+    record that would not validate — both answer `.get()`, and this reads nothing else.
 
     Returns (parsed_records, skipped_count).
     """
@@ -1882,11 +1886,11 @@ class ClaudeToolkit:
         # Note: CP API /iserver/account/trades is session-scoped — mobile/TWS-placed
         # trades from the same account may NOT appear. Use source='store' (Flex) for
         # authoritative multi-day P&L including all origins.
-        trades = self._client.get_trades()
+        live_trades = self._client.get_trades()
         if symbol:
-            trades = [t for t in trades if t.get("symbol", "").upper() == symbol.upper()]
+            live_trades = [t for t in live_trades if t.get("symbol", "").upper() == symbol.upper()]
 
-        parsed, skipped = _parse_live_trades(trades)
+        parsed, skipped = _parse_live_trades(live_trades)
         upsert_note = ""
         if parsed:
             try:
@@ -1903,7 +1907,7 @@ class ClaudeToolkit:
                 log.warning("_get_trades: flex_trade live upsert failed: %s", redact_error(exc))
         skip_note = f" ({skipped} record(s) skipped — missing required fields)" if skipped else ""
 
-        if not trades:
+        if not live_trades:
             return (
                 "No trades visible in CP API session (last 7 days). "
                 "Mobile/TWS-placed trades are not included in the session scope. "
@@ -2510,14 +2514,36 @@ class ClaudeToolkit:
         """Return FYI notifications and unread count from the IBKR notification centre."""
         max_r = inputs.get("max_results", 10)
         notifications = self._client.get_notifications(max_r)
-        unread = self._client.get_unread_count()
+        # The list is the answer and the count is decoration, so a failing count must not
+        # discard a list that arrived. /fyi/unreadnumber returned HTTP 423 "waiting for
+        # reply" on four consecutive attempts against a healthy authenticated gateway on
+        # 2026-09-16 while /fyi/notifications answered normally throughout.
+        try:
+            unread: int | None = self._client.get_unread_count()
+        except IBKRCoreError as exc:
+            log.warning("_get_notifications: unread count unavailable: %s", redact_error(exc))
+            unread = None
+        count = f"{unread} unread" if unread is not None else "unread count unavailable"
         if not notifications:
-            return f"No FYI notifications. Unread count: {unread}", None
+            return f"No FYI notifications. {count[0].upper()}{count[1:]}.", None
+        # IBKR names these fields with letter codes — `MS` title, `R` read flag, `D` epoch
+        # date — and sends no `isRead`, `headline` or `title` at all. Reading those three
+        # rendered every notification as "- [UNREAD] ?", which is what this tool returned
+        # from the day it was written until 2026-09-16. Read through the payload keys
+        # rather than the model's attributes so a record that failed validation, and so
+        # arrived as a plain dict, still renders.
+        #
+        # On `R`'s polarity, and the limit of the evidence: IBKR documents it as "Return
+        # if the notification was read or not. Value Format: 0: Disabled; 1: Enabled", so
+        # 1 is the flag set. Measured 2026-09-16, three notifications all carried `R: 0`
+        # while /fyi/unreadnumber reported 3 — consistent with 0 meaning unread. **R: 1
+        # was never observed**, so the read branch below rests on the documentation alone.
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-notifications.md
         lines = [
-            f"- [{('UNREAD' if not n.get('isRead') else 'read')}] {n.get('headline', n.get('title', '?'))}"
+            f"- [{('read' if n.get('R') else 'UNREAD')}] {n.get('MS') or n.get('headline') or '?'}"
             for n in notifications
         ]
-        return f"FYI Notifications ({unread} unread):\n" + "\n".join(lines), None
+        return f"FYI Notifications ({count}):\n" + "\n".join(lines), None
 
     def _add_indicators(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Compute RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, and Williams %R from cached bars."""
@@ -2937,7 +2963,9 @@ class ClaudeToolkit:
         contracts = self._client.search_contract(symbol, sec_type)
         if not contracts:
             return f"No contracts found for {symbol} ({sec_type}).", None
-        return json.dumps(contracts, indent=2), None
+        # default=json_default: search_contract returns Contract models, which serialise
+        # back to the exact rows IBKR sent — every key, not the six the model names.
+        return json.dumps(contracts, indent=2, default=json_default), None
 
     def _get_futures(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return the futures contracts for the given root symbols, sorted by expiry.

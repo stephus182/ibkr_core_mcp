@@ -1,8 +1,24 @@
 """IBKRClient — the complete IBKR Client Portal Web API surface (74 endpoints).
 
 Wraps market data, contracts, portfolio, orders, alerts, watchlists, and session
-management, returning typed models from `models.py` where the shape is stable.
-Rate limiting and 429/503 backoff are handled transparently by `rate_limiter.py`.
+management. Rate limiting and 429/503 backoff are handled transparently by
+`rate_limiter.py`.
+
+**Return types.** Six endpoints return models from `models.py` — `search_contract` and
+`get_secdef` (`Contract`), `get_positions` (`Position`), `get_trades` (`Trade`),
+`get_live_orders` (`Order`), `get_account_summary` (`AccountSummary`) and
+`get_notifications` (`Notification`). The rest return the decoded response as-is, and
+their annotations say so. This file claimed to return "typed models from `models.py`
+where the shape is stable" from the day it was written until 2026-09-16, when not one
+method did (audit finding API-11); the claim is now a list, so it can be checked.
+
+Those models never replace the payload. Each one is also a mapping over exactly what
+IBKR sent — `position["mktValue"]`, `dict(position)`, `len(position)` — so a typed
+return cannot narrow a 51-key position to seven fields. A record that will not validate
+is passed through as the plain dict it arrived as rather than dropped, which is why the
+annotations are `list[Position | dict[str, Any]]` and not `list[Position]`. See
+`models.py` for the reasoning and `tests/fixtures/ibkr_live_shapes.json` for the
+captured responses both are checked against.
 
 **Security invariant.** Every order write method — `place_order`, `modify_order`,
 `cancel_order`, `reply_order`, and the `*_and_confirm` variants — runs two
@@ -37,6 +53,16 @@ from ibkr_core_mcp.human_auth import (
     ORDER_WRITE_AUTHORIZATION_TTL_S,
     OrderWriteAuthorization,
     require_touch_id,
+)
+from ibkr_core_mcp.models import (
+    AccountSummary,
+    Contract,
+    Notification,
+    Order,
+    Position,
+    Trade,
+    parse_many,
+    parse_one,
 )
 from ibkr_core_mcp.order_confirm import (
     confirm_cancel_dialog,
@@ -741,7 +767,7 @@ class IBKRClient:
     # Contract / Security Definition
     # ------------------------------------------------------------------
 
-    def search_contract(self, symbol: str, sec_type: str = "STK") -> list[dict[str, Any]]:
+    def search_contract(self, symbol: str, sec_type: str = "STK") -> list[Contract | dict[str, Any]]:
         """Resolve a symbol to one or more contracts. Returns [] if no match.
 
         Returns [{"conid", "companyHeader", "companyName", "symbol", "description",
@@ -767,7 +793,7 @@ class IBKRClient:
         Endpoint: GET /iserver/secdef/search
         """
         data = self._get("/iserver/secdef/search", {"symbol": symbol, "secType": sec_type})
-        return data if isinstance(data, list) else []
+        return parse_many(Contract, data)
 
     def get_contract_info(self, conid: int) -> dict[str, Any]:
         """Full contract metadata: exchange, currency, primary exchange, trading class, multiplier.
@@ -940,7 +966,7 @@ class IBKRClient:
             params["exchangeFilter"] = exchange_filter
         return self._get("/trsrv/secdef/schedule", params)
 
-    def get_secdef(self, conids: list[int]) -> list[dict[str, Any]]:
+    def get_secdef(self, conids: list[int]) -> list[Contract | dict[str, Any]]:
         """Batch security definitions for up to 200 conids: [{conid, currency, ...}, ...].
 
         The response is an OBJECT wrapping the array — ``{"secdef": [{...}, {...}]}`` —
@@ -969,9 +995,8 @@ class IBKRClient:
         """
         data = self._get("/trsrv/secdef", {"conids": ",".join(str(c) for c in conids)})
         if isinstance(data, dict):
-            rows = data.get("secdef")
-            return rows if isinstance(rows, list) else []
-        return data if isinstance(data, list) else []
+            data = data.get("secdef")
+        return parse_many(Contract, data)
 
     def get_currency_pairs(self, currency: str) -> list[dict[str, Any]]:
         """Available FX pairs for a target currency: [{symbol, conid, ccyPair}, ...].
@@ -1037,14 +1062,24 @@ class IBKRClient:
         _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/meta")
 
-    def get_account_summary(self, account_id: str) -> dict[str, Any]:
-        """Net liquidation, cash, P&L. Response uses nested {"amount": value} objects.
+    def get_account_summary(self, account_id: str) -> AccountSummary | dict[str, Any]:
+        """Net liquidation and cash. Response uses nested {"amount": value} objects.
+
+        **This endpoint publishes no profit-and-loss key.** Its page documents none, and
+        a 108-key capture on 2026-09-16 contained none; `AccountSummary.unrealized_pnl`
+        and `.realized_pnl` accordingly read `None`, not `0.0`. P&L comes from
+        `get_pnl()` (/iserver/account/pnl/partitioned), as `upnl.{account}.{upl,dpl}`.
+        The docstring here said "Net liquidation, cash, P&L" until 2026-09-16.
+
+        The returned `AccountSummary` keeps the whole response: `summary["netliquidation"]`
+        is IBKR's own `{"amount", "currency", "isNull", "timestamp", "value"}` object,
+        including the currency the four typed attributes drop.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary.md
         Endpoint: GET /portfolio/{accountId}/summary
         """
         _validate_account_id(account_id)
-        return self._get(f"/portfolio/{account_id}/summary")
+        return parse_one(AccountSummary, self._get(f"/portfolio/{account_id}/summary"))
 
     def get_account_ledger(self, account_id: str) -> dict[str, Any]:
         """Cash balances by currency with detailed ledger fields.
@@ -1064,7 +1099,7 @@ class IBKRClient:
         _validate_account_id(account_id)
         return self._get(f"/portfolio/{account_id}/allocation")
 
-    def get_positions(self, account_id: str, page: int = 0) -> list[dict[str, Any]]:
+    def get_positions(self, account_id: str, page: int = 0) -> list[Position | dict[str, Any]]:
         """Open positions, one page at a time (page 0 = first 100). Returns [] if not a list.
 
         The page size is **100**, not 30. IBKR's cited page says so twice — "The endpoint
@@ -1089,7 +1124,7 @@ class IBKRClient:
         """
         _validate_account_id(account_id)
         data = self._get(f"/portfolio/{account_id}/positions/{page}")
-        return data if isinstance(data, list) else []
+        return parse_many(Position, data)
 
     def get_positions_by_conid(self, conid: int) -> list[dict[str, Any]]:
         """Position data for a specific contract across all accounts, flattened to one list.
@@ -1199,7 +1234,7 @@ class IBKRClient:
         self._get("/iserver/account/orders?force=true")
         time.sleep(1)
 
-    def get_live_orders(self) -> list[dict[str, Any]]:
+    def get_live_orders(self) -> list[Order | dict[str, Any]]:
         """Working orders only (PreSubmitted, Submitted, ApiPending, PendingSubmit, PendingCancel, Inactive).
 
         Two-call pattern required: first call with ?force=true instantiates the subscription;
@@ -1241,7 +1276,8 @@ class IBKRClient:
                 f"or the diagnose_orders tool to see what the gateway actually sent.",
                 status_code=0,
             )
-        return [o for o in orders if o.get("status") and o.get("status") not in self._TERMINAL_STATUSES]
+        working = [o for o in orders if o.get("status") and o.get("status") not in self._TERMINAL_STATUSES]
+        return parse_many(Order, working)
 
     def get_orders_raw(self) -> Any:
         """Raw, unfiltered /iserver/account/orders response, for diagnostics.
@@ -1271,7 +1307,7 @@ class IBKRClient:
         self._ensure_accounts_initialized()
         return self._get(f"/iserver/account/order/status/{order_id}")
 
-    def get_trades(self) -> list[dict[str, Any]]:
+    def get_trades(self) -> list[Trade | dict[str, Any]]:
         """Trade executions for the current day + up to 6 previous days (7-day window).
 
         **This is the package's direct access point for TODAY's and recent fills** —
@@ -1332,10 +1368,10 @@ class IBKRClient:
         # days=7 requests maximum lookback; without it IBKR returns today's session only
         data = self._get("/iserver/account/trades?days=7")
         if isinstance(data, list) and data:
-            return data
+            return parse_many(Trade, data)
         time.sleep(1)  # empty first response may be the unprimed subscription
         data = self._get("/iserver/account/trades?days=7")
-        return data if isinstance(data, list) else []
+        return parse_many(Trade, data)
 
     # ------------------------------------------------------------------
     # Portfolio Analyst
@@ -1473,7 +1509,7 @@ class IBKRClient:
     # FYI / Notifications
     # ------------------------------------------------------------------
 
-    def get_notifications(self, max_results: int = 10) -> list[dict[str, Any]]:
+    def get_notifications(self, max_results: int = 10) -> list[Notification | dict[str, Any]]:
         """Account notifications — order fills, margin calls, system messages.
 
         IBKR enforces a hard cap of 10 notifications per request.
@@ -1482,7 +1518,7 @@ class IBKRClient:
         """
         max_results = min(max(1, max_results), 10)
         data = self._get("/fyi/notifications", {"max": max_results})
-        return data if isinstance(data, list) else []
+        return parse_many(Notification, data)
 
     def get_unread_count(self) -> int:
         """Number of unread FYI notifications.
