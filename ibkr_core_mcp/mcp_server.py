@@ -164,14 +164,24 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
             if path == "ibkr://accounts":
                 text = json.dumps(toolkit._client.get_accounts(), indent=2)
             elif path == "ibkr://positions/current":
-                accounts = toolkit._client.get_accounts()
-                account_id = accounts[0].get("accountId", "") if accounts else ""
+                # `_first_account_id`, not an inlined `get_accounts()[0]["accountId"]`.
+                # IBKR varies that key by endpoint — the helper applies the documented
+                # "accountId" -> "id" fallback, and CLAUDE.md requires using it for exactly
+                # this reason. Reading only "accountId" was the package's single violation
+                # of that rule: a row carrying just "id" fell into the branch below and
+                # reported a resolution failure for an account that resolved fine
+                # everywhere else (audit finding TOOL-06, 2026-09-16).
+                account_id, account_err = toolkit._first_account_id()
                 if account_id:
                     text = json.dumps(toolkit._client.get_positions(account_id), indent=2)
                 else:
-                    # Silent branch: no exception, but nothing was read either.
+                    # Not silent: no exception, but nothing was read either, and the
+                    # reason the helper gave is carried out rather than discarded.
                     text = json.dumps(
-                        {"error": "no account could be resolved, so positions were never read", "resource": path}
+                        {
+                            "error": account_err or "no account could be resolved, so positions were never read",
+                            "resource": path,
+                        }
                     )
             elif path == "ibkr://trades/recent":
                 text = json.dumps(store.get_trades()[:100], indent=2)

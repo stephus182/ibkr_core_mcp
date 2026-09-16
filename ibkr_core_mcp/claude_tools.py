@@ -696,6 +696,15 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_pnl",
+        # READ_ONLY is accurate despite the WebSocket in `_prime_pnl_subscription`,
+        # and this note exists so the point is not re-raised (audit TOOL-09, 2026-09-16).
+        # That touch is conditional (only when a cold gateway returns an empty upnl),
+        # net-zero (connect -> subscribe_pnl -> unsubscribe_pnl -> disconnect leaves the
+        # gateway exactly as it was), and best-effort (failure is logged, never raised).
+        # NETWORK is reserved here for THIRD-PARTY services — only sync_flex_trades and
+        # firecrawl_search hold it; all 24 READ_ONLY tools already talk to the local
+        # gateway over HTTP. Removing the touch would restore a live-verified bug:
+        # empty P&L on a fresh session (2026-07-17).
         "capabilities": frozenset({"READ_ONLY", "LOCAL_IO"}),
         "description": (
             "Get real-time daily and unrealized P&L for the IBKR account, one summary "

@@ -1065,7 +1065,21 @@ class IBKRClient:
         return self._get(f"/portfolio/{account_id}/allocation")
 
     def get_positions(self, account_id: str, page: int = 0) -> list[dict[str, Any]]:
-        """Open positions, paginated (page 0 = first 30). Returns [] if not a list.
+        """Open positions, one page at a time (page 0 = first 100). Returns [] if not a list.
+
+        The page size is **100**, not 30. IBKR's cited page says so twice — "The endpoint
+        supports paging, each page will return up to 100 positions" and "One page contains a
+        maximum of 100 positions" (audit finding API-05, corrected 2026-09-16). Nothing in
+        this package chunked by 30, so the figure was a docstring claim only.
+
+        Documentation-confirmed, live-indeterminate: the gateway build here returns no
+        `pageSize` field at all (measured 2026-09-16 — every row had `pageSize: None`), and
+        the test account holds 2 positions, so the boundary cannot be observed directly.
+
+        **Callers read page 0 and stop.** `ClaudeToolkit._get_positions` and the
+        `ibkr://positions/current` resource both take the default, so an account with more
+        than 100 positions is reported with its first 100 and no indication there are more.
+        Not reachable on the test account; recorded as API-17.
 
         Returns [{"conid": ..., "contractDesc": ..., "position": ..., "mktPrice": ...,
         "mktValue": ..., "unrealizedPnl": ..., "realizedPnl": ...}].

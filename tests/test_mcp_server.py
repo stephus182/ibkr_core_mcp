@@ -513,3 +513,33 @@ async def test_stream_loop_drops_a_subscription_once_its_alert_is_gone():
 
     assert 265598 in fake_ws.subscribed
     assert 265598 in fake_ws.unsubscribed, "a stale subscription was never released"
+
+
+@pytest.mark.asyncio
+async def test_positions_resource_resolves_an_account_row_that_has_only_id(toolkit, store):
+    """`ibkr://positions/current` inlined `get_accounts()` and read only `"accountId"`.
+
+    IBKR varies that key by endpoint, which is why `ClaudeToolkit._first_account_id()`
+    exists and why CLAUDE.md says to use it rather than inline the call — this was the
+    package's single violation of that rule (audit finding TOOL-06).
+
+    Verified live 2026-09-16: this account's rows carry BOTH `accountId` and `id`, with the
+    same value, so nothing was broken here — which is exactly why it survived. A row
+    carrying only `id` took the "no account could be resolved" branch and read no positions
+    at all, reporting a resolution failure for an account that had resolved fine everywhere
+    else in the package.
+    """
+    import json
+
+    from ibkr_core_mcp.mcp_server import build_server
+
+    toolkit._client.get_accounts.return_value = [{"id": "U9999999"}]  # no "accountId"
+    toolkit._client.get_positions.return_value = [{"symbol": "GLD", "position": 10}]
+
+    server = build_server(toolkit, store)
+    content = await _read_resource_text(server, "ibkr://positions/current")
+
+    assert "no account could be resolved" not in content, content
+    positions = json.loads(content)
+    assert positions[0]["symbol"] == "GLD"
+    toolkit._client.get_positions.assert_called_once_with("U9999999")

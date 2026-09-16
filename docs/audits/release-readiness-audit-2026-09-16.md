@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**109 findings, 31 closed, 78 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
+**110 findings, 34 closed, 76 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -734,6 +734,76 @@ Five mutants, all caught — including both "flag every response" and "never cac
 the two mutations that a one-sided test suite would miss. The first attempt at the
 "never flag truncation" mutant produced a syntax error rather than a behaviour change and
 was re-run cleanly before being counted.
+
+---
+
+## Phase 3 — the gateway-dependent sweep (before releasing the gateway)
+
+Everything below needed a live, authenticated gateway. Run as one batch so the session
+could be released afterwards.
+
+### API-09 — the stream fix, verified against the real WebSocket
+
+The fix landed against a *fake* WebSocket. Driven against the live gateway with one local
+SQLite alert stored (AAPL 265598, an inert `below 1.00`), and then with the pre-fix
+arrangement restored, in the same session:
+
+| arrangement | subscriptions sent to the live gateway |
+|---|---|
+| **with the fix** | `smd+265598` |
+| **pre-fix** | **NONE** — the deadlock reproduces live |
+
+That is the strongest form of the check: the fix is verified and the verification is proven
+able to fail, both against real IBKR infrastructure rather than a double.
+
+### TOOL-06 — real, but it could never have shown here
+
+`ibkr://positions/current` inlined `get_accounts()[0]["accountId"]`, the package's single
+violation of CLAUDE.md's `_first_account_id()` rule. **Live: this account returns BOTH
+`accountId` and `id`, with the same value** (`U1675699`), so nothing was broken on this
+machine — which is exactly why it survived. A row carrying only `id` fell into the "no
+account could be resolved" branch and read no positions, reporting a resolution failure for
+an account that resolves fine everywhere else in the package. Now uses the helper, and
+carries out the reason the helper gave rather than a generic string.
+
+### API-05 — confirmed from documentation, indeterminate live
+
+`get_positions`' docstring said "page 0 = first 30". IBKR's cited page says 100, twice.
+Nothing in the package chunked by 30, so it was a docstring claim only.
+
+Live could not settle it: this gateway build returns **no `pageSize` field at all** (every
+row `None`, measured 2026-09-16) and the account holds 2 positions, so the boundary is not
+observable. Recorded as documentation-confirmed rather than measured.
+
+### API-17 — new, raised by the above
+
+**Every caller reads page 0 and stops.** `ClaudeToolkit._get_positions` and the
+`ibkr://positions/current` resource both take the default page, so an account with more than
+100 positions is reported with its first 100 and no indication there are more — the same
+silently-incomplete shape as API-02. Not reachable on a 2-position account, so it is recorded
+rather than fixed blind; the docstring now says so.
+
+### TOOL-09 — reviewed, declaration left unchanged
+
+`get_pnl` declares `{READ_ONLY, LOCAL_IO}` while `_prime_pnl_subscription` opens a
+WebSocket. Judged against what the vocabulary actually means rather than on the word
+"WebSocket":
+
+- `NETWORK` is reserved for **third-party** services — only `sync_flex_trades` and
+  `firecrawl_search` hold it, while all 24 `READ_ONLY` tools already talk to the local
+  gateway over HTTP. So this is not a `NETWORK` omission.
+- The touch is **conditional** (only when a cold gateway returns an empty `upnl`),
+  **net-zero** (connect → subscribe → unsubscribe → disconnect leaves the gateway as it
+  was), and **best-effort** (failure logged, never raised).
+- Removing it would restore a live-verified bug: empty P&L on a fresh session (2026-07-17).
+
+Expanding a frozen security vocabulary for a transient no-op is disproportionate. The
+reasoning is now recorded **at the declaration site** so the next audit does not re-raise it.
+
+### Live suite after all of the above
+
+`pytest -m integration`: **85 passed, 14 skipped, 0 failed** (99 collected). The web-scraper
+flake did not recur.
 
 ---
 
