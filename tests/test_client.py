@@ -6,7 +6,7 @@ from unittest.mock import patch as _patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import HumanAuthError
+from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError
 
 # The `client` fixture lives in tests/conftest.py (shared with tests/security/).
 
@@ -2429,3 +2429,79 @@ def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
         f"the shared boundary bar survived: {len(stamps)} bars, {len(set(stamps))} unique"
     )
     assert stamps == sorted(stamps), "bars must come back in ascending time order"
+
+
+# ---------------------------------------------------------------------------
+# FYI writes — both methods contradicted the pages they cite (API-20, API-21)
+# ---------------------------------------------------------------------------
+
+
+def test_mark_notification_read_uses_the_documented_verb_and_path(client):
+    """IBKR documents `PUT /fyi/notifications/{notificationId}` with an empty body.
+
+    This method sent `POST /fyi/notifications/{id}/read` — a verb and a path IBKR
+    publishes nowhere. Two independent documentation families agree:
+    v1/endpoints/fy-is-and-notifications/mark-notification-read.md and
+    api-reference/trading/trading-fy-is-and-notifications/read-fyi-notification.md.
+
+    The live test that was meant to cover this accepted success, 400, 404 and 423 —
+    every outcome the call can produce — so it passed whether or not the endpoint existed.
+    """
+    with patch.object(client._session, "put") as mock_put:
+        mock_put.return_value = _make_ok_response({"V": 1, "T": 12})
+        result = client.mark_notification_read("2026091616556319")
+
+    url = mock_put.call_args.args[0] if mock_put.call_args.args else mock_put.call_args.kwargs["url"]
+    assert url.endswith("/fyi/notifications/2026091616556319")
+    assert not url.endswith("/read")
+    assert result == {"V": 1, "T": 12}
+
+
+def test_mark_notification_read_rejects_a_traversing_id(client):
+    with patch.object(client._session, "put") as mock_put, pytest.raises(ConfigError):
+        client.mark_notification_read("../../iserver/account/orders")
+    mock_put.assert_not_called()
+
+
+def test_update_delivery_option_device_sends_the_four_documented_fields(client):
+    """`device` is POST /fyi/deliveryoptions/device with a JSON body.
+
+    The body was `{"deviceId", "enabled"}` — 2 of the 4 fields the endpoint documents,
+    the same shape of defect as the alert-modify body (TOOL-01).
+    """
+    with patch.object(client._session, "post") as mock_post:
+        mock_post.return_value = _make_ok_response({"V": 1})
+        client.update_delivery_option("apn://mtws@ABC", "device", True, device_name="iPhone", ui_name="iPhone")
+
+    url = mock_post.call_args.args[0] if mock_post.call_args.args else mock_post.call_args.kwargs["url"]
+    assert url.endswith("/fyi/deliveryoptions/device")
+    assert mock_post.call_args.kwargs["json"] == {
+        "deviceName": "iPhone",
+        "deviceId": "apn://mtws@ABC",
+        "uiName": "iPhone",
+        "enabled": True,
+    }
+
+
+def test_update_delivery_option_email_is_a_put_with_a_query_parameter(client):
+    """`email` is PUT /fyi/deliveryoptions/email?enabled=… — a different verb and a
+    different parameter style from `device`, which is why one parameterised path could
+    not serve both."""
+    with patch.object(client._session, "put") as mock_put:
+        mock_put.return_value = _make_ok_response({"V": 1})
+        client.update_delivery_option(None, "email", False)
+
+    url = mock_put.call_args.args[0] if mock_put.call_args.args else mock_put.call_args.kwargs["url"]
+    assert url.endswith("/fyi/deliveryoptions/email")
+    assert mock_put.call_args.kwargs["params"] == {"enabled": "false"}
+
+
+def test_update_delivery_option_rejects_an_undocumented_channel(client):
+    with (
+        patch.object(client._session, "post") as mock_post,
+        patch.object(client._session, "put") as mock_put,
+        pytest.raises(ConfigError),
+    ):
+        client.update_delivery_option("d", "sms", True)
+    mock_post.assert_not_called()
+    mock_put.assert_not_called()

@@ -87,3 +87,25 @@ def test_the_documented_order_id_regex_rejects_unicode_digits():
         assert not order_id.match(unicode_digits), (
             f"the documented regex admits {unicode_digits!r}, which int() silently converts"
         )
+
+
+def test_every_security_test_file_appears_in_the_suite_inventory():
+    """SECURITY.md's suite table must list every file that runs under `-m security`.
+
+    The table reads as the inventory of this suite, so a file missing from it makes the
+    inventory look complete while it is not — the same defect as invariant 9 being listed
+    in the constitution with no test behind it (SEC-04). This file was itself the missing
+    one: it was added during the 2026-09-16 audit and left out of the table it exists to
+    police, which is how it got written.
+    """
+    table = (_ROOT / "SECURITY.md").read_text().split("## Security Regression Suite")[1]
+    documented = set(re.findall(r"^\| `(test_\w+\.py)`", table, re.M))
+    on_disk = {p.name for p in (_ROOT / "tests" / "security").glob("test_*.py")}
+
+    assert on_disk, "no security test files found — the check would be vacuous"
+    assert on_disk - documented == set(), (
+        f"security tests missing from SECURITY.md's suite table: {sorted(on_disk - documented)}"
+    )
+    assert documented - on_disk == set(), (
+        f"SECURITY.md lists suite files that do not exist: {sorted(documented - on_disk)}"
+    )

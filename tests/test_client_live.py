@@ -30,6 +30,7 @@ Explicit exclusions:
 from __future__ import annotations
 
 import itertools
+import os
 
 import pytest
 
@@ -819,21 +820,46 @@ def test_get_delivery_options(live_client):
 
 
 @pytest.mark.integration
-def test_mark_notification_read_noop(live_client):
-    """Verify mark_notification_read is callable. Uses a fake id — expect 404 or {} not an exception."""
-    from ibkr_core_mcp.exceptions import IBKRAPIError
+def test_mark_notification_read_rejects_a_bad_id_without_reaching_the_gateway(live_client):
+    """A malformed id is refused locally — the one thing this can assert without a write.
 
-    try:
-        result = live_client.mark_notification_read("000000000000000000000000")
-        assert result is None or isinstance(result, dict)
-    except IBKRAPIError as e:
-        # 404 for nonexistent id is acceptable — endpoint exists
-        if "404" in str(e) or "400" in str(e):
-            pass  # expected for a fake notification id
-        elif "423" in str(e):
-            pytest.skip("FYI mark-read HTTP 423 — FYI subscription not configured")
-        else:
-            raise
+    **This test replaced one that could not fail.** The previous version called the
+    endpoint with a fake id and accepted a successful result, HTTP 400, HTTP 404 *and*
+    HTTP 423 — every outcome the call can produce — under the docstring "Verify
+    mark_notification_read is callable". It passed for months while the method used
+    `POST /fyi/notifications/{id}/read`, a verb and path IBKR publishes nowhere
+    (audit finding API-20, fixed 2026-09-16).
+
+    What replaced it: the verb and path are pinned by unit tests against the documented
+    shape, and the discriminating live check needs a **real** notification id, because
+    marking one read is a write to the account holder's data with no unmark method in
+    this package. That check is `test_mark_notification_read_live_write` below, which
+    runs only when an id is supplied deliberately.
+    """
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    with pytest.raises(ConfigError):
+        live_client.mark_notification_read("../../iserver/account/orders")
+
+
+@pytest.mark.integration
+def test_mark_notification_read_live_write(live_client):
+    """The real thing — opt-in, because it writes to the account holder's notifications.
+
+    Set `IBKR_TEST_NOTIFICATION_ID` to an id from `get_notifications()`. IBKR documents
+    the endpoint as marking a message "read or unread", but this package exposes no way
+    to mark one unread again, so the effect is not reversible from here.
+
+    Asserts IBKR's documented acknowledgement: `{"V": 1, "T": <ms>}`.
+    """
+    notification_id = os.environ.get("IBKR_TEST_NOTIFICATION_ID")
+    if not notification_id:
+        pytest.skip("set IBKR_TEST_NOTIFICATION_ID to a real id to exercise the write")
+
+    result = live_client.mark_notification_read(notification_id)
+
+    assert isinstance(result, dict), result
+    assert result.get("V") == 1, f"IBKR did not acknowledge the edit: {result}"
 
 
 # ---------------------------------------------------------------------------

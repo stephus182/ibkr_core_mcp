@@ -255,14 +255,42 @@ This is OWASP's *Excessive Permissions* item and its §4 human-in-the-loop check
 A confused deputy is a trusted intermediary manipulated into using its privileges on an attacker's behalf; here the deputy is the model and the attacker is whatever it read. (The MCP best-practices page's section of that name is about OAuth proxy servers, a condition this deployment does not have.) In this system:
 
 - The LLM (deputy) has no path to order execution regardless of instruction — no tool exists for it to call.
-- `account_id`, `order_id`/`alert_id`, and `reply_id` values from LLM-generated tool input are validated with strict regexes before use in URLs, preventing path-manipulation attacks:
+- Every value interpolated into a URL path is validated before use, preventing path-manipulation attacks:
 
 ```python
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 _ORDER_ID_RE = re.compile(r"^[0-9]+$")
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
+_NUMERIC_PATH_SEGMENT_RE = re.compile(r"^[0-9]+$")
+_UNSAFE_PATH_SEGMENT_RE = re.compile(r"[/\\?#%\s]|\.\.")
 # Blocks values like "../../iserver/auth/status", "../order/987654321", etc.
 ```
+
+`_NUMERIC_PATH_SEGMENT_RE` backs `_validate_conid`, `_validate_page` and
+`_validate_notification_id`, added 2026-09-16. Those three values carry `int` annotations
+that do not survive into the interpolation — and `/iserver/secdef/search` returns `conid`
+as a **string** — so a string there is an ordinary value, not a hypothetical misuse.
+
+`_UNSAFE_PATH_SEGMENT_RE` backs `_validate_path_segment`, which asserts only that a value
+stays one path segment rather than asserting its format. It is used where the value comes
+from **IBKR's own response** instead of a caller: `_resolve_one_reply`'s reply id.
+`_REPLY_ID_RE` is inferred from a single documented example and has never been checked
+against a reply id IBKR actually sent, so a strict check there could reject a legitimate
+id mid-chain and leave a placed order unconfirmed — a worse outcome than the traversal it
+would prevent, on a value no caller supplied. `reply_order`, whose reply id *is*
+caller-supplied, keeps the strict check. Recorded as audit finding SEC-11.
+
+One path segment is not a regex at all: `update_delivery_option`'s `option` is checked
+against `_DELIVERY_OPTIONS = frozenset({"device", "email"})`, the two channels IBKR
+publishes, because no other value forms a real path.
+
+**This bullet said "`account_id`, `order_id`/`alert_id`, and `reply_id` … are validated"
+until 2026-09-16, and that was a claim about three names rather than about the property.**
+An AST enumeration found 36 path interpolations and 10 with no validator for the value
+being interpolated — including `get_positions`' page index, in a method that validated its
+account id in the same URL. `tests/security/test_path_identifier_validation.py` now holds
+the property itself: every interpolated value is passed to a validator, or listed with a
+reason (audit findings SEC-03, SEC-04).
 
 `_ORDER_ID_RE` is `[0-9]`, never `\d`. Python's `\d` matches Unicode decimal digits, and
 `int()` accepts them: `\d+` admits `"١٢٣"` (Arabic-Indic), which `int()` reads as 123, and
@@ -503,8 +531,10 @@ The 2026-09-13 audit's conclusion was that the important properties held by conv
 lint-clean, fully typed change could violate any of them silently. Each now has a test that
 reads the source or drives the code, and a `security` marker (`pytest -m security`, ~10 s).
 The last row, and the bearer-token half of the transport row, came from the 2026-09-14 OWASP
-recalibration (`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`); the rest from the
-2026-09-13 audit:
+recalibration (`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`); the path-identifier
+row from the 2026-09-16 release-readiness audit, which found property **(9)** listed in this
+constitution with **no test at all** and false for three methods (findings SEC-03 and SEC-04) —
+the constitution had eleven entries and the table ten; the rest from the 2026-09-13 audit:
 
 | File | Property held |
 |---|---|
@@ -516,6 +546,8 @@ recalibration (`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`); the r
 | `test_error_redaction.py` | Secret-shaped material (14 forms, userinfo and OAuth parameters included) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
+| `test_documented_controls.py` | The regexes this document presents as the mitigation are character-for-character what `client.py` compiles, in both directions; the documented `order_id` pattern actually rejects Unicode digits; every file running under `-m security` appears in the table above |
+| `test_path_identifier_validation.py` | Every value interpolated into a URL path in `client.py` is itself passed to a validator, or listed with a reason; the checker fires on an unguarded snippet, ignores prose that merely begins with a path, and holds no exemption for an interpolation that no longer exists |
 | `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback, with or without a port; it answers 401 to an absent, wrong, prefix, case-altered or scheme-altered bearer credential on both routes, and lets the real token through |
 | `test_tool_input_validation.py` | On the MCP transport an argument set that fails the tool's `inputSchema` never reaches `_dispatch`; a well-formed one does; no call in the package passes `validate_input=False`; every name the dispatcher routes is a listed tool (the SDK validates no other); the probe reaches the handler for all four sets with validation off |
 
@@ -527,8 +559,8 @@ not execution; **(3)** every tool declares its capabilities and none declares `O
 frozen; **(5)** every externally derived URL is checked before the fetch and on every browser
 request; **(6)** error text reaching the model or a log passes one redaction function; **(7)**
 unit tests cannot open sockets, resolve names or see credentials; **(8)** processes are spawned
-only from three named modules, never through a shell; **(9)** every
-path-interpolated identifier passes its regex; **(10)** the HTTP transport validates `Host`
+only from three named modules, never through a shell; **(9)** every value
+interpolated into a URL path is validated, or carries a written exemption; **(10)** the HTTP transport validates `Host`
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
 transport an argument set that fails the tool's `inputSchema` never reaches a handler.
 

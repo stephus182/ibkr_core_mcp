@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**117 findings, 41 closed, 76 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are **open**; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
+**119 findings, 46 closed, 73 open** (TOOL-01 investigated and documented rather than closed — it cannot be exercised while the upstream operator block stands) (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). API-18, API-19 and TOOL-10/11/12 were raised and closed by the API-11 work; API-20 and API-21 were raised by the SEC-03/04 investigation and are now **closed**, along with SEC-03, SEC-04 and SEC-12; SEC-11 (`_REPLY_ID_RE` never checked against a real reply id) is **open** and needs a live order; **API-11 itself is partly done** — six of 74 methods return models, the other 68 remain open. The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -1373,3 +1373,82 @@ calling it directly. Both are `ACCOUNT_STATE` writes in the capability registry,
 
 **Not verified live.** Confirming API-20 means marking one of the owner's real notifications
 read, and this package has no method to mark one unread again. Deferred to the owner.
+
+---
+
+## Phase 3 — SEC-03/04 closed, API-20/21 fixed, and what the new control found next
+
+### Invariant 9 now holds as a property, not as a list of three names
+
+`tests/security/test_path_identifier_validation.py` enumerates every value interpolated into
+a URL path in `client.py` and requires that **that value** be passed to a validator, or listed
+in `ALLOWED` with a reason. Three exemptions are recorded (`self._base` in `ping`, `tickle`
+and `delete_watchlist` — the gateway base URL, pinned to loopback at construction), and a
+fourth test fails if an exemption outlives the interpolation it excuses.
+
+**The first version of the checker asked the wrong question.** It asked whether the enclosing
+method called *any* validator, which `get_positions` satisfied by validating its account id
+while interpolating an unchecked `page` into the same URL. Strengthening it from per-method to
+per-value took the count of unguarded interpolations from 8 to 10 — `get_positions`' `page`
+and `get_position`'s `conid` were invisible to the weaker form. A checker that asks a weaker
+question than the invariant is the same defect as no checker, one step further from being
+noticed.
+
+Ten interpolations were closed: five `conid` sites and one `page` (`_validate_conid`,
+`_validate_page`, on `_NUMERIC_PATH_SEGMENT_RE`), `_resolve_one_reply`'s reply id, the
+notification id, and the delivery option.
+
+### SEC-11 — **Medium, open**: `_REPLY_ID_RE` has never met a real reply id
+
+Adding `_validate_reply_id` to `_resolve_one_reply` — the obvious fix, and what the invariant
+literally asks for — broke 18 reply-chain tests, whose fixtures use ids like `"RPL1"`. That is
+a test-fixture problem, but chasing it surfaced a real one: **`_REPLY_ID_RE` is inferred from a
+single documented example** (`a12b34c5-d678-9e012f-3456-7a890b12cd3e`) and no reply id IBKR
+actually sent exists anywhere in this repository, because exercising one means placing a real
+order.
+
+The asymmetry decided it. A strict check on the chain path buys protection against a malicious
+localhost gateway — the trust anchor we authenticate *to* — on a value **no caller supplies**.
+If the inference is wrong it rejects a legitimate id in the middle of a reply chain, leaving a
+placed order unconfirmed at IBKR. So `_resolve_one_reply` validates the property that matters —
+`_validate_path_segment`, "this stays one path segment" — while `reply_order`, whose reply id
+*is* caller-supplied, keeps the strict regex it has had since 2026-07-11.
+
+`reply_order`'s strict check carries the same unverified inference and has carried it since
+2026-07-11. **Open**, because closing it means placing a real order and reading the reply id
+IBKR returns.
+
+### API-20 and API-21 — fixed against both documentation families
+
+`mark_notification_read` now does `PUT /fyi/notifications/{notificationId}` with an empty
+body. `update_delivery_option` dispatches: `device` → `POST /fyi/deliveryoptions/device` with
+all four documented body fields, `email` → `PUT /fyi/deliveryoptions/email?enabled=…`. Both
+needed a `_put` helper, which is named in `test_order_write_boundary.py` alongside `_post` and
+`_session` so a new order-write call site cannot reach the network through it either.
+
+**The live test that could not fail is gone.** `test_mark_notification_read_noop` accepted a
+successful result, 400, 404 and 423 under the docstring "Verify mark_notification_read is
+callable". It is replaced by a local-refusal assertion plus
+`test_mark_notification_read_live_write`, which runs only when `IBKR_TEST_NOTIFICATION_ID`
+names a real id and asserts IBKR's documented `{"V": 1}` acknowledgement. It is opt-in
+because marking a notification read writes to the account holder's data and this package
+exposes no way to mark one unread.
+
+### SEC-12 — raised and closed: the suite inventory was missing a file
+
+Reconciling SECURITY.md's suite table against the constitution's eleven properties turned up a
+twelfth file on disk — `test_documented_controls.py`, **added by this audit's own earlier
+session and never listed in the table it exists to police**. The table reads as the inventory
+of the suite, so a file missing from it makes the inventory look complete while it is not:
+SEC-04 one level up. Closed by listing it, and by a new assertion in that same file that the
+table and the directory must agree in both directions.
+
+### Verification
+
+Nine mutations, each reverting one of the new controls; every one turns a test red, and the
+control run is green. Gates: ruff, ruff format, mypy (117 files), pytest 1,399 passed,
+`pytest -m security` 208 passed.
+
+**Not live-verified.** The gateway session expired during the pause and API-20's live check is
+the opt-in write above, awaiting the owner. The unit tests pin verb, path and body against the
+documented shapes; nothing here claims a live round trip.

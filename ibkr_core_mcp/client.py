@@ -83,6 +83,19 @@ _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 # ".../order/status/1234567890"; alertId documented as "int. Required").
 _ORDER_ID_RE = re.compile(r"^[0-9]+$")
 
+# conids, positions page indices and FYI notification IDs are all non-negative integers
+# in IBKR's documentation. `[0-9]` rather than `\d`, which matches Unicode digits that
+# int() accepts and a URL path does not — the same correction SECURITY.md records for
+# _ORDER_ID_RE.
+_NUMERIC_PATH_SEGMENT_RE = re.compile(r"^[0-9]+$")
+
+# Anything that would stop an interpolated value being a single path segment. Used where
+# the value is IBKR's own rather than a caller's — see `_validate_path_segment`.
+_UNSAFE_PATH_SEGMENT_RE = re.compile(r"[/\\?#%\s]|\.\.")
+
+# The two delivery channels IBKR documents, and the only two values that form a real path.
+_DELIVERY_OPTIONS = frozenset({"device", "email"})
+
 # IBKR reply IDs are documented as "String. Required" with example value
 # "a12b34c5-d678-9e012f-3456-7a890b12cd3e" — hex + hyphens, non-standard
 # UUID grouping (not 8-4-4-4-12), so match on charset/length, not exact
@@ -320,6 +333,72 @@ def _validate_reply_id(reply_id: str) -> None:
         raise ConfigError(f"Invalid reply_id {reply_id!r}: must be a hex/hyphen string.")
 
 
+def _validate_path_segment(value: str, label: str) -> None:
+    """Raise ConfigError if `value` could change the shape of the URL it is placed in.
+
+    This checks the property invariant 9 exists to protect — that an interpolated value
+    stays one path segment — rather than asserting a format. Use it where the value comes
+    from IBKR's own response rather than from a caller.
+
+    That distinction is deliberate. `_REPLY_ID_RE` is inferred from a **single documented
+    example** (`a12b34c5-d678-9e012f-3456-7a890b12cd3e`) and has never been checked against
+    a reply id IBKR actually sent, because exercising one means placing a real order. If
+    that inference is wrong, a strict check here would reject a legitimate id **in the
+    middle of a reply chain**, leaving a placed order unconfirmed at IBKR — a worse outcome
+    than the traversal it would prevent, on a value the caller never supplied. Recorded as
+    audit finding SEC-11; `reply_order`, whose reply id *is* caller-supplied, keeps the
+    strict check it has had since 2026-07-11.
+    """
+    if not value or not isinstance(value, str) or _UNSAFE_PATH_SEGMENT_RE.search(value):
+        raise ConfigError(f"Invalid {label} {value!r}: must be a single URL path segment.")
+
+
+def _require_numeric(value: object, label: str) -> None:
+    """Raise ConfigError unless `value` is a non-negative integer, or text spelling one.
+
+    Type annotations do not survive into the interpolation. `get_contract_info(conid: int)`
+    renders whatever it is handed, and `/iserver/secdef/search` returns `conid` as a
+    **string** ("265598"), so a string here is an ordinary value rather than a hypothetical
+    misuse. Invariant 9 asks that every path-interpolated identifier pass a regex; these
+    are identifiers, so they do.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ConfigError(f"Invalid {label} {value!r}: must be a non-negative integer.")
+    text = str(value)
+    if not _NUMERIC_PATH_SEGMENT_RE.fullmatch(text):
+        raise ConfigError(f"Invalid {label} {value!r}: must be a non-negative integer.")
+
+
+def _validate_conid(conid: int | str) -> None:
+    """Raise ConfigError if conid is not a non-negative integer."""
+    _require_numeric(conid, "conid")
+
+
+def _validate_page(page: int | str) -> None:
+    """Raise ConfigError if a positions page index is not a non-negative integer."""
+    _require_numeric(page, "page")
+
+
+def _validate_notification_id(notification_id: str) -> None:
+    """Raise ConfigError if notification_id is not a non-negative integer.
+
+    IBKR's own 400 for this endpoint reads "Missing, empty, **non-numeric**, or
+    out-of-range parameter", so numeric is the documented shape, not an inference.
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-fy-is-and-notifications/read-fyi-notification.md
+    """
+    _require_numeric(notification_id, "notification_id")
+
+
+def _validate_delivery_option(option: str) -> None:
+    """Raise ConfigError unless `option` is one of the two documented delivery channels.
+
+    IBKR publishes exactly two, and they are different endpoints rather than one
+    parameterised path — see `update_delivery_option` for what differs between them.
+    """
+    if option not in _DELIVERY_OPTIONS:
+        raise ConfigError(f"Invalid delivery option {option!r}: must be one of {sorted(_DELIVERY_OPTIONS)}.")
+
+
 def _as_reply_list(data: Any) -> list[dict[str, Any]]:
     """Normalize a /iserver/reply/{replyId} JSON body to list[dict] (place_order's shape)."""
     if isinstance(data, list):
@@ -387,6 +466,17 @@ class IBKRClient:
     def _post(self, path: str, body: dict[str, Any] | None = None) -> Any:
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.post(url, json=body or {}, timeout=30), path=path)
+        return resp.json()
+
+    def _put(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """PUT with an empty JSON body — the shape both FYI write endpoints document.
+
+        Added 2026-09-16 with the API-20/21 fixes. `tests/security/test_order_write_boundary.py`
+        names it alongside `_post` and `_session`, so a new order-write call site cannot
+        reach the network through it either.
+        """
+        url = f"{self._base}{path}"
+        resp = with_retry(lambda: self._session.put(url, params=params, json={}, timeout=30), path=path)
         return resp.json()
 
     # ------------------------------------------------------------------
@@ -801,6 +891,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id.md
         Endpoint: GET /iserver/contract/{conid}/info
         """
+        _validate_conid(conid)
         return self._get(f"/iserver/contract/{conid}/info")
 
     def get_contract_info_and_rules(self, conid: int) -> dict[str, Any]:
@@ -809,6 +900,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/find-all-info-and-rules-for-a-given-contract.md
         Endpoint: GET /iserver/contract/{conid}/info-and-rules
         """
+        _validate_conid(conid)
         return self._get(f"/iserver/contract/{conid}/info-and-rules")
 
     def get_contract_algos(self, conid: int) -> list[dict[str, Any]]:
@@ -827,6 +919,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id.md
         Endpoint: GET /iserver/contract/{conid}/algos
         """
+        _validate_conid(conid)
         data = self._get(f"/iserver/contract/{conid}/algos")
         if isinstance(data, dict):
             rows = data.get("algos")
@@ -1123,6 +1216,7 @@ class IBKRClient:
         Endpoint: GET /portfolio/{accountId}/positions/{page}
         """
         _validate_account_id(account_id)
+        _validate_page(page)
         data = self._get(f"/portfolio/{account_id}/positions/{page}")
         return parse_many(Position, data)
 
@@ -1146,6 +1240,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/position-contract-info.md
         Endpoint: GET /portfolio/positions/{conid}
         """
+        _validate_conid(conid)
         data = self._get(f"/portfolio/positions/{conid}")
         if isinstance(data, dict):
             # Keyed by account id, one bucket per account holding the contract, so the
@@ -1164,6 +1259,7 @@ class IBKRClient:
         Endpoint: GET /portfolio/{accountId}/position/{conid}
         """
         _validate_account_id(account_id)
+        _validate_conid(conid)
         return self._get(f"/portfolio/{account_id}/position/{conid}")
 
     def get_combo_positions(self, account_id: str) -> list[dict[str, Any]]:
@@ -1859,6 +1955,11 @@ class IBKRClient:
         (2026-09-10): two human-confirmed IBKR precautions had left no trace anywhere.
         """
         reply_id = entry["id"]
+        # Invariant 9: this URL is built here as well as in `reply_order`, and only that
+        # one validated (audit finding SEC-03). Path-safety rather than `_REPLY_ID_RE`,
+        # because the value is IBKR's own and the regex is an inference — see
+        # `_validate_path_segment` for why a false rejection here is the worse failure.
+        _validate_path_segment(reply_id, "reply_id")
         message = " ".join(entry.get("message", []))
         options = entry.get("messageOptions")
         record: dict[str, Any] = {
@@ -2094,18 +2195,86 @@ class IBKRClient:
     def mark_notification_read(self, notification_id: str) -> dict[str, Any]:
         """Mark a FYI notification as read.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/mark-notification-read.md
-        Endpoint: POST /fyi/notifications/{notificationId}/read
-        """
-        return self._post(f"/fyi/notifications/{notification_id}/read")
+        **Corrected 2026-09-16 (audit finding API-20).** This sent
+        `POST /fyi/notifications/{id}/read` — a verb and a path IBKR publishes nowhere.
+        Both of IBKR's documentation families independently document
+        `PUT /fyi/notifications/{notificationId}` with an empty JSON body, including the
+        page this docstring already cited.
 
-    def update_delivery_option(self, device_id: str, option: str, enabled: bool) -> dict[str, Any]:
+        The live test meant to cover it accepted a successful result, HTTP 400, HTTP 404
+        **and** HTTP 423 — every outcome the call can produce — so it passed whether or not
+        the endpoint existed.
+
+        `notification_id` is numeric: the endpoint's own 400 reads "Missing, empty,
+        **non-numeric**, or out-of-range parameter".
+
+        Returns {"V": 1, "T": <ms>} — V acknowledges the edit, T is how long it took.
+
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/mark-notification-read.md
+                https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-fy-is-and-notifications/read-fyi-notification.md
+        Endpoint: PUT /fyi/notifications/{notificationId}
+        """
+        _validate_notification_id(notification_id)
+        return self._put(f"/fyi/notifications/{notification_id}")
+
+    def update_delivery_option(
+        self,
+        device_id: str | None,
+        option: str,
+        enabled: bool,
+        device_name: str = "",
+        ui_name: str = "",
+    ) -> dict[str, Any]:
         """Enable or disable a notification delivery channel.
 
+        **Corrected 2026-09-16 (audit finding API-21).** This built
+        `POST /fyi/deliveryoptions/{option}` with `{"deviceId", "enabled"}` for any
+        `option`. IBKR publishes two delivery endpoints, and they agree on neither the
+        verb nor how parameters are passed, so one parameterised path could not serve
+        both:
+
+        | option | Method | Path | Parameters |
+        |---|---|---|---|
+        | `device` | POST | /fyi/deliveryoptions/device | JSON body: deviceName, deviceId, uiName, enabled |
+        | `email` | PUT | /fyi/deliveryoptions/email | query: enabled=true / false |
+
+        So the `device` call sent 2 of the 4 documented fields — the same defect shape as
+        the alert-modify body — and the `email` call was wrong in both verb and parameter
+        style and could not have worked. `option` is now checked against the two
+        documented values rather than interpolated as given (audit finding SEC-03).
+
+        The two documentation families disagree on whether the `device` body fields are
+        required: `v1/endpoints` marks all four Required, `api-reference` marks them
+        optional. All four are sent, which satisfies either reading. `device_name` and
+        `ui_name` default to `device_id` when not given, matching IBKR's own example,
+        where all three carry the same APN token.
+
+        Args:
+            device_id: The device's ID code. Ignored for `option="email"`.
+            option: "device" or "email".
+            enabled: Whether the channel should receive notifications.
+            device_name: Human-readable device name; defaults to `device_id`.
+            ui_name: Interface title; defaults to `device_id`.
+
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-device-option.md
-        Endpoint: POST /fyi/deliveryoptions/{option}
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-email-option.md
+        Endpoint: POST /fyi/deliveryoptions/device | PUT /fyi/deliveryoptions/email
         """
-        return self._post(f"/fyi/deliveryoptions/{option}", {"deviceId": device_id, "enabled": enabled})
+        _validate_delivery_option(option)
+        if option == "email":
+            # The flag is a query parameter here, and lowercase text — not a JSON bool.
+            return self._put("/fyi/deliveryoptions/email", {"enabled": "true" if enabled else "false"})
+        if not device_id:
+            raise ConfigError("update_delivery_option(option='device') requires a device_id.")
+        return self._post(
+            "/fyi/deliveryoptions/device",
+            {
+                "deviceName": device_name or device_id,
+                "deviceId": device_id,
+                "uiName": ui_name or device_id,
+                "enabled": enabled,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Account / Admin

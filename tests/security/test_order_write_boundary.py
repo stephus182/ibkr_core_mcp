@@ -11,6 +11,8 @@ tool handler would have been lint-clean, fully typed and gate-free
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from .structural import (
@@ -44,7 +46,7 @@ GATE_CALLS = (
     "confirm_cancel_dialog",
     "confirm_reply_dialog",
 )
-NETWORK_CALLS = ("_post", "_get", "with_retry")
+NETWORK_CALLS = ("_post", "_get", "_put", "with_retry")
 ORDER_WRITE_NAMES = {
     "place_order",
     "modify_order",
@@ -56,6 +58,7 @@ ORDER_WRITE_NAMES = {
     "_authorize_order_write",
     "OrderWriteAuthorization",
     "_post",
+    "_put",
     "_session",
 }
 
@@ -173,10 +176,27 @@ def test_the_reference_probe_sees_an_order_write_in_a_handler():
     assert attribute_names_referenced(snippet) & ORDER_WRITE_NAMES == {"cancel_order"}
 
 
-def test_the_ordering_probe_sees_a_network_call_before_a_gate():
-    snippet = 'def bad(self):\n    self._post("/x")\n    require_touch_id("later")\n'
+@pytest.mark.parametrize("primitive", ["_get", "_post", "_put"])
+def test_the_ordering_probe_sees_a_network_call_before_a_gate(primitive):
+    """Parameterised over every HTTP primitive the client has.
+
+    `_put` was added 2026-09-16 for the two FYI write endpoints. A primitive the probe does
+    not know about is a way to reach the network before a gate that this file would not
+    see — which is the whole point of the file.
+    """
+    snippet = f'def bad(self):\n    self.{primitive}("/x")\n    require_touch_id("later")\n'
     fn = function_named(snippet, "bad")
     assert min(call_lines(fn, NETWORK_CALLS)) < min(call_lines(fn, GATE_CALLS))
+
+
+def test_the_ordering_probe_knows_every_http_primitive_the_client_has():
+    """The list above is hand-written; this fails if `client.py` grows another primitive."""
+    primitives = set(re.findall(r"^    def (_[a-z]+)\(self, path", CLIENT, re.M))
+    assert primitives, "no HTTP primitives matched — the check would be vacuous"
+
+    assert primitives <= set(NETWORK_CALLS), (
+        f"HTTP primitives the ordering probe cannot see: {sorted(primitives - set(NETWORK_CALLS))}"
+    )
 
 
 # ── The body the dialog showed is the body that is sent ────────────────────────

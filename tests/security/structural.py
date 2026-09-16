@@ -243,3 +243,46 @@ def keyword_literal_lines(source: str, keyword: str, value: object) -> list[int]
 def shell_true_keywords(source: str) -> list[int]:
     """Line numbers of any call passing `shell=True`."""
     return keyword_literal_lines(source, "shell", True)
+
+
+def path_interpolations(source: str) -> list[tuple[str, str, str]]:
+    """Every value interpolated into a URL path, as (function, expression, path literal).
+
+    A path literal is an f-string whose constant parts begin with "/" and contain no
+    whitespace. The whitespace rule is not cosmetic: without it this reports
+    `get_live_orders`' error message, which begins "/iserver/account/orders returned …"
+    and is not a URL at all.
+
+    This answers invariant 9 ("every path-interpolated identifier passes its regex"),
+    which until 2026-09-16 had no test and was false for three methods.
+    """
+    found: list[tuple[str, str, str]] = []
+    for node in ast.walk(_tree(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.JoinedStr):
+                continue
+            literal = "".join(v.value for v in inner.values if isinstance(v, ast.Constant) and isinstance(v.value, str))
+            if not literal.startswith("/") or any(c.isspace() for c in literal):
+                continue
+            for value in inner.values:
+                if isinstance(value, ast.FormattedValue):
+                    found.append((node.name, ast.unparse(value.value), literal))
+    return found
+
+
+def arguments_passed_to(source: str, function: str, callees: Iterable[str]) -> set[str]:
+    """Every expression `function` passes to one of `callees`, unparsed.
+
+    Asking "does this function validate *anything*" is not the question invariant 9 poses.
+    A method can validate its account id and interpolate an unchecked page number in the
+    same URL — `get_positions` did exactly that — so the check has to be per value.
+    """
+    wanted = set(callees)
+    fn = function_named(source, function)
+    passed: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and callee_name(node) in wanted:
+            passed.update(ast.unparse(a) for a in node.args)
+    return passed

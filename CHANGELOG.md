@@ -166,6 +166,27 @@ built the model's input by hand.
   titles, read state always wrong. Its test stubbed `{"id", "title", "body", "isRead"}`, a
   payload invented to match the guess. This predates the model work: the handler read raw
   dicts and guessed their keys, the same guess `Notification` made.
+- **Two FYI write endpoints contradicted the pages they cite.** `mark_notification_read` sent
+  `POST /fyi/notifications/{id}/read`; both of IBKR's documentation families document
+  `PUT /fyi/notifications/{notificationId}` with an empty body (API-20). The live test meant to
+  cover it accepted success, 400, 404 **and** 423, so it passed whether or not the endpoint
+  existed; it is replaced by a local-refusal assertion plus an opt-in live write gated on
+  `IBKR_TEST_NOTIFICATION_ID`. `update_delivery_option` conflated two endpoints that share
+  neither verb nor parameter style (API-21): `device` is `POST /fyi/deliveryoptions/device`
+  with a four-field body, of which two were sent, and `email` is
+  `PUT /fyi/deliveryoptions/email?enabled=…`, which a POST-with-body could not reach.
+  **Breaking:** `update_delivery_option` now takes `device_name` and `ui_name`, accepts only
+  `"device"` or `"email"`, and requires a `device_id` for `"device"`.
+- **Invariant 9 held as a claim about three names, not as a property** (SEC-03, SEC-04). It was
+  documented as "every path-interpolated identifier passes its regex", had **no test**, and was
+  false: an AST enumeration found 36 path interpolations and 10 whose interpolated value was
+  never validated — including `get_positions`' page index, in a method that validated its
+  account id in the same URL. `tests/security/test_path_identifier_validation.py` now holds the
+  property per value, with written exemptions; new validators cover conids, page indices,
+  notification ids and the delivery-option allowlist.
+  `_resolve_one_reply` validates path-safety rather than `_REPLY_ID_RE`, because that regex is
+  inferred from one documented example and rejecting a legitimate id mid-chain would leave a
+  placed order unconfirmed (SEC-11, open).
 - **A failing unread count no longer discards the notification list** (TOOL-12).
   `/fyi/unreadnumber` returned `HTTP 423 {"status":"waiting for reply"}` on four consecutive
   attempts against a healthy gateway while `/fyi/notifications` answered normally; the handler
