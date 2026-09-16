@@ -737,13 +737,48 @@ parametrized across all three, which asserts the refusal happens with `crawl4ai`
 ```python
 async def _reject_private_requests(route, request):
     host = (urllib.parse.urlparse(request.url).hostname or "").lower()
-    if host and is_private_host(host):
+    if _is_private(url):
         await route.abort()
-    else:
-        await route.continue_()
+        return
+    for _ in range(_MAX_REDIRECT_HOPS):
+        response = await route.fetch(url=url, method=method, max_redirects=0)
+        if response.status not in _REDIRECT_STATUSES:
+            await route.fulfill(response=response)
+            return
+        url = urllib.parse.urljoin(url, response.headers.get("location"))
+        if _is_private(url):
+            await route.abort()
+            return
+    await route.abort()
 ```
 
-This handler intercepts **every** request Chromium makes during the page load — the initial navigation, every HTTP redirect hop, and every subresource — and re-resolves + re-checks each one at the moment it's actually about to be sent, inside the same browser process. This closes both gaps: DNS rebinding no longer helps an attacker, because the check that matters is the one immediately before Chromium connects, not an earlier check in a different process; and redirects to a private address are aborted regardless of what the original URL looked like. Both layers share one implementation (`local_browser.is_private_host`) so they cannot silently drift apart. Since 2026-09-13 that implementation also parses every
+This handler intercepts every request Chromium makes during the page load — the initial
+navigation and every subresource — and re-resolves + re-checks each one at the moment it's
+actually about to be sent, inside the same browser process. **Redirect hops are resolved by the
+handler itself**, one at a time with `max_redirects=0`, so every URL in a chain is checked and
+not merely the one the caller supplied.
+
+> **This paragraph was wrong until 2026-09-16, and the gap it described as closed was open.**
+> The handler ended in `route.continue_()`, which hands the request to Chromium — and Chromium
+> follows a 3xx *internally*, emitting no second route event. Subresources did fire the hook
+> (45 route events measured on an asset-heavy page), so the glob was never the problem; the hop
+> was simply invisible. `https://<public-host>/redirect-to?url=http://127.0.0.1:<port>/` fetched
+> the loopback page and returned it to the model, reproduced with a canary server whose own
+> access log recorded the connection. The claim below — that this was "verified … against the
+> Chromium/Playwright network stack, which routes redirects … through the same
+> request-interception path as the initial navigation" — was the specific sentence that was
+> false. `search_site`'s httpx half was correct throughout, because httpx runs its request hook
+> per hop. The test that was meant to hold this asserted only that a handler had been
+> *registered*, on a fake page object, so it stayed green the whole time; it is now backed by
+> `tests/test_web_tools_live.py::test_a_public_url_that_redirects_to_loopback_never_reaches_it`,
+> which uses real Chromium, a real redirector and a real server whose request counter is the
+> assertion.
+
+DNS rebinding is narrowed but not eliminated: the check that matters is the one immediately
+before Chromium connects rather than an earlier check in a different process, but
+`is_private_host` still performs its own resolution, so a TTL-0 flip between that lookup and
+Chromium's remains theoretically possible. Redirects to a private address are now aborted
+regardless of what the original URL looked like. Both layers share one implementation (`local_browser.is_private_host`) so they cannot silently drift apart. Since 2026-09-13 that implementation also parses every
 non-canonical literal locally with `socket.inet_aton` before asking DNS — decimal, hex,
 **octal** (`0177.0.0.1`, which the system resolver reads as public 177.0.0.1 and Chromium as
 127.0.0.1) and short forms — and blocks the RFC 6598 shared range `100.64.0.0/10` (CGNAT,
@@ -751,7 +786,7 @@ Tailscale) and the IPv4 inside an IPv4-mapped IPv6 address. `tests/security/test
 holds a table of twenty forms, none needing DNS. **`search_site` gets the same per-request layer in httpx form**: `_reject_private_httpx_request`
 is installed as a request hook on the seeder's own client, so every robots/sitemap/`<head>`
 fetch and every redirect hop is re-checked at the moment it is sent (fresh-eye review 2026-09-13;
-until then the seeder had layer 1 only, and a sitemap listing a loopback URL was fetched). Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack, which routes redirects and subresources through the same request-interception path as the initial navigation.
+until then the seeder had layer 1 only, and a sitemap listing a loopback URL was fetched). Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack — where subresources do route through the request-interception path but **redirects do not**, which is why the handler resolves them itself (see the correction above).
 
 **Path-traversal hardening (defense in depth):** the domain extracted from a URL is used to build a filesystem path (`profiles_dir / domain`, for locating and writing saved login profiles). `local_browser._safe_domain` explicitly rejects any domain containing `..`, `/`, or `\`, or that is empty, before it reaches a path join — independent of upstream URL validation, so it can't be silently reopened by a future change elsewhere.
 

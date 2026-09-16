@@ -287,3 +287,91 @@ def test_private_hosts_are_refused_before_any_request(toolkit, tool, args):
     """
     text, _ = toolkit.execute(tool, args)
     assert text.startswith("Blocked:"), f"{tool} did not refuse a private host: {text[:200]}"
+
+
+@pytest.mark.integration
+def test_a_public_url_that_redirects_to_loopback_never_reaches_it(browser_available, tmp_path):
+    """A 302 from a public host to a private address must be refused mid-navigation.
+
+    Regression guard for the defect found 2026-09-16: the Playwright route handler is
+    registered with a `**/*` glob and fires for the initial navigation and for every
+    subresource, but Playwright follows a 3xx internally after `route.continue_()` and
+    emits no second route event — so the hop itself was invisible and the loopback page
+    came back to the model. `search_site`'s httpx guard, the other half of the same layer,
+    refused the identical redirect correctly.
+
+    Why this test is shaped this way. The test that was supposed to hold this property
+    (`tests/test_local_browser.py`) asserted only that a handler had been REGISTERED, on a
+    fake page object — so it stayed green for the entire time the property did not hold.
+    A mock cannot catch this: the bug lives in what real Chromium does after
+    `route.continue_()`. Hence a real browser, a real redirector, and a real server whose
+    own request counter is the evidence.
+
+    The assertion that matters is `hits == 0`, not the absence of the marker in the reply.
+    The first symptom of this defect was a plausible-looking 493 B page, and a tool that
+    fetched the private page but failed to render it would still be an SSRF.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from unittest.mock import MagicMock
+    from urllib.parse import quote
+
+    import requests
+
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+    from ibkr_core_mcp.config import Config
+
+    marker = "SSRF_CANARY_a4f19c2e"
+    hits: list[str] = []
+
+    class _Canary(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            body = f"<html><body>{marker}</body></html>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Canary)
+    port = server.server_port
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        target = f"http://127.0.0.1:{port}/"
+        redirector = f"https://httpbin.org/redirect-to?url={quote(target, safe='')}"
+
+        # The redirector is a third-party host. If it is not issuing the 302 we depend on,
+        # this test proves nothing either way — skip loudly rather than pass vacuously.
+        try:
+            probe = requests.get(redirector, allow_redirects=False, timeout=15)
+        except requests.RequestException as exc:  # pragma: no cover - network dependent
+            pytest.skip(f"redirector unreachable, so the property cannot be exercised: {exc}")
+        if probe.status_code not in (301, 302, 303, 307, 308) or probe.headers.get("Location") != target:
+            pytest.skip(
+                f"redirector did not issue the expected 302 to {target} "
+                f"(status {probe.status_code}, Location {probe.headers.get('Location')!r})"
+            )
+
+        config = Config(
+            gateway_url="https://localhost:5055/v1/api",
+            anthropic_api_key="unused-by-the-scraper",
+            gdrive_folder_id="",
+            sqlite_path=tmp_path / "store.db",
+            gdrive_token_file=tmp_path / "token.json",
+            gdrive_credentials_file=tmp_path / "credentials.json",
+            firecrawl_api_key="",
+            crawl4ai_profiles_dir=tmp_path / "profiles-that-do-not-exist",
+        )
+        toolkit = ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), config)
+
+        text, _fig = toolkit.execute("fetch_page", {"url": redirector})
+
+        assert not hits, f"the private server was actually contacted: {hits}"
+        assert marker not in text, f"loopback content reached the model: {text[:300]}"
+    finally:
+        server.shutdown()
+        server.server_close()

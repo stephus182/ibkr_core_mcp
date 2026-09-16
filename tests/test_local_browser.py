@@ -206,10 +206,33 @@ def test_assess_quality_handles_none_metadata():
 # ── _reject_private_requests (Playwright per-request SSRF guard) ─────────────
 
 
+class _FakeResponse:
+    """The parts of Playwright's `APIResponse` that `_reject_private_requests` reads."""
+
+    def __init__(self, status=200, headers=None):
+        self.status = status
+        self.headers = headers or {}
+
+
 class _FakeRoute:
-    def __init__(self):
+    """A stand-in for Playwright's `Route`, modelling the redirect behaviour that matters.
+
+    Deliberately NOT a bare recorder. The 2026-09-16 SSRF defect survived because the
+    guard's test asserted that a handler had been *registered* on a fake page, which a
+    mock always satisfies; the real gap was in what happened after `route.continue_()`.
+    So this fake serves a scripted chain of responses through `fetch`, which is how the
+    handler now discovers each hop — a fake that cannot express a redirect cannot test
+    a redirect. The live guard remains
+    `tests/test_web_tools_live.py::test_a_public_url_that_redirects_to_loopback_never_reaches_it`,
+    which uses real Chromium and a real server; these cases cover the branches cheaply.
+    """
+
+    def __init__(self, responses=None):
         self.aborted = False
         self.continued = False
+        self.fulfilled = None
+        self.fetched = []
+        self._responses = list(responses or [])
 
     async def abort(self):
         self.aborted = True
@@ -217,10 +240,20 @@ class _FakeRoute:
     async def continue_(self):
         self.continued = True
 
+    async def fetch(self, *, url=None, method=None, max_redirects=None):
+        self.fetched.append((url, method, max_redirects))
+        if self._responses:
+            return self._responses.pop(0)
+        return _FakeResponse(200)
+
+    async def fulfill(self, *, response=None):
+        self.fulfilled = response
+
 
 class _FakeRequest:
-    def __init__(self, url):
+    def __init__(self, url, method="GET"):
         self.url = url
+        self.method = method
 
 
 @pytest.mark.asyncio
@@ -262,10 +295,107 @@ async def test_reject_private_requests_continues_public_host(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
-    route = _FakeRoute()
+    route = _FakeRoute([_FakeResponse(200)])
     await _reject_private_requests(route, _FakeRequest("https://example.com/article"))
-    assert route.continued is True
     assert route.aborted is False
+    assert route.fulfilled is not None, "a public, non-redirecting request must be served"
+    assert route.fetched == [("https://example.com/article", "GET", 0)]
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_aborts_a_redirect_to_a_private_host(monkeypatch):
+    """The 2026-09-16 defect: the hop, not the original URL, is the private one.
+
+    Chromium follows a 3xx internally after `route.continue_()` and emits no second route
+    event, so delegating the request hid this entirely. The handler now resolves each hop
+    itself with `max_redirects=0` and checks every URL in the chain.
+    """
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        addr = "127.0.0.1" if host == "127.0.0.1" else "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    route = _FakeRoute([_FakeResponse(302, {"location": "http://127.0.0.1:8080/"})])
+    await _reject_private_requests(route, _FakeRequest("https://public.example/go"))
+    assert route.aborted is True
+    assert route.fulfilled is None, "the private body must never be served"
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_follows_a_public_redirect_to_its_target(monkeypatch):
+    """The counter-case. A guard that refused every redirect would pass the test above
+    while breaking ordinary browsing, so this pins that a public chain still resolves."""
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+    final = _FakeResponse(200)
+    route = _FakeRoute([_FakeResponse(302, {"location": "https://other.example/here"}), final])
+    await _reject_private_requests(route, _FakeRequest("https://public.example/go"))
+    assert route.aborted is False
+    assert route.fulfilled is final
+    assert [f[0] for f in route.fetched] == ["https://public.example/go", "https://other.example/here"]
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_demotes_the_method_to_get_on_a_303(monkeypatch):
+    """A browser switches to GET on 301/302/303. Replaying a POST body to the redirect
+    target would both diverge from the browser and re-send data the caller sent once."""
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+    route = _FakeRoute([_FakeResponse(303, {"location": "https://other.example/here"}), _FakeResponse(200)])
+    await _reject_private_requests(route, _FakeRequest("https://public.example/submit", method="POST"))
+    assert [f[1] for f in route.fetched] == ["POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_refuses_an_endless_redirect_loop(monkeypatch):
+    """A chain that never terminates must end in a refusal, not a spin."""
+    import socket
+
+    from ibkr_core_mcp.local_browser import _MAX_REDIRECT_HOPS, _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+    loop = [_FakeResponse(302, {"location": "https://public.example/go"}) for _ in range(_MAX_REDIRECT_HOPS + 5)]
+    route = _FakeRoute(loop)
+    await _reject_private_requests(route, _FakeRequest("https://public.example/go"))
+    assert route.aborted is True
+    assert len(route.fetched) == _MAX_REDIRECT_HOPS
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_fails_closed_when_the_fetch_raises(monkeypatch):
+    """A route handler that raises leaves the request hanging until it times out.
+    The handler must abort instead — a failed fetch, never an unguarded one."""
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+
+    class _ExplodingRoute(_FakeRoute):
+        async def fetch(self, **kwargs):
+            raise RuntimeError("connection reset")
+
+    route = _ExplodingRoute()
+    await _reject_private_requests(route, _FakeRequest("https://public.example/x"))
+    assert route.aborted is True
 
 
 # ── _safe_domain (path-traversal hardening for profiles_dir / domain) ────────

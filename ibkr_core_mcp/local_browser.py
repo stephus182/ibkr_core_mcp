@@ -385,32 +385,82 @@ def _resolve_profile_dir(profiles_dir: Path, url_or_domain: str) -> Path | None:
     return None
 
 
+# Redirect statuses a browser follows, and the ceiling on how many hops
+# `_reject_private_requests` will resolve before refusing. Ten matches the limit Chromium
+# and curl both use; the point of the bound is that a redirect loop must terminate in a
+# refusal rather than spin.
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_MAX_REDIRECT_HOPS = 10
+
+
 async def _reject_private_requests(route: Any, request: Any) -> None:
     """Playwright route handler: abort any request whose host is private/loopback/
-    link-local/reserved; otherwise let it continue.
+    link-local/reserved, **including every host in its redirect chain**; otherwise serve it.
 
-    Installed (via _install_ssrf_guard below) on every request Chromium makes
-    during a Crawl4AI page load — the initial navigation, every HTTP redirect
-    hop, and every subresource — not just the URL Crawl4AIScraper.scrape() was
-    originally called with. This is the second of two SSRF layers (see
-    is_private_host's docstring): it closes what a single pre-fetch URL check
-    at the Python level cannot, because it re-checks at the moment each request
-    is actually about to be sent, inside the same browser navigation, rather
-    than relying on a DNS resolution done earlier in a different process.
+    Installed (via _install_ssrf_guard below) on every request Chromium makes during a
+    Crawl4AI page load, not just the URL Crawl4AIScraper.scrape() was originally called
+    with. This is the second of two SSRF layers (see is_private_host's docstring): it
+    closes what a single pre-fetch URL check at the Python level cannot, because it
+    re-checks at the moment each request is actually about to be sent.
+
+    **Why this follows redirects by hand instead of calling route.continue_().** Until
+    2026-09-16 it delegated the whole request to Chromium. Playwright's `**/*` glob does
+    fire for the initial navigation and for every subresource — measured at 45 route
+    events on an asset-heavy page — but after `route.continue_()` Chromium follows a 3xx
+    *internally* and emits no second route event. The hop was therefore invisible, and
+    `https://<public>/redirect-to?url=http://127.0.0.1:<port>/` fetched the loopback page
+    and returned it. Reproduced with a canary server whose own access log recorded the
+    connection; `search_site`'s httpx guard, the other half of this layer, refused the
+    identical redirect correctly, because httpx runs its request hook per hop.
+
+    So each hop is resolved here, one at a time, with `max_redirects=0` — the check runs
+    against every URL in the chain rather than only the one the caller supplied. A
+    non-redirect response is served back with `route.fulfill()`.
+
+    Note `route.fulfill()` serves the final body without a navigation, so `page.url` stays
+    at the first URL of the chain even when the content came from the last.
 
     Args:
         route: Playwright `Route` object for the intercepted request.
-        request: Playwright `Request` object; `request.url` is the URL about
-                 to be fetched (which may differ from the original scrape URL
-                 if this is a redirect or subresource).
+        request: Playwright `Request` object; `request.url` is the URL about to be fetched.
     """
     import urllib.parse
 
-    host = (urllib.parse.urlparse(request.url).hostname or "").lower()
-    if host and is_private_host(host):
+    url = request.url
+    method = request.method
+
+    def _is_private(candidate: str) -> bool:
+        host = (urllib.parse.urlparse(candidate).hostname or "").lower()
+        return bool(host) and is_private_host(host)
+
+    if _is_private(url):
         await route.abort()
-    else:
-        await route.continue_()
+        return
+
+    try:
+        for _ in range(_MAX_REDIRECT_HOPS):
+            response = await route.fetch(url=url, method=method, max_redirects=0)
+            if response.status not in _REDIRECT_STATUSES:
+                await route.fulfill(response=response)
+                return
+            location = response.headers.get("location")
+            if not location:
+                # A 3xx with nowhere to go: serve it rather than inventing a destination.
+                await route.fulfill(response=response)
+                return
+            url = urllib.parse.urljoin(url, location)
+            # A browser demotes the method to GET on 301/302/303; 307/308 preserve it.
+            if response.status in (301, 302, 303) and method != "HEAD":
+                method = "GET"
+            if _is_private(url):
+                await route.abort()
+                return
+        # Ran out of hops. Refuse rather than follow an unbounded chain.
+        await route.abort()
+    except Exception:
+        # A route handler that raises leaves the request hanging until it times out.
+        # Fail closed instead: the caller sees a failed fetch, never private content.
+        await route.abort()
 
 
 async def _reject_private_httpx_request(request: Any) -> None:
