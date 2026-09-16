@@ -18,7 +18,15 @@ Every test cleans up after itself — alerts are always deleted in finally block
 
 get_alerts (read) is fully machine-testable and passes.
 
-Alert write operations (create, modify, delete, activate) skip with HTTP 403
+Alert CREATE/MODIFY skip with HTTP 403. **Corrected 2026-09-16:** this file said the 403
+meant "alert writes require an active brokerage session". It does not. The gateway rejects
+any request body containing `>=` or `<=` before it reaches IBKR, and those are the only two
+operators IBKR's alert engine accepts (`>`, `<`, `==` arrive and come back "can't recognize
+fix"). `delete_alert` and `activate_alert` are writes and both reach IBKR, which is what
+rules out the session explanation. Full elimination table:
+docs/ibkr-api-behaviors-reference.md § Price alerts.
+
+Original (incorrect) note: alert write operations skip with HTTP 403
 in the test harness. This is an IBKR CP API architectural restriction: write
 operations require an active brokerage session that BrowserCookieAuth alone
 cannot replicate. ClaudIA maintains this session via continuous /tickle keepalive;
@@ -116,7 +124,7 @@ def _create_alert(
         pytest.skip("Rate limited on create_price_alert — try again in a few seconds")
     if "403" in text:
         pytest.skip(
-            "create_price_alert HTTP 403 — alert writes require an active brokerage "
+            "create_price_alert HTTP 403 — gateway blocks '>=' / '<=' bodies; see "
             "session (complete IBKR 2FA login before running these tests)"
         )
     alert_id = _parse_alert_id(text)

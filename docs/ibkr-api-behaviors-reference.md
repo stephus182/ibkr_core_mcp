@@ -57,3 +57,68 @@ it really returns an array.
 **Open:** `GET /events/contracts` returned HTTP 404 live and no page under `v1/endpoints/`
 declares it. Absence from the index proves nothing on its own, so this is unverified rather
 than dead; settling it needs `firecrawl_search`.
+
+## Price alerts: the gateway rejects the two operators the API documents most
+
+**Alerts had never been exercised end to end.** Reviewed and measured 2026-09-16 against a
+live authenticated gateway.
+
+**A body containing `>=`, `<=` or `!=` never reaches IBKR.** It comes back as an opaque
+HTML `403 Error 403 - Access Denied`, with nothing in the gateway log. Measured, isolating
+one field at a time:
+
+| Body contains | Result |
+|---|---|
+| `>=`, `<=`, `!=` — in `operator` **or** in `alertName` | **403 HTML**, request never reaches the alert API |
+| `>`, `<`, `=`, `==`, `=>`, `=<`, plain text | `500` + a real IBKR JSON validation error |
+
+So the filter is **body-wide, not field-specific**, and it is not a permissions problem:
+`DELETE /iserver/account/{acctId}/alert/{id}` — also a write — reaches IBKR and answers
+`{"error":"failed to delete alert: Alert 999999999 doesn't exist"}`. Calling the documented
+prerequisite `GET /iserver/accounts` first, or `tickle`, changes nothing.
+
+**Whether the filter is the local gateway or IBKR's edge is undetermined.** `conf.yaml` sets
+`proxyRemoteHost: https://api.ibkr.com`, and the gateway logs nothing for these requests.
+Recorded as unknown rather than guessed.
+
+**The consequence.** IBKR documents `operator` as an enum of `>=`, `<=`, `>`, `<`, `==`, and
+its own sample body uses `"<="`. Three of the five are usable through the gateway; the two
+the API leads with are not.
+
+**This is why alert writes have always "skipped".** `tests/test_client_live.py` and
+`tests/test_alerts_live.py` recorded the 403 as "alert write requires trading session
+permissions (CP API restriction)" and `docs/audits/live-test-log.md` carries "All 10 write
+tests | SKIP (403)" on that basis. A write verb works, and the failure is payload-dependent,
+so that attribution is wrong.
+
+**The create/modify page is not where the other alert pages are.**
+`v1/endpoints/alerts/create-or-modify-alert.md` returns "# Page Not Found", and no page under
+`v1/endpoints/` declares `POST /iserver/account/{accountId}/alert`. The real page is
+`api-reference/trading/trading-alerts/create-alert.md` (28,219 B) and is **absent from
+`llms.txt`** — the case CLAUDE.md names, where the index's silence proves nothing and
+`firecrawl_search` settles it. It also answers a question the archived capture could not:
+`orderId` is "optional; used in case of modification and represent Alert Id", so it is the
+create-vs-modify discriminator.
+
+### Why this cannot be worked around
+
+Measured 2026-09-16, in this order, each step ruling out the next-most-likely cause:
+
+| Attempt | Result |
+|---|---|
+| Every value in IBKR's documented `operator` enum | `>` `<` `==` reach IBKR and are refused by its own engine: `{"error":"Condition #1:can't recognize fix [>]"}`. `>=` `<=` never arrive (403) |
+| Other spellings — `&gt;=`, `gte`, `GE`, `5`, `A` | all "can't recognize fix" |
+| JSON unicode escapes — `"\u003e="`, `"\u003e\u003d"` (no literal `>` or `=` in the raw bytes) | still 403, so the filter is not a naive byte scan of the body |
+| `GET /iserver/accounts` prerequisite, then POST | 403 |
+| `tickle`, then POST | 403 |
+| Rebuilding the gateway image for a newer build | **pointless** — `HEAD` on `download2.interactivebrokers.com/portal/clientportal.gw.zip` returns `Last-Modified: Mon, 24 Apr 2023`. The running container reports that same build, so it is not stale: that IS IBKR's currently published gateway |
+
+**Conclusion: the only two operators IBKR's alert engine accepts are the only two that
+cannot reach it.** Price alert creation and modification are not possible through the
+Client Portal Gateway as published. This is an upstream defect, not a configuration
+mistake, and no code change in this package can resolve it.
+
+What this package should do about it is be honest: a `403` here means this, not "your
+account lacks permission", and the alert write tools should say so rather than surfacing
+an opaque gateway error.
+

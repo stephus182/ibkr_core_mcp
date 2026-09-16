@@ -1373,6 +1373,35 @@ def _sorted_with_front_month(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return ordered
 
 
+_ALERT_WRITE_403 = (
+    "Cannot create or modify a price alert: the IBKR Client Portal Gateway refuses this "
+    "request before it reaches IBKR (opaque HTTP 403).\n"
+    "  Cause: the gateway rejects any request body containing the operator '>=' or '<=', "
+    "and those are the only two operators IBKR's alert engine accepts — '>', '<' and '==' "
+    'reach IBKR and come back "can\'t recognize fix". Measured against a live gateway '
+    "2026-09-16.\n"
+    "  This is NOT an account permissions problem and not a missing brokerage session: "
+    "deleting an alert is also a write and works.\n"
+    "  No setting or code change here can resolve it — the published gateway build "
+    "(2023-04-24, the current one upstream) is where the block lives.\n"
+    "  Evidence and the full elimination table: docs/ibkr-api-behaviors-reference.md "
+    "§ Price alerts."
+)
+
+
+def _alert_write_error(exc: Exception) -> str | None:
+    """The honest message for an alert-write 403, or None if this is some other failure.
+
+    `_safe_error`'s generic text ("IBKR gateway returned an error (HTTP 403)") sends a
+    reader to check account permissions, which is not the cause and cost this project
+    months of the failure being logged as an expected permissions skip.
+    """
+    status = getattr(exc, "status_code", None)
+    if status == 403 or "403" in str(exc):
+        return _ALERT_WRITE_403
+    return None
+
+
 class ClaudeToolkit:
     """Ready-made Anthropic tool-use layer for IBKR research. Portable across any Claude-powered app.
 
@@ -3313,7 +3342,13 @@ class ClaudeToolkit:
                 }
             ],
         }
-        result = self._client.create_alert(account_id, alert)
+        try:
+            result = self._client.create_alert(account_id, alert)
+        except Exception as exc:
+            honest = _alert_write_error(exc)
+            if honest:
+                return honest, None
+            raise
         return json.dumps(result, indent=2), None
 
     def _modify_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -3339,7 +3374,13 @@ class ClaudeToolkit:
                     conditions[0]["value"] = str(inputs["price"])
                 if "operator" in inputs:
                     conditions[0]["operator"] = inputs["operator"]
-        result = self._client.create_alert(account_id, existing)
+        try:
+            result = self._client.create_alert(account_id, existing)
+        except Exception as exc:
+            honest = _alert_write_error(exc)
+            if honest:
+                return honest, None
+            raise
         return json.dumps(result, indent=2), None
 
     def _delete_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:

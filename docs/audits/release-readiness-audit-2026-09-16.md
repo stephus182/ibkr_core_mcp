@@ -405,3 +405,87 @@ the timeline.
 
 Sequence: WEB-01, API-01, DATA-02 (Criticals), then High, Medium, Low, Nit.
 Each fix: failing test first → root-cause fix → four CI gates in CI's order → commit.
+
+---
+
+## Phase 3 — Fixes completed (session 1)
+
+Branch `audit/release-readiness-2026-09-16`. Every claim below was verified by me
+independently of the agent that raised it, and every fix was mutation-tested.
+
+| # | Finding | Severity | Verification |
+|---|---|---|---|
+| WEB-01 | Playwright SSRF guard did not see redirect hops | **Critical** | Canary server's own access log recorded Chromium connecting to loopback; fixed guard leaves it empty |
+| API-01 | `1d/1min` returned 69.4% of a trading day's bars | **Critical** | Driven against an IBKR-accurate truncating stub; all 20 period/bar combinations now ≥100% span, 0 gaps |
+| DATA-02 | `run_backtest` annualised intraday Sharpe 8.8x wrong | **Critical** | Daily control agrees to 1e-12, proving the divergence real |
+| — | Three endpoints returned `[]` for data that arrived | **Critical** | Live: 10 algos, 2 positions, **11 transactions** recovered |
+| — | `place_order` discarded IBKR's documented rejection object | High | `place-order.md` publishes a third, object-shaped response |
+| SEC-01 | Order-write AST guard saw only f-strings | High | 5 of 6 URL idioms measured invisible; owner set unchanged after widening |
+| — | Live suite asserted types, not data (38 tests) | **Systemic** | Reverting fixes now fails the live tests; previously passed |
+| API-06 | Pagination stub timezone-skewed | Medium | 4.0h skew reproduced; zero on a UTC runner, so CI could never see it |
+| — | Price alerts non-functional; cause misattributed for months | High | See below |
+
+### Price alerts — reviewed and measured end to end
+
+Alerts had never been exercised. Documentation reviewed first, then tested methodically
+against the live gateway at the owner's direction.
+
+**Finding: alert creation and modification are impossible through the Client Portal
+Gateway as published.** The gateway rejects any body containing `>=` or `<=` with an opaque
+HTML 403 before it reaches IBKR; those are the only two operators IBKR's alert engine
+accepts (`>`, `<`, `==` arrive and return `can't recognize fix`). Both alert tools exposed
+an enum of exactly the two blocked operators.
+
+Ruled out, each by measurement: account permissions and brokerage session (`DELETE` is a
+write and works); the documented `GET /iserver/accounts` prerequisite; `tickle`; JSON
+unicode escaping of the operator; and a stale gateway image — the upstream zip's
+`Last-Modified` is 2023-04-24, so the build in use IS the current published one.
+
+**Documentation corrected:** `create_alert` cited a dead page. The real one sits under
+`api-reference/trading/trading-alerts/` and is **absent from `llms.txt`** — the case
+CLAUDE.md names, where the index's silence proves nothing and `firecrawl_search` settles
+it. It also confirmed `orderId` as the create-vs-modify discriminator, which the archived
+capture could not.
+
+**Honesty fix, verified live against a real 403:** the tools now name the real cause,
+explicitly rule out the wrong one, and cite the evidence — instead of
+"IBKR gateway returned an error (HTTP 403)". The misattribution in
+`tests/test_client_live.py`, `tests/test_alerts_live.py` and `docs/audits/live-test-log.md`
+is corrected; the dated log's observations are left as written, with a correction appended,
+because they record what was seen on their dates.
+
+### The systemic pattern
+
+Every Critical in this audit was one of two shapes:
+
+1. **A control that could not fail.** The SSRF test asserted a handler was *registered*;
+   the order-write probe's guard-on-guard used only f-strings; 38 live tests asserted
+   `isinstance(x, list)` where `[]` is a list.
+2. **A fix applied to one branch of a defect class, never swept.** Pagination (loop fixed,
+   fast path not); annualisation (`full_report` fixed, backtest not); the object-wrapper
+   silent empty (fixed three times, three more live).
+
+Both now have permanent guards: `tests/test_assertion_strength.py` and
+`test_no_new_endpoint_silently_discards_an_object_response`. Both guards are heuristics
+over the shapes that have actually cost this project, not proofs.
+
+### Release readiness — current view
+
+**Not ready.** 11 of 102 findings closed. The remaining queue is 16 High and below, plus
+two owner-approved scope additions (a full indicator audit; Pydantic return types across
+74 client methods). No release should carry the alert tools without the honesty fix that
+landed here, and the `get_watchlists` note pending since 2026-08-11 is now closed by a live
+run.
+
+### Open: an uncaptured intermittent failure in the live web-tools suite
+
+One run of `pytest tests/test_web_tools_live.py -m integration` reported `1 failed, 11
+passed`; four further runs the same day were clean (12 passed each). The failing test's
+identity was not captured, so it is recorded as unknown rather than guessed at.
+
+The suite reaches third-party hosts (httpbin.org, docs.crawl4ai.com, Firecrawl), so a
+transient network or rate-limit fault is the likely cause — but "likely" is not evidence.
+Note the new redirect guard cannot fail this way: if the redirector is slow or unreachable
+the canary server is simply never contacted, `hits` stays empty and the test passes, and if
+the redirector stops issuing its 302 the test skips loudly. Watch for a recurrence and
+capture `-rf` output when it happens.

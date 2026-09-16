@@ -1914,7 +1914,22 @@ class IBKRClient:
         Use ClaudeToolkit.execute("create_price_alert", ...) instead — it resolves
         conid and exchange automatically.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/create-or-modify-alert.md
+        `orderId` distinguishes create from modify: omitted or 0 creates, an existing alert
+        id modifies that alert ("optional; used in case of modification and represent Alert
+        Id"). `conditions[].operator` is an enum of `>=`, `<=`, `>`, `<`, `==` — but see
+        `docs/ibkr-api-behaviors-reference.md`: a body containing `>=` or `<=` is rejected
+        before it reaches IBKR with an opaque HTML `403 Access Denied`, so only `>`, `<` and
+        `==` are usable through the gateway (measured 2026-09-16).
+
+        The citation below is NOT the `v1/endpoints/alerts/` page the rest of this section
+        uses — that page (`create-or-modify-alert.md`) returns "# Page Not Found", and no
+        page under `v1/endpoints/` declares this endpoint. The real one lives under
+        `api-reference/trading/trading-alerts/` and is **absent from `llms.txt`**, which is
+        why the index could not find it; `firecrawl_search` did, exactly as CLAUDE.md says
+        it should when the index is silent.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
+                (verified 2026-09-16, 28,219 B, with a fabricated control URL in the same batch)
         Endpoint: POST /iserver/account/{accountId}/alert
         """
         _validate_account_id(account_id)

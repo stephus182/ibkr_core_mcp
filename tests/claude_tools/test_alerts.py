@@ -175,3 +175,40 @@ def test_modify_price_alert_error(toolkit):
 # ============================================================================
 # _sync_flex_archive
 # ============================================================================
+
+
+def test_create_price_alert_explains_the_gateway_operator_block_on_403(toolkit):
+    """A 403 here has one known cause, and it is not the account's permissions.
+
+    Measured 2026-09-16 against a live authenticated gateway: a request body containing
+    `>=` or `<=` never reaches IBKR — the gateway answers an opaque HTML
+    `403 Error 403 - Access Denied`, logging nothing. Those are the only two operators
+    IBKR's alert engine accepts: `>`, `<`, `==` and every other spelling reach IBKR and
+    come back `{"error":"Condition #1:can't recognize fix [>]"}`.
+
+    So alert creation is impossible through the Client Portal Gateway as published, and
+    `DELETE` — also a write — works fine, which rules out the "no trading session"
+    explanation this repo recorded for months.
+
+    The tool cannot fix that. It can stop reporting someone else's defect as the caller's
+    problem: `_safe_error`'s generic text sends a reader off to check account permissions
+    that are not the cause.
+    """
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
+    toolkit._client.create_alert.side_effect = IBKRAPIError(
+        "IBKR gateway returned HTTP 403: Error 403 - Access Denied", status_code=403
+    )
+
+    text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">=", "price": 250.0})
+
+    assert fig is None
+    assert "operator" in text.lower(), text
+    # Names the real cause AND explicitly rules out the wrong one this repo recorded for
+    # months. Asserting the absence of the word "permission" would be wrong — the message
+    # has to use it in order to deny it.
+    assert "NOT an account permissions problem" in text, text
+    assert ">=" in text and "<=" in text, "the blocked operators are not named"
+    assert "ibkr-api-behaviors-reference" in text, "the reader is not pointed at the evidence"

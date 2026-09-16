@@ -686,7 +686,12 @@ def test_alert_crud_roundtrip(live_client, account_id):
         return
     except IBKRAPIError as e:
         if "403" in str(e):
-            pytest.skip("create_alert HTTP 403 — alert write requires trading session permissions (CP API restriction)")
+            pytest.skip(
+                "create_alert HTTP 403 — the gateway rejects a body containing '>=' or '<=' "
+                "before it reaches IBKR, and those are the only operators its alert engine "
+                "accepts. NOT a permissions restriction: DELETE is also a write and works. "
+                "See docs/ibkr-api-behaviors-reference.md § Price alerts (measured 2026-09-16)."
+            )
         raise
     assert isinstance(created, dict), f"create_alert returned {type(created)}"
 

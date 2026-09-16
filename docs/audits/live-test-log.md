@@ -364,3 +364,33 @@ Findings column codes: ✅ correct · ⚠️ assertion corrected · 🐛 bug fou
 ---
 
 *To add a new run entry, prepend it above this one and add a link to the index at the top.*
+
+---
+
+## Correction 2026-09-16 — the alert-write 403 was misattributed throughout this log
+
+The **observations** in this file stand: `create_alert` returned HTTP 403 on every run. The
+**interpretation** attached to them does not. Three entries above say the cause is that the
+CP API "requires trading session permissions for alert writes" and one recommends
+re-testing "after enabling trading mode via browser login". That is wrong, and it left
+alert CRUD recorded as a known-expected skip for months rather than as a defect.
+
+Measured 2026-09-16 against a live authenticated gateway:
+
+* the gateway returns an opaque HTML `403 Access Denied` for any request body containing
+  `>=`, `<=` or `!=` — in the `operator` field or in `alertName`, so it is body-wide;
+* `>`, `<`, `==` and every other spelling reach IBKR and are refused by its own engine
+  (`{"error":"Condition #1:can't recognize fix [>]"}`), so the only two operators IBKR
+  accepts are the only two that cannot reach it;
+* `DELETE /iserver/account/{acctId}/alert/{id}` is a write and reaches IBKR normally,
+  which is what rules out the session/permissions explanation;
+* calling `GET /iserver/accounts` first, or `tickle`, changes nothing; JSON-escaping the
+  operator (`\u003e\u003d`) changes nothing; rebuilding the gateway would change nothing,
+  because the upstream zip's `Last-Modified` is 2023-04-24 — the build in use IS the
+  current published one.
+
+Alert creation and modification are therefore not possible through the Client Portal
+Gateway as published. Evidence and the full elimination table:
+`docs/ibkr-api-behaviors-reference.md` § Price alerts. The entries above are left as
+written, because they record what was observed on their dates.
+
