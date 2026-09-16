@@ -68,6 +68,25 @@ def live_client(client):
 
 
 @pytest.fixture(scope="module")
+def held_conid(live_client, account_id):
+    """A conid this account actually holds, or a loud skip.
+
+    Several tests below asked about AAPL (265598) and asserted `isinstance(result, list)`.
+    The account holds GLD and IGV, so those endpoints correctly returned `[]` — and the
+    assertion passed either way. That is how `get_positions_by_conid` could return `[]` for
+    EVERY contract, held or not, from the day it was written until 2026-09-16, with a live
+    test watching it (see `docs/ibkr-api-behaviors-reference.md` § Response shape).
+
+    Deriving the conid from real positions means a position test asserts a position.
+    """
+    positions = live_client.get_positions(account_id)
+    conids = [p.get("conid") for p in positions if p.get("conid")]
+    if not conids:
+        pytest.skip("account holds no positions, so no position endpoint can be asserted against content")
+    return conids[0]
+
+
+@pytest.fixture(scope="module")
 def account_id(live_client):
     accounts = live_client.get_accounts()
     assert accounts, "No accounts returned from /portfolio/accounts"
@@ -103,8 +122,12 @@ def test_tickle(live_client):
 @pytest.mark.integration
 def test_validate_sso(live_client):
     result = live_client.validate_sso()
-    # Returns dict with login info or empty on unauthenticated — no exception means path OK
     assert isinstance(result, dict)
+    # An authenticated session names the credential it authenticated; an empty dict or an
+    # unauthenticated stub does not. `live_client` already required ping(), so anything
+    # less than this means the response was not what the endpoint documents.
+    assert result.get("USER_NAME") or result.get("CREDENTIAL"), f"no credential in SSO response: {sorted(result)}"
+    assert result.get("RESULT") is not False, f"SSO validation reported failure: {result.get('RESULT')}"
 
 
 # ---------------------------------------------------------------------------
@@ -133,38 +156,62 @@ def test_get_contract_info(live_client):
     # AAPL conid 265598 is stable
     result = live_client.get_contract_info(265598)
     assert isinstance(result, dict)
-    assert result  # non-empty
+    # The contract asked for is the contract described — `con_id` is the endpoint's own
+    # spelling. A wrong or empty body cannot satisfy this.
+    conid = result.get("con_id") or result.get("conid")
+    assert conid is not None, f"no conid in contract info: {sorted(result)[:8]}"
+    assert int(conid) == 265598, f"wrong contract: {conid}"
+    assert "APPLE" in str(result.get("company_name", "")).upper(), result.get("company_name")
 
 
 @pytest.mark.integration
 def test_get_contract_info_and_rules(live_client):
     result = live_client.get_contract_info_and_rules(265598)
     assert isinstance(result, dict)
+    # The point of this endpoint is that it returns BOTH halves in one call.
+    assert "rules" in result, f"no rules block: {sorted(result)[:10]}"
+    conid = result.get("con_id") or result.get("conid")
+    assert conid is not None and int(conid) == 265598, f"wrong contract: {conid}"
 
 
 @pytest.mark.integration
 def test_get_contract_algos(live_client):
     result = live_client.get_contract_algos(265598)
     assert isinstance(result, list)
+    # Until 2026-09-16 this returned [] for every contract: the response is
+    # `{"algos": [...]}` and was read as a bare list. AAPL has ten algos; an empty list
+    # here is the bug returning, not a quiet market.
+    assert result, "no algos for AAPL — the object wrapper is being discarded again"
+    assert {"id", "name"} <= set(result[0]), sorted(result[0])
 
 
 @pytest.mark.integration
 def test_get_secdef_info(live_client):
     result = live_client.get_secdef_info(265598)
     assert isinstance(result, dict)
+    conid = result.get("conid")
+    assert conid is not None and int(conid) == 265598, f"wrong conid: {conid}"
+    assert result.get("currency"), f"no currency in secdef info: {sorted(result)}"
 
 
 @pytest.mark.integration
 def test_get_secdef_batch(live_client):
-    # /trsrv/secdef may return empty when accounts aren't initialized — just verify the shape
     result = live_client.get_secdef([265598])
     assert isinstance(result, list)
+    # `get_secdef` had this exact defect fixed on 2026-07-28 — the response is
+    # `{"secdef": [...]}` and was read as a bare list, returning [] on every call. An empty
+    # list here means it has come back.
+    assert result, "empty secdef batch — the {'secdef': [...]} wrapper is being discarded again"
+    assert 265598 in {int(r["conid"]) for r in result if r.get("conid") is not None}
 
 
 @pytest.mark.integration
 def test_get_contract_rules(live_client):
     result = live_client.get_contract_rules(265598, is_buy=True)
     assert isinstance(result, dict)
+    # Order types are the rules a caller actually acts on; their absence makes the response
+    # useless even when well-formed.
+    assert result.get("orderTypes"), f"no orderTypes in rules: {sorted(result)[:10]}"
 
 
 @pytest.mark.integration
@@ -180,6 +227,10 @@ def test_get_stocks_aapl(live_client):
     result = live_client.get_stocks(["AAPL"])
     assert isinstance(result, list)
     assert len(result) > 0
+    # The symbol asked for is the symbol returned, and it carries the contracts that make
+    # the row useful. `search_contract` resolving to the wrong listing was a real defect
+    # here (CHANGELOG 2026-08-05), so the identity check is not ceremony.
+    assert any("AAPL" in str(r.get("name", "")) or r.get("contracts") for r in result), result[:1]
 
 
 @pytest.mark.integration
@@ -237,14 +288,19 @@ def test_get_market_snapshot_aapl(live_client):
     # First call may return empty (warmup) — retry once as the client does internally
     result = live_client.get_market_snapshot([265598])
     assert isinstance(result, list)
+    assert result, "empty snapshot after the client's own warmup retry"
+    assert int(result[0].get("conid")) == 265598, f"snapshot for the wrong contract: {result[0].get('conid')}"
 
 
 @pytest.mark.integration
 def test_get_market_history_aapl(live_client):
     result = live_client.get_market_history(265598, period="5d", bar="1d")
     assert isinstance(result, dict)
-    # data key may be "data" or "timePeriod" depending on gateway version
-    assert result  # non-empty response
+    # Bars, not merely an envelope. A well-formed response carrying no data is exactly the
+    # shape both history defects took (2026-08-05 stale window, 2026-09-15 dropped bars).
+    bars = result.get("data") or []
+    assert bars, f"history envelope with no bars: {sorted(result)[:10]}"
+    assert {"t", "c"} <= set(bars[0]), sorted(bars[0])
 
 
 @pytest.mark.integration
@@ -252,6 +308,9 @@ def test_unsubscribe_all_market_data(live_client):
     # GET /iserver/marketdata/unsubscribeall — was wrongly POST before fix
     result = live_client.unsubscribe_all_market_data()
     assert isinstance(result, dict)
+    # The endpoint reports what it did; an empty dict would pass a type check while telling
+    # the caller nothing about whether anything was unsubscribed.
+    assert "unsubscribed" in result, f"no confirmation key: {sorted(result)}"
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +323,17 @@ def test_get_accounts(live_client):
     accounts = live_client.get_accounts()
     assert isinstance(accounts, list)
     assert len(accounts) > 0
+    # The id is the only field every downstream call needs, and `_first_account_id` exists
+    # because IBKR spells it `accountId` or `id` depending on the endpoint.
+    assert accounts[0].get("accountId") or accounts[0].get("id"), sorted(accounts[0])[:8]
 
 
 @pytest.mark.integration
 def test_get_subaccounts(live_client):
     result = live_client.get_subaccounts()
     assert isinstance(result, list)
+    assert result, "no subaccounts returned for an authenticated session"
+    assert result[0].get("accountId") or result[0].get("id"), sorted(result[0])[:8]
 
 
 @pytest.mark.integration
@@ -285,36 +349,59 @@ def test_get_brokerage_accounts(live_client):
 def test_get_account_summary(live_client, account_id):
     result = live_client.get_account_summary(account_id)
     assert isinstance(result, dict)
+    # Net liquidation is the number a human opens this for; an empty summary is a failure
+    # wearing a success's shape.
+    assert result, "empty account summary"
+    assert any(k.lower().startswith("netliquidation") for k in result), sorted(result)[:10]
 
 
 @pytest.mark.integration
 def test_get_account_ledger(live_client, account_id):
     result = live_client.get_account_ledger(account_id)
     assert isinstance(result, dict)
+    # The ledger is keyed by currency and always carries BASE for the account's base currency.
+    assert "BASE" in result, f"no BASE currency bucket in ledger: {sorted(result)[:8]}"
 
 
 @pytest.mark.integration
 def test_get_positions(live_client, account_id):
     result = live_client.get_positions(account_id)
     assert isinstance(result, list)
+    if not result:
+        pytest.skip("account holds no positions — nothing for this endpoint to return")
+    # A position without a conid or a size is not a position.
+    assert result[0].get("conid"), sorted(result[0])[:8]
+    assert "position" in result[0], sorted(result[0])[:8]
 
 
 @pytest.mark.integration
 def test_get_account_allocation(live_client, account_id):
     result = live_client.get_account_allocation(account_id)
     assert isinstance(result, dict)
+    # The endpoint's whole output is the three breakdowns; an empty dict passes a type
+    # check and answers nothing.
+    assert {"assetClass", "sector", "group"} & set(result), sorted(result)[:8]
 
 
 @pytest.mark.integration
-def test_get_positions_by_conid(live_client):
-    result = live_client.get_positions_by_conid(265598)
+def test_get_positions_by_conid(live_client, held_conid):
+    result = live_client.get_positions_by_conid(held_conid)
     assert isinstance(result, list)
+    # Asked about a contract the account HOLDS, so an empty answer is wrong by construction.
+    # This test previously asked about AAPL — which the account does not hold — and asserted
+    # only the type, so it passed for two years' worth of `[]` from an account-keyed object
+    # being read as a bare list (fixed 2026-09-16).
+    assert result, f"no position returned for held conid {held_conid}"
+    assert {int(r["conid"]) for r in result} == {int(held_conid)}
+    assert all(r.get("acctId") for r in result), result[:1]
 
 
 @pytest.mark.integration
 def test_get_pnl(live_client):
     result = live_client.get_pnl()
     assert isinstance(result, dict)
+    # `upnl` is the payload; without it the caller has an envelope and no P&L.
+    assert "upnl" in result, f"no upnl block: {sorted(result)[:8]}"
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +414,9 @@ def test_get_live_orders(live_client):
     # Two-call pattern — fixed path #live-orders
     result = live_client.get_live_orders()
     assert isinstance(result, list)
+    if not result:
+        pytest.skip("no live orders on the account right now — nothing to assert content against")
+    assert result[0].get("orderId") or result[0].get("order_id"), sorted(result[0])[:8]
 
 
 @pytest.mark.integration
@@ -334,6 +424,13 @@ def test_get_trades(live_client):
     # GET /iserver/account/trades — confirmed anchor #trades
     result = live_client.get_trades()
     assert isinstance(result, list)
+    if not result:
+        pytest.skip("no fills in the last 7 days — nothing for this endpoint to return")
+    # An execution names its account and its contract; the two-call warmup returning an
+    # empty first response is exactly what this endpoint is documented to do, so an empty
+    # list is skipped above rather than asserted away.
+    assert result[0].get("account") or result[0].get("acctCode"), sorted(result[0])[:8]
+    assert result[0].get("conid") or result[0].get("conidex"), sorted(result[0])[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +443,11 @@ def test_get_watchlists(live_client):
     # Was 404ing with /iserver/account/watchlists — fixed to /iserver/watchlists
     result = live_client.get_watchlists()
     assert isinstance(result, list)
+    # This endpoint wraps its lists in `{"data": {"user_lists": [...]}}`; reading it as a
+    # bare array reported none for an account that had eight (2026-07-23 → 2026-08-11).
+    # A type-only assertion is what let that live for three weeks.
+    assert result, "no watchlists — the {'data': {'user_lists': ...}} wrapper is being discarded again"
+    assert result[0].get("id") is not None and result[0].get("name") is not None, sorted(result[0])
 
 
 @pytest.mark.integration
@@ -383,7 +485,7 @@ def test_watchlist_roundtrip(live_client):
     except IBKRRateLimitError:
         pytest.skip("IBKR rate limited watchlist creation — endpoint path is correct (503 is not 404)")
         return
-    assert isinstance(created, dict)
+    assert created.get("id") or created.get("name"), f"create returned no identifier: {sorted(created)}"
 
     # Get all watchlists and find ours
     watchlists = live_client.get_watchlists()
@@ -397,10 +499,18 @@ def test_watchlist_roundtrip(live_client):
     # Read specific watchlist
     detail = live_client.get_watchlist(str(wl_id))
     assert isinstance(detail, dict)
+    # A watchlist that reports no identity and no instruments is not a watchlist; the
+    # sibling get_watchlists endpoint returned exactly that shape for three weeks.
+    assert detail.get("id") or detail.get("name") or detail.get("instruments") is not None, sorted(detail)[:8]
 
     # Delete
     delete_result = live_client.delete_watchlist(str(wl_id))
     assert isinstance(delete_result, dict)
+    assert delete_result, "delete returned an empty body — no confirmation that anything happened"
+    # The list must actually be gone; a 200 with an empty body is not a deletion.
+    assert not [w for w in live_client.get_watchlists() if str(w.get("id")) == str(wl_id)], (
+        f"watchlist {wl_id} still present after delete"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +522,8 @@ def test_watchlist_roundtrip(live_client):
 def test_get_scanner_params(live_client):
     result = live_client.get_scanner_params()
     assert isinstance(result, dict)
-    assert result  # non-empty — docs confirm rich metadata response
+    # The four lists ARE the response; without them a scanner cannot be built.
+    assert {"instrument_list", "scan_type_list", "filter_list", "location_tree"} <= set(result), sorted(result)
 
 
 @pytest.mark.integration
@@ -425,6 +536,9 @@ def test_run_iserver_scanner(live_client):
     }
     result = live_client.run_iserver_scanner(params)
     assert isinstance(result, list)
+    if not result:
+        pytest.skip("scanner returned no rows for MOST_ACTIVE/US right now — market may be closed")
+    assert result[0].get("conid") or result[0].get("con_id") or result[0].get("symbol"), sorted(result[0])[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +549,11 @@ def test_run_iserver_scanner(live_client):
 @pytest.mark.integration
 def test_get_pa_periods(live_client, account_id):
     result = live_client.get_pa_periods([account_id])
-    # Returns list of period strings or empty list — non-error is sufficient
     assert isinstance(result, list)
+    # These strings are the only valid `period=` inputs for get_pa_performance, so an empty
+    # list silently breaks the caller below rather than this test.
+    assert result, "no performance periods returned"
+    assert "1D" in result or "1M" in result, result
 
 
 @pytest.mark.integration
@@ -447,25 +564,35 @@ def test_get_pa_performance(live_client, account_id):
     period = periods[0] if periods else "1D"
     result = live_client.get_pa_performance([account_id], period=period)
     assert isinstance(result, dict)
+    assert result, f"empty performance response for period {period!r}"
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=False,
-    reason="/pa/transactions returned HTTP 400 for every tested period/days value on "
-    "2026-06-30 — parameter format unconfirmed. See docs/audits/live-test-log.md#run-2026-06-30",
-)
-def test_get_pa_transactions(live_client, account_id):
-    """xfail, not skip: an unconditional pytest.skip() is a TODO wearing a test's clothes.
+def test_get_pa_transactions(live_client, account_id, held_conid):
+    """Marker removed 2026-09-16 — the endpoint works and the test now proves it.
 
-    Disabled since 2026-06-30 while still being counted in the integration suite, so
-    nothing would have noticed if IBKR fixed the endpoint — or if our request format
-    started working by accident. strict=False means an unexpected pass is reported as
-    XPASS rather than a failure, which is the signal to go confirm the format and
-    remove this marker.
+    Was xfail from 2026-06-30, when `/pa/transactions` returned HTTP 400 for every tested
+    period/days value. The request format was corrected on that date (`conids` + `currency`
+    became required), and the marker was left behind — so the suite reported XPASS instead
+    of coverage.
+
+    That XPASS is what led here, exactly as the old docstring said it should: "the signal
+    to go confirm the format and remove this marker." Confirming it found something worse
+    than a stale marker — the method was returning `[]` for every account because the
+    response is an object and was read as a bare list, and this test could not see that
+    because it asserted only `isinstance(result, list)`.
+
+    Both are now fixed: the wrapper is unpacked, and the assertion is against a contract
+    the account actually holds over a year, where acquiring it was itself a transaction.
     """
-    result = live_client.get_pa_transactions([account_id], [265598], days=30)
+    result = live_client.get_pa_transactions([account_id], [held_conid], days=365)
     assert isinstance(result, list)
+    # Asked about a contract the account HOLDS, over a year: acquiring it was itself a
+    # transaction. This method returned `[]` for every account from the day it was written
+    # until 2026-09-16 — the response is an object and was read as a bare list — and a live
+    # test watched it do so, asserting only `isinstance(result, list)`.
+    assert result, f"no transactions in 365d for held conid {held_conid} — the object wrapper is being discarded again"
+    assert {"conid", "date", "amt"} <= set(result[0]), sorted(result[0])
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +604,9 @@ def test_get_pa_transactions(live_client, account_id):
 def test_get_notifications(live_client):
     result = live_client.get_notifications()
     assert isinstance(result, list)
+    if not result:
+        pytest.skip("no FYI notifications on the account — nothing to assert content against")
+    assert result[0].get("ID") or result[0].get("id"), sorted(result[0])[:8]
 
 
 @pytest.mark.integration
@@ -497,6 +627,8 @@ def test_get_unread_count(live_client):
 def test_get_mta_alert(live_client):
     result = live_client.get_mta_alert()
     assert isinstance(result, dict)
+    # The MTA alert always exists for an account; an empty dict means it was not read.
+    assert result.get("account") or result.get("order_id"), sorted(result)[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +640,12 @@ def test_get_mta_alert(live_client):
 def test_get_alerts(live_client, account_id):
     result = live_client.get_alerts(account_id)
     assert isinstance(result, list)
+    if not result:
+        # Deliberate loud skip, not a passing type check: alert WRITES need a brokerage
+        # session this suite cannot establish (see the module docstring), so an account
+        # under test legitimately holds none. Saying so beats asserting a type.
+        pytest.skip("account has no price alerts — alert writes need a brokerage session, so none can be created here")
+    assert result[0].get("order_id") or result[0].get("alert_name"), sorted(result[0])[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +732,7 @@ def test_alert_crud_roundtrip(live_client, account_id):
 def test_get_account_meta(live_client, account_id):
     result = live_client.get_account_meta(account_id)
     assert isinstance(result, dict)
+    assert str(result.get("accountId") or result.get("id")) == str(account_id), sorted(result)[:8]
 
 
 @pytest.mark.integration
@@ -611,11 +750,15 @@ def test_get_portfolio_allocation(live_client, account_id):
 
 
 @pytest.mark.integration
-def test_get_position(live_client, account_id):
-    # /portfolio/{accountId}/position/{conid} — single contract position
-    # AAPL (265598) may or may not be held; endpoint should return list (empty or filled)
-    result = live_client.get_position(account_id, 265598)
+def test_get_position(live_client, account_id, held_conid):
+    # /portfolio/{accountId}/position/{conid} — single contract position.
+    # Asked about a HELD contract: "may or may not be held" plus a type assertion is a test
+    # that passes whatever the endpoint does, which is how the sibling endpoint's
+    # always-empty bug survived (see test_get_positions_by_conid).
+    result = live_client.get_position(account_id, held_conid)
     assert isinstance(result, list)
+    assert result, f"no position returned for held conid {held_conid}"
+    assert {int(r["conid"]) for r in result} == {int(held_conid)}
 
 
 @pytest.mark.integration
@@ -624,7 +767,9 @@ def test_get_combo_positions(live_client, account_id):
 
     try:
         result = live_client.get_combo_positions(account_id)
-        assert isinstance(result, list)
+        if not result:
+            pytest.skip("account holds no combo (spread) positions — nothing for this endpoint to return")
+        assert result[0].get("conid"), sorted(result[0])[:8]
     except IBKRAPIError as e:
         if "500" in str(e):
             pytest.skip("get_combo_positions HTTP 500 — no combo (spread) positions in account")
@@ -686,6 +831,7 @@ def test_unsubscribe_market_data_single(live_client):
     live_client.get_market_snapshot([265598])
     result = live_client.unsubscribe_market_data(265598)
     assert isinstance(result, dict)
+    assert result, "empty unsubscribe response — the call reported nothing about what it did"
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +867,11 @@ def test_get_order_status_invalid_id(live_client):
 
     try:
         result = live_client.get_order_status("999999999")
-        assert isinstance(result, dict)
+        # If IBKR answers rather than erroring, the answer must not look like a real order:
+        # an invalid id returning a populated order would be far worse than a 404.
+        assert not result.get("order_id") and not result.get("orderId"), (
+            f"a nonexistent order id returned an order: {sorted(result)[:8]}"
+        )
     except (IBKRAPIError, IBKRRateLimitError) as e:
         # 404/400 expected for nonexistent id; 503 = IBKR returns rate-limit error for invalid ids
         code = str(e)
@@ -737,18 +887,20 @@ def test_get_order_status_invalid_id(live_client):
 
 
 @pytest.mark.integration
-def test_get_pa_transactions_aapl(live_client, account_id):
+def test_get_pa_transactions_aapl(live_client, account_id, held_conid):
     """PA transaction history for AAPL (conid 265598), 30 days."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
 
     try:
         result = live_client.get_pa_transactions(
             account_ids=[account_id],
-            conids=[265598],
+            conids=[held_conid],
             currency="USD",
-            days=30,
+            days=365,
         )
         assert isinstance(result, list)
+        assert result, f"no transactions in 365d for held conid {held_conid}"
+        assert {"conid", "date", "amt"} <= set(result[0]), sorted(result[0])
     except IBKRAPIError as e:
         # Document the actual HTTP status — this is the first live test of the fixed signature
         pytest.skip(f"get_pa_transactions returned error (fixed signature, first live test): {e}")
@@ -776,6 +928,9 @@ def test_search_contract_sap_frankfurt(live_client):
     results = live_client.search_contract("SAP", "STK")
     assert isinstance(results, list)
     assert len(results) > 0
+    # Resolving a ticker to the WRONG listing was a real defect here (IGV resolved to the
+    # Mexican listing, CHANGELOG 2026-08-05), so assert the symbol actually came back.
+    assert any("SAP" in str(r.get("symbol", "") or r.get("companyHeader", "")).upper() for r in results), results[:1]
 
 
 @pytest.mark.integration
