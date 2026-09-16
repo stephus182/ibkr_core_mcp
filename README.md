@@ -204,6 +204,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `preview_order` | Whatif order preview — no order placed |
 | `get_pa_performance` | Portfolio Analyst NAV performance |
 | `get_pa_transactions` | Portfolio Analyst transactions |
+| `get_pa_periods` | Valid period strings for `get_pa_performance` |
 | `search_contract` | Resolve symbol → conid, exchange, currency |
 | `get_contract_info` | Full contract details (exchange, trading hours, etc.) |
 | `get_option_chain` | Option chain — expiry months + call/put strikes |
@@ -284,8 +285,11 @@ slow = df['close'].ewm(span=26).mean()
 df['signal'] = (fast > slow).astype(int)
 """
 
-result = run_backtest(code=code, df=bars_dataframe, strategy_name="EMA crossover", symbol="AAPL")
-print(result.sharpe, result.max_drawdown, result.total_return)
+# The sandbox runs in a SPAWNED child process, which re-imports your __main__ — so a
+# script must guard the call, or the child re-runs it and dies before the strategy runs.
+if __name__ == "__main__":
+    result = run_backtest(code=code, df=bars_dataframe, strategy_name="EMA crossover", symbol="AAPL")
+    print(result.sharpe, result.max_drawdown, result.total_return)
 ```
 
 Strategy code runs in a `RestrictedPython` sandbox inside a child process — no imports, no
@@ -394,7 +398,7 @@ Copy `.env.example` to `.env` and fill in:
 Implemented in `human_auth.py` using the macOS `LocalAuthentication` framework via `pyobjc-framework-LocalAuthentication`.
 
 - **Policy:** `LAPolicyDeviceOwnerAuthentication` — tries Touch ID/Face ID first, then falls back to the device's system password if the biometric scan fails or is cancelled. The fallback exists because a fingerprint scan can genuinely fail to read (wet/dry skin, worn ridge detail, sensor angle) even for the real account owner — the stricter biometrics-only policy has no recovery path on a failed scan.
-- **No bypass inside the library:** `ibkr_core_mcp` itself never intercepts, caches, or skips this call — every order-write attempt calls `require_touch_id()` fresh. If both the biometric scan and the system password fail, `HumanAuthError` is raised immediately and the order is never submitted.
+- **No bypass inside the library:** `ibkr_core_mcp` itself never intercepts or skips this call. A standalone write prompts. A chain started by `place_order_and_confirm` / `modify_order_and_confirm` takes **one** Touch ID up front, which mints an `OrderWriteAuthorization` bound to the SHA-256 of that write's own body (300 s, frame-local, expiring closed); the write and each chained reply re-check *that value* instead of prompting again, and Gate 2 runs unskipped at every step. Anything the authorization does not cover — a direct call, an expired window, a body that no longer matches — prompts. This bullet said "every order-write attempt calls `require_touch_id()` fresh" until 2026-09-16, contradicting the paragraph above it and the 2026-09-11 rule. If both the biometric scan and the system password fail, `HumanAuthError` is raised immediately and the order is never submitted.
 - **Timeout:** 60 seconds. An unanswered prompt raises `HumanAuthError` and the order is not submitted.
 - **Prompt text:** The caller-supplied `reason` string appears in the macOS Touch ID dialog (e.g. *"Confirm order: BUY 100 AAPL"*).
 - **Thread-safe:** Uses a `threading.Event` to wait for the async `LAContext` reply callback without blocking the main run loop.
@@ -432,7 +436,7 @@ run and of CI):
 - processes are spawned only from three named modules, never through a shell;
 - the SSE transport rejects foreign `Host`/`Origin` values.
 
-CI adds `pip-audit` over the full installed tree and `gitleaks` over every pushed range. The
+CI adds `pip-audit` over a **fresh resolve** of `.[dev,server,scraper]` — requirements mode, installing nothing, so it audits what a user would get rather than what this machine happens to have — and `gitleaks` over every pushed range. The
 design — principals, privilege tiers, the trust-boundary map, each invariant with its enforcing
 test, the decision log, change recipes — is [`docs/security-architecture.md`](docs/security-architecture.md);
 the control inventory is [SECURITY.md](SECURITY.md); the audit with its probe evidence is

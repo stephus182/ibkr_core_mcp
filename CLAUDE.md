@@ -100,8 +100,12 @@ clone by `git config core.hooksPath .githooks` (Dev Setup); `git push --no-verif
 on purpose. Branch protection cannot do this for a direct-push workflow: a required status
 check rejects every push whose commit has not already passed CI, which a direct push never has.
 
-**Two more gates run in CI only** (they need the network): `pip-audit` over the full installed
-tree, weekly as well as per push, with ignores only from `security/pip-audit-ignores.txt`; and
+**Two more gates run in CI only** (they need the network): `pip-audit` over a **fresh resolve**
+of `.[dev,server,scraper]` — requirements mode, `pip install --dry-run` in a throwaway venv,
+installing nothing — weekly as well as per push, with ignores only from
+`security/pip-audit-ignores.txt`. Auditing the *installed* tree instead reports what this
+machine happens to have and is not what CI checks; that difference produced a near-miss on
+2026-09-16. Reproduce CI exactly with the command in `.github/workflows/ci.yml`. And
 `gitleaks` over the pushed range, configured by `.gitleaks.toml`. Neither is in the pre-push
 hook. Added 2026-09-13; the reasoning is in
 `docs/audits/security-architecture-audit-2026-09-13.md` § Phase 3.

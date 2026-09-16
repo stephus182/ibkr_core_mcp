@@ -172,6 +172,32 @@ deviation, so it holds whichever `ddof` you pass — which is the same "control 
 fail" pattern this audit found in the live suite and the order-write boundary.
 
 ### Fixed
+- **SECURITY.md documented a weaker order-id mitigation than the code implements.** The
+  control inventory printed `_ORDER_ID_RE = re.compile(r"^\d+$")` while `client.py`
+  compiles `r"^[0-9]+$"`. Python's `\d` matches Unicode decimal digits and `int()` accepts
+  them, so the documented pattern admits Arabic-Indic `"١٢٣"` (int reads 123) and mixed
+  `"1٢2"` — which int reads as **122**, a different order id than the string appears to
+  name. The same file records the fix for that exact gap in its audit log, so it
+  contradicted itself, and a reader copying the documented form would have reintroduced it.
+  `tests/security/test_documented_controls.py` now fails on drift in either direction;
+  it is a documentation-accuracy check, **not** a twelfth invariant.
+- **`run_backtest`'s child-exit error blamed the strategy for a caller-side mistake.** The
+  sandbox child is started with the `spawn` method, so it re-imports the caller's
+  `__main__`; a module-level call re-runs itself in the child and dies with
+  `Strategy process exited unexpectedly (exit code 1)`. README's own Backtesting example
+  reproduced this when pasted verbatim. The message now names
+  `if __name__ == "__main__":` as a possible cause — which matters because `_safe_error`
+  shows only `str(exc)`, where Python's own bootstrap guidance does not appear — and the
+  example carries the guard.
+- **Documentation corrected against the code it describes** (2026-09-16 audit): `docs/README.md`
+  stated the gate policy as "re-run for every chained reply", the pre-2026-09-11 rule;
+  `README.md` contradicted itself seven lines apart on whether Gate 1 re-prompts;
+  `docs/tools-reference.md` documented `search_contract`'s pre-2026-08-05 "JSON array of
+  matching contracts" behaviour, which was replaced by resolve-one-or-ask precisely because
+  `contracts[0]` for IGV was the Mexican listing; `README.md`'s tool table was missing
+  `get_pa_periods` (44 defined, 1 absent); and three documents described the CI dependency
+  audit as running "over the full installed tree" when it runs a fresh resolve in
+  requirements mode — the distinction that produced this audit's Phase 0 near-miss.
 - **Max drawdown ignored any fall that began on the first bar.** `(1 + returns).cumprod()`
   starts the equity curve at the first bar's value, so the starting capital was never a
   peak. Measured:

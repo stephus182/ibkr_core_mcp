@@ -400,17 +400,38 @@ Source: https://www.interactivebrokers.com/docs/web-api/changelog (Dec 10, 2025)
 ## Contracts
 
 ### `search_contract`
-Look up IBKR contract details for a symbol.
+Resolve a ticker to exactly **one** contract, with its currency — or return a question.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker, e.g. `"AAPL"`, `"IBM"` |
 | `sec_type` | string | — | `"STK"`, `"IND"`, or `"BOND"` (default `"STK"`) — **the only values `/iserver/secdef/search` supports.** For futures use `get_futures`; for FX use `get_market_snapshot`; for option strikes use `get_option_chain`. |
+| `exchange` | string | — | STK only. Disambiguates a ticker that trades on several markets, e.g. `"BATS"`, `"MEXI"`, `"BVME"`. Omit for the US listing. |
 
-**Output:** JSON array of matching contracts. Each entry has `conid`, `symbol`, `companyName`,
-`exchange`, `currency`.
+**Output — three outcomes for `STK`, none of which is a guess:**
 
-**IBKR endpoint:** `GET /iserver/secdef/search`
+1. **One listing resolved** — a JSON object, not an array:
+   `{"symbol", "sec_type", "conid", "currency", "exchange"}`. `currency` is always present
+   and reads `"UNKNOWN"` rather than being omitted when IBKR does not state it, because a
+   missing unit reads as "the usual currency", which is the assumption this removes.
+2. **Ambiguous, or no US listing** — a **question naming every candidate, with no conid in
+   it**. Ask the user which market they mean and call again with `exchange`. There is
+   deliberately nothing to lift from that reply.
+3. **`IND` / `BOND`** — passed through `/iserver/secdef/search` unchanged and returned as a
+   raw, *unranked* JSON array. `/trsrv/stocks` is stocks-only and pretending otherwise
+   would be a guess.
+
+**This is not a menu.** Until 2026-08-05 it returned every listing in
+`/iserver/secdef/search`'s undocumented order while telling the model to use it to discover
+conids — measured live, `contracts[0]` for IGV was the **Mexican** listing, and the same
+ticker can be a US ETF in USD, a Mexican listing in MXN, and an unrelated Italian company.
+Ranking the rows US-first was tried and rejected: it still left the *pick* to the model.
+
+Listing discovery is not lost, it moved to where it is answered rather than implied — an
+ambiguous ticker names its candidates here, and `get_contract_info` returns
+`valid_exchanges` for a resolved one.
+
+**IBKR endpoint:** `GET /iserver/secdef/search` (STK resolution goes through `/trsrv/stocks`)
 
 ---
 

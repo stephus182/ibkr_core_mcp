@@ -43,8 +43,8 @@ Every living document, grouped by what you'd be doing when you need it.
 | [`security-architecture.md`](security-architecture.md) | **Living security design** — principals and threat model (incl. AI-generated changes), privilege tiers, the trust-boundary map, the eleven invariants each with its enforcing test, subsystem designs (gates, sandbox, SSRF, redaction, transport), CI as a security instrument, the dated decision log, change recipes. `SECURITY.md` is the control inventory; the audits are the evidence |
 
 > The gate policy itself — Touch ID → visual confirmation, enforced inside `IBKRClient`,
-> re-run for every chained reply — is specified in `CLAUDE.md` and `README.md`'s Security
-> section, and its rationale is in
+> with **one Touch ID for a whole confirmation chain and a dialog for every reply in it** —
+> is specified in `CLAUDE.md` and `README.md`'s Security section, and its rationale is in
 > [`plans/archive/security-orders/HISTORY.md`](plans/archive/security-orders/HISTORY.md).
 
 ### Tool layers (Claude + MCP)

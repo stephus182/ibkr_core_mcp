@@ -259,10 +259,18 @@ A confused deputy is a trusted intermediary manipulated into using its privilege
 
 ```python
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
-_ORDER_ID_RE = re.compile(r"^\d+$")
+_ORDER_ID_RE = re.compile(r"^[0-9]+$")
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 # Blocks values like "../../iserver/auth/status", "../order/987654321", etc.
 ```
+
+`_ORDER_ID_RE` is `[0-9]`, never `\d`. Python's `\d` matches Unicode decimal digits, and
+`int()` accepts them: `\d+` admits `"١٢٣"` (Arabic-Indic), which `int()` reads as 123, and
+`"1٢2"`, which it reads as **122** — a different order id than the string appears to name.
+This block printed the `\d` form until 2026-09-16 while `client.py` had `[0-9]`, so the
+documented mitigation was weaker than the implemented one and a reader copying it would have
+reintroduced the gap; the fix itself is recorded in the audit log at the end of this file.
+`tests/security/test_documented_controls.py` now fails if the two drift apart again.
 
   (`order_id`/`alert_id` validation was added 2026-07-11 after an audit found `delete_alert(alert_id="../order/<id>")` could collapse to `cancel_order`'s URL — see `docs/audits/security-audit-2026-07-11.md` H-2. `account_id` alone was not sufficient; every path-interpolated identifier needs the same treatment.)
 
@@ -524,10 +532,16 @@ path-interpolated identifier passes its regex; **(10)** the HTTP transport valid
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
 transport an argument set that fails the tool's `inputSchema` never reaches a handler.
 
-CI adds two gates the four code gates cannot provide: `pip-audit` over the full installed tree
-(`[dev,server,scraper]`, weekly as well as per push, ignores only from
+CI adds two gates the four code gates cannot provide: `pip-audit` over a **fresh resolve** of
+`.[dev,server,scraper]` (requirements mode — `pip install --dry-run --report` in a throwaway
+venv, installing nothing — weekly as well as per push, ignores only from
 `security/pip-audit-ignores.txt` with a reason and a re-check date) and `gitleaks` over the
 pushed range (`.gitleaks.toml`: default rules plus the Firecrawl and Anthropic key shapes).
+
+The distinction matters and has already cost time: auditing the *installed* tree reports
+what this machine happens to have, which is not what CI checks. During this audit a local
+installed-tree run showed 50 vulnerabilities and a fix version that does not exist under
+OSV, none of which CI sees (2026-09-16 near-miss).
 
 ## Session Security
 

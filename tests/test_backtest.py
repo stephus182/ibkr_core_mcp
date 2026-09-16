@@ -1,3 +1,5 @@
+import pathlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -627,4 +629,71 @@ def test_backtest_defaults_to_daily_annualisation(ohlcv):
     code = "df['signal'] = 1"
     assert (
         run_backtest(code, ohlcv, symbol="TEST").sharpe == run_backtest(code, ohlcv, symbol="TEST", periods=252).sharpe
+    )
+
+
+def test_child_exit_error_names_the_main_guard_as_a_likely_cause(tmp_path):
+    """`run_backtest` spawns its child with the "spawn" start method, so the child
+    re-imports the caller's `__main__`. A caller that invokes `run_backtest` at module
+    level therefore re-runs that call inside the child, which dies at once — and the
+    message blamed the strategy:
+
+        BacktestRuntimeError: Strategy process exited unexpectedly (exit code 1)
+
+    Reproduced 2026-09-16 by pasting README's Backtesting example into a script verbatim
+    (audit finding DOCA-11). Nothing in that message pointed at the real cause, and the
+    strategy code is the one thing NOT at fault.
+
+    This runs the real thing in a real interpreter rather than mocking the multiprocessing
+    context: the defect only exists because of how `spawn` re-imports `__main__`, and a
+    mock of that machinery would be asserting against my model of it, not against it.
+    The guard is offered as a *possible* cause, never asserted — an OOM-kill also exits
+    cleanly, and that is why the signal case carries no hint.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    script = tmp_path / "unguarded.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import numpy as np
+            import pandas as pd
+
+            from ibkr_core_mcp.backtest import run_backtest
+
+            df = pd.DataFrame(
+                {"open": [1.0] * 30, "high": [1.0] * 30, "low": [1.0] * 30,
+                 "close": list(np.linspace(1.0, 2.0, 30)), "volume": [1.0] * 30},
+                index=pd.date_range("2026-01-02", periods=30, freq="B"),
+            )
+            # Deliberately NOT under `if __name__ == "__main__":` — this is the defect.
+            run_backtest("df['signal'] = 1", df, strategy_name="x", symbol="X")
+            """
+        )
+    )
+
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        cwd=str(pathlib.Path(__file__).resolve().parents[1]),
+        timeout=120,
+    )
+
+    assert proc.returncode != 0, "the unguarded script unexpectedly succeeded"
+
+    # Assert on the EXCEPTION LINE, not on stderr as a whole. Python's own multiprocessing
+    # bootstrap error already prints guard guidance further up, so `"__main__" in stderr`
+    # is satisfied whatever this package does — a first version of this test asserted
+    # exactly that, and a mutant removing the hint survived it. What Python prints is also
+    # not what a programmatic caller gets: `_safe_error` renders `str(exc)`, and the
+    # bootstrap text is not in there.
+    error_line = next((ln for ln in proc.stderr.splitlines() if "BacktestRuntimeError:" in ln), "")
+    assert error_line, f"no BacktestRuntimeError line in:\n{proc.stderr[-800:]}"
+    assert "exited unexpectedly" in error_line, error_line
+    assert '__name__ == "__main__"' in error_line, (
+        "the exception message itself does not name the spawn guard, so a caller that "
+        f"only sees str(exc) cannot act on it:\n{error_line}"
     )

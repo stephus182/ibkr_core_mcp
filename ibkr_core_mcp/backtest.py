@@ -542,8 +542,24 @@ def run_backtest(
         # complete result (e.g. a segfault or an immediate OOM-kill).
         process.join()
         exitcode = process.exitcode
-        detail = f"killed by signal {-exitcode}" if exitcode is not None and exitcode < 0 else f"exit code {exitcode}"
-        raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail})") from None
+        if exitcode is not None and exitcode < 0:
+            detail = f"killed by signal {-exitcode}"
+            hint = ""
+        else:
+            detail = f"exit code {exitcode}"
+            # The child is started with the "spawn" method (see `get_context` above), so
+            # it re-imports the caller's `__main__`. A caller that invokes run_backtest at
+            # module level therefore re-runs that call inside the child, which dies at
+            # once with a clean non-zero exit. The old message blamed the strategy, which
+            # is the one thing not at fault — README's own Backtesting example reproduced
+            # this when pasted verbatim (audit finding DOCA-11, 2026-09-16). Offered as a
+            # possible cause, not asserted: an OOM-kill also exits cleanly.
+            hint = (
+                " If you are calling run_backtest at module level in a script, guard it "
+                'with `if __name__ == "__main__":` — the sandbox child re-imports your '
+                "__main__ and would otherwise run the call again."
+            )
+        raise BacktestRuntimeError(f"Strategy process exited unexpectedly ({detail}).{hint}") from None
 
     # Got a complete result — reap the child. Connection.send() is synchronous,
     # so the child has already flushed everything by the time recv() returned;

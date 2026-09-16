@@ -668,7 +668,7 @@ in theory.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
-**109 findings, 24 closed, 85 open** (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
+**109 findings, 31 closed, 78 open** (DATA-25 raised and closed by this sweep; the original DATA-03/04/05 detail was lost with the Phase 1 agent output and could not be recovered). The
 sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
 
 Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
@@ -734,6 +734,80 @@ Five mutants, all caught — including both "flag every response" and "never cac
 the two mutations that a one-sided test suite would miss. The first attempt at the
 "never flag truncation" mutant produced a syntax error rather than a behaviour change and
 was re-run cleanly before being counted.
+
+---
+
+## Phase 3 — the documentation block
+
+Seven findings, each verified against the code before being touched rather than taken from
+the Phase 1 summary. One did not reproduce as stated and is recorded that way.
+
+| ID | Sev | Outcome |
+|---|---|---|
+| DOCB-01 | Critical* | Confirmed. `docs/README.md` stated the gate policy as "re-run for every chained reply" — the pre-2026-09-11 wording, wrong about Gate 1 |
+| DOCA-01 | **High** | Confirmed. SECURITY.md printed a **weaker mitigation than the code implements** |
+| DOCA-02 | **High** | Confirmed. `tools-reference.md` documented `search_contract`'s pre-2026-08-05 menu behaviour |
+| SEC-05 | Medium | Confirmed. README contradicted itself seven lines apart |
+| DOCA-10 | Medium | Confirmed exactly: 44 tools defined, `get_pa_periods` the one missing |
+| DOCA-11 | Medium | Confirmed, **but not for the stated reason** — see below |
+| DOCA-18 | Low | Confirmed in exactly three documents |
+
+### DOCA-01 — the documented mitigation was weaker than the implemented one
+
+SECURITY.md's confused-deputy section printed `_ORDER_ID_RE = re.compile(r"^\d+$")` while
+`client.py` compiles `r"^[0-9]+$"`. Not equivalent, and the difference is the vulnerability:
+
+| input | documented `\d+` | actual `[0-9]+` | `int()` accepts? |
+|---|---|---|---|
+| `123` | MATCH | MATCH | 123 |
+| Arabic-Indic `١٢٣` | **MATCH** | reject | **123** |
+| Devanagari `१२३` | **MATCH** | reject | **123** |
+| mixed `1٢2` | **MATCH** | reject | **122** |
+
+The mixed case is the sharp one: it passes `\d+`, and `int()` silently yields a *different*
+order id than the string reads as. The same file records the fix for exactly this gap in its
+audit log (2026-07-11 H-2 follow-up), so the file contradicted itself — and anyone copying
+the documented pattern would have reintroduced the gap.
+
+All three regexes were compared programmatically, not by eye: one mismatch of three, and
+`client.py` defines exactly those three. The edit was confined to the **control inventory**;
+the historical audit log quotes old values deliberately and was not touched.
+
+`tests/security/test_documented_controls.py` now fails if the two drift apart, in either
+direction, and asserts the Unicode property rather than only comparing strings. Three
+mutants, three caught. It is explicitly **not** a twelfth invariant — the eleven are
+unchanged.
+
+### DOCA-11 — confirmed, but the stated cause was wrong
+
+The finding read "README's Backtesting example does not run as pasted". The attribute access
+is fine (`result.sharpe` etc. all resolve on a `BacktestResult`). The example fails for a
+different reason: `run_backtest` spawns its child with `multiprocessing.get_context("spawn")`,
+so the child re-imports the caller's `__main__` and re-runs a module-level call. Pasted into
+a script it dies with
+
+```
+BacktestRuntimeError: Strategy process exited unexpectedly (exit code 1)
+```
+
+which blames the strategy — the one thing not at fault. Both halves fixed: the example now
+carries the `if __name__ == "__main__":` guard, and the exception names the guard as a
+possible cause so a programmatic caller sees it (Python prints its own guidance to stderr,
+but `_safe_error` renders only `str(exc)`, where that text does not appear).
+
+**A vacuous test of my own, caught by mutation.** The first version asserted
+`"__main__" in stderr`, which Python's multiprocessing bootstrap error satisfies on its own —
+the mutant removing the hint survived. Tightened to assert on the `BacktestRuntimeError:`
+line specifically; the mutant is now caught.
+
+### DOCA-18 — three documents, and a fourth that was already right
+
+`README.md`, `CLAUDE.md` and `SECURITY.md` all described the CI dependency audit as running
+"over the full installed tree". It runs in **requirements mode** — `pip install --dry-run` in
+a throwaway venv, installing nothing — which this audit verified by running CI's exact
+command. `CHANGELOG.md` already said so correctly. The distinction is the one that produced
+Phase 0's near-miss: a local installed-tree run showed 50 vulnerabilities and a fix version
+that does not exist under OSV, none of which CI sees.
 
 ---
 
