@@ -941,3 +941,58 @@ def test_snapshot_names_the_price_fields_and_drops_the_numeric_ids(toolkit):
         "_updated",
     ):
         assert gone not in quote, gone
+
+
+def _indicator_frame(n, freq, start="2025-01-02 09:30"):
+    """OHLCV frame with a real DatetimeIndex at the requested bar size."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(3)
+    close = 100 + np.cumsum(rng.normal(0, 0.5, n))
+    return pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.ones(n) * 1e6,
+        },
+        index=pd.date_range(start, periods=n, freq=freq),
+    )
+
+
+def test_add_indicators_reports_vwap_only_for_intraday_timeframes(toolkit):
+    """VWAP measures one trading session, so on daily bars each session holds a
+    single bar and VWAP collapses to that bar's typical price. StockCharts states
+    it plainly: "VWAP is not defined for daily, weekly, or monthly periods due to
+    the nature of the calculation." Printing a number there reads as a real level
+    and is not one, so the daily output says so instead."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _indicator_frame(120, "B")
+
+    text, _ = toolkit.execute(
+        "add_indicators", {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+    )
+
+    assert_tool_succeeded(text)
+    vwap_line = next(line for line in text.splitlines() if "VWAP" in line)
+    assert "intraday" in vwap_line.lower(), vwap_line
+    assert "n/a" in vwap_line.lower(), vwap_line
+
+
+def test_add_indicators_prints_a_vwap_number_on_intraday_bars(toolkit):
+    """The counter-case: on 5-minute bars VWAP is exactly what it is defined for,
+    so a real figure must appear. Without this, "never print VWAP" would satisfy
+    the test above."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _indicator_frame(120, "5min")
+
+    text, _ = toolkit.execute(
+        "add_indicators", {"symbol": "AAPL", "timeframe": "5min", "period": "1D", "end": "2026-05-22"}
+    )
+
+    assert_tool_succeeded(text)
+    vwap_line = next(line for line in text.splitlines() if "VWAP" in line)
+    assert "n/a" not in vwap_line.lower(), vwap_line
+    assert any(ch.isdigit() for ch in vwap_line.split("VWAP")[1]), vwap_line

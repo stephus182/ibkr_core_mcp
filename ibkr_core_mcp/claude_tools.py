@@ -1251,6 +1251,34 @@ _UNKNOWN_MONEY = "—"
 _WATCHLIST_CONTENTS_LIMIT = 25
 
 
+def _format_vwap(last: Any, timeframe: str) -> str:
+    """Render the VWAP line, or say why there is no VWAP to render.
+
+    VWAP accumulates across one trading session. On daily or coarser bars each
+    session holds a single bar, so `indicators.vwap` correctly returns that bar's
+    typical price — a number that looks like a support level and is not one:
+
+        "VWAP is not defined for daily, weekly, or monthly periods due to the nature
+         of the calculation."
+        https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/volume-weighted-average-price-vwap
+
+    Before 2026-09-16 the indicator accumulated over the whole frame and this line
+    printed, for a 1-year daily request, a volume-weighted average of the entire
+    year labelled "VWAP". Saying "n/a" is the honest output.
+
+    Args:
+        last: Final row of the indicator frame.
+        timeframe: IBKR bar-size string the bars were loaded at.
+
+    Returns:
+        A formatted price for intraday bars, else an explanatory placeholder.
+    """
+    if not _analytics.is_intraday_timeframe(timeframe):
+        return f"n/a ({timeframe} bars — VWAP is an intraday, single-session measure)"
+    value = last.get("vwap", float("nan"))
+    return f"{value:.2f}"
+
+
 def _money(v: float | None) -> str:
     """'$' + comma-grouped magnitude, sign only shown when negative (e.g. -$8,107.13).
 
@@ -2406,7 +2434,7 @@ class ClaudeToolkit:
             f"  MACD:             {last.get('macd', float('nan')):.4f}  Signal: {last.get('macd_signal', float('nan')):.4f}",
             f"  BB Upper/Mid/Low: {last.get('bb_upper', float('nan')):.2f} / {last.get('bb_mid', float('nan')):.2f} / {last.get('bb_lower', float('nan')):.2f}",
             f"  ATR(14):          {last.get('atr', float('nan')):.4f}",
-            f"  VWAP:             {last.get('vwap', float('nan')):.2f}",
+            f"  VWAP:             {_format_vwap(last, timeframe)}",
             f"  Stoch %K/%D:      {last.get('stoch_k', float('nan')):.1f} / {last.get('stoch_d', float('nan')):.1f}",
             f"  Williams %R:      {last.get('williams_r', float('nan')):.1f}",
             f"  Volume Ratio:     {last.get('volume_ratio', float('nan')):.2f}x avg",

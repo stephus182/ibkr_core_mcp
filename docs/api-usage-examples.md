@@ -44,7 +44,7 @@ else:
 
 ## Technical Indicators
 
-14 pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
+15 pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
 
 ```python
 from ibkr_core_mcp import indicators
@@ -57,10 +57,31 @@ rsi      = indicators.rsi(df, period=14)
 macd_df  = indicators.macd(df)        # columns: macd, macd_signal, histogram
 bb_df    = indicators.bollinger_bands(df)
 atr      = indicators.atr(df)
-vwap     = indicators.vwap(df)
+vwap     = indicators.vwap(df)        # per-session; needs a DatetimeIndex (see Conventions)
+vwap_all = indicators.vwap(df, anchor=None)   # whole-frame cumulative, opt-in
+kc_df    = indicators.keltner_channels(df)    # EMA(20) ± 2 × ATR(10) — ATR length is separate
+tr       = indicators.true_range(df)
 ```
 
-Available: `sma`, `ema`, `rsi`, `macd`, `bollinger_bands`, `atr`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`
+Available: `sma`, `ema`, `rsi`, `macd`, `bollinger_bands`, `atr`, `true_range`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`
+
+### Conventions — which variant each indicator implements
+
+Every formula here was checked against its source authority on 2026-09-16, and four
+were wrong. The divergences were measured against worked examples those authorities
+publish themselves; `scripts/audit/indicator_reference_divergence.py` reproduces the
+table, and `tests/test_indicators_worked_examples.py` pins the values so they cannot
+drift back. Don't change any of the following without doing the same.
+
+| Indicator | Variant, and why | Warm-up |
+|---|---|---|
+| `rsi`, `atr` | **Wilder's smoothing, seeded with the SMA of the first `period` values** — not `ewm(alpha=1/period)`, which seeds with the first observation. Seeding it wrong put RSI up to 19.8 points and ATR up to 22% off ChartSchool's published examples. | NaN until the seed bar |
+| `ema`, `macd` | **Seeded with the first close**, matching TradingView's `pine_ema`. Deliberately *not* the Wilder seed above, and deliberately not StockCharts' SMA seed — our generated PineScript runs on TradingView. Verified correct, unchanged. | none |
+| `bollinger_bands` | **Population standard deviation (ddof=0)**. Both StockCharts and TradingView (`ta.stdev`'s `biased=true` default) use it; pandas' `.std()` default is ddof=1, which made every band 2.60% too wide. | NaN for `period - 1` bars |
+| `stochastic` | **Fast** (%K unsmoothed, %D = 3-period SMA of %K). Charting packages often default to Slow, so the lines will differ from theirs — that is the variant, not a bug. | NaN for `k - 1` bars |
+| `keltner_channels` | EMA(`period`) ± `atr_mult` × ATR(`atr_period`), defaulting to ChartSchool's (20, 2.0, **10**) triple. The authorities genuinely differ here — TradingView's `ta.kc` uses an EMA of true range at the basis length — so `atr_period` exists to address either. | follows ATR |
+| `vwap` | **Resets every session** (`anchor="D"`). VWAP is defined over one trading day; accumulating across a whole frame answers no question. Raises on a non-DatetimeIndex rather than silently running cumulatively. On daily or coarser bars it degenerates to the bar's typical price, which is why `add_indicators` reports it only for intraday timeframes. | none |
+| `obv`, `williams_r`, `sma` | Verified correct against ChartSchool, unchanged. | per definition |
 
 ## Backtesting
 

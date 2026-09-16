@@ -28,6 +28,33 @@ _BARS_PER_YEAR_BY_UNIT = {
 }
 
 
+_INTRADAY_UNITS = frozenset({"min", "h"})
+
+
+def is_intraday_timeframe(timeframe: str) -> bool:
+    """True when a bar-size string denotes bars within a single trading session.
+
+    Shares `periods_for_timeframe`'s vocabulary and parsing so the two cannot drift:
+    '5min' and '1h' are intraday; '1d', '1w' and '1m' (month, in IBKR's notation)
+    are not, and neither is anything unrecognised.
+
+    Added for VWAP, which is defined over one session only — "VWAP is not defined
+    for daily, weekly, or monthly periods due to the nature of the calculation"
+    (https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/volume-weighted-average-price-vwap).
+
+    Args:
+        timeframe: IBKR bar-size string, case-insensitive.
+
+    Returns:
+        True for minute and hour bars; False for daily and coarser, and for any
+        string `periods_for_timeframe` would reject.
+    """
+    m = re.fullmatch(r"(\d+)\s*(min|h|d|w|m)", timeframe.strip().lower())
+    if m is None or int(m.group(1)) <= 0:
+        return False
+    return m.group(2) in _INTRADAY_UNITS
+
+
 def periods_for_timeframe(timeframe: str) -> int | None:
     """Bars per year for a bar-size string — the `periods` annualisation input.
 

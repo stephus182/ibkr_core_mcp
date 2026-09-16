@@ -118,5 +118,125 @@
     "status": "ok",
     "bytes": 15609,
     "note": "--only-main-content; carries the Security Warning (Origin validation MUST, localhost bind SHOULD, authentication SHOULD)"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/relative-strength-index-rsi",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 28939,
+    "note": "2026-09-16 indicator audit; saved as chartschool-rsi.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/average-true-range-atr",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 13163,
+    "note": "2026-09-16 indicator audit; saved as chartschool-atr.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/bollinger-bands",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 24836,
+    "note": "2026-09-16 indicator audit; saved as chartschool-bollinger.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/standard-deviation-volatility",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 13452,
+    "note": "2026-09-16 indicator audit; saved as chartschool-stdev.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/volume-weighted-average-price-vwap",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 17567,
+    "note": "2026-09-16 indicator audit; saved as chartschool-vwap.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/keltner-channels",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 22710,
+    "note": "2026-09-16 indicator audit; saved as chartschool-keltner.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/stochastic-oscillator-fast-slow-and-full",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 30426,
+    "note": "2026-09-16 indicator audit; saved as chartschool-stochastic.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/macd-moving-average-convergence-divergence-oscillator",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 26248,
+    "note": "2026-09-16 indicator audit; saved as chartschool-macd.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/on-balance-volume-obv",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 20411,
+    "note": "2026-09-16 indicator audit; saved as chartschool-obv.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/williams-r",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 17544,
+    "note": "2026-09-16 indicator audit; saved as chartschool-williams.md"
+  },
+  {
+    "url": "https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/moving-averages-simple-and-exponential",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 44470,
+    "note": "2026-09-16 indicator audit; saved as chartschool-ema.md"
+  },
+  {
+    "url": "https://www.tradingview.com/pine-script-reference/v6/",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 1323889,
+    "note": "2026-09-16 indicator audit; full page 1.3 MB, EXCERPTED to tradingview-pine-v6-excerpts.md (ta.sma/ema/rma/rsi/atr/tr/stdev/bb/kc/stoch/wpr). pine_ema and pine_rma settled the Wilder-vs-EMA seeding question."
+  },
+  {
+    "url": "https://436553459-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FERtrZrZOhufFzk6ZQO4B%2Fuploads%2FcFVjzTtdAgH6y4RZl8kQ%2Fcs-rsi.xls",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "curl",
+    "status": "ok",
+    "bytes": 28160,
+    "note": "StockCharts' own worked-example spreadsheet, linked from the page above. Binary not committed; its columns are transcribed verbatim in tests/test_indicators_worked_examples.py, which is the durable evidence."
+  },
+  {
+    "url": "https://436553459-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FERtrZrZOhufFzk6ZQO4B%2Fuploads%2Fl2dscfibmLDJyo1YVDpe%2Fcs-atr%20(1).xls",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "curl",
+    "status": "ok",
+    "bytes": 41984,
+    "note": "StockCharts' own worked-example spreadsheet, linked from the page above. Binary not committed; its columns are transcribed verbatim in tests/test_indicators_worked_examples.py, which is the durable evidence."
+  },
+  {
+    "url": "https://436553459-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FERtrZrZOhufFzk6ZQO4B%2Fuploads%2FanKvdQj5hf23LTtoC3Ws%2Fcs-bbands.xls",
+    "retrieved_at": "2026-09-16T00:00:00Z",
+    "method": "curl",
+    "status": "ok",
+    "bytes": 33792,
+    "note": "StockCharts' own worked-example spreadsheet, linked from the page above. Binary not committed; its columns are transcribed verbatim in tests/test_indicators_worked_examples.py, which is the durable evidence."
   }
 ]

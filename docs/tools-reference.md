@@ -541,6 +541,11 @@ Load cached market data and compute all technical indicators.
 **Output:** Current values for: RSI(14), MACD, MACD signal, Bollinger Bands (upper/mid/lower),
 ATR(14), VWAP, Stochastic %K/%D, Williams %R, Volume Ratio.
 
+VWAP is reported only for intraday `timeframe` values (`5min`, `1h`, …). It measures a
+single trading session, so on daily or coarser bars it has no meaning and the line reads
+`n/a` with the reason rather than printing a number — see
+`docs/api-usage-examples.md` § Conventions.
+
 **Prerequisite:** Data must be cached. Call `fetch_market_data` first if needed.
 
 ---

@@ -366,6 +366,10 @@ the function returns `0.0` at bar 1.
 | Docs — remaining 19 | 19 | 1* | 4 | 8 | 3 | 3 |
 | **Total** | **102** | **4** | **16** | **39** | **33** | **10** |
 
+The indicator sweep of Phase 3 session 2 added 5 findings to the Data layer & quant row
+(DATA-20 … DATA-24: 2 High, 1 Medium, 1 Low, 1 Nit), taking the register to **107**. They
+are listed there rather than here because they were raised by a fix, not by Phase 1.
+
 *API-01 raised from High to Critical by me. DOCB-01's Critical is a documentation claim and is
 re-graded at triage.
 
@@ -469,11 +473,102 @@ Both now have permanent guards: `tests/test_assertion_strength.py` and
 `test_no_new_endpoint_silently_discards_an_object_response`. Both guards are heuristics
 over the shapes that have actually cost this project, not proofs.
 
+## Phase 3 — Fixes completed (session 2): the indicator audit
+
+DATA-01 was triaged as "fix to canonical Wilder, **and audit every other indicator the
+same way** — re-derived against authoritative definitions with hand-computed references".
+All 14 were re-derived. Four were wrong; three had never diverged and one was a variant
+that was simply unnamed.
+
+### Method
+
+The point of the exercise was to assert against something outside this repository, so no
+formula was judged by inspection. For each indicator:
+
+1. The definition was retrieved from StockCharts ChartSchool via Firecrawl (full markdown,
+   HTTP 200 recorded for every page), and cross-checked against the TradingView Pine Script
+   v6 reference, which publishes *equivalent Pine source* for its built-ins.
+2. Where ChartSchool publishes a downloadable worked example, the spreadsheet itself was
+   downloaded and its columns read — `cs-rsi.xls`, `cs-atr.xls`, `cs-bbands.xls`, all three
+   authored by StockCharts staff.
+3. **A hand-written canonical implementation was run against the published columns first.**
+   If it could not reproduce them, the misunderstanding was mine and not the code's. It
+   reproduced all three to 5e-5 or better — within those spreadsheets' own rounding.
+4. A deliberately-broken control was run in the same batch: canonical Wilder at `period=13`
+   against the published `period=14` column diverges by 1.4241, versus 4.79e-05 for the
+   correct one. The check can fail.
+5. Only then was the shipped implementation measured.
+
+### What the two authorities settled — including one finding I nearly got wrong
+
+TradingView's prose describes `ta.ema` and `ta.rma` almost identically ("exponentially
+weighted moving average with alpha = ..."), which reads as though both are plain
+recursions and would have made our `ema` look wrong too. Its published equivalent source
+says otherwise, and the contrast is the entire finding:
+
+```
+pine_ema: sum := na(sum[1]) ? src                 : alpha*src + (1-alpha)*sum[1]
+pine_rma: sum := na(sum[1]) ? ta.sma(src, length) : alpha*src + (1-alpha)*sum[1]
+```
+
+`ema` matches `pine_ema` exactly and is correct; `rsi`/`atr` used that same seed where
+Wilder's requires the SMA. Had I stopped at the prose I would have "fixed" EMA and MACD —
+changing every MACD backtest in the project — for no reason. A test now pins the EMA seed
+so that wrong fix cannot be applied later, and mutation testing confirms it catches it.
+
+### Findings
+
+| ID | Indicator | Severity | Divergence vs the authority's own worked example |
+|---|---|---|---|
+| DATA-01 | `rsi` | **High** | up to **19.78 points**. Bar 15: 50.75 (neutral) vs published 70.53 (overbought) — opposite signals |
+| DATA-20 | `atr` | **High** | up to **22.2%** relative; also emitted a value on bar 1, where ATR is undefined |
+| DATA-21 | `bollinger_bands` | **High** | band width **2.60%** too wide — exactly `sqrt(20/19)-1`, which identifies the cause as `ddof` and nothing else |
+| DATA-22 | `vwap` | Medium | accumulated over the whole frame, never resetting per session |
+| DATA-23 | `keltner_channels` | Low | ATR length tied to the EMA length; the documented (20, 2.0, 10) default was inexpressible |
+| DATA-24 | `stochastic` | Nit | correct, but the variant (Fast) was unnamed — it will differ from packages defaulting to Slow |
+
+`ema`, `macd`, `obv`, `williams_r`, `sma`, `volume_sma`, `volume_ratio`: verified
+unchanged. `true_range` was extracted as a public function so `atr` cannot drift from it.
+
+### The same systemic pattern, a third time
+
+**Not one existing test failed** when RSI moved by 19.78 points, ATR by 22% and every
+Bollinger band by 2.6%. `tests/test_indicators.py` asserted shapes and bounds only:
+`test_atr_positive`, `test_vwap_positive`, `bb_upper >= bb_mid` (true for any non-negative
+deviation, hence true for either `ddof`), and `test_macd_histogram_is_diff`, which asserts
+the histogram equals its own definition and so cannot fail at all. Thirteen of the
+seventeen indicator tests could not detect a wrong formula.
+
+This is the third instance of the pattern already recorded in this audit — a control that
+cannot fail — after the live suite's 38 type-only assertions and the order-write AST guard
+that saw only f-strings.
+
+The guard added here is a different kind, and deliberately so: a test that pins computed
+values to an outside reference. `tests/test_indicators_worked_examples.py` holds the three
+published columns verbatim with their provenance, and
+`scripts/audit/indicator_reference_divergence.py` reproduces the before/after table on
+demand. Eight mutants were run against the new tests — including both directions of the
+VWAP branch and the plausible-but-wrong EMA "fix" — and all eight were caught.
+
+### Scope note
+
+Institutional VWAP variants (Bloomberg's calculation, close-excluded forms) were raised and
+ruled out of scope by the owner. `vwap` implements the single-session definition with a
+configurable `anchor`.
+
+---
+
 ### Release readiness — current view
 
-**Not ready.** 11 of 102 findings closed. The remaining queue is 16 High and below, plus
-two owner-approved scope additions (a full indicator audit; Pydantic return types across
-74 client methods). No release should carry the alert tools without the honesty fix that
+**Not ready.** The indicator sweep raised 5 findings beyond the 102 of Phase 1 (DATA-20
+through DATA-24), so the register now stands at **107 findings, 17 closed, 90 open**. The
+sweep itself is complete: 14 indicators re-derived, 6 findings, all 6 fixed and pinned.
+
+Of the 16 High findings in the Phase 1 totals, DATA-01 closes here and SEC-01 closed in
+session 1, leaving 14; DATA-20 and DATA-21 were raised at High and closed in the same
+session. The rest of the queue is Medium and below, plus one owner-approved scope addition
+still open (Pydantic return types across 74 client methods) and TOOL-07, which is to be
+investigated before anything is touched. No release should carry the alert tools without the honesty fix that
 landed here, and the `get_watchlists` note pending since 2026-08-11 is now closed by a live
 run.
 

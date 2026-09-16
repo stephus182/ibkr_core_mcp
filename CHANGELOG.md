@@ -120,6 +120,63 @@ failed before its fix:
   caller-owned list that receives one record per IBKR reply (raw + cleaned text,
   `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
 
+### Fixed
+Four technical indicators disagreed with the definitions they cite. Found by the
+2026-09-16 release-readiness audit, which re-derived every one of the 14 against its
+source authority instead of checking shapes and bounds. Each divergence below is
+measured against a worked example the authority publishes itself — three downloadable
+ChartSchool spreadsheets — and every figure is reproducible with
+`scripts/audit/indicator_reference_divergence.py` and pinned by
+`tests/test_indicators_worked_examples.py`.
+
+**Results computed before this release are not comparable for these indicators.** The
+precedent is the 2026-07-07 sortino migration, where pre-migration figures were likewise
+accepted as not comparable.
+
+- **`rsi` and `atr`: Wilder smoothing was seeded with the first observation, not the SMA
+  of the first `period` values.** `ewm(alpha=1/period, adjust=False)` is a plain EMA
+  recursion; Wilder's average is not. Against ChartSchool's published columns RSI was out
+  by up to **19.78 points** — bar 15 read 50.75, neutral, where the reference reads 70.53,
+  overbought, which is the opposite trading signal — and ATR by up to **22.2%**. Both now
+  seed correctly and return NaN through the warm-up instead of printing a value where the
+  indicator is undefined; `atr` did so from bar 1. TradingView publishes equivalent Pine
+  source that makes the distinction explicit: `pine_rma` seeds `ta.sma(src, length)` while
+  `pine_ema` seeds `src`.
+- **`bollinger_bands` used the sample standard deviation.** `Series.rolling(n).std()`
+  defaults to `ddof=1`; both StockCharts ("StockCharts.com calculates the standard
+  deviation for a population") and TradingView (`ta.stdev`'s `biased` defaults to true)
+  specify the population form. Every band sat `sqrt(20/19)` = **2.60%** too far from the
+  middle at the default period, so every band touch — the signal — was under-reported.
+- **`vwap` never reset.** VWAP is defined over a single trading session; this accumulated
+  from the first bar of the frame to the last, so on a multi-day intraday frame every
+  session carried all the ones before it. It now resets per `anchor` (default `"D"`), and
+  raises on a frame with no DatetimeIndex rather than silently running cumulatively.
+  `anchor=None` restores the old behaviour explicitly. `add_indicators` reports VWAP only
+  for intraday timeframes, because on daily bars it collapses to the bar's typical price —
+  "VWAP is not defined for daily, weekly, or monthly periods due to the nature of the
+  calculation."
+- **`keltner_channels` could not express its own documented default.** The ATR length was
+  tied to the EMA length, giving EMA(20) ± 2·ATR(20) where ChartSchool's default triple is
+  (20, 2.0, **10**). New `atr_period` argument, defaulting to 10. The two authorities
+  genuinely differ here — TradingView's `ta.kc` uses an EMA of true range at the basis
+  length — so this one is a documented choice, not a correction.
+
+Verified correct and deliberately left alone: `ema` and `macd` (they match `pine_ema`,
+which is what `pinescript.py` emits for TradingView — an SMA seed here would be a wrong
+"fix", and a test now guards against it), `stochastic` (the Fast variant, now named in its
+docstring), `obv`, `williams_r`, `sma`.
+
+Not one existing test failed when RSI moved by 19.8 points. `tests/test_indicators.py`
+asserted shapes and bounds only — `bb_upper >= bb_mid` holds for any non-negative
+deviation, so it holds whichever `ddof` you pass — which is the same "control that cannot
+fail" pattern this audit found in the live suite and the order-write boundary.
+
+### Added
+- `indicators.true_range` — True Range as a public function, shared with `atr` so the two
+  cannot drift apart.
+- `analytics.is_intraday_timeframe` — shares `periods_for_timeframe`'s bar-size vocabulary
+  and parsing, so the two cannot disagree about what `1m` means (a month, in IBKR notation).
+
 ### Changed
 - `get_market_snapshot`: the price fields reach the model **by name** (`last`, `bid`, `ask`,
   `high`, `low`, `change`, `change_pct`, `volume`, `volume_raw`) from the package's one map,

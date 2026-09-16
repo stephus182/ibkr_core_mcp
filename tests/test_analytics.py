@@ -290,3 +290,22 @@ def test_sortino_counts_all_observations_in_downside_deviation():
     result = sortino(returns, periods=252)
     assert result != 0.0
     assert abs(result - expected) < 1e-9
+
+
+def test_is_intraday_timeframe_agrees_with_periods_for_timeframe():
+    """Both read the same bar-size vocabulary, so they must not disagree about what
+    a string means. 'm' is a MONTH in IBKR's notation, not a minute — the one case
+    where an outside reader is most likely to get it backwards."""
+    from ibkr_core_mcp.analytics import is_intraday_timeframe, periods_for_timeframe
+
+    for tf in ("1min", "5min", "30min", "1h", "4h"):
+        assert is_intraday_timeframe(tf), tf
+        assert periods_for_timeframe(tf) is not None, tf
+
+    for tf in ("1d", "1w", "1m", "3m"):
+        assert not is_intraday_timeframe(tf), tf
+        assert periods_for_timeframe(tf) is not None, tf
+
+    for tf in ("banana", "", "0min", "0h"):
+        assert not is_intraday_timeframe(tf), tf
+        assert periods_for_timeframe(tf) is None, tf
