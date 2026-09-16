@@ -10,4 +10,50 @@ These are verified against official sources — not guesses:
 - **Flex endpoint** — the initial `SendRequest` call goes to `ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest`, matching official docs. The follow-up `GetStatement` URL that IBKR returns in the `SendRequest` response, however, is observed live pointing at **`gdcdyn`**, not `ndcdyn` — both are legitimate IBKR Flex subdomains and both are allowlisted by the SSRF guard in `flex_query.py` (`_ALLOWED_URL_PREFIXES`). Treating `gdcdyn` as categorically wrong was itself a past incident (see CLAUDE.md's Flex endpoint URL row) — the earlier bug was assuming the *wrong path* (`gdcdyn.../Universal/servlet/...`) for the *first* call, not that `gdcdyn` never legitimately appears. Requires a `User-Agent` header for programmatic access. Observed live 2026-06-26.
 - **`/md/regsnapshot` (Regulatory Snapshot) — permanently removed by IBKR.** Announced via the official [Web API Changelog](https://www.interactivebrokers.com/docs/web-api/changelog), dated **2026-02-11**, tagged `warning`: *"The /md/regsnapshot endpoint is no longer supported for users to query a regulatory snapshot via API."* Enforcement was not immediate — the endpoint still returned real live NBBO data (with the documented $0.01 charge) as recently as the 2026-07-08 integration baseline, and only started returning `HTTP 404: Resource not found` sometime between 2026-07-08 and 2026-07-22 (no separate changelog entry marks the exact cutover date). `get_regulatory_snapshot()` was removed from `client.py` accordingly (dead API surface, not an entitlement gap on the calling account) — see `docs/audits/live-test-log.md` run `2026-07-22-1` for the full investigation.
 
-- **Several endpoints return an OBJECT wrapping the array, and reading them as a bare list reports "no data" for data that arrived.** Verified live against an authenticated gateway on 2026-09-16, each against its published `.md` sample with a deliberately fabricated control URL in the same batch. `GET /iserver/contract/{conid}/algos` → `{"algos": [...]}` (10 algos for GLD; documented "algos: Array of objects"). `POST /pa/transactions` → `{"transactions": [...], "rpnl": {...}, "currency", "from", "to", "id", "nd"}` — **documented as an object and never as a bare array**, so `isinstance(data, list)` could not match on any response and `get_pa_transactions` returned `[]` for every account since it was written, while IBKR was returning 11 transactions for a held contract. `GET /portfolio/positions/{conid}` → an **account-keyed** dict, `{"U1234567": [...], "U1234567C": [...]}`, one bucket per account holding the contract; the keys are account ids, so no fixed key name can find them. Note this last one **diverges from its own documentation**, whose sample shows a bare array — the client accepts both, and the divergence is recorded here rather than assumed away. The same shape had already been found in `get_currency_pairs` (2026-06-30, `{"currencyPairs": ...}`), `get_secdef` (2026-07-28, `{"secdef": ...}`) and `get_watchlists` (found live 2026-07-23, fixed 2026-08-11, `{"data": {"user_lists": ...}}`) — four point-fixes before anyone swept the rest, which is why `tests/test_client.py::test_no_new_endpoint_silently_discards_an_object_response` now requires every method using the bare-list fallback to name its endpoint and the evidence that it really returns an array. **`GET /events/contracts` is a separate open question**: it returned HTTP 404 live on 2026-09-16 and appears nowhere in `llms.txt` (469 unique `.md` URLs, re-counted the same day). Absence from the index proves nothing on its own, so this is logged as unverified rather than declared dead — settling it needs `firecrawl_search`.
+## Response shape: several endpoints wrap the array in an object
+
+Reading these as a bare list reports **"no data" for data that arrived** — silently, with no
+error and no log. All verified 2026-09-16 against an authenticated gateway *and* against the
+doc page that declares the endpoint.
+
+**How the pages were identified.** Not by name. Every page under `v1/endpoints/` in
+`llms.txt` (123) was fetched, each page's own endpoint declaration extracted, and the method
+matched to the page declaring its endpoint. Matching by *name* is unsound and was caught doing
+harm here: `positions-by-conid.md` and `position-contract-info.md` are both plausible names for
+`get_positions_by_conid`, and the first documents `GET /portfolio/{acctId}/position/{conid}` —
+a different endpoint. A fabricated control URL in the same batch returned `# Page Not Found`,
+so the check could fail. Matched properly, **all 14 `Source:` URLs already in `client.py` are
+correct**.
+
+| Endpoint | Documented | Live | Effect before the fix |
+|---|---|---|---|
+| `GET /iserver/contract/{conid}/algos` | object, `algos: Array of objects` | `{"algos": [...]}` | 10 algos for GLD reported as none |
+| `POST /pa/transactions` | object; **never a bare array** | `{"transactions": [...], "rpnl", "currency", "from", "to", "id", "nd"}` | `[]` for every account since the method was written, while IBKR returned 11 transactions |
+| `GET /portfolio/positions/{conid}` | **array** (`position-contract-info.md`) | **account-keyed object**, `{"U1234567": [...], "U1234567C": [...]}` | open positions reported as none |
+
+**The `/portfolio/positions/{conid}` divergence is real** — documented as an array, observed as
+an object keyed by account id, one bucket per account holding the contract. The keys are
+account ids, so no fixed key name finds them. Both shapes are accepted. *(This entry first
+claimed the divergence on 2026-09-16 having checked `positions-by-conid.md` — the wrong page.
+Re-checked against the page that declares the endpoint: the claim holds, the evidence did not.)*
+
+**`POST /iserver/account/{accountId}/orders` publishes a third shape, and it is an object.**
+Beside the normal array and the Alternate reply-required array, `place-order.md` documents a
+bare `{"error": "We cannot accept an order at the limit price you selected…"}`. Read as a list
+it became `[]`, so an order IBKR **refused for a stated reason** reached the caller as an empty
+response — indistinguishable from "nothing happened", with IBKR's own words discarded, on the
+one path where that matters most. `place_order` now returns it via `_as_reply_list`, the
+one-element-list wrapper that already existed and was only ever applied a layer further out.
+`reply_order` publishes only the array shape; `cancel_order` publishes two objects and already
+returns them intact.
+
+**Prior instances of the same class:** `get_currency_pairs` (2026-06-30, `{"currencyPairs": …}`),
+`get_secdef` (2026-07-28, `{"secdef": …}`), `get_watchlists` (found live 2026-07-23, fixed
+2026-08-11, `{"data": {"user_lists": …}}`). Three point-fixes and no sweep is what allowed the
+next three. `tests/test_client.py::test_no_new_endpoint_silently_discards_an_object_response`
+now requires any method using the bare-list fallback to name its endpoint and the evidence that
+it really returns an array.
+
+**Open:** `GET /events/contracts` returned HTTP 404 live and no page under `v1/endpoints/`
+declares it. Absence from the index proves nothing on its own, so this is unverified rather
+than dead; settling it needs `firecrawl_search`.

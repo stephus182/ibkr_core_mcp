@@ -767,7 +767,17 @@ class IBKRClient:
         return self._get(f"/iserver/contract/{conid}/info-and-rules")
 
     def get_contract_algos(self, conid: int) -> list[dict[str, Any]]:
-        """Available algorithmic order types for a contract. Returns [] if none.
+        """Available algorithmic order types for a contract: [{id, name, parameters}, ...].
+
+        The response is an OBJECT wrapping the array — ``{"algos": [...]}`` — matching the
+        endpoint's documented "algos: Array of objects". Corrected 2026-09-16: this method
+        read ``data if isinstance(data, list) else []``, which cannot match an object, so it
+        returned ``[]`` on every call; a live gateway returned 10 algos for GLD. Same shape
+        and cause as ``get_currency_pairs`` (2026-06-30), ``get_secdef`` (2026-07-28) and
+        ``get_watchlists`` (2026-08-11) — see ``docs/ibkr-api-behaviors-reference.md``.
+
+        A bare list is still accepted; the only cost is tolerating a shape IBKR does not
+        currently publish, and the alternative is another silent empty.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id.md
         Endpoint: GET /iserver/contract/{conid}/algos
@@ -1049,7 +1059,21 @@ class IBKRClient:
         return data if isinstance(data, list) else []
 
     def get_positions_by_conid(self, conid: int) -> list[dict[str, Any]]:
-        """Position data for a specific contract across all accounts. Returns [] if not a list.
+        """Position data for a specific contract across all accounts, flattened to one list.
+
+        The gateway returns an **account-keyed object** — ``{"U1234567": [...],
+        "U1234567C": [...]}``, one bucket per account holding the contract. The keys are
+        account ids, so no fixed key name can find them; every bucket is concatenated.
+
+        This **diverges from the endpoint's own documentation**, whose sample is a bare
+        array, so both shapes are accepted and the divergence is recorded (verified live
+        2026-09-16, ``docs/ibkr-api-behaviors-reference.md``). Until then the method read
+        ``data if isinstance(data, list) else []`` and reported no position for a contract
+        the account actually held.
+
+        Note the cited page is the one that declares this endpoint. ``positions-by-conid.md``
+        is a similarly-named page documenting ``GET /portfolio/{acctId}/position/{conid}`` —
+        a different endpoint — and reading the shape off it gives the wrong answer.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/position-contract-info.md
         Endpoint: GET /portfolio/positions/{conid}
@@ -1330,6 +1354,13 @@ class IBKRClient:
         Covers all trade origins (CP API, mobile, TWS, web portal) — not session-scoped.
         Only one conid per call is supported (IBKR limitation per official docs).
 
+        The response is an OBJECT — ``{"transactions": [...], "rpnl": {...}, "currency",
+        "from", "to", "id", "nd"}`` — and the endpoint documents no bare-array form at all.
+        Corrected 2026-09-16: this method read ``data if isinstance(data, list) else []``,
+        which therefore could not match ANY response, and had returned ``[]`` for every
+        account since it was written. Measured live against an account holding the queried
+        contract: IBKR returned 11 transactions, this method returned 0.
+
         Bug fixed 2026-06-30: previous signature took `period: str` and sent it as the
         request body field "period" — both wrong. Required fields are `conids` (array of
         ints) and `currency` (string). `days` is optional (int). Old calls returned HTTP
@@ -1550,6 +1581,15 @@ class IBKRClient:
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
                 https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
 
+        Returns whatever IBKR sent, always as a list. The endpoint publishes THREE shapes:
+        the normal array, the Alternate (reply-required) array, and a bare object
+        ``{"error": "We cannot accept an order at the limit price you selected..."}``. Until
+        2026-09-16 the body was read as a list, so that rejection became ``[]`` — an order
+        IBKR refused for a stated reason, reported to the caller as an empty response with
+        IBKR's own words discarded. ``_as_reply_list`` wraps the object into a one-element
+        list; it already existed, but was applied only by ``place_order_and_confirm``, one
+        layer too far out to save the dict.
+
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/account/{accountId}/orders
@@ -1577,7 +1617,13 @@ class IBKRClient:
         # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [api_order]})
-        return data if isinstance(data, list) else []
+        # IBKR's documented rejection is a bare OBJECT — `{"error": "We cannot accept an
+        # order at the limit price you selected..."}` (place-order.md, under Alternate
+        # Response Object, alongside the two array shapes). Reading the body as a list
+        # discarded it and handed the caller `[]`, which is what "nothing happened" looks
+        # like too. `_as_reply_list` is the existing one-element-list wrapper; it was only
+        # ever applied by `place_order_and_confirm`, one layer too late to save the dict.
+        return _as_reply_list(data)
 
     def modify_order(
         self,

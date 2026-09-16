@@ -2101,24 +2101,43 @@ def test_get_pa_transactions_reads_the_transactions_array_out_of_its_wrapper(cli
 
 
 # Endpoints whose top-level response is a BARE ARRAY, so `data if isinstance(data, list)
-# else []` is correct for them. Every entry was checked twice on 2026-09-16: against the
-# published response sample (the `.md` variant of its doc page, with a deliberately
-# fabricated control URL in the same batch), and against a live authenticated gateway.
+# else []` is correct for them.
 #
-# The value is the evidence. Do not add a name here without both checks.
+# How each line was established, 2026-09-16 — page names were NOT guessed. Every page under
+# `v1/endpoints/` in `llms.txt` (123 of them) was fetched, each page's own endpoint
+# declaration was extracted (`GET /portfolio/positions/{conid}` and the unbackticked and
+# `{{ jinja }}` variants), and the method was matched to the page DECLARING ITS ENDPOINT.
+# That matters: `positions-by-conid.md` and `position-contract-info.md` are both plausible
+# names for `get_positions_by_conid`, and the first one documents a different endpoint
+# entirely — matching by name picked the wrong page and produced a wrong "divergence".
+# Matched this way, all 14 `Source:` URLs already in client.py are correct.
+#
+# "documented" is the top-level bracket of the JSON sample under that page's own
+# "Response Object" heading. "live" is the raw type observed against an authenticated
+# gateway the same day. A fabricated control URL was fetched in the same batch and
+# correctly returned "# Page Not Found", so the check was capable of failing.
 _BARE_ARRAY_ENDPOINTS = {
-    "get_market_snapshot": "market-data/live-market-data-snapshot.md — sample `[`; live: list",
-    "search_contract": "contract/search-contract-by-symbol.md — sample `[`; live: list of 3",
-    "get_accounts": "portfolio/portfolio-accounts.md — sample `[`; live: list of 1",
-    "get_subaccounts": "portfolio/portfolio-subaccounts.md — sample `[`; live: list of 1",
-    "get_positions": "portfolio/positions.md — sample `[`; live: list of 2",
-    "get_combo_positions": "portfolio/combination-positions.md — sample `[`; live: HTTP 500, no combo positions held",
-    "get_trades": "order-monitoring/trades.md — sample `[`; live: list of 4",
-    "get_alerts": "alerts/get-a-list-of-available-alerts.md — sample `[`; live: list (empty, account has no alerts)",
-    "get_notifications": "live: list of 3; doc page not located in llms.txt under the guessed path",
-    "get_event_contracts": "UNVERIFIED — GET /events/contracts returned HTTP 404 live and is absent from llms.txt",
-    "place_order": "orders/place-order.md — BOTH the normal and the Alternate (reply-required) samples are `[`; never called in a test",
-    "reply_order": "orders/place-order-reply-confirmation.md — sample `[`; never called in a test",
+    "get_market_snapshot": "market-data/live-market-data-snapshot: documented ARRAY; live list",
+    "search_contract": "contract/search-contract-by-symbol: documented ARRAY; live list of 3",
+    "get_accounts": "portfolio/portfolio-accounts: documented ARRAY; live list of 1",
+    "get_subaccounts": "portfolio/portfolio-subaccounts: documented ARRAY; live list of 1",
+    "get_positions": "portfolio/positions: documented ARRAY; live list of 2",
+    "get_trades": "order-monitoring/trades: documented ARRAY; live list of 4",
+    "get_notifications": "fy-is-and-notifications/get-a-list-of-notifications: documented ARRAY; live list of 3",
+    "get_alerts": "alerts/get-a-list-of-available-alerts: documented ARRAY; live list, empty (account holds no alerts)",
+    "get_combo_positions": (
+        "portfolio/combination-positions: documented ARRAY; live UNCONFIRMED — HTTP 500, "
+        "the account holds no combo positions, so no payload was observed"
+    ),
+    "reply_order": (
+        "orders/place-order-reply-confirmation: documented ARRAY, and the only shape that page "
+        "publishes; live UNVERIFIED — a reply is an order write and is never driven by a test"
+    ),
+    "get_event_contracts": (
+        "UNVERIFIED BOTH WAYS — no page under v1/endpoints/ declares GET /events/contracts, and "
+        "it returned HTTP 404 live. Absence from llms.txt proves nothing on its own (CLAUDE.md), "
+        "so this is recorded as unknown rather than dead; firecrawl_search would settle it"
+    ),
 }
 
 
@@ -2164,3 +2183,55 @@ def test_no_new_endpoint_silently_discards_an_object_response():
         "sample. If it truly returns a bare array, add it to _BARE_ARRAY_ENDPOINTS with "
         "that evidence. If it returns an object, unwrap the array — see get_secdef."
     )
+
+
+def test_place_order_surfaces_ibkrs_rejection_object_instead_of_an_empty_list(client):
+    """IBKR's documented rejection is a top-level OBJECT, and it must reach the caller.
+
+    `place-order.md` documents three response shapes: the normal array, the Alternate
+    (reply-required) array, and — under that same Alternate heading — a bare object:
+
+        {"error": "We cannot accept an order at the limit price you selected. Please
+                   submit your order using a limit price that is closer to the current
+                   market price of 197.79. ..."}
+
+    `return data if isinstance(data, list) else []` collapsed that to `[]`, so an order
+    IBKR refused for a stated reason was reported to the caller as an empty response —
+    indistinguishable from "nothing happened", with the reason discarded. On the order
+    path that is the one place where losing IBKR's own words is least acceptable.
+
+    `_as_reply_list` already existed to turn a bare dict into a one-element list, but it
+    is applied by `place_order_and_confirm` one layer OUTSIDE `place_order`, so the dict
+    was destroyed before the defence ever saw it.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    """
+    rejection = {
+        "error": "We cannot accept an order at the limit price you selected. "
+        "Please submit your order using a limit price that is closer to the current market price."
+    }
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100, "orderType": "LIMIT", "price": 1.0}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response(rejection)
+        result = client.place_order("U1234567", order)
+
+    assert result, "IBKR's rejection reason was discarded — the caller sees nothing"
+    assert result[0].get("error") == rejection["error"]
+
+
+def test_place_order_still_returns_the_documented_array_unchanged(client):
+    """The counter-case: the normal and reply-required responses are arrays and must pass
+    through untouched, so the fix above cannot quietly re-wrap them."""
+    payload = [{"id": "07a13a5a", "message": ["price exceeds the Percentage constraint of 3%"]}]
+    order = {"ticker": "AAPL", "side": "BUY", "quantity": 100, "orderType": "LIMIT", "price": 182.5}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response(payload)
+        assert client.place_order("U1234567", order) == payload
