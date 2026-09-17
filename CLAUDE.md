@@ -69,6 +69,16 @@ pytest -m security
 pytest tests/test_web_tools_live.py -v -m integration
 ```
 
+**A new guard is not a guard until you have watched it fail.** This audit repeatedly found
+tests that could not fail — one read its own oracle from the code under test, another asserted
+a handler had been *registered* rather than that it worked. `scripts/audit/mutation_battery.py`
+breaks the thing a test watches and requires the test to catch it; it refuses to report a
+result when the mutation did not apply, when pytest never ran, or when the unmutated control
+is not green, because each of those has already produced a wrong answer here — an earlier
+ad-hoc version **fabricated 15 results**, hiding two genuinely unpinned functions. Drive it
+from a throwaway script (usage is in its docstring); `tests/scripts/test_mutation_battery.py`
+proves the harness itself before you trust it.
+
 **The web scraper does not get to be "done" on a green unit suite.** Every defect in the
 2026-07-30 rewrite was found by running a tool, never by a test failing — four in one
 session, each behind a passing suite; and before that `create_profile` shipped with three
@@ -99,6 +109,17 @@ they are `.githooks/pre-push` in both repos, which refuses a push that would go 
 clone by `git config core.hooksPath .githooks` (Dev Setup); `git push --no-verify` bypasses it
 on purpose. Branch protection cannot do this for a direct-push workflow: a required status
 check rejects every push whose commit has not already passed CI, which a direct push never has.
+
+**No gate command may be piped.** `$?` is the exit status of the *last* command in a pipeline
+and `pipefail` is off by default, so `pytest … | tail -1` exits **0 on a red suite** — measured
+here in both `zsh` and `sh`. On 2026-09-16 that exact line, joined by `&&`, carried the rest of
+a commit chain through a red suite; `.githooks/pre-push` is what stopped it leaving the machine,
+and the commit was amended (`0ea4a09`). The same trap reported a failed CI run as green on
+2026-09-13 — see *Reading a CI run* below, which is the same rule applied to `gh run watch`.
+Run each gate bare and read its status, or redirect first and read the file:
+`pytest -m "not integration" -q > out.txt; ec=$?; tail -3 out.txt`. Never `gate | filter`, and
+note that `&&` between gates hides this rather than catching it: a masked 0 lets the chain
+continue.
 
 **Two more gates run in CI only** (they need the network): `pip-audit` over a **fresh resolve**
 of `.[dev,server,scraper]` — requirements mode, `pip install --dry-run` in a throwaway venv,

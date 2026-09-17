@@ -2964,3 +2964,49 @@ the table rows only.
 **5 mutants run, 5 caught, no-op control survived, restore verified byte-identical.** M5 first
 came back `MUTATION NEVER APPLIED` — its anchor had changed when the row's `1` was bolded — and
 the harness refused to report a result rather than scoring it as caught.
+
+---
+
+## Phase 3 — process hardening (no register IDs: these are about how the audit is run)
+
+Two items carried open for several sessions, both closed now. Neither is a defect in the
+package, so neither takes a finding ID; both are defects in **how findings were being
+produced**, which is why they were worth doing before the remaining tail.
+
+### 1. The mutation harness is committed, with its guards under test
+
+`scripts/audit/mutation_battery.py`. It had existed only as a scratch shell script rebuilt
+from memory each session — which is precisely how the version that **fabricated 15 results**
+came to exist. Committed as a library with an injected runner, so the harness can be tested
+without spawning pytest, and `tests/scripts/test_mutation_battery.py` (9 tests) drives every
+outcome: caught, survived, not-applied, did-not-run, red control, restore.
+
+It carries **five** guards, not the four the shell version had. The fifth — *the file must
+still hold the mutation when the run ends* — was found while writing the tests: if the run
+itself rewrites the file, the verdict was never about the mutant. One of those tests was also
+wrong on its first draft, clobbering the file during the control run so there was no mutation
+left to apply; the harness correctly answered `not-applied` and the test, not the code, was
+fixed. Both are recorded in the test docstrings.
+
+The control now runs **first** rather than last. A red or non-running baseline makes every
+verdict beneath it meaningless, so it is refused outright instead of being discovered at the
+end of a battery whose results have already been read.
+
+**Reproduction, as the acceptance check:** the committed module was driven against the five
+doc mutants run by hand earlier in this session and returned the identical verdict — 5 of 5
+caught — plus a sixth mutant with a deliberately dead anchor, which came back `not-applied`
+rather than being scored. That sixth is a positive control for guard 2: without it, "5 caught"
+is equally consistent with a harness that cannot report anything else.
+
+### 2. `CLAUDE.md`'s pipe warning now covers any gate, not just `gh run watch`
+
+The existing warning was scoped to reading a CI run. The same trap had already fired locally:
+on 2026-09-16 a `pytest … | tail -1` joined by `&&` carried a commit chain through a **red
+suite**, and `.githooks/pre-push` is what stopped it leaving the machine (the commit was
+amended to `0ea4a09`).
+
+Re-verified before writing rather than quoted from the incident: `false | tail -1` exits **0**
+in both `zsh` and `sh`, and `pipefail` is **off** by default in this environment. One
+correction fell out of that check — the pre-amendment SHA cited in the session record is
+unreachable, amending having replaced it, so the note cites the surviving commit instead. A
+dead SHA in a warning about unreliable evidence would have been its own small joke.
