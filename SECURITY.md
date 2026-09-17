@@ -172,7 +172,7 @@ it is held by construction: `ORDER_EXECUTION` is not a capability any tool can d
 | `IBKRClient` method | Reason |
 |---|---|
 | `get_order_preview` | IBKR `whatif` endpoint — simulates, never executes |
-| `get_live_orders` / `get_order_status` | Read-only |
+| `get_live_orders` / `get_order_status` / `get_orders_raw` | Read-only |
 
 *Ungated non-order `ACCOUNT_STATE` mutations* — these do change state on IBKR's servers. They are
 ungated deliberately: a price notification is not an execution path, and the two gates are
@@ -184,7 +184,29 @@ reserved for order writes.
 | `delete_alert` | `DELETE` — removes a price alert permanently |
 | `activate_alert` | `POST` — enables or disables an existing alert |
 
-Until 2026-09-14 this table was headed "read-only; no execution risk" for all six methods, which
+**The alerts are not the only ones.** This table listed three ungated state-changing methods
+until 2026-09-17 while the client had nine (audit finding `SEC-R2`); an inventory missing an
+entry reads as complete while it is not, which is `SEC-12` one level up. The rest:
+
+| `IBKRClient` method | What it changes |
+|---|---|
+| `create_watchlist` | `POST` — creates a watchlist |
+| `delete_watchlist` | `DELETE` — removes a watchlist permanently |
+| `mark_notification_read` | `PUT` — marks one FYI notification read |
+| `update_delivery_option` | `POST`/`PUT` — enables or disables a notification delivery channel |
+| `switch_account` | `POST` — changes the active account (advisor / family accounts) |
+| `unsubscribe_market_data` | `POST` — drops a streaming market-data subscription |
+| `invalidate_positions_cache` | `POST` — force-refreshes IBKR's position cache |
+| `logout` / `reauthenticate` / `tickle` | `POST` — session lifecycle |
+
+**None of the nine is reachable from the model layer** — measured 2026-09-17 by searching
+`claude_tools.py` and `mcp_server.py` for each name. The only ungated writes a tool can reach
+are `run_iserver_scanner` and `get_pa_periods_raw`, and both are POST-as-query: IBKR takes a
+request body for them, they change nothing. So this was a gap in the *inventory*, not in the
+boundary. `tests/security/test_documented_controls.py` now fails if a write method in
+`client.py` is neither gated nor named here.
+
+Until 2026-09-14 the read-only table was headed "read-only; no execution risk" for all six methods, which
 was wrong for the three alert writes. The capability registry had them right the whole time —
 `create_price_alert`, `modify_price_alert`, `delete_alert`, `activate_alert` are the
 `ACCOUNT_STATE` row of § Capability declarations — so this is a documentation correction only;
@@ -851,7 +873,7 @@ Tailscale) and the IPv4 inside an IPv4-mapped IPv6 address. `tests/security/test
 holds a table of twenty forms, none needing DNS. **`search_site` gets the same per-request layer in httpx form**: `_reject_private_httpx_request`
 is installed as a request hook on the seeder's own client, so every robots/sitemap/`<head>`
 fetch and every redirect hop is re-checked at the moment it is sent (fresh-eye review 2026-09-13;
-until then the seeder had layer 1 only, and a sitemap listing a loopback URL was fetched). Verified against the installed `crawl4ai==0.9.0` source (`async_crawler_strategy.py`) confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack — where subresources do route through the request-interception path but **redirects do not**, which is why the handler resolves them itself (see the correction above).
+until then the seeder had layer 1 only, and a sitemap listing a loopback URL was fetched). Verified 2026-09-13 against `crawl4ai==0.9.0` source (`async_crawler_strategy.py`), and re-verified 2026-09-17 against the now-installed **0.9.2**, where the hook is still called with the live context (`async_crawler_strategy.py:615`) and the live redirect-SSRF test passed against real Chromium. The extra floats (`crawl4ai>=0.5.0`), so this citation is dated on purpose — it read as a claim about what *is* installed until `SEC-R3` confirming the `on_page_context_created` hook receives the live Playwright `page` object, and against the Chromium/Playwright network stack — where subresources do route through the request-interception path but **redirects do not**, which is why the handler resolves them itself (see the correction above).
 
 **Path-traversal hardening (defense in depth):** the domain extracted from a URL is used to build a filesystem path (`profiles_dir / domain`, for locating and writing saved login profiles). `local_browser._safe_domain` explicitly rejects any domain containing `..`, `/`, or `\`, or that is empty, before it reaches a path join — independent of upstream URL validation, so it can't be silently reopened by a future change elsewhere.
 

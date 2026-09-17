@@ -165,3 +165,90 @@ def test_the_architecture_doc_states_the_real_number_of_secret_shapes():
     claimed = {int(n) for n in re.findall(r"(\d+) secret shapes", doc)}
     assert claimed, "the architecture doc no longer states a secret-shape count; update or remove this guard"
     assert claimed == {len(SECRETS)}, f"the doc claims {claimed} secret shapes; the table holds {len(SECRETS)}"
+
+
+# Ungated writes that are POST-as-query: IBKR takes a request body for them because the
+# query has parameters, and they change nothing on its servers. Exempt by name with the
+# reason written down, the way `test_order_write_boundary.PRE_GATE_EXEMPT` is — an unnamed
+# exemption is how an inventory comes to look complete while it is not (SEC-12, SEC-R2).
+_POST_AS_QUERY = {
+    "get_contract_rules": "POST /iserver/contract/rules — reads order rules for a conid",
+    "get_pa_periods_raw": "POST /pa/performance — the unparsed form of get_pa_periods",
+    "get_portfolio_allocation": "POST /portfolio/allocation — reads a breakdown for given accounts",
+    "run_iserver_scanner": "POST /iserver/scanner/run — runs a market scan, stores nothing",
+}
+
+_GATED_ORDER_WRITES = frozenset(
+    {
+        "place_order",
+        "place_order_and_confirm",
+        "modify_order",
+        "modify_order_and_confirm",
+        "cancel_order",
+        "reply_order",
+    }
+)
+
+
+def _client_write_methods() -> dict[str, list[str]]:
+    """Every public `IBKRClient` method that issues a non-GET request.
+
+    Both spellings count. There is no `_delete` helper, so `cancel_order` and
+    `delete_watchlist` call `self._session.delete(...)` directly — a first version of this
+    probe looked only for `_post`/`_put`/`_delete` helpers and silently missed four methods,
+    including a gated one. A probe that cannot see a whole spelling is the defect this file
+    exists to catch.
+    """
+    import ast
+
+    source = (_ROOT / "ibkr_core_mcp" / "client.py").read_text()
+    writes: dict[str, list[str]] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+            continue
+        verbs = set()
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call) or not isinstance(sub.func, ast.Attribute):
+                continue
+            func = sub.func
+            if func.attr in {"_post", "_put"}:
+                verbs.add(func.attr)
+            elif (
+                func.attr in {"post", "put", "delete", "patch"}
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "_session"
+            ):
+                verbs.add(f"session.{func.attr}")
+        if verbs:
+            writes[node.name] = sorted(verbs)
+    return writes
+
+
+def test_every_client_write_is_gated_or_named_in_the_inventory():
+    """SEC-R2. SECURITY.md's ungated-mutations table listed three of nine.
+
+    None of the missing ones was reachable from the model layer — measured — so the boundary
+    held and the *inventory* did not. That is exactly SEC-12's shape one level up: a control
+    inventory with a gap reads as complete, and the next reader trusts it.
+    """
+    inventory = (_ROOT / "SECURITY.md").read_text()
+    writes = _client_write_methods()
+    assert len(writes) >= 20, f"the write probe found only {len(writes)} methods — it has stopped seeing a spelling"
+
+    unlisted = [
+        name
+        for name in sorted(writes)
+        if name not in _GATED_ORDER_WRITES and name not in _POST_AS_QUERY and f"`{name}`" not in inventory
+    ]
+    assert not unlisted, (
+        f"these client methods write to IBKR but appear nowhere in SECURITY.md: {unlisted}. "
+        "Add each to the ungated-mutations table, or to _POST_AS_QUERY with its reason."
+    )
+
+
+def test_the_write_probe_sees_both_spellings():
+    """Vacuity guard: the probe must find the gated writes, including the session form."""
+    writes = _client_write_methods()
+    assert "place_order" in writes and writes["place_order"] == ["_post"]
+    assert "cancel_order" in writes and writes["cancel_order"] == ["session.delete"]
+    assert "mark_notification_read" in writes and writes["mark_notification_read"] == ["_put"]

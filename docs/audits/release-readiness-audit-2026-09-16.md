@@ -31,10 +31,10 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `API-R` | **2** | **2** | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| `SEC-R` | **1** | **1** | — | — | — |
-| **Total** | **142** | **83** | **8** (+1 partial) | **0** | **50** |
+| `SEC-R` | **3** | **3** | — | — | — |
+| **Total** | **144** | **85** | **8** (+1 partial) | **0** | **50** |
 
-`83 + 8 + 1 + 0 + 50 = 142`. **There are no unrecorded findings left.** All three blocks
+`85 + 8 + 1 + 0 + 50 = 144`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -3443,3 +3443,62 @@ remaining hits were line-boundary artifacts of the sweep itself, confirmed by re
 again — *"the third site, missed when the first two were fixed"* — and it is the argument for
 the owner's instruction to check a second angle every time: the first grep was not wrong, it
 was just answering a narrower question than the one that mattered.
+
+---
+
+## Phase 3 — verifying the security documentation, and `SEC-R2` / `SEC-R3`
+
+Owner asked for the security docs to be checked before moving on, as the place where a stale
+claim does the most damage. Checked from several angles rather than one, because the `SEC-07`
+sweep had just shown that one angle finds a third of the sites.
+
+**What already held.** Internal links in `SECURITY.md` and `docs/security-architecture.md` all
+resolve. Every `.py` file they name exists. The eleven invariant rows are numbered 1–11 and
+each names a test file that exists — verified one by one. `46 tools` matches
+`len(_ALL_TOOL_DEFS)`. The four store-permission tests named in `SECURITY.md` exist. Five
+properties were already machine-checked by `test_documented_controls.py`.
+
+**A count that looked wrong and was not.** `SECURITY.md:187` says the pre-2026-09-14 table was
+headed "read-only" for *"all six methods"*, and the table has five rows. Reading settled it:
+one row names two methods (`get_live_orders` / `get_order_status`), so six is right. A row
+count would have produced a false finding; the same class of instrument error as the three in
+the previous pass.
+
+### `SEC-R2` — the ungated inventory listed three of nine
+
+`SECURITY.md`'s *"Ungated non-order `ACCOUNT_STATE` mutations"* table carried the three alert
+writes. The client has **nine** ungated methods that change state on IBKR's servers:
+`create_watchlist`, `delete_watchlist`, `mark_notification_read`, `update_delivery_option`,
+`switch_account`, `unsubscribe_market_data`, `invalidate_positions_cache`, `logout` /
+`reauthenticate` / `tickle`. `get_orders_raw` was also missing from the read-only table, where
+`CLAUDE.md` has listed it all along — found by reading the two documents against each other.
+
+**The boundary held; the inventory did not.** Measured: none of the nine is reachable from
+`claude_tools.py` or `mcp_server.py`. The only ungated writes a tool can reach are
+`run_iserver_scanner` and `get_pa_periods_raw`, and both are POST-as-query — IBKR takes a body
+because the query has parameters, and nothing changes. So this is `SEC-12`'s shape one level
+up: an inventory with a gap reads as complete, and the next reader trusts it.
+
+`test_every_client_write_is_gated_or_named_in_the_inventory` now fails if a write method is
+neither gated, nor named in `SECURITY.md`, nor in a `_POST_AS_QUERY` exemption carrying its
+reason — the same named-exemption discipline as `PRE_GATE_EXEMPT`.
+
+**The probe was wrong first.** Its first version looked for `_post`/`_put`/`_delete` helpers
+and reported 21 write methods. There is no `_delete` helper: `cancel_order`,
+`delete_watchlist` and `tickle` call `self._session.delete`/`.post` directly. The corrected
+probe finds **25**, and it missed a *gated* method — so the first answer was not merely
+incomplete, it was incomplete in the direction that matters. A vacuity guard now pins both
+spellings, and blinding the probe to the session form fails it.
+
+### `SEC-R3` — a version claim that expired silently
+
+`SECURITY.md` read *"Verified against the installed `crawl4ai==0.9.0` source"*. Installed is
+**0.9.2**, and the `scraper` extra floats (`crawl4ai>=0.5.0`), so the sentence was a
+present-tense claim about a moving target.
+
+The substance was re-verified rather than the number patched: the `on_page_context_created`
+hook still exists in 0.9.2, still receives the live context
+(`async_crawler_strategy.py:615`), our guard still registers on it, and the live
+redirect-SSRF test passed against real Chromium the same day. **The property holds; only the
+citation had expired.** Now dated, with the floor named, so it reads as a record rather than
+a claim.
