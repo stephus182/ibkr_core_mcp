@@ -1,33 +1,34 @@
-"""Live integration tests for the Firecrawl web scraper.
+"""Live integration tests for the Firecrawl client and the `firecrawl_search` tool.
 
-Exercises the real Firecrawl REST API (https://api.firecrawl.dev/v1) — no
-mocking. Covers:
-    FirecrawlClient.search, FirecrawlClient.crawl,
-    ClaudeToolkit.execute("firecrawl_search") end-to-end
+Exercises the real Firecrawl REST API (https://api.firecrawl.dev/v1) — no mocking.
 
-Run with real API keys exported (not committed anywhere):
+Run with a real key exported (never committed):
     export FIRECRAWL_API_KEY=fc-...
-    export ANTHROPIC_API_KEY=sk-ant-...   # only needed if a result is ambiguous
 
     pytest tests/test_web_scraper_live.py -v -m integration
 
-All tests are skipped automatically when FIRECRAWL_API_KEY is not set.
+Every test here skips automatically when FIRECRAWL_API_KEY is not set.
 
 ## Scope
 
-- FirecrawlClient.search/crawl hit the real API — network calls, real cost
-  against the configured Firecrawl plan. Kept cheap: limit=1, max_pages=1,
-  targeting small/stable pages.
-- Drive persistence (WebDocsStore, firecrawl_crawl's mandatory save_to_drive)
-  is NOT exercised here — it needs real GDrive OAuth, out of scope for this
-  key-gated suite. firecrawl_crawl is tested via FirecrawlClient.crawl()
-  directly (module-level), not through ClaudeToolkit.execute, for that reason.
-  firecrawl_search is tested through ClaudeToolkit.execute with
-  save_to_drive=False (the schema default).
-- The Crawl4AI fallback is NOT forced here — it only fires when
-  assess_quality() classifies a real Firecrawl result as ambiguous/fallback,
-  which depends on live page content at run time and isn't deterministic to
-  script against a real target.
+- `FirecrawlClient.search` against the real API — network calls, real cost on the
+  configured plan. Kept cheap: `limit=1`, small stable targets.
+- `firecrawl_search` end to end through `ClaudeToolkit.execute`, with the schema default
+  `save_to_drive=False`. Drive persistence needs real OAuth and lives in
+  `tests/test_web_scraper_drive_live.py`.
+- The three browser tools are **not** here. They need no Firecrawl key and are covered by
+  `tests/test_web_tools_live.py`.
+
+**`ANTHROPIC_API_KEY` is not needed, and this file used to say otherwise** (WEB-07). The
+docstring told the reader to export it "only needed if a result is ambiguous", which
+described `judge_completeness_llm` — a Haiku call that arbitrated between two scraper
+engines and was deleted on 2026-07-30 with the ladder itself. The scraper makes no
+Anthropic call at all. `Config` still requires the field, which is why the fixture below
+passes a placeholder.
+
+It also claimed to cover `FirecrawlClient.crawl` and said `firecrawl_crawl` was "tested via
+`FirecrawlClient.crawl()` directly". Neither exists: the tool was deleted with the ladder
+and the client method with it. This file has four tests and all four are search.
 """
 
 from __future__ import annotations

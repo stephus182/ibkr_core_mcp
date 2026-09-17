@@ -171,8 +171,12 @@ which point the ladder had nothing left to do.
 configured the hosted rung removed on 2026-07-28 (§5.1) and are now ignored wherever they remain
 set.
 
-Crawl4AI is an optional extra. Without it, the fallback layer reports itself unavailable and
-Firecrawl's result is returned as-is:
+Crawl4AI is an optional extra, and **three of the four tools are Crawl4AI** — `fetch_page`,
+`crawl_site` and `search_site`. Without it those three report themselves unavailable and name
+the install command (three call sites in `claude_tools.py`); `firecrawl_search` is unaffected,
+because whole-web search never touches the browser. Nothing falls back to anything: the ladder
+was deleted on 2026-07-30 (§1.1), so an absent browser removes three tools rather than
+degrading them.
 
 ```bash
 pip install "ibkr_core_mcp[scraper]"
@@ -349,9 +353,16 @@ both re-verified 2026-07-30.
 > right — the doc was wrong. Caught on 2026-07-30 only because the vendor page was re-fetched
 > before "fixing" the code to match this sentence.
 
-Crawl4AI local has no rate limit and no quota — it is a browser on this machine. The
-search-result path launches up to `_MAX_CONCURRENT_FALLBACKS = 5` local scrapes in parallel; the
-only ceiling is this machine's memory.
+Crawl4AI local has no rate limit and no quota — it is a browser on this machine. The only
+ceiling is the machine itself, plus one deliberate serialisation: a saved login profile is a
+Chrome `user_data_dir`, and only one Chrome may hold one, so profiled fetches of the same
+domain queue rather than run together (§6).
+
+> This paragraph said "the search-result path launches up to `_MAX_CONCURRENT_FALLBACKS = 5`
+> local scrapes in parallel" until 2026-09-17 (WEB-08). That constant existed nowhere in the
+> tree, and neither did the behaviour: the parallel-scrape path belonged to the search-result
+> rescue in the deleted ladder. `local_browser.py` now contains no concurrency primitive at
+> all — the only occurrences of "concurrent" in it are about the profile lock above.
 
 **Note for the eventual paid transition:** `web_scraper.py`'s comment about "Firecrawl Free
 allows 2 `/crawl` per minute" is likewise a tier fact living in a comment. It becomes wrong on
@@ -851,6 +862,7 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-09-16 | **The per-request SSRF guard could raise from its own failure path, intermittently killing a crawl.** When a page tears down mid-request Playwright resolves the outstanding route itself; `route.fetch` then raises, the handler's `except` branch called `route.abort()`, and abort raised `Route.abort: Route is already handled!` — *from inside the except block*, so nothing caught it. It escaped the handler and surfaced as `Browser.close: Route.abort: Route is already handled!`. This is the intermittent live failure first seen 2026-09-16 (1 run in 5) and recorded then as unidentified; it was introduced by that same day's redirect fix. Captured in `test_crawl_site_saves_pages_to_drive`. Every abort is now best-effort (`_abort_quietly`). Deterministic unit coverage in `tests/test_local_browser.py` (teardown during fetch and during fulfill, plus a check that a failing abort still never serves private content); 3 mutants run, 3 caught. |
 | 2026-09-16 | Live run after the fix: `test_web_scraper_drive_live.py` 2 passed x6 consecutive runs; `test_web_tools_live.py` + `test_crawl4ai_live.py` + `test_web_scraper_live.py` 17 passed x4 consecutive runs. Full integration sweep 94 collected -> 79 passed / 14 skipped / 1 failed before the fix (that failure), and clean after. |
 | 2026-09-17 | **The §10 requirements table was wrong in a way only running it could show, and the credit is not gated by the key.** Four runs of `test_web_tools_live.py -m integration`, each isolating one requirement: everything present **12 passed / 27 s**; `import crawl4ai` blocked by a meta-path finder **3 passed, 9 skipped** (8 on the extra, 1 on the key) in **0.44 s with no network**; `load_dotenv` neutralised and the key deleted **11 passed, 1 skipped**; `requests.get` raised at the redirector **that test skipped, it did not fail**. Two facts fell out that reading the fixtures had missed. First, `test_a_public_url_that_redirects_to_loopback_never_reaches_it` carries a **second, undocumented gate on `httpbin.org`** — it is one of the 8, so it never disturbed the arithmetic and the table never mentioned it. Second, `crawl4ai/config.py` calls a bare `load_dotenv()` at import and `find_dotenv()` walks up from the **cwd**, so importing the free browser extra from the repo root **injects this repo's gitignored `.env` into `os.environ`** — the same shell, with nothing sourced, skipped the Firecrawl test as "not set" with the import blocked and spent a credit with it allowed. The blocker was proved in both directions before any result was read. `tests/test_config_docs_consistency.py` now derives the three counts from the suite's AST; 5 mutants run, 5 caught, no-op survived. |
+| 2026-09-17 | **Live run after WEB-09: 15 passed, 0 skipped, 40.6 s.** `test_web_tools_live.py` (12) + `test_web_scraper_drive_live.py` (3), against the real browser, real sitemaps, real Firecrawl and **real Drive**. `_handle_crawl_site`'s Drive cache read was restructured — the read and the store's construction now sit inside one `try` that reports the cause, where before an OAuth failure escaped to `execute`'s catch-all as "encountered an unexpected error" while the *write* had always named it. The rule that a scraper change is not done on a green unit suite applies exactly here: the unit tests drive that path with a `MagicMock` raising on demand, so only this run shows the rearranged happy path still reaching Drive and returning a manifest. 4 mutants run, 4 caught, dead-anchor control refused. |
 
 ---
 

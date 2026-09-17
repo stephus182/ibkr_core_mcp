@@ -3966,25 +3966,45 @@ class ClaudeToolkit:
         max_depth = int(inputs.get("max_depth", 2))
         force_refresh = bool(inputs.get("force_refresh", False))
 
-        if self._web_docs is None:
-            self._web_docs = WebDocsStore(self._config)
+        # Drive is this tool's destination, not an optimisation, so a failure reaching it is
+        # reported with its cause instead of falling through to `execute`'s catch-all, which
+        # says only "encountered an unexpected error". The write below has always done this;
+        # the read did not, so one OAuth failure was diagnosable in one direction and opaque
+        # in the other (WEB-09).
+        #
+        # Construction is inside the try on purpose. `WebDocsStore.__init__` performs no
+        # OAuth today and documents that, but it is another module's property and nothing
+        # here enforces it: a guard that relies on it reopens the day construction acquires
+        # a network call, and reopens *silently*, since the symptom is generic text rather
+        # than a failing test.
+        try:
+            if self._web_docs is None:
+                self._web_docs = WebDocsStore(self._config)
+            cached = None if force_refresh else self._web_docs.get_cached_crawl(url)
+        except Exception as exc:
+            log.warning("crawl_site could not reach Drive for %s: %s", url, redact_error(exc))
+            return (
+                f"Crawl of {url} did not start: the Drive archive is unreachable "
+                f"({redact_error(exc)}).\n"
+                f"crawl_site exists to archive to Drive, so there is nothing useful it can do "
+                f"without it. Re-authenticate and retry.",
+                None,
+            )
 
-        if not force_refresh:
-            cached = self._web_docs.get_cached_crawl(url)
-            if cached is not None:
-                saved = len(cached["pages"])
-                # "Saved N page(s)" read as a fresh measurement; it is a count from
-                # index.json, and the .md files it names are not re-checked against
-                # Drive. Verifying would cost N round-trips on every cache hit and
-                # defeat the 48h cache, so the honest fix is to say what is known.
-                return (
-                    f"Using cached crawl of {url} from Drive — nothing was re-fetched.\n"
-                    f"Crawled at: {cached['crawled_at']}\n"
-                    f"The cached manifest lists {saved} page(s); their contents were not "
-                    f"re-verified against Drive. Pass force_refresh=true to re-crawl.\n"
-                    f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10]) + ("..." if saved > 10 else ""),
-                    None,
-                )
+        if cached is not None:
+            saved = len(cached["pages"])
+            # "Saved N page(s)" read as a fresh measurement; it is a count from
+            # index.json, and the .md files it names are not re-checked against
+            # Drive. Verifying would cost N round-trips on every cache hit and
+            # defeat the 48h cache, so the honest fix is to say what is known.
+            return (
+                f"Using cached crawl of {url} from Drive — nothing was re-fetched.\n"
+                f"Crawled at: {cached['crawled_at']}\n"
+                f"The cached manifest lists {saved} page(s); their contents were not "
+                f"re-verified against Drive. Pass force_refresh=true to re-crawl.\n"
+                f"Pages: " + ", ".join(p["url"] for p in cached["pages"][:10]) + ("..." if saved > 10 else ""),
+                None,
+            )
 
         try:
             pages = crawl_site(url, self._config.crawl4ai_profiles_dir, max_pages=max_pages, max_depth=max_depth)

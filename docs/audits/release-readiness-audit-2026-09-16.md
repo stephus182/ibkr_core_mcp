@@ -19,7 +19,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
 |---|---:|---:|---:|---:|---:|
 | `SEC` | 13 | 8 | 5 | — | — |
-| `WEB` | 9 | 4 | 5 | — | — |
+| `WEB` | 9 | **9** | — | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
 | `API` | 21 | 14 | 6 (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
@@ -31,9 +31,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `API-R` | 1 | 1 | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| **Total** | **140** | **71** | **18** (+1 partial) | **0** | **50** |
+| **Total** | **140** | **76** | **13** (+1 partial) | **0** | **50** |
 
-`71 + 18 + 1 + 0 + 50 = 140`. **There are no unrecorded findings left.** All three blocks
+`76 + 13 + 1 + 0 + 50 = 140`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -3010,3 +3010,73 @@ in both `zsh` and `sh`, and `pipefail` is **off** by default in this environment
 correction fell out of that check — the pre-amendment SHA cited in the session record is
 unreachable, amending having replaced it, so the note cites the surviving commit instead. A
 dead SHA in a warning about unreliable evidence would have been its own small joke.
+
+---
+
+## Phase 3 — `WEB-05…09`: the whole `WEB` domain closed
+
+Session 10, working the tail by severity. All five were re-verified as still true before
+anything was touched — several were raised in session 1 and could have been fixed
+incidentally since. None had been.
+
+| ID | Severity | Fix |
+|---|---|---|
+| `WEB-05` | Medium | §2 said "without it, the fallback layer reports itself unavailable and Firecrawl's result is returned as-is". There is no fallback layer. Rewritten: Crawl4AI **is** three of the four tools, and its absence removes them rather than degrading them |
+| `WEB-09` | Low | `_handle_crawl_site` guarded the Drive write and not the Drive read |
+| `WEB-06` | Low | `pyproject.toml`'s `scraper` extra named "the scraper's fallback rung"; the `web_scraping` marker's description said "firecrawl/scrape-fallback handlers" |
+| `WEB-07` | Low | `tests/test_web_scraper_live.py`'s docstring |
+| `WEB-08` | Nit | §5 cited `_MAX_CONCURRENT_FALLBACKS = 5` |
+
+### `WEB-09` — one OAuth failure, two different levels of honesty
+
+`save_crawl` is wrapped and returns `"Crawl completed (N pages) but Drive save failed:
+<cause>"`. `get_cached_crawl` was not, so the identical failure escaped to `execute`'s
+catch-all and reached the caller as *"Tool 'crawl_site' encountered an unexpected error."*
+The cause was discarded on the one path where the operator could have acted on it — and an
+expired refresh token is the realistic trigger, being exactly what `RefreshError` means and
+exactly what `WEB-03` was about.
+
+**The construction is inside the guard, and that was the owner's call during review.** My
+first version wrapped only the read, reasoning that `WebDocsStore.__init__` "performs no
+OAuth and no network I/O" — which its docstring does say. But that is another module's
+property, enforced by nothing in this handler, and a guard resting on it reopens the day
+construction acquires a network call. It would reopen *silently*, because the symptom is
+`execute`'s generic text rather than a red test. Both are now in one `try`, and
+`test_crawl_site_names_a_drive_failure_raised_while_building_the_store` pins it.
+
+**4 mutants run, 4 caught**, plus a dead anchor that came back `not-applied` rather than
+scored. One mutant was *"move construction back outside the guard"* — it is caught, so the
+weaker version of this fix now fails a test rather than passing quietly. Run through
+`scripts/audit/mutation_battery.py`, committed earlier this session.
+
+**A detail worth keeping about the tests.** Both new tests first failed on
+`Invalid URL: SocketBlockedError`, not on the behaviour under test: `_validate_public_url`
+resolves the host, the unit suite blocks sockets, and the handler short-circuits into
+`Blocked:`/`Invalid URL:` before reaching any of the code under test. That is the trap
+`tests/conftest.py` documents above `_REAL_DNS_EXEMPT_TESTS`, and the house answer is to add
+the test's name to that list. These tests use a **literal public IP** instead. The SSRF guard
+parses an IP literal with `inet_aton` and resolves nothing, so no exemption is needed — and
+that list is a security exemption list, where the smallest correct version is the right one.
+Verified under the suite's own socket block that the literal path is genuinely parsing rather
+than failing open: `93.184.216.34` -> public, `127.0.0.1` and `10.0.0.1` -> private, `d.dev`
+-> raises. Had errors been swallowed into "public", the two private literals would have come
+back public.
+
+### `WEB-07` was worse than recorded
+
+The finding said the docstring "documents a deleted method and tells the reader to export
+`ANTHROPIC_API_KEY`". Both true. It also claimed to cover `FirecrawlClient.crawl` and said
+`firecrawl_crawl` was "tested via `FirecrawlClient.crawl()` directly" — and **neither exists**:
+the tool went with the ladder on 2026-07-30 and the client method with it. The file has four
+tests and all four are search. The `ANTHROPIC_API_KEY` line described
+`judge_completeness_llm`, deleted the same day; the scraper makes no Anthropic call, and
+`Config` merely still requires the field, which is why the fixture passes a placeholder.
+
+### `WEB-08` — the constant and the behaviour were both gone
+
+`_MAX_CONCURRENT_FALLBACKS = 5` exists nowhere in the tree, and neither does what it
+described: parallel local scrapes belonged to the deleted ladder's search-result rescue.
+`local_browser.py` now holds **no concurrency primitive at all** — every occurrence of
+"concurrent" in it refers to the profile lock, which serialises rather than parallelises. The
+paragraph now says that, since "no rate limit and no quota" was true and "5 in parallel" was
+not.

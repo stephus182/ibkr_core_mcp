@@ -520,6 +520,78 @@ def test_crawl_site_blocks_a_private_url_before_launching_a_browser():
     assert text.startswith("Blocked:")
 
 
+# A literal public IP, not a hostname. `_validate_public_url` parses an IP literal with
+# `inet_aton` and resolves nothing, so these tests need no entry in conftest's
+# `_REAL_DNS_EXEMPT_TESTS` — which is a SECURITY EXEMPTION LIST, and the smallest version
+# of it is the correct one. Verified under the suite's own socket block: `is_private_host`
+# returns False for this address without touching `getaddrinfo`.
+_PUBLIC_IP_URL = "https://93.184.216.34/"
+
+
+def test_crawl_site_names_a_drive_read_failure_instead_of_calling_it_unexpected():
+    """WEB-09. The Drive WRITE and the Drive READ failed with different honesty.
+
+    `save_crawl` is wrapped and returns "Drive save failed: <cause>"; `get_cached_crawl`
+    was not, so the identical OAuth failure escaped to `execute`'s catch-all and came back
+    as "Tool 'crawl_site' encountered an unexpected error" — the cause discarded on the one
+    path where the user could have acted on it. An expired refresh token is the realistic
+    trigger: it is what `RefreshError` means, and it is what WEB-03 was about.
+    """
+    toolkit = _make_toolkit()
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.side_effect = RuntimeError("invalid_grant: token has been expired or revoked")
+
+    with patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl:
+        text, _ = toolkit.execute("crawl_site", {"url": _PUBLIC_IP_URL})
+        mock_crawl.assert_not_called()
+
+    assert "unexpected error" not in text, "the generic catch-all text is what this fixes"
+    assert "Drive" in text
+    assert "invalid_grant" in text, "the cause must survive to the caller"
+
+
+def test_crawl_site_names_a_drive_failure_raised_while_building_the_store():
+    """The guard must not depend on `WebDocsStore.__init__` staying lazy.
+
+    It performs no OAuth today and says so in its own docstring — but that is a property of
+    another module, enforced by nothing here. A guard that covers only the read reopens the
+    moment construction acquires a network call, and it would reopen silently, because the
+    symptom is `execute`'s generic text rather than a failing test. So construction sits
+    inside the same try.
+    """
+    toolkit = _make_toolkit()
+    toolkit._web_docs = None
+
+    with (
+        patch("ibkr_core_mcp.web_scraper.WebDocsStore", side_effect=RuntimeError("invalid_grant: revoked")),
+        patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl,
+    ):
+        text, _ = toolkit.execute("crawl_site", {"url": _PUBLIC_IP_URL})
+        mock_crawl.assert_not_called()
+
+    assert "unexpected error" not in text
+    assert "invalid_grant" in text
+
+
+def test_crawl_site_force_refresh_skips_the_cache_read_entirely():
+    """The read is only consulted when `force_refresh` is false, so a broken Drive read
+    must not block a caller who already asked to bypass the cache."""
+    toolkit = _make_toolkit()
+    toolkit._web_docs = MagicMock()
+    toolkit._web_docs.get_cached_crawl.side_effect = AssertionError("must not be consulted")
+    toolkit._web_docs.save_crawl.return_value = {
+        "url": _PUBLIC_IP_URL,
+        "crawled_at": "2026-07-30T00:00:00+00:00",
+        "pages": [{"url": _PUBLIC_IP_URL, "file_id": "f1"}],
+    }
+    with patch("ibkr_core_mcp.local_browser.crawl_site") as mock_crawl:
+        mock_crawl.return_value = [{"url": _PUBLIC_IP_URL, "markdown": _REALISTIC_MARKDOWN, "metadata": {}}]
+        text, _ = toolkit.execute("crawl_site", {"url": _PUBLIC_IP_URL, "force_refresh": True})
+
+    assert_tool_succeeded(text)
+    assert "saved 1 page(s)" in text
+
+
 def test_crawl_site_uses_the_48h_drive_cache():
     toolkit = _make_toolkit()
     toolkit._web_docs = MagicMock()
