@@ -65,7 +65,7 @@ pytest tests/claude_tools/test_tool_descriptions.py      # schema/description ho
 pytest -m security
 
 # Web tools — a LIVE run is mandatory before calling any scraper change done.
-# 11 tests, ~28s. Skips cleanly without the [scraper] extra or a Firecrawl key.
+# 12 tests, ~28s. Skips cleanly without the [scraper] extra or a Firecrawl key.
 pytest tests/test_web_tools_live.py -v -m integration
 ```
 

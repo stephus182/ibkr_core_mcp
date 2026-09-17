@@ -1,6 +1,15 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,008 unit tests · 93 integration tests (1,101 total) · 85% line coverage (non-integration)** — all three re-measured 2026-09-08 with the commands below (992 / 93 / 85% on 2026-08-11; the per-module tables further down are still that day's reading), not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,459 unit tests · 100 integration tests (1,559 total) · 87% line coverage (non-integration)** — all four re-measured 2026-09-16 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+
+> **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
+> 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
+> per-module figures had drifted**. The file's own rule — "do not edit these numbers by hand;
+> re-run the commands below" — was correct and nobody ran them. Two of the drifts were caused
+> by the release-readiness audit itself: `indicators.py` fell out of the 100% table (its DATA-01
+> fix added two early returns with no test) and `models.py` dropped 99% → 95% (`IBKRResponse`'s
+> `items()`, `values()` and `.raw` had none either). Both are pinned now and both are back.
+> Re-measured after that: `indicators.py` 100%, `models.py` 98%.
 
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
 
@@ -44,10 +53,10 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `local_browser.py` | 95% | 151–152, 442, 648, 935, 1042–1048, 1052 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`), and interactive `create_profile` / CLI paths that need a real TTY and a real browser — covered live, not by unit tests. |
 | `flex_import.py` | 90% | 180, 232–236, 240–241, 269, 273–274, 279–283, 340 | Type-coercion failure branches (`INTEGER`/`REAL` attributes that IBKR has never emitted as non-numeric), the unparseable-date raise in `normalise_datetime`, the blank-`execId` skip and unparseable-timestamp warning in the live-fill path, and the `counts()` accessor. Every one is a defensive branch against IBKR changing a format — the raising behaviour is deliberate (see `flex_import.py`'s refusal-on-unknown-attribute contract), so these fire only on a schema change, which is exactly when you want them loud. |
 | `flex_store.py` | 97% | 127, 135 |
-| `models.py` | 99% | 162 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
-| `human_auth.py` | 96% | 31 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
+| `models.py` | 98% | 162 | `return data` fallback in `AccountSummary._normalize` when input is not a dict — IBKR API always sends a dict; no known real-world trigger |
+| `human_auth.py` | 98% | 31 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 93% | 49–50, 408, 424, 451–453, 481–484, 488–491, 495–497, 508–511, 799 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
-| `rate_limiter.py` | 93% | 105–106 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
+| `rate_limiter.py` | 98% | 105–106 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
 | `__init__.py` | 92% | 58–59 | Optional-dependency import guard (module absent from environment) |
 | `auth.py` | 90% | 80, 114, 127–128 | `browser_cookie3` import and cookie-apply path — requires a real installed browser's cookie store |
 | `pinescript.py` | 90% | 143–144, 232, 234, 236, 239 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe-inference edge cases for sub-1-minute and multi-day intervals |
@@ -63,16 +72,16 @@ inside a spawned child process, invisible to single-process coverage instrumenta
 
 | Module | Coverage | Why low |
 |---|---|---|
-| `backtest.py` | 85% | Uncovered: 34–36, 50–55, 138–139, 159–186, 298. Most of this is *not* actually untested: `_write_guard`, `_sandboxed_getattr`, and all of `_execute_in_subprocess` (lines 34–36, 50–55, 159–186) run inside the sandboxed strategy's `multiprocessing.Process` child (see `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`) — `coverage.py`'s default single-process instrumentation can't see code executing in a different OS process, even though the same 20 tests that exercised this logic pre-rewrite still exercise it today. Verified with multiprocessing-aware coverage (`COVERAGE_PROCESS_START` + `concurrency=multiprocessing`, a one-off local check, not wired into CI): real line coverage is ~92%. The two lines that are genuinely untested even under that measurement: `_terminate_then_kill`'s SIGKILL-escalation branch (138–139 — reached only if a killed process is somehow still alive after the SIGTERM grace period) and the success-path reap safety net (298 — reached only if the child is somehow still alive moments after a successful `send()`), both rare defensive branches with no deterministic trigger. |
+| `backtest.py` | 88% | Uncovered: 34–36, 50–55, 138–139, 159–186, 298. Most of this is *not* actually untested: `_write_guard`, `_sandboxed_getattr`, and all of `_execute_in_subprocess` (lines 34–36, 50–55, 159–186) run inside the sandboxed strategy's `multiprocessing.Process` child (see `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`) — `coverage.py`'s default single-process instrumentation can't see code executing in a different OS process, even though the same 20 tests that exercised this logic pre-rewrite still exercise it today. Verified with multiprocessing-aware coverage (`COVERAGE_PROCESS_START` + `concurrency=multiprocessing`, a one-off local check, not wired into CI): real line coverage is ~92%. The two lines that are genuinely untested even under that measurement: `_terminate_then_kill`'s SIGKILL-escalation branch (138–139 — reached only if a killed process is somehow still alive after the SIGTERM grace period) and the success-path reap safety net (298 — reached only if the child is somehow still alive moments after a successful `send()`), both rare defensive branches with no deterministic trigger. |
 | `cache.py` | 51% | All GDrive API operations (upload, download, manifest) require live OAuth tokens and Drive access. Error paths exercised in integration tests only. |
-| `mcp_server.py` | 67% | SSE transport wiring (`uvicorn`, `starlette` app/routes) and MCP protocol request handlers exercise the full tool chain — require a live IBKR gateway + MCP client. Tested integration-only. |
+| `mcp_server.py` | 77% | SSE transport wiring (`uvicorn`, `starlette` app/routes) and MCP protocol request handlers exercise the full tool chain — require a live IBKR gateway + MCP client. Tested integration-only. |
 | `gateway/manager.py` | 73% | Docker container lifecycle (`ensure_docker_running`, `image_exists`) and the interactive startup flow require Docker Desktop and a terminal for user input. All pure logic is tested. |
-| `client.py` | 74% | IBKR Client Portal REST API endpoints — all require a running gateway at `localhost:5055`. Tested live via integration tests. The tested 74% covers shared infrastructure: auth, request signing, pagination math, error handling, retry logic. |
-| `_order_dialog.py` | 84% | macOS AppKit `NSAlert`/`NSRunLoop` modal dialog subprocess (Gate 2's actual display code, split into its own process — see the pyobjc/Tahoe/Python 3.14 spurious-auto-confirm workaround) — requires a real running display/event loop, not unit-testable |
-| `order_confirm.py` | 86% | AppleScript `display dialog` fallback path and countdown-tick internals — require a running display/event loop; macOS only |
+| `client.py` | 81% | IBKR Client Portal REST API endpoints — all require a running gateway at `localhost:5055`. Tested live via integration tests. The tested 74% covers shared infrastructure: auth, request signing, pagination math, error handling, retry logic. |
+| `_order_dialog.py` | 89% | macOS AppKit `NSAlert`/`NSRunLoop` modal dialog subprocess (Gate 2's actual display code, split into its own process — see the pyobjc/Tahoe/Python 3.14 spurious-auto-confirm workaround) — requires a real running display/event loop, not unit-testable |
+| `order_confirm.py` | 91% | AppleScript `display dialog` fallback path and countdown-tick internals — require a running display/event loop; macOS only |
 | `flex_query.py` | 83% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
-| `streaming.py` | 89% | WebSocket I/O methods (`connect`, `subscribe`, `listen`, `disconnect`) require a live IBKR WebSocket. `_parse_message` (the pure parsing logic) is fully tested; only network I/O is untested. |
-| `claude_tools.py` | 89% | The untested 11% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
+| `streaming.py` | 90% | WebSocket I/O methods (`connect`, `subscribe`, `listen`, `disconnect`) require a live IBKR WebSocket. `_parse_message` (the pure parsing logic) is fully tested; only network I/O is untested. |
+| `claude_tools.py` | 90% | The untested 11% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
 
 ---
 

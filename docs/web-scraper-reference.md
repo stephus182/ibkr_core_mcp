@@ -458,7 +458,7 @@ owning multi-page work. `example.com` returned 166 B locally against Firecrawl's
 near-identical, confirming that page is genuinely tiny rather than blocked.
 
 Read the timings carefully: the Firecrawl column is **this client's** wall clock, which includes
-its own 5 s polling cadence (`_try_crawl` sleeps 5 s before the first poll), not the vendor's raw
+its own 5 s polling cadence (the crawl poller slept 5 s before its first poll), not the vendor's raw
 service time. The size comparison carries no such caveat.
 
 **So the pivot costs nothing and usually gains.** What Firecrawl still uniquely provides is
@@ -702,7 +702,7 @@ it is called done, and the run is recorded in §11.**
 pytest tests/test_web_tools_live.py -v -m integration
 ```
 
-11 tests, ~28 s, and every one is a regression guard for a defect a live run found — the
+12 tests, ~28 s, and every one is a regression guard for a defect a live run found — the
 docstring names which. Read the docstring before concluding a failing test is wrong.
 
 | Requirement | Gates | Cost |
@@ -732,6 +732,7 @@ free.
 | `crawl_site_archives_a_real_page_and_does_not_duplicate_the_root` | The deep-crawl strategy returns the root **twice**, depth 0 and depth 1; undeduplicated the manifest claims a page count the archive lacks. |
 | `firecrawl_search_reaches_hosts_search_site_never_could` | The entire justification for keeping the Firecrawl dependency. |
 | `private_hosts_are_refused_before_any_request` ×3 | Every URL-taking tool must refuse a private host *before* the request it is meant to prevent. |
+| `a_public_url_that_redirects_to_loopback_never_reaches_it` | Playwright follows a 3xx internally after `route.continue_()` and emits no second route event, so the hop was invisible and the loopback page came back to the model (WEB-01, 2026-09-16). The assertion that matters is the canary server's own hit counter reading **0**, not the absence of the marker in the reply. |
 
 ### Sibling suites
 

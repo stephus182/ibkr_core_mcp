@@ -16,16 +16,29 @@ Phase 1 domain totals, because the previous statement of the register was a para
 the middle of the document and no longer matched it. **120 findings**, and the domain
 counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 
-| Domain | Total | Closed | Open, with a claim | **No claim recorded** |
-|---|---:|---:|---:|---:|
-| `SEC` | 13 | 7 | 6 | — |
-| `WEB` | 9 | 2 | 7 | — |
-| `TOOL` | 12 | 7 | 5 | — |
-| `API` | 21 | 13 | 7 (+1 partial) | — |
-| `DATA` | 25 | 8 | — | **17** |
-| `DOCA` | 21 | 6 | — | **15** |
-| `DOCB` | 19 | 1 | — | **18** |
-| **Total** | **120** | **44** | **25** (+1 partial) | **50** |
+| Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
+|---|---:|---:|---:|---:|---:|
+| `SEC` | 13 | 7 | 6 | — | — |
+| `WEB` | 9 | 2 | 7 | — | — |
+| `TOOL` | 12 | 7 | 5 | — | — |
+| `API` | 21 | 13 | 7 (+1 partial) | — | — |
+| `DATA` | 25 | 8 | — | **17** | — |
+| `DOCA` | 21 | 6 | — | **15** | — |
+| `DOCB` | 19 | 1 | — | — | **18** |
+| `DOCB-R` | 6 | 6 | — | — | — |
+| **Total** | **126** | **50** | **25** (+1 partial) | **32** | **18** |
+
+`50 + 25 + 1 + 32 + 18 = 126`. "Written off" is its own column and not folded into either
+"closed" or "no claim recorded", because it is neither: those 18 slots were never readable and
+never will be, and the six `DOCB-R` findings that replace them are a **fresh** audit of the
+same documents, not a recovery of what they said.
+
+**`DOCB` re-derived, session 9.** The 18 unwritten `DOCB` slots are **written off, not
+closed** — their claims are unrecoverable. In their place the same 19 documents were
+re-audited from scratch and produced `DOCB-R1…R6`, all six raised and closed (one High, three
+Medium, two Low), plus four untested public behaviours in `indicators.py` and `models.py` that
+the check found on the way. See *Phase 3 — `DOCB` re-derived*. `DATA-03…19` and the 15 unnamed
+`DOCA` slots are the remaining 32 and are owed the same treatment.
 
 ### The number that changed, and why
 
@@ -43,12 +56,12 @@ and six more appear only as the endpoints of a range (`DATA-06 … DATA-10 | Med
 claim cell is empty. Phase 1 ran through agents; the domain *totals* were carried into this
 report and the per-finding text was not.
 
-| Block | IDs | What exists |
-|---|---|---|
-| `DATA-03…05` | 3 (**High**) | the cell reads `(see full report)` — there is no full report |
-| `DATA-06…19` | 14 | table cells are empty |
-| `DOCA-03…09, 12…17, 20, 21` | 15 | never written |
-| `DOCB-02…19` | 18 (4 **High**) | never written |
+| Block | IDs | What exists | State |
+|---|---|---|---|
+| `DATA-03…05` | 3 (**High**) | the cell reads `(see full report)` — there is no full report | **outstanding** |
+| `DATA-06…19` | 14 | table cells are empty | **outstanding** |
+| `DOCA-03…09, 12…17, 20, 21` | 15 | never written | **outstanding** |
+| `DOCB-02…19` | 18 (4 **High**) | never written | re-derived session 9 → `DOCB-R1…R6` |
 
 **A finding with no claim cannot be closed, dismissed or ranked.** Under the owner's
 fix-everything-then-tag bar it is not open, it is unreadable — so "Criticals first, then by
@@ -95,8 +108,9 @@ depending on that reading.
 
 ### What has to happen before a tag is even decidable
 
-1. Re-derive `DOCB` (18), `DOCA` (15) and `DATA-03…19` (17) by auditing those files directly,
-   as `analytics.py` was. Until then the register has no terminating condition.
+1. ~~Re-derive `DOCB` (18)~~ — **done, session 9**, yielding `DOCB-R1…R6`. Still to do:
+   `DOCA` (15) and `DATA-03…19` (17), by auditing those files directly, as `analytics.py`
+   was. Until then the register has no terminating condition.
 2. Then the 25 readable open findings, in severity order — all Medium and below except
    `TOOL-01`, which is blocked upstream and cannot be closed here.
 3. `API-11`'s remaining 68 methods (owner-approved scope addition).
@@ -1843,3 +1857,117 @@ recorded above and was answered by re-auditing `analytics.py`; the other 48 were
 re-derived. A finding with no claim cannot be closed or dismissed — under the owner's
 fix-everything-then-tag bar it is not open, it is unreadable, and re-deriving those three
 blocks is the remaining work before severity order means anything.
+
+---
+
+## Phase 3 — `DOCB` re-derived (session 9)
+
+**The original text is unrecoverable, so nothing here is a recovery.** The 18 unwritten
+`DOCB` slots named a severity and nothing else; what follows is a fresh audit of the same 19
+documents, and the findings are numbered `DOCB-R1…` to keep them distinguishable from the
+Phase 1 slots they replace. Where a re-derived finding cannot be matched to a slot, it is not
+matched — inventing a correspondence would be the same error as carrying 120 forward without
+checking it.
+
+### Method, and the two blind spots the method itself had
+
+Three mechanical sweeps over the 19 documents, each with fabricated controls that had to be
+reported missing or the run was discarded:
+
+| Sweep | Checked | Controls |
+|---|---:|---|
+| Every backticked token that names a file resolves in the tree | 214 | 3/3 caught |
+| Every backticked identifier exists in the source | 902 | 3/3 caught |
+| Every `<n> tools/tests/endpoints/...` claim, verified by running it | 38 | measured, not read |
+
+**The first run of the identifier sweep produced 62 hits and most were false.** Two classes:
+the documents name tests without their `test_` prefix by house convention, and `CHANGELOG.md`
+names deleted code *on purpose*, because that is what a changelog is. Both were found by
+reading the hits rather than counting them — and the second one is the reason a raw grep count
+is a lead, not a finding. Corrected, the sweep reports 45, of which the great majority are
+external vendor and IBKR field names that correctly exist nowhere in *this* tree.
+
+### Findings
+
+| ID | Sev | Finding |
+|---|---|---|
+| `DOCB-R1` | **High** | `docs/test-coverage.md`'s headline was **30% wrong** and 12 of 28 per-module figures had drifted |
+| `DOCB-R2` | Medium | `docs/windows-setup.md:146` claims "All 22 MCP server tools"; there are **46** |
+| `DOCB-R3` | Medium | `docs/web-scraper-reference.md:705` and `CLAUDE.md:68` both say the live web suite is **11 tests**; it is **12** |
+| `DOCB-R4` | Low | `docs/web-scraper-reference.md:461` cites `_try_crawl`, which exists nowhere — the same class as WEB-08 |
+| `DOCB-R5` | Low | `docs/plans/INDEX.md` carries three stale entries, one of which can never be resolved |
+| `DOCB-R6` | Medium | **Code, found by the doc check** — four public behaviours with no test, all added by this audit |
+
+#### DOCB-R1 — the file said "re-run the commands", and nobody ran them
+
+`docs/test-coverage.md` opens with its own measurements and its own instruction: *"Do not edit
+these numbers by hand; re-run the commands below."* The commands are in the file. Running them:
+
+| | file said | measured 2026-09-16 |
+|---|---:|---:|
+| unit tests | 1,008 | **1,459** |
+| integration tests | 93 | **100** |
+| total | 1,101 | **1,559** |
+| line coverage | 85% | **87%** |
+
+and **12 of 28 per-module figures were wrong**, in both directions (`client.py` 74 → 81,
+`mcp_server.py` 67 → 77, `models.py` 99 → 95).
+
+Two of those drifts are **this audit's own work**, which makes the finding sharper than a
+stale-number finding usually is:
+
+- `indicators.py` was still listed under **"100% Coverage (no gaps)"** and had fallen to 98%.
+  The DATA-01 fix added two early returns to `_wilder_smooth` and neither had a test — in the
+  fix whose entire subject was correct behaviour on short series.
+- `models.py` fell 99% → 95% because `IBKRResponse.items()`, `.values()` and the public `.raw`
+  property, all added by the API-11 work, had no test at all.
+
+#### DOCB-R6 — and the mutant that made it worth doing
+
+Four behaviours were pinned. All four were already correct; none was pinned:
+
+| Behaviour | Why it matters |
+|---|---|
+| RSI is NaN below `period + 1` bars | `0.0` reads as maximally oversold — the far end of DATA-01 |
+| ATR is NaN below `period` bars | ATR is a volatility **denominator**; zero reads as a riskless instrument |
+| `_wilder_smooth` on an all-NaN column | must not raise |
+| `.raw`, `.items()`, `.values()` | public mapping surface; `.raw` must be a copy, not a view |
+
+**The first version of the short-series test asserted only through `rsi`, and the mutant
+survived.** Replacing the NaN guard with zeros is *invisible* through RSI, because RSI divides
+gains by losses and `0/0` is NaN either way. The branch is observable through `atr`, which
+returns the smoothed series directly — so the test moved there and the mutant is caught. This
+is the same shape as SEC-13's `fullname`: a control aimed one layer away from the thing it
+claims to hold.
+
+**And a boundary I asserted instead of measuring.** The corrected test first claimed ATR needs
+`period + 1` bars, by analogy with RSI, and failed against correct code. Measured, ATR needs
+exactly `period`: `true_range` is defined on bar 0 (`high - low`, Wilder's convention with no
+previous close) while RSI comes from `diff()` and loses one. Recorded because the failure
+looked exactly like a defect and was not one.
+
+Four mutants, all caught after the correction. `indicators.py` is back to **100%** and
+`models.py` to **98%**.
+
+#### What was checked and found correct
+
+Not everything drifted, and the sweeps say so specifically: `indicators.add_all` adds exactly
+the **20** columns `docs/api-usage-examples.md` claims; the MCP server exposes exactly **4**
+resources and **46** tools as `docs/mcp-server-reference.md` and `docs/README.md` state;
+`TOOL_DEFINITIONS` is **44** as `TEST_INDEX.md` and `api-usage-examples.md` state;
+`docs/plans/INDEX.md`'s arithmetic (43 → 5 + 34 + 4, and 12+6+5+4+3 = 34 archived) is exact.
+The `_merge_pages` / `_scrape_with_fallback` family in `web-scraper-reference.md` § 1.1 and
+`require_windows_hello()` in `windows-setup.md` are cited as **deleted** and **not yet built**
+respectively, which is correct usage of a name that does not resolve.
+
+### Status
+
+`DOCB-R1…R6` raised and closed. The 18 Phase 1 `DOCB` slots are **written off, not closed** —
+their claims cannot be recovered and this sweep is what stands in their place. The register at
+the top of this report is updated accordingly.
+
+Gates: ruff, ruff format, mypy, pytest **1,459 passed**, `pytest -m security` **241 passed**.
+
+*(The write-up first stated 1,445 from memory rather than from the run — corrected to the
+measured figure. The same slip, in the section about a file whose numbers were never
+re-measured.)*

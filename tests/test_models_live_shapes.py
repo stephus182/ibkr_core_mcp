@@ -277,3 +277,35 @@ def test_iterating_a_model_yields_ibkrs_keys(live, model, endpoint):
     assert list(parsed) == list(raw)
     assert sorted(parsed) == sorted(raw)
     assert {k: parsed[k] for k in parsed} == raw
+
+
+# ── The mapping surface that had no test ───────────────────────────────────────
+#
+# `IBKRResponse` was added by this audit so a typed return could never narrow a 51-key
+# position to seven fields. `test_model_supports_dict_access` covers `keys()`,
+# `__getitem__`, `get()`, `__contains__` and `__len__` — and not `items()`, `values()` or
+# the public `.raw` property, which were 3 of the 6 uncovered lines in `models.py` when
+# `docs/test-coverage.md` was re-measured. All three behave correctly; nothing pinned them.
+
+
+@pytest.mark.parametrize(("model", "endpoint"), LOSSLESS_CASES, ids=lambda v: getattr(v, "__name__", v))
+def test_items_and_values_agree_with_what_ibkr_sent(live, model, endpoint):
+    raw = _first(live, endpoint)
+    parsed = model.model_validate(raw)
+
+    assert dict(parsed.items()) == raw
+    assert sorted(parsed.values(), key=repr) == sorted(raw.values(), key=repr)
+    assert list(parsed.keys()) == [k for k, _ in parsed.items()]
+
+
+@pytest.mark.parametrize(("model", "endpoint"), LOSSLESS_CASES, ids=lambda v: getattr(v, "__name__", v))
+def test_raw_is_a_copy_of_the_payload_and_not_a_view(live, model, endpoint):
+    """`.raw` is documented as "a copy of the response exactly as IBKR sent it". Both
+    halves matter: a view would let a caller mutate the model's own record of the wire."""
+    raw = _first(live, endpoint)
+    parsed = model.model_validate(raw)
+
+    assert parsed.raw == raw
+    parsed.raw["injected-by-the-caller"] = True
+    assert "injected-by-the-caller" not in parsed.raw, ".raw handed out a live reference"
+    assert "injected-by-the-caller" not in raw, ".raw aliased the caller's own dict"

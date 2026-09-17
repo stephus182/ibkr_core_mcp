@@ -143,7 +143,12 @@ HumanAuthError: Touch ID unavailable: pyobjc-framework-LocalAuthentication not i
 - Live orders (read), order preview (`whatif`), trades
 - Portfolio analytics, backtesting, PineScript generation
 - Scanners, watchlists, alerts (read), FYI notifications
-- All 22 MCP server tools
+- All 46 MCP server tools (44 `TOOL_DEFINITIONS` plus the 2 MCP-only alert tools). This
+  read `22` until 2026-09-16 — less than half the real number, so a Windows reader was
+  told that roughly half the tool surface was unavailable to them when none of it is:
+  **no tool can place an order in the first place**, because `ORDER_EXECUTION` cannot be
+  declared by any tool (`SECURITY.md` § Security Regression Suite, invariant 3). The
+  Touch ID blocker below applies to the `IBKRClient` methods, not to the tool layer.
 
 ### Options for order execution on Windows
 
