@@ -22,7 +22,17 @@ from collections import Counter
 from pathlib import Path
 
 _DEFAULT = Path(__file__).resolve().parents[2] / "docs/audits/release-readiness-audit-2026-09-16.md"
-_ID = re.compile(r"`((?:SEC|WEB|TOOL|API|DATA|DOCA|DOCB)(?:-R)?-[0-9]+)`")
+# `DOCB-R1`, not `DOCB-R-1`: the re-derived series has no second hyphen, and a pattern
+# demanding one silently skipped all 19 of them on 2026-09-17, which made a reconciliation
+# look 21 short. The negative lookahead drops `SEC-2026`-shaped date fragments.
+_ID_RE = r"(?:SEC|WEB|TOOL|API|DATA|DOCA|DOCB)-R?(?!20[0-9]{2}\b)[0-9]+"
+_ID = re.compile(rf"`({_ID_RE})`")
+
+# Named only as the endpoints of a written-off range, so they carry no claim and were never
+# fixed. "Written off" is not "closed": these must not be counted as either.
+_WRITTEN_OFF_ENDPOINTS = frozenset(
+    {"DATA-03", "DATA-06", "DATA-10", "DATA-11", "DATA-18", "DATA-19", "DOCA-03", "DOCB-02"}
+)
 
 
 def _cells(line: str) -> list[str]:
@@ -83,6 +93,12 @@ def main(argv: list[str]) -> int:
     listed = [i for i in ids if i != "API-11"]
     if len(listed) != open_:
         problems.append(f"register says {open_} open; the per-finding table lists {len(listed)}: {sorted(listed)}")
+
+    # Every closed finding must have a written identity somewhere in the document. A closure
+    # with no id is one nobody can re-verify later, which is what this whole pass was about.
+    named = set(re.findall(_ID_RE, text)) - set(ids) - _WRITTEN_OFF_ENDPOINTS
+    if len(named) != closed:
+        problems.append(f"register says {closed} closed; {len(named)} closed findings are named in the document")
 
     per_domain = Counter(i.split("-")[0] for i in listed)
     for domain, values in rows.items():

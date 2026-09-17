@@ -3223,3 +3223,77 @@ Findings closed in sessions 1–9 were taken from the record, not re-verified, s
 checked against the code: **SEC-03, SEC-04, TOOL-03, TOOL-04, TOOL-05, TOOL-06, WEB-03,
 SEC-05 and API-02 — nine, all genuinely closed.** That is a sample, not a proof; roughly 70 of
 79 closures remain recorded rather than re-verified.
+
+---
+
+## Phase 3 — re-verifying the 79 closed findings
+
+The previous section admitted that roughly 70 of 79 closures were *recorded* rather than
+re-verified. The owner asked for that gap to be closed before the remaining tail. This is the
+result.
+
+### Every closed finding has a written identity
+
+Names in the document, cross-checked against the register: **79 named closed ids against the
+register's 79 closed — exact.** No closure exists that nobody can look up later. The check is
+now part of `scripts/audit/check_register.py`.
+
+Two corrections were needed to get there, both in the instrument rather than the audit:
+
+- **`written off` is not `closed`.** The first extraction treated every id mentioned anywhere
+  as closed unless listed open, which swept in `DATA-03/06/10/11/18/19`, `DOCA-03` and
+  `DOCB-02` — ids that exist only as the endpoints of a written-off range and were never
+  claimed fixed. Eight phantom "closures" to verify.
+- **The id pattern missed the entire re-derived series.** `(?:-R)?-[0-9]+` requires
+  `DOCB-R-1`; the real ids are `DOCB-R1`. All 19 `-R` findings were invisible, and the
+  reconciliation came out 21 short before the pattern was fixed.
+
+### Triage, then verification of the hardest category
+
+| How the fix is anchored | Count | Confidence |
+|---|---:|---|
+| The finding id is named in a test | **32** | Highest — a green suite re-checks it on every run |
+| Named in code or a doc, no test | **16** | The fix is present and annotated; nothing re-checks it |
+| Named nowhere in the tree | **31** | None, until verified by hand |
+
+**All 31 in the last row were verified individually**, against the code rather than the
+record: `API-06` `API-16` `DATA-20` `DATA-22` `DATA-23` `DATA-24` `DATA-R1…R5` `DOCA-02`
+`DOCA-10` `DOCA-18` `DOCA-R1…R5` `DOCB-01` `DOCB-R2` `DOCB-R4` `DOCB-R5` `DOCB-R6` `SEC-01`
+`SEC-05` `SEC-12` `WEB-02` `WEB-05` `WEB-R1` `WEB-R2`. Every one holds. Six of the 16
+code-or-doc-only findings were spot-checked as well (`API-04` `API-07` `API-09` `API-14`
+`TOOL-08` `TOOL-09`), plus the nine sampled in the previous section. **No closed finding was
+found to have regressed or to have been closed without a fix.**
+
+### What the pass actually found
+
+The value was not in the confirmations.
+
+**A real gap in a guard written the day before.** `DOCA-R2` records that the live web suite's
+size lives in *three* files and that a fix reached two — *"the third site, missed when the
+first two were fixed"*. The guard added on 2026-09-17 named `CLAUDE.md` and
+`web-scraper-reference.md`, and so covered two of three. `README.md:361` was correct only by
+luck. The guard no longer names files: it finds every tracked file stating the size and
+requires all of them to agree, so a fourth site is covered without anyone remembering.
+`docs/plans/` is excluded because the directory is gitignored, `docs/audits/` because a dated
+record must not be rewritten to stay green.
+
+**Three false alarms, all from the review's own instruments, none reported as findings.**
+
+| Apparent problem | Actual cause |
+|---|---|
+| `SEC-03` unvalidated in two of three methods | a 25-line grep window consumed by docstrings; the AST shows all three validate |
+| `API-02` only logs the truncation | the returned envelope also carries `ibkr_core_warning` |
+| `SEC-12` inventory missing two files | both listed in `SECURITY.md` as bare filenames; the regex demanded a path prefix |
+
+Three instrument errors against zero real regressions. **The measuring device was less
+reliable than the thing measured** — which is the same lesson as the no-op control, the
+fabricated 15, and the `.pyc` that outlived its mutant, arriving once more from a new
+direction. A line-window grep, a path-anchored regex and a pattern that silently matches
+nothing are all controls that cannot fail.
+
+### What remains unverified
+
+The 16 findings anchored only in code or a doc have no test re-checking them; ten of those
+were not individually re-verified in this pass. They are all documentation or annotation
+fixes, so the failure mode is drift rather than regression — but it is drift that nothing
+would catch, which is the same shape as `DOCA-R2` and `API-05`.

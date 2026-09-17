@@ -164,12 +164,37 @@ def test_scraper_doc_total_matches_the_sum_of_its_own_rows():
     assert claimed == {sum(_gate_counts().values())}
 
 
-def test_claude_md_and_the_scraper_doc_state_the_same_suite_size():
-    """DOCB-R3: both said 11 while the suite held 12. One source of truth, two files."""
-    claude_md = (_REPO / "CLAUDE.md").read_text()
-    claimed = _documented(r"(\d+) tests, ~\d+\s?s", claude_md)
-    assert claimed, "CLAUDE.md no longer states the live web suite size; update or remove this guard"
-    assert claimed == {sum(_gate_counts().values())}
+def test_every_tracked_file_stating_the_live_suite_size_agrees_with_it():
+    """The count lives in three files, and a fix once reached two of them.
+
+    DOCB-R3 corrected "11 tests" in `web-scraper-reference.md` and `CLAUDE.md`; DOCA-R2 then
+    found `README.md` still saying 11 — *"the third site, missed when the first two were
+    fixed"*. So this does not name the files: it finds every tracked file that states the
+    size and requires all of them to agree with the suite itself. A fourth site added later
+    is covered without anyone remembering to add it here.
+
+    `docs/plans/` is excluded because the whole directory is gitignored (`.gitignore:55`) —
+    a private working plan is not a published claim. `docs/audits/` is excluded because a
+    dated audit records what was true on its day and must not be rewritten.
+    """
+    total = sum(_gate_counts().values())
+    pattern = re.compile(r"(\d+) tests, ~\d+\s?s")
+    skip = {".venv", ".git", "build", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+
+    claims: dict[str, int] = {}
+    for path in sorted(_REPO.rglob("*")):
+        if not path.is_file() or path.suffix not in {".md", ".py"}:
+            continue
+        rel = path.relative_to(_REPO).as_posix()
+        if any(part in skip for part in path.parts) or rel.startswith(("docs/audits/", "docs/plans/")):
+            continue
+        for number, line in enumerate(path.read_text(errors="ignore").splitlines(), 1):
+            if found := pattern.search(line):
+                claims[f"{rel}:{number}"] = int(found.group(1))
+
+    assert claims, "no tracked file states the live web suite size any more; update or remove this guard"
+    wrong = {where: n for where, n in claims.items() if n != total}
+    assert not wrong, f"the live web suite holds {total} tests; these disagree: {wrong}"
 
 
 # ---------------------------------------------------------------------------
