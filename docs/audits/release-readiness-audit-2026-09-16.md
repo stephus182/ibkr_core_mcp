@@ -4,7 +4,106 @@ Whole-package assess / test / fix, run against `HEAD` before deciding whether th
 commits since `v1.2.2` warrant a release tag. Plan:
 `docs/plans/2026-09-16-release-readiness-audit.md` (gitignored).
 
-**Status:** Phase 0 in progress.
+**Status:** Phase 3 (fixes) — in progress across nine sessions. **Not ready to tag.**
+The register below is the current state; everything after it is chronological record.
+
+---
+
+## Register — current state (rebuilt 2026-09-16, session 9)
+
+Rebuilt by extracting every finding ID from this report and reconciling it against the
+Phase 1 domain totals, because the previous statement of the register was a paragraph in
+the middle of the document and no longer matched it. **120 findings**, and the domain
+counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
+
+| Domain | Total | Closed | Open, with a claim | **No claim recorded** |
+|---|---:|---:|---:|---:|
+| `SEC` | 13 | 7 | 6 | — |
+| `WEB` | 9 | 2 | 7 | — |
+| `TOOL` | 12 | 7 | 5 | — |
+| `API` | 21 | 13 | 7 (+1 partial) | — |
+| `DATA` | 25 | 8 | — | **17** |
+| `DOCA` | 21 | 6 | — | **15** |
+| `DOCB` | 19 | 1 | — | **18** |
+| **Total** | **120** | **44** | **25** (+1 partial) | **50** |
+
+### The number that changed, and why
+
+This report previously read **"120 findings, 51 closed, 69 open"**. That 51 counted *fixes
+shipped* — session 1's table alone carries four rows whose ID column is `—` (three endpoints
+returning `[]` for data that arrived; `place_order` discarding IBKR's rejection object; the
+live suite's 38 type-only assertions; price alerts non-functional). The 44 above counts
+*register IDs resolved*. Both are true and they measure different things; the second is the
+one a tag decision needs, so it is the one stated here from now on.
+
+### 50 findings have no claim recorded — this is the blocker
+
+**Only 73 of the 120 IDs appear anywhere in this 1,700-line report. 47 never appear at all**,
+and six more appear only as the endpoints of a range (`DATA-06 … DATA-10 | Medium |`) whose
+claim cell is empty. Phase 1 ran through agents; the domain *totals* were carried into this
+report and the per-finding text was not.
+
+| Block | IDs | What exists |
+|---|---|---|
+| `DATA-03…05` | 3 (**High**) | the cell reads `(see full report)` — there is no full report |
+| `DATA-06…19` | 14 | table cells are empty |
+| `DOCA-03…09, 12…17, 20, 21` | 15 | never written |
+| `DOCB-02…19` | 18 (4 **High**) | never written |
+
+**A finding with no claim cannot be closed, dismissed or ranked.** Under the owner's
+fix-everything-then-tag bar it is not open, it is unreadable — so "Criticals first, then by
+severity" cannot terminate while 50 entries have no severity that can be checked and no claim
+that can be verified. The precedent for answering this is already in this report twice: when
+`DATA-03/04/05` were found to be lost, the domain was **re-audited directly** rather than
+guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
+three blocks.
+
+### Open findings that do have a claim (25, none Critical)
+
+| ID | Sev | Claim, in brief |
+|---|---|---|
+| `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
+| `WEB-03` | Medium | `WebDocsStore._get_service` is a third OAuth reimplementation, without `gdrive_auth.py`'s `RefreshError` handling |
+| `WEB-04` | Medium | `firecrawl_search` archives to Drive, verbatim, results it simultaneously marks "⚠ Not usable content" |
+| `WEB-05` | Medium | `docs/web-scraper-reference.md:174` describes the deleted fallback layer as current |
+| `WEB-09` | Low | `_handle_crawl_site` guards the Drive write but not the Drive read |
+| `WEB-06` | Low | `pyproject.toml:63` and `:97` name the deleted fallback rung in the present tense |
+| `WEB-07` | Low | A live-test docstring documents a deleted method and tells the reader to export `ANTHROPIC_API_KEY` |
+| `WEB-08` | Nit | `docs/web-scraper-reference.md:353` cites `_MAX_CONCURRENT_FALLBACKS`, which exists nowhere — re-confirmed session 9 |
+| `SEC-02` | Medium | Three documents claim a gated method contacts no network before its gates; every one calls `_ensure_accounts_initialized()` first |
+| `SEC-06` | Low | `redact_error` claims to scrub `identifier: value` pairs; the JSON/quoted form is not scrubbed. No reachable leak shown |
+| `SEC-07` | Low | `OrderWriteAuthorization` binds body and order id but not account id |
+| `SEC-08` | Low | Two more structural probes miss an ordinary alternative spelling |
+| `SEC-09` | Nit | "The default button is the abandon one" holds only on the `osascript` fallback |
+| `SEC-10` | Nit | `collapse_home` claims every surface; the SSE bearer-token log line writes the absolute home path |
+| `TOOL-03` | Medium | `sync_flex_archive` tells users to upload to `ibkr_flex_archive/`; the handler reads `account_data/` |
+| `TOOL-04` | Medium | `firecrawl_search` promises "full page content as markdown"; the handler returns 400 characters |
+| `TOOL-05` | Medium | `verify_flex_import` is described as "does not modify any data" while writing to `flex_import_log` |
+| `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
+| `API-05` | Medium | Positions page size documented as 30; IBKR documents 100. Confirmed from docs, indeterminate live |
+| `API-10` | Medium | `IBKR_AUTH_BROWSER` is honoured on one code path out of three |
+| `API-17` | Medium | Raised by the API-05 investigation; no closure recorded |
+| `API-08` | Low | Stale docstring chunk table |
+| `API-12` | Low | Wrong model citation |
+| `API-13` | Low | Contradictory inline comment |
+| `API-15` | Nit | Unguarded response shape |
+| `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
+
+`API-08` and `API-12/13/15` have no ID-tagged row of their own; their claims are recovered by
+position from the Phase 1 combined row (`API-08, 11–15`) and are recorded here so they stop
+depending on that reading.
+
+### What has to happen before a tag is even decidable
+
+1. Re-derive `DOCB` (18), `DOCA` (15) and `DATA-03…19` (17) by auditing those files directly,
+   as `analytics.py` was. Until then the register has no terminating condition.
+2. Then the 25 readable open findings, in severity order — all Medium and below except
+   `TOOL-01`, which is blocked upstream and cannot be closed here.
+3. `API-11`'s remaining 68 methods (owner-approved scope addition).
+
+Two things need the owner: a fresh Chrome login at `https://localhost:5055` for any live
+work, and explicit permission for `API-20`'s live check, which writes to the owner's data and
+has no unmark method.
 
 ---
 
@@ -665,6 +764,11 @@ in theory.
 ---
 
 ### Release readiness — current view
+
+> **Superseded by the Register at the top of this report (session 9).** The paragraph below
+> was the register for five sessions and no longer matches the document: it omits `SEC-13`,
+> `WEB-02`'s closure, and it states 51 closed, which counted fixes shipped rather than
+> register IDs resolved. Kept because it is what was believed at the time.
 
 **Not ready.** Two sweeps have raised 6 findings beyond the 102 of Phase 1 (DATA-20 …
 DATA-24 from the indicator audit, API-16 from the rate-limit work), so the register stands at
