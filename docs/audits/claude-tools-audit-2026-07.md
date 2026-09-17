@@ -424,7 +424,7 @@ optimization on this evidence.
 
 1. **Flex sync archived and verified an IBKR error response as a successful import**
    (root cause verified 2026-07-02 after the owner correctly challenged the first framing).
-   `flex_import_log` row 13 (`flex_U1675699_2026-07-02_*.xml`, `trade_id_count=0`,
+   `flex_import_log` row 13 (`flex_UXXXX699_2026-07-02_*.xml`, `trade_id_count=0`,
    verified as success) is a **226-byte `FlexStatementResponse` with `Status=Warn`,
    `ErrorCode=1019` — "Statement generation in progress. Please try again shortly."** —
    not a statement. Mechanism: `FlexQueryClient._get_statement` (flex_query.py:326–357)

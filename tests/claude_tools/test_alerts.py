@@ -224,7 +224,7 @@ def test_create_price_alert_explains_the_gateway_operator_block_on_403(toolkit):
 # IBKR Mobile. Not a documentation example — this is what the gateway actually returns, and
 # it is snake_case throughout: 26 top-level keys, none camelCase.
 _LIVE_ALERT_DETAIL = {
-    "account": "U1675699",
+    "account": "U1234567",
     "order_id": 1331320792,
     "alert_name": "AAPL <= 1.00",
     "tif": "GTC",
@@ -365,7 +365,7 @@ def test_translation_omits_optional_fields_that_are_null():
 def test_modify_price_alert_sends_a_translated_modify_body(toolkit):
     """End to end: the handler must post the translated shape, carrying `orderId`, with the
     caller's patch applied to the TRANSLATED field names rather than beside the stale ones."""
-    toolkit._client.get_accounts.return_value = [{"accountId": "U1675699"}]
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
     toolkit._client.get_alert.return_value = dict(_LIVE_ALERT_DETAIL)
     toolkit._client.create_alert.return_value = {"success": True, "order_id": 1331320792}
 
@@ -373,7 +373,7 @@ def test_modify_price_alert_sends_a_translated_modify_body(toolkit):
 
     assert_tool_succeeded(text)
     account_id, body = toolkit._client.create_alert.call_args[0]
-    assert account_id == "U1675699"
+    assert account_id == "U1234567"
     assert body["orderId"] == 1331320792, "a modify without orderId creates a second alert"
     assert body["alertName"] == "AAPL audit"
     # `str(2.50)` is "2.5" — the handler stringifies the caller's float as-is, which is

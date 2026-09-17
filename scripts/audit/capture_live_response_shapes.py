@@ -6,9 +6,15 @@ Run against a live, authenticated gateway. Writes the JSON consumed by
     source /path/to/.env
     python scripts/audit/capture_live_response_shapes.py tests/fixtures/ibkr_live_shapes.json
 
-Account numbers are rewritten to U1234567 wherever they appear, in values and in keys
-alike — `/pnl/partitioned` and `/iserver/accounts` both key sub-objects by account.
-Nothing else is altered.
+Everything the account holder can be identified by is stripped before the file is
+written; only the SHAPE is kept. `redact_live_payload.py` holds the rules and the reasons.
+
+This used to read "account numbers are rewritten ... nothing else is altered", and that is
+exactly what it did. The check afterwards looked for account numbers too, so it passed
+while the committed fixture published the holder's legal name, net liquidation value, cash
+balance, buying power, open positions, four executed futures fills with their IBKR
+execution IDs, a resting order and every watchlist name — to a PUBLIC repository
+(finding SEC-13, 2026-09-16). A control scoped to one field of ten is not a control.
 
 Two payloads are reduced after capture, and both are labelled in the fixture's README:
 `scanner_params` (218 KB of static reference data) keeps the first two entries of every
@@ -19,25 +25,42 @@ per IP, so a second concurrent capture can earn the fifteen-minute penalty box.
 """
 
 import json
-import re
 import sys
 from collections.abc import Callable
 from typing import Any
 
+from redact_live_payload import ACCOUNT_ID_RE, PUBLIC_ENDPOINTS, redact_capture
+
 from ibkr_core_mcp import Config, IBKRClient
 
-ACCOUNT_ID_RE = re.compile(r"\bU\d{6,9}\b")
 
-
-def redact(obj: Any) -> Any:
-    """Rewrite every account number in the payload, in keys as well as values."""
+def _shape(obj: Any) -> Any:
+    """Keys, nesting and scalar types — everything the fixture exists to record."""
     if isinstance(obj, dict):
-        return {ACCOUNT_ID_RE.sub("U1234567", k) if isinstance(k, str) else k: redact(v) for k, v in obj.items()}
+        return {k: _shape(v) for k, v in sorted(obj.items())}
     if isinstance(obj, list):
-        return [redact(v) for v in obj]
-    if isinstance(obj, str):
-        return ACCOUNT_ID_RE.sub("U1234567", obj)
-    return obj
+        return [_shape(v) for v in obj]
+    return type(obj).__name__
+
+
+def _scalars(obj: Any, key: str | None = None) -> list[Any]:
+    """Every leaf value, paired with nothing — the caller only needs the values."""
+    if isinstance(obj, dict):
+        return [v for k, sub in obj.items() for v in _scalars(sub, k if isinstance(k, str) else None)]
+    if isinstance(obj, list):
+        return [v for sub in obj for v in _scalars(sub, key)]
+    return [(key, obj)]
+
+
+def _is_placeholder(pair: Any) -> bool:
+    from redact_live_payload import STRUCTURAL
+
+    key, value = pair
+    if isinstance(value, bool) or value is None or value in (0, 1):
+        return True
+    if value in ("REDACTED", "1111.11", "U1234567", 1111111, 1111.11):
+        return True
+    return bool(key and key.lower() in STRUCTURAL)
 
 
 def truncate(obj: Any, keep: int = 2) -> Any:
@@ -90,7 +113,7 @@ def main(out_path: str) -> int:
     failures = 0
     for name, call in calls.items():
         try:
-            value = redact(call())
+            value = call()
         except Exception as exc:
             failures += 1
             print(f"  {name:<22} FAILED  {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -101,12 +124,25 @@ def main(out_path: str) -> int:
         size = len(value) if isinstance(value, (list, dict)) else 1
         print(f"  {name:<22} ok      ({type(value).__name__}, {size})", file=sys.stderr)
 
+    redacted = redact_capture(captured)
+    assert _shape(captured) == _shape(redacted), "redaction changed the shape it exists to preserve"
+
     with open(out_path, "w") as fh:
-        json.dump(captured, fh, indent=2, sort_keys=True)
+        json.dump(redacted, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
-    leaked = ACCOUNT_ID_RE.findall(open(out_path).read())
+    # Two assertions, because the one that existed before checked a single field class and
+    # passed while nine others went out. `tests/security/test_published_identifiers.py`
+    # holds the same properties against the committed file, so a hand-edit cannot restore
+    # what this strips.
+    written = open(out_path).read()
+    leaked = ACCOUNT_ID_RE.findall(written)
     assert set(leaked) <= {"U1234567"}, f"un-redacted account numbers in the fixture: {sorted(set(leaked))}"
+    for endpoint, payload in redacted.items():
+        if endpoint in PUBLIC_ENDPOINTS:
+            continue
+        surviving = [v for v in _scalars(payload) if not _is_placeholder(v)]
+        assert not surviving, f"{endpoint}: real values survived redaction: {surviving[:5]}"
 
     print(f"wrote {out_path}: {len(captured)} endpoints, {failures} failed", file=sys.stderr)
     return 1 if failures else 0

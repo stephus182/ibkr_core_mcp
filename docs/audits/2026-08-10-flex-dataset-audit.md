@@ -29,7 +29,7 @@ was rebuilt from scratch out of the refreshed archive, and the resulting audit o
 The first baseline run reported **5 failures** and printed *"do not ship this dataset"*.
 All five were the same 7 rows, and none was a data defect:
 
-`flex_U1675699_2026-08-06_4602951826.xml` (112 trades, imported 2026-08-06 per
+`flex_UXXXX699_2026-08-06_4602951826.xml` (112 trades, imported 2026-08-06 per
 `flex_import_log` id 29) was **not in the local archive**, which had last been fetched
 2026-08-05 08:25. The audit was comparing a correct database against an out-of-date source
 of truth.
@@ -55,7 +55,7 @@ condition directly, and `rebuild` refuses before dropping anything.
 
 ## 3. Archive change — the ErrorCode 1019 payload
 
-`flex_U1675699_2026-07-02_2928480049.xml` was 226 bytes of:
+`flex_UXXXX699_2026-07-02_2928480049.xml` was 226 bytes of:
 
 ```xml
 <FlexStatementResponse timestamp='02 July, 2026 08:05 PM EDT'>
@@ -71,7 +71,7 @@ fossil of the pre-fix code path, not evidence of a live bug.
 
 - **Deleted** from `~/.ibkr_core/flex_archive/` on 2026-08-10 (owner decision — no value; a
   source statement can be re-requested if ever needed).
-- **Preserved** as evidence at `~/.ibkr_core/backups/flex_U1675699_2026-07-02_2928480049.xml`.
+- **Preserved** as evidence at `~/.ibkr_core/backups/flex_UXXXX699_2026-07-02_2928480049.xml`.
 - **Still present on Drive.** A local delete is not durable: the very next
   `fetch_flex_archive.py` run downloaded it straight back. `fetch_flex_archive.py` is
   read-only against Drive by design and stays that way, so it now *refuses to write* any
@@ -89,7 +89,7 @@ DELETE FROM flex_import_log WHERE id = 13;
 The row claimed the 1019 payload above had been imported *and verified*:
 
 ```
-id=13  filename=flex_U1675699_2026-07-02_2928480049.xml
+id=13  filename=flex_UXXXX699_2026-07-02_2928480049.xml
 sha256=7ee13b7cbfa5342b85cb70f77df07373ef6fd4770d5356610dffbd5fd8f2db06
 trade_id_count=0  raw_trade_count=0  source=auto
 imported_at=2026-07-03T00:05:55Z  verified_at=2026-07-23T01:32:20Z
@@ -131,7 +131,7 @@ data in an audit log: it asserts an import and a verification that never happene
 | `~/.ibkr_core/backups/store-2026-08-10-pre-flex-session.db` | Start of session; bit-identical to production throughout the code work |
 | `~/.ibkr_core/backups/store-20260810-pre-import-log-delete.db` | Taken immediately before the `DELETE`; `integrity_check: ok` |
 | `~/.ibkr_core/backups/pre-import-log-delete.20260810.txt` | Full pre/post state snapshot, all 23 log rows listed |
-| `~/.ibkr_core/backups/flex_U1675699_2026-07-02_2928480049.xml` | The deleted payload itself |
+| `~/.ibkr_core/backups/flex_UXXXX699_2026-07-02_2928480049.xml` | The deleted payload itself |
 
 ## 5. Archive integrity, now actually verified
 
@@ -205,7 +205,7 @@ The difference is that the first line now says why:
 
 ```
 [FAIL] 0b. archive holds every statement the import log recorded
-       — 1 missing: ['flex_U1675699_2026-08-10_6523460410.xml']
+       — 1 missing: ['flex_UXXXX699_2026-08-10_6523460410.xml']
 ```
 
 That morning the same five failures appeared with no explanation and took a full

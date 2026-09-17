@@ -537,7 +537,10 @@ The last row, and the bearer-token half of the transport row, came from the 2026
 recalibration (`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`); the path-identifier
 row from the 2026-09-16 release-readiness audit, which found property **(9)** listed in this
 constitution with **no test at all** and false for three methods (findings SEC-03 and SEC-04) —
-the constitution had eleven entries and the table ten; the rest from the 2026-09-13 audit:
+the constitution had eleven entries and the table ten; the published-identifier row from the
+same audit, which found the account holder's account number in eight tracked files and their
+legal name, balances, holdings and executed trades in a committed fixture (finding SEC-13);
+the rest from the 2026-09-13 audit:
 
 | File | Property held |
 |---|---|
@@ -551,6 +554,7 @@ the constitution had eleven entries and the table ten; the rest from the 2026-09
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
 | `test_documented_controls.py` | The regexes this document presents as the mitigation are character-for-character what `client.py` compiles, in both directions; the documented `order_id` pattern actually rejects Unicode digits; every file running under `-m security` appears in the table above |
 | `test_path_identifier_validation.py` | Every value interpolated into a URL path in `client.py` is itself passed to a validator, or listed with a reason; the checker fires on an unguarded snippet, ignores prose that merely begins with a path, and holds no exemption for an interpolation that no longer exists |
+| `test_published_identifiers.py` | No tracked file in this PUBLIC repository carries the account holder's real account number, and the live-shape fixture carries no owner-scoped value at all — every scalar in it is a placeholder, a flag, or sits under a named structural exemption; the scan is proven non-vacuous against the placeholders it must find, and against the specific values that were once published |
 | `test_transport_security.py` | The SSE transport rejects foreign `Host`/`Origin` and accepts loopback, with or without a port; it answers 401 to an absent, wrong, prefix, case-altered or scheme-altered bearer credential on both routes, and lets the real token through |
 | `test_tool_input_validation.py` | On the MCP transport an argument set that fails the tool's `inputSchema` never reaches `_dispatch`; a well-formed one does; no call in the package passes `validate_input=False`; every name the dispatcher routes is a listed tool (the SDK validates no other); the probe reaches the handler for all four sets with validation off |
 

@@ -760,7 +760,7 @@ able to fail, both against real IBKR infrastructure rather than a double.
 
 `ibkr://positions/current` inlined `get_accounts()[0]["accountId"]`, the package's single
 violation of CLAUDE.md's `_first_account_id()` rule. **Live: this account returns BOTH
-`accountId` and `id`, with the same value** (`U1675699`), so nothing was broken on this
+`accountId` and `id`, with the same value** (`UXXXX699`), so nothing was broken on this
 machine — which is exactly why it survived. A row carrying only `id` fell into the "no
 account could be resolved" branch and read no positions, reporting a resolution failure for
 an account that resolves fine everywhere else in the package. Now uses the helper, and
@@ -1592,3 +1592,150 @@ fixes remove is a *second* reason the call would fail, exactly as the TOOL-01 ro
 — the value is in eliminating confounds, not in a green result.
 
 Six mutations, each reverting one fix; every one turns a test red.
+
+---
+
+## Phase 3 — SEC-13: the fixture this audit created published the account holder
+
+Raised while re-deriving the `DOCB` findings, whose Phase 1 text was never written down. The
+sweep began mechanically — every backticked token in the 19 non-high-risk documents that
+names a file must resolve somewhere in the tree — and one of its hits was
+`flex_UXXXX699_2026-07-02_2928480049.xml`, a filename in `docs/flex-query-reference.md`
+carrying the account holder's real IBKR account number. Looking for the rest of that number
+is what found the fixture.
+
+### What was published
+
+`tests/fixtures/ibkr_live_shapes.json`, added by **this audit** in `ffd6014` and pushed to
+`github.com/stephus182/ibkr_core_mcp`, confirmed `"visibility":"PUBLIC"`:
+
+| | |
+|---|---|
+| Legal name on the account | `accountTitle` and `displayName`, in `account_meta` and `accounts` |
+| Net liquidation / cash / buying power | 52,054.15 / 21,985.98 / 176,643.44 |
+| Open positions | both, with conids, quantities, market values and average costs |
+| Executed trades | four real futures fills with prices, order IDs and IBKR execution IDs |
+| Resting order | one, with its order id and the consuming app's order reference |
+| Account summary | 68 populated fields of 108 |
+| Watchlist names, FYI notification bodies and IDs | all |
+
+Plus the account number itself in **eight** tracked files, 33 occurrences — two living
+documents, two unit-test modules and four audit records.
+
+### The control that existed, and what it covered
+
+`capture_live_response_shapes.py` did redact. It rewrote account numbers, in keys as well as
+values, and asserted afterwards that none survived. **That assertion passed.** Its scope was
+one field class of ten, and the file's own README stated the scope plainly — "account numbers
+are the only thing rewritten … every value is exactly what came off the wire" — which is why
+nothing flagged it: the document and the code agreed, and both were describing a control that
+was narrower than the risk.
+
+This is the sixth instance of the pattern this audit has recorded, and the first one the audit
+introduced itself, in the same session that wrote up the other five.
+
+### What changed
+
+`scripts/audit/redact_live_payload.py` inverts the rule. In an owner-scoped payload **every
+scalar is replaced by default**; exemptions are a named list of eleven keys holding IBKR
+vocabulary (`currency`, `secType`, `assetClass`, `type`, and the ledger/summary envelope
+labels). A field IBKR adds tomorrow is redacted, not published. Eight endpoints returning
+public contract and market reference data — identical bytes for every customer — keep their
+values.
+
+Two properties made it harder than a `.replace()`:
+
+- **Shape is the point.** The fixture exists to prove what IBKR sends. Keys, nesting and
+  scalar types are asserted identical before and after redaction, on every re-derivation.
+- **Type is not enough — the domain matters too.** A first pass preserved types and broke
+  twelve of the fixture's own tests: IBKR sends `price` and `commission` as numeric *strings*,
+  so `"7658.5"` → `"REDACTED"` is a string for a string and still unparseable; and `R` is a
+  0/1 int Pydantic coerces to bool, so `0` → `1111111` is an int for an int and no longer a
+  boolean. *A fixture that no longer validates is not a redacted fixture, it is a deleted one.*
+
+Measured after: **1,170 owner-scoped scalars, 0 that are not a placeholder, a flag, or an
+exempted structural value.** All 32 model tests still pass against it.
+
+### The two mutants that mattered
+
+Eight mutations were run against the new guard. Six were caught immediately. The two that
+were not are the findings:
+
+**M4 — re-exempting `fullname` survived.** The test imported `STRUCTURAL` and
+`PUBLIC_ENDPOINTS` from the redactor and exempted whatever they held, so widening the code
+widened its own oracle in one edit. `fullname` is the exact key that leaked `GLD` and `IGV` as
+holdings on the first run of the new redactor — exempted as reference data, published as a
+position. The lists are now **frozen in the test**, duplicated deliberately, with a test that
+fails if the two drift apart. Adding an exemption is a two-file change and the second file is
+where the reason has to be written.
+
+**My mutation harness reported a survivor that was never applied.** `ruff format` had exploded
+the `frozenset` one entry per line between writing the mutation and running it, so the `sed`
+matched nothing and the unmutated code passed — reported as "SURVIVED". A mutation run that
+does not verify the mutation landed is a control that cannot fail, one level up from the
+control it is testing. Re-run with the edit asserted and the diff checked, M4 is caught by two
+tests.
+
+### An eighth mutant, found by the pre-push hook refusing my own commit
+
+The first commit of `test_published_identifiers.py` was **refused by the pre-push hook, by
+this test, for carrying the very thing it forbids.** Two literals: the real account number
+quoted in a comment explaining the regex gap, and the fictional control the fire tests need
+in order to prove the pattern can match.
+
+The mechanism is worth recording, because it only appears once. `_tracked_files()` reads
+`git ls-files`, so while the test file was untracked it was invisible to its own scan; the
+full suite ran green 1,438 times. The moment it was committed it entered the scanned set and
+failed. A guard that exempts itself is the obvious thing to write here and it is wrong — the
+file is published like every other.
+
+The comment is masked. The control is now **assembled at runtime** from three string
+fragments, so the seven digits never appear together in the source and the exemption list
+stays tight;
+adding it to `PLACEHOLDERS` would have exempted a real-shaped number everywhere in the tree to
+solve a problem in one file. M8 — restoring the literal — is caught.
+
+### Status and what is deliberately not done
+
+SEC-13 **closed at HEAD**. `tests/security/test_published_identifiers.py` (20 tests) holds:
+no tracked file carries a real account number; no owner-scoped fixture value survives; the
+seven specific values that were published are named individually and asserted absent; the scan
+is proven non-vacuous against placeholders it must find; and the fixture is still substantial
+enough to feed the model tests.
+
+**The history is not rewritten.** The values remain in the pushed commits and can be reached
+by SHA. The owner was shown the inventory and adjudicated: the exposure is not materially
+actionable, no history rewrite, mask in place. The account number is masked as `UXXXX699` in
+documents and audit records — which keeps those records honest about having used a real
+account — and as the repo-wide placeholder `U1234567` in test code, where the value must stay
+a valid account-number shape.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,438 passed**, `pytest -m security`
+**241 passed**.
+
+### DOCB re-derivation — where it stood when this interrupted it
+
+The mechanical path check swept 19 documents and 214 file-naming tokens, with three fabricated
+controls all reported missing. Findings so far, to be written up properly next session:
+
+| | |
+|---|---|
+| `docs/plans/INDEX.md` | Lists `2026-08-07-flex-audit-handoff.md` as live "while branch `audit/checks-that-cannot-fail` is unmerged" — that branch exists neither locally nor on the remote, so the stated archive trigger can never fire |
+| `docs/plans/INDEX.md` | States "root holds only live documents" and omits `2026-09-16-release-readiness-audit.md`, which is live on disk |
+| `docs/plans/INDEX.md` | Still records `get-watchlists-empty-bug` as "pending live verification"; this audit closed it with a live run |
+| `docs/web-scraper-reference.md:353` | Cites `_MAX_CONCURRENT_FALLBACKS`, which exists nowhere in the tree — WEB-08, confirmed |
+| `docs/audits/release-readiness-audit-2026-09-16.md` | Cited `docs/order-api-reference.md` unqualified; that file is in **claudia_ui**, not this repository |
+
+**A correction to this report's own open list.** The close-out of the previous session listed
+the open findings and omitted the entire `WEB` domain. WEB-03 through WEB-09 are open and four
+were re-confirmed against the code. WEB-02 is **closed** — by `102fd9d`, which replaced the
+fake that could not express a redirect and added a real-browser live guard whose assertion is
+the canary server's own hit counter — and was never recorded as closed.
+
+**And the register's real state.** Of the 69 open findings, **51 have no recorded claim text**:
+`DATA-03…05` (3 High, marked "see full report"), `DATA-06…19` (14, empty table cells), 16
+unnamed `DOCA` and 18 unnamed `DOCB` (4 of them High). The `DATA-03/04/05` gap is already
+recorded above and was answered by re-auditing `analytics.py`; the other 48 were never
+re-derived. A finding with no claim cannot be closed or dismissed — under the owner's
+fix-everything-then-tag bar it is not open, it is unreadable, and re-deriving those three
+blocks is the remaining work before severity order means anything.

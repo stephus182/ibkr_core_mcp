@@ -218,7 +218,7 @@ reconciliation entirely while the summary went on reporting "N/N checks passed" 
 that no longer contained it. The gate now declares its expected check ids up front and fails
 any that did not run, so the denominator cannot shrink to match the checks that survived.
 
-**On the 2026-07-02 statement.** `flex_U1675699_2026-07-02_2928480049.xml` was a 226-byte
+**On the 2026-07-02 statement.** `flex_UXXXX699_2026-07-02_2928480049.xml` was a 226-byte
 `<FlexStatementResponse>` carrying `ErrorCode 1019` ("Statement generation in progress" —
 [official codes](https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm)),
 not a statement. It contributed zero rows, and `flex_query._get_statement` has retried that

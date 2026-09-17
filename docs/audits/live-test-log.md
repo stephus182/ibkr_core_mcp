@@ -104,7 +104,7 @@ Added to `tests/test_client_live.py`, all mutation-tested against the live gatew
 | Date | 2026-07-22 |
 | Purpose | Re-verify `main` (b714800) end-to-end against real IBKR gateway, Drive, Firecrawl after the 2026-07-22 code-quality audit (`pytest -m "not integration"` only had been run). |
 | Auth method | `BrowserCookieAuth` |
-| Account | `U1675699` |
+| Account | `UXXXX699` |
 | Python | `3.11.15` · pytest |
 | Result | **69 pass · 16 skip · 1 fail** (before fix below) → **all green after removal** |
 
@@ -118,7 +118,7 @@ a **February 11, 2026** entry, tagged `warning`, states verbatim: *"The /md/regs
 is no longer supported for users to query a regulatory snapshot via API."*
 Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
 
-This account (`U1675699`, live individual) has active real-time US equities/futures market data —
+This account (`UXXXX699`, live individual) has active real-time US equities/futures market data —
 the 404 is **not** an entitlement gap, contrary to this run's initial hypothesis. IBKR evidently
 enforced the Feb 11 announcement later, after a multi-month grace period: the endpoint still
 returned real live data (with the $0.01 charge) as recently as the 2026-07-08 baseline, and only
@@ -170,7 +170,7 @@ This is a known CP API restriction — not a code bug. The same skip exists in `
 | Purpose | Add `get_regulatory_snapshot` (AAPL conid 265598, $0.01/call). Confirm endpoint works in an authenticated session. |
 | Gateway build | `Build 10.46.1o, Jun 23, 2026 4:45:50 PM` · server `JifN15105` |
 | Auth method | `BrowserCookieAuth` |
-| Account | `U1675699` |
+| Account | `UXXXX699` |
 | Python | `3.14.6` · pytest `9.0.3` |
 | Result | **57 pass · 4 skip · 0 fail** |
 | Runtime | 47.15 s |
@@ -197,7 +197,7 @@ When running this test in isolation (`pytest tests/test_client_live.py::test_get
 | Purpose | Batch 2: alert CRUD, portfolio methods, FYI, market data single-unsub, order preview/status, PA transactions (fixed), international stocks, FX pairs, bond filters |
 | Gateway build | `Build 10.46.1o, Jun 23, 2026 4:45:50 PM` · server `JifN15105` |
 | Auth method | `BrowserCookieAuth` |
-| Account | `U1675699` |
+| Account | `UXXXX699` |
 | Python | `3.14.6` · pytest `9.0.3` |
 | Result | **56 pass · 4 skip · 0 fail** |
 | Runtime | 54.31 s |
@@ -260,7 +260,7 @@ When running this test in isolation (`pytest tests/test_client_live.py::test_get
 | Purpose | Verification run after `get_pa_periods()` parsing fix and PA period string correction |
 | Gateway build | `Build 10.46.1o, Jun 23, 2026 4:45:50 PM` · server `JifN15105` |
 | Auth method | `BrowserCookieAuth` |
-| Account | `U1675699` |
+| Account | `UXXXX699` |
 | Python | `3.14.6` · pytest `9.0.3` |
 | Result | **40 pass · 3 skip · 0 fail** |
 | Runtime | 15.23 s |
@@ -269,7 +269,7 @@ When running this test in isolation (`pytest tests/test_client_live.py::test_get
 
 | Fix | Detail |
 |---|---|
-| `get_pa_periods()` parsing | `periods` list is nested inside the account sub-dict (`data["U1675699"]["periods"]`), not at the top level. Old code only checked top-level keys → always returned `[]`. Fixed to walk values first. |
+| `get_pa_periods()` parsing | `periods` list is nested inside the account sub-dict (`data["UXXXX699"]["periods"]`), not at the top level. Old code only checked top-level keys → always returned `[]`. Fixed to walk values first. |
 | `get_pa_performance` period strings | `"last7days"` / `"last30days"` etc. return HTTP 400. Valid strings are `"1D"`, `"7D"`, `"MTD"`, `"1M"`, `"YTD"`, `"1Y"` (all return HTTP 200, verified live). Docstring corrected. |
 | `get_pa_performance` docstring | Updated to state verified valid strings and explicitly warn that `"last7days"` etc. return 400. |
 
@@ -279,7 +279,7 @@ When running this test in isolation (`pytest tests/test_client_live.py::test_get
 |---|---|---|
 | `test_watchlist_roundtrip` | `IBKRRateLimitError` (503) on `create_watchlist` after multiple watchlist reads in same session | ℹ️ Rate limit, not a path bug. Re-run in isolation. |
 | `test_get_pa_transactions` | HTTP 400 for ALL tested parameter formats (`period="1D"/"7D"/...`, `days=7/30/90`) via both BrowserCookieAuth Python script and unauthenticated curl | 🔍 Parameter format unknown. Official docs anchor `#pa-transaction-history` to scrape. Docstring says `days` (int) but code passes `period` (str) — inconsistency may be the bug. |
-| `test_get_unread_count` | HTTP 423 (Locked) from `/fyi/unreadnumber` | ℹ️ FYI subscription not configured for account `U1675699`. Not a code bug. |
+| `test_get_unread_count` | HTTP 423 (Locked) from `/fyi/unreadnumber` | ℹ️ FYI subscription not configured for account `UXXXX699`. Not a code bug. |
 
 ### New Bug Found
 
@@ -311,7 +311,7 @@ Findings column codes: ✅ correct · ⚠️ assertion corrected · 🐛 bug fou
 | Gateway build | `Build 10.46.1o, Jun 23, 2026 4:45:50 PM` · server `JifN15105` |
 | Gateway URL | `https://localhost:5055/v1/api` |
 | Auth method | `BrowserCookieAuth` (extracts live session cookie from Chrome keychain) |
-| Account | `U1675699` |
+| Account | `UXXXX699` |
 | Python | `3.14.6` |
 | pytest | `9.0.3` |
 | Total tests | 43 |
@@ -363,10 +363,10 @@ Findings column codes: ✅ correct · ⚠️ assertion corrected · 🐛 bug fou
 | `get_accounts()` | `GET /portfolio/accounts` | ✅ PASS | `list[dict]` | — |
 | `get_subaccounts()` | `GET /portfolio/subaccounts` | ✅ PASS | `list` | — |
 | `get_brokerage_accounts()` | `GET /iserver/accounts` | ✅ PASS | `dict` with keys: `accounts`, `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles`, `selectedAccount` | ⚠️ Test initially asserted bare `list` — corrected. `/iserver/accounts` returns a rich dict, not a list. The `accounts` value inside is a list of account ID strings. |
-| `get_account_summary(U1675699)` | `GET /portfolio/{accountId}/summary` | ✅ PASS | `dict` | — |
-| `get_account_ledger(U1675699)` | `GET /portfolio/{accountId}/ledger` | ✅ PASS | `dict` | — |
-| `get_positions(U1675699)` | `GET /portfolio/{accountId}/positions/0` | ✅ PASS | `list` | — |
-| `get_account_allocation(U1675699)` | `GET /portfolio/{accountId}/allocation` | ✅ PASS | `dict` | — |
+| `get_account_summary(UXXXX699)` | `GET /portfolio/{accountId}/summary` | ✅ PASS | `dict` | — |
+| `get_account_ledger(UXXXX699)` | `GET /portfolio/{accountId}/ledger` | ✅ PASS | `dict` | — |
+| `get_positions(UXXXX699)` | `GET /portfolio/{accountId}/positions/0` | ✅ PASS | `list` | — |
+| `get_account_allocation(UXXXX699)` | `GET /portfolio/{accountId}/allocation` | ✅ PASS | `dict` | — |
 | `get_positions_by_conid(265598)` | `GET /portfolio/positions/{conid}` | ✅ PASS | `list` | — |
 | `get_pnl()` | `GET /iserver/account/pnl/partitioned` | ✅ PASS | `dict` | — |
 
@@ -397,9 +397,9 @@ Findings column codes: ✅ correct · ⚠️ assertion corrected · 🐛 bug fou
 
 | Method | Endpoint | Result | Observed shape | Finding |
 |---|---|---|---|---|
-| `get_pa_periods([U1675699])` | `POST /pa/allperiods` | ✅ PASS | `list` | — |
-| `get_pa_performance([U1675699], period="last7days")` | `POST /pa/performance` | ⚠️ 400 then PASS | `dict` | ⚠️ `"last7days"` returned HTTP 400. Valid period strings must come from `get_pa_periods()` first. Test updated to call `get_pa_periods()` and use the first returned value. |
-| `get_pa_transactions([U1675699], period="last7days")` | `POST /pa/transactions` | ⚠️ 400 then PASS | `dict` or `list` | ⚠️ Same issue as `get_pa_performance`. Fixed to use `get_pa_periods()` output. |
+| `get_pa_periods([UXXXX699])` | `POST /pa/allperiods` | ✅ PASS | `list` | — |
+| `get_pa_performance([UXXXX699], period="last7days")` | `POST /pa/performance` | ⚠️ 400 then PASS | `dict` | ⚠️ `"last7days"` returned HTTP 400. Valid period strings must come from `get_pa_periods()` first. Test updated to call `get_pa_periods()` and use the first returned value. |
+| `get_pa_transactions([UXXXX699], period="last7days")` | `POST /pa/transactions` | ⚠️ 400 then PASS | `dict` or `list` | ⚠️ Same issue as `get_pa_performance`. Fixed to use `get_pa_periods()` output. |
 
 #### FYI / Alerts
 
@@ -408,7 +408,7 @@ Findings column codes: ✅ correct · ⚠️ assertion corrected · 🐛 bug fou
 | `get_notifications()` | `GET /fyi/notifications` | ✅ PASS | `list` | — |
 | `get_unread_count()` | `GET /fyi/unreadnumber` | ✅ PASS | `int` ≥ 0 | — |
 | `get_mta_alert()` | `GET /iserver/account/mta` | ✅ PASS | `dict` | — |
-| `get_alerts(U1675699)` | `GET /iserver/account/{accountId}/alerts` | ✅ PASS | `list` | — |
+| `get_alerts(UXXXX699)` | `GET /iserver/account/{accountId}/alerts` | ✅ PASS | `list` | — |
 
 ---
 

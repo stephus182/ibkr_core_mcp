@@ -2,985 +2,985 @@
   "account_allocation": {
     "assetClass": {
       "long": {
-        "CASH": 21985.98,
-        "STK": 30069.67
+        "CASH": 1111.11,
+        "STK": 1111.11
       },
       "short": {}
     },
     "group": {
       "long": {
-        "Others": 30069.67
+        "Others": 1111.11
       },
       "short": {}
     },
     "sector": {
       "long": {
-        "Others": 30069.67
+        "Others": 1111.11
       },
       "short": {}
     }
   },
   "account_ledger": {
     "BASE": {
-      "acctcode": "U1234567",
-      "cashbalance": 21985.98,
-      "cashbalancefxsegment": 0.0,
-      "commoditymarketvalue": 0.0,
-      "corporatebondsmarketvalue": 0.0,
+      "acctcode": "REDACTED",
+      "cashbalance": 1111.11,
+      "cashbalancefxsegment": 1111.11,
+      "commoditymarketvalue": 1111.11,
+      "corporatebondsmarketvalue": 1111.11,
       "currency": "BASE",
-      "dividends": 0.0,
+      "dividends": 1111.11,
       "exchangerate": 1,
-      "funds": 0.0,
-      "futuremarketvalue": 0.0,
-      "futureoptionmarketvalue": 0.0,
-      "futuresonlypnl": 0.0,
-      "interest": -1.5,
-      "issueroptionsmarketvalue": 0.0,
+      "funds": 1111.11,
+      "futuremarketvalue": 1111.11,
+      "futureoptionmarketvalue": 1111.11,
+      "futuresonlypnl": 1111.11,
+      "interest": 1111.11,
+      "issueroptionsmarketvalue": 1111.11,
       "key": "LedgerList",
-      "moneyfunds": 0.0,
-      "netliquidationvalue": 52054.15,
-      "realizedpnl": 0.0,
+      "moneyfunds": 1111.11,
+      "netliquidationvalue": 1111.11,
+      "realizedpnl": 1111.11,
       "secondkey": "BASE",
       "sessionid": 1,
-      "settledcash": 21985.98,
+      "settledcash": 1111.11,
       "severity": 0,
-      "stockmarketvalue": 30069.67,
-      "stockoptionmarketvalue": 0.0,
-      "tbillsmarketvalue": 0.0,
-      "tbondsmarketvalue": 0.0,
-      "timestamp": 1789588758,
-      "unrealizedpnl": 1145.5,
-      "warrantsmarketvalue": 0.0
+      "stockmarketvalue": 1111.11,
+      "stockoptionmarketvalue": 1111.11,
+      "tbillsmarketvalue": 1111.11,
+      "tbondsmarketvalue": 1111.11,
+      "timestamp": 1111111,
+      "unrealizedpnl": 1111.11,
+      "warrantsmarketvalue": 1111.11
     },
     "USD": {
-      "acctcode": "U1234567",
-      "cashbalance": 21985.98,
-      "cashbalancefxsegment": 0.0,
-      "commoditymarketvalue": 0.0,
-      "corporatebondsmarketvalue": 0.0,
+      "acctcode": "REDACTED",
+      "cashbalance": 1111.11,
+      "cashbalancefxsegment": 1111.11,
+      "commoditymarketvalue": 1111.11,
+      "corporatebondsmarketvalue": 1111.11,
       "currency": "USD",
-      "dividends": 0.0,
+      "dividends": 1111.11,
       "endofbundle": 1,
       "exchangerate": 1,
-      "funds": 0.0,
-      "futuremarketvalue": 0.0,
-      "futureoptionmarketvalue": 0.0,
-      "futuresonlypnl": 0.0,
-      "interest": -1.5,
-      "issueroptionsmarketvalue": 0.0,
+      "funds": 1111.11,
+      "futuremarketvalue": 1111.11,
+      "futureoptionmarketvalue": 1111.11,
+      "futuresonlypnl": 1111.11,
+      "interest": 1111.11,
+      "issueroptionsmarketvalue": 1111.11,
       "key": "LedgerList",
-      "moneyfunds": 0.0,
-      "netliquidationvalue": 52054.15,
-      "realizedpnl": 0.0,
+      "moneyfunds": 1111.11,
+      "netliquidationvalue": 1111.11,
+      "realizedpnl": 1111.11,
       "secondkey": "USD",
       "sessionid": 1,
-      "settledcash": 21985.98,
+      "settledcash": 1111.11,
       "severity": 0,
-      "stockmarketvalue": 30069.67,
-      "stockoptionmarketvalue": 0.0,
-      "tbillsmarketvalue": 0.0,
-      "tbondsmarketvalue": 0.0,
-      "timestamp": 1789588758,
-      "unrealizedpnl": 1145.5,
-      "warrantsmarketvalue": 0.0
+      "stockmarketvalue": 1111.11,
+      "stockoptionmarketvalue": 1111.11,
+      "tbillsmarketvalue": 1111.11,
+      "tbondsmarketvalue": 1111.11,
+      "timestamp": 1111111,
+      "unrealizedpnl": 1111.11,
+      "warrantsmarketvalue": 1111.11
     }
   },
   "account_meta": {
     "PrepaidCrypto-P": false,
     "PrepaidCrypto-Z": false,
     "accountAlias": null,
-    "accountId": "U1234567",
-    "accountStatus": 1453093200000,
-    "accountTitle": "Stephane G Menard",
-    "accountVan": "U1234567",
-    "acctCustType": "INDIVIDUAL",
+    "accountId": "REDACTED",
+    "accountStatus": 1111111,
+    "accountTitle": "REDACTED",
+    "accountVan": "REDACTED",
+    "acctCustType": "REDACTED",
     "brokerageAccess": false,
-    "businessType": "INDEPENDENT",
-    "category": "",
-    "clearingStatus": "O",
+    "businessType": "REDACTED",
+    "category": "REDACTED",
+    "clearingStatus": "REDACTED",
     "covestor": false,
     "currency": "USD",
-    "desc": "U1234567",
-    "displayName": "Stephane G Menard",
+    "desc": "REDACTED",
+    "displayName": "REDACTED",
     "faclient": false,
-    "ibEntity": "IBLLC-US",
-    "id": "U1234567",
+    "ibEntity": "REDACTED",
+    "id": "REDACTED",
     "noClientTrading": false,
     "parent": {
-      "accountId": "",
+      "accountId": "REDACTED",
       "isMChild": false,
       "isMParent": false,
       "isMultiplex": false,
       "mmc": []
     },
     "trackVirtualFXPortfolio": false,
-    "tradingType": "STKNOPT",
+    "tradingType": "REDACTED",
     "type": "INDIVIDUAL"
   },
   "account_summary": {
     "accountcode": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "U1234567"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "accountready": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "true"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "accounttype": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "INDIVIDUAL"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "accruedcash": {
-      "amount": -1.5,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "accruedcash-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "accruedcash-s": {
-      "amount": -1.5,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "accrueddividend": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "accrueddividend-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "accrueddividend-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "availablefunds": {
-      "amount": 44160.859375,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "availablefunds-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "availablefunds-s": {
-      "amount": -194.58999633789062,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "billable": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "billable-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "billable-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "buyingpower": {
-      "amount": 176643.4375,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "columnprio-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "2"
+      "timestamp": 1111111,
+      "value": "1111.11"
     },
     "columnprio-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "1"
+      "timestamp": 1111111,
+      "value": "1111.11"
     },
     "cushion": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "1"
+      "timestamp": 1111111,
+      "value": "1111.11"
     },
     "depositoncredithold": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "null"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "equitywithloanvalue": {
-      "amount": 52054.1484375,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "equitywithloanvalue-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "equitywithloanvalue-s": {
-      "amount": 7698.7001953125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "excessliquidity": {
-      "amount": 44536.73046875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "excessliquidity-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "excessliquidity-s": {
-      "amount": 181.27999877929688,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullavailablefunds": {
-      "amount": 44160.859375,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullavailablefunds-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullavailablefunds-s": {
-      "amount": -194.58999633789062,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullexcessliquidity": {
-      "amount": 44536.73046875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullexcessliquidity-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullexcessliquidity-s": {
-      "amount": 181.27999877929688,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullinitmarginreq": {
-      "amount": 7893.2900390625,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullinitmarginreq-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullinitmarginreq-s": {
-      "amount": 7893.2900390625,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullmaintmarginreq": {
-      "amount": 7517.419921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullmaintmarginreq-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "fullmaintmarginreq-s": {
-      "amount": 7517.419921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "grosspositionvalue": {
-      "amount": 30069.669921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "grosspositionvalue-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "grosspositionvalue-s": {
-      "amount": 30069.669921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "guarantee": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "guarantee-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "guarantee-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "highestseverity": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "null"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "incentivecoupons": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "incentivecoupons-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "incentivecoupons-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "indianstockhaircut": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "indianstockhaircut-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "indianstockhaircut-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "initmarginreq": {
-      "amount": 7893.2900390625,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "initmarginreq-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "initmarginreq-s": {
-      "amount": 7893.2900390625,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "leverage-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "0.0"
+      "timestamp": 1111111,
+      "value": "1111.11"
     },
     "leverage-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "0.58"
+      "timestamp": 1111111,
+      "value": "1111.11"
     },
     "lookaheadavailablefunds": {
-      "amount": 44160.859375,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadavailablefunds-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadavailablefunds-s": {
-      "amount": -194.58999633789062,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadexcessliquidity": {
-      "amount": 44536.73046875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadexcessliquidity-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadexcessliquidity-s": {
-      "amount": 181.27999877929688,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadinitmarginreq": {
-      "amount": 7893.2900390625,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadinitmarginreq-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadinitmarginreq-s": {
-      "amount": 7893.2900390625,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadmaintmarginreq": {
-      "amount": 7517.419921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadmaintmarginreq-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadmaintmarginreq-s": {
-      "amount": 7517.419921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "lookaheadnextchange": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "1789588800"
+      "timestamp": 1111111,
+      "value": "1111.11"
     },
     "maintmarginreq": {
-      "amount": 7517.419921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "maintmarginreq-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "maintmarginreq-s": {
-      "amount": 7517.419921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "netliquidation": {
-      "amount": 52054.1484375,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "netliquidation-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "netliquidation-s": {
-      "amount": 7698.7001953125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "netliquidationuncertainty": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "nlvandmargininreview": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "false"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "pasharesvalue": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "pasharesvalue-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "pasharesvalue-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "physicalcertificatevalue": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "physicalcertificatevalue-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "physicalcertificatevalue-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "postexpirationexcess": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "postexpirationexcess-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "postexpirationexcess-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "postexpirationmargin": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "postexpirationmargin-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "postexpirationmargin-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "regtequity": {
-      "amount": 7698.7001953125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "regtequity-s": {
-      "amount": 7698.7001953125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "regtmargin": {
-      "amount": 15034.830078125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "regtmargin-s": {
-      "amount": 15034.830078125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "segmenttitle-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "US Commodities"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "segmenttitle-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "US Securities"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "settledcashbydate": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "20260916:21985.98"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "settledcashbydate-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "20260916:44355.45"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "settledcashbydate-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "20260916:-22369.47"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "sma": {
-      "amount": 2234.77001953125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "sma-s": {
-      "amount": 2234.77001953125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "totalcashvalue": {
-      "amount": 21985.98046875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "totalcashvalue-c": {
-      "amount": 44355.44921875,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "totalcashvalue-s": {
-      "amount": -22369.470703125,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "totaldebitcardpendingcharges": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "totaldebitcardpendingcharges-c": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "totaldebitcardpendingcharges-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": "USD",
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
+      "timestamp": 1111111,
       "value": null
     },
     "tradingtype-s": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "STKNOPT"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     },
     "whatifpmenabled": {
-      "amount": 0.0,
+      "amount": 1111.11,
       "currency": null,
       "isNull": false,
       "severity": 0,
-      "timestamp": 1789588758000,
-      "value": "true"
+      "timestamp": 1111111,
+      "value": "REDACTED"
     }
   },
   "accounts": [
@@ -988,63 +988,63 @@
       "PrepaidCrypto-P": false,
       "PrepaidCrypto-Z": false,
       "accountAlias": null,
-      "accountId": "U1234567",
-      "accountStatus": 1453093200000,
-      "accountTitle": "Stephane G Menard",
-      "accountVan": "U1234567",
-      "acctCustType": "INDIVIDUAL",
+      "accountId": "REDACTED",
+      "accountStatus": 1111111,
+      "accountTitle": "REDACTED",
+      "accountVan": "REDACTED",
+      "acctCustType": "REDACTED",
       "brokerageAccess": true,
-      "businessType": "INDEPENDENT",
-      "category": "",
-      "clearingStatus": "O",
+      "businessType": "REDACTED",
+      "category": "REDACTED",
+      "clearingStatus": "REDACTED",
       "covestor": false,
       "currency": "USD",
-      "desc": "U1234567",
-      "displayName": "Stephane G Menard",
+      "desc": "REDACTED",
+      "displayName": "REDACTED",
       "faclient": false,
-      "ibEntity": "IBLLC-US",
-      "id": "U1234567",
+      "ibEntity": "REDACTED",
+      "id": "REDACTED",
       "noClientTrading": false,
       "parent": {
-        "accountId": "",
+        "accountId": "REDACTED",
         "isMChild": false,
         "isMParent": false,
         "isMultiplex": false,
         "mmc": []
       },
       "trackVirtualFXPortfolio": false,
-      "tradingType": "STKNOPT",
+      "tradingType": "REDACTED",
       "type": "INDIVIDUAL"
     }
   ],
   "alerts": [
     {
-      "account": "U1234567",
+      "account": "REDACTED",
       "alert_active": 1,
-      "alert_name": "AAPL <= 1.00",
+      "alert_name": "REDACTED",
       "alert_repeatable": 0,
       "alert_triggered": false,
-      "order_id": 1331320792,
-      "order_time": "20260916-19:42:45"
+      "order_id": 1111111,
+      "order_time": "REDACTED"
     }
   ],
   "auth_status": {
-    "MAC": "06:85:84:B4:41:AE",
+    "MAC": "REDACTED",
     "authenticated": true,
     "competing": false,
     "connected": true,
     "established": true,
-    "fail": "",
-    "hardware_info": "a8db0528|06:85:84:B4:41:AE",
-    "message": "",
+    "fail": "REDACTED",
+    "hardware_info": "REDACTED",
+    "message": "REDACTED",
     "serverInfo": {
-      "serverName": "JisfN2118",
-      "serverVersion": "Build 10.49.1b, Sep 1, 2026 5:34:20 PM"
+      "serverName": "REDACTED",
+      "serverVersion": "REDACTED"
     }
   },
   "brokerage_accounts": {
     "accounts": [
-      "U1234567"
+      "REDACTED"
     ],
     "acctProps": {
       "U1234567": {
@@ -1059,7 +1059,7 @@
       }
     },
     "aliases": {
-      "U1234567": "U1234567"
+      "U1234567": "REDACTED"
     },
     "allowFeatures": {
       "allowCrypto": true,
@@ -1072,7 +1072,7 @@
       "allowLiteUnderPro": false,
       "allowMTA": true,
       "allowTypeAhead": true,
-      "allowedAssetTypes": "STK,CFD,OPT,FOP,WAR,FUT,BAG,PDC,CASH,IND,BOND,BILL,FUND,SLB,News,CMDTY,IOPT,ICU,ICS,PHYSS,CRYPTO",
+      "allowedAssetTypes": "REDACTED",
       "debugPnl": true,
       "liteUser": false,
       "research": true,
@@ -1084,70 +1084,70 @@
       "showUkUserLabels": false,
       "showWebNews": true,
       "sideBySide": true,
-      "snapshotRefreshTimeout": 30
+      "snapshotRefreshTimeout": 1111111
     },
     "chartPeriods": {
       "BOND": [
-        "*"
+        "REDACTED"
       ],
       "CASH": [
-        "*"
+        "REDACTED"
       ],
       "CFD": [
-        "*"
+        "REDACTED"
       ],
       "CMDTY": [
-        "*"
+        "REDACTED"
       ],
       "CRYPTO": [
-        "*"
+        "REDACTED"
       ],
       "FOP": [
-        "2h",
-        "1d",
-        "2d",
-        "1w",
-        "1m"
+        "REDACTED",
+        "REDACTED",
+        "REDACTED",
+        "REDACTED",
+        "REDACTED"
       ],
       "FUND": [
-        "*"
+        "REDACTED"
       ],
       "FUT": [
-        "*"
+        "REDACTED"
       ],
       "IND": [
-        "*"
+        "REDACTED"
       ],
       "IOPT": [
-        "*"
+        "REDACTED"
       ],
       "OPT": [
-        "2h",
-        "1d",
-        "2d",
-        "1w",
-        "1m"
+        "REDACTED",
+        "REDACTED",
+        "REDACTED",
+        "REDACTED",
+        "REDACTED"
       ],
       "PHYSS": [
-        "*"
+        "REDACTED"
       ],
       "STK": [
-        "*"
+        "REDACTED"
       ],
       "WAR": [
-        "*"
+        "REDACTED"
       ]
     },
     "groups": [],
     "isFT": false,
     "isPaper": false,
     "profiles": [],
-    "selectedAccount": "U1234567",
+    "selectedAccount": "REDACTED",
     "serverInfo": {
-      "serverName": "JisfN2118",
-      "serverVersion": "Build 10.49.1b, Sep 1, 2026 5:34:20 PM"
+      "serverName": "REDACTED",
+      "serverVersion": "REDACTED"
     },
-    "sessionId": "6aaa17ac.00000115"
+    "sessionId": "REDACTED"
   },
   "combo_positions": [],
   "contract_info": {
@@ -1350,54 +1350,54 @@
     "E": [
       {
         "A": 1,
-        "I": "gcm://sdsa@cTC12NhliEg:APA91bGXqVOmUXaQOJQs7rFSYWqYoqnzEpgohee9xeXk2OfYmftnbORga8h1hJ5rxsBFva4Gnsdf_C43nWBtuxhUvYJRVJSFX08xYS9x_3sWzyrFvmqpfsHie-V1BPx7pADA-nm1vzzZ",
-        "NM": "Google Pixel 4",
-        "UI": "gcm://sdsa@cTC12NhliEg:APA91bGXqVOmUXaQOJQs7rFSYWqYoqnzEpgohee9xeXk2OfYmftnbORga8h1hJ5rxsBFva4Gnsdf_C43nWBtuxhUvYJRVJSFX08xYS9x_3sWzyrFvmqpfsHie-V1BPx7pADA-nm1vzzZ"
+        "I": "REDACTED",
+        "NM": "REDACTED",
+        "UI": "REDACTED"
       },
       {
         "A": 1,
-        "I": "gcm://sdsa@eMfIyWWBT8mxKUnGCzO-Cc:APA91bFEKiCPxvciQBmVvTVYT5U8UbBNOaHas1L1DcMNlYB6BSt0ehZdNTEJ51SjdIpbdWLqy7OzyC0B2edw_54VTraR-8x9da0803bkqxLVj7nB-pyq5pMBl9D0qt9h1f6wlvWPSrAo",
-        "NM": "Google Pixel 7",
-        "UI": "gcm://sdsa@eMfIyWWBT8mxKUnGCzO-Cc:APA91bFEKiCPxvciQBmVvTVYT5U8UbBNOaHas1L1DcMNlYB6BSt0ehZdNTEJ51SjdIpbdWLqy7OzyC0B2edw_54VTraR-8x9da0803bkqxLVj7nB-pyq5pMBl9D0qt9h1f6wlvWPSrAo"
+        "I": "REDACTED",
+        "NM": "REDACTED",
+        "UI": "REDACTED"
       }
     ],
     "M": 1
   },
   "live_orders": [
     {
-      "account": "U1234567",
-      "acct": "U1234567",
-      "auxPrice": "",
-      "bgColor": "#000000",
+      "account": "REDACTED",
+      "acct": "REDACTED",
+      "auxPrice": "REDACTED",
+      "bgColor": "REDACTED",
       "cashCcy": "USD",
-      "companyName": "APPLE INC",
-      "conid": 265598,
-      "conidex": "265598",
-      "description1": "AAPL",
-      "fgColor": "#00F000",
-      "filledQuantity": 0.0,
-      "isEventTrading": "0",
-      "lastExecutionTime": "260723190006",
-      "lastExecutionTime_r": 1784833206000,
-      "listingExchange": "NASDAQ.NMS",
-      "orderDesc": "Buy 1 AAPL Limit 150.00, GTC",
-      "orderId": 1986940574,
-      "orderType": "Limit",
-      "order_ccp_status": "Replaced",
-      "order_ref": "CLAUDIA-1784833069457",
-      "origOrderType": "LIMIT",
+      "companyName": "REDACTED",
+      "conid": 1111111,
+      "conidex": "1111.11",
+      "description1": "REDACTED",
+      "fgColor": "REDACTED",
+      "filledQuantity": 1111.11,
+      "isEventTrading": "1111.11",
+      "lastExecutionTime": "1111.11",
+      "lastExecutionTime_r": 1111111,
+      "listingExchange": "REDACTED",
+      "orderDesc": "REDACTED",
+      "orderId": 1111111,
+      "orderType": "REDACTED",
+      "order_ccp_status": "REDACTED",
+      "order_ref": "REDACTED",
+      "origOrderType": "REDACTED",
       "outsideRTH": false,
-      "price": "150.00",
-      "remainingQuantity": 1.0,
+      "price": "1111.11",
+      "remainingQuantity": 1111.11,
       "secType": "STK",
-      "side": "BUY",
-      "sizeAndFills": "0/1",
-      "status": "Submitted",
-      "stop_price": "",
-      "supportsTaxOpt": "1",
-      "ticker": "AAPL",
-      "timeInForce": "GTC",
-      "totalSize": 1.0
+      "side": "REDACTED",
+      "sizeAndFills": "REDACTED",
+      "status": "REDACTED",
+      "stop_price": "REDACTED",
+      "supportsTaxOpt": "1111.11",
+      "ticker": "REDACTED",
+      "timeInForce": "REDACTED",
+      "totalSize": 1111.11
     }
   ],
   "market_snapshot": [
@@ -1408,79 +1408,79 @@
   ],
   "notifications": [
     {
-      "D": "1789580611.0",
-      "FC": "SM",
+      "D": "1111.11",
+      "FC": "REDACTED",
       "HT": 0,
-      "ID": "2026091616556319",
-      "MD": "<html><div>There are pending items on your account that require your attention.</div><div><br /></div><div> - Document Submission <br /></div><div><br /></div><div><a href=\"sso://action=DOC&amp;service=AM.LOGIN&amp;webaccess=true\" target=\"_blank\">Complete Pending Items</a></div></html>",
-      "MS": "IBKR FYI: Complete Pending Items",
+      "ID": "1111.11",
+      "MD": "REDACTED",
+      "MS": "REDACTED",
       "R": 0
     },
     {
-      "D": "1789524632.0",
-      "FC": "SM",
+      "D": "1111.11",
+      "FC": "REDACTED",
       "HT": 0,
-      "ID": "2026091599476950",
-      "MD": "<html><div>There are pending items on your account that require your attention.</div><div><br /></div><div> - Document Submission <br /></div><div><br /></div><div><a href=\"sso://action=DOC&amp;service=AM.LOGIN&amp;webaccess=true\" target=\"_blank\">Complete Pending Items</a></div></html>",
-      "MS": "IBKR FYI: Complete Pending Items",
+      "ID": "1111.11",
+      "MD": "REDACTED",
+      "MS": "REDACTED",
       "R": 0
     },
     {
-      "D": "1789488999.0",
-      "FC": "AA",
+      "D": "1111.11",
+      "FC": "REDACTED",
       "HT": 0,
-      "ID": "2026091595608557",
-      "MD": "<html>Dear Client,<br /><br />Your withdrawal request for USD 5000.00 from your U****5699 account was processed. The funds should be arriving in your bank account at JPMORGAN CHASE BANK on approximately 2026-09-16.<br /><br /><strong>Still waiting for funds to arrive?</strong><br /><br />Funds may be delayed due to additional processing or review by your bank.</html>",
-      "MS": "Withdrawal Activity",
+      "ID": "1111.11",
+      "MD": "REDACTED",
+      "MS": "REDACTED",
       "R": 0
     }
   ],
   "pa_periods": [
-    "1D",
-    "7D",
-    "MTD",
-    "1M",
-    "YTD",
-    "1Y"
+    "REDACTED",
+    "REDACTED",
+    "REDACTED",
+    "REDACTED",
+    "REDACTED",
+    "REDACTED"
   ],
   "pnl": {
     "upnl": {
       "U1234567.Core": {
-        "dpl": -179.0,
-        "el": 44540.0,
-        "mv": 30080.0,
-        "nl": 52050.0,
+        "dpl": 1111.11,
+        "el": 1111.11,
+        "mv": 1111.11,
+        "nl": 1111.11,
         "rowType": 1,
-        "uel": 44536.73,
-        "upl": 1160.0
+        "uel": 1111.11,
+        "upl": 1111.11
       }
     }
   },
   "positions": [
     {
-      "acctId": "U1234567",
-      "allExchanges": "AMEX,NYSE,CBOE,PHLX,CHX,ARCA,ISLAND,ISE,IDEAL,NASDAQQ,DRCTEDGE,BEX,BATS,NITEECN,EDGEA,CSFBALGO,TRADEWEB,PSX,BYX,PDQ,IBKRATS,CITADEL,NYSEDARK,MIAX,IBDARK,CITADELDP,NASDDARK,IEX,SUMMER,FINRA,UBSDARK,BTIG,VIRTU,JEFF,OPCO,DBK,JPMC,EDGX,JANE,FRACSHARE,RBCALGO,VIRTUDP,FOXRIVER,NITEEXST,PEARL,NITERTL,NYSENAT,IEXMID,HRT,FLOWTRADE,HRTDP,JANELP,PEAK6,CTDLZERO,HRTMID,JANEZERO,HRTEXST,IMCLP,LTSE,SOCGENDP,MEMX,INTELCROS,VIRTUBYIN,JUMPTRADE,NITEZERO,XTXEXST,XTXDP,XTXMID,COWENLP,BARCDP,JUMPLP,OLDMCLP,RBCCMALP,WALLBETH,IBEOS,JONES,GSLP,BLUEOCEAN,USIBSILP,OVERNIGHT,JANEMID,IBATSEOS,HRTZERO,VIRTUALGO,G1XLP,VIRTUMID,GLOBALXLP,CTDLMID,TPLUS0,JUMPMID,CLOSEOUT,T24X,OMCDP,OMCMID,TXSE,MOON,BRUCE",
+      "acctId": "REDACTED",
+      "allExchanges": "REDACTED",
       "assetClass": "STK",
-      "avgCost": 383.215004,
-      "avgPrice": 383.215004,
-      "baseAvgCost": 383.215004,
-      "baseAvgPrice": 383.215004,
-      "baseMktPrice": 391.5655823,
-      "baseMktValue": 19578.28,
-      "baseRealizedPnl": 0.0,
-      "baseUnrealizedPnl": 417.53,
-      "chineseName": "SPDR&#x9EC4;&#x91D1;&#x4FE1;&#x6258;",
+      "avgCost": 1111.11,
+      "avgPrice": 1111.11,
+      "baseAvgCost": 1111.11,
+      "baseAvgPrice": 1111.11,
+      "baseMktPrice": 1111.11,
+      "baseMktValue": 1111.11,
+      "baseRealizedPnl": 1111.11,
+      "baseUnrealizedPnl": 1111.11,
+      "chineseName": "REDACTED",
       "conExchMap": [],
-      "conid": 51529211,
-      "contractDesc": "GLD",
-      "countryCode": "US",
+      "conid": 1111111,
+      "contractDesc": "REDACTED",
+      "countryCode": "REDACTED",
       "currency": "USD",
       "displayRule": {
         "displayRuleStep": [
           {
-            "decimalDigits": 2,
-            "lowerEdge": 0.0,
-            "wholeDigits": 4
+            "decimalDigits": 1111111,
+            "lowerEdge": 1111.11,
+            "wholeDigits": 1111111
           }
         ],
         "magnification": 0
@@ -1488,61 +1488,61 @@
       "exchs": null,
       "exerciseStyle": null,
       "expiry": null,
-      "fullName": "GLD",
+      "fullName": "REDACTED",
       "group": null,
       "hasOptions": true,
       "incrementRules": [
         {
-          "increment": 0.01,
-          "lowerEdge": 0.0
+          "increment": 1111.11,
+          "lowerEdge": 1111.11
         }
       ],
       "isEventContract": false,
       "isUS": true,
       "lastTradingDay": null,
-      "listingExchange": "ARCA",
-      "mktPrice": 391.5655823,
-      "mktValue": 19578.28,
+      "listingExchange": "REDACTED",
+      "mktPrice": 1111.11,
+      "mktValue": 1111.11,
       "model": "",
-      "multiplier": 0.0,
-      "name": "SPDR GOLD SHARES",
-      "pageSize": 100,
-      "position": 50.0,
+      "multiplier": 1111.11,
+      "name": "REDACTED",
+      "pageSize": 1111111,
+      "position": 1111.11,
       "putOrCall": null,
-      "realizedPnl": 0.0,
+      "realizedPnl": 1111.11,
       "sector": null,
       "sectorGroup": null,
-      "strike": "0",
-      "ticker": "GLD",
-      "time": 31,
+      "strike": "1111.11",
+      "ticker": "REDACTED",
+      "time": 1111111,
       "type": "ETF",
       "undConid": 0,
-      "unrealizedPnl": 417.53
+      "unrealizedPnl": 1111.11
     },
     {
-      "acctId": "U1234567",
-      "allExchanges": "AMEX,NYSE,CBOE,PHLX,CHX,ARCA,ISLAND,IDEAL,NASDAQQ,DRCTEDGE,BEX,BATS,EDGEA,CSFBALGO,TRADEWEB,PSX,BYX,IBKRATS,CITADEL,NYSEDARK,MIAX,IBDARK,NASDDARK,IEX,FINRA,UBSDARK,BTIG,VIRTU,JEFF,OPCO,EDGX,FRACSHARE,VIRTUDP,FOXRIVER,PEARL,NYSENAT,HRT,FLOWTRADE,HRTDP,JANELP,PEAK6,CTDLZERO,HRTMID,JANEZERO,HRTEXST,IMCLP,LTSE,SOCGENDP,MEMX,INTELCROS,VIRTUBYIN,JUMPTRADE,NITEZERO,XTXEXST,XTXDP,XTXMID,COWENLP,BARCDP,JUMPLP,OLDMCLP,RBCCMALP,WALLBETH,IBEOS,JONES,GSLP,BLUEOCEAN,USIBSILP,OVERNIGHT,IBATSEOS,HRTZERO,VIRTUALGO,G1XLP,VIRTUMID,GLOBALXLP,TPLUS0,JUMPMID,CLOSEOUT,T24X,OMCDP,OMCMID,TXSE,MOON,BRUCE",
+      "acctId": "REDACTED",
+      "allExchanges": "REDACTED",
       "assetClass": "STK",
-      "avgCost": 97.634216,
-      "avgPrice": 97.634216,
-      "baseAvgCost": 97.634216,
-      "baseAvgPrice": 97.634216,
-      "baseMktPrice": 104.9138794,
-      "baseMktValue": 10491.39,
-      "baseRealizedPnl": 0.0,
-      "baseUnrealizedPnl": 727.97,
-      "chineseName": "iShares&#x5B89;&#x7855;&#x5317;&#x7F8E;&#x79D1;&#x6280;&#x8F6F;&#x4EF6;ETF",
+      "avgCost": 1111.11,
+      "avgPrice": 1111.11,
+      "baseAvgCost": 1111.11,
+      "baseAvgPrice": 1111.11,
+      "baseMktPrice": 1111.11,
+      "baseMktValue": 1111.11,
+      "baseRealizedPnl": 1111.11,
+      "baseUnrealizedPnl": 1111.11,
+      "chineseName": "REDACTED",
       "conExchMap": [],
-      "conid": 12658199,
-      "contractDesc": "IGV",
-      "countryCode": "US",
+      "conid": 1111111,
+      "contractDesc": "REDACTED",
+      "countryCode": "REDACTED",
       "currency": "USD",
       "displayRule": {
         "displayRuleStep": [
           {
-            "decimalDigits": 2,
-            "lowerEdge": 0.0,
-            "wholeDigits": 4
+            "decimalDigits": 1111111,
+            "lowerEdge": 1111.11,
+            "wholeDigits": 1111111
           }
         ],
         "magnification": 0
@@ -1550,36 +1550,36 @@
       "exchs": null,
       "exerciseStyle": null,
       "expiry": null,
-      "fullName": "IGV",
+      "fullName": "REDACTED",
       "group": null,
       "hasOptions": true,
       "incrementRules": [
         {
-          "increment": 0.01,
-          "lowerEdge": 0.0
+          "increment": 1111.11,
+          "lowerEdge": 1111.11
         }
       ],
       "isEventContract": false,
       "isUS": true,
       "lastTradingDay": null,
-      "listingExchange": "BATS",
-      "mktPrice": 104.9138794,
-      "mktValue": 10491.39,
+      "listingExchange": "REDACTED",
+      "mktPrice": 1111.11,
+      "mktValue": 1111.11,
       "model": "",
-      "multiplier": 0.0,
-      "name": "ISHARES EXPANDED TECH-SOFTWA",
-      "pageSize": 100,
-      "position": 100.0,
+      "multiplier": 1111.11,
+      "name": "REDACTED",
+      "pageSize": 1111111,
+      "position": 1111.11,
       "putOrCall": null,
-      "realizedPnl": 0.0,
+      "realizedPnl": 1111.11,
       "sector": null,
       "sectorGroup": null,
-      "strike": "0",
-      "ticker": "IGV",
-      "time": 28,
+      "strike": "1111.11",
+      "ticker": "REDACTED",
+      "time": 1111111,
       "type": "ETF",
       "undConid": 0,
-      "unrealizedPnl": 727.97
+      "unrealizedPnl": 1111.11
     }
   ],
   "positions_by_conid": [],
@@ -1863,182 +1863,182 @@
   ],
   "trades": [
     {
-      "account": "U1234567",
-      "accountCode": "U1234567",
-      "account_allocation_name": "U1234567",
-      "clearing_id": "IB",
-      "clearing_name": "IB",
-      "commission": "2.24",
-      "company_name": "E-mini S&P 500",
-      "conid": 515416632,
-      "conidEx": "515416632@CME",
-      "contract_description_1": "Dec18 '26",
-      "exchange": "CME",
-      "execution_id": "00010181.6aa8c7de.01.01",
-      "is_event_trading": "0",
-      "liquidation_trade": "0",
-      "listing_exchange": "CME",
-      "net_amount": 382925.0,
-      "order_description": "Bot 1 @ 7658.5 on CME",
-      "order_id": 2061969510,
-      "price": "7658.5",
+      "account": "REDACTED",
+      "accountCode": "REDACTED",
+      "account_allocation_name": "REDACTED",
+      "clearing_id": "REDACTED",
+      "clearing_name": "REDACTED",
+      "commission": "1111.11",
+      "company_name": "REDACTED",
+      "conid": 1111111,
+      "conidEx": "REDACTED",
+      "contract_description_1": "REDACTED",
+      "exchange": "REDACTED",
+      "execution_id": "REDACTED",
+      "is_event_trading": "1111.11",
+      "liquidation_trade": "1111.11",
+      "listing_exchange": "REDACTED",
+      "net_amount": 1111.11,
+      "order_description": "REDACTED",
+      "order_id": 1111111,
+      "price": "1111.11",
       "sec_type": "FUT",
-      "side": "B",
-      "size": 1.0,
-      "supports_tax_opt": "1",
-      "symbol": "ES",
-      "trade_time": "20260915-15:41:46",
-      "trade_time_r": 1789486906000
+      "side": "REDACTED",
+      "size": 1111.11,
+      "supports_tax_opt": "1111.11",
+      "symbol": "REDACTED",
+      "trade_time": "REDACTED",
+      "trade_time_r": 1111111
     },
     {
-      "account": "U1234567",
-      "accountCode": "U1234567",
-      "account_allocation_name": "U1234567",
-      "clearing_id": "IB",
-      "clearing_name": "IB",
-      "commission": "2.24",
-      "company_name": "E-mini S&P 500",
-      "conid": 649180671,
-      "conidEx": "649180671@CME",
-      "contract_description_1": "Sep18 '26",
-      "exchange": "CME",
-      "execution_id": "00010181.6aa798a8.01.01",
-      "is_event_trading": "0",
-      "liquidation_trade": "0",
-      "listing_exchange": "CME",
-      "net_amount": 382400.0,
-      "order_description": "Sold 1 @ 7648.0 on CME",
-      "order_id": 626641664,
-      "price": "7648.0",
+      "account": "REDACTED",
+      "accountCode": "REDACTED",
+      "account_allocation_name": "REDACTED",
+      "clearing_id": "REDACTED",
+      "clearing_name": "REDACTED",
+      "commission": "1111.11",
+      "company_name": "REDACTED",
+      "conid": 1111111,
+      "conidEx": "REDACTED",
+      "contract_description_1": "REDACTED",
+      "exchange": "REDACTED",
+      "execution_id": "REDACTED",
+      "is_event_trading": "1111.11",
+      "liquidation_trade": "1111.11",
+      "listing_exchange": "REDACTED",
+      "net_amount": 1111.11,
+      "order_description": "REDACTED",
+      "order_id": 1111111,
+      "price": "1111.11",
       "sec_type": "FUT",
-      "side": "S",
-      "size": 1.0,
-      "supports_tax_opt": "1",
-      "symbol": "ES",
-      "trade_time": "20260914-16:48:32",
-      "trade_time_r": 1789404512000
+      "side": "REDACTED",
+      "size": 1111.11,
+      "supports_tax_opt": "1111.11",
+      "symbol": "REDACTED",
+      "trade_time": "REDACTED",
+      "trade_time_r": 1111111
     },
     {
-      "account": "U1234567",
-      "accountCode": "U1234567",
-      "account_allocation_name": "U1234567",
-      "clearing_id": "IB",
-      "clearing_name": "IB",
-      "commission": "2.24",
-      "company_name": "E-mini S&P 500",
-      "conid": 649180671,
-      "conidEx": "649180671@CME",
-      "contract_description_1": "Sep18 '26",
-      "exchange": "CME",
-      "execution_id": "00010181.6aa87622.01.01",
-      "is_event_trading": "0",
-      "liquidation_trade": "0",
-      "listing_exchange": "CME",
-      "net_amount": 380000.0,
-      "order_description": "Bot 1 @ 7600.0 on CME",
-      "order_id": 626641665,
-      "price": "7600.0",
+      "account": "REDACTED",
+      "accountCode": "REDACTED",
+      "account_allocation_name": "REDACTED",
+      "clearing_id": "REDACTED",
+      "clearing_name": "REDACTED",
+      "commission": "1111.11",
+      "company_name": "REDACTED",
+      "conid": 1111111,
+      "conidEx": "REDACTED",
+      "contract_description_1": "REDACTED",
+      "exchange": "REDACTED",
+      "execution_id": "REDACTED",
+      "is_event_trading": "1111.11",
+      "liquidation_trade": "1111.11",
+      "listing_exchange": "REDACTED",
+      "net_amount": 1111.11,
+      "order_description": "REDACTED",
+      "order_id": 1111111,
+      "price": "1111.11",
       "sec_type": "FUT",
-      "side": "B",
-      "size": 1.0,
-      "supports_tax_opt": "1",
-      "symbol": "ES",
-      "trade_time": "20260915-05:08:55",
-      "trade_time_r": 1789448935000
+      "side": "REDACTED",
+      "size": 1111.11,
+      "supports_tax_opt": "1111.11",
+      "symbol": "REDACTED",
+      "trade_time": "REDACTED",
+      "trade_time_r": 1111111
     },
     {
-      "account": "U1234567",
-      "accountCode": "U1234567",
-      "account_allocation_name": "U1234567",
-      "clearing_id": "IB",
-      "clearing_name": "IB",
-      "commission": "2.24",
-      "company_name": "E-mini S&P 500",
-      "conid": 515416632,
-      "conidEx": "515416632@CME",
-      "contract_description_1": "Dec18 '26",
-      "exchange": "CME",
-      "execution_id": "00010181.6aa88a86.01.01",
-      "is_event_trading": "0",
-      "liquidation_trade": "0",
-      "listing_exchange": "CME",
-      "net_amount": 383800.0,
-      "order_description": "Sold 1 @ 7676.0 on CME",
-      "order_id": 1358484956,
-      "price": "7676.0",
+      "account": "REDACTED",
+      "accountCode": "REDACTED",
+      "account_allocation_name": "REDACTED",
+      "clearing_id": "REDACTED",
+      "clearing_name": "REDACTED",
+      "commission": "1111.11",
+      "company_name": "REDACTED",
+      "conid": 1111111,
+      "conidEx": "REDACTED",
+      "contract_description_1": "REDACTED",
+      "exchange": "REDACTED",
+      "execution_id": "REDACTED",
+      "is_event_trading": "1111.11",
+      "liquidation_trade": "1111.11",
+      "listing_exchange": "REDACTED",
+      "net_amount": 1111.11,
+      "order_description": "REDACTED",
+      "order_id": 1111111,
+      "price": "1111.11",
       "sec_type": "FUT",
-      "side": "S",
-      "size": 1.0,
-      "supports_tax_opt": "1",
-      "symbol": "ES",
-      "trade_time": "20260915-10:54:19",
-      "trade_time_r": 1789469659000
+      "side": "REDACTED",
+      "size": 1111.11,
+      "supports_tax_opt": "1111.11",
+      "symbol": "REDACTED",
+      "trade_time": "REDACTED",
+      "trade_time_r": 1111111
     }
   ],
   "trading_schedule": [],
   "unread_count": 0,
   "watchlists": [
     {
-      "id": "105",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1789339866566,
-      "name": "(1) Commodity Futures",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "103",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1789339565093,
-      "name": "Favorites",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "106",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1789046626251,
-      "name": "FX",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "10",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1784256766414,
-      "name": "Favorites",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "104",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1781477302498,
-      "name": "Index Futures",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "-7171512622707682541",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1770388250140,
-      "name": "us",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "-2848335496026461312",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1770388250130,
-      "name": "Favoris",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     },
     {
-      "id": "101",
+      "id": "1111.11",
       "is_open": false,
-      "modified": 1765494055600,
-      "name": "Futures",
+      "modified": 1111111,
+      "name": "REDACTED",
       "read_only": false,
       "type": "watchlist"
     }

@@ -247,7 +247,7 @@ def test_get_pnl_empty(toolkit):
 def test_get_pnl_reports_account_partition_totals(toolkit):
     toolkit._client.get_pnl.return_value = {
         "upnl": {
-            "U1675699.Core": {
+            "U1234567.Core": {
                 "rowType": 1,
                 "dpl": 15.7,
                 "nl": 10000.0,
@@ -258,7 +258,7 @@ def test_get_pnl_reports_account_partition_totals(toolkit):
         }
     }
     text, _fig = toolkit.execute("get_pnl", {})
-    assert "U1675699.Core" in text
+    assert "U1234567.Core" in text
     assert "607.00" in text  # unrealized
     assert "15.70" in text  # daily
 
@@ -306,7 +306,7 @@ def test_get_pnl_retries_after_priming_when_first_call_empty(toolkit):
     the REST call, which then returns real data."""
     real_data = {
         "upnl": {
-            "U1675699.Core": {
+            "U1234567.Core": {
                 "rowType": 1,
                 "dpl": 663.8,
                 "nl": 62990.0,
@@ -321,7 +321,7 @@ def test_get_pnl_retries_after_priming_when_first_call_empty(toolkit):
         text, _fig = toolkit.execute("get_pnl", {})
     mock_prime.assert_called_once()
     assert toolkit._client.get_pnl.call_count == 2
-    assert "U1675699.Core" in text
+    assert "U1234567.Core" in text
     assert "-8270.00" in text
 
 

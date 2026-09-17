@@ -150,7 +150,7 @@ These paths cannot be exercised in unit tests. Verified manually against a live 
 
 | Path | Date | Result |
 |---|---|---|
-| `fetch_trades` → `_archive_and_log` → Drive upload → `log_flex_import` | 2026-06-26 | `flex_U1675699_2026-06-26_4997140278.xml`: trade_id_count=161, raw_trade_count=161, source=auto, verified_at set at import time |
+| `fetch_trades` → `_archive_and_log` → Drive upload → `log_flex_import` | 2026-06-26 | `flex_UXXXX699_2026-06-26_4997140278.xml`: trade_id_count=161, raw_trade_count=161, source=auto, verified_at set at import time |
 | `verify_flex_import` — hash match path (auto file, hash unchanged) | pending | — |
 | `verify_flex_import` — manual file pre-validated path | pending | — |
 | `sync_archive_from_drive` — full Drive XML re-import | pending | — |
