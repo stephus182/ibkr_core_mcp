@@ -28,13 +28,13 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCB-R` | 6 | 6 | — | — | — |
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
-| `API-R` | **3** | **3** | — | — | — |
+| `API-R` | **4** | **4** | — | — | — |
 | `TOOL-R` | **2** | **2** | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **148** | **96** | **1** (+1 partial) | **0** | **50** |
+| **Total** | **149** | **97** | **1** (+1 partial) | **0** | **50** |
 
-`96 + 1 + 1 + 0 + 50 = 148`. **There are no unrecorded findings left.** All three blocks
+`97 + 1 + 1 + 0 + 50 = 149`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -4118,3 +4118,46 @@ its first run — typed since API-17, never driven.
 `get_watchlists` is driven on **both** shapes — IBKR's wrapped `{"data": {"user_lists": …}}`
 and the bare list it has never actually sent — because the surviving mutation was on the
 wrapped branch, which a bare-list fixture never reaches.
+
+
+---
+
+## `API-R4` — **Low, new: a 404 read as "this endpoint does not exist"**
+
+Raised by the owner while reviewing the re-capture, against my own write-up:
+
+> *"this is expected simply because it's an authorisation basis, and since I did not choose
+> to get authorised on this because I have no interest this is the message it gives, but in
+> reality it is 'unsubscribed'."*
+
+`get_event_contracts` and `get_event_contract` 404 against a healthy authenticated gateway.
+`client.py` and `docs/api-reference.md` both recorded that as *"does not appear in the
+official reference … does not exist"*, and the commit message for the re-capture (`28fa3a2`)
+repeated it. **The conclusion happens to be right about the path and was reached from the
+wrong evidence.**
+
+Verified, rather than adopting either account:
+
+| Check | Result |
+|---|---|
+| `/events/` in IBKR's complete index (`llms.txt`, 69,149 B) | **0 occurrences** |
+| Event Contracts documented at all? | Yes — nine pages, under `/forecast/*` |
+| The real endpoint, read from the API-reference page not the overview | `GET /v1/api/forecast/category/tree` |
+| Fabricated control URL in the same batch | 483 B `# Page Not Found`, against 5–6 KB for the real pages — so the check can fail |
+| Entitlement behaviour documented by IBKR? | **No** — neither page mentions entitlement, subscription or a status for an unentitled product |
+
+So the index settles the *path*: `/events/*` is not IBKR's. **The 404 settles nothing**, and
+that is the finding. A 404 cannot distinguish an unknown path from a product this account is
+not entitled to, and the owner holds no event-contract subscription by choice — IBKR answers
+404 for this account whichever path is used. The documents now say that, and draw the path
+conclusion from the index instead.
+
+One consequence worth stating before anyone acts on the known gap: **the `/forecast/*`
+endpoints cannot be verified live from this account either.** A reimplementation would ship on
+documentation alone unless the subscription is taken — the exact "assumption-based
+development" CLAUDE.md opens with, and the reason two IBKR incidents are recorded there.
+
+This is the third appearance of the same lesson in this audit — *a status code is a lead, not
+a fact* ([[feedback_reflect_before_concluding_defect]]) — after a link checker graded 74 URLs
+"resolving" on status alone and the new docs site answered 200 for pages that do not exist.
+Here it ran the other way: a 404 was read as proof of absence.

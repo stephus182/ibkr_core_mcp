@@ -1877,12 +1877,20 @@ class IBKRClient:
     def get_event_contracts(self, conids: list[int]) -> list[dict[str, Any]]:
         """Event-based contracts (e.g. political outcome contracts). Returns [] if not a list.
 
-        WARNING: /events/contracts does not appear in the official IBKR Client Portal API or
-        Web API reference (verified 2026-06-30, full page scan of both docs pages). If IBKR
-        has an event contracts API it may be on a separate unreleased documentation page.
-        This method will raise IBKRAPIError (404) until the correct endpoint is identified.
+        WARNING: this path is not IBKR's. `/events/` appears **zero times** in the complete
+        documentation index (`llms.txt`, 69,149 bytes, re-verified 2026-09-17). The real
+        product is documented under `/forecast/*` — `GET /v1/api/forecast/category/tree` and
+        the rest, read from the page itself, not inferred. Reimplementing this pair against
+        those endpoints is a known gap; see `docs/api-reference.md` § Event Contracts.
 
-        Source: unverified — endpoint not found in official docs
+        **The 404 this raises is not the evidence for that.** A 404 from the gateway cannot
+        tell an unknown path from a product the account is not entitled to: the owner holds
+        no event-contract subscription by choice, so IBKR answers 404 for this account
+        whatever path is used, and IBKR documents no distinct status for an unentitled
+        product. The index is what settles the path; the status code settles nothing
+        (API-R4, 2026-09-17).
+
+        Source: https://www.interactivebrokers.com/docs/web-api/llms.txt (absence of /events/)
         Endpoint: GET /events/contracts
         """
         data = self._get("/events/contracts", {"conids": ",".join(str(c) for c in conids)})
@@ -1891,11 +1899,12 @@ class IBKRClient:
     def get_event_contract(self, conid: int) -> dict[str, Any]:
         """Details for a specific event contract.
 
-        WARNING: /events/show does not appear in the official IBKR Client Portal API or
-        Web API reference (verified 2026-06-30, full page scan of both docs pages). Same
-        class of unverified endpoint as get_event_contracts().
+        WARNING: same as `get_event_contracts` — `/events/` is absent from IBKR's index and
+        the documented product lives under `/forecast/*`. The 404 is equally uninformative:
+        this account is not entitled to event contracts, so it would 404 on the correct path
+        too (API-R4, 2026-09-17).
 
-        Source: unverified — endpoint not found in official docs
+        Source: https://www.interactivebrokers.com/docs/web-api/llms.txt (absence of /events/)
         Endpoint: GET /events/show
         """
         return self._get("/events/show", {"conid": conid})
