@@ -790,8 +790,13 @@ endpoint's own API-reference page on 2026-09-17, retrieved with a deliberately f
 control URL in the same batch — it returned the 508-byte `# Page Not Found` body while the
 five real pages returned 5.5–6.8 KB, so the retrieval could fail and did not.
 
-**None of them has been run.** Event contracts need a subscription the development account
-does not hold. That is also why **none returns a model**: this package validates a model
+**None of them has been run, and none is scheduled to be.** Event contracts need a
+subscription the development account does not hold. The owner's position, 2026-09-17: a
+subscription may be opened later for development purposes, it is **not a priority**, and until
+then these endpoints are **expressly not validated**. That is a decision on record, not an
+oversight — `test_the_event_contract_endpoints_stay_marked_unvalidated` holds it, and fails
+the day a captured response appears, because that is the day they should be typed and moved
+into the live suite. That is also why **none returns a model**: this package validates a model
 against a captured response, never against a reading of the documentation — the rule that
 exists because all six original models were wrong for the package's life behind tests built
 to match them. These five return the decoded response and are annotated as such.

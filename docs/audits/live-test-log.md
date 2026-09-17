@@ -13,6 +13,34 @@ When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30
 
 ---
 
+## Deliberately not covered — Event Contracts (`/forecast/*`)
+
+This log records what has been executed. One area is **known not to be, by decision**, and is
+written down here so its absence is not mistaken for an omission.
+
+`get_forecast_categories`, `get_forecast_contract`, `get_forecast_market`,
+`get_forecast_rules` and `get_forecast_schedules` have **never been run against a gateway**.
+They need an event-contract subscription the development account does not hold. The owner's
+position, 2026-09-17: a subscription may be opened later for development purposes, it is
+**not a priority**, and until then these endpoints are **expressly not validated**.
+
+What that means in practice, and what it does not:
+
+- Their paths and query parameters are read from IBKR's own API-reference pages, retrieved
+  with a fabricated control URL in the same batch — so the *request* each one builds is
+  pinned by `tests/test_client_event_contracts.py`.
+- **No response has ever been observed**, so none of them returns a model, and none appears
+  in `tests/fixtures/ibkr_live_shapes.json`.
+- No live test references them. A live test that can only ever skip reads as coverage and is
+  not — the failure mode that let a rewritten scraper test go unverified for hours on
+  2026-07-30.
+
+`test_the_event_contract_endpoints_stay_marked_unvalidated` holds all three and **fails the
+day a captured response appears** — which is the signal that the subscription now exists and
+these should be typed, given live coverage, and moved into this log properly.
+
+---
+
 <a id="run-2026-09-16-3"></a>
 ## Run: 2026-09-16 — gateway re-authenticated; trading-schedule settled (release-readiness audit)
 

@@ -112,3 +112,78 @@ def test_the_dead_events_methods_are_gone():
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith("/events/")
     }
     assert not literals, f"a dead /events/ path is being requested again: {sorted(literals)}"
+
+
+FORECAST_METHODS = (
+    "get_forecast_categories",
+    "get_forecast_contract",
+    "get_forecast_market",
+    "get_forecast_rules",
+    "get_forecast_schedules",
+)
+
+
+def test_the_event_contract_endpoints_stay_marked_unvalidated():
+    """The owner's standing position, 2026-09-17, held as a check rather than a comment:
+
+        *"I can open a subscription in the future just for dev purposes but not my priority
+        ... assume no live testing, and will be done at some point but expressly NOT
+        validated."*
+
+    So this is a **known and accepted** state, not an oversight — and the risk is that it
+    stops looking like one. These five methods are indistinguishable from the seventy-odd
+    around them that *have* been exercised, and the next reader has no reason to suspect
+    otherwise. This test is what tells them.
+
+    Three properties, each with an unlock path rather than a prohibition:
+
+    1. No model return type. A model is validated against a captured response in this
+       package; there is no captured response, so there can be no model.
+    2. No entry in `tests/fixtures/ibkr_live_shapes.json`. **If one appears, this test
+       fails** — which is the point: it means a subscription now exists, and whoever
+       captured it should type the responses and move these endpoints into the live suite.
+    3. No live test claims to cover them.
+    """
+    import ast
+    import json
+    import pathlib
+    import sys
+
+    from ibkr_core_mcp.client import IBKRClient
+
+    package = pathlib.Path(sys.modules[IBKRClient.__module__].__file__ or "").parent
+
+    model_names = {
+        node.name
+        for node in ast.walk(ast.parse((package / "models.py").read_text()))
+        if isinstance(node, ast.ClassDef)
+        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
+    }
+    client_tree = ast.parse((package / "client.py").read_text())
+    typed = {
+        node.name
+        for node in ast.walk(client_tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name in FORECAST_METHODS
+        and node.returns is not None
+        and any(m in ast.unparse(node.returns) for m in model_names)
+    }
+    assert not typed, (
+        f"{sorted(typed)} declare a model return, but no event-contract response has ever been "
+        "observed. If a subscription now exists, capture the shapes first — a model built from "
+        "documentation is the defect that made all six original models wrong."
+    )
+
+    fixture = json.loads((pathlib.Path(__file__).parent / "fixtures" / "ibkr_live_shapes.json").read_text())
+    captured = sorted(k for k in fixture if "forecast" in k or "event_contract" in k)
+    assert not captured, (
+        f"event-contract responses are now captured ({captured}) — the subscription exists. "
+        "Type these endpoints against the capture, add live coverage, and delete this test."
+    )
+
+    live = (pathlib.Path(__file__).parent / "test_client_live.py").read_text()
+    claimed = [m for m in FORECAST_METHODS if m in live]
+    assert not claimed, (
+        f"the live suite references {claimed}, which cannot run without an event-contract "
+        "subscription — a live test that always skips reads as coverage and is not."
+    )

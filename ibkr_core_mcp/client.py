@@ -1885,6 +1885,10 @@ class IBKRClient:
     # endpoint (each cited per method, retrieved 2026-09-17 with a fabricated control URL
     # in the same batch to prove the check could fail). None has been executed against a
     # live gateway, because event contracts need a subscription this account does not hold.
+    # The owner's position (2026-09-17): a subscription may be opened later for development
+    # purposes, it is **not a priority**, and until then these are **expressly not validated**
+    # — a decision on record, not a gap. `tests/test_client_event_contracts.py` holds that
+    # state and fails the day a captured response appears, which is the day to type them.
     # That is why **none of them returns a model**: this package's rule is that a model is
     # validated against a captured response, never against a reading of the documentation
     # (`models.py`, and the six models that were wrong for the package's life). They return

@@ -4197,6 +4197,25 @@ rather than the wire is the defect that made all six original models wrong. The 
 IBKR documents 401/500/503 for all five and **no 404**, which is itself a small piece of
 evidence that the 404 this package saw was about the path, not entitlement.
 
+**Validation status, on the owner's instruction and on record:**
+
+> *"I can open a subscription in the future just for dev purposes but not my priority, pls
+> note the real status now and assume no live testing, and will be done at some point but
+> expressly NOT validated."*
+
+So the state is **known and accepted**, not a gap — and the danger is precisely that it stops
+looking like one: these five sit among seventy-odd methods that *have* been exercised and are
+indistinguishable from them. `test_the_event_contract_endpoints_stay_marked_unvalidated`
+therefore holds the status as a check rather than a comment, with an unlock path instead of a
+prohibition. It asserts none of the five declares a model return, none appears in
+`ibkr_live_shapes.json`, and no live test references them — and **fails the day a captured
+response appears**, because that is the day the subscription exists and they should be typed,
+covered live, and entered in `docs/audits/live-test-log.md`, which now records the gap
+explicitly rather than only recording what has run. Mutation-tested on all three unlock paths.
+
+A live test that can only skip is the trap being avoided here: it reads as coverage and is
+not, which is how a rewritten scraper test went unverified for hours on 2026-07-30.
+
 One of my own checks had to be rewritten: asserting `"/events/contracts" not in source` failed
 because the comment explaining the removal names the path. That is API-12's defect exactly — a
 sentence explaining a guard satisfying it — so the check reads the AST for request literals
