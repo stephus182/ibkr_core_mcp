@@ -350,3 +350,83 @@ def test_no_shipped_module_imports_a_model_sdk():
 def test_the_import_probe_can_actually_find_an_import():
     """Vacuity guard: both tests above assert an absence, so the probe must be shown to work."""
     assert _modules_importing("requests"), "the import probe found no `requests` import — it is broken"
+
+
+def _model_names() -> set[str]:
+    """Every `IBKRResponse` subclass, derived from models.py rather than hand-typed."""
+    tree = ast.parse((_REPO / "ibkr_core_mcp" / "models.py").read_text())
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
+    }
+
+
+def _methods_returning_models() -> set[str]:
+    """Public `IBKRClient` methods whose return annotation names a model."""
+    models = _model_names()
+    tree = ast.parse((_REPO / "ibkr_core_mcp" / "client.py").read_text())
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and not node.name.startswith("_")
+        and node.returns is not None
+        and any(re.search(rf"\b{m}\b", ast.unparse(node.returns)) for m in models)
+    }
+
+
+def test_the_api_reference_marks_exactly_the_methods_that_return_models():
+    """`docs/api-reference.md` prints a signature per method, and those signatures go stale.
+
+    Its header claimed "all 74 methods return raw dicts/lists" while fourteen returned models
+    (API-R3, 2026-09-17), and six method headings still said `-> dict`. A reference whose
+    signatures disagree with the code is worse than none: the reader has no reason to doubt it.
+
+    Both directions, so neither a new typed method nor a reverted one can slip through.
+    """
+    doc = (_REPO / "docs" / "api-reference.md").read_text()
+    models = _model_names()
+    documented = set()
+    for heading in re.findall(r"^### `(\w+)\([^)]*\)\s*->\s*(.+?)`", doc, re.M):
+        name, returns = heading
+        if any(re.search(rf"\b{m}\b", returns) for m in models):
+            documented.add(name)
+
+    returning = _methods_returning_models()
+    assert returning, "no client method returns a model — update or remove this guard"
+
+    assert documented == returning, (
+        f"docs/api-reference.md marks {sorted(documented)} as returning models; "
+        f"client.py returns models from {sorted(returning)}. "
+        f"Missing from the doc: {sorted(returning - documented)}. "
+        f"Claimed by the doc but not by the code: {sorted(documented - returning)}."
+    )
+
+
+def test_the_api_reference_states_the_real_number_of_typed_methods():
+    """The count in the header, checked against the code rather than remembered."""
+    doc = (_REPO / "docs" / "api-reference.md").read_text()
+    words = {
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
+    }
+    stated = re.findall(r"\*\*(\w+) return a Pydantic model\*\*", doc)
+    assert len(stated) == 1, f"the header states the typed-method count {len(stated)} times, expected once"
+    assert words[stated[0].lower()] == len(_methods_returning_models()), (
+        f"the header says {stated[0]}; {len(_methods_returning_models())} methods return models"
+    )

@@ -478,8 +478,10 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 1. **`client.py`** — add method. Return a model from `models.py` when the response has a
    shape worth naming; otherwise return the decoded response and annotate it as such. This
    step said "return typed model" while **zero of 74 methods did** (audit finding API-11,
-   2026-09-16); six do now, and `client.py`'s module docstring lists them by name so the
-   claim can be checked rather than believed. Decode the response with `_decode(resp, path)`,
+   2026-09-16); **fourteen do now** (2026-09-17), and `client.py`'s module docstring lists
+   them by name so the claim can be checked rather than believed — by a guard whose model
+   set is derived from `models.py`, because the first version froze six hand-typed names
+   and stopped noticing the day a seventh model appeared. Decode the response with `_decode(resp, path)`,
    never a bare `resp.json()`: `with_retry` has already raised on any non-2xx, but a 2xx is
    not a promise of JSON — the gateway serves an HTML page once its session lapses, and that
    left `IBKRClient` as `requests.exceptions.JSONDecodeError`, straight past the

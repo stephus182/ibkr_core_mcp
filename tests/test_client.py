@@ -2785,9 +2785,11 @@ def test_the_documented_chunk_table_matches_what_the_code_computes():
 def test_the_module_docstring_names_every_method_that_returns_a_model():
     """API-12. It said "Six endpoints return models", then named seven.
 
-    Eight actually do: `get_all_positions` was added for API-17 and never reached the list.
+    Eight actually did: `get_all_positions` was added for API-17 and never reached the list.
     The docstring exists so the claim can be checked rather than believed (CLAUDE.md), which
-    only works if something checks it.
+    only works if something checks it — and on 2026-09-17 this guard was itself found not to,
+    for any model added after it was written, because its model set was six hand-typed names.
+    The set is derived from `models.py` now.
     """
     import ast
     import re
@@ -2798,7 +2800,19 @@ def test_the_module_docstring_names_every_method_that_returns_a_model():
     tree = ast.parse(source)
     module_doc = ast.get_docstring(tree) or ""
 
-    models = {"Contract", "Order", "Position", "Notification", "Trade", "AccountSummary"}
+    # Derived from models.py, never hand-typed. The first version of this guard froze the
+    # six models that existed when it was written, so the six methods added by the
+    # 2026-09-17 tranche — Account, AuthStatus, Alert, Watchlist, CurrencyPair — were
+    # invisible to it and the docstring went stale without a single test failing. A check
+    # whose oracle is a hand-kept list stops checking the day the list stops being kept.
+    models_tree = ast.parse((pathlib.Path(client_mod.__file__).parent / "models.py").read_text())
+    models = {
+        node.name
+        for node in ast.walk(models_tree)
+        if isinstance(node, ast.ClassDef)
+        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
+    }
+    assert len(models) >= 6, f"only {len(models)} response models found — the derivation is broken"
     returning = {
         node.name
         for node in ast.walk(tree)
@@ -2821,7 +2835,25 @@ def test_the_module_docstring_names_every_method_that_returns_a_model():
 
     spelled = re.search(r"\*\*Return types\.\*\*\s+(\w+) endpoints return models", module_doc)
     assert spelled, "the docstring no longer states how many endpoints return models"
-    words = {"Four": 4, "Five": 5, "Six": 6, "Seven": 7, "Eight": 8, "Nine": 9, "Ten": 10}
+    words = {
+        "Four": 4,
+        "Five": 5,
+        "Six": 6,
+        "Seven": 7,
+        "Eight": 8,
+        "Nine": 9,
+        "Ten": 10,
+        "Eleven": 11,
+        "Twelve": 12,
+        "Thirteen": 13,
+        "Fourteen": 14,
+        "Fifteen": 15,
+        "Sixteen": 16,
+        "Seventeen": 17,
+        "Eighteen": 18,
+        "Nineteen": 19,
+        "Twenty": 20,
+    }
     assert words.get(spelled.group(1).capitalize()) == len(returning), (
         f"the docstring says {spelled.group(1)} endpoints; {len(returning)} return models"
     )

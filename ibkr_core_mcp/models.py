@@ -335,6 +335,130 @@ class Notification(IBKRResponse):
     fyi_code: str = Field(default="", alias="FC", description="FYI category code (IBKR field: FC)")
 
 
+class Account(IBKRResponse):
+    """One account, from `/portfolio/accounts` or `/portfolio/{accountId}/meta`.
+
+    **One model for both endpoints on purpose.** Their key sets were measured identical
+    (24 keys, 2026-09-17) against `tests/fixtures/ibkr_live_shapes.json`, and
+    `test_one_account_model_serves_both_endpoints` fails if they ever diverge — two models
+    that are supposed to match are two models that will stop matching.
+
+    `accountId` and `id` both appear and held the same value in the capture. Both stay
+    readable; `account_id` reads the documented one. `claude_tools._first_account_id`
+    centralises the same fallback for raw dicts.
+
+    IBKR's `type` is exposed as `account_type`, because a field named `type` shadows the
+    builtin at every call site that touches it.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts.md
+    """
+
+    account_id: str = Field(default="", alias="accountId", description="Account identifier (IBKR field: accountId)")
+    account_van: str = Field(
+        default="", alias="accountVan", description="Masked account number (IBKR field: accountVan)"
+    )
+    account_title: str = Field(default="", alias="accountTitle", description="Account title (IBKR field: accountTitle)")
+    display_name: str = Field(
+        default="", alias="displayName", description="Name shown in IBKR UIs (IBKR field: displayName)"
+    )
+    account_type: str = Field(default="", alias="type", description="INDIVIDUAL, JOINT, ... (IBKR field: type)")
+    trading_type: str = Field(
+        default="", alias="tradingType", description="Trading permissions code (IBKR field: tradingType)"
+    )
+    currency: str = Field(default="", description="Base currency")
+    ib_entity: str = Field(default="", alias="ibEntity", description="IBKR legal entity (IBKR field: ibEntity)")
+    brokerage_access: bool = Field(
+        default=False, alias="brokerageAccess", description="Whether brokerage features are enabled"
+    )
+
+
+class AuthStatus(IBKRResponse):
+    """Session state from `/iserver/auth/status`.
+
+    The four flags are what a caller branches on, and `competing` is the one that matters
+    operationally: the gateway allows one brokerage session per username, so another IBKR
+    app taking it is reported here rather than as an error. `client.ping()` reads
+    `authenticated` off the raw response and is deliberately left untyped — it is a
+    liveness probe that answers False rather than raising.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/auth-status.md
+    """
+
+    authenticated: bool = Field(default=False, description="Brokerage session is authenticated")
+    connected: bool = Field(default=False, description="Gateway is connected to IBKR")
+    competing: bool = Field(default=False, description="Another session holds this username")
+    message: str = Field(default="", description="Human-readable status text")
+    server_info: dict[str, Any] = Field(
+        default_factory=dict, alias="serverInfo", description="serverName/serverVersion (IBKR field: serverInfo)"
+    )
+
+
+class Alert(IBKRResponse):
+    """One price alert, from `/iserver/account/{accountId}/alerts`.
+
+    **`alert_active` and `alert_repeatable` are IBKR enum ints (0/1), not booleans**, while
+    `alert_triggered` in the same record really is a bool — measured, not assumed. Declaring
+    the first two as `bool` would rewrite 0/1 into False/True and lose which spelling IBKR
+    used; the alert-body work had to undo exactly that confusion once already
+    (`outsideRth`/`alertRepeatable` are enum ints, never Python bools).
+
+    `order_id` is IBKR's identifier for the alert — alerts are orders on its side — and it
+    arrives as an int but goes back out inside a URL path, so it is normalised to text the
+    way `Order.order_id` is. The int stays readable as `alert["order_id"]`.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-alerts.md
+    """
+
+    order_id: str = Field(default="", description="Alert identifier, as text (IBKR sends an int)")
+    account: str = Field(default="", description="Account the alert belongs to")
+    alert_name: str = Field(default="", description="Alert name")
+    alert_active: int = Field(default=0, description="Enabled flag, 0 or 1 — an enum int, not a bool")
+    alert_repeatable: int = Field(default=0, description="Repeat flag, 0 or 1 — an enum int, not a bool")
+    alert_triggered: bool = Field(
+        default=False, description="Whether the alert has fired (IBKR sends a real bool here)"
+    )
+    order_time: str = Field(default="", description="Creation time as IBKR formats it")
+
+    @field_validator("order_id", mode="before")
+    @classmethod
+    def _id_as_text(cls, value: Any) -> Any:
+        """IBKR sends an int; it is interpolated into a URL path, so keep it as text."""
+        return str(value) if isinstance(value, int) else value
+
+
+class Watchlist(IBKRResponse):
+    """One watchlist, from `/iserver/watchlists`.
+
+    **The id looks numeric and is not** — `"1111.11"` in the capture. Declaring `int` or
+    `float` would corrupt the value that goes straight back into
+    `/iserver/watchlist?id=`, which is the same class of defect as a digits-only order-id
+    pattern admitting Unicode digits (DOCA-01).
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists.md
+    """
+
+    id: str = Field(default="", description="Watchlist identifier, text — may contain a dot")
+    name: str = Field(default="", description="Watchlist name")
+    type: str = Field(default="", description="Watchlist kind, e.g. `watchlist`")
+    read_only: bool = Field(default=False, description="Whether the list can be modified")
+    is_open: bool = Field(default=False, description="Whether the list is currently open in a UI")
+    modified: int = Field(default=0, description="Last-modified epoch as IBKR sends it")
+
+
+class CurrencyPair(IBKRResponse):
+    """One FX pair, from `/iserver/currency/pairs`.
+
+    `ccyPair` is the quote currency alone (`SGD`) and `symbol` is the full pair
+    (`USD.SGD`) — not interchangeable, which is why both are named.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fx/currency-pairs.md
+    """
+
+    symbol: str = Field(default="", description="Full pair, e.g. USD.SGD")
+    ccy_pair: str = Field(default="", alias="ccyPair", description="Quote currency, e.g. SGD (IBKR field: ccyPair)")
+    conid: int = Field(default=0, description="IBKR contract identifier")
+
+
 def bars_to_dataframe(raw: dict[str, Any]) -> pd.DataFrame:
     """Convert IBKR market history API response to a standard OHLCV DataFrame.
 

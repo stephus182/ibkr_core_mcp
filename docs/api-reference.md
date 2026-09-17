@@ -1,7 +1,12 @@
 # IBKRClient — API Reference
 
-Full reference for all 74 public `IBKRClient` methods. All methods return raw dicts/lists from
-the IBKR Client Portal API unless noted. HTTP errors raise exceptions from
+Full reference for the public `IBKRClient` methods. Most return raw dicts/lists from the IBKR
+Client Portal API; **fourteen return a Pydantic model** from `models.py`, and each of those is
+marked in its signature below. A model derives from `IBKRResponse`, which keeps IBKR's payload
+as sent and serves it through the mapping protocol — so `row["accountId"]` and `dict(row)` work
+exactly as before, and a record that fails validation is passed through as the dict it arrived
+as rather than dropped. This paragraph said "all 74 methods return raw dicts/lists" until
+2026-09-17 (API-11, API-R3). HTTP errors raise exceptions from
 `ibkr_core_mcp.exceptions`. Every endpoint below is sourced from the official Client Portal Web
 API reference at https://www.interactivebrokers.com/docs/web-api/v1/introduction (anchored
 per-endpoint below) unless explicitly marked unverified.
@@ -40,7 +45,7 @@ returns `authenticated=false` even when fully logged in.
 (see Note below); GET is production-verified, not changed without a live test.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
 
-### `get_auth_status() -> dict`
+### `get_auth_status() -> AuthStatus | dict`
 Full authentication status including `authenticated`, `competing`, `connected` fields.
 No callers elsewhere in the codebase as of 2026-06-30.
 **Endpoint:** `GET /iserver/auth/status` — same documented-vs-implemented HTTP method
@@ -194,7 +199,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data
 
 ## Contract / Security Definition
 
-### `search_contract(symbol, sec_type) -> list[dict]`
+### `search_contract(symbol, sec_type) -> list[Contract | dict]`
 Resolve a symbol to one or more contracts. Returns `[]` if no match.
 
 | Parameter | Type | Default | Description |
@@ -262,7 +267,7 @@ https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-
 https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-query-contract-details-for-derivatives-in-the-web-api/,
 https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
 
-### `get_secdef(conids) -> list[dict]`
+### `get_secdef(conids) -> list[Contract | dict]`
 Batch security definitions for up to 200 conids. The response is an **object** wrapping the
 array — `{"secdef": [...]}` — and this method unwraps it; reading the body as a bare list
 returned `[]` on every call until 2026-07-28 (same defect shape as `get_currency_pairs`).
@@ -390,7 +395,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/tr
 > (`GET /contract/trading-schedule`, keyed by `conid`, different response shape) that this
 > package does not implement.
 
-### `get_currency_pairs(currency) -> list[dict]`
+### `get_currency_pairs(currency) -> list[CurrencyPair | dict]`
 Available FX pairs for a target currency.
 
 **Note:** IBKR returns `{"USD": [{"symbol": "USD.SGD", "conid": ..., "ccyPair": "SGD"}, ...]}` —
@@ -413,7 +418,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 
 ## Portfolio
 
-### `get_accounts() -> list[dict]`
+### `get_accounts() -> list[Account | dict]`
 All accounts associated with the authenticated session. Returns `[]` if response is not a list.
 **Returns:** `[{"accountId": "U1234567", ...}, ...]`
 **Endpoint:** `GET /portfolio/accounts`
@@ -424,12 +429,12 @@ Sub-accounts (for IB Family accounts / advisors). Returns `[]` if response is no
 **Endpoint:** `GET /portfolio/subaccounts`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-subaccounts
 
-### `get_account_meta(account_id) -> dict`
+### `get_account_meta(account_id) -> Account | dict`
 Account metadata (display name, status, type).
 **Endpoint:** `GET /portfolio/{accountId}/meta`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/specific-accounts-portfolio-information
 
-### `get_account_summary(account_id) -> dict`
+### `get_account_summary(account_id) -> AccountSummary | dict`
 Net liquidation, cash, P&L. The response uses nested `{"amount": value}` objects.
 **Endpoint:** `GET /portfolio/{accountId}/summary`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary
@@ -446,7 +451,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/p
 
 ---
 
-### `get_positions(account_id, page) -> list[dict]`
+### `get_positions(account_id, page) -> list[Position | dict]`
 Open positions, one page at a time (page 0 = first 100). Returns `[]` if response is
 not a list. **Prefer `get_all_positions` below** unless you specifically want one page.
 
@@ -508,7 +513,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/i
 
 ## Orders (Read-Only)
 
-### `get_live_orders() -> list[dict]`
+### `get_live_orders() -> list[Order | dict]`
 Working orders — every order **except** those in `_TERMINAL_STATUSES`:
 `{"Filled", "Cancelled", "ApiCancelled", "Expired"}`. In practice this surfaces orders in
 `PreSubmitted`, `Submitted`, `ApiPending`, `PendingSubmit`, `PendingCancel`, or `Inactive`.
@@ -542,7 +547,7 @@ Full order details for a specific order ID.
 **Endpoint:** `GET /iserver/account/order/status/{orderId}`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status
 
-### `get_trades() -> list[dict]`
+### `get_trades() -> list[Trade | dict]`
 Trade executions for the current day plus up to 6 previous days (7-day window). **This is the
 package's direct access point for TODAY's and recent fills** — the only REST source that can
 contain same-day executions (Flex is T+1 and never contains today). Exposed to the LLM as
@@ -659,7 +664,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/scanner/ise
 
 ## FYI / Notifications
 
-### `get_notifications(max_results) -> list[dict]`
+### `get_notifications(max_results) -> list[Notification | dict]`
 Account notifications — order fills, margin calls, system messages. `max_results` is clamped
 to `[1, 10]` — IBKR enforces a hard cap of 10 notifications per request.
 **Endpoint:** `GET /fyi/notifications`
@@ -694,7 +699,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-n
 
 ## Alerts (IBKR Native)
 
-### `get_alerts(account_id) -> list[dict]`
+### `get_alerts(account_id) -> list[Alert | dict]`
 All price alerts configured on the account. The `orderId` field is the alert ID. Returns `[]`
 if response is not a list.
 **Endpoint:** `GET /iserver/account/{accountId}/alerts`
@@ -754,7 +759,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/acti
 
 ## Watchlists
 
-### `get_watchlists() -> list[dict]`
+### `get_watchlists() -> list[Watchlist | dict]`
 All watchlists for the account. Returns `[]` if response is not a list.
 **Endpoint:** `GET /iserver/watchlists` — query param `SC=USER_WATCHLIST`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists

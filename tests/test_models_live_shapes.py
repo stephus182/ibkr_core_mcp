@@ -309,3 +309,92 @@ def test_raw_is_a_copy_of_the_payload_and_not_a_view(live, model, endpoint):
     parsed.raw["injected-by-the-caller"] = True
     assert "injected-by-the-caller" not in parsed.raw, ".raw handed out a live reference"
     assert "injected-by-the-caller" not in raw, ".raw aliased the caller's own dict"
+
+
+# ---------------------------------------------------------------------------
+# API-11, second tranche — models derived from the capture, never from a guess
+# ---------------------------------------------------------------------------
+
+
+def test_account_validates_a_real_portfolio_account(live):
+    """`/portfolio/accounts` rows carry both `accountId` and `id`, and they match here."""
+    from ibkr_core_mcp.models import Account
+
+    raw = _first(live, "accounts")
+    account = Account.model_validate(raw)
+
+    assert account.account_id == raw["accountId"]
+    assert account.account_type == raw["type"], "IBKR's `type` must not shadow a Python builtin"
+    assert account.currency == raw["currency"]
+    assert dict(account) == raw, "the mapping protocol must round-trip the payload"
+
+
+def test_one_account_model_serves_both_endpoints(live):
+    """`/portfolio/accounts` rows and `/portfolio/{id}/meta` carry identical keys — measured
+    2026-09-17, so one model serves both rather than two that can drift apart."""
+    from ibkr_core_mcp.models import Account
+
+    row, meta = _first(live, "accounts"), _first(live, "account_meta")
+    assert set(row) == set(meta), "the two endpoints no longer share a shape; split the model"
+
+    assert Account.model_validate(meta).account_id == meta["accountId"]
+
+
+def test_auth_status_validates_a_real_session(live):
+    """The four flags a caller branches on are booleans, and `competing` is the one that
+    means another session has taken the gateway."""
+    from ibkr_core_mcp.models import AuthStatus
+
+    raw = _first(live, "auth_status")
+    status = AuthStatus.model_validate(raw)
+
+    for flag in ("authenticated", "connected", "competing"):
+        assert isinstance(raw[flag], bool), f"fixture no longer exercises {flag} as a bool"
+        assert getattr(status, flag) is raw[flag]
+    assert status.server_info == raw["serverInfo"]
+
+
+def test_alert_keeps_ibkrs_enum_ints_as_ints(live):
+    """`alert_active` and `alert_repeatable` are IBKR enum ints (0/1) while `alert_triggered`
+    is a real bool — measured, in the same record. Declaring the first two as `bool` would
+    silently rewrite 0/1 into False/True and lose which spelling IBKR used, the mistake the
+    alert-body work already had to undo once."""
+    from ibkr_core_mcp.models import Alert
+
+    raw = _first(live, "alerts")
+    assert isinstance(raw["alert_active"], int) and not isinstance(raw["alert_active"], bool)
+    assert isinstance(raw["alert_triggered"], bool), "fixture no longer exercises the asymmetry"
+
+    alert = Alert.model_validate(raw)
+
+    assert alert.alert_active == raw["alert_active"]
+    assert type(alert.alert_active) is int
+    assert alert.alert_triggered is raw["alert_triggered"]
+    assert alert.order_id == str(raw["order_id"]), "the id is re-used in a URL path, so it is text"
+
+
+def test_watchlist_keeps_a_dotted_id_as_text(live):
+    """Watchlist ids look numeric and are not — `"1111.11"` here. Declaring `int` or `float`
+    would corrupt the value that goes back into `/iserver/watchlist?id=`."""
+    from ibkr_core_mcp.models import Watchlist
+
+    raw = _first(live, "watchlists")
+    assert isinstance(raw["id"], str), "fixture no longer exercises the string id"
+
+    watchlist = Watchlist.model_validate(raw)
+
+    assert watchlist.id == raw["id"]
+    assert watchlist.name == raw["name"]
+    assert watchlist.read_only is raw["read_only"]
+
+
+def test_currency_pair_validates_a_real_pair(live):
+    """`/iserver/currency/pairs` — `ccyPair` is the quote currency, `symbol` the full pair."""
+    from ibkr_core_mcp.models import CurrencyPair
+
+    raw = _first(live, "currency_pairs")
+    pair = CurrencyPair.model_validate(raw)
+
+    assert pair.ccy_pair == raw["ccyPair"]
+    assert pair.conid == raw["conid"]
+    assert pair.symbol == raw["symbol"]

@@ -40,7 +40,7 @@ from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
-from ibkr_core_mcp.models import Trade, json_default
+from ibkr_core_mcp.models import Account, Trade, json_default
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.redaction import collapse_home, redact_error
 from ibkr_core_mcp.store import SQLiteStore
@@ -1655,12 +1655,17 @@ class ClaudeToolkit:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _get_accounts(self) -> tuple[list[dict[str, Any]], str | None]:
+    def _get_accounts(self) -> tuple[list[Account | dict[str, Any]], str | None]:
         """Fetch all IBKR accounts. Returns (accounts, None) or ([], error_message).
 
         Single source of truth for the accounts call — callers should use
         _first_account_id / _all_account_ids rather than calling this directly,
         so the empty-accounts error string stays consistent everywhere.
+
+        Rows are `Account` models since 2026-09-17 (API-11), or the plain dict IBKR sent
+        when a row failed validation. Both answer `.get()` — `IBKRResponse` serves the
+        mapping protocol over the untouched payload — so the `accountId`/`id` fallback in
+        the two callers below reads the same values it always did.
         """
         accounts = self._client.get_accounts()
         if not accounts:

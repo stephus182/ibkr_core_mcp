@@ -33,13 +33,18 @@ from ibkr_core_mcp.flex_query import FlexQueryClient
 from ibkr_core_mcp.gateway import GatewayManager
 from ibkr_core_mcp.human_auth import require_touch_id
 from ibkr_core_mcp.models import (
+    Account,
     AccountSummary,
+    Alert,
+    AuthStatus,
     Contract,
+    CurrencyPair,
     IBKRResponse,
     Notification,
     Order,
     Position,
     Trade,
+    Watchlist,
     bars_to_dataframe,
 )
 from ibkr_core_mcp.store import SQLiteStore
@@ -79,6 +84,11 @@ __all__ = [
     "Order",
     "AccountSummary",
     "Notification",
+    "Account",
+    "AuthStatus",
+    "Alert",
+    "Watchlist",
+    "CurrencyPair",
     "bars_to_dataframe",
     # Backtest
     "run_backtest",

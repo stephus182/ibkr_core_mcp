@@ -178,7 +178,7 @@ built the model's input by hand.
   One dict behaviour does not carry over: `model == {...}` is False — compare `dict(model)`.
 - **Six methods now return models**: `search_contract` and `get_secdef` (`Contract`),
   `get_positions` (`Position`), `get_trades` (`Trade`), `get_live_orders` (`Order`),
-  `get_account_summary` (`AccountSummary`), `get_notifications` (`Notification`). The other 68
+  `get_account_summary` (`AccountSummary`), `get_notifications` (`Notification`); then on 2026-09-17 `get_accounts` and `get_account_meta` (`Account`), `get_auth_status` (`AuthStatus`), `get_alerts` (`Alert`), `get_watchlists` (`Watchlist`) and `get_currency_pairs` (`CurrencyPair`) — fourteen in all. The other 61
   are unchanged and still return the decoded response. `client.py`'s module docstring claimed
   typed returns from the day it was written; it now enumerates them, so the claim is checkable.
 - **A record that will not validate is passed through as the dict it arrived as, never

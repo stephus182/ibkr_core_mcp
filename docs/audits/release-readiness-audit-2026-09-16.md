@@ -28,13 +28,13 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCB-R` | 6 | 6 | — | — | — |
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
-| `API-R` | **2** | **2** | — | — | — |
+| `API-R` | **3** | **3** | — | — | — |
 | `TOOL-R` | **2** | **2** | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **147** | **95** | **1** (+1 partial) | **0** | **50** |
+| **Total** | **148** | **96** | **1** (+1 partial) | **0** | **50** |
 
-`95 + 1 + 1 + 0 + 50 = 147`. **There are no unrecorded findings left.** All three blocks
+`96 + 1 + 1 + 0 + 50 = 148`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -89,7 +89,7 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
+| `API-11` | *scope* | **Partial** — **14 of 75** public client methods return a Pydantic model (2026-09-17); the other 61 are open |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
 > sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15` and `TOOL-07` left on 2026-09-17. This table is the
@@ -4027,3 +4027,94 @@ two doors: MCP for anything, and `ClaudeToolkit` as the Anthropic-shaped conveni
 a host app that is itself Anthropic-native. Nothing needs building, and a speculative rename of
 `input_schema` across 47 sites would churn a public surface and break the one real consumer to
 buy what a ~10-line adapter provides on the day a second model actually appears.
+
+
+---
+
+## Phase 3 — `API-11` second tranche, and `API-R3` found by checking the documentation
+
+Five models, six methods, and two guards that turned out not to guard.
+
+### What shipped
+
+`Account`, `AuthStatus`, `Alert`, `Watchlist`, `CurrencyPair` — each derived from
+`tests/fixtures/ibkr_live_shapes.json`, never from a reading of the documentation. Six
+methods now return them: `get_accounts`, `get_account_meta`, `get_auth_status`, `get_alerts`,
+`get_watchlists`, `get_currency_pairs`. **Fourteen of 75 public methods are typed** (74
+endpoints plus `get_all_positions`, the paging helper).
+
+Three things the capture settled that a guess would have got wrong:
+
+| Measured | Why it matters |
+|---|---|
+| `accounts[0]` and `account_meta` have **identical** 24-key shapes | One `Account` serves both, and a test fails if they diverge — two models meant to match are two models that will stop matching |
+| `search_contract` and `contract_info` share **only `symbol`** | Reusing `Contract` for `get_contract_info` would have been API-12's defect exactly. `get_contract_info` was left untyped |
+| `alert_active` is an enum **int** (0/1) while `alert_triggered`, in the same record, is a real **bool** | Declaring both `bool` would rewrite 0/1 and lose which spelling IBKR used — the confusion the alert-body work already had to undo once |
+
+Also left untyped, deliberately: `scanner_params` (an open structure — a model would assert
+more than IBKR does), `account_ledger` and `delivery_options` (mappings keyed by currency and
+by option code, not fixed shapes), `market_snapshot` (quote fields are numeric codes), and
+`combo_positions`, `positions_by_conid`, `trading_schedule` — whose captures are **empty
+lists**. A fixture with no records cannot validate a model; that is the same trap as a
+hand-written fixture, wearing a different hat.
+
+### `API-R3` — **Low, new: two false claims in `SECURITY.md`, one of them since 2026-09-16**
+
+Raised by the owner's instruction to check the documentation. `SECURITY.md` § response data
+opened with *"`IBKRClient` returns IBKR's JSON as plain dicts"* and *"nothing in the package
+calls `model_validate`"*. Both false. Double-checked from three angles before recording,
+because it is a security document:
+
+- **Driven, not read** — stubbing the session and calling the methods returns `Account`,
+  `AuthStatus`, `Alert`, `CurrencyPair`, `Watchlist`, not dicts.
+- **Located** — `models.parse_one` calls `model_validate` at `models.py:488`.
+- **Dated** — `git log -S model_validate` puts its first appearance in `50102c6`
+  (2026-09-16), *"six endpoints return models"*. So the second claim had been false since
+  API-11's first tranche, and nothing noticed for a day.
+
+**And the fourth check, which is the one that matters for a security document:** a payload
+that fails validation comes back as the original `dict`, measured — so `model_validate` being
+called does **not** make response validation a boundary control. The corrected paragraph says
+so explicitly, rather than leaving a reader to infer that responses are now checked at the
+boundary. The list of actual controls below it is unchanged.
+
+`docs/api-reference.md` carried the same error one level down: its header said *"all 74
+methods return raw dicts/lists"*, and **seven method signatures were still `-> dict`, left
+behind by the 2026-09-16 tranche** — found by a new guard on its first run.
+
+### Two guards that were not guarding
+
+**The module-docstring guard (API-12's) could not see a new model.** Its model set was six
+hand-typed names:
+
+```python
+models = {"Contract", "Order", "Position", "Notification", "Trade", "AccountSummary"}
+```
+
+So the six methods added here were invisible to it and the docstring would have gone stale
+with the suite green. The set is derived from `models.py` now. *A check whose oracle is a
+hand-kept list stops checking the day the list stops being kept* — the same shape as SEC-01's
+two-node-kind reconstruction and SEC-08's missed spelling.
+
+**Every guard checked the annotation, not the value.** A mutation removing
+`parse_many(Watchlist, …)` from `client.py` while leaving the return annotation in place
+**survived the whole suite**: the module-docstring guard, the new api-reference guard and
+`mypy` all read the label. `test_every_method_annotated_as_returning_a_model_is_driven_here`
+now requires a behavioural test per typed method, and found `get_all_positions` unproven on
+its first run — typed since API-17, never driven.
+
+```
+  ok  Alert: declare IBKR's 0/1 enum int as a bool             -> caught
+  ok  Watchlist: declare the dotted id as a float              -> caught
+  ok  Account: read IBKR's `type` without the alias            -> caught
+  ok  CurrencyPair: swap ccyPair and symbol                    -> caught
+  ok  client: stop typing get_watchlists                       -> caught  (survived before)
+  ok  client: stop typing the watchlists tolerance branch      -> caught
+  ok  client: stop typing get_all_positions' page rows         -> caught
+  ok  docs: revert one signature to -> list[dict]              -> caught
+  XX  CONTROL (dead anchor, must be refused)                   -> not-applied
+```
+
+`get_watchlists` is driven on **both** shapes — IBKR's wrapped `{"data": {"user_lists": …}}`
+and the bare list it has never actually sent — because the surviving mutation was on the
+wrapped branch, which a bare-list fixture never reaches.

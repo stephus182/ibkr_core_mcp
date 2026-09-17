@@ -4,15 +4,21 @@ Wraps market data, contracts, portfolio, orders, alerts, watchlists, and session
 management. Rate limiting and 429/503 backoff are handled transparently by
 `rate_limiter.py`.
 
-**Return types.** Eight endpoints return models from `models.py` — `search_contract` and
+**Return types.** Fourteen endpoints return models from `models.py` — `search_contract` and
 `get_secdef` (`Contract`), `get_positions` and `get_all_positions` (`Position`),
 `get_trades` (`Trade`), `get_live_orders` (`Order`), `get_account_summary`
-(`AccountSummary`) and `get_notifications` (`Notification`). This said "Six" while naming
-seven, against a real eight, until 2026-09-17: the paging helper added for API-17 never
-reached the list (API-12). Its name is deliberately not repeated in this sentence — a
-mutation that removed it from the list above survived while the prose still carried it. The point of naming them is that the claim can be checked
-rather than believed, which only works if something checks it —
-`test_the_module_docstring_names_every_method_that_returns_a_model` now does. The rest return the decoded response as-is, and
+(`AccountSummary`), `get_notifications` (`Notification`), `get_accounts` and
+`get_account_meta` (`Account`), `get_auth_status` (`AuthStatus`), `get_alerts` (`Alert`),
+`get_watchlists` (`Watchlist`) and `get_currency_pairs` (`CurrencyPair`). This said "Six"
+while naming seven, against a real eight, until 2026-09-17: the paging helper added for
+API-17 never reached the list (API-12). Its name is deliberately not repeated in this
+sentence — a mutation that removed it from the list above survived while the prose still
+carried it. The point of naming them is that the claim can be checked rather than believed,
+which only works if something checks it —
+`test_the_module_docstring_names_every_method_that_returns_a_model` now does, over a model
+set **derived from `models.py`**: its first version froze the six models that existed when
+it was written, so the six methods added on 2026-09-17 were invisible to it and this
+paragraph would have gone stale with the suite green. The rest return the decoded response as-is, and
 their annotations say so. This file claimed to return "typed models from `models.py`
 where the shape is stable" from the day it was written until 2026-09-16, when not one
 method did (audit finding API-11); the claim is now a list, so it can be checked.
@@ -65,12 +71,17 @@ from ibkr_core_mcp.human_auth import (
     require_touch_id,
 )
 from ibkr_core_mcp.models import (
+    Account,
     AccountSummary,
+    Alert,
+    AuthStatus,
     Contract,
+    CurrencyPair,
     Notification,
     Order,
     Position,
     Trade,
+    Watchlist,
     parse_many,
     parse_one,
 )
@@ -566,7 +577,7 @@ class IBKRClient:
                 time.sleep(1)
         return False
 
-    def get_auth_status(self) -> dict[str, Any]:
+    def get_auth_status(self) -> AuthStatus | dict[str, Any]:
         """Full authentication status including authenticated, competing, connected fields.
 
         Note: official docs document this endpoint as POST /iserver/auth/status (request
@@ -578,7 +589,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
         Endpoint: GET /iserver/auth/status (see Note above)
         """
-        return self._get("/iserver/auth/status")
+        return parse_one(AuthStatus, self._get("/iserver/auth/status"))
 
     def tickle(self) -> bool:
         """Keep the session alive. Returns True on HTTP 200. Never raises.
@@ -1217,7 +1228,7 @@ class IBKRClient:
             data = data.get("secdef")
         return parse_many(Contract, data)
 
-    def get_currency_pairs(self, currency: str) -> list[dict[str, Any]]:
+    def get_currency_pairs(self, currency: str) -> list[CurrencyPair | dict[str, Any]]:
         """Available FX pairs for a target currency: [{symbol, conid, ccyPair}, ...].
 
         Response is keyed by the requested currency, e.g. {"USD": [{"symbol": "USD.SGD",
@@ -1235,9 +1246,9 @@ class IBKRClient:
         """
         data = self._get("/iserver/currency/pairs", {"currency": currency})
         if isinstance(data, list):
-            return data
+            return parse_many(CurrencyPair, data)
         if isinstance(data, dict):
-            return [c for contracts in data.values() for c in (contracts or [])]
+            return parse_many(CurrencyPair, [c for contracts in data.values() for c in (contracts or [])])
         return []
 
     def get_contract_rules(self, conid: int, is_buy: bool = True) -> dict[str, Any]:
@@ -1252,7 +1263,7 @@ class IBKRClient:
     # Portfolio
     # ------------------------------------------------------------------
 
-    def get_accounts(self) -> list[dict[str, Any]]:
+    def get_accounts(self) -> list[Account | dict[str, Any]]:
         """All accounts associated with the authenticated session. Returns [] if not a list.
 
         Returns [{"accountId": "U1234567", ...}].
@@ -1260,8 +1271,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts.md
         Endpoint: GET /portfolio/accounts
         """
-        data = self._get("/portfolio/accounts")
-        return data if isinstance(data, list) else []
+        return parse_many(Account, self._get("/portfolio/accounts"))
 
     def get_subaccounts(self) -> list[dict[str, Any]]:
         """Sub-accounts for IB Family accounts and advisors. Returns [] if not a list.
@@ -1272,14 +1282,14 @@ class IBKRClient:
         data = self._get("/portfolio/subaccounts")
         return data if isinstance(data, list) else []
 
-    def get_account_meta(self, account_id: str) -> dict[str, Any]:
+    def get_account_meta(self, account_id: str) -> Account | dict[str, Any]:
         """Account metadata: display name, status, type.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/specific-accounts-portfolio-information.md
         Endpoint: GET /portfolio/{accountId}/meta
         """
         _validate_account_id(account_id)
-        return self._get(f"/portfolio/{account_id}/meta")
+        return parse_one(Account, self._get(f"/portfolio/{account_id}/meta"))
 
     def get_account_summary(self, account_id: str) -> AccountSummary | dict[str, Any]:
         """Net liquidation and cash. Response uses nested {"amount": value} objects.
@@ -1803,21 +1813,20 @@ class IBKRClient:
         """
         return self._get("/iserver/account/mta")
 
-    def get_alerts(self, account_id: str) -> list[dict[str, Any]]:
+    def get_alerts(self, account_id: str) -> list[Alert | dict[str, Any]]:
         """All price alerts configured on the account. The orderId field is the alert ID.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
         Endpoint: GET /iserver/account/{accountId}/alerts
         """
         _validate_account_id(account_id)
-        data = self._get(f"/iserver/account/{account_id}/alerts")
-        return data if isinstance(data, list) else []
+        return parse_many(Alert, self._get(f"/iserver/account/{account_id}/alerts"))
 
     # ------------------------------------------------------------------
     # Watchlists (read-only)
     # ------------------------------------------------------------------
 
-    def get_watchlists(self) -> list[dict[str, Any]]:
+    def get_watchlists(self) -> list[Watchlist | dict[str, Any]]:
         """All watchlists for the account, user-created first, then IB-created.
 
         Returns watchlist *metadata* — `id`, `name`, `read_only`, `type`. The
@@ -1840,7 +1849,7 @@ class IBKRClient:
         """
         data = self._get("/iserver/watchlists", {"SC": "USER_WATCHLIST"})
         if isinstance(data, list):
-            return [w for w in data if isinstance(w, dict)]
+            return parse_many(Watchlist, [w for w in data if isinstance(w, dict)])
         if not isinstance(data, dict):
             return []
         payload = data.get("data")
@@ -1851,7 +1860,7 @@ class IBKRClient:
             entries = payload.get(key)
             if isinstance(entries, list):
                 watchlists.extend(w for w in entries if isinstance(w, dict))
-        return watchlists
+        return parse_many(Watchlist, watchlists)
 
     def get_watchlist(self, watchlist_id: str) -> dict[str, Any]:
         """Contents of a specific watchlist. Uses the watchlist ID as a query param.
