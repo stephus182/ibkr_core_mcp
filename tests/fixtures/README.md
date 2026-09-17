@@ -1,7 +1,8 @@
 # Live IBKR response shapes
 
 `ibkr_live_shapes.json` holds the **shape of real responses from the IBKR Client Portal
-Gateway**, captured 2026-09-16 against a live authenticated session (build 2023-04-24).
+Gateway**, captured against a live authenticated session (build 2023-04-24) — 27 endpoints on 2026-09-16,
+re-captured at **40 endpoints** on 2026-09-17.
 Every key, every nesting level and every scalar *type* is exactly what came off the wire.
 **The values are not.**
 
@@ -42,10 +43,16 @@ you chose cannot tell you whether the shape is right — only the wire can.
 
 Captured by `scripts/audit/capture_live_response_shapes.py`.
 
-**Two payloads are not verbatim, and are labelled in the file:**
+**One payload is not verbatim, and is labelled in the file:** `scanner_params` is truncated
+to the first two entries of every list (the real response is 218 KB of static reference data);
+its key structure is intact. (`market_snapshot` came back as bare `{"conid", "conidEx"}` in the
+2026-09-16 capture — IBKR's first snapshot call primes the subscription and returns metadata
+only — and carries `31`/`84`/`86` price fields in the 2026-09-17 one.)
 
-- `scanner_params` is truncated to the first two entries of every list (the real response
-  is 218 KB of static reference data). Its key structure is intact.
-- `market_snapshot` came back as `{"conid", "conidEx"}` with no price fields. That is the
-  response itself, not a capture error: IBKR's first snapshot call primes the subscription
-  and returns metadata only. Do not treat it as evidence that quote fields are absent.
+**Three captures are empty**, and that is a fact about the account, not the endpoint:
+`combo_positions` (no spread positions), `pa_transactions` and `positions_by_conid` (nothing
+held for the probed conid). **No model is ever built on an empty capture** — it could only be
+tested against a shape someone invented, which is the defect this file exists to prevent — so
+those three methods return the decoded response and are listed with that reason in
+`tests/test_client_returns_models.py::_NO_MODEL_BY_DESIGN`. A model for one of them starts
+with a re-capture from an account that holds the data.

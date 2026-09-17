@@ -13,7 +13,7 @@ Standalone pip-installable Python package providing a complete IBKR Client Porta
 pip install git+https://github.com/stephus182/ibkr_core_mcp.git
 
 # Pinned version
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.0.0
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.2.2
 
 # Local editable dev
 pip install -e /path/to/ibkr_core_mcp

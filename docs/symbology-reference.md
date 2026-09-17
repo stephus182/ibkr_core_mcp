@@ -69,8 +69,11 @@ Also observed on `/iserver/secdef/search` results: the keys are `companyHeader`,
 `c["exchange"]` matches nothing and silently falls through.
 
 `/iserver/secdef/info?conid=` returns `currency` (verified: MXN / USD / EUR for the three
-IGV listings) and `listingExchange`. It returns a **list**, despite the wrapper's `dict`
-annotation.
+IGV listings) and `listingExchange`. **Its outer shape has been observed both ways**: a
+**list** on 2026-07-28 (this paragraph's original observation) and a single **object** in the
+2026-09-17 live capture (`tests/fixtures/ibkr_live_shapes.json`, `secdef_info`). The wrapper is
+annotated `SecDefInfo | dict` and hands a list through untouched, and `_listing_currency`
+reads the first element either way — neither observation is assumed away.
 
 ---
 

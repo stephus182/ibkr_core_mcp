@@ -36,9 +36,10 @@
 > | Full documentation index (469 pages, measured 2026-08-07) | https://www.interactivebrokers.com/docs/web-api/llms.txt |
 > | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server |
 >
-> `FirecrawlClient.crawl()` returns 0 pages on `interactivebrokers.com` — the host needs
-> Firecrawl's `waitFor`/`proxy` options, which the client does not expose, and it fails
-> silently rather than signalling the block. Use the `.md` / `llms.txt` routes instead.
+> `FirecrawlClient.crawl()` used to return 0 pages on `interactivebrokers.com` — that method was
+> removed on 2026-07-30 with the rest of the crawl ladder, and `crawl_site` (the local browser)
+> took its job. The advice stands for a different reason: the `.md` / `llms.txt` routes cost
+> nothing and cannot be edge-blocked, so never scrape this host at all.
 
 ## Verifying a documentation URL before citing it
 
@@ -151,8 +152,8 @@ not in the code.
 
 | Topic | URL |
 |---|---|
-| **Firecrawl API reference — v1** (search/crawl endpoints — `web_scraper.py`'s `BASE_URL` is `https://api.firecrawl.dev/v1`; it only calls `POST /v1/search` and `POST /v1/crawl` + `GET /v1/crawl/{id}`, never `/v1/scrape`. The bare `docs.firecrawl.dev/api-reference/endpoint/...` paths now render **v2** docs — use the `/v1/...`-prefixed paths below, re-verified live 2026-07-14, to match what this repo actually targets) | https://docs.firecrawl.dev/v1/api-reference/endpoint/search , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-get |
-| **Crawl4AI docs — home** (OSS library, our rung 2; no built-in confidence score on the Firecrawl side — confirmed 2026-06-30. Site is labelled **v0.9.x**, matching PyPI 0.9.2) | https://docs.crawl4ai.com/ |
+| **Firecrawl API reference — v1** (`web_scraper.py`'s `BASE_URL` is `https://api.firecrawl.dev/v1`; **it calls only `POST /v1/search`** — the `/v1/crawl` + `GET /v1/crawl/{id}` pair went with `FirecrawlClient.crawl()` on 2026-07-30, and this row still listed them until 2026-09-17; the two crawl links are kept as the record of what was once called, and it never calls `/v1/scrape`. The bare `docs.firecrawl.dev/api-reference/endpoint/...` paths now render **v2** docs — use the `/v1/...`-prefixed paths below, re-verified live 2026-07-14, to match what this repo actually targets) | https://docs.firecrawl.dev/v1/api-reference/endpoint/search , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-post , https://docs.firecrawl.dev/v1/api-reference/endpoint/crawl-get |
+| **Crawl4AI docs — home** (OSS library — the local browser behind `fetch_page`, `crawl_site` and `search_site`; "rung 2" until 2026-07-30, when the ladder went. No built-in confidence score on the Firecrawl side — confirmed 2026-06-30. Site is labelled **v0.9.x**, matching PyPI 0.9.2) | https://docs.crawl4ai.com/ |
 | **Crawl4AI — `llms-full.txt`** (243,158 B of `text/plain`. **Start here** for any OSS-library question. The same directory holds 13 modular topic files — `simple_crawling`, `config_objects`, `deep_crawling`, `extraction-llm`, `extraction-no-llm`, `docker`, `installation`, `cli`, `url_seeder`, `multi_urls_crawling`, `http_based_crawler_strategy`, `deep_crawl_advanced_filters_scorers` — plus `diagrams/` variants; mirrored in the repo under `docs/md_v2/assets/llm.txt/`) | https://docs.crawl4ai.com/assets/llm.txt/txt/llms-full.txt |
 | **Crawl4AI — complete SDK reference** (same material as `llms-full.txt` but served as ~988 KB of HTML, not plain text — prefer the file above) | https://docs.crawl4ai.com/complete-sdk-reference/ |
 | **Crawl4AI — docs sitemap** (the machine-readable index: 87 pages) | https://docs.crawl4ai.com/sitemap.xml |
@@ -165,7 +166,7 @@ not in the code.
 | **Crawl4AI migration guides** (webscraping-strategy, and table extraction v0.7.3. **Neither affects this repo** — `local_browser.py` uses only `AsyncWebCrawler`, `BrowserConfig` and `BrowserProfiler`, none of the migrated APIs. Checked 2026-07-28 so a future reader need not re-check) | https://docs.crawl4ai.com/migration/webscraping-strategy-migration/ , https://docs.crawl4ai.com/migration/table_extraction_v073/ |
 
 ⚠️ **Four products share the name "Crawl4AI".** Only the first is used here: the **OSS
-library** (PyPI `crawl4ai`, rung 2 and `fetch_page`). The others are **Crawl4AI Cloud**
+library** (PyPI `crawl4ai`, behind `fetch_page`, `crawl_site` and `search_site`). The others are **Crawl4AI Cloud**
 (`api.crawl4ai.com`, a hosted credit-billed REST API), **`crawl4ai-cloud-sdk`** (PyPI, the
 vendor's client for it), and the **`janbuchar/crawl4ai` Apify Actor**. Cloud was built and
 then removed on 2026-07-28 — see §5.1 of `docs/web-scraper-reference.md` for why, and for

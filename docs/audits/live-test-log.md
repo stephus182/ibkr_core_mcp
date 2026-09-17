@@ -39,6 +39,40 @@ What that means in practice, and what it does not:
 day a captured response appears** — which is the signal that the subscription now exists and
 these should be typed, given live coverage, and moved into this log properly.
 
+## Deliberately not covered — alert writes (IBKR `create_alert` and modify)
+
+The second area known not to be executed, by measurement rather than by decision.
+
+`create_price_alert` and `modify_price_alert` build the request IBKR's create-alert page
+documents, field for field — verified against a real alert's detail response on 2026-09-16 —
+and **the round trip has never completed**: creating or modifying an alert is not possible
+through the Client Portal Gateway as published. The gateway answers an opaque HTTP 403 to any
+body carrying `>=` or `<=` before IBKR sees it, and IBKR's engine refuses `>`, `<` and `==`
+(`can't recognize fix`). Every workaround was eliminated on 2026-09-16 — JSON escapes, the
+accounts prerequisite, `tickle`, a rebuilt gateway (the published zip *is* the 2023-04-24
+build) — and a well-formed body against a real alert still 403s, which rules the body shape
+out. Elimination table: `docs/ibkr-api-behaviors-reference.md` § Price alerts. Not this
+package's defect; audit finding TOOL-01, closed 2026-09-17 with this status on record.
+
+What is and is not established:
+
+- The **read** path is live-verified (`get_alerts`, `get_alert`, `get_mta_alert`; the `Alert`
+  and `MTAAlert` models are tested against captured responses). `delete_alert` and
+  `activate_alert` reach IBKR (a delete of a non-existent id returns IBKR's own error), but
+  neither has been exercised against a real alert either — they depend on a create.
+- The ten write tests in `tests/test_alerts_live.py` **skip with the real reason** rather
+  than fail. They would run unchanged the day the gateway accepts the operator, so they are
+  kept — unlike the event-contract endpoints, they were written to run and are blocked by a
+  measured upstream fact, not by a missing subscription.
+
+The status is held as one phrase — *not possible through the Client Portal Gateway as
+published* — in the two tool descriptions, `README.md`, `docs/tools-reference.md`,
+`docs/ibkr-api-behaviors-reference.md` and `tests/test_alerts_live.py`, and
+`tests/claude_tools/test_alerts.py::test_the_alert_write_block_is_stated_everywhere_it_matters_until_it_lifts`
+requires it in all of them. **The unlock is a line in this log**: record a passing run here
+as `alert-write round trip: PASS`, and that same test then fails until the phrase is removed
+from every surface — so the warning cannot outlive the block.
+
 ---
 
 <a id="run-2026-09-16-3"></a>

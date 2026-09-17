@@ -8,7 +8,7 @@ time, inside `execute()`: `firecrawl_search` without `FIRECRAWL_API_KEY`, or any
 browser tools without the `[scraper]` extra installed, returns an error string rather than the
 tool being absent from what's offered to the model.
 
-Each tool returns `(text: str, fig: plotly.Figure | None)`. `fig` is only non-`None` for chart tools (currently none — reserved for a future equity-curve chart tool).
+Each tool returns `(text: str, None)` — `ClaudeToolkit.execute` is annotated `tuple[str, None]`. The second slot is reserved for a future chart-returning tool; no tool populates it, `plotly` is not a dependency, and charting lives in the consumer (`docs/python-package-landscape.md`).
 
 Pass `toolkit.tools` directly to the Anthropic SDK `tools=` parameter. Route responses through `toolkit.execute(block.name, block.input)`.
 
@@ -124,7 +124,9 @@ Portfolio breakdown by asset class, industry, sector, and group.
 
 **Inputs:** none
 
-**Output:** JSON object with `assetClass`, `group`, `sector`, `industry` sub-objects.
+**Output:** JSON object with `assetClass`, `group` and `sector` sub-objects, each split into
+`long` and `short` mappings keyed by class name. There is no `industry` block (measured
+2026-09-17; this entry listed one until then).
 
 **IBKR endpoint:** `GET /portfolio/{accountId}/allocation`
 
@@ -366,7 +368,9 @@ Automatically paginates requests exceeding the 1000 data-point limit using `star
 **Note:** Max 1000 data points per request — handled automatically by pagination.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
 
-**Rate limit:** 5 concurrent requests (official).
+**Rate limit:** 10 req/sec and 50 req/min on `/iserver/marketdata/history` (IBKR's pacing table,
+paced before the request goes out by `rate_limiter.EndpointPacer`). This line said "5 concurrent
+requests" until 2026-09-17 — the value IBKR replaced at its 2026-08 documentation move.
 
 **IBKR endpoint:** `GET /iserver/marketdata/history` (paginated via `startTime`)
 
@@ -506,7 +510,7 @@ Trading hours and session information for a symbol. Resolves symbol to conid int
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker, e.g. `"CL"`, `"AAPL"` |
 | `asset_class` | string | — | `"STK"` (default), `"FUT"`, `"OPT"`, `"FX"` |
-| `exchange` | string | — | e.g. `"NYMEX"`, `"NYSE"` (default `"SMART"`) |
+| `exchange` | string | — | e.g. `"NYMEX"`, `"ISLAND"`. **Omit it** for every venue (the fullest answer). No default — the tool defaulted to `"SMART"`, which returns nothing, until 2026-09-16 (TOOL-R1); this row still said so until 2026-09-17 |
 
 **Output:** the endpoint's JSON, passed through unchanged. Each row carries `id`,
 `tradeVenueId`, `exchange`, `description`, `timezone` and `schedules[]`, where each schedule
@@ -677,6 +681,18 @@ metrics.
 IBKR alerts are server-side — they fire even when ClaudIA is not running and are delivered
 to the IBKR mobile app.
 
+> **Creating or modifying one is not possible through the Client Portal Gateway as published.**
+> The gateway refuses any request body carrying `>=` or `<=` with an opaque HTTP 403 before IBKR
+> sees it, and IBKR's alert engine refuses the three operators the gateway lets through
+> (`can't recognize fix [>]`) — measured 2026-09-16, every workaround eliminated in
+> `docs/ibkr-api-behaviors-reference.md` § Price alerts. Not this package's defect and not one it
+> can fix. `create_price_alert` and `modify_price_alert` stay (the request they build is correct
+> against IBKR's page and a real alert), say so in their descriptions, and return that
+> explanation rather than an opaque error. **Listing, deleting and toggling existing alerts
+> work.** For alerts this machine evaluates itself, see the MCP server's `add_price_alert`
+> (`docs/mcp-server-reference.md`). This section described both write tools as working until
+> 2026-09-17.
+
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/introduction
 
 ### `get_alerts`
@@ -684,8 +700,10 @@ List all IBKR price alerts configured on the account.
 
 **Inputs:** none
 
-**Output:** JSON array of alerts. Each entry has `orderId` (the alert ID), `alertName`,
-`alertActive` (1/0), `conditions` array.
+**Output:** JSON array of alerts, **snake_case as IBKR sends them**: `order_id` (the alert ID),
+`alert_name`, `alert_active` (1/0, an enum int), `alert_repeatable` (1/0), `alert_triggered`
+(a real bool), `account`, `order_time`. There is no `conditions` array on this endpoint. This
+entry listed camelCase keys and a `conditions` array until 2026-09-17.
 
 **IBKR endpoint:** `GET /iserver/account/{accountId}/alerts`
 
@@ -700,12 +718,14 @@ Create a native IBKR server-side price alert.
 | `operator` | string | ✅ | `">="` (at or above) or `"<="` (at or below) |
 | `price` | number | ✅ | Price threshold |
 | `sec_type` | string | — | `"STK"`, `"IND"`, or `"BOND"` (default `"STK"`) — resolved via contract search; `"FUT"` — resolved to the front-month contract; `"CASH"` — FX pair, `symbol` must be `"BASE.QUOTE"` e.g. `"EUR.USD"`. **`OPT` is not supported** (options need a strike/expiry, not just a symbol). |
-| `tif` | string | — | `"GTC"` (default) or `"DAY"` (expires at market close) |
+| `tif` | string | — | `"GTC"` (default) or `"GTD"` — IBKR documents no `"DAY"` (this row offered it until 2026-09-17) |
+| `expire_time` | string | — | Required when `tif` is `"GTD"`: when the alert terminates if never triggered, `'YYYYMMDD-HH:mm:ss'` |
 | `outside_rth` | boolean | — | `true` = also monitor extended hours (pre/after-market); default `false` |
 | `name` | string | — | Human-readable label (auto-generated if omitted) |
 | `repeat` | boolean | — | Repeat after firing (default `false`) |
 
-**Output:** JSON confirmation with the new alert's `orderId`.
+**Output:** today, the explanation above — the gateway refuses the request before IBKR sees it.
+When the block lifts: JSON confirmation with the new alert's `orderId`.
 
 **Note:** the alert condition's exchange is always `"SMART"` — including for futures — because
 `create_price_alert`'s conid-resolution path (shared with `get_market_snapshot`) does not
@@ -721,14 +741,15 @@ fields you provide, leaving others unchanged. Use `get_alerts` first to find the
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `alert_id` | string | ✅ | Alert ID from `get_alerts` (`orderId` field) |
+| `alert_id` | string | ✅ | Alert ID from `get_alerts` (`order_id` field) |
 | `price` | number | — | New price threshold |
 | `operator` | string | — | `">="` or `"<="` |
-| `tif` | string | — | `"GTC"` or `"DAY"` |
+| `tif` | string | — | `"GTC"` or `"GTD"` — the same vocabulary as `create_price_alert` (this row offered `"DAY"` until 2026-09-17, TOOL-R3) |
+| `expire_time` | string | — | Required when `tif` becomes `"GTD"` and the alert carries no expiry yet, `'YYYYMMDD-HH:mm:ss'` |
 | `outside_rth` | boolean | — | `true` = extended hours, `false` = regular hours only |
 | `name` | string | — | New alert name |
 
-**Output:** JSON confirmation.
+**Output:** today, the explanation above. When the block lifts: JSON confirmation.
 
 **IBKR endpoint:** `POST /iserver/account/{accountId}/alert` (update via same create endpoint)
 
@@ -739,7 +760,7 @@ Delete an IBKR alert permanently.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `alert_id` | string | ✅ | Alert ID from `get_alerts` (`orderId` field) |
+| `alert_id` | string | ✅ | Alert ID from `get_alerts` (`order_id` field) |
 
 **Output:** JSON confirmation.
 
@@ -791,8 +812,12 @@ IBKR FYI notifications — account alerts, order fills, margin calls, news.
 |-----------|------|----------|-------------|
 | `max_results` | integer | — | Maximum to return (default 10, max 10 per request) |
 
-**Output:** JSON array of notifications. Each entry has `id`, `date`, `headline`, `body`, `isRead`.
-Also includes total unread count.
+**Output:** text — a header `FYI Notifications (<n> unread)` (or `unread count unavailable`
+when `/fyi/unreadnumber` fails, which it did with HTTP 423 on a healthy gateway on 2026-09-16)
+followed by one line per notification, `- [read|UNREAD] <title>`. IBKR names the fields with
+letter codes — `MS` title, `MD` body, `D` date, `ID`, `R` read flag — and sends no `id`, `date`,
+`headline`, `body` or `isRead`, which is what this entry listed until 2026-09-17 (the same guess
+that rendered every notification as `- [UNREAD] ?` until TOOL-10).
 
 **Note:** IBKR enforces a hard cap of 10 notifications per request.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction

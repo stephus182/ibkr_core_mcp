@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -518,3 +520,143 @@ def test_create_price_alert_passes_an_expiry_through_for_gtd(toolkit):
     )
 
     assert toolkit._client.create_alert.call_args.args[1]["expireTime"] == "20270101-12:00:00"
+
+
+# ---------------------------------------------------------------------------
+# TOOL-R3 (2026-09-17): TOOL-02's tif fix reached `create_price_alert` and not `modify`
+# ---------------------------------------------------------------------------
+
+
+def _tool(name):
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    return next(t for t in TOOL_DEFINITIONS if t["name"] == name)
+
+
+def test_modify_price_alert_offers_the_same_tif_vocabulary_as_create():
+    """IBKR documents `tif` as GTC or GTD and `expireTime` as "used with a tif of GTD only".
+
+    TOOL-02 (2026-09-16) removed `DAY` from `create_price_alert` and added `expire_time`.
+    `modify_price_alert` kept `["GTC", "DAY"]` and no `expire_time` input, so the model was
+    offered a value IBKR does not accept on one tool and refused it on the other — one fix
+    applied to one branch of the same body and never swept.
+    """
+    create, modify = _tool("create_price_alert"), _tool("modify_price_alert")
+
+    assert modify["input_schema"]["properties"]["tif"]["enum"] == create["input_schema"]["properties"]["tif"]["enum"]
+    assert "DAY" not in modify["input_schema"]["properties"]["tif"]["enum"]
+    assert "expire_time" in modify["input_schema"]["properties"]
+
+
+def test_modify_price_alert_refuses_gtd_without_an_expiry(toolkit):
+    """A GTD alert with no expiry is not a request IBKR can act on — the create tool says so."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.return_value = {
+        "order_id": 7,
+        "alert_name": "AAPL <= 1.00",
+        "tif": "GTC",
+        "conditions": [],
+    }
+
+    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "7", "tif": "GTD"})
+
+    assert "expire_time" in text
+    toolkit._client.create_alert.assert_not_called()
+
+
+def test_modify_price_alert_sends_the_expiry_under_ibkrs_name(toolkit):
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.return_value = {
+        "order_id": 7,
+        "alert_name": "AAPL <= 1.00",
+        "tif": "GTC",
+        "conditions": [],
+    }
+    toolkit._client.create_alert.return_value = {"orderId": 7}
+
+    toolkit.execute("modify_price_alert", {"alert_id": "7", "tif": "GTD", "expire_time": "20261231-16:00:00"})
+
+    sent = toolkit._client.create_alert.call_args[0][1]
+    assert sent["tif"] == "GTD"
+    assert sent["expireTime"] == "20261231-16:00:00"
+
+
+def test_modify_price_alert_keeps_an_existing_expiry_when_only_tif_changes(toolkit):
+    """The detail response carries `expire_time`; translated, it satisfies GTD on its own."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.get_alert.return_value = {
+        "order_id": 7,
+        "alert_name": "AAPL <= 1.00",
+        "tif": "GTC",
+        "expire_time": "20261231-16:00:00",
+        "conditions": [],
+    }
+    toolkit._client.create_alert.return_value = {"orderId": 7}
+
+    toolkit.execute("modify_price_alert", {"alert_id": "7", "tif": "GTD"})
+
+    sent = toolkit._client.create_alert.call_args[0][1]
+    assert sent["tif"] == "GTD" and sent["expireTime"] == "20261231-16:00:00"
+
+
+# ---------------------------------------------------------------------------
+# TOOL-01's closing property: the alert-write block is stated everywhere it matters,
+# and stops being stated everywhere the day it lifts
+# ---------------------------------------------------------------------------
+
+_BLOCK_MARKER = "not possible through the Client Portal Gateway as published"
+_UNLOCK_MARKER = "alert-write round trip: PASS"
+
+
+def test_the_alert_write_block_is_stated_everywhere_it_matters_until_it_lifts():
+    """Price-alert creation and modification cannot succeed through the gateway IBKR publishes:
+    it refuses any body carrying `>=` or `<=` before IBKR sees it, and IBKR's engine refuses
+    the three operators the gateway lets through (measured 2026-09-16; the elimination table
+    is `docs/ibkr-api-behaviors-reference.md` § Price alerts). Not this package's defect, and
+    not something it can fix — but `README.md` and `docs/tools-reference.md` went on
+    describing the tools as working, and `tests/test_alerts_live.py` said the write path was
+    "validated manually through the ClaudIA UI", which runs on the same gateway.
+
+    So the status is held the way the event-contract status is: one phrase, present in every
+    place a reader would form the belief, and **required to be absent everywhere the day
+    `docs/audits/live-test-log.md` records a passing round trip** — so the warning cannot
+    outlive the block any more than the block could go unmentioned.
+    """
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    repo = Path(__file__).resolve().parents[2]
+    surfaces = {
+        "create_price_alert description": next(
+            t["description"] for t in TOOL_DEFINITIONS if t["name"] == "create_price_alert"
+        ),
+        "modify_price_alert description": next(
+            t["description"] for t in TOOL_DEFINITIONS if t["name"] == "modify_price_alert"
+        ),
+        "README.md": (repo / "README.md").read_text(),
+        "docs/tools-reference.md": (repo / "docs/tools-reference.md").read_text(),
+        "docs/ibkr-api-behaviors-reference.md": (repo / "docs/ibkr-api-behaviors-reference.md").read_text(),
+        "tests/test_alerts_live.py": (repo / "tests/test_alerts_live.py").read_text(),
+    }
+    log = (repo / "docs/audits/live-test-log.md").read_text()
+    # The log's own "Deliberately not covered" section names the unlock phrase, in backticks,
+    # so a reader knows what to write. Read literally, that sentence IS the unlock — the first
+    # run of this test took the unlock branch on the prose explaining it (API-12's defect: a
+    # document that explains a check trips the check it explains). Inline code is stripped
+    # before looking; a real run entry writes the phrase plainly.
+    log_outside_code = re.sub(r"`[^`\n]*`", "", log)
+
+    if _UNLOCK_MARKER in log_outside_code:
+        stale = [name for name, text in surfaces.items() if _BLOCK_MARKER in text]
+        assert not stale, (
+            f"the live-test log records a passing alert-write round trip, but these still say the "
+            f"write is {_BLOCK_MARKER!r}: {stale}. Remove the statement everywhere, retire the "
+            "'Deliberately not covered' section, and delete this test's unlock branch."
+        )
+        return
+
+    missing = [name for name, text in surfaces.items() if _BLOCK_MARKER not in text]
+    assert not missing, f"these surfaces do not state that alert writes are {_BLOCK_MARKER!r}: {missing}"
+    assert "Deliberately not covered — alert writes" in log, (
+        "docs/audits/live-test-log.md must carry a 'Deliberately not covered — alert writes' section "
+        "beside the event-contracts one, so an absence in the log is not mistaken for an omission"
+    )

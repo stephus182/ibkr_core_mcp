@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,624 unit tests · 102 integration tests (1,726 total) · 89% line coverage (non-integration)** — all four re-measured 2026-09-17 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,630 unit tests · 102 integration tests (1,732 total) · 89% line coverage (non-integration)** — all four re-measured 2026-09-17 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -110,20 +110,22 @@ inside a spawned child process, invisible to single-process coverage instrumenta
 ## What the unit tests specifically lock down
 
 These are the load-bearing paths with regression tests. Editing any of them will fail specific named tests.
+The counts in the tables below are collected test ids matching each name prefix, measured
+2026-09-17 — four of them had drifted (10→9, 9→2, 3→2, 4→5) since they were last typed.
 
 ### Data integrity
 
 | Path | Tests |
 |---|---|
-| `_parse_live_trades` — required fields, side normalization, commission sign | `test_parse_live_trades_*` (10 tests) |
+| `_parse_live_trades` — required fields, side normalization, commission sign | `test_parse_live_trades_*` (9 tests) |
 | `_parse_trades` — 20% invalid-records guard (at threshold: no raise; above: raises) | `test_parse_trades_integrity_guard_*` |
 | `_parse_trades` — skip on missing tradeID/symbol/buySell, raise on bad datetime | `test_parse_trades_*` |
-| `get_trade_date_coverage` — gap detection boundary (45d = no flag, 46d = flagged) | `test_coverage_gap_*` (9 tests) |
+| `get_trade_date_coverage` — gap detection boundary (45d = no flag, 46d = flagged) | `test_coverage_gap_*` (2 tests) |
 | `get_trade_date_coverage` — `request_from/to` excludes trade dates themselves | `test_coverage_gap_request_range_excludes_trade_dates` |
 | `get_trade_date_coverage` — NYSE calendar staleness vs fallback | `test_trade_coverage_*` (4 tests) |
 | `_format_coverage` — gap instructions rendered, stale note rendered | `test_format_coverage_*` (3 tests) |
-| `extract_execution_ids` — returns (unique_ids, raw_count); blank tradeID counted in raw but not unique; within-file duplicate detected | `test_extract_execution_ids_*` (3 tests) |
-| `verify_flex_import` — all present (hash match), missing records, no Drive, no files, manual pre-validated | `test_verify_flex_import_*` (4 tests) |
+| `extract_execution_ids` — returns (unique_ids, raw_count); blank tradeID counted in raw but not unique; within-file duplicate detected | `test_extract_execution_ids_*` (2 tests) |
+| `verify_flex_import` — all present (hash match), missing records, no Drive, no files, manual pre-validated | `test_verify_flex_import_*` (5 tests) |
 | `log_flex_import` / `get_flex_import_entry` / `mark_flex_import_verified` — manifest CRUD | tested via `test_verify_flex_import_*` (mock store) |
 
 ### IBKR error handling (regression guard for real incidents)

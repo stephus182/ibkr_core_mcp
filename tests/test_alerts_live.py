@@ -26,15 +26,16 @@ fix"). `delete_alert` and `activate_alert` are writes and both reach IBKR, which
 rules out the session explanation. Full elimination table:
 docs/ibkr-api-behaviors-reference.md § Price alerts.
 
-Original (incorrect) note: alert write operations skip with HTTP 403
-in the test harness. This is an IBKR CP API architectural restriction: write
-operations require an active brokerage session that BrowserCookieAuth alone
-cannot replicate. ClaudIA maintains this session via continuous /tickle keepalive;
-the test harness creates a fresh client with cookie auth only.
-
-These write operations are validated manually through the ClaudIA UI:
-ask ClaudIA to create an alert and verify it appears on the IBKR mobile app.
-This is the correct validation path — not a gap in test coverage.
+So the write round trip — create, read back, modify, deactivate, delete — is **expressly not
+validated**: it is not possible through the Client Portal Gateway as published, and no client of
+that gateway can do it, ClaudIA included. This docstring said until 2026-09-17 that the writes
+were "validated manually through the ClaudIA UI … not a gap in test coverage", which described a
+validation that cannot have happened: ClaudIA talks to the same gateway. The ten write tests
+below skip with the real reason rather than fail, and they would run for real the day the
+gateway changes — `docs/audits/live-test-log.md` § "Deliberately not covered — alert writes"
+records the gap so the skips are not mistaken for coverage, and
+`tests/claude_tools/test_alerts.py::test_the_alert_write_block_is_stated_everywhere_it_matters_until_it_lifts`
+fails the day a passing round trip is logged while this note still stands.
 
 Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/initialize-brokerage-session.md
 See docs/audits/live-test-log.md#run-2026-07-01-1 for the confirmed finding.

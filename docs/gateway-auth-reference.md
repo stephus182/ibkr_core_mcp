@@ -188,8 +188,12 @@ limit. Repeat violators can be blocked permanently.
 
 - **`EndpointPacer` paces proactively**, before the request goes out, against a sliding
   window per endpoint. The limits live in `rate_limiter.ENDPOINT_LIMITS` — one executable
-  table, deliberately with no prose copy anywhere, because the prose copy is what went
-  stale (see below). Ordinary spaced-out usage never waits.
+  table, deliberately with no second table in prose, because the prose copy is what went
+  stale (see below). The per-tool one-line rate-limit notes in `docs/tools-reference.md` and
+  `docs/api-reference.md` restate single rows and are the copies to check when the table
+  changes: the history endpoint's still read "5 concurrent requests" in both files and in
+  `client.py`'s docstring until 2026-09-17, a day after the table itself was corrected.
+  Ordinary spaced-out usage never waits.
 - **`with_retry` reacts**, retrying 429/503 with exponential backoff (1s, 2s, 4s over 3
   attempts) and raising `IBKRRateLimitError` if still failing.
 

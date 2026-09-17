@@ -674,7 +674,11 @@ class IBKRClient:
         Returns {"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}.
 
         ## Data point limit (officially documented)
-        Maximum 1000 data points per request. Concurrent request limit: 5.
+        Maximum 1000 data points per request. Pacing: 10 requests/second and 50 per
+        minute on this endpoint (`rate_limiter.ENDPOINT_LIMITS`, paced before the request
+        goes out). This line said "Concurrent request limit: 5" until 2026-09-17 — the value
+        IBKR replaced at its 2026-08 documentation move (API-03), surviving here as a third
+        prose copy after the two in `docs/` were corrected.
         Exceeding either limit returns HTTP 429.
 
         ## Valid period and bar values (from official docs, verified 2026-06-26)

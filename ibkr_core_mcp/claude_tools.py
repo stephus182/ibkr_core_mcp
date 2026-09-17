@@ -889,7 +889,13 @@ TOOL_DEFINITIONS = [
         "description": (
             "Create a native IBKR price alert for a symbol. "
             "The alert fires server-side (even when the app is closed) when the price "
-            "crosses the threshold. Use '>=' for above and '<=' for below."
+            "crosses the threshold. Use '>=' for above and '<=' for below. "
+            "CURRENTLY BLOCKED UPSTREAM: creating an alert is not possible through the Client "
+            "Portal Gateway as published — it refuses any request body carrying '>=' or '<=' "
+            "before IBKR sees it, and IBKR's own engine refuses every other operator (measured "
+            "2026-09-16). The call returns that explanation instead of an alert: tell the user, "
+            "and do not retry with another operator. Listing, deleting and toggling existing "
+            "alerts work."
         ),
         "input_schema": {
             "type": "object",
@@ -976,7 +982,10 @@ TOOL_DEFINITIONS = [
         "description": (
             "Modify an existing IBKR price alert. Fetches the current alert by ID and "
             "applies only the fields you provide, leaving others unchanged. "
-            "Use get_alerts first to find the alert ID."
+            "Use get_alerts first to find the alert ID. "
+            "CURRENTLY BLOCKED UPSTREAM: modifying an alert is not possible through the Client "
+            "Portal Gateway as published, for the same reason as create_price_alert; the call "
+            "returns that explanation instead of a confirmation — tell the user, do not retry."
         ),
         "input_schema": {
             "type": "object",
@@ -990,8 +999,20 @@ TOOL_DEFINITIONS = [
                 },
                 "tif": {
                     "type": "string",
-                    "enum": ["GTC", "DAY"],
-                    "description": "New time in force: GTC or DAY",
+                    "enum": ["GTC", "GTD"],
+                    "description": (
+                        "New time in force: 'GTC' or 'GTD' (good till date, which requires expire_time "
+                        "unless the alert already carries one). IBKR documents no 'DAY' — this tool "
+                        "offered it until 2026-09-17 while create_price_alert had been corrected on "
+                        "2026-09-16 (TOOL-R3)."
+                    ),
+                },
+                "expire_time": {
+                    "type": "string",
+                    "description": (
+                        "Required when tif becomes 'GTD' and the alert has no expiry yet: when the alert "
+                        "terminates if never triggered. Format 'YYYYMMDD-HH:mm:ss'."
+                    ),
                 },
                 "outside_rth": {
                     "type": "boolean",
@@ -3634,6 +3655,8 @@ class ClaudeToolkit:
             body["alertName"] = inputs["name"]
         if "tif" in inputs:
             body["tif"] = inputs["tif"]
+        if "expire_time" in inputs:
+            body["expireTime"] = inputs["expire_time"]
         if "outside_rth" in inputs:
             body["outsideRth"] = inputs["outside_rth"]
         if "price" in inputs or "operator" in inputs:
@@ -3643,6 +3666,16 @@ class ClaudeToolkit:
                     conditions[0]["value"] = str(inputs["price"])
                 if "operator" in inputs:
                     conditions[0]["operator"] = inputs["operator"]
+        if body.get("tif") == "GTD" and not body.get("expireTime"):
+            # The same rule create_price_alert applies: IBKR documents expireTime as "used with
+            # a tif of GTD only", and a GTD alert with no expiry is not a request it can act on.
+            # The translated body carries the alert's own expire_time when it has one, so only
+            # a GTD with no expiry from either side is refused (TOOL-R3).
+            return (
+                "tif='GTD' needs an expire_time — IBKR documents expireTime as \"Used with a tif "
+                'of GTD only", and this alert carries no expiry. Pass expire_time as '
+                "'YYYYMMDD-HH:mm:ss', or use tif='GTC'."
+            ), None
         try:
             result = self._client.create_alert(account_id, body)
         except Exception as exc:

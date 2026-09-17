@@ -20,21 +20,21 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 |---|---:|---:|---:|---:|---:|
 | `SEC` | 13 | **13** | **—** | — | — |
 | `WEB` | 9 | **9** | — | — | — |
-| `TOOL` | 12 | **11** | **1** | — | — |
+| `TOOL` | 12 | **12** | **—** | — | — |
 | `API` | 21 | **21** | **—** | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
-| `DOCB-R` | 6 | 6 | — | — | — |
-| `DOCA-R` | 5 | 5 | — | — | — |
+| `DOCB-R` | **11** | **11** | — | — | — |
+| `DOCA-R` | **9** | **9** | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | **5** | **5** | — | — | — |
-| `TOOL-R` | **2** | **2** | — | — | — |
+| `TOOL-R` | **3** | **3** | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **150** | **99** | **1** | **0** | **50** |
+| **Total** | **160** | **110** | **0** | **0** | **50** |
 
-`99 + 1 + 0 + 50 = 150`. **There are no unrecorded findings left.** All three blocks
+`110 + 0 + 0 + 50 = 160`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -80,7 +80,7 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (1, none Critical)
+### Open findings that do have a claim (0)
 
 Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
@@ -88,11 +88,10 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
-| `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
-> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15`, `TOOL-07`
-> and `API-11` left on 2026-09-17. This table is the
+> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15`, `TOOL-07`,
+> `API-11` and — last — `TOOL-01` left on 2026-09-17. **The table is empty.** This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -107,7 +106,9 @@ is written up below with how its subject was located.
    `DOCB-R1…R6`, `DOCA-R1…R3`, `DATA-R1…R5` and `API-R1`, all closed. The register now has a
    terminating condition.
 2. Then the 25 readable open findings, in severity order — all Medium and below except
-   `TOOL-01`, which is blocked upstream and cannot be closed here.
+   `TOOL-01`, which is blocked upstream and cannot be closed here. ~~cannot be closed~~ —
+   **closed 2026-09-17**: the block is upstream and measured, and the finding closes the way
+   the event contracts did, with the real status held by a test rather than by an open row.
 3. ~~`API-11`'s remaining 68 methods~~ — **done 2026-09-17.** 29 methods return models and
    every captured endpoint that does not carries a recorded reason, machine-checked.
 
@@ -4330,3 +4331,80 @@ method, not by this diff.
   have failed regardless of whether the docs were right. Numerals now, no map. *An oracle
   that is a hand-kept list stops checking the day the list stops being kept* — the same
   lesson as API-12's derived model set, in the guard written to enforce it.
+
+---
+
+## Phase 3 — `TOOL-01` closed, and a full review of the documentation
+
+Session 12 (2026-09-17). Two asks from the owner: *close the last one*, then *a full review of
+the documentation and the readmes*. The second found ten findings and one code defect, and
+the first turned out to be a documentation finding too.
+
+### `TOOL-01` — closed the way the event contracts were
+
+The fix has been shipped and verified against the live read shape since 2026-09-16; what
+kept the row open was that the write round trip cannot run — the gateway refuses `>=`/`<=`
+bodies before IBKR sees them and IBKR refuses the rest (§ *the operator block re-tested*
+above). An open row for an upstream fact would have stayed open forever, which is not what
+"open" means in this register. So it closes as the event contracts did: **the real status is
+held by a test, not by a row.**
+
+The status is one phrase — *not possible through the Client Portal Gateway as published* —
+and `test_the_alert_write_block_is_stated_everywhere_it_matters_until_it_lifts` requires it
+in the two tool descriptions, `README.md`, `docs/tools-reference.md`,
+`docs/ibkr-api-behaviors-reference.md` and `tests/test_alerts_live.py`, plus a
+*Deliberately not covered — alert writes* section in `docs/audits/live-test-log.md`. **The
+unlock is a line in that log**: record `alert-write round trip: PASS` and the same test fails
+until the phrase is gone from every surface, so the warning cannot outlive the block. Mutated
+both ways — a marker removed, and the PASS line added with the markers still present — and
+caught both.
+
+What closing it exposed is why it belongs in this section: **the block was stated in one
+document and contradicted in four.** `README.md` told readers to "use the native IBKR alert
+system via `create_price_alert` — alerts fire server-side"; `docs/tools-reference.md` promised
+"JSON confirmation with the new alert's `orderId`"; the two tool descriptions promised the
+model a working create; and `tests/test_alerts_live.py` said the writes were "validated
+manually through the ClaudIA UI … not a gap in test coverage" — a validation that cannot have
+happened, because ClaudIA talks to the same gateway.
+
+### The review — method, then findings
+
+Every living document was read in full (`README.md`, `SECURITY.md`, `CLAUDE.md`, the
+`CHANGELOG` Unreleased section, all seventeen `docs/*.md`, the docs and plans indexes, the
+live-test log, the fixture README and the claude_tools test index), with a mechanical pass
+first: every backticked path checked for existence, every backticked identifier for a
+definition, every count claim listed beside its derived value, every IBKR URL for the
+superseded forms, every account-shaped string against the placeholder set. The first version
+of the path check tested `not <generator>`, which is always False, and reported nothing
+missing — a check that could not fail, found because 82 candidates appeared the moment it
+could. The count claims were then settled by collection, not by reading.
+
+| ID | Severity | Finding |
+|---|---|---|
+| `TOOL-R3` | Low | **Code.** `modify_price_alert` still offered `tif="DAY"` and had no `expire_time` input. TOOL-02 corrected the vocabulary to IBKR's `GTC`/`GTD` on `create_price_alert` on 2026-09-16 and never reached the modify tool — one fix on one branch of the same body. Both share the vocabulary now; a modify to `GTD` needs an expiry from the caller or the alert |
+| `DOCA-R6` | Medium | The alert-write tools documented as working in four places (above), and `docs/api-reference.md`'s `create_alert` example was **the pre-TOOL-02 body**: `conid` + `exchange` as two keys, an invented `conditionType`, an `isSizeCondition` IBKR documents nowhere, a Python bool for `outsideRth`, and advice contradicting what the handler sends. `get_alerts` was documented with camelCase keys and a `conditions` array; the wire is snake_case with neither |
+| `DOCA-R7` | Medium | `docs/api-reference.md` still described the code as it was before 2026-09-16: `mark_notification_read` as `POST …/read` (it is `PUT`, API-20), `update_delivery_option` with the old three-argument signature and one endpoint for both channels (API-21), `get_live_orders` "performs both calls" (it primes only on empty), `get_pnl` returning a realized figure (the endpoint publishes none), and the history endpoint at "max 5 concurrent requests" — the value IBKR replaced in 2026-08 and API-03 corrected in the table, surviving as **three prose copies**: this file, `docs/tools-reference.md`, and `client.py`'s own docstring |
+| `DOCA-R8` | Low | `docs/tools-reference.md` output shapes: `get_notifications` "JSON array … `id`, `date`, `headline`, `body`, `isRead`" — the handler emits text lines from IBKR's `MS`/`R`, the TOOL-10 guess in documentary form; `get_allocation` an `industry` block that does not exist; `get_trading_schedule` "default `SMART`" a day after TOOL-R1 removed it; `execute()` returning `plotly.Figure \| None` when it is annotated `tuple[str, None]` and `plotly` is gone |
+| `DOCA-R9` | Low | Six smaller expired claims: `docs/external-docs-reference.md` said `web_scraper.py` calls `/v1/crawl` and that `FirecrawlClient.crawl()` "returns 0 pages" — the method was deleted 2026-07-30, and "rung 2" survived from the ladder; `docs/windows-setup.md` sent readers to `docker compose up` in an "IB_MCP repo", installed `[dev]` without `server`, and marked "Price alerts ✅" without saying which; `docs/symbology-reference.md` recorded `/iserver/secdef/info` as a list when the 2026-09-17 capture is an object (both now stated); `docs/api-reference.md` named `order_flow.py` — a claudia_ui module — as if it were here; `README.md`'s Development section gave the **installed-tree** `pip-audit` as "the same command CI runs", the exact form CLAUDE.md warns produced the 2026-09-16 near-miss; and `docs/gateway-auth-reference.md` and the `CHANGELOG` claimed "no prose copy anywhere" of the rate-limit table and "a test that fails if a second copy reappears" — six prose copies exist and no such test does |
+| `DOCB-R7` | Low | `SECURITY.md` after TOOL-07, API-11 and SEC-06: `anthropic_api_key` still listed as `repr=False` in the Config snippet and the defence-in-depth table (the field no longer exists), "a Pydantic model from fourteen of them" (29), and `test_error_redaction.py` at "14 forms" (18 — `docs/security-architecture.md` already said so, one line from a sentence explaining that 14 had been wrong) |
+| `DOCB-R8` | Low | `docs/README.md` — "the full catalog … Nothing is orphaned. Last verified 2026-09-13" — was missing the two most recent audits: the OWASP applicability decision (three days old) and this register, and still marked the 2026-09-13 audit **Latest**. Now a test: `test_every_tracked_reference_and_audit_document_is_in_the_docs_catalog` |
+| `DOCB-R9` | Low | `tests/claude_tools/TEST_INDEX.md`: eight of eleven per-file test counts wrong (`test_tool_descriptions.py` 6 against 17, `test_market_data.py` 39 against 64), two files absent from the table, and six `file:line` citations for hardcoded sleeps all stale — in a file whose own text warns that "a number in prose drifts silently". The count column is gone; the sleeps are named by function |
+| `DOCB-R10` | Low | Three records of the fixture that had expired: `tests/fixtures/README.md` dated 2026-09-16 with a `market_snapshot` "no price fields" claim the re-capture falsified (it carries `31`/`84`/`86`) and no mention of the three empty captures; `docs/ibkr-api-behaviors-reference.md`'s "the empty `trading_schedule` in the fixture" — the third copy of the claim corrected in `client.py` this morning; and `docs/test-coverage.md`'s named test-group counts, four of seven drifted (10→9, 9→2, 3→2, 4→5) |
+| `DOCB-R11` | Low | `CHANGELOG.md` Unreleased — the text that ships with the tag — still said the fixture was "captured verbatim (account numbers rewritten, nothing else)", **the sentence SEC-13 found to be false**; counted the typed methods at fourteen; had no entry for API-15, SEC-10, API-R5, TOOL-R3 or TOOL-01's status; and claimed a test that does not exist (DOCA-R9) |
+
+All eleven fixed in the same commit; every count restated was measured first. Two things
+were **not** changed on purpose: the dated `docs/plans/` and `docs/audits/` records (the two
+closed plans the index had marked "archive" were archived under `client/` and `flex/` with a
+`HISTORY.md` each — `docs/plans/` is gitignored, so that is a local change), and the six
+accurate per-tool rate-limit lines in `docs/tools-reference.md`, which restate single rows
+of `ENDPOINT_LIMITS` and are now named as the copies to re-check when the table changes.
+
+### What this session leaves
+
+**160 findings, 110 closed, 0 open, 50 written off.** The per-finding open table is empty for
+the first time. The recurring shapes were the register's own: *a claim whose condition
+expired* (nine of the eleven), *a fix applied to one branch and never swept* (`TOOL-R3`, the
+three "5 concurrent" copies, the four alert-write surfaces), and *a check that could not
+fail* (the path scan's `not <generator>`, the catalog's "last verified" sentence). Three
+guards leave with it — the alert-write status, the docs catalog, and the `tif` vocabulary —
+each watched failing before it was trusted.

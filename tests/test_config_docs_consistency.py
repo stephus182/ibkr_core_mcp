@@ -419,3 +419,24 @@ def test_the_api_reference_states_the_real_number_of_typed_methods():
     assert int(stated[0]) == len(_methods_returning_models()), (
         f"the header says {stated[0]}; {len(_methods_returning_models())} methods return models"
     )
+
+
+def test_every_tracked_reference_and_audit_document_is_in_the_docs_catalog():
+    """`docs/README.md` calls itself "the full catalog" and ends with "Nothing is orphaned".
+
+    On 2026-09-17 two audits were: `owasp-mcp-guide-applicability-2026-09-14.md` (three days
+    old) and `release-readiness-audit-2026-09-16.md` — the two most recent, and the two a
+    reader would most need to find. The catalog's own coverage check was a sentence with a
+    date on it, which is a number a human must remember to update (DOCB-R1 again).
+
+    Plans are deliberately not checked here: `docs/plans/` is gitignored, so CI cannot see
+    it, and `docs/plans/INDEX.md` is its own catalog.
+    """
+    catalog = (_REPO / "docs" / "README.md").read_text()
+    tracked = sorted(
+        p for p in list(_REPO.glob("docs/*.md")) + list(_REPO.glob("docs/audits/*.md")) if p.name != "README.md"
+    )
+    assert len(tracked) >= 30, f"only {len(tracked)} documents found — the glob is broken"
+
+    orphans = [str(p.relative_to(_REPO)) for p in tracked if p.name not in catalog]
+    assert not orphans, f"documents missing from docs/README.md's catalog: {orphans}"

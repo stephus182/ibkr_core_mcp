@@ -116,7 +116,9 @@ Dated filenames, not retroactively edited.
 | [`2026-08-10-flex-dataset-audit.md`](audits/2026-08-10-flex-dataset-audit.md) | Flex dataset completeness — the live data-loss window and the row deleted |
 | [`2026-07-22-code-quality-audit.md`](audits/2026-07-22-code-quality-audit.md) | `tests/` mypy gap — 1,164 → 183 → 0 errors, and the `tests.*` override rationale |
 | [`2026-06-30-quote-access-matrix.md`](audits/2026-06-30-quote-access-matrix.md) | Which quote fields the account's subscriptions actually return, per instrument type |
-| [`security-architecture-audit-2026-09-13.md`](audits/security-architecture-audit-2026-09-13.md) | **Latest** — security *architecture* audit: trust-boundary map, 10 invariants, 3 confirmed issues (sandbox arbitrary file read/write, SSE DNS rebinding) fixed test-first, the `tests/security/` constitution, pip-audit + gitleaks gates, probe evidence and the red→green record |
+| [`release-readiness-audit-2026-09-16.md`](audits/release-readiness-audit-2026-09-16.md) | **Latest** — the whole-package release-readiness audit and its running register: 160 findings across security, API, tools, data, docs and the web scraper, each with its evidence and its closing test; the per-domain counts are machine-checked by `scripts/audit/check_register.py`. Plan: `plans/2026-09-16-release-readiness-audit.md` |
+| [`owasp-mcp-guide-applicability-2026-09-14.md`](audits/owasp-mcp-guide-applicability-2026-09-14.md) | The OWASP *Practical Guide for Secure MCP Server Development* v1.0 mapped item by item onto this deployment — 49 items classified applies / partly / not applicable, with what each decision rests on; the principal external security baseline since 2026-09-14 |
+| [`security-architecture-audit-2026-09-13.md`](audits/security-architecture-audit-2026-09-13.md) | Security *architecture* audit: trust-boundary map, 10 invariants, 3 confirmed issues (sandbox arbitrary file read/write, SSE DNS rebinding) fixed test-first, the `tests/security/` constitution, pip-audit + gitleaks gates, probe evidence and the red→green record |
 | [`security-audit-2026-07-11.md`](audits/security-audit-2026-07-11.md) | Security audit — 6 findings (4 High, 2 Medium), all fixed and verified in code |
 | [`security-audit-2026-06-23.md`](audits/security-audit-2026-06-23.md) · [`-06-10`](audits/security-audit-2026-06-10.md) · [`-05-27`](audits/security-audit-2026-05-27.md) · [`-05-26`](audits/security-audit-2026-05-26.md) · [`-05-25`](audits/security-audit-2026-05-25.md) | Earlier security passes, superseded by the 2026-07-11 audit but kept as the dated record |
 
@@ -136,6 +138,10 @@ the script's `--md-out` / `--json-out` defaults, so moving one means moving the 
 ## Coverage check
 
 Everything under `docs/` is indexed above: **18 reference documents** (17 at `docs/` root
-plus the generated Flex schema report under `audits/`), **12 audits**, and the plans index
-with its 6 archive themes. Nothing is orphaned. Last verified 2026-09-13 — if you add a
-document here, add its row too.
+plus the generated Flex schema report under `audits/`), **14 audits**, and the plans index
+with its 6 archive themes. Nothing is orphaned — and that is now a test, not a sentence:
+`test_every_tracked_reference_and_audit_document_is_in_the_docs_catalog` fails the suite for
+any `docs/*.md` or `docs/audits/*.md` this file does not name. It was added on 2026-09-17,
+when this paragraph read "Nothing is orphaned. Last verified 2026-09-13" while the two most
+recent audits — the OWASP applicability decision and the release-readiness register — were
+missing from the table above.

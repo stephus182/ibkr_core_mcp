@@ -82,7 +82,7 @@ pip install git+https://github.com/stephus182/ibkr_core_mcp.git
 Or pin to a specific version:
 
 ```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.0.0
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.2.2
 ```
 
 Or for local development:
@@ -215,8 +215,8 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `run_scanner` | Market scanner (top gainers, losers, most active, …) |
 | `get_notifications` | IBKR FYI account notifications |
 | `get_alerts` | List IBKR native price alerts |
-| `create_price_alert` | Create a server-side IBKR price alert |
-| `modify_price_alert` | Update threshold or direction on an existing IBKR alert |
+| `create_price_alert` | Create a server-side IBKR price alert — **blocked upstream**, see [Streaming](#streaming-live-quotes) |
+| `modify_price_alert` | Update threshold or direction on an existing IBKR alert — **blocked upstream**, same note |
 | `delete_alert` | Delete an IBKR price alert |
 | `activate_alert` | Enable or disable an IBKR price alert |
 | `get_watchlists` | List IBKR watchlists and their contents |
@@ -268,8 +268,16 @@ async def main():
 asyncio.run(main())
 ```
 
-For price alerts, use the native IBKR alert system via `ClaudeToolkit.execute("create_price_alert", ...)`
-— alerts fire server-side and deliver to the IBKR mobile app even when the app is closed.
+**Price alerts: the local engine works; creating IBKR's native alerts does not, and it is not this
+package's defect.** `SQLiteStore.add_alert` + `AlertManager` (and the MCP server's `add_price_alert`
+under `--stream`) evaluate thresholds against live quotes on this machine. IBKR's own server-side
+alerts can be *listed, deleted and toggled* through `get_alerts` / `delete_alert` / `activate_alert`,
+but **creating or modifying one is not possible through the Client Portal Gateway as published**:
+the gateway refuses any request body carrying `>=` or `<=` before IBKR sees it, and IBKR's alert
+engine refuses the three operators the gateway lets through — measured 2026-09-16, elimination
+table in [`docs/ibkr-api-behaviors-reference.md`](docs/ibkr-api-behaviors-reference.md) § Price
+alerts. `create_price_alert` and `modify_price_alert` are kept, say so in their descriptions, and
+return that explanation instead of an alert; the day the gateway changes, they work unchanged.
 
 ---
 
@@ -566,8 +574,12 @@ ruff check .            # includes pydocstyle D — every public definition need
 ruff format --check .
 mypy
 
-# Dependency audit (network; the same command CI runs, minus the ignore-file flags)
-pip-audit --strict --desc --vulnerability-service osv
+# Dependency audit (network). CI audits a FRESH RESOLVE of the extras in requirements mode —
+# `pip install --dry-run` in a throwaway venv, installing nothing — not this machine's installed
+# tree, which reports what happens to be here and produced a near-miss on 2026-09-16. Same
+# command as .github/workflows/ci.yml, minus the ignore-file flags:
+printf '.[dev,server,scraper]\n' > /tmp/audit-requirements.txt
+pip-audit --strict --desc --vulnerability-service osv -r /tmp/audit-requirements.txt
 ```
 
 Docstring coverage is enforced in CI: `ruff`'s `pydocstyle` (`D`) rules are enabled, so a new

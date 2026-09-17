@@ -190,11 +190,30 @@ built the model's input by hand.
   `position["mktValue"]`, `dict(position)`, `len(position)` and `for k in position` are what
   IBKR sent. A typed return therefore cannot narrow a 51-key position to seven fields.
   One dict behaviour does not carry over: `model == {...}` is False — compare `dict(model)`.
-- **Six methods now return models**: `search_contract` and `get_secdef` (`Contract`),
-  `get_positions` (`Position`), `get_trades` (`Trade`), `get_live_orders` (`Order`),
-  `get_account_summary` (`AccountSummary`), `get_notifications` (`Notification`); then on 2026-09-17 `get_accounts` and `get_account_meta` (`Account`), `get_auth_status` (`AuthStatus`), `get_alerts` (`Alert`), `get_watchlists` (`Watchlist`) and `get_currency_pairs` (`CurrencyPair`) — fourteen in all. The other 61
-  are unchanged and still return the decoded response. `client.py`'s module docstring claimed
-  typed returns from the day it was written; it now enumerates them, so the claim is checkable.
+- **29 methods now return models** (API-11 closed 2026-09-17): `search_contract` and
+  `get_secdef` (`Contract`), `get_positions` and `get_all_positions` (`Position`), `get_trades`
+  (`Trade`), `get_live_orders` (`Order`), `get_account_summary` (`AccountSummary`),
+  `get_notifications` (`Notification`), `get_accounts`, `get_account_meta` and
+  `get_subaccounts` (`Account` — the three endpoints were measured key-for-key identical),
+  `get_auth_status` (`AuthStatus`), `get_alerts` (`Alert`), `get_mta_alert` (`MTAAlert`),
+  `get_watchlists` (`Watchlist`), `get_watchlist` (`WatchlistDetail`), `get_currency_pairs`
+  (`CurrencyPair`), `get_secdef_info` (`SecDefInfo`), `get_contract_info` and
+  `get_contract_info_and_rules` (`ContractDetails`), `get_contract_rules` (`ContractRules`),
+  `get_futures` (`FutureContract`), `get_stocks` (`StockSearchResult`), `get_contract_algos`
+  (`Algo`), `get_trading_schedule` (`TradingSchedule`), `get_market_history` and
+  `get_market_history_paginated` (`MarketHistory`), `get_option_chain` (`OptionChain`) and
+  `get_brokerage_accounts` (`BrokerageSession`). `client.py`'s module docstring enumerates
+  them and a test derives the list from `models.py`.
+
+  **Typing everything was never the bar, and the rest are not untyped by accident.** Every
+  endpoint in the live capture either returns a model or is listed in
+  `tests/test_client_returns_models.py::_NO_MODEL_BY_DESIGN` with the reason — a payload keyed
+  by account or currency has no field to name; three captures are empty and a model built on
+  an empty capture could only be tested against an invented shape — and
+  `test_every_captured_endpoint_is_typed_or_reasoned` fails when a new capture belongs to
+  neither set. `MarketHistory.high`/`low` are the reason the rule exists: IBKR sends them as
+  `%h/%v/%t` strings, and a `float` field would have raised on every call — silently, because
+  `parse_one` answers a validation failure by handing the payload back.
 - **A record that will not validate is passed through as the dict it arrived as, never
   dropped** — hence `list[Position | dict[str, Any]]`. And a `null` is IBKR's "not
   applicable", not a malformed value: a search for AAPL returns a bond aggregate whose
@@ -209,10 +228,16 @@ built the model's input by hand.
   onto its own field, which `populate_by_name` already did. Found by mutation — breaking
   `Trade`'s alias left the whole suite green. The multi-spelling cases are now `AliasChoices`
   and the validators are gone, 60 lines.
-- New: `tests/fixtures/ibkr_live_shapes.json`, 27 endpoints captured verbatim from an
-  authenticated gateway (account numbers rewritten, nothing else), plus
-  `scripts/audit/capture_live_response_shapes.py` to re-capture. Models are tested against it
-  rather than against hand-built dicts.
+- New: `tests/fixtures/ibkr_live_shapes.json` — **40 endpoints** captured from an
+  authenticated gateway (27 on 2026-09-16, 40 on 2026-09-17), plus
+  `scripts/audit/capture_live_response_shapes.py` to re-capture and
+  `scripts/audit/redact_live_payload.py`, which rewrites every owner-scoped value by default
+  while preserving its type and domain. Models are tested against it rather than against
+  hand-built dicts. **The first version of this entry read "account numbers rewritten, nothing
+  else", and that was the defect**: the fixture was committed to a public repository carrying
+  the account holder's name, balances, holdings and executed fills while its account-number
+  assertion passed (SEC-13). `tests/security/test_published_identifiers.py` now holds that no
+  owner-scoped scalar survives in the committed file.
 - **The `get_notifications` tool has never shown a notification** (TOOL-10). Its renderer read
   `isRead` and `headline`/`title`; `/fyi/notifications` sends `R`, `MS`, `MD`, `D`, `ID`, `FC`
   and none of those three, so every notification came out as `- [UNREAD] ?` — right count, no
@@ -273,7 +298,40 @@ built the model's input by hand.
   The resource `json.dumps` the client's return and its handler catches every exception, so a
   `Position` reaching it would have produced a successful response reading
   `{"error": "Object of type Position is not JSON serializable"}`. `models.json_default` is
-  now passed wherever a response is serialised.
+  now passed wherever a response is serialised — **and "wherever" is now a rule read from the
+  source, not the sites that happened to break**: `test_every_json_dumps_in_the_tool_layer_can_serialise_a_model`
+  fails on any `json.dumps` in `claude_tools.py` or `mcp_server.py` without `default=json_default`
+  (25 call sites). `ibkr://accounts` and the `get_alerts` tool had reached the same state on
+  this branch a day after TOOL-11 was fixed, because the first fix covered the two sites that
+  had broken and the next typed method armed the third.
+- **A typed return is a mapping, not a `dict`, and three callers filtered on `isinstance(row,
+  dict)`.** Typing `get_futures`, `get_secdef_info` and `get_contract_info` turned 21 futures
+  rows into none, made every price report "currency unknown", and dropped the front-month
+  `_contract` block — with the unit suite green, because every mock hands its handler a dict.
+  Widened to `dict | IBKRResponse`; `tests/claude_tools/test_typed_returns.py` drives the
+  affected handlers with models built from the capture. `CLAUDE.md` § Adding a New IBKR
+  Endpoint carries both traps as a step.
+- **An empty payload did not round-trip (API-R5).** `IBKRResponse` promises `dict(model)` is
+  what IBKR sent; for `{}` it answered nine default-valued *field* names, `len()` said 9 and
+  `if not response:` flipped to False, because `_payload()` fell back to `model_dump()` on a
+  falsy `_raw` and could not tell "IBKR sent `{}`" from "never given a payload". The test is
+  `is not None` now; `model_construct()` keeps the fallback.
+- **A 2xx with a non-JSON body escaped `IBKRCoreError` (API-15).** The gateway serves an HTML
+  page once its session lapses, and `resp.json()` then raised `requests.exceptions.JSONDecodeError`
+  straight past the `except IBKRCoreError` every caller is told to write. `client._decode`
+  now raises `IBKRAPIError` naming the path and a 400-byte preview; every request helper routes
+  through it, `ping` is the one named exemption, and a test fails if a second appears.
+- **`modify_price_alert` still offered `tif="DAY"` and could not set an expiry (TOOL-R3).**
+  TOOL-02 corrected the vocabulary on `create_price_alert` to IBKR's `GTC`/`GTD` +
+  `expire_time` and never reached the modify tool — one fix on one branch of the same body.
+  Both tools now share the vocabulary; a modify to `GTD` needs an expiry, from the caller or
+  carried over from the alert.
+- **`modify_price_alert` and `create_price_alert` say what they cannot do (TOOL-01 closed).**
+  Creating or modifying an IBKR alert is not possible through the Client Portal Gateway as
+  published — it refuses `>=`/`<=` bodies before IBKR sees them and IBKR refuses the rest —
+  and the two descriptions, `README.md`, `docs/tools-reference.md` and the live suite all said
+  the tools worked. They now state the block in one phrase, held by a test that also fails the
+  day `docs/audits/live-test-log.md` records a passing round trip while the phrase remains.
 
 Four technical indicators disagreed with the definitions they cite. Found by the
 2026-09-16 release-readiness audit, which re-derived every one of the 14 against its
@@ -501,8 +559,11 @@ fail" pattern this audit found in the live suite and the order-write boundary.
   req/min" at the 2026-08 documentation move, and the link-repointing pass updated the citation
   URL without re-reading the page behind it — leaving a wrong value with a correct-looking source
   beside it (audit finding API-03). Re-read and diffed row by row: **25 of 26 rows agreed and
-  that one did not**. There is now one executable table and deliberately no prose copy, with a
-  test that fails if a second copy reappears.
+  that one did not**. There is now one executable table and deliberately no second table in
+  prose. (This entry claimed "a test that fails if a second copy reappears"; no such test
+  exists — the per-tool one-liners in `docs/tools-reference.md` and `docs/api-reference.md`
+  are checked by reading, and the history endpoint's still said "5 concurrent" in both, and
+  in `client.py`, until 2026-09-17.)
 - `get_market_snapshot`: the price fields reach the model **by name** (`last`, `bid`, `ask`,
   `high`, `low`, `change`, `change_pct`, `volume`, `volume_raw`) from the package's one map,
   `streaming.SNAPSHOT_FIELD_NAMES`; IBKR's numeric codes and server bookkeeping (`server_id`,

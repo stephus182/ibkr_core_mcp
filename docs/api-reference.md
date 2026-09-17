@@ -83,9 +83,12 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/val
 ## Market Data
 
 ### `get_market_history(conid, period, bar, outside_rth) -> MarketHistory | dict`
-Single-page OHLCV bars. **Maximum 1000 data points per request; max 5 concurrent requests**
-(both officially documented — exceeding either returns HTTP 429). For requests that may exceed
-the point limit, use `get_market_history_paginated()`.
+Single-page OHLCV bars. **Maximum 1000 data points per request; 10 requests/second and 50
+per minute** on this endpoint (IBKR's pacing table, held as `rate_limiter.ENDPOINT_LIMITS` and
+paced before the request goes out — exceeding it returns HTTP 429 and a fifteen-minute penalty
+box on the IP). This entry read "max 5 concurrent requests" until 2026-09-17, the value IBKR
+replaced at its 2026-08 documentation move (API-03). For requests that may exceed the point
+limit, use `get_market_history_paginated()`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -115,7 +118,7 @@ lowercases both inputs before the request to avoid the trap.
 | `3y` | `1d`–`1m` | `1w` |
 | `15y` | `1w`–`1m` | `1w` |
 
-**Returns:** `{"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}` — `t` is UNIX milliseconds UTC.
+**Returns:** a `MarketHistory` over `{"startTime": "...", "data": [{"o":..., "h":..., "l":..., "c":..., "v":..., "t":...}, ...]}` — `t` is UNIX milliseconds UTC. The envelope's `high` and `low` are **not prices**: IBKR documents them as `%h/%v/%t` strings (price scaled by `priceFactor` / volume÷100 / minutes from chart start), e.g. `"17510/472117.45/0"`. Bar prices are in `data`.
 
 **Endpoint:** `GET /iserver/marketdata/history`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
@@ -521,9 +524,11 @@ Working orders — every order **except** those in `_TERMINAL_STATUSES`:
 `Inactive` = order exists on IBKR but is stalled (e.g. failed risk check). These require
 user action to resolve.
 
-**Two-call warmup (officially documented):** the first call with `?force=true` instantiates
-the order subscription; a second call (after a 1s pause) returns the actual live order list.
-This method performs both calls internally.
+**Warmup, once per session:** a fresh brokerage session's first read returns an empty array
+until `?force=true` instantiates the order subscription. Since 2026-09-16 this method **reads
+first and primes only when the read comes back empty** — it used to send the `force=true` pair
+before every read, spending two slots of a 1-req/5-secs endpoint per question (measured: 5.17 s
+→ 0.35 s on a warm session). This entry described the old per-call pair until 2026-09-17.
 
 **Endpoint:** `GET /iserver/account/orders`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
@@ -532,7 +537,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monit
 ---
 
 ### `get_orders_raw() -> Any`
-Raw, unfiltered `/iserver/account/orders` response, for diagnostics. Same two-call warmup as
+Raw, unfiltered `/iserver/account/orders` response, for diagnostics. Same read-first warmup as
 `get_live_orders()`, but returns the response exactly as IBKR sent it — no status filtering, no
 shape normalization. Used by `ClaudeToolkit`'s `diagnose_orders` to show what the server
 actually returned when `get_live_orders()`'s filtered/normalized view isn't enough to debug a
@@ -686,13 +691,24 @@ Mobile Trading Alerts — account-level watchdog alerts.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-mta-alert
 
 ### `mark_notification_read(notification_id) -> dict`
-Mark a FYI notification as read.
-**Endpoint:** `POST /fyi/notifications/{notificationId}/read`
+Mark **one** FYI notification as read — targeted, not global, and `R: 1` is the read flag
+(both measured with the account holder's permission on 2026-09-16, API-20).
+**Endpoint:** `PUT /fyi/notifications/{notificationId}` with an empty body — the verb and path
+both IBKR documentation families publish. This entry said `POST …/{id}/read` until 2026-09-17,
+the form corrected in `client.py` on 2026-09-16.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/mark-notification-read
 
-### `update_delivery_option(device_id, option, enabled) -> dict`
-Enable/disable a notification delivery channel.
-**Endpoint:** `POST /fyi/deliveryoptions/{option}`
+### `update_delivery_option(device_id, option, enabled, device_name="", ui_name="") -> dict`
+Enable/disable a notification delivery channel. `option` is `"device"` or `"email"` — the two
+channels IBKR publishes, and they share neither verb nor parameter style (API-21, 2026-09-16):
+
+| `option` | Request |
+|---|---|
+| `"device"` | `POST /fyi/deliveryoptions/device` with `{deviceId, devicename, uiName, enabled}` — `device_id` required; `device_name`/`ui_name` default to it |
+| `"email"` | `PUT /fyi/deliveryoptions/email?enabled=true\|false` — no body, `device_id` ignored |
+
+This entry gave one `POST /fyi/deliveryoptions/{option}` with a two-field body for both until
+2026-09-17, which is what the method sent before the fix and could not have worked.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-device-option
 
 ---
@@ -700,8 +716,11 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-n
 ## Alerts (IBKR Native)
 
 ### `get_alerts(account_id) -> list[Alert | dict]`
-All price alerts configured on the account. The `orderId` field is the alert ID. Returns `[]`
-if response is not a list.
+All price alerts configured on the account, as `Alert` rows. **The keys are snake_case** —
+`order_id` is the alert ID (`Alert.order_id`, normalised to text), beside `alert_name`,
+`alert_active` / `alert_repeatable` (IBKR enum ints, 0/1), `alert_triggered` (a real bool),
+`account` and `order_time`; there is no `conditions` array on this endpoint (that is
+`get_alert`). This entry said `orderId` until 2026-09-17. Returns `[]` if response is not a list.
 **Endpoint:** `GET /iserver/account/{accountId}/alerts`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts
 
@@ -714,31 +733,42 @@ session's logged-in account.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-details-of-a-specific-alert
 
 ### `create_alert(account_id, alert) -> dict`
-Create a price alert. The `alert` dict must match the IBKR alert payload schema:
+Create a price alert — or, with an existing alert's id in `orderId`, modify it ("omitted or 0
+creates, an existing alert id modifies that alert"). The body below is what
+`create_price_alert` sends, field for field, against IBKR's create-alert page:
 
 ```python
 alert = {
-    "orderId": 0,
+    "orderId": 0,                 # 0 creates; an existing alert id MODIFIES that alert
     "alertName": "AAPL >= 200",
     "alertMessage": "",
-    "alertRepeatable": 0,        # 1 = repeat
-    "expireTime": "",
-    "tif": "GTC",
-    "outsideRth": False,
-    "isSizeCondition": False,
+    "alertRepeatable": 0,         # enum int 0/1, never a Python bool
+    "expireTime": "",             # required when tif is "GTD": 'YYYYMMDD-HH:mm:ss'
+    "tif": "GTC",                 # "GTC" or "GTD" — IBKR documents no "DAY"
+    "outsideRth": 0,              # enum int 0/1
     "conditions": [{
-        "type": 1,               # 1 = Price condition
-        "conid": 265598,
-        "exchange": "NASDAQ",    # use contract's actual exchange, not SMART for futures
-        "conditionType": "Price", # camelCase required
-        "operator": ">=",
-        "value": "200.0",        # string, not number
+        "type": 1,                # 1 = Price
+        "conidex": "265598@SMART", # ONE field, "conid@exchange" — not conid + exchange
+        "logicBind": "n",         # END: nothing follows a single condition
+        "operator": ">=",         # the only two IBKR's engine accepts are >= and <=
+        "triggerMethod": "0",     # "the string representation of zero"
+        "value": "200.0",         # string, not number
     }],
 }
 ```
 
-Use `ClaudeToolkit.execute("create_price_alert", ...)` instead — it resolves conid and
-exchange automatically.
+**This block showed the pre-2026-09-16 body until 2026-09-17** — `conid` + `exchange` as two keys,
+an invented `conditionType: "Price"`, an `isSizeCondition` IBKR documents nowhere, a Python bool
+for `outsideRth`, and a note to "use the contract's actual exchange, not SMART for futures" that
+contradicts what `create_price_alert` sends (always `@SMART`, because its resolver returns no
+listing exchange). That is the body TOOL-02 replaced, surviving in the reference.
+
+**Creating or modifying an alert is not possible through the Client Portal Gateway as published.**
+The gateway answers an opaque HTTP 403 to any body carrying `>=` or `<=` before IBKR sees it,
+and IBKR's engine refuses `>`, `<` and `==` (`can't recognize fix`) — measured 2026-09-16, every
+workaround eliminated in `docs/ibkr-api-behaviors-reference.md` § Price alerts. A well-formed body
+against a real alert still 403s, which is what rules the body shape out as the cause. Reading,
+deleting and toggling existing alerts all work.
 
 **Endpoint:** `POST /iserver/account/{accountId}/alert`
 Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-alerts/create-alert.md
@@ -882,8 +912,9 @@ reply attempt).
 
 **US Futures and Futures Options (FUT/FOP):** the order dict must include both
 `manualIndicator=True` and `extOperator="<user>"`. Required since May 1, 2025 for CME Group
-Rule 536-B compliance — IBKR returns HTTP 400 without them for FUT/FOP orders. `order_flow.py`
-adds these automatically when `sec_type` is `"FUT"` or `"FOP"`.
+Rule 536-B compliance — IBKR returns HTTP 400 without them for FUT/FOP orders. **This package
+does not add them**: claudia_ui's `order_flow.py` does, when `sec_type` is `"FUT"` or `"FOP"`,
+before the dict reaches `place_order`. A direct caller of `IBKRClient` supplies both itself.
 Source: https://www.interactivebrokers.com/docs/web-api/changelog
 
 ### `place_order(account_id, order) -> list[dict]`
@@ -972,7 +1003,10 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/prev
 ## Account / Admin
 
 ### `get_pnl() -> dict`
-Real-time partitioned P&L — daily, unrealized, realized — across all positions.
+Real-time partitioned P&L — daily and unrealized, one row per account partition
+(`upnl.{account}.Core` → `dpl`, `upl`, `nl`, `el`, `mv`, `uel`). **No realized figure** — the
+endpoint publishes none (this line said "realized" until 2026-09-17), and no per-position
+detail: use `get_positions` for that.
 **Endpoint:** `GET /iserver/account/pnl/partitioned`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss
 
@@ -986,7 +1020,7 @@ method (`get_live_orders`, `get_orders_raw`, `get_order_status`, `place_order`, 
 `cancel_order`, `reply_order`, `get_order_preview`) — callers do not need to call this
 directly under normal use.
 
-**Returns:** `dict` with keys: `accounts` (list of account ID strings), `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles`, `selectedAccount`. Verified live 2026-06-30 — NOT a bare list.
+**Returns:** a `BrokerageSession` over the 12-key object IBKR sends — `accounts` (list of account ID strings), `selectedAccount`, `isPaper`, `isFT`, `sessionId`, `serverInfo`, `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles` (measured 2026-09-17; verified live as an object, NOT a bare list, on 2026-06-30). `session.is_paper` and `session.selected_account` are the two a caller branches on; the account-keyed blocks stay mappings.
 
 **Endpoint:** `GET /iserver/accounts`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts
@@ -1013,7 +1047,7 @@ flowchart TB
     classDef err fill:#fde3e1,stroke:#b42318,color:#111827
     classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
 
-    M["An IBKRClient method"] --> V{"_validate_account_id /<br/>_order_id / _reply_id"}
+    M["An IBKRClient method"] --> V{"_validate_account_id / _order_id /<br/>_reply_id / _conid / _page /<br/>_notification_id"}
     V -->|"malformed"| CE["ConfigError — raised before the id<br/>ever reaches an f-string URL"]
     V -->|"ok"| G{"An order write?"}
     G -->|"yes"| GATES["Gate 1 Touch ID, then Gate 2 dialog<br/>see Order Management below"]

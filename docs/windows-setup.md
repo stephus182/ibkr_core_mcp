@@ -56,7 +56,7 @@ Required for `BrowserCookieAuth` to read the IBKR gateway session cookie automat
 
 ```bash
 # Editable dev install (run in PowerShell or WSL2 terminal)
-pip install -e ".[dev]"
+pip install -e ".[dev,server]"
 
 # Or from GitHub
 pip install git+https://github.com/stephus182/ibkr_core_mcp.git
@@ -84,10 +84,14 @@ Python expands `~` correctly on Windows.
 
 Same Docker workflow as macOS:
 
-```bash
-# From the IB_MCP repo
-docker compose up
+```python
+from ibkr_core_mcp.gateway import GatewayManager
+
+GatewayManager().startup()   # builds the image on first run, starts the container, opens the login page
 ```
+
+(This section pointed at a `docker compose up` in an "IB_MCP repo" until 2026-09-17 — a repo
+that is not this one. `GatewayManager` is the only supported way to run the gateway here.)
 
 Open `https://localhost:5055` in Chrome, log in with IBKR credentials + 2FA. The package reads the session cookie automatically once authenticated.
 
@@ -178,7 +182,8 @@ A Windows Hello implementation has not been built yet. Contributions welcome —
 | Scanners | ✅ |
 | MCP server (stdio + SSE) | ✅ |
 | Live WebSocket quotes | ✅ |
-| Price alerts | ✅ |
+| Price alerts — local engine (`SQLiteStore.add_alert` / MCP `add_price_alert`) | ✅ |
+| Price alerts — creating IBKR's native alerts | ❌ on every platform — not possible through the Client Portal Gateway as published (`docs/ibkr-api-behaviors-reference.md` § Price alerts); listing, deleting and toggling them ✅ |
 | Order placement / modify / cancel | ❌ Touch ID gate (see above) |
 | `browser_cookie3` (Chrome/Edge/Firefox) | ✅ |
 | tkinter order confirmation dialog | ✅ (Gate 2 only) |
