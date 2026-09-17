@@ -88,24 +88,22 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `WEB-05` | Medium | `docs/web-scraper-reference.md:174` describes the deleted fallback layer as current |
-| `WEB-09` | Low | `_handle_crawl_site` guards the Drive write but not the Drive read |
-| `WEB-06` | Low | `pyproject.toml:63` and `:97` name the deleted fallback rung in the present tense |
-| `WEB-07` | Low | A live-test docstring documents a deleted method and tells the reader to export `ANTHROPIC_API_KEY` |
-| `WEB-08` | Nit | `docs/web-scraper-reference.md:353` cites `_MAX_CONCURRENT_FALLBACKS`, which exists nowhere — re-confirmed session 9 |
 | `SEC-06` | Low | `redact_error` claims to scrub `identifier: value` pairs; the JSON/quoted form is not scrubbed. No reachable leak shown |
 | `SEC-07` | Low | `OrderWriteAuthorization` binds body and order id but not account id |
 | `SEC-08` | Low | Two more structural probes miss an ordinary alternative spelling |
 | `SEC-09` | Nit | "The default button is the abandon one" holds only on the `osascript` fallback |
 | `SEC-10` | Nit | `collapse_home` claims every surface; the SSE bearer-token log line writes the absolute home path |
 | `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
-| `API-05` | Medium | Positions page size documented as 30; IBKR documents 100. Confirmed from docs, indeterminate live |
-| `API-10` | Medium | `IBKR_AUTH_BROWSER` is honoured on one code path out of three |
 | `API-08` | Low | Stale docstring chunk table |
 | `API-12` | Low | Wrong model citation |
 | `API-13` | Low | Contradictory inline comment |
 | `API-15` | Nit | Unguarded response shape |
 | `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
+
+> Rows leave this table when the finding closes; the write-up stays in the Phase 3
+> sections below. `WEB-05…09`, `API-05` and `API-10` left on 2026-09-17. This table is the
+> source of truth for *which* findings are open — the register's counts are checked against
+> it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
 `API-08` and `API-12/13/15` have no ID-tagged row of their own; their claims are recovered by
 position from the Phase 1 combined row (`API-08, 11–15`) and are recorded here so they stop
@@ -3158,3 +3156,70 @@ name away from `getattr`. Only CLAUDE.md overclaimed, so only CLAUDE.md changed.
 **Whether to widen the list is left to the owner and is deliberately not done here.** It is a
 decision about auth surface, not a typo fix, and the five Chromium/Gecko/WebKit families
 already cover the supported install paths. Recorded rather than actioned.
+
+---
+
+## Phase 3 — reviewing the audit's own work
+
+Requested by the owner as a deliberate pause before the remaining tail. The useful output of
+a self-review is the defects it finds in itself, so that is what this records.
+
+### The register contradicted itself, and I caused it
+
+The document carries **two** representations of which findings are open: the register's
+per-domain counts, and a per-finding table listing each open id. On 2026-09-17 I closed seven
+findings and updated only the counts. The register said **11 open**; the table still listed
+**18**.
+
+This is the same defect the audit has now found four times — WEB-03 ("a fix that reached two
+of three copies"), the 2026-07-25 repoint (81 links fixed, 118 missed), API-05 ("page 0 =
+first 30" surviving in the second of two files), and now the audit document itself, in the
+section whose job is to state where the audit stands. **Machine-verifying the register's
+arithmetic every time was not enough: the arithmetic was internally perfect and described the
+wrong set.** The same shape as WEB-R1, where `8 + 1 + 3 = 12` held while a requirement was
+missing.
+
+Fixed at the root rather than by editing the table: the per-finding table is now the source of
+truth for *which* findings are open, and `scripts/audit/check_register.py` checks the counts
+against it — totals, the closed/open/partial/written-off identity, and per-domain open counts.
+Written before the table was corrected and run first, where it named all three disagreements.
+
+### Two mutants survived in the mutation harness itself
+
+The harness's nine tests had only ever been red collectively, on a `ModuleNotFoundError`
+before the module existed. Running a battery against it found two that did not hold:
+
+- **`PYTHONDONTWRITEBYTECODE` was asserted but never actually tested.** `subprocess_runner`
+  exports the variable; the child pytest inherits it; `dict(os.environ)` therefore still
+  carries it when the runner stops adding it. Removing the runner's own assignment left the
+  test **green under a battery and red when run directly** — verified both ways. The test
+  passed for the wrong reason in exactly the situation it exists for. It now deletes the
+  variable from the inherited environment first.
+- **`NOT_APPLIED` has two paths** — a missing anchor, and a replacement identical to the
+  original — so deleting the first check let the second answer in its place and the outcome
+  assertion could not tell. It now asserts *which* refusal fired.
+
+Both are the audit's own recurring finding, applied to the tool built to detect it: **a
+control that cannot fail.** Six mutants now, six caught.
+
+### Two false alarms, both caught before being reported
+
+Worth recording because the method mattered more than the result.
+
+- **SEC-03 appeared to have regressed.** A grep for a validation call within 25 lines of three
+  method definitions found nothing in two of them. Reading the executable bodies through the
+  AST instead showed `_validate_reply_id`, `_validate_notification_id` and
+  `_validate_delivery_option` all present — the 25-line windows had been consumed by
+  docstrings. `update_delivery_option` no longer interpolates at all.
+- **API-02 appeared to only log.** `log.warning` sits at the chunk ceiling; the returned
+  envelope also carries `ibkr_core_warning`, so the caller does see it.
+
+A line-window grep is a lead, not a fact — the same rule the audit already holds for grep
+counts, status codes and tool summaries, now applied to the review's own instrument.
+
+### Sample verification of earlier sessions' closures
+
+Findings closed in sessions 1–9 were taken from the record, not re-verified, so a sample was
+checked against the code: **SEC-03, SEC-04, TOOL-03, TOOL-04, TOOL-05, TOOL-06, WEB-03,
+SEC-05 and API-02 — nine, all genuinely closed.** That is a sample, not a proof; roughly 70 of
+79 closures remain recorded rather than re-verified.

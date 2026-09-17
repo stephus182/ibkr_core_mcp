@@ -77,6 +77,11 @@ def test_a_mutation_that_never_applied_is_refused_not_scored(tmp_path):
         runner=runner,
     )
     assert [r.outcome for r in results] == [mb.NOT_APPLIED]
+    # Assert WHICH refusal fired. Two paths return NOT_APPLIED — a missing anchor, and a
+    # replacement identical to the original — so without this the first check can be deleted
+    # and the second answers in its place. Measured: that mutant survived until the detail
+    # was asserted.
+    assert "anchor not found" in results[0].detail
 
 
 def test_a_run_where_pytest_never_ran_is_not_scored_as_caught(tmp_path):
@@ -166,8 +171,15 @@ def test_the_real_runner_forbids_writing_bytecode(monkeypatch):
         seen_env.update(kwargs["env"])
         return _Proc()
 
+    # Delete it from the INHERITED environment first. Without this the assertion passes
+    # whenever this suite is itself run by a battery: `subprocess_runner` exports the
+    # variable, the child pytest inherits it, and `dict(os.environ)` carries it even when
+    # the runner no longer adds it. Measured 2026-09-17 — removing the runner's own
+    # assignment left this test GREEN under the battery and RED when run directly. A check
+    # that cannot fail in the conditions it will actually run in.
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
     monkeypatch.setattr("mutation_battery.subprocess.run", fake_run)
     mb.subprocess_runner(REPO_ROOT)(["tests/x.py"])
 
-    assert seen_env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert seen_env.get("PYTHONDONTWRITEBYTECODE") == "1", "the runner must set it, not inherit it"
     assert "-B" in seen_cmd
