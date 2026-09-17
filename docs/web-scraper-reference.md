@@ -707,11 +707,22 @@ docstring names which. Read the docstring before concluding a failing test is wr
 
 | Requirement | Gates | Cost |
 |---|---|---|
-| `[scraper]` extra + `crawl4ai-setup` | the 10 browser tests | free |
+| `[scraper]` extra + `crawl4ai-setup` | **8** browser tests (those taking `browser_available`) | free |
 | `FIRECRAWL_API_KEY` | 1 whole-web search test | ~1 credit |
+| **neither** | **3** private-host refusals | free |
 
-Each requirement skips independently rather than failing, so a machine without a Firecrawl
-key still gets 10 of 11.
+8 + 1 + 3 = 12. Each requirement skips independently rather than failing, so a machine with
+no Firecrawl key still gets **11 of 12**, and one with nothing installed at all still gets the
+**3** that matter most: `private_hosts_are_refused_before_any_request` is parametrised over
+all three URL-taking tools and *"needs no `crawl4ai`: rejection must happen even when the
+browser is absent"*. A guard that only works once the browser is installed is not a guard.
+
+> This table read "the 10 browser tests" and "10 of 11" until 2026-09-17, and the third row
+> did not exist. The counts were stale — the suite gained the redirect-SSRF guard on
+> 2026-09-16 (WEB-01) — but the missing row was the older error: three tests were attributed
+> to a requirement they deliberately do not have. Corrected by reading which tests take
+> `browser_available` and confirming against `--collect-only`, not by adjusting the number
+> that looked closest.
 
 **An exhausted quota is not a test failure.** HTTP 402 (out of credits) and 429 (rate
 limited) describe the account, so the affected tests skip with the real message in the skip
