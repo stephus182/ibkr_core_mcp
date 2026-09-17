@@ -1032,9 +1032,26 @@ class IBKRClient:
         return []
 
     def get_trading_schedule(
-        self, asset_class: str, symbol: str, exchange: str, exchange_filter: str = ""
+        self,
+        asset_class: str,
+        symbol: str,
+        exchange: str,
+        exchange_filter: str = "",
+        conid: int | str = "",
     ) -> list[dict[str, Any]]:
         """Trading hours, sessions, and timezone for a symbol/exchange.
+
+        Returns IBKR's rows unchanged: `id`, `tradeVenueId`, `timezone` and `schedules[]`,
+        each schedule carrying `sessions[]` and `tradingtimes[]`. There is no
+        `regularTradingHours` or `liquidHours` key — `docs/tools-reference.md` claimed both
+        until 2026-09-16 and neither exists.
+
+        `conid` is documented **Required** and was not sendable here until 2026-09-16; the
+        one live capture of this endpoint returned an empty list. Whether the omission is
+        what caused that is not established — IBKR's own curl example on the page below
+        omits `conid` while its Python example includes it — so this makes the parameter
+        available rather than claiming a fix. Left optional because `claude_tools`' caller
+        resolves a symbol, not a contract id.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol.md
         Endpoint: GET /trsrv/secdef/schedule
@@ -1042,6 +1059,9 @@ class IBKRClient:
         params = {"assetClass": asset_class, "symbol": symbol, "exchange": exchange}
         if exchange_filter:
             params["exchangeFilter"] = exchange_filter
+        if conid != "":
+            _validate_conid(conid)
+            params["conid"] = str(conid)
         return self._get("/trsrv/secdef/schedule", params)
 
     def get_secdef(self, conids: list[int]) -> list[Contract | dict[str, Any]]:

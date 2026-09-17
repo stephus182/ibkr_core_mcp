@@ -501,7 +501,18 @@ Trading hours and session information for a symbol. Resolves symbol to conid int
 | `asset_class` | string | — | `"STK"` (default), `"FUT"`, `"OPT"`, `"FX"` |
 | `exchange` | string | — | e.g. `"NYMEX"`, `"NYSE"` (default `"SMART"`) |
 
-**Output:** JSON with `regularTradingHours`, `liquidHours`, `timezone`, and next/current session.
+**Output:** the endpoint's JSON, passed through unchanged. IBKR documents each row as
+`id`, `tradeVenueId`, `timezone` and `schedules[]`, where each schedule carries
+`clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]` (`openingTime`, `closingTime`,
+`prop` — `LIQUID` when the whole day is liquid) and `tradingtimes[]` (`openingTime`,
+`closingTime`, `cancelDayOrders`).
+
+> This line read "JSON with `regularTradingHours`, `liquidHours`, `timezone`, and
+> next/current session" until 2026-09-16. **`regularTradingHours` and `liquidHours` appear
+> nowhere in IBKR's response object** and nowhere in this codebase; only `timezone` was
+> real. The handler is a `json.dumps` passthrough, so the shape is IBKR's and was checked
+> against their page (2,982 B, fetched 2026-09-16 with a fabricated control URL returning
+> `# Page Not Found` at 433 B).
 
 **IBKR endpoint:** `GET /trsrv/secdef/schedule`
 

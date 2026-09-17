@@ -2574,3 +2574,40 @@ def test_update_delivery_option_rejects_an_undocumented_channel(client):
         client.update_delivery_option("d", "sms", True)
     mock_post.assert_not_called()
     mock_put.assert_not_called()
+
+
+def test_get_trading_schedule_sends_the_conid_ibkr_documents_as_required(client):
+    """IBKR's `GET /trsrv/secdef/schedule` page marks **conid** Required, alongside
+    `assetClass` and `symbol`. This client sent neither the parameter nor offered it, and
+    the one live capture of this endpoint came back as an empty list
+    (`tests/fixtures/ibkr_live_shapes.json`, `trading_schedule: []`).
+
+    Source, fetched 2026-09-16 with a fabricated control URL that returned `# Page Not
+    Found`: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol.md
+
+    The empty response is **not** proven to be caused by the missing parameter — IBKR's own
+    curl example on that page omits `conid` while its Python example includes it, and no
+    gateway was reachable to settle it. What is established is that a documented-Required
+    parameter was unsendable, which this fixes; the live confirmation is still owed.
+    """
+    from unittest.mock import patch
+
+    with patch.object(client, "_get", return_value=[]) as get:
+        client.get_trading_schedule("STK", "AAPL", "SMART", conid=265598)
+
+    params = get.call_args.args[1]
+    assert params["conid"] == "265598", "conid is not sent"
+    assert params["assetClass"] == "STK"
+    assert params["symbol"] == "AAPL"
+
+
+def test_get_trading_schedule_omits_conid_when_the_caller_has_none(client):
+    """The counter-case: `conid` is optional on this client because callers reaching it
+    through `claude_tools` have a symbol and not a contract id. An empty value must not be
+    sent as an empty string — IBKR would receive `conid=` and reject or ignore it."""
+    from unittest.mock import patch
+
+    with patch.object(client, "_get", return_value=[]) as get:
+        client.get_trading_schedule("STK", "AAPL", "SMART")
+
+    assert "conid" not in get.call_args.args[1]

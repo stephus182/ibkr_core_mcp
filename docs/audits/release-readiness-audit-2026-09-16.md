@@ -23,17 +23,19 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `TOOL` | 12 | 7 | 5 | — | — |
 | `API` | 21 | 13 | 7 (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | **17** | — |
-| `DOCA` | 21 | 6 | — | **15** | — |
+| `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | 6 | 6 | — | — | — |
-| **Total** | **126** | **50** | **25** (+1 partial) | **32** | **18** |
+| `DOCA-R` | 3 | 3 | — | — | — |
+| `API-R` | 1 | 1 | — | — | — |
+| **Total** | **130** | **54** | **25** (+1 partial) | **17** | **33** |
 
-`50 + 25 + 1 + 32 + 18 = 126`. "Written off" is its own column and not folded into either
+`54 + 25 + 1 + 17 + 33 = 130`. "Written off" is its own column and not folded into either
 "closed" or "no claim recorded", because it is neither: those 18 slots were never readable and
 never will be, and the six `DOCB-R` findings that replace them are a **fresh** audit of the
 same documents, not a recovery of what they said.
 
-**`DOCB` re-derived, session 9.** The 18 unwritten `DOCB` slots are **written off, not
+**`DOCB` and `DOCA` re-derived, session 9.** The 18 unwritten `DOCB` slots are **written off, not
 closed** — their claims are unrecoverable. In their place the same 19 documents were
 re-audited from scratch and produced `DOCB-R1…R6`, all six raised and closed (one High, three
 Medium, two Low), plus four untested public behaviours in `indicators.py` and `models.py` that
@@ -60,7 +62,7 @@ report and the per-finding text was not.
 |---|---|---|---|
 | `DATA-03…05` | 3 (**High**) | the cell reads `(see full report)` — there is no full report | **outstanding** |
 | `DATA-06…19` | 14 | table cells are empty | **outstanding** |
-| `DOCA-03…09, 12…17, 20, 21` | 15 | never written | **outstanding** |
+| `DOCA-03…09, 12…17, 20, 21` | 15 | never written | re-derived session 9 → `DOCA-R1…R3`, `API-R1` |
 | `DOCB-02…19` | 18 (4 **High**) | never written | re-derived session 9 → `DOCB-R1…R6` |
 
 **A finding with no claim cannot be closed, dismissed or ranked.** Under the owner's
@@ -108,9 +110,10 @@ depending on that reading.
 
 ### What has to happen before a tag is even decidable
 
-1. ~~Re-derive `DOCB` (18)~~ — **done, session 9**, yielding `DOCB-R1…R6`. Still to do:
-   `DOCA` (15) and `DATA-03…19` (17), by auditing those files directly, as `analytics.py`
-   was. Until then the register has no terminating condition.
+1. ~~Re-derive `DOCB` (18)~~ and ~~`DOCA` (15)~~ — **both done, session 9**, yielding
+   `DOCB-R1…R6`, `DOCA-R1…R3` and `API-R1`. **Still to do: `DATA-03…19` (17)**, by auditing
+   those files directly, as `analytics.py` was. Until that is done the register has no
+   terminating condition.
 2. Then the 25 readable open findings, in severity order — all Medium and below except
    `TOOL-01`, which is blocked upstream and cannot be closed here.
 3. `API-11`'s remaining 68 methods (owner-approved scope addition).
@@ -1971,3 +1974,82 @@ Gates: ruff, ruff format, mypy, pytest **1,459 passed**, `pytest -m security` **
 *(The write-up first stated 1,445 from memory rather than from the run — corrected to the
 measured figure. The same slip, in the section about a file whose numbers were never
 re-measured.)*
+
+---
+
+## Phase 3 — `DOCA` re-derived (session 9)
+
+Same method as `DOCB`, applied to the five high-risk documents (`SECURITY.md`, `CLAUDE.md`,
+`README.md`, `docs/security-architecture.md`, `docs/tools-reference.md`). The 15 unwritten
+`DOCA` slots are **written off**; `DOCA-R1…R3` replace them, plus one API finding the sweep
+turned up.
+
+### The sweeps found far less here, and that is the result
+
+`SECURITY.md` and `docs/security-architecture.md` produced **no findings**. Every name the
+identifier sweep flagged in them is cited *as deleted or as absent*, which is correct usage:
+the `_scrape_with_fallback` family sits under an explicit "Restructured 2026-07-30 … that
+ladder and all three functions were deleted" note; `tickler.sh` is described as having left the
+image on 2026-08-06 and the tree on 2026-08-07; `outputSchema` appears in the sentence "none
+declares an `outputSchema`"; `dependabot.yml` is a recorded decision *not* to have one. The
+`conf.yaml` keys `listenSsl`, `sslPwd` and `cors.allowCredentials` all exist — **my sweep read
+`.yml` and not `.yaml`**, which is a blind spot in the checker and not a defect in the
+document.
+
+`CLAUDE.md`'s package-structure block was diffed against the tree in both directions: **nothing
+listed that does not exist, nothing in the tree left out.**
+
+### Findings
+
+| ID | Sev | Finding |
+|---|---|---|
+| `DOCA-R1` | Medium | `docs/tools-reference.md:504` documents `get_trading_schedule`'s output with two field names IBKR does not return |
+| `DOCA-R2` | Low | `README.md:361` says the live web suite is 11 tests — the **third** site of `DOCB-R3`, missed when the first two were fixed |
+| `DOCA-R3` | Low | `CLAUDE.md:46` says `tests/test_mcp_server.py` is 17 tests; it collects **25** |
+| `API-R1` | Medium | `client.get_trading_schedule` could not send `conid`, which IBKR documents as **Required** |
+
+#### DOCA-R1 / API-R1 — one line of documentation, two defects behind it
+
+`tools-reference.md` promised the tool returns "JSON with `regularTradingHours`, `liquidHours`,
+`timezone`, and next/current session". The handler is a `json.dumps` passthrough, so that is a
+claim about IBKR's shape, and it had never been checked against IBKR. Fetched with a fabricated
+control in the same batch (real page 2,982 B and no `# Page Not Found`; control 433 B and
+`# Page Not Found` present):
+
+| Promised | In IBKR's documented response object |
+|---|---|
+| `regularTradingHours` | **0 occurrences** |
+| `liquidHours` | **0 occurrences** |
+| `timezone` | 1 — real |
+
+The real shape is `id`, `tradeVenueId`, `timezone`, `schedules[]`, each carrying `sessions[]`
+(`openingTime`, `closingTime`, `prop`) and `tradingtimes[]` (`openingTime`, `closingTime`,
+`cancelDayOrders`). A model told to look for `regularTradingHours` finds nothing and has no way
+to know why.
+
+Reading that same page for the response shape showed the request was wrong too: **`conid` is
+marked Required** and this client had no way to send it. The one live capture of this endpoint
+in the fixture is `trading_schedule: []`.
+
+**The cause of the empty response is deliberately not claimed.** IBKR's own curl example on
+that page omits `conid` while its Python example includes it, and no gateway was reachable to
+settle it. What is established is that a documented-Required parameter was unsendable; that is
+what was fixed, with two tests (sent when supplied, absent when not — an empty `conid=` would
+be worse than none) and two mutants, both caught. **Live confirmation is owed.**
+
+#### DOCA-R2 — the same defect, a third time, missed by me in this session
+
+`DOCB-R3` found the live web suite documented as 11 tests when it collects 12. I fixed
+`docs/web-scraper-reference.md` and `CLAUDE.md` — and `README.md:361` carried it too. I found
+it only because the numeric sweep was run again over a different document set.
+
+Two fixes applied to two branches of a defect class and the third left, in the session whose
+own write-up calls that the recurring pattern. It is recorded here rather than quietly
+corrected because the failure is the interesting part: **"fix the class" is not satisfied by
+fixing the instances you happened to have open** — it requires re-running the check that found
+the first one.
+
+### Status
+
+`DOCA-R1…R3` and `API-R1` raised and closed, `API-R1` pending live confirmation. The 15
+Phase 1 `DOCA` slots are written off.

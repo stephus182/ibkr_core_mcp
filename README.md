@@ -358,7 +358,7 @@ a tool rather than by a test failing:
 
 ```bash
 set -a; source ./.env; set +a
-pytest tests/test_web_tools_live.py -v -m integration     # 11 tests, ~30s
+pytest tests/test_web_tools_live.py -v -m integration     # 12 tests, ~30s
 ```
 
 Full detail, including the credit model and per-host notes:

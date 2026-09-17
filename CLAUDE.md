@@ -43,7 +43,7 @@ versioned binary (`python3.11 -m venv`), not bare `python3`, since Homebrew may 
 to a newer, unsupported interpreter.
 **Package manager:** `brew install` for macOS tooling, `pip install -e ".[dev,server]"` for
 Python deps. The `server` extra (`mcp`, `starlette`, `uvicorn`) is not optional for a full
-local test run — `tests/test_mcp_server.py`'s 17 tests fail to collect without it, even
+local test run — `tests/test_mcp_server.py`'s 25 tests fail to collect without it, even
 though `mcp_server.py` itself is a separate entry point from the rest of the package.
 
 ## Running Tests
