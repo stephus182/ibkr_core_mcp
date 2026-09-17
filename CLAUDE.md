@@ -121,6 +121,16 @@ Run each gate bare and read its status, or redirect first and read the file:
 note that `&&` between gates hides this rather than catching it: a masked 0 lets the chain
 continue.
 
+**Run the four as four separate commands, each status read on its own — not an `&&` chain.**
+`&&` stops at the first red, so three real errors cost three round trips to find instead of
+one. Measured 2026-09-17: a single bare pass surfaced `ruff check`, `ruff format` and `mypy`
+failures *together*, in code written minutes earlier; chained, it would have reported one,
+then one, then one. `.githooks/pre-push` deliberately stops at the first failure (its `run()`
+helper exits) — that is correct for a gate whose job is to refuse, and it is why the hook is
+not a substitute for running the line yourself while you still have work to fix. The same
+shape is already recorded above for CI: run 34082479743 failed at `ruff format --check` and
+that red step hid two real `mypy` errors CI never reached.
+
 **Two more gates run in CI only** (they need the network): `pip-audit` over a **fresh resolve**
 of `.[dev,server,scraper]` — requirements mode, `pip install --dry-run` in a throwaway venv,
 installing nothing — weekly as well as per push, with ignores only from
