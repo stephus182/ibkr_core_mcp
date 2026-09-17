@@ -30,9 +30,10 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
-| **Total** | **138** | **69** | **18** (+1 partial) | **0** | **50** |
+| `WEB-R` | 2 | 2 | — | — | — |
+| **Total** | **140** | **71** | **18** (+1 partial) | **0** | **50** |
 
-`69 + 18 + 1 + 0 + 50 = 138`. **There are no unrecorded findings left.** All three blocks
+`71 + 18 + 1 + 0 + 50 = 140`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -2875,3 +2876,91 @@ the three the gateway lets through.** Not a defect in this package. TOOL-01 stay
 and unexercisable, and the reason is now measured rather than inferred.
 
 The account was verified unchanged afterwards: one alert, the pre-existing one.
+
+---
+
+## Phase 3 — `WEB-R1` / `WEB-R2`: the requirements table, measured instead of read
+
+Session 10. Both findings come from one act: **running** `test_web_tools_live.py` under each
+requirement in isolation, after having "fixed" the same table the day before by reading it.
+
+| ID | Severity | Finding |
+|---|---|---|
+| `WEB-R1` | Low | `docs/web-scraper-reference.md` §10's requirements table omits a **second gate** on one of its 8 browser tests: `test_a_public_url_that_redirects_to_loopback_never_reaches_it` also needs `httpbin.org` reachable and still issuing its 302 |
+| `WEB-R2` | Low | The table's two requirements are **not independent**, and its cost column is conditional: importing the free `[scraper]` extra from the repo root loads this repo's gitignored `.env` into `os.environ`, which satisfies the `FIRECRAWL_API_KEY` row and spends the credit |
+
+### How they were found
+
+The table had already been corrected once, on 2026-09-17 (commit `4ad9f56`), by reading which
+tests take the `browser_available` fixture. That pass was right about what it checked — 8, not
+10, and a missing refusals row — and it is the *method* that was insufficient. Reading a test
+tells you what it **asks for**; only running it tells you what it **needs**.
+
+Four runs, each isolating one requirement, with the harness proved in both directions first:
+
+| Condition | Mechanism | Outcome |
+|---|---|---|
+| everything available | — | **12 passed**, 26.95 s |
+| no `[scraper]` extra | `sys.meta_path` finder raising on `crawl4ai` | **3 passed, 9 skipped** — 8 on the extra, 1 on the key — in **0.44 s, no network** |
+| no `.env`, no key | `load_dotenv` neutralised + variable deleted | **11 passed, 1 skipped** |
+| redirector down | `requests.get` raising `RequestException` | that test **skipped**, did not fail |
+
+The blocker was proved before any result was read: `import crawl4ai` succeeds without it and
+raises with it. Without that control, "9 skipped" is equally consistent with a broken plugin.
+
+### `WEB-R1` — a second gate that could not disturb the arithmetic
+
+The redirect-SSRF guard is one of the 8 the `[scraper]` row already counts, so its extra
+dependency on a third-party host never showed up as a number that failed to add up. `8 + 1 + 3
+= 12` was true before and after. **A partition can be arithmetically perfect and still hide a
+requirement**, which is why the fourth row is written as a second gate on an already-counted
+test rather than as a fourth group.
+
+Run D confirmed it skips rather than fails — so an unreachable `httpbin.org` costs a property,
+silently, in a green run. That is the same failure mode as the 2026-07-30 Drive fixture that
+demanded a variable the code did not need and skipped on every run for hours: **a skip is not
+a failure**, and nothing in the docs said this skip existed.
+
+### `WEB-R2` — the free extra is what spends the credit
+
+`crawl4ai/config.py:4` calls a bare `load_dotenv()` at import time. `find_dotenv()` walks up
+from the **cwd**, so from the repo root it finds this repo's gitignored standalone-dev `.env`
+and injects `FIRECRAWL_API_KEY` into `os.environ`. The Firecrawl test reads `os.environ`
+directly, so it then runs and spends a credit.
+
+Measured in one shell that never sourced `.env`, `FIRECRAWL_API_KEY` unset throughout:
+
+| | Firecrawl test |
+|---|---|
+| `import crawl4ai` blocked | **skipped** — "FIRECRAWL_API_KEY not set" |
+| `import crawl4ai` allowed | **passed** — credit spent |
+| `import crawl4ai` from `cwd=/tmp` | key **not** injected — the coupling is cwd-bound |
+
+**Scope, checked in both directions rather than asserted.** A module-scope `import crawl4ai` in
+a *unit* test leaves the key invisible — `conftest.py`'s `_no_real_secrets` prefix scrub holds.
+The identical assertion under `@pytest.mark.integration` **fails**, the key being visible there
+by design. So this is a cost-and-honesty defect in the docs, not a secret-handling defect: the
+one path that must not see the operator's environment does not see it.
+
+I first attributed the leak to `Config(...)` running `load_dotenv()` through its
+`crawl4ai_profiles_dir` default factory — the mechanism `conftest.py` documents. A direct probe
+falsified that: constructing a `Config` left `os.environ` untouched. The real cause was a
+third-party import. **The plausible mechanism that is already written down in your own repo is
+the most dangerous kind of guess**, and one probe was the difference.
+
+### Fixes
+
+§10's table now carries the fourth row, a four-condition *measured* block quoting each run, and
+the coupling note. The history blockquote records that two passes were needed and why the first
+was insufficient. §11 carries the live-run row.
+
+`tests/test_config_docs_consistency.py` gains three guards deriving the three counts from the
+live suite's **AST** and failing if the table, or `CLAUDE.md`, disagrees. Scope was set by a
+failure, not by design: the first version scanned the whole document and failed on §10's own
+history note quoting the superseded "10 browser tests" — so a guard that cannot tell a live
+claim from a corrected one would have forced the record to be deleted to stay green. It reads
+the table rows only.
+
+**5 mutants run, 5 caught, no-op control survived, restore verified byte-identical.** M5 first
+came back `MUTATION NEVER APPLIED` — its anchor had changed when the row's `1` was bolded — and
+the harness refused to report a result rather than scoring it as caught.

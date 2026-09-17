@@ -708,21 +708,46 @@ docstring names which. Read the docstring before concluding a failing test is wr
 | Requirement | Gates | Cost |
 |---|---|---|
 | `[scraper]` extra + `crawl4ai-setup` | **8** browser tests (those taking `browser_available`) | free |
-| `FIRECRAWL_API_KEY` | 1 whole-web search test | ~1 credit |
+| `FIRECRAWL_API_KEY` | **1** whole-web search test | ~1 credit |
 | **neither** | **3** private-host refusals | free |
+| *on top of the extra:* `httpbin.org` reachable and still issuing its 302 | **1 of those 8** — the redirect-SSRF guard | free |
 
-8 + 1 + 3 = 12. Each requirement skips independently rather than failing, so a machine with
-no Firecrawl key still gets **11 of 12**, and one with nothing installed at all still gets the
-**3** that matter most: `private_hosts_are_refused_before_any_request` is parametrised over
-all three URL-taking tools and *"needs no `crawl4ai`: rejection must happen even when the
-browser is absent"*. A guard that only works once the browser is installed is not a guard.
+The first three rows partition the suite: 8 + 1 + 3 = 12. The fourth is a *second* gate on a
+test the first row already counts, so it adds nothing to the total — which is precisely why it
+stayed invisible for as long as it did.
 
-> This table read "the 10 browser tests" and "10 of 11" until 2026-09-17, and the third row
-> did not exist. The counts were stale — the suite gained the redirect-SSRF guard on
-> 2026-09-16 (WEB-01) — but the missing row was the older error: three tests were attributed
-> to a requirement they deliberately do not have. Corrected by reading which tests take
-> `browser_available` and confirming against `--collect-only`, not by adjusting the number
-> that looked closest.
+**Measured, not derived.** Every row above was established by running the suite under that
+exact condition on 2026-09-17, not by reading which fixtures a test takes:
+
+| Condition | Outcome |
+|---|---|
+| everything available | **12 passed** in 27 s |
+| `import crawl4ai` blocked, no key | **3 passed, 9 skipped** — 0.44 s, no network |
+| browser present, no `.env` and no key | **11 passed, 1 skipped** |
+| browser present, `httpbin.org` unreachable | that one test **skips**; it does not fail |
+
+So an absent requirement skips rather than fails, and the three refusals survive having nothing
+installed at all: `private_hosts_are_refused_before_any_request` is parametrised over all three
+URL-taking tools and *"needs no `crawl4ai`: rejection must happen even when the browser is
+absent"*. A guard that only works once the browser is installed is not a guard.
+
+**The first two rows are not independent on a dev machine, and the cost column is the
+casualty.** `crawl4ai/config.py` calls a bare `load_dotenv()` at import, and `find_dotenv()`
+walks up from the **cwd** — so running this suite from the repo root while the standalone-dev
+`.env` of §2 exists injects `FIRECRAWL_API_KEY` into `os.environ` before the Firecrawl test
+reads it. Measured both ways in one shell that never sourced `.env`: with `crawl4ai`
+importable that test **ran and spent the credit**; with the import blocked, the identical shell
+skipped it as *"FIRECRAWL_API_KEY not set"*. Installing the free extra is what moves that row
+from free to paid. Run from a directory with no `.env` above it and nothing is injected.
+
+> This table read "the 10 browser tests" and "10 of 11" until 2026-09-17, with no third or
+> fourth row, and it took two passes to fix. The first **read** the source: it found the
+> missing refusals row and corrected 10 to 8, and stopped there. The second **ran** the suite
+> under each condition, and only that turned up the `httpbin.org` gate and the `.env`
+> coupling — neither of which is visible in a fixture list. The lesson is the subsystem's own
+> (§10 opening): reading tells you what a test asks for, running tells you what it needs.
+> `tests/test_config_docs_consistency.py` now derives the three counts from the suite's AST
+> and fails if this table disagrees; the fourth row is prose and is not machine-checked.
 
 **An exhausted quota is not a test failure.** HTTP 402 (out of credits) and 429 (rate
 limited) describe the account, so the affected tests skip with the real message in the skip
@@ -825,6 +850,7 @@ Each entry was observed, not assumed. Evidence lives in
 | 2026-07-28 | **The `[scraper]` extra was not installed in claudia_ui**, so inside ClaudIA the fallback rung was dark: detection worked, recovery dead-ended, and nothing said so. Fixed the same day by installing `crawl4ai` + Playwright there. A capability can be fully coded, fully tested and fully documented and still be unreachable in the app that needs it — check the consumer, not just the library. |
 | 2026-09-16 | **The per-request SSRF guard could raise from its own failure path, intermittently killing a crawl.** When a page tears down mid-request Playwright resolves the outstanding route itself; `route.fetch` then raises, the handler's `except` branch called `route.abort()`, and abort raised `Route.abort: Route is already handled!` — *from inside the except block*, so nothing caught it. It escaped the handler and surfaced as `Browser.close: Route.abort: Route is already handled!`. This is the intermittent live failure first seen 2026-09-16 (1 run in 5) and recorded then as unidentified; it was introduced by that same day's redirect fix. Captured in `test_crawl_site_saves_pages_to_drive`. Every abort is now best-effort (`_abort_quietly`). Deterministic unit coverage in `tests/test_local_browser.py` (teardown during fetch and during fulfill, plus a check that a failing abort still never serves private content); 3 mutants run, 3 caught. |
 | 2026-09-16 | Live run after the fix: `test_web_scraper_drive_live.py` 2 passed x6 consecutive runs; `test_web_tools_live.py` + `test_crawl4ai_live.py` + `test_web_scraper_live.py` 17 passed x4 consecutive runs. Full integration sweep 94 collected -> 79 passed / 14 skipped / 1 failed before the fix (that failure), and clean after. |
+| 2026-09-17 | **The §10 requirements table was wrong in a way only running it could show, and the credit is not gated by the key.** Four runs of `test_web_tools_live.py -m integration`, each isolating one requirement: everything present **12 passed / 27 s**; `import crawl4ai` blocked by a meta-path finder **3 passed, 9 skipped** (8 on the extra, 1 on the key) in **0.44 s with no network**; `load_dotenv` neutralised and the key deleted **11 passed, 1 skipped**; `requests.get` raised at the redirector **that test skipped, it did not fail**. Two facts fell out that reading the fixtures had missed. First, `test_a_public_url_that_redirects_to_loopback_never_reaches_it` carries a **second, undocumented gate on `httpbin.org`** — it is one of the 8, so it never disturbed the arithmetic and the table never mentioned it. Second, `crawl4ai/config.py` calls a bare `load_dotenv()` at import and `find_dotenv()` walks up from the **cwd**, so importing the free browser extra from the repo root **injects this repo's gitignored `.env` into `os.environ`** — the same shell, with nothing sourced, skipped the Firecrawl test as "not set" with the import blocked and spent a credit with it allowed. The blocker was proved in both directions before any result was read. `tests/test_config_docs_consistency.py` now derives the three counts from the suite's AST; 5 mutants run, 5 caught, no-op survived. |
 
 ---
 
