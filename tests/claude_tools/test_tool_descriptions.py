@@ -165,3 +165,110 @@ def test_snapshot_description_does_not_promise_first_result_is_used(toolkit):
     selected, or an ambiguity question is returned — never 'the first result'."""
     description = _snapshot_description(toolkit)
     assert "first result is used" not in description
+
+
+# ── Description honesty as a PROPERTY, not as a list of known cases ────────────
+#
+# This file is the description-honesty suite and it held six hand-written assertions about
+# six descriptions somebody had thought of. TOOL-03, TOOL-04 and TOOL-05 were three nobody
+# had — so the suite was green while a description sent users to a folder no code reads,
+# another promised page content the handler truncates to 400 characters, and a third
+# declared itself read-only while performing two database writes.
+#
+# The three checks below are properties over ALL tools, so the next one is caught without
+# anybody thinking of it. Each was run against the tree before it was fixed and reported
+# exactly the known offender — that is what makes a green run afterwards mean something.
+#
+# The shared root, found while verifying them: each of the three handlers' own DOCSTRING is
+# accurate ("Returns where to look, not what is there"; "Updates verified_at in the
+# manifest"). The 2026-07-30 refactor updated the docstrings and left the descriptions.
+# Docstrings are for humans; the description is the only text the model ever sees.
+
+_MUTATING_CAPABILITIES = {"DATABASE", "GOOGLE_DRIVE", "ACCOUNT_STATE"}
+_READ_ONLY_CLAIM = re.compile(
+    r"does not modify|never modifies|read-only|readonly|makes no changes|without modifying", re.I
+)
+_FOLDER_TOKEN = re.compile(r"'([a-z0-9_]{5,})'|\b([a-z0-9_]{5,}/)")
+
+
+def _capability_names(tool):
+    return {c.name if hasattr(c, "name") else str(c) for c in tool.get("capabilities", ())}
+
+
+def test_the_capability_source_actually_carries_capabilities():
+    """Vacuity guard for the test below, and it has already fired once.
+
+    That test first read `toolkit.tools`, which is the wire format sent to the Anthropic
+    API and deliberately drops `capabilities` — so `_capability_names` returned an empty
+    set for every tool and the check passed against a tree that contained a known
+    offender. `TOOL_DEFINITIONS` is the declaration; `toolkit.tools` is the projection.
+    """
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    assert all("capabilities" in t for t in TOOL_DEFINITIONS)
+    declared = {c for t in TOOL_DEFINITIONS for c in _capability_names(t)}
+    assert declared & _MUTATING_CAPABILITIES, "no tool declares a mutating capability — check is vacuous"
+
+
+def test_no_description_claims_read_only_while_declaring_a_mutating_capability():
+    """`verify_flex_import` said "Does not modify any data — read-only integrity check"
+    while declaring `DATABASE` and calling `store.log_flex_import()` and
+    `store.mark_flex_import_verified()` (TOOL-05).
+
+    Both writes go to `flex_import_log`, the import manifest, and **neither touches the
+    `trades` table** — checked in `store.py`, not assumed. So the description was not
+    describing a dangerous tool, it was making an unqualified claim about a tool that does
+    write. The fix names what it writes rather than reversing the claim.
+
+    The capability declaration was right all along; `test_tool_capabilities.py` checks that
+    every sink is declared. Nothing checked the description against it.
+    """
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    offenders = {
+        str(t["name"]): sorted(_capability_names(t) & _MUTATING_CAPABILITIES)
+        for t in TOOL_DEFINITIONS
+        if _READ_ONLY_CLAIM.search(str(t["description"])) and _capability_names(t) & _MUTATING_CAPABILITIES
+    }
+    assert offenders == {}, f"descriptions claiming read-only while declaring a write: {offenders}"
+
+
+def test_every_folder_a_description_names_exists_somewhere_in_the_code(package_source, toolkit):
+    """`sync_flex_archive` told users to upload to `'ibkr_flex_archive'`; the handler reads
+    `account_data/` and says so in its own error message. The string appeared **exactly
+    once in the whole package — inside that description** (TOOL-03).
+
+    Counting occurrences rather than searching is deliberate: a first attempt stripped the
+    descriptions from the source and searched the remainder, which found nothing, because
+    the description is split across source lines and the strip silently failed. A check
+    that reports clean against a known offender is broken, not clean.
+    """
+    all_descriptions = "\n".join(t["description"] for t in toolkit.tools)
+
+    def count(token, text):
+        return len(re.findall(rf"\b{re.escape(token)}\b", text))
+
+    offenders = {}
+    for tool in toolkit.tools:
+        for quoted, slashed in _FOLDER_TOKEN.findall(tool["description"]):
+            token = (quoted or slashed).rstrip("/")
+            if token in {"markdown", "google", "drive", "sqlite", "python"}:
+                continue
+            if count(token, package_source) == count(token, all_descriptions):
+                offenders[tool["name"]] = token
+    assert offenders == {}, f"descriptions naming a folder no code reads: {offenders}"
+
+
+def test_no_description_promises_content_a_handler_truncates(toolkit):
+    """`firecrawl_search` promised "return full page content as markdown" while the handler
+    emits `" ".join(markdown.split())[:400]` — a 400-character snippet with an ellipsis
+    (TOOL-04). Its own docstring says the opposite: "Returns where to look, not what is
+    there. `fetch_page` reads a chosen result."
+
+    The 2026-07-30 refactor gave each tool one job and made `firecrawl_search` a finder;
+    the description still advertised the deleted behaviour, which is the more expensive
+    kind of wrong — a model that believes it will not call `fetch_page`.
+    """
+    promises_full_content = re.compile(r"full page content|complete page content|entire page", re.I)
+    offenders = [t["name"] for t in toolkit.tools if promises_full_content.search(t["description"])]
+    assert offenders == [], f"descriptions promising full page content: {offenders}"

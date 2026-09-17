@@ -302,7 +302,7 @@ TOOL_DEFINITIONS = [
         "name": "sync_flex_archive",
         "capabilities": frozenset({"DATABASE"}),
         "description": (
-            "Download all Flex XML files from the 'ibkr_flex_archive' Google Drive subfolder "
+            "Download all Flex XML files from the 'account_data/' Google Drive subfolder "
             "and import them into the local SQLite trade store. Use for historical backfill: "
             "upload year-by-year XML files to Drive first, then run this once. "
             "Duplicates are handled automatically. Runs check_flex_coverage at the end."
@@ -347,7 +347,7 @@ TOOL_DEFINITIONS = [
             "all tradeIDs and checks whether they are present in SQLite. Reports per-file "
             "counts (XML records vs SQLite matches) and an aggregate summary. "
             "A missing tradeID means that execution was not imported. "
-            "Does not modify any data — read-only integrity check against the source files."
+            "Does not touch the trades table. It does write to the import manifest (flex_import_log): a first-encounter entry, and verified_at on each successful check."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -1037,7 +1037,7 @@ TOOL_DEFINITIONS = [
         "name": "firecrawl_search",
         "capabilities": frozenset({"NETWORK", "GOOGLE_DRIVE"}),
         "description": (
-            "Search the web using Firecrawl and return full page content as markdown. "
+            "Search the web using Firecrawl and return where to look: each result's URL, title and a ~400-character snippet — NOT full page text. Call fetch_page on a result to read it. "
             "Use for research, news, or fetching technical documentation. "
             "Optionally saves a Drive snapshot under web_docs/searches/ for later reference. "
             "Requires FIRECRAWL_API_KEY to be set."

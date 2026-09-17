@@ -102,3 +102,12 @@ def toolkit(mock_config):
     cache = MagicMock()
     store = MagicMock()
     return ClaudeToolkit(client, cache, store, mock_config)
+
+
+@pytest.fixture(scope="session")
+def package_source():
+    """Every line of package source, for description-vs-code honesty checks."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "ibkr_core_mcp"
+    return "\n".join(p.read_text() for p in sorted(root.rglob("*.py")))

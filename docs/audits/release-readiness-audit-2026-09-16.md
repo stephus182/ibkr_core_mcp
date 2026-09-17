@@ -20,7 +20,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 |---|---:|---:|---:|---:|---:|
 | `SEC` | 13 | 8 | 5 | — | — |
 | `WEB` | 9 | 2 | 7 | — | — |
-| `TOOL` | 12 | 7 | 5 | — | — |
+| `TOOL` | 12 | 10 | 2 | — | — |
 | `API` | 21 | 13 | 7 (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
@@ -29,9 +29,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCA-R` | 3 | 3 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
-| **Total** | **135** | **60** | **24** (+1 partial) | **0** | **50** |
+| **Total** | **135** | **63** | **21** (+1 partial) | **0** | **50** |
 
-`60 + 24 + 1 + 0 + 50 = 135`. **There are no unrecorded findings left.** All three blocks
+`63 + 21 + 1 + 0 + 50 = 135`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -77,9 +77,9 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (24, none Critical; +1 partial)
+### Open findings that do have a claim (21, none Critical; +1 partial)
 
-Closed since this table was written: `SEC-02`.
+Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`.
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
@@ -96,9 +96,6 @@ Closed since this table was written: `SEC-02`.
 | `SEC-08` | Low | Two more structural probes miss an ordinary alternative spelling |
 | `SEC-09` | Nit | "The default button is the abandon one" holds only on the `osascript` fallback |
 | `SEC-10` | Nit | `collapse_home` claims every surface; the SSE bearer-token log line writes the absolute home path |
-| `TOOL-03` | Medium | `sync_flex_archive` tells users to upload to `ibkr_flex_archive/`; the handler reads `account_data/` |
-| `TOOL-04` | Medium | `firecrawl_search` promises "full page content as markdown"; the handler returns 400 characters |
-| `TOOL-05` | Medium | `verify_flex_import` is described as "does not modify any data" while writing to `flex_import_log` |
 | `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
 | `API-05` | Medium | Positions page size documented as 30; IBKR documents 100. Confirmed from docs, indeterminate live |
 | `API-10` | Medium | `IBKR_AUTH_BROWSER` is honoured on one code path out of three |
@@ -2229,4 +2226,95 @@ call to `place_order` is caught by three tests; adding an unused entry to the ex
 caught. `git diff` after the battery: clean.
 
 Gates: ruff, ruff format, mypy (119 files), pytest **1,482 passed**, `pytest -m security`
+**249 passed**.
+
+---
+
+## Phase 3 — TOOL-03, TOOL-04, TOOL-05: one class, not three findings
+
+Three Medium findings, all of the form *the description says X, the handler does Y*. Taken
+together because that is a class, and because `tests/claude_tools/test_tool_descriptions.py`
+already exists to hold exactly this property.
+
+### Why the existing honesty suite was green
+
+It held **six hand-written assertions about six descriptions somebody had thought of** —
+`firecrawl_search` exposes `wait_for`/`proxy`, the crawl/search routing, no description names
+a deleted tool, the snapshot currency rules. There was no property connecting a description to
+what its handler does, so three descriptions nobody had thought of sailed through. A suite that
+fires only on the cases already known is the register's recurring shape in its mildest form.
+
+### The three, each measured
+
+| ID | Claim | What the code does |
+|---|---|---|
+| `TOOL-03` | upload to `'ibkr_flex_archive'` | the string appears **exactly once in the whole package — inside that description**. `sync_archive_from_drive()` reads `account_data/`, and the handler's own error says so |
+| `TOOL-04` | "return full page content as markdown" | `" ".join(markdown.split())[:400]` — a 400-character snippet with an ellipsis |
+| `TOOL-05` | "Does not modify any data — read-only integrity check" | `store.log_flex_import()` and `store.mark_flex_import_verified()` — two writes |
+
+**The shared root.** Each handler's own **docstring** is accurate: *"Returns where to look, not
+what is there"*; *"Updates verified_at in the manifest after each successful check"*. And
+`docs/tools-reference.md` already said `firecrawl_search` returns *"a ~400-character snippet —
+**not** full page text"*. The 2026-07-30 one-tool-one-job refactor updated the docstrings and
+the reference, and left the descriptions. **Docstrings are for humans and the reference is for
+readers; the description is the only text the model ever sees**, so it is the one that had to
+be right and the one that was not.
+
+### TOOL-05 stated precisely, not merely reversed
+
+`log_flex_import` inserts into `flex_import_log` and `mark_flex_import_verified` runs
+`UPDATE flex_import_log SET verified_at` — **both touch the manifest only; neither writes the
+`trades` table** (read in `store.py`, not assumed). So "does not modify any data" is too strong
+and "read-only" is wrong, but the tool is not dangerous either. The description now names what
+it writes instead of reversing the claim, and the `DATABASE` capability it already declared was
+right all along.
+
+**No Flex logic was touched.** `flex_query.py`, `flex_import.py`, `flex_store.py` and
+`flex_schema.py` are unchanged; the diff in the package is three description strings in
+`claude_tools.py`, confirmed by `git diff --name-only`.
+
+### Three properties, replacing three fixes
+
+| Property | Sweeps |
+|---|---|
+| No description claims read-only while the tool declares `DATABASE`/`GOOGLE_DRIVE`/`ACCOUNT_STATE` | all 44 |
+| Every folder token a description names occurs in package code somewhere other than descriptions | all 44 |
+| No description promises "full page content" | all 44 |
+
+Each reported **exactly its known offender and nothing else** when run against the unfixed
+tree, which is what makes the green run afterwards mean something.
+
+### Two failures of my own while building them
+
+**The capability check was vacuous.** It first read `toolkit.tools` — which is the wire format
+sent to the Anthropic API and deliberately **drops `capabilities`** — so `_capability_names()`
+returned an empty set for every tool and the check passed against a tree containing a known
+offender. `TOOL_DEFINITIONS` is the declaration; `toolkit.tools` is the projection. A vacuity
+guard now asserts the source actually carries capabilities.
+
+**The folder check reported clean and was broken.** Its first version stripped the descriptions
+from the source and searched the remainder; the strip silently failed because the description
+is split across source lines, so it found nothing — against a tree where `ibkr_flex_archive`
+was sitting in plain sight. It now counts occurrences in the package against occurrences in
+descriptions, and a known positive is asserted. *A check that reports clean against a known
+offender is broken, not clean* — the same lesson as the mutation harness earlier today.
+
+### The class swept, and one hit that was not a defect
+
+Re-running the finders tree-wide after fixing found **two more sites** in
+`docs/tools-reference.md` (the wrong folder, and the read-only claim), both corrected.
+
+A third hit — `web_scraper.py:280`, *"Search the web and return full page content as
+markdown"* — was checked and **left alone**: `FirecrawlClient.search` requests
+`scrapeOptions.formats=["markdown"]` and genuinely returns full markdown per result. The
+truncation belongs to the handler one layer up. The docstring is accurate at its layer, and a
+grep hit is a lead rather than a finding.
+
+### Verification
+
+Four mutants. The **no-op control survived**, as it must; re-introducing each of the three
+defects is caught by exactly one test. `git diff` after the battery showed only the three
+intended description lines.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,486 passed**, `pytest -m security`
 **249 passed**.

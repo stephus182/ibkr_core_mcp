@@ -293,7 +293,7 @@ Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.h
 ---
 
 ### `sync_flex_archive`
-Download all Flex XML files from the `ibkr_flex_archive` Google Drive subfolder and import
+Download all Flex XML files from the `account_data/` Google Drive subfolder and import
 them into the local SQLite trade store. Use for historical backfill: upload year-by-year
 XML files to Drive first, then run this once. Duplicates are handled automatically.
 Runs `check_flex_coverage` at the end.
@@ -330,8 +330,15 @@ necessarily missing imports — use `verify_flex_import` to distinguish.
 ---
 
 ### `verify_flex_import`
-Read-only integrity check — compares source XML archives in Google Drive `account_data/`
-against the local SQLite trades table. For each XML file, extracts all tradeIDs and checks
+Integrity check — compares source XML archives in Google Drive `account_data/`
+against the local SQLite trades table.
+
+> **Not read-only, though it never touches trade data.** This entry and the tool's own
+> description both said "read-only" until 2026-09-16. The handler writes to the import
+> manifest `flex_import_log` — `log_flex_import()` on first encounter and
+> `mark_flex_import_verified()` after each successful check — which is why the tool
+> correctly declares the `DATABASE` capability. The `trades` table is never written
+> (verified in `store.py`, TOOL-05). For each XML file, extracts all tradeIDs and checks
 whether they are present in SQLite. Reports per-file counts (XML records vs SQLite matches)
 and an aggregate summary. A missing tradeID means that execution was not imported.
 
