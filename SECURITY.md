@@ -153,7 +153,7 @@ and `claude_tools.py` / `mcp_server.py` may not name any of them.
 
 ### Gated vs. Ungated Endpoints
 
-**Gated (Touch ID → confirmation dialog required before any network call):**
+**Gated (Touch ID → confirmation dialog required before any order-write request):**
 
 | `IBKRClient` method | Dialog shown |
 |---|---|

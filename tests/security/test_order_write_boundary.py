@@ -22,6 +22,7 @@ from .structural import (
     function_named,
     functions_calling,
     functions_using_url_templates,
+    methods_reaching_the_network,
     names_referenced,
     package_sources,
 )
@@ -231,3 +232,128 @@ def test_a_body_mutated_after_the_dialog_is_not_the_body_sent(client, method):
             sent = post.call_args.args[1]
     assert shown["quantity"] == 1
     assert sent["quantity"] == 1, "the body sent is not the body the dialog showed"
+
+
+# ── The gate-ordering check, transitively ──────────────────────────────────────
+
+
+# One call is allowed to precede the gates, and only this one. IBKR documents
+# `GET /iserver/accounts` as a prerequisite that "must be called before modifying an order"
+# (`client.get_brokerage_accounts` docstring, receive-brokerage-accounts.md), and the
+# ordering is deliberate: `tests/test_client.py::test_place_order_initializes_accounts_
+# before_touch_id` requires it by name, so that a dead session fails fast instead of after
+# two human gates. It is a READ of the operator's own account list, on loopback, and it can
+# neither place, modify, cancel nor confirm an order.
+PRE_GATE_EXEMPT = {
+    "_ensure_accounts_initialized": (
+        "IBKR's documented prerequisite for order operations; a GET of the operator's own "
+        "account list. Ordering pinned by test_place_order_initializes_accounts_before_touch_id."
+    ),
+}
+
+
+def test_no_gated_method_reaches_the_network_indirectly_before_a_gate():
+    """`test_every_gated_method_runs_a_gate_before_its_first_network_call` asks whether a
+    gated method calls `_get`/`_post`/`_put` ITSELF. The property four documents stated was
+    broader — "both gates ... before any network call reaches IBKR" — and one call deeper
+    was invisible: every gated method opens with `_ensure_accounts_initialized()`, which
+    issues `GET /iserver/accounts` on a fresh session, before Gate 1 (SEC-02).
+
+    Driven 2026-09-16 with Gate 1 denying: 1 request on a fresh session, 0 once the flag is
+    already set. The second arm is what proves the first is real rather than a harness
+    artefact — and the documents have been corrected to the property that is both true and
+    the one that matters: no ORDER-WRITE request precedes the gates.
+    """
+    reaching = methods_reaching_the_network(CLIENT, NETWORK_CALLS) - set(PRE_GATE_EXEMPT)
+    offenders = {}
+    for name in GATED_OWNERS:
+        fn = function_named(CLIENT, name)
+        gates = call_lines(fn, GATE_CALLS)
+        early = [ln for ln in call_lines(fn, reaching - {name}) if ln < min(gates)]
+        if early:
+            offenders[name] = early
+    assert offenders == {}, f"network reached before a gate, indirectly: {offenders}"
+
+
+def test_the_transitive_probe_sees_the_exempted_call():
+    """The control. Without the exemption the probe must report all four gated methods —
+    otherwise `test_no_gated_method_reaches_the_network_indirectly_before_a_gate` passes
+    because the probe is blind, not because the property holds."""
+    reaching = methods_reaching_the_network(CLIENT, NETWORK_CALLS)
+    assert "_ensure_accounts_initialized" in reaching
+
+    seen = set()
+    for name in GATED_OWNERS:
+        fn = function_named(CLIENT, name)
+        gates = call_lines(fn, GATE_CALLS)
+        if [ln for ln in call_lines(fn, reaching - {name}) if ln < min(gates)]:
+            seen.add(name)
+    assert seen == {"place_order", "modify_order", "cancel_order", "reply_order"}, seen
+
+
+def test_the_transitive_probe_ignores_a_helper_that_touches_nothing():
+    """The counter-case: a probe that called everything network-reaching would make the
+    exemption list meaningless. Pure validators must not be flagged."""
+    reaching = methods_reaching_the_network(CLIENT, NETWORK_CALLS)
+    for pure in ("_validate_conid", "_validate_account_id", "_order_label", "_require_numeric"):
+        assert pure not in reaching, f"{pure} does not touch the network"
+
+
+def test_no_pre_gate_exemption_outlives_its_call_site():
+    """An exemption nothing exercises is a hole left open for a reason that has expired."""
+    for name in PRE_GATE_EXEMPT:
+        used = any(call_lines(function_named(CLIENT, owner), (name,)) for owner in GATED_OWNERS)
+        assert used, f"{name} is exempted but no gated method calls it"
+
+
+@pytest.mark.parametrize(
+    ("name", "call"),
+    [
+        ("place_order", lambda c: c.place_order("U1234567", {"conid": 265598, "side": "BUY", "quantity": 1})),
+        ("modify_order", lambda c: c.modify_order("U1234567", "123", {"conid": 265598, "quantity": 1})),
+        ("cancel_order", lambda c: c.cancel_order("U1234567", "123")),
+        ("reply_order", lambda c: c.reply_order("11111111-1111-4111-8111-111111111111")),
+    ],
+)
+def test_a_denied_gate_1_sends_no_order_write_however_fresh_the_session(client, name, call):
+    """The behavioural half of SEC-02, and the property the documents now state.
+
+    On a FRESH session one request precedes the gates — `GET /iserver/accounts`, IBKR's
+    documented prerequisite. Zero order writes do, whether the session is fresh or not.
+    Both arms are asserted: without the pre-initialised case the test cannot distinguish
+    "no order write escaped" from "nothing was attempted at all".
+    """
+    from unittest.mock import MagicMock, patch
+
+    from ibkr_core_mcp.exceptions import HumanAuthError
+
+    for fresh in (False, True):
+        client._accounts_initialized = not fresh
+        seen: list[tuple[str, str]] = []
+
+        def record(method, url, *args, _seen=seen, **kwargs):
+            _seen.append((method, url))
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {"accounts": ["U1234567"]}
+            return response
+
+        with (
+            patch.object(client._session, "request", side_effect=record),
+            patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
+            patch("ibkr_core_mcp.client.confirm_order_dialog"),
+            patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+            patch("ibkr_core_mcp.client.confirm_cancel_dialog"),
+            patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+            pytest.raises(HumanAuthError),
+        ):
+            call(client)
+
+        writes = [u for m, u in seen if m in {"POST", "DELETE"}]
+        assert writes == [], f"{name}: order write escaped a denied gate: {writes}"
+
+        reads = [u for m, u in seen if m == "GET"]
+        expected = 1 if fresh else 0
+        assert len(reads) == expected, f"{name}: fresh={fresh} expected {expected} GET, got {reads}"
+        if fresh:
+            assert reads[0].endswith("/iserver/accounts")

@@ -286,3 +286,33 @@ def arguments_passed_to(source: str, function: str, callees: Iterable[str]) -> s
         if isinstance(node, ast.Call) and callee_name(node) in wanted:
             passed.update(ast.unparse(a) for a in node.args)
     return passed
+
+
+def methods_reaching_the_network(source: str, primitives: Iterable[str]) -> set[str]:
+    """Every method that reaches the network, directly or through another method.
+
+    `test_order_write_boundary` asked only whether a gated method calls `_get`/`_post`
+    itself. Its stated property is broader — "gate before first network call" — and
+    `_ensure_accounts_initialized()` satisfied the check while issuing
+    `GET /iserver/accounts`, because the request is one call deeper
+    (release-readiness audit 2026-09-16, SEC-02). The fixed point below closes that gap for
+    any depth, so a helper introduced tomorrow is covered without being named.
+    """
+    direct = set(primitives)
+    callers: dict[str, set[str]] = {}
+    for fn in _functions(_tree(source)):
+        callees: set[str] = set()
+        for stmt in _body_without_docstring(fn):
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call):
+                    name = callee_name(node)
+                    if name:
+                        callees.add(name)
+        callers[fn.name] = callees
+
+    reaching = {name for name, callees in callers.items() if callees & direct}
+    while True:
+        grown = {name for name, callees in callers.items() if callees & reaching}
+        if grown <= reaching:
+            return reaching | direct
+        reaching |= grown

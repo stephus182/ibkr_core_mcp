@@ -23,7 +23,12 @@ captured responses both are checked against.
 **Security invariant.** Every order write method — `place_order`, `modify_order`,
 `cancel_order`, `reply_order`, and the `*_and_confirm` variants — runs two
 sequential human gates (Touch ID, then a visual confirmation dialog) *before* any
-network call reaches IBKR. The gates are enforced here, at the innermost call site,
+**order-write request** reaches IBKR. One read precedes them, deliberately:
+`_ensure_accounts_initialized()` issues IBKR's documented order prerequisite
+`GET /iserver/accounts` once per session, so a dead session fails before the human is
+asked rather than after. Nothing else does, and no write does — checked transitively by
+`tests/security/test_order_write_boundary.py` (SEC-02, 2026-09-16). The gates are
+enforced here, at the innermost call site,
 precisely so that no caller can route around them; they must never be moved
 outward, cached, or made bypassable. Read-only methods (`get_order_preview`, the
 order-status readers, alert management) are deliberately ungated. See the Security
@@ -1751,8 +1756,9 @@ class IBKRClient:
         body. When it covers this body, Gate 1 is not repeated; Gate 2 always runs. Called
         directly with none — the documented single-shot use — it prompts as it always has.
 
-        Both security gates fire before any network call. HumanAuthError is raised if either
-        gate fails or times out. ClaudIA constraint: ClaudeToolkit exposes no tool calling
+        Both security gates fire before the order is sent. HumanAuthError is raised if
+        either gate fails or times out. The one request that may precede them is the
+        session's first `GET /iserver/accounts` (see this module's docstring); no write does. ClaudIA constraint: ClaudeToolkit exposes no tool calling
         this method — order execution is UI-layer only, triggered by physical button click.
 
         ## GTC orders are not indefinite (verified live 2026-07-06, IBKR convention)

@@ -255,7 +255,16 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass both gates — in order — before any network call reaches IBKR.
+Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass
+both gates — in order — before **any order-write request** reaches IBKR.
+
+This read "before any network call reaches IBKR" until 2026-09-16 and that was wrong: on a
+fresh session each of the four opens with `_ensure_accounts_initialized()`, which issues
+`GET /iserver/accounts` — IBKR's documented prerequisite for order operations — before
+Gate 1. The ordering is deliberate (`test_place_order_initializes_accounts_before_touch_id`
+requires it by name) so a dead session fails fast rather than after two human gates.
+Measured with Gate 1 denying: one GET on a fresh session, zero once initialised, and
+**zero order writes either way** (audit finding SEC-02).
 
 `place_order_and_confirm` / `modify_order_and_confirm` take **one Touch ID for the whole chain** and show **a dialog for every chained reply**. The fingerprint is taken once, up front, and mints an `OrderWriteAuthorization` bound to the SHA-256 of that write's own body (300 s, frame-local, expiring closed); the write and every chained reply re-check *that* value instead of prompting again, and Gate 2 runs unskipped at each step. This is the 2026-09-11 rule — IBKR Mobile and TWS also ask once per placement — and it is stated correctly in `SECURITY.md` § Two-Gate System and `docs/security-architecture.md` § 6.1. **This file said "the same two gates again for every chained reply" until 2026-09-14**, which was wrong about Gate 1 and right about Gate 2. Full usage examples: `docs/order-management-examples.md`
 
@@ -313,7 +322,8 @@ declarations). Documentation only — no gate or classification changed.
 - Never move the gates out of `IBKRClient` — enforcement must be at the innermost call site.
 - The required policy is `LAPolicyDeviceOwnerAuthentication` (Touch ID/Face ID, falling back to the device's system password on a failed/cancelled biometric scan) — Apple's own recovery path for a genuinely-failed biometric read, not a bypass this library adds. The stricter biometrics-only policy was evaluated and rejected: a failed scan under it has no recovery path at all. Don't change this policy without updating both this file and `README.md`'s Security section in the same PR.
 - Any PR that weakens these gates *beyond* the documented policy above — e.g. skipping `require_touch_id`/`confirm_order_dialog` entirely, caching a prior success, or adding a fallback beyond the OS's own password prompt — will be rejected.
-- **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate, or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audits that produced them: `docs/audits/security-architecture-audit-2026-09-13.md` (invariants 1–10) and `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` (invariant 11, and the SSE bearer token in 10).
+- **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate — directly or through a helper, with
+  `_ensure_accounts_initialized` the one exemption, named and reasoned in the test — or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audits that produced them: `docs/audits/security-architecture-audit-2026-09-13.md` (invariants 1–10) and `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` (invariant 11, and the SSE bearer token in 10).
 
 ---
 

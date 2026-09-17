@@ -18,7 +18,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 
 | Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
 |---|---:|---:|---:|---:|---:|
-| `SEC` | 13 | 7 | 6 | — | — |
+| `SEC` | 13 | 8 | 5 | — | — |
 | `WEB` | 9 | 2 | 7 | — | — |
 | `TOOL` | 12 | 7 | 5 | — | — |
 | `API` | 21 | 13 | 7 (+1 partial) | — | — |
@@ -29,9 +29,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCA-R` | 3 | 3 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
-| **Total** | **135** | **59** | **25** (+1 partial) | **0** | **50** |
+| **Total** | **135** | **60** | **24** (+1 partial) | **0** | **50** |
 
-`59 + 25 + 1 + 0 + 50 = 135`. **There are no unrecorded findings left.** All three blocks
+`60 + 24 + 1 + 0 + 50 = 135`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -77,7 +77,9 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (25, none Critical)
+### Open findings that do have a claim (24, none Critical; +1 partial)
+
+Closed since this table was written: `SEC-02`.
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
@@ -89,7 +91,6 @@ three blocks.
 | `WEB-06` | Low | `pyproject.toml:63` and `:97` name the deleted fallback rung in the present tense |
 | `WEB-07` | Low | A live-test docstring documents a deleted method and tells the reader to export `ANTHROPIC_API_KEY` |
 | `WEB-08` | Nit | `docs/web-scraper-reference.md:353` cites `_MAX_CONCURRENT_FALLBACKS`, which exists nowhere — re-confirmed session 9 |
-| `SEC-02` | Medium | Three documents claim a gated method contacts no network before its gates; every one calls `_ensure_accounts_initialized()` first |
 | `SEC-06` | Low | `redact_error` claims to scrub `identifier: value` pairs; the JSON/quoted form is not scrubbed. No reachable leak shown |
 | `SEC-07` | Low | `OrderWriteAuthorization` binds body and order id but not account id |
 | `SEC-08` | Low | Two more structural probes miss an ordinary alternative spelling |
@@ -2149,3 +2150,83 @@ threshold, and `backtest`'s `win_rate` and `total_return` all fail a mutation im
 Phase 1 `DATA` slots are written off.
 
 Gates: ruff, ruff format, mypy, pytest **1,474 passed**, `pytest -m security` **241 passed**.
+
+---
+
+## Phase 3 — SEC-02: the claim was wrong, and I nearly fixed the wrong end of it
+
+First of the 25 readable open findings, taken in severity order. Recorded in Phase 1 as
+*"three documents claim a gated method contacts no network before its gates; every one calls
+`_ensure_accounts_initialized()` → `GET /iserver/accounts` first."*
+
+### Measured, both arms
+
+Driven against the real methods with Gate 1 raising `HumanAuthError`:
+
+| | requests before the denial |
+|---|---|
+| `_accounts_initialized = True` (the shared fixture's default) | **0** |
+| fresh session | **1** — `GET …/iserver/accounts`, on all four gated methods |
+
+The first row is the control: the probe can report zero, so the one is real. And it explains
+why this was never noticed — **`tests/conftest.py`'s shared `client` fixture pre-sets
+`_accounts_initialized = True`**, so no existing order test exercises the prerequisite at all.
+
+### Why the structural test passed
+
+`test_every_gated_method_runs_a_gate_before_its_first_network_call` states the property as
+"gate before first network call" and checks `call_lines(fn, ("_get", "_post", "_put",
+"with_retry"))` — **calls the method makes itself**. The request here is one level deeper,
+inside `_ensure_accounts_initialized`, so the checker could not see it. A property stated
+broader than the check that holds it: the register's recurring shape, now on its seventh
+instance.
+
+### The correction I almost made
+
+The obvious fix is to move `_ensure_accounts_initialized()` below the gates, making the strong
+claim true. **That would have broken a deliberate design**, and the thing that stopped it was
+checking what pins the current behaviour before changing it:
+`tests/test_client.py::test_place_order_initializes_accounts_before_touch_id` requires the
+ordering *by name*. It is there so a dead session fails fast instead of after two human gates,
+and `GET /iserver/accounts` is IBKR's own documented prerequisite for order operations.
+
+So SEC-02 is a **documentation defect, not a code defect**, and the code is left alone.
+
+### What changed
+
+**Six sites, not the three the finding named** — and two of them are in `client.py` itself, not
+in documentation. They were found by re-running the search after fixing the first four, which
+is the rule this same session had already broken once (DOCA-R2, where "11 tests" was fixed in
+two files and left in a third).
+
+| Site | Was |
+|---|---|
+| `CLAUDE.md:258` | "before any network call reaches IBKR" |
+| `CLAUDE.md:316` | "if a gated method reaches the network before a gate" |
+| `SECURITY.md:156` | "required before any network call" |
+| `docs/security-architecture.md:185` | "gate before first network call" |
+| `client.py:26` (module docstring) | "*before* any network call reaches IBKR" |
+| `client.py:1754` (`place_order`) | "Both security gates fire before any network call" |
+
+All now state the property that is **true and the one that matters**: no *order-write request*
+reaches IBKR before the gates. Each records the measured behaviour and why the ordering is
+deliberate.
+
+`structural.methods_reaching_the_network()` computes the network-reaching set as a **fixed
+point**, so a helper introduced at any depth tomorrow is covered without being named.
+`_ensure_accounts_initialized` is the single exemption, with its reason written beside it and
+a test that fails if an exemption is ever added that no gated method calls.
+
+### Verification
+
+Four new tests: the transitive check; a control that the probe reports all four methods
+*without* the exemption (so a pass means the property holds, not that the probe is blind); a
+counter-case that pure validators are never flagged; and a behavioural test asserting **zero
+order writes escape a denied Gate 1** on a fresh session and a pre-initialised one both.
+
+Three mutants. The **no-op control survived**, as it must. Adding a second pre-gate network
+call to `place_order` is caught by three tests; adding an unused entry to the exemption list is
+caught. `git diff` after the battery: clean.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,482 passed**, `pytest -m security`
+**249 passed**.
