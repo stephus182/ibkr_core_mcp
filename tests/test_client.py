@@ -2508,7 +2508,6 @@ def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
 
     cfg = Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="x",
         gdrive_folder_id="x",
         sqlite_path=pathlib.Path("/tmp/x.db"),
         gdrive_token_file=pathlib.Path("/tmp/t.json"),

@@ -234,7 +234,6 @@ def test_the_sse_token_line_logs_the_token_file_without_the_username(monkeypatch
     monkeypatch.setenv("HOME", str(tmp_path))
     config = Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="",
         gdrive_folder_id="",
         sqlite_path=tmp_path / ".ibkr_core" / "store.db",
         gdrive_token_file=tmp_path / ".ibkr_core" / "token.json",

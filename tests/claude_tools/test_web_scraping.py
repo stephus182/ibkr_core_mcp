@@ -57,7 +57,6 @@ def _make_toolkit():
 
     cfg = Config(
         gateway_url="http://localhost",
-        anthropic_api_key="sk-test",
         gdrive_folder_id="root-id",
         sqlite_path=Path("/tmp/store.db"),
         gdrive_token_file=Path("/tmp/token.json"),
@@ -82,7 +81,6 @@ def test_firecrawl_search_returns_no_key_message_when_key_missing():
 
     cfg = Config(
         gateway_url="http://localhost",
-        anthropic_api_key="sk-test",
         gdrive_folder_id="root-id",
         sqlite_path=Path("/tmp/store.db"),
         gdrive_token_file=Path("/tmp/token.json"),

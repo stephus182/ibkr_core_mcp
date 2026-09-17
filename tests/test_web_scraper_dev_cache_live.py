@@ -79,7 +79,6 @@ def dev_config(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("web_scraper_dev_cache_cfg")
     return Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="test-key",
         gdrive_folder_id="",
         sqlite_path=tmp / "store.db",
         gdrive_token_file=token_path,

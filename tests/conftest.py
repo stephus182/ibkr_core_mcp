@@ -16,7 +16,6 @@ def mock_config(tmp_path, tmp_db):
 
     return Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="test-key",
         gdrive_folder_id="test-folder-id",
         sqlite_path=tmp_db,
         gdrive_token_file=tmp_path / "token.json",
@@ -145,6 +144,13 @@ def client(mock_config):
 # `IBKR_AUTH_BROWSER` in claude_tools, `CRAWL4AI_PROFILES_DIR`). Scrubbing by prefix, not by
 # a hand-kept list: the first version listed 14 names, the test that checked them listed 7,
 # and neither had `IBKR_AUTH_BROWSER` (review 2026-09-13).
+#
+# `ANTHROPIC_` is deliberately kept although **nothing in this package reads it any more**
+# (TOOL-07, 2026-09-17, removed `Config.anthropic_api_key`). The scrubber's job is to keep
+# the operator's real secrets out of unit tests, not to mirror what the package consumes:
+# `ANTHROPIC_API_KEY` is still in the `.env` that `load_dotenv` can pull into `os.environ`,
+# and is the most valuable key there. Removing this prefix as "unused" would be a security
+# regression, so the reason is written here rather than left to be inferred.
 _SECRET_ENV_PREFIXES = ("IBKR_", "GDRIVE_", "GOOGLE_", "FIRECRAWL_", "ANTHROPIC_", "CRAWL4AI_")
 
 

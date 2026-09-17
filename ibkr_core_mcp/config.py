@@ -1,6 +1,6 @@
 """Environment-driven configuration for every ibkr_core_mcp service.
 
-A single `Config` dataclass carries the gateway URL, Anthropic key, Drive folder
+A single `Config` dataclass carries the gateway URL, Drive folder
 and credential paths, and SQLite location. `Config.from_env()` is the only intended
 constructor in application code; it reads a `.env` via python-dotenv and falls back
 to process environment variables.
@@ -10,10 +10,21 @@ it lets a caller construct a partial `Config` and have the *feature* that needs 
 given variable report "not configured" at the point of use, instead of making an
 unrelated import fail. See the standalone-dev note in `CLAUDE.md`.
 
-**One exception:** `from_env` raises `ConfigError` when `ANTHROPIC_API_KEY` is
-missing, because a toolkit with no key cannot do anything at all. That is exactly
-the trap `crawl4ai_profiles_dir_from_env` exists to work around for callers who
-only want the scraper — use it rather than `from_env` in that case.
+**There is no exception, since 2026-09-17.** `from_env` used to raise `ConfigError`
+when `ANTHROPIC_API_KEY` was missing, and this docstring gave the reason as "a toolkit
+with no key cannot do anything at all". That was false: `ClaudeToolkit` reads
+`flex_token`, `gateway_url`, `firecrawl_api_key` and `crawl4ai_profiles_dir` and never
+touched the Anthropic key, nothing in the package imported the `anthropic` SDK, and the
+field had zero readers from the day it was written (`182e483`, 2026-05-23; audit finding
+TOOL-07). It cost the MCP server its ability to start, and was routed around three times
+in two repositories rather than removed.
+
+**This package makes no model calls, so it carries no model credentials — from any
+vendor.** `ClaudeToolkit` defines tools; the host application owns the model client and
+gets its own credential from its own environment. `openai_api_key` would be as wrong here
+as `anthropic_api_key` was, which is why
+`test_config_carries_no_model_vendor_credential` states the rule as a property rather
+than a deletion.
 """
 
 from __future__ import annotations
@@ -30,12 +41,13 @@ _DEFAULT_CRAWL4AI_PROFILES_DIR = "~/.ibkr_core/crawl4ai_profiles"
 def crawl4ai_profiles_dir_from_env(dotenv_path: str | None = None) -> Path:
     """Resolve the saved-browser-profile root **without** building a full `Config`.
 
-    `Config.from_env()` raises when `ANTHROPIC_API_KEY` is unset, which is right for
-    application startup and wrong for the two profile CLIs: creating or listing a
-    saved browser login needs nothing from Anthropic, and routing them through
-    `from_env()` made `create-profile` fail with "ANTHROPIC_API_KEY is required but
-    not set" — an error naming a key the operation never uses. (Observed 2026-07-28
-    on the first real run.)
+    Written 2026-07-28 because `Config.from_env()` raised when `ANTHROPIC_API_KEY` was
+    unset, and `create-profile` then failed with "ANTHROPIC_API_KEY is required but not
+    set" — an error naming a key the operation never uses, seen on the first real run.
+    **That requirement is gone (TOOL-07, 2026-09-17)**, so this is no longer a workaround;
+    it is kept because it is still the narrower thing to call. The two profile CLIs need
+    one directory, not a whole `Config`, and a function that reads one variable cannot
+    fail for a reason belonging to another.
 
     Reads the same `.env` and the same `CRAWL4AI_PROFILES_DIR` variable as
     `Config.crawl4ai_profiles_dir`, and shares its default, so the two can never
@@ -58,13 +70,11 @@ class Config:
     Load from environment variables with Config.from_env(). All fields map
     directly to environment variables (see from_env docstring for the mapping).
 
-    Required env vars: ANTHROPIC_API_KEY.
-    Optional with defaults: IBKR_GATEWAY_URL, IBKR_SQLITE_PATH, GDRIVE_TOKEN_FILE,
+    No env var is required. Optional with defaults: IBKR_GATEWAY_URL, IBKR_SQLITE_PATH, GDRIVE_TOKEN_FILE,
     GDRIVE_CREDENTIALS_FILE. All others default to empty string (feature disabled).
     """
 
     gateway_url: str
-    anthropic_api_key: str = field(repr=False)
     gdrive_folder_id: str
     sqlite_path: Path
     gdrive_token_file: Path
@@ -98,7 +108,6 @@ class Config:
         """Load configuration from environment variables (with optional .env file).
 
         Environment variable → field mapping:
-          ANTHROPIC_API_KEY          → anthropic_api_key   (required)
           IBKR_GATEWAY_URL           → gateway_url         (default: https://localhost:5055/v1/api)
           GOOGLE_DRIVE_FOLDER_ID     → gdrive_folder_id    (required for Drive features)
           IBKR_SQLITE_PATH           → sqlite_path         (default: ~/.ibkr_core/store.db)
@@ -113,19 +122,14 @@ class Config:
           GDRIVE_WEB_DOCS_FOLDER_ID  → gdrive_web_docs_folder_id (optional; auto-created as web_docs/)
           CRAWL4AI_PROFILES_DIR      → crawl4ai_profiles_dir   (default: ~/.ibkr_core/crawl4ai_profiles)
 
-        Raises ConfigError if ANTHROPIC_API_KEY is not set.
+        Raises nothing: every value resolves to a default or an empty string, and the
+        feature that needs one reports "not configured" at the point of use. `ANTHROPIC_API_KEY`
+        was the single exception until 2026-09-17 — see the module docstring (TOOL-07).
         """
         load_dotenv(dotenv_path, override=False)
 
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            from ibkr_core_mcp.exceptions import ConfigError
-
-            raise ConfigError("ANTHROPIC_API_KEY is required but not set")
-
         return cls(
             gateway_url=os.environ.get("IBKR_GATEWAY_URL", "https://localhost:5055/v1/api"),
-            anthropic_api_key=api_key,
             gdrive_folder_id=os.environ.get("GOOGLE_DRIVE_FOLDER_ID", ""),
             sqlite_path=Path(os.environ.get("IBKR_SQLITE_PATH", "~/.ibkr_core/store.db")).expanduser(),
             gdrive_token_file=Path(os.environ.get("GDRIVE_TOKEN_FILE", "~/.ibkr_core/token.json")).expanduser(),

@@ -25,7 +25,6 @@ Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_conf
       "args": ["-m", "ibkr_core_mcp.mcp_server"],
       "env": {
         "IBKR_GATEWAY_URL": "https://localhost:5055/v1/api",
-        "ANTHROPIC_API_KEY": "sk-ant-...",
         "GOOGLE_DRIVE_FOLDER_ID": "...",
         "IBKR_SQLITE_PATH": "~/.ibkr_core/store.db",
         "GDRIVE_TOKEN_FILE": "~/.ibkr_core/token_ibkr_core_mcp.json",

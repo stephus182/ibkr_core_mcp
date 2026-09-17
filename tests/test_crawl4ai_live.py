@@ -37,7 +37,6 @@ def toolkit(tmp_path):
 
     config = Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="test-key",
         gdrive_folder_id="",
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=tmp_path / "token.json",

@@ -70,7 +70,6 @@ Create `.env` in your consuming project (same as macOS):
 
 ```
 IBKR_GATEWAY_URL=https://localhost:5055/v1/api
-ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_DRIVE_FOLDER_ID=1abc...xyz
 IBKR_SQLITE_PATH=~/.ibkr_core/store.db
 GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json
@@ -118,7 +117,6 @@ ClaudIA is designed to restore itself automatically on any machine. All persiste
 | `GOOGLE_DRIVE_FOLDER_ID` | Root folder — all subfolders auto-created on first use |
 | `GDRIVE_TOKEN_FILE` | OAuth2 token |
 | `GDRIVE_CREDENTIALS_FILE` | OAuth2 credentials |
-| `ANTHROPIC_API_KEY` | Claude API |
 | `IBKR_FLEX_TOKEN` + `IBKR_FLEX_QUERY_ID` | Re-sync full trade history from IBKR |
 
 `claudia.db` (conversation history) is downloaded automatically at session start. `store.db` rebuilds from the Flex XML archives in `account_data/` via `sync_flex_archive`.

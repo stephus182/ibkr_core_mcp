@@ -20,7 +20,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 |---|---:|---:|---:|---:|---:|
 | `SEC` | 13 | **13** | **—** | — | — |
 | `WEB` | 9 | **9** | — | — | — |
-| `TOOL` | 12 | 10 | 2 | — | — |
+| `TOOL` | 12 | **11** | **1** | — | — |
 | `API` | 21 | **20** | **0** (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
@@ -32,9 +32,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **146** | **93** | **2** (+1 partial) | **0** | **50** |
+| **Total** | **146** | **94** | **1** (+1 partial) | **0** | **50** |
 
-`93 + 2 + 1 + 0 + 50 = 146`. **There are no unrecorded findings left.** All three blocks
+`94 + 1 + 1 + 0 + 50 = 146`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -80,7 +80,7 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (2, none Critical; +1 partial)
+### Open findings that do have a claim (1, none Critical; +1 partial)
 
 Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
@@ -89,11 +89,10 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
 | `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
-> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13` and `API-15` left on 2026-09-17. This table is the
+> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15` and `TOOL-07` left on 2026-09-17. This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -3872,3 +3871,87 @@ is the same one.
 Separable sub-question either way: `anthropic>=0.28` is a base dependency nothing imports.
 
 **Awaiting the owner's decision. Nothing changed.**
+
+
+---
+
+## Phase 3 — `TOOL-07` closed: option C, and what it settles about model-agnosticism
+
+The owner chose **C — remove the field entirely** over my recommendation of A (keep the
+field, drop the raise), and gave the better reason for it:
+
+> *"this field should not exist in either shape."*
+
+That is a stronger argument than the one I offered. Mine was about compatibility, which is a
+cost, not a principle. Theirs is a design rule: **this package makes no model calls, so it
+carries no model credentials — from any vendor.** `ClaudeToolkit` defines tools; the host
+application owns the model client. The rule does not depend on a second model ever arriving.
+
+### What shipped
+
+`Config.anthropic_api_key` is gone and `Config.from_env()` raises nothing. 21 constructor
+arguments removed across 16 test files; `test_from_env_missing_api_key_raises` deleted, since
+its subject no longer exists.
+
+Written as a **property, not a deletion** — `test_config_carries_no_model_vendor_credential`
+scans `dataclasses.fields(Config)` for any field whose name pairs a vendor
+(`anthropic|openai|gemini|claude|llm|model`) with a secret (`key|token|secret|credential`).
+Mutation-tested with three different vendors, so it is a rule rather than a list of two names:
+
+```
+  ok  put anthropic_api_key back on Config                         -> caught
+  ok  add a DIFFERENT vendor's key instead (openai)                -> caught
+  ok  and a third (gemini), to prove it is not a name list of two  -> caught
+  ok  bring back the startup raise                                 -> caught
+  ok  drop ANTHROPIC_ from the test-env scrubber                   -> caught
+  XX  CONTROL (dead anchor, must be refused)                       -> not-applied
+```
+
+The first three of those were **first reported as "caught" for the wrong reason**: the mutant
+inserted a defaulted field ahead of a non-defaulted one, so the dataclass failed to build and
+pytest reported a *collection error*, not a test failure. Re-anchored into the defaulted-field
+block so the mutation is valid code and the test is what has to catch it. `1 failed` in place
+of `1 error`, and the failing test confirmed by name.
+
+### Two things deliberately kept
+
+- **`conftest._SECRET_ENV_PREFIXES` still scrubs `ANTHROPIC_`.** Nothing in the package reads
+  the variable now, but it is still the operator's most valuable secret and still sits in the
+  `.env` that `load_dotenv` can pull into `os.environ`. Removing the prefix as "unused" would
+  be a security regression, so the reason is written at the constant and
+  `test_the_scrubber_still_removes_a_key_the_package_no_longer_reads` holds it.
+- **`test_no_live_io`'s variable scan** legitimately stopped finding `ANTHROPIC_API_KEY` — it
+  is derived from package source on purpose. Its vacuity guard was re-pointed and now asserts
+  the *absence*, with the floor lowered 15 → 14 and the reason recorded.
+
+### The dependency question, investigated as the owner asked
+
+`anthropic>=0.28` is a **base** dependency. Measured: imported by exactly one file in the
+repository, `scripts/audit/count_tool_tokens.py` — an audit artifact, not shipped code. Every
+consumer installs it; nothing in `ibkr_core_mcp/` imports it, and `'anthropic' in sys.modules`
+is `False` after loading the whole package.
+
+**Recommendation: move it to the `dev` extra.** No shipped module imports it, so nothing
+breaks; it shrinks every consumer's install and its `pip-audit` surface. *Not changed —
+awaiting the owner, as asked.*
+
+### What model-agnosticism would actually cost
+
+Measured rather than estimated, because the instinct behind option C was "don't hardwire
+Anthropic", and it is worth knowing how hardwired this actually is.
+
+| Anthropic-specific | Measured | Verdict |
+|---|---|---|
+| The key name `input_schema` on all 44 tool definitions | 47 occurrences, 4 files. But the **value** is plain JSON Schema (`type`, `properties`, `required`) — what OpenAI and Gemini take too. And `mcp_server.py:129` **already translates** it to MCP's `inputSchema` in one line | Thin. A second adapter is a ~10-line function, not a refactor |
+| `anthropic>=0.28` base dependency | Imported by one audit script | Dead weight — see above |
+| Naming (`claude_tools.py`, `ClaudeToolkit`) | Cosmetic; `ClaudeToolkit.tools` is the host's public entry point | Renaming breaks consumers for no capability |
+
+Correctly Anthropic-*aware* and to be left alone: `redaction.py`'s `sk-ant-` pattern,
+`.gitleaks.toml`'s key rule, and the `ANTHROPIC_` scrub prefix. A secret detector has to know
+vendor shapes; that is not coupling.
+
+**Conclusion: the codebase is already close to model-agnostic, and the remaining coupling is a
+key name with a working one-line-adapter precedent.** The right move is the credential rule
+just shipped plus the dependency move — both of which delete dead weight — and *not* a
+speculative rename of 47 sites, which would churn a public surface and break the one real
+consumer to buy something a small adapter already provides on the day a second model appears.

@@ -34,7 +34,8 @@ Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API
 - Python 3.11 – 3.13 (3.14 not yet supported — enforced by `requires-python`)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for `GatewayManager`)
 - An **Interactive Brokers** account (live or paper)
-- Anthropic API key (for Claude AI tools / MCP server)
+- An Anthropic API key if *your* application drives Claude — this package never calls a
+  model, so it neither needs nor accepts one (see `ClaudeToolkit` below)
 
 ### macOS — required for order execution
 
@@ -373,7 +374,6 @@ Copy `.env.example` to `.env` and fill in:
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ for `Config.from_env()` | Anthropic API key (required by `ClaudeToolkit`; `Config.from_env()` raises if absent) |
 | `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055/v1/api`) — the `/v1/api` suffix is required; paths are appended verbatim |
 | `IBKR_SQLITE_PATH` | optional | SQLite store path (default: `~/.ibkr_core/store.db`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | for GDrive | Root Drive folder — parent of `db/` and `market_data/` subfolders |

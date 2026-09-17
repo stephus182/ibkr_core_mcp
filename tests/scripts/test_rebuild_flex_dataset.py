@@ -45,7 +45,6 @@ def _seed_live_row(db) -> None:
     store = SQLiteStore(
         Config(
             gateway_url="https://localhost:5055/v1/api",
-            anthropic_api_key="test-key",
             gdrive_folder_id="test-folder-id",
             sqlite_path=db,
             gdrive_token_file=db.parent / "token.json",

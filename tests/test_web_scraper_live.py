@@ -71,7 +71,6 @@ def live_config(firecrawl_key, tmp_path_factory):
     tmp = tmp_path_factory.mktemp("web_scraper_live_cfg")
     return Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "test-key"),
         gdrive_folder_id="test-folder-id",
         sqlite_path=tmp / "store.db",
         gdrive_token_file=tmp / "token.json",

@@ -78,6 +78,33 @@ failed before its fix:
   the `mcp` floor is 1.10 (`transport_security` did not exist before); the audit scripts parse
   the definitions again; the CI audit uses pip-audit's requirements mode and installs nothing.
 
+### Removed
+- **BREAKING — `Config.anthropic_api_key` is gone, and `Config.from_env()` no longer requires
+  `ANTHROPIC_API_KEY`.** The field was required from the first `Config` commit (`182e483`,
+  2026-05-23) and **never had a reader**: zero attribute accesses anywhere in the package, and
+  `anthropic` never entered `sys.modules` even with `claude_tools` and `mcp_server` imported.
+  `config.py`'s own docstring justified it as "a toolkit with no key cannot do anything at all",
+  which was false — `ClaudeToolkit` reads `flex_token`, `gateway_url`, `firecrawl_api_key` and
+  `crawl4ai_profiles_dir` and never this one. The cost was real: `mcp_server.main()` calls
+  `from_env()`, so **the MCP server refused to start without a key no part of it uses**, and the
+  requirement had been routed around three times in two repositories
+  (`crawl4ai_profiles_dir_from_env` here; `gateway_preflight.gateway_url` in claudia_ui) rather
+  than removed. `docs/mcp-server-reference.md` also told operators to put a real `sk-ant-…` into
+  Claude Desktop's plaintext config for that process. Audit finding TOOL-07.
+
+  **The rule this establishes is not Anthropic-specific.** This package makes no model calls —
+  `ClaudeToolkit` defines tools and the host application owns the model client — so it carries
+  no model credentials from any vendor. `test_config_carries_no_model_vendor_credential` states
+  that as a property, so adding `openai_api_key` or `gemini_api_key` later fails the same way.
+
+  **Migration.** Callers using `Config.from_env()` need no change beyond being able to drop the
+  variable. Callers constructing `Config(...)` by keyword must delete `anthropic_api_key=`;
+  positional constructions shift by one. Anything reading `config.anthropic_api_key` should read
+  `os.environ["ANTHROPIC_API_KEY"]`, or simply construct the SDK client with no argument —
+  `anthropic.Anthropic()` reads the variable itself, which is what the one known consumer
+  already does. `ANTHROPIC_` remains in `tests/conftest.py`'s scrubbed prefixes on purpose: it
+  is still the operator's most valuable secret even though this package no longer reads it.
+
 ### Added
 - **Tool capability registry**: every `TOOL_DEFINITIONS` entry and both server-local tools carry
   a `capabilities` frozenset from `claude_tools.CAPABILITIES`; `ClaudeToolkit.tools` strips it

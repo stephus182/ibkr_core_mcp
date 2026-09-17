@@ -63,7 +63,6 @@ def toolkit(tmp_path):
 
     config = Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="unused-by-the-scraper",
         gdrive_folder_id="",
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=tmp_path / "token.json",
@@ -241,7 +240,6 @@ def test_firecrawl_search_reaches_hosts_search_site_never_could(tmp_path):
 
     config = Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="unused-by-the-scraper",
         gdrive_folder_id="",
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=tmp_path / "token.json",
@@ -358,7 +356,6 @@ def test_a_public_url_that_redirects_to_loopback_never_reaches_it(browser_availa
 
         config = Config(
             gateway_url="https://localhost:5055/v1/api",
-            anthropic_api_key="unused-by-the-scraper",
             gdrive_folder_id="",
             sqlite_path=tmp_path / "store.db",
             gdrive_token_file=tmp_path / "token.json",

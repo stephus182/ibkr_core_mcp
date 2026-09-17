@@ -160,7 +160,7 @@ which point the ladder had nothing left to do.
 | Env var | Field | Required for | Default |
 |---|---|---|---|
 | `FIRECRAWL_API_KEY` | `firecrawl_api_key` | **`firecrawl_search` only.** Without it that one tool reports "not available" rather than raising. `fetch_page`, `crawl_site` and `search_site` need no key at all — they are a local browser and public sitemaps. | — |
-| `ANTHROPIC_API_KEY` | `anthropic_api_key` | **Nothing in the scraper.** The completeness judge that used it was deleted 2026-07-30 (§1.1). Still required by `Config` itself. | — |
+| `ANTHROPIC_API_KEY` | *(no field)* | **Nothing, anywhere in this package.** The completeness judge that used it was deleted 2026-07-30 (§1.1), and `Config.anthropic_api_key` itself was removed 2026-09-17 — it never had a reader (TOOL-07). | — |
 | `GOOGLE_DRIVE_FOLDER_ID` | `gdrive_folder_id` | Drive persistence, unless `GDRIVE_WEB_DOCS_FOLDER_ID` is set | — |
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | `gdrive_web_docs_folder_id` | Overrides the `web_docs/` root | auto-created under `gdrive_folder_id` |
 | `GDRIVE_TOKEN_FILE` | `gdrive_token_file` | Drive OAuth | `~/.ibkr_core/token.json` |

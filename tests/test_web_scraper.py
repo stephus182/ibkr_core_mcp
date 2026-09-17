@@ -377,7 +377,6 @@ def _make_cfg_with_drive(tmp_path):
     creds_file.write_text("{}")
     return Config(
         gateway_url="http://localhost",
-        anthropic_api_key="sk-test",
         gdrive_folder_id="root-folder-id",
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=token,
@@ -477,7 +476,6 @@ def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tm
     creds_file.write_text("{}")
     cfg = Config(
         gateway_url="http://localhost",
-        anthropic_api_key="sk-test",
         gdrive_folder_id="root-folder-id",
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=token,
@@ -510,7 +508,6 @@ def _make_store_with_mock_service(tmp_path):
     creds_file.write_text("{}")
     cfg = Config(
         gateway_url="http://localhost",
-        anthropic_api_key="sk-test",
         gdrive_folder_id="root-id",
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=token,

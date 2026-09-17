@@ -128,7 +128,6 @@ def test_ibkr_clients_default_auth_honours_ibkr_auth_browser(monkeypatch, tmp_pa
     IBKRClient(
         Config(
             gateway_url="https://localhost:5055/v1/api",
-            anthropic_api_key="test-key",
             gdrive_folder_id="",
             sqlite_path=tmp_path / "store.db",
             gdrive_token_file=tmp_path / "token.json",

@@ -48,7 +48,6 @@ def live_config(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("live_cfg")
     return Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="test-key",
         gdrive_folder_id="test-folder-id",
         sqlite_path=tmp / "store.db",
         gdrive_token_file=tmp / "token.json",

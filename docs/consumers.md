@@ -10,6 +10,25 @@
 
 ## Changes consumers should know about
 
+### 2026-09-17 — BREAKING: `Config` no longer carries an Anthropic key
+
+`Config.anthropic_api_key` is removed and `Config.from_env()` no longer raises when
+`ANTHROPIC_API_KEY` is unset. Nothing in this package ever read the field (audit finding
+TOOL-07), while `mcp_server` refused to start without it.
+
+- **`Config.from_env()` callers**: no change required.
+- **Keyword `Config(...)` constructions**: delete `anthropic_api_key=`.
+- **Positional `Config(...)` constructions**: the second argument is now `gdrive_folder_id`.
+- **Anything reading `config.anthropic_api_key`**: read the environment, or construct the SDK
+  client with no argument — `anthropic.Anthropic()` and `AsyncAnthropic()` read
+  `ANTHROPIC_API_KEY` themselves. ClaudIA already does this (`claudia/agent.py`) and needs no
+  change; it neither constructs `Config(...)` directly nor reads the field.
+- **MCP setup**: `ANTHROPIC_API_KEY` can be dropped from the `env` block in
+  `claude_desktop_config.json`. The server never used it.
+
+The rule going forward: this package makes no model calls, so it carries **no model credentials
+from any vendor**. A host app owns its model client and its own key.
+
 ### 2026-08-10 — Flex sync and coverage text
 
 `sync_flex_trades` and `check_flex_coverage` can now emit two lines they never did before.

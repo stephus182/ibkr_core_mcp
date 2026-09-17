@@ -189,7 +189,6 @@ Create `.env` in any consuming project (not in this repo):
 
 ```
 IBKR_GATEWAY_URL=https://localhost:5055/v1/api
-ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_DRIVE_FOLDER_ID=1abc...xyz
 IBKR_SQLITE_PATH=~/.ibkr_core/store.db
 GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json

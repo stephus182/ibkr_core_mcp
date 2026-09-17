@@ -42,15 +42,41 @@ SECRET_ENV_VARS = sorted(_variables_the_package_reads())
 
 
 def test_the_variable_scan_finds_the_known_readers():
+    """Vacuity guard on the scan: it must still find the variables the package really reads.
+
+    `ANTHROPIC_API_KEY` was in this set until 2026-09-17 and is not any more — the package
+    stopped reading it when `Config.anthropic_api_key` was removed (TOOL-07). That is the
+    scan working, not the scan breaking: it is derived from package source on purpose.
+    `conftest._SECRET_ENV_PREFIXES` still scrubs `ANTHROPIC_` from every unit test, by
+    prefix and for a different reason, which `test_the_scrubber_still_removes_a_key_the_package_no_longer_reads`
+    below holds.
+    """
     found = set(SECRET_ENV_VARS)
     assert {
-        "ANTHROPIC_API_KEY",
         "FIRECRAWL_API_KEY",
         "IBKR_FLEX_TOKEN",
         "IBKR_AUTH_BROWSER",
         "GDRIVE_TOKEN_FILE",
     } <= found
-    assert len(found) >= 15
+    assert "ANTHROPIC_API_KEY" not in found, (
+        "the package reads ANTHROPIC_API_KEY again — TOOL-07 removed the only reader; "
+        "if that is deliberate, Config is carrying a model credential again and "
+        "test_config_carries_no_model_vendor_credential should have caught it first"
+    )
+    # 14 since TOOL-07 removed ANTHROPIC_API_KEY's only reader; it was 15 before.
+    assert len(found) >= 14
+
+
+def test_the_scrubber_still_removes_a_key_the_package_no_longer_reads(monkeypatch):
+    """`ANTHROPIC_API_KEY` is still the operator's most valuable secret and still lives in
+    the `.env` that `load_dotenv` can pull in. The scrubber keeps it out of unit tests
+    whether or not this package consumes it, so removing the prefix as "unused" would be a
+    security regression rather than a tidy-up (TOOL-07, 2026-09-17)."""
+    from tests.conftest import _SECRET_ENV_PREFIXES
+
+    assert "ANTHROPIC_" in _SECRET_ENV_PREFIXES
+    # The autouse fixture has already run for this test.
+    assert "ANTHROPIC_API_KEY" not in os.environ, "the operator's Anthropic key reached a unit test"
 
 
 def test_name_resolution_is_blocked_inside_a_unit_test():
@@ -71,7 +97,6 @@ def test_no_secret_variable_is_visible_to_a_unit_test():
 def test_constructing_a_config_does_not_load_the_repository_dotenv(tmp_path):
     Config(
         gateway_url="https://localhost:5055/v1/api",
-        anthropic_api_key="x",
         gdrive_folder_id="f",
         sqlite_path=tmp_path / "x.db",
         gdrive_token_file=tmp_path / "t",
@@ -82,8 +107,8 @@ def test_constructing_a_config_does_not_load_the_repository_dotenv(tmp_path):
 
 
 def test_config_from_env_sees_only_what_the_test_set(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test-only")
     cfg = Config.from_env()
-    assert cfg.anthropic_api_key == "test-only"
-    assert cfg.firecrawl_api_key == ""
+    assert cfg.firecrawl_api_key == "fc-test-only"
+    assert cfg.flex_token == ""
     assert cfg.gdrive_token_file == Path("~/.ibkr_core/token.json").expanduser()

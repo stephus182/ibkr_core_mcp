@@ -101,7 +101,6 @@ def empty_db(tmp_path: Path) -> Path:
     store = SQLiteStore(
         Config(
             gateway_url="https://localhost:5055/v1/api",
-            anthropic_api_key="test-key",
             gdrive_folder_id="test-folder-id",
             sqlite_path=db,
             gdrive_token_file=tmp_path / "token.json",
