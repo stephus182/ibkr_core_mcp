@@ -697,3 +697,81 @@ def test_child_exit_error_names_the_main_guard_as_a_likely_cause(tmp_path):
         "the exception message itself does not name the spawn guard, so a caller that "
         f"only sees str(exc) cannot act on it:\n{error_line}"
     )
+
+
+# ── Trade-level metrics, pinned to values ─────────────────────────────────────
+#
+# Three mutations to `_compute_metrics` survived the whole unit run:
+#
+#   `sum(trade_pnl)`            expectancy as a TOTAL rather than a mean
+#   `gross_loss / sum(wins)`    profit factor INVERTED
+#   `sum(losses)`               gross loss left signed, which makes the `> 0` guard
+#                               false and turns every profit factor into None
+#
+# `win_rate` and `total_return` were caught; `expectancy` and `profit_factor` had no test
+# that constrained their value at all. An inverted profit factor is the sharp one: it is
+# still positive, still monotone across strategies, and reports a profitable system as
+# losing (4.0 becomes 0.25, and the threshold everyone reads is 1.0).
+#
+# `_compute_metrics` is called directly — it takes a frame with `close` and `signal` and
+# needs no sandbox subprocess, so the arithmetic can be pinned without the machinery.
+
+
+def _two_trade_frame():
+    """One +20% trade and one -5% trade, deliberately asymmetric.
+
+    A symmetric pair (+10%/-10%) was tried first and is useless here: expectancy is 0 and
+    the profit factor is 1.0, which is *also* what the inverted spelling returns. The
+    asymmetry is what makes the mutants visible.
+
+    `signal` is shifted one bar by `_compute_metrics` ("trade on next bar open"), so a 1 on
+    bar 0 captures the bar 0 -> 1 move.
+    """
+    return pd.DataFrame(
+        {
+            "close": [100.0, 120.0, 120.0, 120.0, 114.0, 114.0],
+            "signal": [1, 0, 0, 1, 0, 0],
+        }
+    )
+
+
+def test_expectancy_is_the_mean_trade_and_not_the_total():
+    """Two trades, +20% and -5%: expectancy is (0.20 - 0.05) / 2 = **0.075**.
+    The total is 0.15 — twice the answer here, and n times it in general."""
+    from ibkr_core_mcp.backtest import _compute_metrics
+
+    result = _compute_metrics(_two_trade_frame(), "t", "TEST", periods=252)
+
+    assert result.num_trades == 2
+    assert result.expectancy == pytest.approx(0.075)
+
+
+def test_profit_factor_is_gross_win_over_gross_loss():
+    """0.20 / 0.05 = **4.0**. Inverted it reads 0.25 — below 1.0, the threshold that
+    separates a profitable system from a losing one, so the error flips the conclusion
+    rather than merely scaling it."""
+    from ibkr_core_mcp.backtest import _compute_metrics
+
+    result = _compute_metrics(_two_trade_frame(), "t", "TEST", periods=252)
+
+    assert result.profit_factor is not None, "a losing trade exists, so the ratio is defined"
+    assert result.profit_factor == pytest.approx(4.0)
+    assert result.profit_factor > 1.0, "a system with a 4:1 win/loss ratio reported as losing"
+
+
+def test_profit_factor_is_none_when_nothing_was_lost():
+    """Documented behaviour: `None`, not `inf` — "a strategy that never lost has an
+    undefined ratio, and any number here would be read as a measured edge".
+
+    This is also the counter-case for the signed-`gross_loss` mutant: leaving the sum
+    signed makes `gross_loss > 0` false for every losing strategy, so profit factor becomes
+    None everywhere. Without this test, "None when there are no losses" and "None always"
+    are indistinguishable."""
+    from ibkr_core_mcp.backtest import _compute_metrics
+
+    winners_only = pd.DataFrame({"close": [100.0, 110.0, 110.0, 110.0, 121.0, 121.0], "signal": [1, 0, 0, 1, 0, 0]})
+    result = _compute_metrics(winners_only, "t", "TEST", periods=252)
+
+    assert result.num_trades == 2
+    assert result.profit_factor is None
+    assert _compute_metrics(_two_trade_frame(), "t", "TEST", periods=252).profit_factor is not None

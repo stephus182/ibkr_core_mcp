@@ -22,20 +22,24 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `WEB` | 9 | 2 | 7 | — | — |
 | `TOOL` | 12 | 7 | 5 | — | — |
 | `API` | 21 | 13 | 7 (+1 partial) | — | — |
-| `DATA` | 25 | 8 | — | **17** | — |
+| `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | 6 | 6 | — | — | — |
 | `DOCA-R` | 3 | 3 | — | — | — |
+| `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
-| **Total** | **130** | **54** | **25** (+1 partial) | **17** | **33** |
+| **Total** | **135** | **59** | **25** (+1 partial) | **0** | **50** |
 
-`54 + 25 + 1 + 17 + 33 = 130`. "Written off" is its own column and not folded into either
+`59 + 25 + 1 + 0 + 50 = 135`. **There are no unrecorded findings left.** All three blocks
+(`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
+findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
+range over. "Written off" is its own column and not folded into either
 "closed" or "no claim recorded", because it is neither: those 18 slots were never readable and
 never will be, and the six `DOCB-R` findings that replace them are a **fresh** audit of the
 same documents, not a recovery of what they said.
 
-**`DOCB` and `DOCA` re-derived, session 9.** The 18 unwritten `DOCB` slots are **written off, not
+**`DOCB`, `DOCA` and `DATA-03…19` re-derived, session 9.** The 18 unwritten `DOCB` slots are **written off, not
 closed** — their claims are unrecoverable. In their place the same 19 documents were
 re-audited from scratch and produced `DOCB-R1…R6`, all six raised and closed (one High, three
 Medium, two Low), plus four untested public behaviours in `indicators.py` and `models.py` that
@@ -51,7 +55,7 @@ live suite's 38 type-only assertions; price alerts non-functional). The 44 above
 *register IDs resolved*. Both are true and they measure different things; the second is the
 one a tag decision needs, so it is the one stated here from now on.
 
-### 50 findings have no claim recorded — this is the blocker
+### ~~50 findings have no claim recorded — this is the blocker~~ — RESOLVED, session 9
 
 **Only 73 of the 120 IDs appear anywhere in this 1,700-line report. 47 never appear at all**,
 and six more appear only as the endpoints of a range (`DATA-06 … DATA-10 | Medium |`) whose
@@ -60,8 +64,8 @@ report and the per-finding text was not.
 
 | Block | IDs | What exists | State |
 |---|---|---|---|
-| `DATA-03…05` | 3 (**High**) | the cell reads `(see full report)` — there is no full report | **outstanding** |
-| `DATA-06…19` | 14 | table cells are empty | **outstanding** |
+| `DATA-03…05` | 3 (**High**) | the cell reads `(see full report)` — there is no full report | re-derived session 9 → `DATA-R1…R5` |
+| `DATA-06…19` | 14 | table cells are empty | re-derived session 9 → `DATA-R1…R5` |
 | `DOCA-03…09, 12…17, 20, 21` | 15 | never written | re-derived session 9 → `DOCA-R1…R3`, `API-R1` |
 | `DOCB-02…19` | 18 (4 **High**) | never written | re-derived session 9 → `DOCB-R1…R6` |
 
@@ -110,9 +114,8 @@ depending on that reading.
 
 ### What has to happen before a tag is even decidable
 
-1. ~~Re-derive `DOCB` (18)~~ and ~~`DOCA` (15)~~ — **both done, session 9**, yielding
-   `DOCB-R1…R6`, `DOCA-R1…R3` and `API-R1`. **Still to do: `DATA-03…19` (17)**, by auditing
-   those files directly, as `analytics.py` was. Until that is done the register has no
+1. ~~Re-derive `DOCB`, `DOCA` and `DATA-03…19`~~ — **all three done, session 9**, yielding
+   `DOCB-R1…R6`, `DOCA-R1…R3`, `DATA-R1…R5` and `API-R1`, all closed. The register now has a
    terminating condition.
 2. Then the 25 readable open findings, in severity order — all Medium and below except
    `TOOL-01`, which is blocked upstream and cannot be closed here.
@@ -2053,3 +2056,96 @@ the first one.
 
 `DOCA-R1…R3` and `API-R1` raised and closed, `API-R1` pending live confirmation. The 15
 Phase 1 `DOCA` slots are written off.
+
+---
+
+## Phase 3 — `DATA-03…19` re-derived (session 9)
+
+The last unrecorded block. Seventeen slots: three marked "(see full report)" and fourteen
+with empty claim cells. Written off and replaced by `DATA-R1…R5`.
+
+### Method: mutation, not reading
+
+The two precedents in this domain both found their defects by **changing the code and seeing
+whether anything failed**, never by reading it — the indicator sweep (six findings behind
+thirteen tests that could not detect a wrong formula) and the analytics sweep (`DATA-25`).
+So 21 plausible defects were introduced across `analytics.py`, `backtest.py`, `cache.py`,
+`store.py`, `flex_import.py` and `pinescript.py`, each run against the **whole** unit suite.
+
+### The harness lied, and a no-op control is what caught it
+
+The first battery reported *every* mutation as caught. The harness took its test selection as
+one shell string, `"tests/ -m 'not integration'"`, and word-splitting handed pytest a literal
+`'not` as the marker — so **pytest errored out on every run, and a non-zero exit was read as
+"the mutation was caught"**. Fifteen results were fabricated, including four that this report
+would otherwise have recorded as evidence that `cagr` and `calmar` were well covered.
+
+It was found by a deliberate **no-op mutation** — appending `# noqa` to a `def` line — which
+cannot change behaviour and must therefore survive. It was reported caught. That is the only
+reason the battery was re-run.
+
+The harness now distinguishes three outcomes, not two: tests failed (caught), tests passed
+(survived), and *pytest itself did not run* (discarded). It also refuses to report when the
+mutation text was not found — the failure mode that produced a false survivor in the SEC-13
+work earlier the same day, where `ruff format` had re-flowed a `frozenset` between writing a
+`sed` and running it.
+
+**Three instances of the same shape in one session**: a control that imported its oracle from
+the code under test (SEC-13), a mutation that never applied (SEC-13), and a harness that
+scored a crash as a pass (here). The audit's recurring finding is *a control that cannot
+fail*; these are the auditor's own.
+
+A second lesson, cheaper: the backgrounded battery was killed mid-mutation and **left a mutant
+in the working tree**. `git diff` after every battery is now part of the procedure.
+
+### Findings — all five are metrics with no value pinned
+
+| ID | Sev | Finding | Measured |
+|---|---|---|---|
+| `DATA-R1` | **High** | `sharpe` does not de-annualise `risk_free` — untested because every test passes the default `0.0` | at 4%: correct −2.36, mutant **−70.93** |
+| `DATA-R2` | Medium | `sharpe`'s `ddof` unpinned — population vs sample stdev | ratio exactly `sqrt(n/(n−1))`; **5.4%** at n=10 |
+| `DATA-R3` | **High** | `cagr`'s years denominator and exponent both unpinned | 0.2493 → **0.5608** / **6.4149** |
+| `DATA-R4` | **High** | `calmar` entirely unpinned — *multiplying* by drawdown instead of dividing survives | 0.6462 → **0.0258** |
+| `DATA-R5` | **High** | `backtest.expectancy` and `profit_factor` unpinned; inverted profit factor survives | 4.0 → **0.25**, which reads as a losing system |
+
+`DATA-R1` and `DATA-R3` are the **same defect class as DATA-02** — the Critical where
+`run_backtest` annualised intraday Sharpe with `periods=252`. `DATA-R2` is the same class as
+`DATA-21`, where the Bollinger band width was out by exactly `sqrt(20/19)`. Both classes were
+fixed at one site and never swept.
+
+`DATA-R4` is the sharpest: `cagr(returns, periods) * abs(mdd)` instead of `/` survived 1,469
+tests. It stays positive and preserves the ordering between strategies, so nothing about it
+looks wrong — it simply is not the Calmar ratio.
+
+`DATA-R5`'s inverted profit factor is the same shape. 4.0 becomes 0.25, and **1.0 is the
+threshold a reader uses to decide whether a system makes money**, so the error changes the
+conclusion rather than the magnitude.
+
+### What the 2026-09-16 analytics sweep had already said
+
+That sweep wrote: *"every test for `sharpe`, `max_drawdown`, `cagr` and `calmar` was a shape or
+sign assertion … Only `sortino` had ever been pinned to an outside worked example."* It named
+four metrics, fixed the one that was **wrong** (`max_drawdown`, DATA-25), pinned that one to
+Investopedia — and left the other three unpinned, because they were *correct*. Correct and
+unpinned is exactly the state this audit keeps finding; the sweep diagnosed the class and
+treated one instance.
+
+All three are now pinned to published references: `sharpe` to Wikipedia's Example 2
+(12% return, 10% σ, 5% risk-free ⇒ **0.7**), `cagr` to Investopedia's (10,000 → 19,500 over
+three years ⇒ **24.93%**) plus the identity that a constant annual return of x gives a CAGR of
+exactly x, and `calmar` to a hand-computed −20%/+50%/+20% path (CAGR 0.1292432, drawdown
+−0.20, ⇒ **0.6462162**), which also re-exercises DATA-25's starting-capital peak.
+
+### Verified correct and well covered
+
+Not everything was unpinned, and the mutants say which: `cache.check`'s one-day staleness
+window, `flex_import`'s row-uid occurrence counter and its refusal to accept a trade with
+neither `ibExecID` nor `tradeID`, `pinescript._sanitize`'s length cap, `store`'s 45-day gap
+threshold, and `backtest`'s `win_rate` and `total_return` all fail a mutation immediately.
+
+### Status
+
+`DATA-R1…R5` raised and closed. Eleven mutants caught after the fixes, zero survivors. The 17
+Phase 1 `DATA` slots are written off.
+
+Gates: ruff, ruff format, mypy, pytest **1,474 passed**, `pytest -m security` **241 passed**.

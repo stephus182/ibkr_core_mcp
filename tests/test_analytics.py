@@ -390,3 +390,202 @@ def test_calmar_is_not_zero_for_a_strategy_that_only_lost_money():
     ruined = pd.Series([-0.50, 0.0, 0.0, 0.0])
 
     assert calmar(ruined) < 0.0, "a total loss must not score Calmar 0.0"
+
+
+# ── sharpe, pinned to a value rather than to a sign ────────────────────────────
+#
+# The 2026-09-16 analytics sweep recorded that "every test for sharpe, max_drawdown, cagr
+# and calmar was a shape or sign assertion". It then fixed `max_drawdown` (DATA-25) and
+# pinned it to Investopedia's worked example — and left the other three. `cagr` and
+# `calmar` turned out to be well covered by the wider suite; `sharpe` was not. Two
+# mutations survived the entire 1,461-test run:
+#
+#   `returns - risk_free`          instead of `returns - risk_free / periods`
+#   `excess.std(ddof=0)`           instead of the default sample `ddof=1`
+#
+# Both are defect classes this same audit had already fixed ELSEWHERE — annualisation
+# confusion is DATA-02, and a wrong `ddof` is DATA-21, where the Bollinger band width was
+# out by exactly sqrt(20/19). Fixed on one branch, never swept.
+
+
+def test_sharpe_matches_wikipedias_worked_example():
+    """Wikipedia, *Sharpe ratio* § Examples, Example 2: a portfolio with an expected return
+    of 12% and a standard deviation of 10%, against a risk-free rate of 5%, has a Sharpe
+    ratio of (0.12 - 0.05) / 0.10 = **0.7**.
+
+    Archived at `docs/audits/audit-evidence/scrapes/wiki-sharpe.md`.
+    https://en.wikipedia.org/wiki/Sharpe_ratio#Examples
+
+    The series below is constructed to have exactly that mean and that SAMPLE standard
+    deviation, and is evaluated with `periods=1` so the figures are already annual and the
+    sqrt(periods) factor is 1. That makes the assertion exercise three things a sign test
+    cannot: the risk-free rate is non-zero, the standard deviation is the sample one, and
+    the excess is taken per period.
+    """
+    import numpy as np
+
+    from ibkr_core_mcp.analytics import sharpe
+
+    d = 0.10 / np.sqrt(2)  # two points either side of the mean give sample std = d*sqrt(2)
+    returns = pd.Series([0.12 - d, 0.12 + d])
+    assert returns.mean() == pytest.approx(0.12)
+    assert returns.std() == pytest.approx(0.10), "the fixture does not have the example's sigma"
+
+    assert sharpe(returns, risk_free=0.05, periods=1) == pytest.approx(0.7)
+
+
+def test_sharpe_de_annualises_the_risk_free_rate():
+    """`risk_free` is an ANNUAL rate and the returns are per bar, so it must be divided by
+    `periods` before it is subtracted. Subtracting it whole is invisible at the default
+    `risk_free=0.0` — which is the only value the rest of this file ever passes, and why
+    the mutation survived.
+
+    Measured on 252 daily bars at a 4% rate: correct -2.36, un-de-annualised -70.93.
+    """
+    import numpy as np
+
+    from ibkr_core_mcp.analytics import sharpe
+
+    rng = np.random.default_rng(7)
+    daily = pd.Series(rng.normal(0.0005, 0.01, 252))
+
+    got = sharpe(daily, risk_free=0.04, periods=252)
+    expected_excess = daily - 0.04 / 252
+    expected = float(expected_excess.mean() / expected_excess.std() * np.sqrt(252))
+
+    assert got == pytest.approx(expected)
+    assert got == pytest.approx(-2.3623, abs=1e-4), "the measured reference has moved"
+
+    whole_rate = daily - 0.04
+    not_expected = float(whole_rate.mean() / whole_rate.std() * np.sqrt(252))
+    assert abs(got - not_expected) > 60, "the two spellings are no longer distinguishable"
+
+
+@pytest.mark.parametrize("n", [10, 30, 252])
+def test_sharpe_uses_the_sample_standard_deviation(n):
+    """`Series.std()` defaults to `ddof=1`. With `ddof=0` every Sharpe would be inflated by
+    exactly sqrt(n/(n-1)) — 5.4% on 10 bars — which is the same signature that identified
+    the Bollinger `ddof` defect (DATA-21, sqrt(20/19)). Asserting the ratio rather than a
+    single value is what makes the cause unambiguous."""
+    import numpy as np
+
+    from ibkr_core_mcp.analytics import sharpe
+
+    rng = np.random.default_rng(11)
+    s = pd.Series(rng.normal(0.0005, 0.01, n))
+
+    excess = s - 0.0
+    population = float(excess.mean() / excess.std(ddof=0) * np.sqrt(252))
+    assert population / sharpe(s, periods=252) == pytest.approx(np.sqrt(n / (n - 1)))
+
+
+# ── cagr, pinned to a value rather than to a sign ──────────────────────────────
+#
+# Two mutations survived the whole 1,466-test unit run, and both are annualisation —
+# the same defect class as DATA-02 (`run_backtest` annualising intraday Sharpe with
+# periods=252) and as `sharpe`'s risk-free rate above:
+#
+#   `len(returns) / (periods * 2)`   the years denominator          0.5608 vs 0.2493
+#   `total ** n`                     the exponent, inverted          6.4149 vs 0.2493
+#
+# Only "sum instead of compound" was caught. The 2026-09-16 analytics sweep named `cagr`
+# as one of the four metrics whose tests were "shape or sign assertions" and then pinned
+# only `max_drawdown`.
+
+
+def test_cagr_matches_investopedias_worked_example():
+    """Investopedia, *Compound Annual Growth Rate (CAGR)*: an investment growing from
+    10,000 to 19,500 over three years has a CAGR of **24.93%**.
+    https://www.investopedia.com/terms/c/cagr.asp
+
+    `(1 + returns).prod()` for the series below is exactly 1.95, i.e. 19,500/10,000, and
+    `periods=1` makes the bars annual so `n` is exactly 3 years.
+    """
+    from ibkr_core_mcp.analytics import cagr
+
+    returns = pd.Series([0.25, 0.25, 0.248])
+    assert float((1 + returns).prod()) == pytest.approx(1.95)
+
+    assert cagr(returns, periods=1) == pytest.approx(0.2493, abs=1e-4)
+
+
+def test_cagr_of_a_constant_annual_return_is_that_return():
+    """The structural pin, and the one that makes the cause unambiguous. If every year
+    returns exactly x, the compound annual growth rate is exactly x — for any x and any
+    number of years. Both surviving mutants break this identity at every point: doubling
+    the years denominator gives 0.5608 for x = 0.2493, and inverting the exponent gives
+    6.4149.
+
+    A worked example alone would not be enough: it fixes one (total, n) pair, and a defect
+    in only one of the two could be absorbed by the other. The identity holds the pair.
+    """
+    from ibkr_core_mcp.analytics import cagr
+
+    for x in (0.05, 0.2493, 0.40):
+        for years in (2, 3, 10):
+            assert cagr(pd.Series([x] * years), periods=1) == pytest.approx(x), f"x={x} over {years}y"
+
+
+def test_cagr_converts_bar_count_to_years_with_periods():
+    """`periods` is bars per YEAR, so `len(returns) / periods` is the elapsed years. 504
+    daily bars at 0.1% per bar is two years of 0.1%-compounding: (1.001**504)**(1/2) - 1.
+
+    Measured: correct 0.286434; years-denominator mutant 0.654913; exponent mutant 1.738736.
+    """
+    import numpy as np
+
+    from ibkr_core_mcp.analytics import cagr
+
+    daily = pd.Series(np.full(504, 0.001))
+    expected = float((1.001**504) ** (252 / 504) - 1)
+
+    assert cagr(daily, periods=252) == pytest.approx(expected)
+    assert cagr(daily, periods=252) == pytest.approx(0.286434, abs=1e-6)
+
+
+# ── calmar, pinned to a value rather than to a relation ────────────────────────
+#
+# Both mutations survived the whole unit run, including the crudest one available:
+#
+#   `cagr(returns, periods) * abs(mdd)`   MULTIPLY instead of divide
+#   `max_drawdown(returns) * 2`           halve the ratio
+#
+# `calmar` is the third of the three metrics the 2026-09-16 analytics sweep named as
+# "shape or sign assertions" and did not pin. The whole set is now pinned.
+
+
+def test_calmar_is_cagr_over_absolute_max_drawdown():
+    """Three annual returns of -20%, +50%, +20%, evaluated with `periods=1`.
+
+    Hand-computed: the equity path is 0.80 → 1.20 → 1.44 from a starting 1.0, so the total
+    factor is 1.44 and CAGR is 1.44^(1/3) - 1 = 0.1292432. The only fall is the first bar,
+    from the starting capital, so max drawdown is exactly -0.20 — which also exercises
+    DATA-25, the fix that made the starting capital a peak. Calmar is therefore
+    0.1292432 / 0.20 = **0.6462162**.
+
+    Asserting the value and not `calmar > 0` is the point: multiplying by the drawdown
+    instead of dividing (0.0258 here) is still positive, still ordered the same way across
+    strategies, and survived 1,469 tests.
+    """
+    from ibkr_core_mcp.analytics import cagr, calmar, max_drawdown
+
+    returns = pd.Series([-0.20, 0.50, 0.20])
+
+    assert cagr(returns, periods=1) == pytest.approx(0.1292432, abs=1e-7)
+    assert max_drawdown(returns) == pytest.approx(-0.20)
+    assert calmar(returns, periods=1) == pytest.approx(0.6462162, abs=1e-7)
+
+    # the relation itself, so a change to either input is caught at the ratio too
+    assert calmar(returns, periods=1) == pytest.approx(cagr(returns, periods=1) / abs(max_drawdown(returns)))
+
+
+def test_calmar_is_larger_when_the_drawdown_is_smaller():
+    """A dividing ratio improves as the denominator shrinks; a multiplying one gets worse.
+    This is the direction test the value test cannot express on its own, and it is what
+    distinguishes `cagr / |mdd|` from `cagr * |mdd|` structurally rather than numerically."""
+    from ibkr_core_mcp.analytics import calmar
+
+    shallow = pd.Series([-0.05, 0.20, 0.10])
+    deep = pd.Series([-0.40, 0.20, 0.10])
+
+    assert calmar(shallow, periods=1) > calmar(deep, periods=1)
