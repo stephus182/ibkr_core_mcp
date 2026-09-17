@@ -25,7 +25,10 @@ _MAX_LEN = 300
 # userinfo all passed through verbatim. The rules now are: every Authorization/Cookie value;
 # the two key prefixes this package handles; any URL userinfo; any URL query string whole
 # (the model never needs a query value); and any `identifier=value` / `identifier: value`
-# whose identifier contains a credential word. Order matters where rules overlap.
+# whose identifier contains a credential word — **including the quoted forms**,
+# `{"identifier": "value"}` and `{'identifier': 'value'}`, which is what a JSON error
+# body looks like and which the rule missed until 2026-09-17 (SEC-06). Order matters
+# where rules overlap.
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bbearer\s+\S+"),
     re.compile(r"(?i)cookie:\s*[^\n]+"),
@@ -36,7 +39,14 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"(?i)\b(?:[\w\-]*(?:token|secret|passw|pwd|session|credential|auth)[\w\-]*"
         r"|api[_\-]?key|access[_\-]?key|secret[_\-]?key|private[_\-]?key|key)"
-        r"\s*[=:]\s*['\"]?[^\s'\"&;,]+"
+        # The identifier may be quoted, so the closing quote sits between it and the
+        # separator: `{"refresh_token": "…"}`. Requiring the separator to follow the name
+        # immediately let every JSON and repr form through verbatim, which is exactly the
+        # shape an OAuth or Drive error body has (SEC-06, 2026-09-17).
+        r"['\"]?\s*[=:]\s*"
+        # A quoted value is consumed to its closing quote, so a secret containing spaces
+        # cannot leave its tail behind; an unquoted one stops at the first delimiter.
+        r"(?:'[^']*'|\"[^\"]*\"|[^\s'\"&;,]+)"
     ),
 )
 

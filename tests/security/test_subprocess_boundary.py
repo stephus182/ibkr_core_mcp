@@ -42,10 +42,20 @@ def test_nothing_in_the_package_or_scripts_passes_shell_true():
 
 
 def test_the_spawn_probe_sees_each_form():
+    """SEC-08: `from os import system` was invisible.
+
+    The probe recognised a spawn *module* imported by name, and `os.<attr>` written as an
+    attribute — but `os` is not a spawn module, so importing the function out of it went
+    unseen and `system('x')` looked like an ordinary call. `execv` and the `as` form are
+    here because the same hole covers every name the attribute rule already matches, and
+    renaming on import is the obvious next spelling.
+    """
     snippet = (
         "import subprocess\n"
         "from multiprocessing import Process\n"
         "import os, asyncio\n"
+        "from os import system\n"
+        "from os import execv as run_it\n"
         "os.system('x')\n"
         "os.popen('x')\n"
         "asyncio.create_subprocess_exec('x')\n"
@@ -53,10 +63,17 @@ def test_the_spawn_probe_sees_each_form():
     assert spawn_sites(snippet) == {
         "import subprocess",
         "from multiprocessing import …",
+        "from os import system",
+        "from os import execv",
         "os.system",
         "os.popen",
         "asyncio.create_subprocess_exec",
     }
+
+
+def test_the_spawn_probe_does_not_flag_an_innocent_os_import():
+    """The rule is the attribute list, not the module: `from os import path` is ordinary."""
+    assert spawn_sites("from os import path, environ\nprint(path, environ)\n") == set()
 
 
 def test_the_shell_probe_sees_shell_true():

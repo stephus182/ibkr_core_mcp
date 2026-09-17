@@ -1634,10 +1634,13 @@ def test_modify_order_strips_display_only_keys_before_posting(client):
 # ---------------------------------------------------------------------------
 
 
-def test_order_write_scope_is_the_canonical_body_and_nothing_else():
-    """Dynamic linking: the same order gives the same scope; any change, a different one.
+def test_order_write_scope_is_the_account_and_the_canonical_body():
+    """Dynamic linking: the same order to the same account gives the same scope; any
+    change — the body, the order id, or the account — gives a different one.
 
-    Display-only `_` keys never leave the machine and must not move the scope."""
+    Display-only `_` keys never leave the machine and must not move the scope. The account
+    was added on 2026-09-17 (SEC-07): without it an authorization earned for one account
+    covered a byte-identical body sent to another."""
     from ibkr_core_mcp.client import _order_write_scope
 
     body = {
@@ -1650,12 +1653,20 @@ def test_order_write_scope_is_the_canonical_body_and_nothing_else():
         "cOID": "CLAUDIA-1",
     }
     same = dict(reversed(list(body.items())))
-    assert _order_write_scope("place", body) == _order_write_scope("place", same)
-    assert _order_write_scope("place", {**body, "_companyName": "x"}) == _order_write_scope("place", body)
-    assert _order_write_scope("place", {**body, "auxPrice": 7901}) != _order_write_scope("place", body)
-    assert _order_write_scope("place", body).startswith("place:")
-    assert _order_write_scope("modify", body, order_id="42").startswith("modify:42:")
-    assert _order_write_scope("modify", body, order_id="42") != _order_write_scope("modify", body, order_id="43")
+    acct, other = "U1111111", "U9999999"
+    assert _order_write_scope("place", acct, body) == _order_write_scope("place", acct, same)
+    assert _order_write_scope("place", acct, {**body, "_companyName": "x"}) == _order_write_scope("place", acct, body)
+    assert _order_write_scope("place", acct, {**body, "auxPrice": 7901}) != _order_write_scope("place", acct, body)
+    assert _order_write_scope("place", acct, body).startswith(f"place:{acct}:")
+    assert _order_write_scope("modify", acct, body, order_id="42").startswith(f"modify:{acct}:42:")
+    assert _order_write_scope("modify", acct, body, order_id="42") != _order_write_scope(
+        "modify", acct, body, order_id="43"
+    )
+    # SEC-07: the account moves the scope, for both kinds.
+    assert _order_write_scope("place", acct, body) != _order_write_scope("place", other, body)
+    assert _order_write_scope("modify", acct, body, order_id="42") != _order_write_scope(
+        "modify", other, body, order_id="42"
+    )
 
 
 def test_order_label_is_side_quantity_symbol_from_either_spelling():
@@ -1744,7 +1755,7 @@ def test_place_order_prompts_when_the_body_no_longer_matches_the_authorization(c
     from ibkr_core_mcp.human_auth import OrderWriteAuthorization
 
     body = {"ticker": "ES", "side": "BUY", "quantity": 1, "conid": 649180671, "auxPrice": 7900}
-    auth = OrderWriteAuthorization(_order_write_scope("place", body), "BUY 1 ES", _time.monotonic(), 300.0)
+    auth = OrderWriteAuthorization(_order_write_scope("place", "U1234567", body), "BUY 1 ES", _time.monotonic(), 300.0)
     with (
         _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
         _patch("ibkr_core_mcp.client.confirm_order_dialog"),
@@ -1755,6 +1766,38 @@ def test_place_order_prompts_when_the_body_no_longer_matches_the_authorization(c
         touch_id.assert_called_once()
         touch_id.reset_mock()
         client.place_order("U1234567", body, authorization=auth)
+        touch_id.assert_not_called()
+
+
+def test_place_order_prompts_when_the_authorization_was_for_another_account(client):
+    """SEC-07. The scope bound the body and the order id but not the account.
+
+    So an authorization earned for one account covered a byte-identical body sent to
+    another: the human approved a write against account A and the same authorization would
+    have carried it to account B without a second prompt. The account is part of the
+    transaction, so it belongs in the transaction's own data.
+
+    Both ids here are from the frozen placeholder set in
+    `tests/security/test_published_identifiers.py` — this is a PUBLIC repository and any
+    other account-shaped string fails that scan.
+    """
+    import time as _time
+
+    from ibkr_core_mcp.client import _order_write_scope
+    from ibkr_core_mcp.human_auth import OrderWriteAuthorization
+
+    body = {"ticker": "ES", "side": "BUY", "quantity": 1, "conid": 649180671, "auxPrice": 7900}
+    auth = OrderWriteAuthorization(_order_write_scope("place", "U1111111", body), "BUY 1 ES", _time.monotonic(), 300.0)
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_order_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_status": "Submitted"}])
+        client.place_order("U9999999", body, authorization=auth)
+        touch_id.assert_called_once()
+        touch_id.reset_mock()
+        client.place_order("U1111111", body, authorization=auth)
         touch_id.assert_not_called()
 
 

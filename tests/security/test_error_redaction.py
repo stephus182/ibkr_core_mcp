@@ -41,6 +41,15 @@ SECRETS = {
     "lowercase bearer": "Authorization: bearer SECRETLOWER",
     "env dump": "IBKR_FLEX_TOKEN=SECRETENV ANTHROPIC_API_KEY=sk-ant-SECRETKEY",
     "session param": "GET /iserver?session=SECRETSESSION",
+    # SEC-06, 2026-09-17: the identifier rule required the separator to follow the name
+    # immediately, so every JSON or repr form — where a closing quote sits in between —
+    # passed through verbatim. That is the shape an OAuth or Drive error body actually has,
+    # and `redact_error` is what `WebDocsStore`/`gdrive_auth` failures pass through.
+    "json body": '{"refresh_token": "SECRETJSON", "expires_in": 3600}',
+    "json no space": '{"client_secret":"SECRETTIGHT"}',
+    "python repr": "{'api_key': 'SECRETREPR'}",
+    "json spaced value": '{"password": "SECRET PHRASE HERE"}',
+    "drive error body": 'HttpError 401: {"error": "invalid_credentials", "access_token": "SECRETDRIVE"}',
 }
 
 

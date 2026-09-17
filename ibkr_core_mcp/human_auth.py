@@ -60,10 +60,12 @@ class OrderWriteAuthorization:
     attribute on the client, nothing persisted, nothing shared across actions. That is the
     difference between an authorization and the cache this module refuses.
 
-    `scope` is the transaction's own data (`client._order_write_scope`): the canonical body
-    about to be sent, hashed — a body altered after the fingerprint is a different scope and
-    `covers()` is False. The write and every reply run the same `covers(scope)` check with
-    the scope the chain computed from the body it sent. `label` is the one-line order
+    `scope` is the transaction's own data (`client._order_write_scope`): the account id the
+    write is aimed at, plus the canonical body about to be sent, hashed — a body altered after
+    the fingerprint is a different scope and `covers()` is False, and so is the same body sent
+    to a different account (the account joined the scope 2026-09-17, audit finding SEC-07).
+    The write and every reply run the same `covers(scope)` check with the scope the chain
+    computed from the account and body it sent. `label` is the one-line order
     description the reply dialogs put in their title. Expiry fails closed: the holder
     prompts again.
 

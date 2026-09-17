@@ -41,7 +41,7 @@ print(f"Estimated cost: {preview.get('equity', '?')}")
 try:
     # place_order_and_confirm() is the recommended entry point: one Touch ID
     # up front covers the whole chain (an OrderWriteAuthorization bound to this
-    # body's hash, 300 s), then it calls place_order() and loops a dialog
+    # account and body's hash, 300 s), then it calls place_order() and loops a dialog
     # showing the real IBKR message through every chained reply, until a
     # terminal response. One fingerprint, one dialog per reply.
     # Verified live 2026-07-06: a single order needed 3 sequential replies

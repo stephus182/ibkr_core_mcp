@@ -261,7 +261,7 @@ def _fits_in_one_call(total_days: float, bar: str) -> bool:
 log = logging.getLogger(__name__)
 
 
-def _order_write_scope(kind: str, body: Mapping[str, Any], order_id: str | None = None) -> str:
+def _order_write_scope(kind: str, account_id: str, body: Mapping[str, Any], order_id: str | None = None) -> str:
     """The transaction's own data as a scope string — what one Gate 1 is bound to.
 
     The canonical body is exactly what reaches IBKR: display-only `_`-prefixed keys are
@@ -272,17 +272,27 @@ def _order_write_scope(kind: str, body: Mapping[str, Any], order_id: str | None 
     of the body *as sent*, not of its economics: `7900` and `7900.0` are different bodies,
     which is right, because a chain always carries one body object end to end.
 
+    The account is part of the scope. It was not until 2026-09-17: the scope held the body
+    and the order id only, so an authorization earned for one account covered a
+    byte-identical body sent to another, and a human who approved a write against account A
+    could have had it carried to account B without a second prompt (audit finding SEC-07).
+    `account_id` is required rather than optional so a call site that forgets it fails
+    loudly instead of quietly minting the weaker scope.
+
     Args:
         kind: "place", "modify" or "cancel".
+        account_id: The account the write is aimed at — part of the transaction.
         body: The order body about to be sent.
         order_id: The live order's id for modify/cancel, part of the scope.
 
     Returns:
-        `"<kind>:<digest>"`, or `"<kind>:<order_id>:<digest>"` when an order id is given.
+        `"<kind>:<account>:<digest>"`, or `"<kind>:<account>:<order_id>:<digest>"` when an
+        order id is given.
     """
     canonical = {k: v for k, v in body.items() if not str(k).startswith("_")}
     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
-    return f"{kind}:{order_id}:{digest}" if order_id is not None else f"{kind}:{digest}"
+    head = f"{kind}:{account_id}"
+    return f"{head}:{order_id}:{digest}" if order_id is not None else f"{head}:{digest}"
 
 
 def _order_label(order: Mapping[str, Any]) -> str:
@@ -1828,7 +1838,7 @@ class IBKRClient:
         """Place a new order. Requires Touch ID (Gate 1) + tkinter confirmation dialog (Gate 2).
 
         `authorization` (2026-09-11): the value `place_order_and_confirm` earned for this exact
-        body. When it covers this body, Gate 1 is not repeated; Gate 2 always runs. Called
+        account and body. When it covers both, Gate 1 is not repeated; Gate 2 always runs. Called
         directly with none — the documented single-shot use — it prompts as it always has.
 
         Both security gates fire before the order is sent. HumanAuthError is raised if
@@ -1884,9 +1894,9 @@ class IBKRClient:
         # 2026-09-13, B9; noted and dropped as unreachable 2026-07-11).
         order = dict(order)
         # Gate 1. A chain started by place_order_and_confirm already earned an
-        # authorization for exactly this body; anything else — a direct call, an expired
+        # authorization for exactly this account and body; anything else — a direct call, an expired
         # window, a body that no longer matches — prompts. Fails closed. (2026-09-11)
-        scope = _order_write_scope("place", order)
+        scope = _order_write_scope("place", account_id, order)
         if authorization is None or not authorization.covers(scope):
             require_touch_id(f"place an IBKR order — {_order_label(order)}")
         else:
@@ -1931,8 +1941,8 @@ class IBKRClient:
         self._ensure_accounts_initialized()
         order = dict(order)  # the body shown is the body sent — see place_order
         # Gate 1 — the same rule as place_order: covered by the chain's authorization for
-        # exactly this body and order id, or prompt. Fails closed. (2026-09-11)
-        scope = _order_write_scope("modify", order, order_id=order_id)
+        # exactly this account, body and order id, or prompt. Fails closed. (2026-09-11)
+        scope = _order_write_scope("modify", account_id, order, order_id=order_id)
         if authorization is None or not authorization.covers(scope):
             require_touch_id(f"modify IBKR order {order_id}")
         else:
@@ -2110,7 +2120,7 @@ class IBKRClient:
         `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
         return value stays the terminal response.
         """
-        scope = _order_write_scope("place", order)
+        scope = _order_write_scope("place", account_id, order)
         label = _order_label(order)
         authorization = _authorize_order_write(f"place an IBKR order — {label}", scope, label)
         log.info("Gate 1: granted for %s (%s)", scope, label)
@@ -2132,7 +2142,7 @@ class IBKRClient:
         """Modify an order and resolve its full reply chain, looping until a terminal response.
 
         One Touch ID for the whole chain (2026-09-11): modify is its own transaction and
-        keeps its own Gate 1 — run here, once, bound to this replacement body and order id
+        keeps its own Gate 1 — run here, once, bound to this account, replacement body and order id
         and to 300 s — and its precaution replies verify that same authorization behind
         their dialogs. IBKR Mobile and TWS ask once per modification; so does this.
 
@@ -2156,7 +2166,7 @@ class IBKRClient:
         `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
         return value stays the terminal response.
         """
-        scope = _order_write_scope("modify", order, order_id=order_id)
+        scope = _order_write_scope("modify", account_id, order, order_id=order_id)
         label = f"{_order_label(order)} (order {order_id})"
         authorization = _authorize_order_write(f"modify IBKR order {order_id}", scope, label)
         log.info("Gate 1: granted for %s (%s)", scope, label)

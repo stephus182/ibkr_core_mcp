@@ -114,7 +114,7 @@ mean something else.
 | Property | Value |
 |---|---|
 | Mechanism | Apple `LocalAuthentication` — `LAPolicyDeviceOwnerAuthentication` (biometrics first, device password on a failed scan) |
-| Frequency | **Once per order write.** Place, modify and cancel each take one Touch ID — as IBKR Mobile and TWS ask once per placement, modification or cancellation — and the precaution replies IBKR sends for that write validate through their own dialogs (explicit button, order named in the title) without a second fingerprint. `client._authorize_order_write` → `human_auth.OrderWriteAuthorization`: bound to the write's own body (hashed), 300 s, checked identically at the write and at every reply, fails closed, never persisted, never global. User rule 2026-09-11; sources (OWASP, NIST SP 800-63B-4, CISA, EU RTS 2018/389, Apple) in claudia_ui `docs/api-reference.md` § Order authorization. |
+| Frequency | **Once per order write.** Place, modify and cancel each take one Touch ID — as IBKR Mobile and TWS ask once per placement, modification or cancellation — and the precaution replies IBKR sends for that write validate through their own dialogs (explicit button, order named in the title) without a second fingerprint. `client._authorize_order_write` → `human_auth.OrderWriteAuthorization`: bound to the write's own account id and body (hashed; the account joined the scope 2026-09-17, SEC-07), 300 s, checked identically at the write and at every reply, fails closed, never persisted, never global. User rule 2026-09-11; sources (OWASP, NIST SP 800-63B-4, CISA, EU RTS 2018/389, Apple) in claudia_ui `docs/api-reference.md` § Order authorization. |
 | Password / PIN fallback | **Device password after a failed biometric read** — Apple's own recovery path under this policy. The biometrics-only policy (`…WithBiometrics`) was evaluated and rejected: a failed scan under it leaves the user no recovery at all (`human_auth.py`). Corrected 2026-09-11: this document had claimed biometrics-only with no fallback while the code never did (claudia_ui gap #48). |
 | Timeout | 60 seconds; raises `HumanAuthError` on expiry |
 | On denial | `HumanAuthError` raised immediately; IBKR endpoint is never contacted |
@@ -331,7 +331,8 @@ Where a handler must show the model *detail* — the sandbox error it has to fix
 failure it can act on, a resource handler's reason — it goes through one function,
 `redaction.redact_error`: exception type plus the first line of the message, secret-shaped
 material scrubbed by *shape* — Authorization and Cookie values, `sk-ant-`/`fc-` keys, URL
-userinfo, every URL query string whole, and any `identifier=value` whose identifier contains
+userinfo, every URL query string whole, and any `identifier=value` — quoted or not, so the
+JSON and repr forms `{"identifier": "value"}` are covered too (SEC-06) — whose identifier contains
 token/secret/password/session/credential/auth or names an API, access, secret or private key
 (the first version anchored on exact words and let `refresh_token=` through; review
 2026-09-13) — one line, 300 characters. A `requests` exception carries the full request URL,
@@ -989,7 +990,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 
 The following rules are enforced at PR review. Any PR that violates them will be rejected:
 
-1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
+1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's account and body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
 2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`.
 3. **Never make an authorization global or persistent, and never let a reply skip its dialog** — one biometric per order write, one dialog per message. The device-password fallback under `LAPolicyDeviceOwnerAuthentication` is Apple's recovery path and stays.
 4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution. Every new tool declares its `capabilities`; `ORDER_EXECUTION` may never appear, and a handler that touches a sink its declaration omits fails `tests/security/test_tool_capabilities.py`.

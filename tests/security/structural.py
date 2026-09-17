@@ -214,6 +214,15 @@ def spawn_sites(source: str) -> set[str]:
             root = node.module.split(".")[0]
             if root in _SPAWN_MODULES:
                 sites.add(f"from {node.module} import …")
+            elif root == "os":
+                # `os` is not a spawn module, so importing the function out of it slipped
+                # past both rules: the module rule above does not match, and `system('x')`
+                # is a plain Name call rather than the `os.system` attribute the rule below
+                # looks for. Same names, different spelling, invisible (SEC-08, 2026-09-17).
+                # Matched on the imported name, not the local one, so `as` cannot hide it.
+                for alias in node.names:
+                    if _SPAWN_OS_ATTRS.match(alias.name):
+                        sites.add(f"from os import {alias.name}")
         elif isinstance(node, ast.Attribute):
             base = node.value
             if isinstance(base, ast.Name) and base.id == "os" and _SPAWN_OS_ATTRS.match(node.attr):

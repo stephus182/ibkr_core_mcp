@@ -147,3 +147,21 @@ def test_the_documented_0600_token_write_lives_where_security_md_says():
     section = security_md[security_md.index("### OAuth Token File Permissions") :][:2000]
     assert "gdrive_auth.persist_credentials" in section
     assert "the one place it exists" in section, "the document no longer claims a single holder"
+
+
+def test_the_architecture_doc_states_the_real_number_of_secret_shapes():
+    """A count in a document beside a table in code: it read 14 against a real 13.
+
+    Nobody had checked it, and SEC-06 then moved the real figure to 18 — so the doc was
+    wrong before the change and would have stayed wrong after it. The same shape as the
+    live-suite size (DOCA-R2) and the coverage headline (DOCB-R1): a number a human must
+    remember to update is a number that will be wrong.
+    """
+    import re
+
+    from .test_error_redaction import SECRETS
+
+    doc = (_ROOT / "docs" / "security-architecture.md").read_text()
+    claimed = {int(n) for n in re.findall(r"(\d+) secret shapes", doc)}
+    assert claimed, "the architecture doc no longer states a secret-shape count; update or remove this guard"
+    assert claimed == {len(SECRETS)}, f"the doc claims {claimed} secret shapes; the table holds {len(SECRETS)}"

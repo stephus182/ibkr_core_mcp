@@ -18,7 +18,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 
 | Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
 |---|---:|---:|---:|---:|---:|
-| `SEC` | 13 | 8 | 5 | — | — |
+| `SEC` | 13 | **11** | **2** | — | — |
 | `WEB` | 9 | **9** | — | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
 | `API` | 21 | **16** | **4** (+1 partial) | — | — |
@@ -31,9 +31,10 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `API-R` | **2** | **2** | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| **Total** | **141** | **79** | **11** (+1 partial) | **0** | **50** |
+| `SEC-R` | **1** | **1** | — | — | — |
+| **Total** | **142** | **83** | **8** (+1 partial) | **0** | **50** |
 
-`79 + 11 + 1 + 0 + 50 = 141`. **There are no unrecorded findings left.** All three blocks
+`83 + 8 + 1 + 0 + 50 = 142`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -88,9 +89,6 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `SEC-06` | Low | `redact_error` claims to scrub `identifier: value` pairs; the JSON/quoted form is not scrubbed. No reachable leak shown |
-| `SEC-07` | Low | `OrderWriteAuthorization` binds body and order id but not account id |
-| `SEC-08` | Low | Two more structural probes miss an ordinary alternative spelling |
 | `SEC-09` | Nit | "The default button is the abandon one" holds only on the `osascript` fallback |
 | `SEC-10` | Nit | `collapse_home` claims every surface; the SSE bearer-token log line writes the absolute home path |
 | `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
@@ -101,7 +99,7 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
-> sections below. `WEB-05…09`, `API-05` and `API-10` left on 2026-09-17. This table is the
+> sections below. `WEB-05…09`, `API-05`, `API-10` and `SEC-06…08` left on 2026-09-17. This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -3363,3 +3361,85 @@ All 79 closed findings have now been verified against the code: 32 anchored by a
 anchored in code or docs and individually re-checked here, 31 named nowhere and individually
 re-checked in the previous pass. **One regression found across the whole set — a
 documentation count — and it is now machine-checked.**
+
+---
+
+## Phase 3 — `SEC-06`, `SEC-07`, `SEC-08` closed; `SEC-R1` raised on the way
+
+The three remaining `SEC` Lows, taken first because a release decision turns on them more
+than on a Nit. One of the three turned out to be **half wrong**, and the documentation sweep
+that followed was where most of the work actually was.
+
+### `SEC-06` — the JSON form of every credential pair went through verbatim
+
+`redact_error`'s identifier rule required the separator to follow the name immediately, so
+`refresh_token=…` was scrubbed and `{"refresh_token": "…"}` was not: the closing quote sits
+in between. Measured rather than read — five shapes leaked, not the one recorded:
+
+| shape | before |
+|---|---|
+| `refresh_token=SECRET` | scrubbed |
+| `{"refresh_token": "SECRET"}` | **verbatim** |
+| `{"client_secret":"SECRET"}` | **verbatim** |
+| `{'api_key': 'SECRET'}` | **verbatim** |
+| `{"password": "SECRET PHRASE"}` | **verbatim** |
+| `HttpError 401: {"access_token": "SECRET"}` | **verbatim** |
+
+That is the shape an OAuth or Drive error body actually has, and `redact_error` is what
+`WebDocsStore` and `gdrive_auth` failures pass through — so "no reachable leak demonstrated"
+understated it. The rule now accepts an optional quote before the separator and consumes a
+quoted value **whole**, so a secret containing spaces cannot leave its tail behind. 3 mutants
+run, 3 caught; the whole 255-test security suite stayed green, which is the check against
+over-redaction.
+
+### `SEC-07` — an authorization for account A covered account B
+
+`_order_write_scope` hashed the canonical body and the order id. Not the account. So a Touch
+ID earned for a write against one account covered a byte-identical body sent to another, and
+the human who approved it approved the wrong account.
+
+The account is now part of the scope, and `account_id` is **required** rather than optional
+so a call site that forgets it fails loudly instead of quietly minting the weaker scope. All
+four production sites updated; `cancel_order` is unaffected — it prompts fresh every time and
+mints no authorization. 3 mutants run, 3 caught, including "pin a constant account into the
+scope".
+
+### `SEC-08` — half of it does not reproduce
+
+The finding named two probes. Measured against both:
+
+- **`from os import system` is invisible** — confirmed. `os` is not in `_SPAWN_MODULES`, so
+  the module rule does not fire, and `system('x')` is a plain `Name` call rather than the
+  `os.system` attribute the other rule looks for. Now detected, matched on the *imported*
+  name so `as` cannot hide it, with a false-positive control (`from os import path` must stay
+  clean). 3 mutants, 3 caught — including the over-matching direction.
+- **"a handler binding `c = self._client` first" does not reproduce.** Driven against every
+  relevant probe, direct form versus bound form: `attribute_names_referenced`,
+  `functions_calling`, `methods_reaching_the_network` all return the same answer for both,
+  because they collect attribute names regardless of the base expression. Only
+  `names_referenced` differs, by including `c`, which is harmless. The claim was recorded as
+  a one-liner with no worked demonstration and it is wrong.
+
+### `SEC-R1` — a count in the architecture doc that nothing checked
+
+Raised while updating the docs for `SEC-06`. `docs/security-architecture.md`'s invariant 6
+row read *"14 secret shapes never survive"*. The table held **13** — verified against `HEAD`,
+not inferred from arithmetic. So the figure was wrong before this session touched it, and
+`SEC-06` would have moved the real number to 18 underneath a claim that was already false.
+Now 18, and `test_the_architecture_doc_states_the_real_number_of_secret_shapes` reads the
+table rather than trusting the prose. The third instance of this exact shape after `DOCA-R2`
+(the live-suite size) and `DOCB-R1` (the coverage headline).
+
+### The documentation sweep is where the work was
+
+`SEC-07` changed one function. Its description lives in **ten** places. The first pass grepped
+the phrase I happened to remember — `"SHA-256 of"` — and updated three. A second angle, by
+concept rather than by phrase (`OrderWriteAuthorization`), found three more. A third, for
+"bound to … body", found a seventh in `client.py`. A fourth found three more enumerations in
+`client.py` and `human_auth.py`. Only then did a sweep come back clean, and its three
+remaining hits were line-boundary artifacts of the sweep itself, confirmed by reading.
+
+**Four angles to find ten sites, on a fix that touched one function.** This is `DOCA-R2`
+again — *"the third site, missed when the first two were fixed"* — and it is the argument for
+the owner's instruction to check a second angle every time: the first grep was not wrong, it
+was just answering a narrower question than the one that mattered.
