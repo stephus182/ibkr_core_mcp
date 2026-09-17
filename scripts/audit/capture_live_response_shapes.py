@@ -31,13 +31,33 @@ from typing import Any
 
 from redact_live_payload import ACCOUNT_ID_RE, PUBLIC_ENDPOINTS, redact_capture
 
-from ibkr_core_mcp import Config, IBKRClient
+from ibkr_core_mcp import Config, IBKRClient, IBKRResponse
 
 
 def _shape(obj: Any) -> Any:
-    """Keys, nesting and scalar types — everything the fixture exists to record."""
+    """Keys, nesting and scalar types — everything the fixture exists to record.
+
+    Account-shaped **keys** are normalised to their position, because redaction is
+    supposed to rename them: `/iserver/accounts`'s `acctProps` and `/pnl/partitioned` are
+    keyed by account number, and comparing the raw names would report every correct
+    redaction as a shape change (which it did, 2026-09-17).
+
+    Positional, not a constant, so the check still catches what it is for: every account
+    id masks to the *same* `U1234567`, so two account keys collapse into one and silently
+    lose an account's data. Two keys normalise to `<account:0>` and `<account:1>` before
+    redaction and to a single `<account:0>` after — a difference this reports.
+    """
     if isinstance(obj, dict):
-        return {k: _shape(v) for k, v in sorted(obj.items())}
+        # An account id is not always the whole key: `/pnl/partitioned` is keyed
+        # `U1234567.Core`, so substitute wherever it appears and keep the rest of the key,
+        # which stays part of the compared shape.
+        found: list[str] = sorted({m for k in obj if isinstance(k, str) for m in ACCOUNT_ID_RE.findall(k)})
+        index = {account: position for position, account in enumerate(found)}
+        out: dict[Any, Any] = {}
+        for k, v in sorted(obj.items(), key=lambda kv: str(kv[0])):
+            key: Any = ACCOUNT_ID_RE.sub(lambda m: f"<account:{index[m.group(0)]}>", k) if isinstance(k, str) else k
+            out[key] = _shape(v)
+        return out
     if isinstance(obj, list):
         return [_shape(v) for v in obj]
     return type(obj).__name__
@@ -80,6 +100,57 @@ def _first_watchlist_id(client: Any) -> str:
     """
     lists = client.get_watchlists()
     return str(lists[0].get("id", "")) if lists else ""
+
+
+def _as_payload(value: Any) -> Any:
+    """Reduce any response model back to the payload IBKR sent.
+
+    Fourteen client methods return `IBKRResponse` subclasses since API-11 (2026-09-17), and
+    this file exists to record **what IBKR sent**, not how this package views it. Models
+    broke the run twice over: the redactor walks dicts and lists, so a model fell through to
+    its scalar branch untouched, and `json.dump` then refused it outright — the same gap
+    that made `models.json_default` necessary for the resource handlers.
+
+    `dict(model)` is the untouched payload: `IBKRResponse` serves the mapping protocol over
+    the response exactly as it arrived.
+    """
+    if isinstance(value, IBKRResponse):
+        return _as_payload(dict(value))
+    if isinstance(value, dict):
+        return {k: _as_payload(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_as_payload(v) for v in value]
+    return value
+
+
+def _shape_difference(before: Any, after: Any, path: str = "") -> str | None:
+    """The first place two shapes disagree, as a readable path.
+
+    A bare `assert shapes match` tells you the redaction broke something and nothing about
+    where, which on 2026-09-17 meant a captured gateway session was spent learning only
+    that. The raw capture is deliberately never written to disk while this fails — it
+    holds the operator's real account number, and the whole point of the redactor is that
+    it is the only thing that writes.
+    """
+    if type(before) is not type(after):
+        return f"{path or '<root>'}: {type(before).__name__} became {type(after).__name__}"
+    if isinstance(before, dict):
+        if set(before) != set(after):
+            lost = sorted(set(before) - set(after))
+            gained = sorted(set(after) - set(before))
+            return f"{path or '<root>'}: {len(before)} keys became {len(after)} — lost {lost[:4]}, gained {gained[:4]}"
+        for k in before:
+            if (found := _shape_difference(before[k], after[k], f"{path}.{k}" if path else str(k))) is not None:
+                return found
+        return None
+    if isinstance(before, list):
+        if len(before) != len(after):
+            return f"{path or '<root>'}: {len(before)} items became {len(after)}"
+        for i, (b, a) in enumerate(zip(before, after, strict=True)):
+            if (found := _shape_difference(b, a, f"{path}[{i}]")) is not None:
+                return found
+        return None
+    return None if before == after else f"{path}: {before!r} became {after!r}"
 
 
 def main(out_path: str) -> int:
@@ -153,6 +224,7 @@ def main(out_path: str) -> int:
             failures += 1
             print(f"  {name:<22} FAILED  {type(exc).__name__}: {exc}", file=sys.stderr)
             continue
+        value = _as_payload(value)
         if name == "scanner_params":
             value = {"__truncated__": "first 2 entries of every list; see tests/fixtures/README.md", **truncate(value)}
         captured[name] = value
@@ -160,7 +232,11 @@ def main(out_path: str) -> int:
         print(f"  {name:<22} ok      ({type(value).__name__}, {size})", file=sys.stderr)
 
     redacted = redact_capture(captured)
-    assert _shape(captured) == _shape(redacted), "redaction changed the shape it exists to preserve"
+    difference = _shape_difference(_shape(captured), _shape(redacted))
+    if difference is not None:
+        print(f"\nREDACTION CHANGED THE SHAPE — nothing written.\n  {difference}", file=sys.stderr)
+        print("  Fix scripts/audit/redact_live_payload.py, then re-run.", file=sys.stderr)
+        return 1
 
     with open(out_path, "w") as fh:
         json.dump(redacted, fh, indent=2, sort_keys=True)

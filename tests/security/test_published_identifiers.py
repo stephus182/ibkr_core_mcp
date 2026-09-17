@@ -258,17 +258,25 @@ def test_the_fixture_scan_is_not_vacuous():
     import json
 
     payload = json.loads(FIXTURE.read_text())
-    assert len(payload) >= 27, f"the fixture has lost endpoints: {len(payload)}"
+    assert len(payload) >= 40, f"the fixture has lost endpoints: {len(payload)}"
 
     scalars = list(_fixture_scalars())
     assert len(scalars) > 1000, f"the fixture walk found {len(scalars)} scalars"
 
-    # Counted from the file, not from the walk: `combo_positions`, `positions_by_conid`
-    # and `trading_schedule` were captured as empty lists and yield no scalars at all, so
-    # a walk-derived endpoint count reads 24 and not 27. Recorded here because the first
-    # version of this guard asserted the walk count and failed for that reason.
+    # Counted from the file, not from the walk: these endpoints were captured as empty
+    # containers and yield no scalars at all, so a walk-derived endpoint count runs short.
+    # Recorded here because the first version of this guard asserted the walk count and
+    # failed for that reason.
+    #
+    # The set changed on 2026-09-17's re-capture: `trading_schedule` left it (141 entries
+    # this time, against the empty list TOOL-R1 recorded for SMART) and `pa_transactions`
+    # joined it. Two endpoints are absent from the fixture entirely rather than empty:
+    # `unread_count`, which answered HTTP 423 `{"status":"waiting for reply"}` on every
+    # attempt — the same flakiness TOOL-12 measured over four consecutive tries against a
+    # healthy authenticated gateway — and `event_contracts`, whose path 404s like its
+    # sibling `/events/show`.
     walked = {e for e, _, _ in scalars}
-    assert set(payload) - walked == {"combo_positions", "positions_by_conid", "trading_schedule"}
+    assert set(payload) - walked == {"combo_positions", "pa_transactions", "positions_by_conid"}
 
 
 @pytest.mark.parametrize(
