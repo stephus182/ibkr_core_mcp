@@ -21,19 +21,19 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `SEC` | 13 | 8 | 5 | — | — |
 | `WEB` | 9 | **9** | — | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
-| `API` | 21 | 14 | 6 (+1 partial) | — | — |
+| `API` | 21 | **16** | **4** (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | 6 | 6 | — | — | — |
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
-| `API-R` | 1 | 1 | — | — | — |
+| `API-R` | **2** | **2** | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| **Total** | **140** | **76** | **13** (+1 partial) | **0** | **50** |
+| **Total** | **141** | **79** | **11** (+1 partial) | **0** | **50** |
 
-`76 + 13 + 1 + 0 + 50 = 140`. **There are no unrecorded findings left.** All three blocks
+`79 + 11 + 1 + 0 + 50 = 141`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -3080,3 +3080,81 @@ described: parallel local scrapes belonged to the deleted ladder's search-result
 "concurrent" in it refers to the profile lock, which serialises rather than parallelises. The
 paragraph now says that, since "no rate limit and no quota" was true and "5 in parallel" was
 not.
+
+---
+
+## Phase 3 — `API-05` and `API-10` closed, and `API-R2` raised on the way
+
+Session 10, continuing the tail by severity. Both were the remaining Mediums.
+
+### `API-05` — the fix had reached one of two copies
+
+`get_positions`' docstring was corrected to 100 in session 9 and carries IBKR's wording
+twice. `docs/api-reference.md:450` still read *"page 0 = first 30"* — and it is the line
+**directly above** the `get_all_positions` section that the same session 9 edit *added*. A
+partial edit inside a single file, in the file describing the method that was being fixed.
+
+Same shape as WEB-03 (*"a fix that reached two of three copies"*) and the 2026-07-25 link
+repoint that corrected 81 links and missed 118.
+
+IBKR's own words were re-confirmed from the capture already in
+`docs/audits/audit-evidence/scrapes/`, not by re-fetching: *"The endpoint supports paging,
+each page will return up to 100 positions"* and *"One page contains a maximum of 100
+positions"*. The live half remains unobservable — this gateway build returns no `pageSize`
+field and the account holds 2 positions — and no longer matters, because `get_all_positions`
+pages until empty and never learns the page size (API-17).
+
+`tests/test_config_docs_consistency.py` now pins the number across both files. It is frozen
+in the test rather than read from `client.py`, for the reason
+`tests/security/test_published_identifiers.py` records: a guard that reads its oracle from
+the thing it guards follows it anywhere it drifts. Written first and watched fail — it
+reported `{100, 30}`.
+
+### `API-10` — one env read, three call sites, fixed at the point of construction
+
+`IBKR_AUTH_BROWSER` was honoured by `claude_tools`' P&L WebSocket, which read it from
+`os.environ` and passed it in. `IBKRClient`'s default auth (`client.py:447`) and
+`mcp_server`'s stream path (`mcp_server.py:476`) both constructed `BrowserCookieAuth()` bare
+and got Chrome. **An operator on Firefox had a working P&L subscription and an
+unauthenticated session everywhere else**, reported as *"no localhost cookies found in
+chrome"* — naming a browser they had not chosen.
+
+Fixed at the root rather than at each site: the env read moved **inside**
+`BrowserCookieAuth.__init__`, so all three agree by construction and there is nothing to
+thread through `Config`. The allow-list is unweakened — it is applied to whichever source
+supplied the name, keeping it away from `getattr(browser_cookie3, …)`, and the error names
+the source so an operator knows which input was rejected.
+
+`test_no_call_site_pins_a_browser_name_past_the_environment` walks the package's AST and
+fails if any construction passes a literal, because a divergence between call sites is
+exactly what the finding was.
+
+**4 mutants run, 4 caught**, dead-anchor control refused. One is *"re-pin the P&L site to a
+literal browser"* — caught, so the pre-fix shape now fails a test.
+
+Two corrections to my own test while writing it, both from reading the failure rather than
+the count. It first failed with `NameError: BrowserCookieAuth` — the file imports inside
+each test and I had not matched that. Then it asserted on `client._auth`, which does not
+exist: `IBKRClient` applies the strategy and discards it. Worse, that draft's construction
+went and read this machine's **real Edge cookie store**, warning *"cookie extraction failed
+(BrowserCookieError)"* — real local I/O in a unit test. It now spies on `apply`.
+
+### `API-R2` — "any `browser_cookie3` backend name" was wrong
+
+Found while correcting CLAUDE.md for API-10. The env-var note said the variable *"accepts
+any `browser_cookie3` backend name (`chrome`, `firefox`, `edge`, `safari`, …)"*. The
+ellipsis is the claim, and it is false.
+
+Measured against the installed library rather than reasoned about: `browser_cookie3` exposes
+**14** cookie-loading backends; `_ALLOWED_BROWSERS` admits **5**. So `arc`, `brave`,
+`librewolf`, `lynx`, `opera`, `opera_gx`, `vivaldi` and `w3m` are all refused — several of
+them ordinary daily-driver browsers. A Brave user following that sentence gets a
+`ValueError`, not a session.
+
+The **code** is self-consistent: the class docstring has always said *"Supported browsers:
+chrome, chromium, firefox, safari, edge"*, and the closed list is what keeps an arbitrary
+name away from `getattr`. Only CLAUDE.md overclaimed, so only CLAUDE.md changed.
+
+**Whether to widen the list is left to the owner and is deliberately not done here.** It is a
+decision about auth surface, not a typo fix, and the five Chromium/Gecko/WebKit families
+already cover the supported install paths. Recorded rather than actioned.

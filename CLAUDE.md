@@ -224,10 +224,23 @@ hours (2026-07-30). If you add a live test, require only what the code requires.
 | `CRAWL4AI_PROFILES_DIR` | Defaults to `~/.ibkr_core/crawl4ai_profiles` (paywalled-site logins) |
 
 **`IBKR_AUTH_BROWSER`** (optional, default `chrome`) selects which browser's cookie store
-`BrowserCookieAuth` reads the localhost session from. Read straight from `os.environ` by
-`claude_tools`' P&L WebSocket path rather than through `Config`, which is why it is easy to
-miss — it was documented nowhere at all until 2026-08-07. Accepts any `browser_cookie3`
-backend name (`chrome`, `firefox`, `edge`, `safari`, …).
+`BrowserCookieAuth` reads the localhost session from. It is read from `os.environ` inside
+`BrowserCookieAuth.__init__` — the single point of construction — so all three paths honour
+it: `IBKRClient`'s default auth, `mcp_server`'s stream path, and `claude_tools`' P&L
+WebSocket. **Until 2026-09-17 only the last of the three did** (audit finding API-10): the
+other two constructed the class bare and got Chrome, so an operator on Firefox had a working
+P&L subscription and an unauthenticated session everywhere else, reported as "no localhost
+cookies found in chrome" — a browser they had not chosen. `Config` deliberately does not
+carry it, so there is nothing to thread through.
+
+It accepts exactly five names — `chrome`, `chromium`, `firefox`, `safari`, `edge` — and
+raises `ValueError` naming the offending source on anything else. **This paragraph said
+"any `browser_cookie3` backend name" until 2026-09-17, and that was wrong** (API-R2):
+measured, the library ships 14 backends and this allow-list admits 5, so `brave`, `arc`,
+`opera`, `opera_gx`, `vivaldi`, `librewolf`, `lynx` and `w3m` are all refused. The list is
+closed on purpose — the name reaches `getattr(browser_cookie3, …)`, so it is validated
+before it can get there. Widening it is a deliberate decision about auth surface, not a
+typo fix.
 
 `CRAWL4AI_PROFILES_DIR` is the **only** Crawl4AI setting. A `CRAWL4AI_API_KEY` /
 `CRAWL4AI_API_URL` pair configured a hosted rung that was removed on 2026-07-28 (§5.1 of

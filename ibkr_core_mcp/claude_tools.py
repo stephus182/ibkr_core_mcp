@@ -2859,8 +2859,6 @@ class ClaudeToolkit:
         item is normally already unlocked by the time get_pnl is first called.
         """
         try:
-            import os
-
             import requests
 
             from ibkr_core_mcp.auth import BrowserCookieAuth
@@ -2869,10 +2867,10 @@ class ClaudeToolkit:
 
             async def _touch() -> None:
                 session = requests.Session()
-                # IBKR_AUTH_BROWSER read directly from os.environ (not via Config)
-                # to mirror claudia_ui's own BrowserCookieAuth call sites exactly —
-                # see docs/env-vars-reference.md in that repo.
-                BrowserCookieAuth(os.environ.get("IBKR_AUTH_BROWSER", "chrome")).apply(session)
+                # IBKR_AUTH_BROWSER is read inside BrowserCookieAuth since API-10
+                # (2026-09-17). This site used to read it and the other two construction
+                # sites did not, so the variable worked here and nowhere else.
+                BrowserCookieAuth().apply(session)
                 cookie = session.headers.get("Cookie", "")
                 ws = IBKRWebSocket(self._config.gateway_url, cookie)
                 try:

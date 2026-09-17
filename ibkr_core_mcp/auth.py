@@ -18,6 +18,7 @@ See `docs/gateway-auth-reference.md` for the full login walkthrough.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import warnings
 from typing import Protocol
@@ -99,20 +100,34 @@ class BrowserCookieAuth:
     Source: https://github.com/borisbabic/browser_cookie3
     """
 
-    def __init__(self, browser: str = "chrome") -> None:
+    def __init__(self, browser: str | None = None) -> None:
         """Select which browser's cookie store to read.
 
         Args:
-            browser: One of chrome, chromium, firefox, safari, edge.
+            browser: One of chrome, chromium, firefox, safari, edge. Omit it to take
+                `IBKR_AUTH_BROWSER` from the environment, which falls back to `chrome`.
 
         Raises:
-            ValueError: If `browser` is not one of the supported names. Validated
+            ValueError: If the selected name is not one of the supported names. Validated
                 here rather than at `apply()` time so a typo fails fast, and so the
-                name can never reach `getattr` on the browser_cookie3 module.
+                name can never reach `getattr` on the browser_cookie3 module. Reading the
+                value from the environment does not weaken that: the allow-list is applied
+                to whichever source supplied it, and the message names that source.
+
+        `IBKR_AUTH_BROWSER` is read **here** rather than by each caller. It used to be read
+        in exactly one place — `claude_tools`' P&L WebSocket path — while `IBKRClient`'s
+        default auth and `mcp_server`'s stream path both constructed this class bare and got
+        Chrome regardless (audit finding API-10, fixed 2026-09-17). An operator on Firefox
+        therefore had a working P&L subscription and an unauthenticated session everywhere
+        else, reported as "no localhost cookies found in chrome" — a browser they had not
+        chosen. One env read at the single point of construction is what makes the three
+        paths agree; `Config` deliberately does not carry it, so there is nothing to thread.
         """
-        if browser not in _ALLOWED_BROWSERS:
-            raise ValueError(f"Unsupported browser {browser!r}. Allowed: {sorted(_ALLOWED_BROWSERS)}")
-        self._browser = browser
+        selected = browser if browser is not None else os.environ.get("IBKR_AUTH_BROWSER", "chrome")
+        if selected not in _ALLOWED_BROWSERS:
+            source = "the browser argument" if browser is not None else "IBKR_AUTH_BROWSER"
+            raise ValueError(f"Unsupported browser {selected!r} from {source}. Allowed: {sorted(_ALLOWED_BROWSERS)}")
+        self._browser = selected
 
     def apply(self, session: requests.Session) -> None:
         """Copy localhost cookies from the browser into the session's Cookie header.

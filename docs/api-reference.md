@@ -447,7 +447,14 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/p
 ---
 
 ### `get_positions(account_id, page) -> list[dict]`
-Open positions, paginated (page 0 = first 30). Returns `[]` if response is not a list.
+Open positions, one page at a time (page 0 = first 100). Returns `[]` if response is
+not a list. **Prefer `get_all_positions` below** unless you specifically want one page.
+
+The page size is **100**, not 30 — IBKR's cited page says so twice ("each page will
+return up to 100 positions"; "One page contains a maximum of 100 positions"). Nothing in
+this package ever chunked by 30, so the figure was a documentation claim only. Corrected
+in `client.py` on 2026-09-16 and here on 2026-09-17, the second copy having been missed
+(API-05).
 
 **Returns:** `[{"conid": ..., "contractDesc": ..., "position": ..., "mktPrice": ...,
 "mktValue": ..., "unrealizedPnl": ..., "realizedPnl": ...}, ...]`

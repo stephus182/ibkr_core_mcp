@@ -170,3 +170,37 @@ def test_claude_md_and_the_scraper_doc_state_the_same_suite_size():
     claimed = _documented(r"(\d+) tests, ~\d+\s?s", claude_md)
     assert claimed, "CLAUDE.md no longer states the live web suite size; update or remove this guard"
     assert claimed == {sum(_gate_counts().values())}
+
+
+# ---------------------------------------------------------------------------
+# The positions page size, stated in two files (API-05)
+# ---------------------------------------------------------------------------
+
+# Frozen here on purpose, not imported from the code under test. IBKR's own page says it
+# twice — "The endpoint supports paging, each page will return up to 100 positions" and
+# "One page contains a maximum of 100 positions"
+# (https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions). A guard that read
+# the number out of `client.py` would follow the source anywhere it drifted, which is how a
+# mutant survived in `tests/security/test_published_identifiers.py`.
+_IBKR_POSITIONS_PAGE_SIZE = 100
+
+
+def test_the_positions_page_size_agrees_across_every_place_that_states_it():
+    """API-05. `get_positions` said "page 0 = first 30" while IBKR documents 100.
+
+    Corrected in `client.py` in session 9 — and `docs/api-reference.md` kept saying 30, in
+    the line directly above a section that same edit *added*. Two copies of one fact, one
+    of them fixed. The number is small and the drift is invisible, so it is pinned here.
+    """
+    import inspect
+
+    from ibkr_core_mcp.client import IBKRClient
+
+    doc = (_REPO / "docs" / "api-reference.md").read_text()
+    docstring = inspect.getdoc(IBKRClient.get_positions) or ""
+
+    claimed = _documented(r"page 0 = first (\d+)", doc) | _documented(r"page 0 = first (\d+)", docstring)
+    assert claimed, "neither file states a positions page size any more; update or remove this guard"
+    assert claimed == {_IBKR_POSITIONS_PAGE_SIZE}, (
+        f"positions page size claimed as {claimed}, IBKR documents {_IBKR_POSITIONS_PAGE_SIZE}"
+    )
