@@ -47,7 +47,19 @@ When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30
 | `/fyi/unreadnumber` | HTTP 423 — FYI subscription not configured for this account |
 | `create_alert` (×11) | the known gateway operator block: `>=` / `<=` bodies are refused before reaching IBKR |
 | `get_combo_positions` | the account holds no spread positions — nothing for the endpoint to return |
-| `mark_notification_read` | opt-in write, `IBKR_TEST_NOTIFICATION_ID` unset — **awaiting the owner**, since there is no unmark |
+| `mark_notification_read` | ~~awaiting the owner~~ — **run with permission later the same day, see below** |
+
+### The opt-in write, run with permission
+
+`IBKR_TEST_NOTIFICATION_ID=2026091599476950 pytest -k mark_notification_read -m integration` — **2 passed**. The id chosen was the older of two byte-identical "IBKR FYI: Complete Pending Items" notices, so nothing unique was consumed; the "Withdrawal Activity" notice was deliberately left alone.
+
+| | before | after |
+|---|---|---|
+| `2026091616556319` Complete Pending Items | `R: 0` | `R: 0` |
+| `2026091599476950` Complete Pending Items | `R: 0` | **`R: 1`** |
+| `2026091595608557` Withdrawal Activity | `R: 0` | `R: 0` |
+
+IBKR acknowledged with `{"V": 1, …}`. This is the **first observation of `R: 1`** in this project, and the two unchanged rows are the control that makes it a targeted write rather than a global one.
 
 ---
 

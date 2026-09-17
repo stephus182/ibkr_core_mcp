@@ -2552,11 +2552,14 @@ class ClaudeToolkit:
         # rather than the model's attributes so a record that failed validation, and so
         # arrived as a plain dict, still renders.
         #
-        # On `R`'s polarity, and the limit of the evidence: IBKR documents it as "Return
-        # if the notification was read or not. Value Format: 0: Disabled; 1: Enabled", so
-        # 1 is the flag set. Measured 2026-09-16, three notifications all carried `R: 0`
-        # while /fyi/unreadnumber reported 3 — consistent with 0 meaning unread. **R: 1
-        # was never observed**, so the read branch below rests on the documentation alone.
+        # On `R`'s polarity: IBKR documents it as "Return if the notification was read or
+        # not. Value Format: 0: Disabled; 1: Enabled", so 1 is the flag set. This comment
+        # said `R: 1` had **never been observed** and that the read branch rested on the
+        # documentation alone — true until 2026-09-16, when the opt-in write was finally
+        # run with the account holder's permission. `mark_notification_read` on one of
+        # three notifications flipped that one from `R: 0` to `R: 1` and left the other
+        # two at `0`. Both halves matter: the polarity is confirmed, and the write is
+        # targeted rather than global (audit finding API-20).
         # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-notifications.md
         lines = [
             f"- [{('read' if n.get('R') else 'UNREAD')}] {n.get('MS') or n.get('headline') or '?'}"

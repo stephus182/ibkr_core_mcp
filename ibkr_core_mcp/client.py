@@ -1124,9 +1124,11 @@ class IBKRClient:
         ``/iserver/secdef/info`` returns one conid at a time. This is the batch path for
         them (200 conids/request per IBKR's usage limits), so prefer it over a loop.
 
-        Not live-verified: the gateway was offline when this was written, so the fix
-        rests on the endpoint documentation alone. `tests/test_client_live.py` covers it
-        when a gateway is available.
+        **Live-verified 2026-09-16** (the gateway was offline when this was written, and
+        this note used to say the fix rested on the documentation alone):
+        `get_secdef([265598, 272093])` returned 2 records carrying `conid`, `currency`,
+        `assetClass`, `countryCode`, `fullName`, `allExchanges` and the rest.
+        `tests/test_client_live.py::test_get_secdef_batch` covers it.
 
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-the-security-definition-by-contract-id
                 (scraped 2026-07-28: "Returns a list of security definitions for the

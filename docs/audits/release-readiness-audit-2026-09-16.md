@@ -119,9 +119,10 @@ depending on that reading.
    `TOOL-01`, which is blocked upstream and cannot be closed here.
 3. `API-11`'s remaining 68 methods (owner-approved scope addition).
 
-Two things need the owner: a fresh Chrome login at `https://localhost:5055` for any live
-work, and explicit permission for `API-20`'s live check, which writes to the owner's data and
-has no unmark method.
+~~Two things need the owner~~ — **both done 2026-09-16.** The gateway was re-authenticated,
+which unblocked Phase 0 gates 0.6 / 0.8 / 0.11 and settled API-R1, TOOL-R1 and API-17; and
+`API-20`'s opt-in write was run with permission, giving this project its first observation of
+`R: 1`. **No live work is now blocked on the owner.**
 
 ---
 
@@ -2786,3 +2787,91 @@ Eleven stubs across three test files were repointed from `get_positions` to `get
 
 Gates: ruff, ruff format, mypy (119 files), pytest **1,501 passed**, `pytest -m security`
 **250 passed**.
+
+---
+
+## Phase 3 — API-20 closed by the one write this audit asked permission for
+
+Held open since the FYI work: `mark_notification_read`'s verb and path had been corrected from
+`POST /fyi/notifications` to `PUT /fyi/notifications/{notificationId}` against the
+documentation, and the correction had **never been executed**. It writes to the account
+holder's data and this package exposes no unmark, so it stayed behind an opt-in env var and an
+explicit ask across five sessions.
+
+Run with permission on 2026-09-16. The id was chosen to cost nothing: the older of **two
+byte-identical** "IBKR FYI: Complete Pending Items" notices. The "Withdrawal Activity" notice
+was deliberately left alone.
+
+| notification | before | after |
+|---|---|---|
+| `2026091616556319` Complete Pending Items | `R: 0` | `R: 0` |
+| `2026091599476950` Complete Pending Items | `R: 0` | **`R: 1`** |
+| `2026091595608557` Withdrawal Activity | `R: 0` | `R: 0` |
+
+IBKR acknowledged with `{"V": 1, …}`, its documented shape.
+
+**Two things, and the second is why the control mattered.** `R: 1` is observed for the first
+time in this project — `claude_tools._get_notifications` carried a comment saying it never had
+been and that its read branch *"rests on the documentation alone"*. And the two unchanged rows
+prove the write is **targeted, not global**, which a single-row check could not have shown.
+
+The corrected verb and path work. API-20 is closed on evidence rather than on documentation.
+
+### Two stale claims the sweep picked up on the way
+
+Searching for every place that said `R: 1` had never been seen turned up a second, unrelated
+one: `client.get_secdef` carried *"Not live-verified: the gateway was offline when this was
+written, so the fix rests on the endpoint documentation alone."* The gateway is up, so it was
+checked: `get_secdef([265598, 272093])` returns 2 records carrying `conid`, `currency`,
+`assetClass`, `countryCode`, `fullName`, `allExchanges` and the rest, and
+`test_get_secdef_batch` covers it. Both claims corrected.
+
+A note that outlives its condition is the same defect as a stale count, and the only reason
+this one surfaced is that the search was run across the tree rather than on the file being
+edited.
+
+---
+
+## Phase 3 — TOOL-01: the operator block re-tested at the gateway, and it is not ours
+
+TOOL-01's fix shipped and was recorded as *documented, deliberately not closed* — it cannot be
+exercised while IBKR's gateway refuses every alert operator. That conclusion rested on two
+observations. It was re-tested directly, because a conclusion that blocks a finding forever
+deserves better evidence than two data points.
+
+### The experiment
+
+Read-only first: the account's one pre-existing alert (created outside the API) was fetched, and
+its stored condition is
+
+```json
+{"condition_type": 1, "conidex": "265598@SMART", "condition_operator": "<=",
+ "condition_trigger_method": "2", "condition_value": "1.00", "condition_logic_bind": "n"}
+```
+
+So `<=` is stored **literally** — the operator format this package sends is right. The `"2"` is
+a TWS/mobile artefact; IBKR's create-alert page documents `triggerMethod` as *"Pass the string
+representation of zero, `\"0\"`"*, which is what `create_alert` sends. **The request body is
+correct against both the documentation and the account's own data.**
+
+Then three writes, none of which created anything:
+
+| sent | result |
+|---|---|
+| `"operator": ">"` | **HTTP 500 from IBKR** — `{"error":"Condition #1:can't recognize fix [>]"}` |
+| `"operator": ">="` | **HTTP 403** `Error 403 - Access Denied` — gateway HTML, never reaches IBKR |
+| `"operator": ">="`, escaping verified on the wire | **HTTP 403** |
+
+The third row is the one that adds something. The escape reached the gateway as
+`>=` — printed from the actual request body, not assumed — and was still refused, so
+**the filter decodes the JSON and rejects the decoded value**. It is not a byte match that an
+encoding trick could slip past. `==` reaches IBKR, so it is not rejecting `=` either; the only
+variable between rows 1 and 2 is one character of the operator.
+
+### The conclusion, now symmetric and evidenced
+
+**The gateway refuses the only two operators IBKR's engine accepts, and IBKR's engine refuses
+the three the gateway lets through.** Not a defect in this package. TOOL-01 stays closed-in-code
+and unexercisable, and the reason is now measured rather than inferred.
+
+The account was verified unchanged afterwards: one alert, the pre-existing one.
