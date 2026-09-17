@@ -361,11 +361,34 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 
 ---
 
-### `get_trading_schedule(asset_class, symbol, exchange, exchange_filter) -> list[dict]`
-Trading hours, sessions, and timezone for a symbol/exchange.
-Returns a list of schedule objects (verified live 2026-06-30 — returns `list`, not `dict`).
+### `get_trading_schedule(asset_class, symbol="", exchange="", exchange_filter="", conid="") -> list[dict]`
+Trading hours, sessions and timezone for a contract. Returns a list of schedule objects
+(verified live 2026-06-30 — `list`, not `dict`; re-verified 2026-09-16).
+
+**Pass exactly one of `symbol` or `conid`.** The gateway refuses both together and refuses
+neither: `{"error":"Bad Request: assetClass and exactly one of symbol/conid are required"}`.
+The method raises `ConfigError` locally for either case rather than spending the request.
+Prefer `symbol` — it is the documented parameter; `conid` is accepted but undocumented.
+
+**`exchange="SMART"` returns an empty list.** SMART is IBKR's order router, not a venue with
+published hours. `ISLAND` returned 125 rows for AAPL (measured 2026-09-16). An empty result
+here is almost always the exchange, not a missing contract.
+
+**Returns** per row: `id`, `tradeVenueId`, `exchange`, `description`, `timezone`,
+`schedules[]` → `clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]`, `tradingTimes[]`.
+There is no `regularTradingHours` or `liquidHours`.
+
 **Endpoint:** `GET /trsrv/secdef/schedule`
-Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule
+
+> **IBKR publishes three disagreeing "trading schedule" pages.** The API Reference above is
+> authoritative for this endpoint and matches the wire in all six keys. The older
+> `v1/endpoints/contract/trading-schedule-by-symbol` page lists **both** `conid` and `symbol`
+> as *Required* — a combination the gateway rejects — and omits `exchange`/`description` from
+> its response object; this file cited it until 2026-09-16.
+> `v1/endpoints/contract/trading-schedule-new` is a **different endpoint**
+> (`GET /contract/trading-schedule`, keyed by `conid`, different response shape) that this
+> package does not implement.
 
 ### `get_currency_pairs(currency) -> list[dict]`
 Available FX pairs for a target currency.

@@ -2576,38 +2576,60 @@ def test_update_delivery_option_rejects_an_undocumented_channel(client):
     mock_put.assert_not_called()
 
 
-def test_get_trading_schedule_sends_the_conid_ibkr_documents_as_required(client):
-    """IBKR's `GET /trsrv/secdef/schedule` page marks **conid** Required, alongside
-    `assetClass` and `symbol`. This client sent neither the parameter nor offered it, and
-    the one live capture of this endpoint came back as an empty list
-    (`tests/fixtures/ibkr_live_shapes.json`, `trading_schedule: []`).
+def test_get_trading_schedule_sends_conid_instead_of_symbol_not_alongside_it(client):
+    """IBKR's page marks **both** `conid` and `symbol` Required. The live gateway disagrees:
 
-    Source, fetched 2026-09-16 with a fabricated control URL that returned `# Page Not
-    Found`: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol.md
+        {"error":"Bad Request: assetClass and exactly one of symbol/conid are required"}
 
-    The empty response is **not** proven to be caused by the missing parameter — IBKR's own
-    curl example on that page omits `conid` while its Python example includes it, and no
-    gateway was reachable to settle it. What is established is that a documented-Required
-    parameter was unsendable, which this fixes; the live confirmation is still owed.
+    Measured 2026-09-16 against an authenticated gateway. Sending both is an HTTP 400 every
+    time, so the first version of this fix — which appended `conid` beside `symbol` because
+    the documentation called it Required — shipped a guaranteed error. The documentation is
+    wrong and the gateway is the authority.
     """
     from unittest.mock import patch
 
     with patch.object(client, "_get", return_value=[]) as get:
-        client.get_trading_schedule("STK", "AAPL", "SMART", conid=265598)
+        client.get_trading_schedule("STK", exchange="ISLAND", conid=265598)
 
     params = get.call_args.args[1]
-    assert params["conid"] == "265598", "conid is not sent"
+    assert params["conid"] == "265598"
+    assert "symbol" not in params, "symbol must not be sent alongside conid — IBKR returns 400"
     assert params["assetClass"] == "STK"
-    assert params["symbol"] == "AAPL"
 
 
-def test_get_trading_schedule_omits_conid_when_the_caller_has_none(client):
-    """The counter-case: `conid` is optional on this client because callers reaching it
-    through `claude_tools` have a symbol and not a contract id. An empty value must not be
-    sent as an empty string — IBKR would receive `conid=` and reject or ignore it."""
+def test_get_trading_schedule_sends_symbol_when_no_conid_is_given(client):
+    """The counter-case, and the ordinary call: symbol alone, no `conid` key at all."""
     from unittest.mock import patch
 
     with patch.object(client, "_get", return_value=[]) as get:
-        client.get_trading_schedule("STK", "AAPL", "SMART")
+        client.get_trading_schedule("STK", "AAPL", "ISLAND")
 
-    assert "conid" not in get.call_args.args[1]
+    params = get.call_args.args[1]
+    assert params["symbol"] == "AAPL"
+    assert "conid" not in params
+
+
+def test_get_trading_schedule_refuses_both_symbol_and_conid_before_the_network(client):
+    """Fail fast and locally, rather than spending a request to be told 400 by IBKR. The
+    message names the constraint the gateway enforces, in IBKR's own words."""
+    from unittest.mock import patch
+
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    with patch.object(client, "_get") as get, pytest.raises(ConfigError, match="exactly one"):
+        client.get_trading_schedule("STK", "AAPL", "ISLAND", conid=265598)
+
+    get.assert_not_called()
+
+
+def test_get_trading_schedule_refuses_neither_symbol_nor_conid(client):
+    """`assetClass` alone is also a 400. Both arms, so the check cannot be satisfied by
+    always raising or never raising."""
+    from unittest.mock import patch
+
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    with patch.object(client, "_get") as get, pytest.raises(ConfigError, match="exactly one"):
+        client.get_trading_schedule("STK", exchange="ISLAND")
+
+    get.assert_not_called()

@@ -508,18 +508,28 @@ Trading hours and session information for a symbol. Resolves symbol to conid int
 | `asset_class` | string | — | `"STK"` (default), `"FUT"`, `"OPT"`, `"FX"` |
 | `exchange` | string | — | e.g. `"NYMEX"`, `"NYSE"` (default `"SMART"`) |
 
-**Output:** the endpoint's JSON, passed through unchanged. IBKR documents each row as
-`id`, `tradeVenueId`, `timezone` and `schedules[]`, where each schedule carries
-`clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]` (`openingTime`, `closingTime`,
-`prop` — `LIQUID` when the whole day is liquid) and `tradingtimes[]` (`openingTime`,
-`closingTime`, `cancelDayOrders`).
+**Output:** the endpoint's JSON, passed through unchanged. Each row carries `id`,
+`tradeVenueId`, `exchange`, `description`, `timezone` and `schedules[]`, where each schedule
+carries `clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]` (`openingTime`,
+`closingTime`, `prop` — `LIQUID` when the whole day is liquid) and `tradingTimes[]`
+(`openingTime`, `closingTime`, `cancelDayOrders`). **Verified against a live gateway
+2026-09-16**, key for key, and it matches IBKR's API Reference exactly.
 
-> This line read "JSON with `regularTradingHours`, `liquidHours`, `timezone`, and
-> next/current session" until 2026-09-16. **`regularTradingHours` and `liquidHours` appear
-> nowhere in IBKR's response object** and nowhere in this codebase; only `timezone` was
-> real. The handler is a `json.dumps` passthrough, so the shape is IBKR's and was checked
-> against their page (2,982 B, fetched 2026-09-16 with a fabricated control URL returning
-> `# Page Not Found` at 433 B).
+> **Corrected twice on 2026-09-16, and the second correction matters.** This line first read
+> "JSON with `regularTradingHours`, `liquidHours`, `timezone`, and next/current session".
+> Neither `regularTradingHours` nor `liquidHours` exists anywhere — only `timezone` was real.
+>
+> The first correction then cited
+> `v1/endpoints/contract/trading-schedule-by-symbol.md` and so **omitted `exchange` and
+> `description`**, which the live gateway does return. IBKR publishes three "trading
+> schedule" pages that disagree; the authoritative one for this endpoint is
+> [`api-reference/trading/trading-contracts/get-trading-schedule.md`](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule.md),
+> whose response object matches the wire in all six keys. See `client.get_trading_schedule`
+> for which page says what.
+
+**Note on `exchange`:** `exchange="SMART"` returns an **empty list** — SMART is IBKR's order
+router, not a venue with published hours. Use a real venue (`ISLAND` returned 125 rows for
+AAPL, measured 2026-09-16).
 
 **IBKR endpoint:** `GET /trsrv/secdef/schedule`
 

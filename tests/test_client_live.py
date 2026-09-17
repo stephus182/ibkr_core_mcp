@@ -240,9 +240,47 @@ def test_get_stocks_aapl(live_client):
 
 @pytest.mark.integration
 def test_get_trading_schedule(live_client):
-    # IBKR returns a list of schedule objects (not a dict) for this endpoint
-    result = live_client.get_trading_schedule("STK", "AAPL", "SMART")
-    assert isinstance(result, (dict, list))
+    """Was `get_trading_schedule("STK", "AAPL", "SMART")` + `isinstance(result, (dict, list))`.
+
+    `SMART` returns an EMPTY LIST — it is IBKR's order router, not a venue with published
+    hours — and that assertion passes for `[]` as happily as for real data. So this test was
+    green for its whole life while the call returned nothing, and it survived the 2026-09-16
+    sweep that fixed 38 other type-only live assertions (audit finding API-R1).
+
+    Now it asserts the venue that works, the keys IBKR's API Reference documents, and — as a
+    deliberate second arm — that SMART really does come back empty, so the reason this test
+    was toothless is itself pinned.
+    """
+    result = live_client.get_trading_schedule("STK", "AAPL", "ISLAND")
+
+    assert isinstance(result, list)
+    assert result, "ISLAND returned no schedule rows — the venue or the endpoint changed"
+    row = result[0]
+    for key in ("id", "tradeVenueId", "exchange", "description", "timezone", "schedules"):
+        assert key in row, f"{key} missing from the schedule row: {sorted(row)}"
+    assert isinstance(row["schedules"], list) and row["schedules"]
+    assert "regularTradingHours" not in row and "liquidHours" not in row
+
+    # The other arm: SMART is why the old assertion could not fail.
+    assert live_client.get_trading_schedule("STK", "AAPL", "SMART") == []
+
+
+@pytest.mark.integration
+def test_get_trading_schedule_accepts_conid_instead_of_symbol(live_client):
+    """`conid` is an undocumented alternative to `symbol` — the API Reference lists no
+    `conid` parameter at all, yet the gateway accepts it and the two agree.
+
+    Sending BOTH is a 400 (`assetClass and exactly one of symbol/conid are required`), which
+    is why the client refuses that combination locally."""
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    by_symbol = live_client.get_trading_schedule("STK", "AAPL", "ISLAND")
+    by_conid = live_client.get_trading_schedule("STK", exchange="ISLAND", conid=265598)
+
+    assert by_conid and len(by_conid) == len(by_symbol)
+
+    with pytest.raises(ConfigError, match="exactly one"):
+        live_client.get_trading_schedule("STK", "AAPL", "ISLAND", conid=265598)
 
 
 @pytest.mark.integration

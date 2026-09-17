@@ -138,13 +138,13 @@ install resolving to the source tree.
 | 0.3 | Types | `mypy` | **PASS** — no issues found in 106 source files |
 | 0.4 | Unit | `pytest -m "not integration"` | **PASS** — 1257 passed, 93 deselected, 25.87 s |
 | 0.5 | Security | `pytest -m security` | **PASS** — 194 passed, 1156 deselected, 4.10 s |
-| 0.6 | Live gateway | `pytest tests/test_client_live.py -m integration` | **BLOCKED** — 61 skipped, gateway unauthenticated |
+| 0.6 | Live gateway | `pytest tests/test_client_live.py -m integration` | ~~BLOCKED~~ → **PASS 2026-09-16** — 64 passed, 4 skipped, every skip documented |
 | 0.7 | Live web tools | `pytest tests/test_web_tools_live.py -m integration` | **PASS** — 11 passed, 25.81 s |
 | 0.7b | Live scraper (Drive, dev-cache, crawl4ai, web_scraper) | `pytest tests/test_web_scraper_*_live.py tests/test_crawl4ai_live.py -m integration` | **PASS** — 8 passed |
-| 0.8 | Live watchlist | `pytest tests/test_client_live.py -k watchlist -m integration` | **BLOCKED** — same cause |
+| 0.8 | Live watchlist | `pytest tests/test_client_live.py -k watchlist -m integration` | ~~BLOCKED~~ → **PASS 2026-09-16** (creation skipped: IBKR rate-limited, 503 not 404) |
 | 0.9 | Order gates (manual) | Gate 1 + Gate 2 end to end | not yet run |
 | 0.10 | Supply chain | `pip-audit` (CI-equivalent) | **PASS** — no known vulnerabilities, 1 correctly ignored |
-| 0.11 | Live alerts | `pytest tests/test_alerts_live.py -m integration` | **BLOCKED** — 11 skipped, gateway unauthenticated |
+| 0.11 | Live alerts | `pytest tests/test_alerts_live.py -m integration` | ~~BLOCKED~~ → **PASS 2026-09-16** — 1 passed, 10 skipped on the known operator-403, not on auth |
 
 Gates 0.1–0.4 were run in CI's order, because a red step hides every step after it
 (run 34082479743).
@@ -2542,3 +2542,107 @@ restored, it passes, and the file was byte-compared to its backup afterwards.
 | | **21 live tests, 0 failed** |
 
 Gates: ruff, ruff format, mypy (119 files), pytest **1,492 passed**.
+
+---
+
+## Phase 3 — API-R1 corrected: I shipped a guaranteed HTTP 400 from a page that is wrong
+
+The gateway was re-authenticated on 2026-09-16, which made good the one debt this report had
+explicitly recorded as owed: *"the live confirmation is still owed"* for API-R1. It was owed
+for a reason.
+
+### What the fix did, and why it was wrong
+
+API-R1 added `conid` to `get_trading_schedule` because
+`v1/endpoints/contract/trading-schedule-by-symbol.md` marks it **Required**. Sent against a
+live gateway, alongside `symbol`, that is a 400 **every time**:
+
+```
+{"error":"Bad Request: assetClass and exactly one of symbol/conid are required"}
+```
+
+`conid` and `symbol` are **mutually exclusive**, not both mandatory. The fix was written from
+the documentation, was internally consistent, passed its unit tests, and could not have
+worked.
+
+### Three pages, two endpoints, one of them stale
+
+Searching IBKR's own `llms.txt` for "schedule" — which is what should have been done first —
+returns three relevant pages, and they disagree:
+
+| Page | Endpoint | Says |
+|---|---|---|
+| `api-reference/trading/trading-contracts/get-trading-schedule.md` | `/trsrv/secdef/schedule` | `assetClass` + `symbol` required, `exchange`/`exchangeFilter` optional, **no `conid` parameter at all**. Response object: six keys |
+| `v1/endpoints/contract/trading-schedule-by-symbol.md` | same | **both** `conid` *and* `symbol* "Required"; response object omits `exchange` and `description` |
+| `v1/endpoints/contract/trading-schedule-new.md` | **`GET /contract/trading-schedule`** | a *different* endpoint keyed by `conid`, different response shape. Not implemented here |
+
+**The API Reference is right and matches the wire key for key** — all six of `id`,
+`tradeVenueId`, `exchange`, `description`, `timezone`, `schedules[]`. The narrative page is
+the stale one, and it is the one `client.py` and `docs/api-reference.md` both cited.
+
+The `trading-schedule-new` page had even been offered to me: the fabricated control URL used
+to validate the first fetch returned `# Page Not Found` **with a "Similar pages" list naming
+"Trading Schedule (NEW)"**, and I did not follow it. The control worked; I read only the half
+of its output I was looking for.
+
+### And the empty fixture had nothing to do with any of this
+
+The `trading_schedule: []` in `tests/fixtures/ibkr_live_shapes.json` — the observation that
+started API-R1 — is caused by **`exchange="SMART"`**. SMART is IBKR's order router, not a
+venue with published hours. Measured: `SMART` → `[]`, `ISLAND` → **125 rows**. The missing
+parameter was never the cause, and I had been careful to say the cause was *not established*.
+That caution is the only reason this correction is small.
+
+### What changed now
+
+`get_trading_schedule` requires **exactly one** of `symbol` or `conid` and refuses the other
+two cases locally with `ConfigError`, rather than spending a request to be told 400. `conid`
+is kept because the gateway genuinely accepts it — `265598` and `"AAPL"` return the same 125
+rows — but the docstring names `symbol` as the documented one. Four unit tests (both arms of
+the refusal), and the docstring now lays out which of the three pages says what.
+
+`docs/api-reference.md`, `docs/tools-reference.md` and `client.py` were repointed to the API
+Reference. **`docs/tools-reference.md` needed correcting twice**: DOCA-R1's own fix had cited
+the stale page and therefore omitted `exchange` and `description` from the documented output.
+The behaviour is recorded in `docs/ibkr-api-behaviors-reference.md`, which is the file
+CLAUDE.md designates for verified-not-assumed IBKR behaviour.
+
+### The live test could not have caught any of it
+
+```python
+result = live_client.get_trading_schedule("STK", "AAPL", "SMART")
+assert isinstance(result, (dict, list))
+```
+
+`SMART` returns `[]`, and that assertion passes for `[]` exactly as happily as for 125 rows.
+**Green for its whole life while the call returned nothing** — and it survived session 1's
+sweep that fixed 38 other type-only live assertions, because that sweep worked from a list of
+tests and this one was not on it.
+
+It now asserts the venue that works, the six documented keys, the absence of
+`regularTradingHours`/`liquidHours`, and — as a deliberate second arm — that `SMART` really
+does come back empty, so the reason the old test was toothless is itself pinned. A second live
+test covers the `conid` alternative and the 400 on both.
+
+### Phase 0's blocked gates, closed
+
+| Gate | Was | Now |
+|---|---|---|
+| 0.6 live gateway | BLOCKED, 61 skipped | **64 passed, 4 skipped** |
+| 0.8 live watchlist | BLOCKED | **PASS** (creation skipped: IBKR rate-limited, 503 not 404) |
+| 0.11 live alerts | BLOCKED, 11 skipped | **1 passed, 10 skipped** on the known operator-403, not on auth |
+
+Every remaining skip is documented: the FYI 423 (no subscription on this account), the alert
+operator 403, no combo positions held, and API-20's opt-in write, which still awaits the
+owner.
+
+### The lesson, which is the same one twice
+
+API-11's fixture work established *test against the wire, not against a dict you wrote*. This
+is that rule applied to **documentation**: a vendor page is a claim, and three pages from the
+same vendor contradicted each other. The gateway settled it in one call. **Read the index
+first when a page's contract looks odd** — `llms.txt` had all three pages listed, and the
+disagreement would have been visible before any code was written.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,494 passed**; live
+`test_client_live.py` 64 passed / 4 skipped, `test_alerts_live.py` 1 passed / 10 skipped.

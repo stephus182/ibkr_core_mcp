@@ -1039,34 +1039,66 @@ class IBKRClient:
     def get_trading_schedule(
         self,
         asset_class: str,
-        symbol: str,
-        exchange: str,
+        symbol: str = "",
+        exchange: str = "",
         exchange_filter: str = "",
         conid: int | str = "",
     ) -> list[dict[str, Any]]:
-        """Trading hours, sessions, and timezone for a symbol/exchange.
+        """Trading hours, sessions, and timezone for a contract.
 
-        Returns IBKR's rows unchanged: `id`, `tradeVenueId`, `timezone` and `schedules[]`,
-        each schedule carrying `sessions[]` and `tradingtimes[]`. There is no
-        `regularTradingHours` or `liquidHours` key — `docs/tools-reference.md` claimed both
-        until 2026-09-16 and neither exists.
+        **IBKR publishes three pages for "trading schedule" and they do not agree.** The
+        API Reference below is the one this method follows; it was confirmed against a live
+        gateway on 2026-09-16, key for key.
 
-        `conid` is documented **Required** and was not sendable here until 2026-09-16; the
-        one live capture of this endpoint returned an empty list. Whether the omission is
-        what caused that is not established — IBKR's own curl example on the page below
-        omits `conid` while its Python example includes it — so this makes the parameter
-        available rather than claiming a fix. Left optional because `claude_tools`' caller
-        resolves a symbol, not a contract id.
+        - `api-reference/.../get-trading-schedule.md` — **authoritative for this endpoint.**
+          `assetClass` and `symbol` required, `exchange`/`exchangeFilter` optional. It
+          documents **no `conid` parameter at all**, and its response object matches the
+          wire exactly, all six keys.
+        - `v1/endpoints/contract/trading-schedule-by-symbol.md` — the older narrative page.
+          It lists **both** `conid` and `symbol` as *Required*, which no gateway accepts,
+          and its response object omits `exchange` and `description`. Do not follow it.
+        - `v1/endpoints/contract/trading-schedule-new.md` — a **different endpoint**,
+          `GET /contract/trading-schedule`, keyed by `conid` and returning a different
+          shape. Not implemented here.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol.md
+        `conid` is accepted as an undocumented alternative to `symbol`: the gateway refuses
+        both together and refuses neither, with
+
+            {"error":"Bad Request: assetClass and exactly one of symbol/conid are required"}
+
+        so this method requires exactly one and refuses the other two cases locally rather
+        than spending a request to be told. Prefer `symbol`, which is the documented one.
+
+        `exchange` matters more than it looks. `exchange="SMART"` returns an **empty list**
+        for AAPL while `exchange="ISLAND"` returns 125 rows; SMART is IBKR's order router,
+        not a venue with published hours. The empty `trading_schedule` in
+        `tests/fixtures/ibkr_live_shapes.json` is that, not a defect and not a missing
+        parameter.
+
+        Returns IBKR's rows unchanged: `id`, `tradeVenueId`, `exchange`, `description`,
+        `timezone`, `schedules[]`. There is no `regularTradingHours` or `liquidHours` —
+        `docs/tools-reference.md` promised both until 2026-09-16 and neither exists.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule.md
         Endpoint: GET /trsrv/secdef/schedule
         """
-        params = {"assetClass": asset_class, "symbol": symbol, "exchange": exchange}
-        if exchange_filter:
-            params["exchangeFilter"] = exchange_filter
-        if conid != "":
+        has_conid = conid != ""
+        if has_conid == bool(symbol):
+            raise ConfigError(
+                "get_trading_schedule needs exactly one of symbol or conid — IBKR returns "
+                'HTTP 400 "assetClass and exactly one of symbol/conid are required" for '
+                "both together and for neither."
+            )
+        params = {"assetClass": asset_class}
+        if has_conid:
             _validate_conid(conid)
             params["conid"] = str(conid)
+        else:
+            params["symbol"] = symbol
+        if exchange:
+            params["exchange"] = exchange
+        if exchange_filter:
+            params["exchangeFilter"] = exchange_filter
         return self._get("/trsrv/secdef/schedule", params)
 
     def get_secdef(self, conids: list[int]) -> list[Contract | dict[str, Any]]:
