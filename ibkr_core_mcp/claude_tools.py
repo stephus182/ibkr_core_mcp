@@ -3825,6 +3825,10 @@ class ClaudeToolkit:
 
         lines = [f"## Search results for: {query}\n"]
         readable = 0
+        # url -> why it is unusable. Built here, beside the model-facing wording, and
+        # handed to the Drive snapshot so the archive and the model cannot disagree
+        # (WEB-04: the snapshot used to record a 403 stub verbatim with no marker).
+        unusable: dict[str, str] = {}
         for i, r in enumerate(results, 1):
             markdown = r.get("markdown") or ""
             metadata = r.get("metadata") or {}
@@ -3836,6 +3840,7 @@ class ClaudeToolkit:
                 why = f"HTTP {status}" if isinstance(status, int) and status >= 400 else None
                 if not why:
                     why = f"error: {metadata['error']}" if metadata.get("error") else "almost no text extracted"
+                unusable[r.get("url", "")] = f"Not usable content ({why})"
                 # Annotated, never dropped: a host that refuses automated access is
                 # itself useful, and dropping it would make the result count lie.
                 lines.append(
@@ -3854,11 +3859,19 @@ class ClaudeToolkit:
         )
 
         drive_note = ""
-        if save_to_drive:
+        if save_to_drive and readable == 0:
+            # Same refusal, and the same reason, as crawl_site: filing an error page into
+            # the archive would poison later research. Only an all-unusable set refuses —
+            # a mixed set is still archived, with the unusable members marked.
+            drive_note = (
+                "\n\n**Nothing was saved to Drive** — no result returned usable text, and "
+                "filing error pages into the archive would poison later research."
+            )
+        elif save_to_drive:
             if self._web_docs is None:
                 self._web_docs = WebDocsStore(self._config)
             try:
-                file_id = self._web_docs.save_search(query, results)
+                file_id = self._web_docs.save_search(query, results, notes=unusable)
                 drive_note = f"\n\n*Snapshot saved to Drive (file ID: {file_id})*"
             except Exception as exc:
                 log.warning("firecrawl_search: Drive save failed: %s", redact_error(exc))

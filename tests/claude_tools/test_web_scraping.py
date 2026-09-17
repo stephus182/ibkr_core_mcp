@@ -113,9 +113,14 @@ def test_firecrawl_search_returns_formatted_results(mock_fc_cls):
 @patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
 @patch("ibkr_core_mcp.web_scraper.WebDocsStore")
 def test_firecrawl_search_saves_to_drive_when_requested(mock_wds_cls, mock_fc_cls):
+    """The fixture was `markdown: "m"` — one character — until 2026-09-16, and this test
+    asserted that it was archived. `assess_quality` rates that "fallback", so under WEB-04's
+    fix a result set consisting only of it is no longer written to Drive. The body is now
+    realistic, which is what the test meant all along: that a successful search with usable
+    content produces a snapshot."""
     toolkit = _make_toolkit()
     mock_fc = MagicMock()
-    mock_fc.search.return_value = [{"url": "u", "title": "t", "markdown": "m"}]
+    mock_fc.search.return_value = [{"url": "u", "title": "t", "markdown": _REALISTIC_MARKDOWN}]
     mock_fc_cls.return_value = mock_fc
     mock_wds = MagicMock()
     mock_wds.save_search.return_value = "file-id-123"
@@ -625,3 +630,105 @@ def test_firecrawl_search_keeps_flagged_results_out_of_the_read_these_invitation
     assert "https://ok.example.com/a" in text
     assert "https://bad.example.com/b" in text
     assert "1 of 2" in text, "the reply must say how many results are actually readable"
+
+
+# ── WEB-04: what reaches the Drive archive vs what the model is told ───────────
+#
+# `firecrawl_search` annotates an unusable result to the model — "⚠ Not usable content
+# (HTTP 403)" — and then passed the SAME raw list to `save_search`, which writes
+# `r["markdown"]` verbatim with no marker. A 403 stub or anti-bot page therefore landed in
+# `web_docs/searches/` looking exactly like a real page.
+#
+# `crawl_site` had this defect and it was fixed: it refuses to archive when every page is
+# "fallback", because "filing an error page into the archive would poison later research",
+# and deliberately keeps "ambiguous" pages because short pages are legitimate. These tests
+# hold the same convention for search, using the same `assess_quality` signal rather than a
+# new threshold that could drift from it.
+#
+# Scope, measured rather than assumed: search snapshots are NOT read back programmatically
+# — only crawls are cached and re-served (`get_cached_crawl`). The harm is to a human or a
+# later search reading the archive, not automatic re-serving.
+
+
+_BLOCKED_STUB = "403 Forbidden"
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+def test_search_does_not_archive_when_no_result_is_usable(mock_wds_cls, mock_fc_cls):
+    """All-fallback refuses the write, as `crawl_site` does — and says so, rather than
+    reporting a successful snapshot of nothing."""
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {"url": "https://a.example", "title": "A", "markdown": _BLOCKED_STUB, "metadata": {"statusCode": 403}},
+        {"url": "https://b.example", "title": "B", "markdown": "", "metadata": {"statusCode": 403}},
+    ]
+    mock_fc_cls.return_value = mock_fc
+    mock_wds = MagicMock()
+    mock_wds_cls.return_value = mock_wds
+
+    result, _ = toolkit.execute("firecrawl_search", {"query": "q", "save_to_drive": True})
+
+    mock_wds.save_search.assert_not_called()
+    assert "Nothing was saved to Drive" in result
+
+
+@patch("ibkr_core_mcp.web_scraper.FirecrawlClient")
+@patch("ibkr_core_mcp.web_scraper.WebDocsStore")
+def test_search_archives_a_mixed_set_but_marks_the_unusable_results(mock_wds_cls, mock_fc_cls):
+    """A mixed set is still archived — dropping the usable ones would be worse — but the
+    snapshot must carry the same warning the model got, so a later reader is not handed a
+    403 stub that reads like a page."""
+    toolkit = _make_toolkit()
+    mock_fc = MagicMock()
+    mock_fc.search.return_value = [
+        {"url": "https://good.example", "title": "Good", "markdown": _REALISTIC_MARKDOWN, "metadata": {}},
+        {"url": "https://bad.example", "title": "Bad", "markdown": _BLOCKED_STUB, "metadata": {"statusCode": 403}},
+    ]
+    mock_fc_cls.return_value = mock_fc
+    mock_wds = MagicMock()
+    mock_wds.save_search.return_value = "file-id-123"
+    mock_wds_cls.return_value = mock_wds
+
+    result, _ = toolkit.execute("firecrawl_search", {"query": "q", "save_to_drive": True})
+
+    mock_wds.save_search.assert_called_once()
+    notes = mock_wds.save_search.call_args.kwargs.get("notes")
+    assert notes is not None, "save_search was given no quality annotations"
+    assert "https://bad.example" in notes
+    assert "https://good.example" not in notes, "a usable result must not be marked"
+    assert "file-id-123" in result
+
+
+def test_save_search_renders_the_annotation_into_the_snapshot(tmp_path):
+    """The note has to reach the file, not just the call. Asserted on the bytes uploaded."""
+    from unittest.mock import ANY
+
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+
+    store = WebDocsStore.__new__(WebDocsStore)
+    svc = MagicMock()
+    svc.files.return_value.create.return_value.execute.return_value = {"id": "fid"}
+    store._get_service = lambda: svc  # type: ignore[method-assign]
+    store._get_web_docs_folder_id = lambda: "web"  # type: ignore[method-assign]
+    store._find_or_create_folder = lambda name, parent: "searches"  # type: ignore[assignment,method-assign]
+
+    captured: dict[str, bytes] = {}
+
+    def grab(body, media_body, fields):
+        captured["bytes"] = media_body.getbytes(0, media_body.size())
+        return MagicMock(execute=lambda: {"id": "fid"})
+
+    svc.files.return_value.create.side_effect = grab
+
+    store.save_search(
+        "q",
+        [{"url": "https://bad.example", "title": "Bad", "markdown": "403 Forbidden"}],
+        notes={"https://bad.example": "Not usable content (HTTP 403)"},
+    )
+
+    body = captured["bytes"].decode()
+    assert "Not usable content (HTTP 403)" in body
+    assert "403 Forbidden" in body, "the payload is still recorded, only annotated"
+    assert ANY

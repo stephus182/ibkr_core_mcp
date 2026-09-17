@@ -190,3 +190,52 @@ def test_crawl_site_saves_pages_to_drive(toolkit, drive_service, web_docs_id):
         # web_docs/<slug>/ folder itself in place.
         for f in contents:
             drive_service.files().delete(fileId=f["id"]).execute()
+
+
+@pytest.mark.integration
+def test_save_search_writes_the_unusable_marker_into_the_real_drive_file(live_config, drive_service):
+    """WEB-04, against real Drive: the annotation must reach the FILE, not just the call.
+
+    `test_firecrawl_search_saves_snapshot_to_drive` above proves a snapshot exists — it
+    reads `files().get(fields="id,name,parents")` and never downloads the body. So the
+    contents of a search snapshot had never been live-verified at all, and the unit tests
+    for this fix assert against a MagicMock upload. This repository's own record is that
+    every scraper defect was found by running the thing, never by a test failing
+    (`CLAUDE.md`, `docs/web-scraper-reference.md` §10), and a mock cannot show what Drive
+    actually stored.
+
+    Until 2026-09-16 `save_search` wrote `r["markdown"]` verbatim with no marker, so a 403
+    stub filed into `web_docs/searches/` read exactly like a real page.
+    """
+    import io
+
+    from googleapiclient.http import MediaIoBaseDownload
+
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+
+    store = WebDocsStore(live_config)
+    stub = "403 Forbidden — request blocked"
+    file_id = store.save_search(
+        "ibkr_core_mcp WEB-04 live check",
+        [
+            {"url": "https://blocked.example/x", "title": "Blocked", "markdown": stub},
+            {"url": "https://ok.example/y", "title": "Real", "markdown": "A genuine paragraph of text."},
+        ],
+        notes={"https://blocked.example/x": "Not usable content (HTTP 403)"},
+    )
+
+    try:
+        buf = io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, drive_service.files().get_media(fileId=file_id))
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        body = buf.getvalue().decode()
+
+        assert "Not usable content (HTTP 403)" in body, "the marker never reached Drive"
+        assert stub in body, "the payload was dropped rather than annotated"
+        assert body.index("Not usable content") < body.index(stub), "the marker must precede the body"
+        # The usable result carries no warning — otherwise the marker means nothing.
+        assert body.count("⚠") == 1, f"expected exactly one marker, got {body.count('⚠')}"
+    finally:
+        drive_service.files().delete(fileId=file_id).execute()

@@ -19,7 +19,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
 |---|---:|---:|---:|---:|---:|
 | `SEC` | 13 | 8 | 5 | — | — |
-| `WEB` | 9 | 3 | 6 | — | — |
+| `WEB` | 9 | 4 | 5 | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
 | `API` | 21 | 13 | 7 (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
@@ -29,9 +29,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
-| **Total** | **137** | **66** | **20** (+1 partial) | **0** | **50** |
+| **Total** | **137** | **67** | **19** (+1 partial) | **0** | **50** |
 
-`66 + 20 + 1 + 0 + 50 = 137`. **There are no unrecorded findings left.** All three blocks
+`67 + 19 + 1 + 0 + 50 = 137`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -77,16 +77,15 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (20, none Critical; +1 partial)
+### Open findings that do have a claim (19, none Critical; +1 partial)
 
-Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`.
+Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
 0600 holders).
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `WEB-04` | Medium | `firecrawl_search` archives to Drive, verbatim, results it simultaneously marks "⚠ Not usable content" |
 | `WEB-05` | Medium | `docs/web-scraper-reference.md:174` describes the deleted fallback layer as current |
 | `WEB-09` | Low | `_handle_crawl_site` guards the Drive write but not the Drive read |
 | `WEB-06` | Low | `pyproject.toml:63` and `:97` name the deleted fallback rung in the present tense |
@@ -2475,3 +2474,71 @@ reported a failed CI run as green on 2026-09-13.
 
 The committed content was never wrong: `gdrive_auth.py` is byte-identical to its parent in that
 commit. Only the verification was.
+
+---
+
+## Phase 3 — WEB-04: the model was warned, the archive was not
+
+`firecrawl_search` renders `⚠ **Not usable content** (HTTP 403)` for a result `assess_quality`
+rates `fallback`, then passed the **same raw list** to `save_search`, which writes
+`r["markdown"]` verbatim. A 403 stub, an anti-bot interstitial or an empty extraction landed in
+`web_docs/searches/` looking exactly like a real page.
+
+### Scope, measured rather than asserted
+
+Search snapshots are **not** read back programmatically — only crawls are cached and re-served
+(`get_cached_crawl`, 48 h). So this does not silently re-feed a blocked page into a later tool
+call; the harm is to a human, or a later piece of research, reading the archive. Stated that way
+rather than at its most alarming, because the difference is real.
+
+### The convention already existed, one tool over
+
+`crawl_site` had this defect and its fix is in the tree with the reasoning written out: refuse to
+archive when **every** page is `fallback`, because *"filing an error page into the archive would
+poison later research"*, and deliberately keep `ambiguous` pages because *"'ambiguous' covers
+genuinely short pages, and discarding those would be its own kind of wrong."*
+
+So the fix reuses `assess_quality` rather than inventing a threshold that could drift from it:
+
+- **all results unusable → nothing is written**, with the same explanation `crawl_site` gives;
+- **mixed → still archived**, with each unusable member marked in the snapshot, using the
+  wording the model was given, built in the same loop so the two cannot disagree.
+
+`save_search` gained one optional `notes: dict[str, str]` parameter. The caller owns the
+verdict; the store renders it.
+
+### A pre-existing test was documenting the defect
+
+`test_firecrawl_search_saves_to_drive_when_requested` used `markdown: "m"` — one character,
+which `assess_quality` rates `fallback` — and asserted it reached Drive. Under the fix it no
+longer does. The fixture is now realistic markdown, which is what the test meant all along: a
+successful search with usable content produces a snapshot.
+
+### The evidence gap, and closing it live
+
+All of the above was proved against `MagicMock`. This repository's own record is that **every**
+scraper defect was found by running the tool and none by a test failing, and that the mocks were
+weaker than the dependency each time (`CLAUDE.md`; `docs/web-scraper-reference.md` §10).
+
+It also turned out that the existing live test, `test_firecrawl_search_saves_snapshot_to_drive`,
+reads `files().get(fields="id,name,parents")` and **never downloads the body** — so the contents
+of a search snapshot had never been live-verified at all.
+
+`test_save_search_writes_the_unusable_marker_into_the_real_drive_file` now writes a snapshot to
+**real Drive**, downloads it with `MediaIoBaseDownload`, and asserts the marker is present, that
+the payload is still there (annotated, not dropped), that the marker precedes it, and that
+exactly one `⚠` appears — so a usable result is not marked too. The file is deleted afterwards,
+following the established cleanup policy.
+
+**Proven able to fail:** with the annotation reverted, that live test fails against real Drive;
+restored, it passes, and the file was byte-compared to its backup afterwards.
+
+### Live run recorded in `docs/web-scraper-reference.md` §11
+
+| Suite | Result |
+|---|---|
+| `test_web_tools_live.py` | **12 passed** |
+| `drive_live` + `dev_cache_live` + `web_scraper_live` + `crawl4ai_live` | **9 passed** |
+| | **21 live tests, 0 failed** |
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,492 passed**.

@@ -586,7 +586,7 @@ class WebDocsStore:
 
         return manifest
 
-    def save_search(self, query: str, results: list[dict[str, str]]) -> str:
+    def save_search(self, query: str, results: list[dict[str, str]], notes: dict[str, str] | None = None) -> str:
         """Save a search result snapshot to Drive under web_docs/searches/.
 
         Produces a single markdown file named {YYYYMMDDTHHMMSSz}-{query-slug}.md,
@@ -604,6 +604,12 @@ class WebDocsStore:
             query: The search query string, used in the filename and document header.
             results: List of result dicts from FirecrawlClient.search(), each with
                      "url", "title", and "markdown" keys.
+            notes: Optional per-URL quality annotation, rendered above the body. The
+                   caller owns the verdict — `claude_tools` already runs `assess_quality`
+                   to build the model-facing reply and passes the same wording here, so
+                   the archive and the model cannot disagree. Until 2026-09-16 the payload
+                   was written verbatim with no marker, so a 403 stub filed into
+                   `web_docs/searches/` read exactly like a real page (WEB-04).
 
         Returns:
             Drive file ID of the created snapshot file.
@@ -624,6 +630,13 @@ class WebDocsStore:
             lines.append(f"## {i}. {r.get('title', '(no title)')}")
             lines.append(f"**URL:** {r.get('url', '')}")
             lines.append("")
+            note = (notes or {}).get(r.get("url", ""))
+            if note:
+                # Annotated, never dropped — the same choice the model-facing reply makes.
+                # A host that refuses automated access is itself a useful record, and
+                # removing the body would make the snapshot disagree with the result count.
+                lines.append(f"> ⚠ {note}")
+                lines.append("")
             lines.append(r.get("markdown", ""))
             lines.append("")
         content = "\n".join(lines).encode("utf-8")
