@@ -4,10 +4,15 @@ Wraps market data, contracts, portfolio, orders, alerts, watchlists, and session
 management. Rate limiting and 429/503 backoff are handled transparently by
 `rate_limiter.py`.
 
-**Return types.** Six endpoints return models from `models.py` — `search_contract` and
-`get_secdef` (`Contract`), `get_positions` (`Position`), `get_trades` (`Trade`),
-`get_live_orders` (`Order`), `get_account_summary` (`AccountSummary`) and
-`get_notifications` (`Notification`). The rest return the decoded response as-is, and
+**Return types.** Eight endpoints return models from `models.py` — `search_contract` and
+`get_secdef` (`Contract`), `get_positions` and `get_all_positions` (`Position`),
+`get_trades` (`Trade`), `get_live_orders` (`Order`), `get_account_summary`
+(`AccountSummary`) and `get_notifications` (`Notification`). This said "Six" while naming
+seven, against a real eight, until 2026-09-17: the paging helper added for API-17 never
+reached the list (API-12). Its name is deliberately not repeated in this sentence — a
+mutation that removed it from the list above survived while the prose still carried it. The point of naming them is that the claim can be checked
+rather than believed, which only works if something checks it —
+`test_the_module_docstring_names_every_method_that_returns_a_model` now does. The rest return the decoded response as-is, and
 their annotations say so. This file claimed to return "typed models from `models.py`
 where the shape is stable" from the day it was written until 2026-09-16, when not one
 method did (audit finding API-11); the claim is now a list, so it can be checked.
@@ -674,11 +679,31 @@ class IBKRClient:
         timestamp of that same moment reached 08-04, and midnight-today reached 08-03. Only
         the omitted form returns today's bar.
 
-        Chunk sizes by bar (targeting 80% of the 1000-point limit):
-          1d  → 1000-calendar-day chunks  (~690 trading days each)
-          1w  → 1000-calendar-day chunks  (~142 trading weeks each)
-          1h  → 246-calendar-day chunks   (~160 trading days × 6.5h each)
-          1m  → 1000-calendar-day chunks  (~33 months each)
+        Chunk sizes by bar, from `_chunk_days_for_bar` (80% of the 1000-point cap,
+        against the worst-case continuously-traded day in `_BARS_PER_CALENDAR_DAY`):
+          1min  → 1-calendar-day chunks
+          2min  → 1-calendar-day chunks
+          3min  → 1-calendar-day chunks
+          5min  → 1-calendar-day chunks
+          10min → 5-calendar-day chunks
+          15min → 7-calendar-day chunks
+          30min → 7-calendar-day chunks
+          1h    → 30-calendar-day chunks
+          2h    → 66-calendar-day chunks
+          3h    → 90-calendar-day chunks
+          4h    → 133-calendar-day chunks
+          8h    → 266-calendar-day chunks
+          1d    → 1000-calendar-day chunks
+          1w    → 1000-calendar-day chunks
+          1m    → 1000-calendar-day chunks
+
+        Until 2026-09-17 the hourly row carried the width from *before* the 2026-09-15 live
+        re-measurement — eight times the real one — and the table listed four bars of
+        fifteen (API-08). The superseded number is deliberately not written in this
+        paragraph in row form: a sentence that restates a checkable line can satisfy, or
+        spuriously trip, the check that guards it. It is no longer maintained by hand:
+        `test_the_documented_chunk_table_matches_what_the_code_computes` fails if any row
+        disagrees with the function.
 
         **The assembled span is a floor, not an exact match.** IBKR sizes each chunk's
         response by its own bar alignment, so the union can reach further back than asked:

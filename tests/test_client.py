@@ -1,4 +1,5 @@
 import itertools
+import pathlib
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -2738,3 +2739,90 @@ def test_get_all_positions_handles_an_account_with_nothing(client):
     with patch.object(client, "get_positions", return_value=[]) as gp:
         assert client.get_all_positions("U1234567") == []
     assert gp.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Docstrings that restate what the code computes (API-08, API-12)
+# ---------------------------------------------------------------------------
+
+
+def test_the_documented_chunk_table_matches_what_the_code_computes():
+    """API-08. The table said `1h -> 246-calendar-day chunks`; the function returns 30.
+
+    The 2026-09-15 live re-measurement of `_BARS_PER_CALENDAR_DAY` moved every intraday
+    chunk width — 246 was the *old* 1h value, and it is still printed in the measurement
+    table above the constant as the width that was asked for. The prose followed the
+    correction nowhere.
+    """
+    import ast
+    import inspect
+    import re
+
+    from ibkr_core_mcp.client import IBKRClient, _chunk_days_for_bar
+
+    doc = inspect.getdoc(IBKRClient.get_market_history_paginated) or ""
+    rows = re.findall(r"^\s*(\w+)\s*→\s*([\d,]+)-calendar-day chunks", doc, re.M)
+    assert rows, "the chunk table is gone from the docstring; update or remove this guard"
+
+    wrong = {
+        bar: (int(claimed.replace(",", "")), _chunk_days_for_bar(bar))
+        for bar, claimed in rows
+        if int(claimed.replace(",", "")) != _chunk_days_for_bar(bar)
+    }
+    assert not wrong, f"documented chunk width vs computed, per bar: {wrong}"
+
+    # Completeness, not just correctness. Checking only the rows that are present lets a
+    # deleted row pass unnoticed — the table would still be internally consistent and
+    # silently cover fewer bars, which is how it came to list four of fifteen.
+    from ibkr_core_mcp.client import _BARS_PER_CALENDAR_DAY
+
+    documented = {bar for bar, _ in rows}
+    assert documented == set(_BARS_PER_CALENDAR_DAY), (
+        f"the table documents {sorted(documented)}; the function supports {sorted(_BARS_PER_CALENDAR_DAY)}"
+    )
+    assert ast is not None  # keep the import meaningful if the parse above changes
+
+
+def test_the_module_docstring_names_every_method_that_returns_a_model():
+    """API-12. It said "Six endpoints return models", then named seven.
+
+    Eight actually do: `get_all_positions` was added for API-17 and never reached the list.
+    The docstring exists so the claim can be checked rather than believed (CLAUDE.md), which
+    only works if something checks it.
+    """
+    import ast
+    import re
+
+    from ibkr_core_mcp import client as client_mod
+
+    source = pathlib.Path(client_mod.__file__).read_text()
+    tree = ast.parse(source)
+    module_doc = ast.get_docstring(tree) or ""
+
+    models = {"Contract", "Order", "Position", "Notification", "Trade", "AccountSummary"}
+    returning = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and not node.name.startswith("_")
+        and node.returns is not None
+        and any(re.search(rf"\b{m}\b", ast.unparse(node.returns)) for m in models)
+    }
+    assert returning, "no method returns a model any more; update or remove this guard"
+
+    block = module_doc[module_doc.index("**Return types.**") :].split("\n\n")[0]
+    named = {
+        m for m in re.findall(r"`(\w+)`", block) if m in returning or m.startswith("get_") or m == "search_contract"
+    }
+    named -= models
+
+    assert named == returning, (
+        f"the module docstring names {sorted(named)}; the code returns models from {sorted(returning)}"
+    )
+
+    spelled = re.search(r"\*\*Return types\.\*\*\s+(\w+) endpoints return models", module_doc)
+    assert spelled, "the docstring no longer states how many endpoints return models"
+    words = {"Four": 4, "Five": 5, "Six": 6, "Seven": 7, "Eight": 8, "Nine": 9, "Ten": 10}
+    assert words.get(spelled.group(1).capitalize()) == len(returning), (
+        f"the docstring says {spelled.group(1)} endpoints; {len(returning)} return models"
+    )

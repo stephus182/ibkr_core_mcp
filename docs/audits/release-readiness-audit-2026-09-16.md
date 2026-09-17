@@ -21,7 +21,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `SEC` | 13 | **11** | **2** | — | — |
 | `WEB` | 9 | **9** | — | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
-| `API` | 21 | **16** | **4** (+1 partial) | — | — |
+| `API` | 21 | **19** | **1** (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
@@ -32,9 +32,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **3** | **3** | — | — | — |
-| **Total** | **144** | **85** | **8** (+1 partial) | **0** | **50** |
+| **Total** | **144** | **88** | **5** (+1 partial) | **0** | **50** |
 
-`85 + 8 + 1 + 0 + 50 = 144`. **There are no unrecorded findings left.** All three blocks
+`88 + 5 + 1 + 0 + 50 = 144`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -92,14 +92,11 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | `SEC-09` | Nit | "The default button is the abandon one" holds only on the `osascript` fallback |
 | `SEC-10` | Nit | `collapse_home` claims every surface; the SSE bearer-token log line writes the absolute home path |
 | `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
-| `API-08` | Low | Stale docstring chunk table |
-| `API-12` | Low | Wrong model citation |
-| `API-13` | Low | Contradictory inline comment |
 | `API-15` | Nit | Unguarded response shape |
 | `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
-> sections below. `WEB-05…09`, `API-05`, `API-10` and `SEC-06…08` left on 2026-09-17. This table is the
+> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…08` and `API-08/12/13` left on 2026-09-17. This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -3502,3 +3499,68 @@ hook still exists in 0.9.2, still receives the live context
 redirect-SSRF test passed against real Chromium the same day. **The property holds; only the
 citation had expired.** Now dated, with the floor named, so it reads as a record rather than
 a claim.
+
+---
+
+## Phase 3 — `API-08`, `API-12`, `API-13`: two real, one that does not reproduce
+
+These three had no claim text of their own. Their descriptions were recovered *by position*
+from the Phase 1 combined row (`API-08, 11–15`), which reads: *"Stale docstring chunk table;
+zero of 74 methods return a Pydantic model; wrong model citation; contradictory inline
+comment; deliberate double-call on a 1-req/5-s endpoint; unguarded response shape."* Position
+gives `API-08` the chunk table, `API-12` the model citation, `API-13` the comment. That is a
+reading, not a record, so each was re-derived against the code rather than taken on trust.
+
+### `API-08` — the chunk table was stale by 8x, and listed four bars of fifteen
+
+`get_market_history_paginated`'s docstring said `1h → 246-calendar-day chunks`.
+`_chunk_days_for_bar("1h")` returns **30**. 246 is the value from *before* the 2026-09-15 live
+re-measurement of `_BARS_PER_CALENDAR_DAY` — it still appears, correctly, in the measurement
+table above the constant as the width that was *asked for* during that measurement. The prose
+followed the correction nowhere.
+
+The table is now generated from the function, covers all fifteen bars, and
+`test_the_documented_chunk_table_matches_what_the_code_computes` fails if any row disagrees.
+
+### `API-12` — "Six endpoints return models", naming seven, against a real eight
+
+`client.py`'s module docstring exists so the return-type claim *can be checked rather than
+believed* (CLAUDE.md). It said **Six**, listed **seven**, and **eight** methods actually return
+a model: `get_all_positions`, added for API-17, never reached the list. Corrected and pinned.
+
+**A mutation survived the first version of that guard, and the cause was my own prose.** The
+explanatory sentence repeated `get_all_positions`, so removing the name from the authoritative
+list left the guard still finding it. Rephrased so the name appears only in the list. A
+document that explains a check can weaken it.
+
+### `API-13` — does not reproduce
+
+The claim is "contradictory inline comment". Swept:
+
+| angle | result |
+|---|---|
+| inline comments asserting a number | 2, both consistent with the code |
+| comments asserting an absolute (`never`, `only`, `cannot`) | 32, reviewed, none contradicted |
+| section banners vs the methods under them | already correct |
+| warmup and rate-limit comments | consistent |
+
+**And I nearly shipped a manufactured fix for it.** My first probe reported that
+`# Watchlists (read-only)` covered every order write, including the four gated ones — so I
+edited `client.py` and inserted six new section banners **before verifying**. The probe was
+wrong: it computed each section's end as the next *read-only* header rather than the next
+header of any kind, making one banner appear to span seven hundred lines. The file already
+had `# Order Management (write — human auth required)`, `# Alerts (write)`,
+`# Watchlists (write)` and `# FYI (write)` in the right places.
+
+The guard written for the imagined defect **failed its own control**, which is how this was
+caught, with the six banners still uncommitted. They were reverted; `client.py` is unchanged
+apart from the `API-08`/`API-12` docstrings.
+
+The guard was **kept**, because the property is real and worth holding: a banner labelled
+read-only must not cover a write. Control-tested by relabelling
+`# Order Management (write — human auth required)` as read-only, which it catches, naming all
+six methods.
+
+Owner's instruction, given while this was in flight: *"NEVER manufacture a fix"*. Recorded.
+`API-13` is closed as **not reproducing**, with the sweep above as the evidence — the same
+treatment as `SEC-08`'s second half.

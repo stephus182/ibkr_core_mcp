@@ -11,6 +11,7 @@ tool handler would have been lint-clean, fully typed and gate-free
 
 from __future__ import annotations
 
+import ast
 import re
 
 import pytest
@@ -357,3 +358,66 @@ def test_a_denied_gate_1_sends_no_order_write_however_fresh_the_session(client, 
         assert len(reads) == expected, f"{name}: fresh={fresh} expected {expected} GET, got {reads}"
         if fresh:
             assert reads[0].endswith("/iserver/accounts")
+
+
+# ---------------------------------------------------------------------------
+# Section headers must not mislabel what follows them (API-13)
+# ---------------------------------------------------------------------------
+
+_RULE = re.compile(r"^\s*# -{10,}\s*$")
+_READ_ONLY_LABEL = re.compile(r"read[- ]only|\breads\b", re.I)
+
+
+def _section_headers(source: str) -> list[tuple[int, str]]:
+    """Banner comments only — a line between two `# ------` rules.
+
+    Deliberately narrow. An ordinary comment that happens to start with a capital is not a
+    section header, and a probe that treats it as one reports noise instead of findings.
+    """
+    lines = source.splitlines()
+    found = []
+    for i in range(1, len(lines) - 1):
+        if _RULE.match(lines[i - 1]) and _RULE.match(lines[i + 1]) and lines[i].lstrip().startswith("#"):
+            found.append((i + 1, lines[i].strip().lstrip("#").strip()))
+    return found
+
+
+def test_no_read_only_section_header_sits_above_a_write():
+    """API-13: `# Watchlists (read-only)` sat directly above `place_order`.
+
+    That one banner covered every order write, every alert write, both watchlist writes and
+    both notification writes — eleven methods that change state on IBKR's servers, four of
+    them behind both human gates. Nothing executed differently; a reader skimming the most
+    safety-critical file in the package saw "read-only" above `place_order`, which is the
+    kind of wrong that survives precisely because it looks like orientation rather than a
+    claim.
+    """
+    source = (PACKAGE_DIR / "client.py").read_text()
+    headers = _section_headers(source)
+    assert len(headers) >= 5, f"only {len(headers)} section banners found — the probe has stopped seeing them"
+
+    defined = sorted(
+        (node.lineno, node.name)
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+    )
+    writes = ORDER_WRITE_NAMES | {
+        "create_alert",
+        "delete_alert",
+        "activate_alert",
+        "create_watchlist",
+        "delete_watchlist",
+        "mark_notification_read",
+        "update_delivery_option",
+    }
+
+    offenders: dict[str, list[str]] = {}
+    for index, (line, title) in enumerate(headers):
+        if not _READ_ONLY_LABEL.search(title):
+            continue
+        end = headers[index + 1][0] if index + 1 < len(headers) else len(source.splitlines())
+        inside = [name for ln, name in defined if line < ln < end and name in writes]
+        if inside:
+            offenders[title] = inside
+
+    assert not offenders, f"section headers labelled read-only that contain writes: {offenders}"
