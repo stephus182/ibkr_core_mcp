@@ -2826,3 +2826,75 @@ def test_the_module_docstring_names_every_method_that_returns_a_model():
     assert words.get(spelled.group(1).capitalize()) == len(returning), (
         f"the docstring says {spelled.group(1)} endpoints; {len(returning)} return models"
     )
+
+
+# ---------------------------------------------------------------------------
+# API-15 — a 200 whose body is not JSON must stay inside the package's hierarchy
+# ---------------------------------------------------------------------------
+
+
+def _non_json_200(body: str) -> MagicMock:
+    """A 2xx response whose body will not decode — what `requests` really raises."""
+    import requests
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = body
+    resp.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", body, 0)
+    return resp
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("<html><body>Sign in to IBKR</body></html>", id="the gateway's HTML page"),
+        pytest.param("", id="an empty 200"),
+    ],
+)
+def test_a_200_that_is_not_json_raises_inside_the_package_hierarchy(client, body):
+    """`exceptions.py` opens with "Every error raised by this package derives from
+    `IBKRCoreError`". It did not: `with_retry` raises on any non-2xx, so `resp.json()` only
+    ever sees a 2xx — but a 2xx is not a promise of JSON. The gateway serves an HTML page
+    once its session lapses, and `requests.exceptions.JSONDecodeError` then escaped a
+    caller's `except IBKRCoreError` with a message naming neither the endpoint nor what
+    arrived (audit finding API-15, reproduced 2026-09-17).
+    """
+    from ibkr_core_mcp.exceptions import IBKRAPIError, IBKRCoreError
+
+    with (
+        patch.object(client._session, "get", return_value=_non_json_200(body)),
+        pytest.raises(IBKRCoreError) as caught,
+    ):
+        client.get_auth_status()
+
+    assert isinstance(caught.value, IBKRAPIError)
+    assert caught.value.status_code == 200
+    assert "/iserver/auth/status" in str(caught.value), "the message must name the endpoint"
+    assert body[:40] in str(caught.value) or not body, "the message must show what arrived instead"
+
+
+def test_every_client_request_helper_decodes_through_the_same_guard():
+    """The guard is one function, not a habit repeated at six call sites.
+
+    `_get`, `_post` and `_put` each decoded with a bare `resp.json()`, and so did the three
+    methods that call `self._session.delete` directly — `cancel_order`, `delete_alert`,
+    `delete_watchlist`. Six places to keep in step is the shape that produced API-10
+    (`IBKR_AUTH_BROWSER` honoured at one construction site of three), so the decode lives in
+    one place and this test fails if a seventh appears beside it rather than through it.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path("ibkr_core_mcp/client.py").read_text())
+    bare: set[str] = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for node in ast.walk(function):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "json":
+                bare.add(function.name)
+
+    assert bare == {"ping", "_decode"}, (
+        f"these functions decode a response outside `_decode`: {sorted(bare - {'ping', '_decode'})}. "
+        "`ping` is the one exemption — a liveness probe with its own try/except that answers "
+        "False rather than raising, so it has no error to put in the hierarchy."
+    )

@@ -127,7 +127,8 @@ mean something else.
 | Property | Value |
 |---|---|
 | Mechanism | On macOS an AppKit `NSAlert` run in a subprocess (`_order_dialog.py`, banner colour-coded by side: green BUY, red SELL, dark red CANCEL, amber when the side is unknown), falling back to an `osascript` dialog if that subprocess fails; a `tkinter` modal on other platforms. All three show the typed order rows and a live-order disclaimer |
-| Confirmation | Explicit mouse click on the confirm button (labelled for the action: SEND TO IBKR / MODIFY ORDER / CANCEL ORDER / CONFIRM REPLY) — Enter key does not confirm; the default button is the abandon one |
+| Confirmation | Explicit mouse click on the confirm button (labelled for the action: SEND TO IBKR / MODIFY ORDER / CANCEL ORDER / CONFIRM REPLY). **Return confirms on none of the three renderers**, by three different mechanisms: AppKit clears the Return key equivalent off the confirm button and gives Escape to the abandon one, so no button is default at all; `osascript` names the abandon button `default button`; `tkinter` marks no default, and Tk's `Button` class binds `<space>` and the mouse — never `<Return>`. This row read "the default button is the abandon one" until 2026-09-17, which held for `osascript` alone (SEC-09); each mechanism now has the test that checks it |
+| Button → verdict | AppKit answers `NSAlertFirstButtonReturn` (1000) for the **first button added**, and that is the only response `_order_dialog.py` turns into `CONFIRMED`. Nothing tied that position to a title, so swapping the two `addButtonWithTitle_` lines — which would make GO BACK place the order and SEND TO IBKR abandon it — passed all 1,537 unit tests when it was tried on 2026-09-17 (SEC-R4). `test_the_button_that_reports_confirmed_is_the_confirm_button` and `test_the_abandon_button_cannot_report_confirmed` now assert the binding by title, never by position |
 | Auto-cancel | 60-second countdown ticker; raises `HumanAuthError` on expiry |
 | Rationale for timeout | Prevents an unattended dialog on a locked screen from being confirmed by physical access |
 | Location | `ibkr_core_mcp/order_confirm.py` |
@@ -368,9 +369,20 @@ exactly what the model never needs: the Flex import's root is documented to it a
 `~/.ibkr_core`, while the refusal message spelled out `/Users/<name>/.ibkr_core` in full —
 something the 2026-07-11 audit noted in passing ("discloses the exact home-directory path on
 any invalid probe") and left. Since 2026-09-14 one function, `redaction.collapse_home`,
-rewrites the home directory as `~`, and both surfaces use it: `redact_error` applies it before
-the length cap, and `_import_flex_file` builds its refusal from it. One definition of "show a
+rewrites the home directory as `~`. One definition of "show a
 path", the way `price_text_safe` is one definition of showing a broker price.
+
+**Four surfaces call it**, and the set is an inventory rather than a filter, because a library
+must not reconfigure the host application's logging: `redact_error` applies it to all exception
+text before the length cap; `_import_flex_file` builds its refusal from it; and, since
+2026-09-17, `mcp_server._issue_sse_token`'s token-file line and `store._restrict`'s
+chmod-failure warning. Those last two are **logs, not model surfaces** — the rule below is
+about the model and was never broken — but the function's own docstring claimed "every surface
+that shows one to the model or a log" while both wrote `/Users/<name>/…` in full (audit finding
+SEC-10; the store one came out of its sweep, which is why the count is stated and checked
+rather than left to a reader). `test_error_redaction.py` drives each of the four under a
+throwaway `HOME`. `local_browser._main`'s `print`s are deliberately outside the inventory: the
+operator's own terminal, with `create-profile` refusing to run without a TTY.
 
 ### Tool inputs and outputs
 
@@ -993,7 +1005,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
 | SSRF via the local browser (`fetch_page` / `crawl_site`) or the seeder (`search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved/shared-range hosts before anything is constructed, parsing decimal/hex/octal literals locally; the validate-before-reach order is asserted by `test_ssrf_boundary.py` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level; `_reject_private_httpx_request` does the same on the seeder's httpx client for `search_site`. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
-| The operator's username leaks through a path in a tool result | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error` and by `_import_flex_file`'s refusal | Canaries in `test_error_redaction.py`, including the real handler's blocked-path message |
+| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal and — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus both log surfaces driven under a throwaway `HOME` |
 | Credential exposure in logs or tool results | `repr=False` on `anthropic_api_key`, `flex_token`, `firecrawl_api_key`; every logged or shown exception passes `redact_error` | Credentials loaded from env vars only, never hardcoded; `gitleaks` in CI; unit tests never load `.env` |
 | Vulnerable dependency in the resolved tree | `pip-audit` over `[dev,server,scraper]`, per push and weekly, fixable findings block | Dependabot alerts on the manifest's direct dependencies |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |

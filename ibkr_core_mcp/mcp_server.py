@@ -27,7 +27,7 @@ from pydantic import AnyUrl
 from ibkr_core_mcp import __version__
 from ibkr_core_mcp.claude_tools import READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
 from ibkr_core_mcp.models import json_default
-from ibkr_core_mcp.redaction import redact_error
+from ibkr_core_mcp.redaction import collapse_home, redact_error
 
 if TYPE_CHECKING:
     from ibkr_core_mcp.config import Config
@@ -304,7 +304,7 @@ def _issue_sse_token(config: Config) -> str:
     logger.warning(
         "ibkr-core-mcp: SSE bearer token for this launch written to %s — clients must send "
         "'Authorization: Bearer <token>'. It is replaced on every launch.",
-        path,
+        collapse_home(str(path)),
     )
     return token
 

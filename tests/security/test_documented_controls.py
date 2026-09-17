@@ -252,3 +252,49 @@ def test_the_write_probe_sees_both_spellings():
     assert "place_order" in writes and writes["place_order"] == ["_post"]
     assert "cancel_order" in writes and writes["cancel_order"] == ["session.delete"]
     assert "mark_notification_read" in writes and writes["mark_notification_read"] == ["_put"]
+
+
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9}
+
+
+def _collapse_home_call_sites() -> dict[str, int]:
+    """Every call to `collapse_home` in the package, by file."""
+    import ast
+
+    sites: dict[str, int] = {}
+    for source_file in sorted((_ROOT / "ibkr_core_mcp").rglob("*.py")):
+        calls = 0
+        for node in ast.walk(ast.parse(source_file.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+            if name == "collapse_home":
+                calls += 1
+        if calls:
+            sites[source_file.name] = calls
+    return sites
+
+
+def test_security_md_states_the_real_number_of_collapse_home_surfaces():
+    """SEC-10: `collapse_home` is an inventory of call sites, not a filter, so the inventory
+    is the control — and an inventory nobody counts is how this one came to be wrong.
+
+    The function's docstring said it covered "the model or a log"; two log lines wrote the
+    absolute path anyway, and the finding named only one of them. A number a human must
+    remember to update is a number that will be wrong (DOCA-R2, DOCB-R1, the secret-shape
+    count) — so this reads both sides and compares them.
+    """
+    sites = _collapse_home_call_sites()
+    assert sites, "no collapse_home calls found at all — the check would be vacuous"
+
+    text = (_ROOT / "SECURITY.md").read_text()
+    stated = re.findall(r"\*\*(\w+) surfaces call it\*\*", text)
+    assert len(stated) == 1, f"SECURITY.md states the collapse_home surface count {len(stated)} times, expected once"
+    claimed = _NUMBER_WORDS[stated[0].lower()]
+
+    assert claimed == sum(sites.values()), (
+        f"SECURITY.md says {stated[0]} surfaces call collapse_home; the package has "
+        f"{sum(sites.values())}: {sites}. Add the new one to the inventory and give it a "
+        "canary in test_error_redaction.py, or the inventory reads as complete while it is not."
+    )

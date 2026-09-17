@@ -1257,3 +1257,67 @@ def test_futures_quantity_row_names_the_contract_size():
         {"ticker": "AAPL", "side": "BUY", "quantity": 10, "orderType": "LMT", "price": 150.0, "_currency": "USD"}, "U1"
     )
     assert stk["Quantity"] == "10"
+
+
+# ---------------------------------------------------------------------------
+# SEC-09 — "Return cannot confirm" holds on all three renderers, by three
+# different mechanisms. Each is checked against the renderer that implements it.
+# ---------------------------------------------------------------------------
+
+
+def test_the_osascript_dialog_makes_the_abandon_button_the_default():
+    """The AppleScript renderer is the only one with a default button, and it is abandon.
+
+    Driven rather than read: the script text is whatever `_show_osascript_dialog`
+    actually hands to `osascript`, captured from the call.
+    """
+    from ibkr_core_mcp import order_confirm as oc
+
+    captured: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["script"] = argv[-1]
+        return MagicMock(returncode=0, stdout="SEND TO IBKR", stderr="")
+
+    with patch("ibkr_core_mcp.order_confirm.subprocess.run", side_effect=fake_run):
+        oc._show_osascript_dialog("LIVE ORDER CONFIRMATION", {"Symbol": "AAPL"}, "live", "SEND TO IBKR", "GO BACK")
+
+    script = captured["script"]
+    assert 'default button "GO BACK"' in script, f"the abandon button is not the AppleScript default:\n{script}"
+    assert 'default button "SEND TO IBKR"' not in script, "Return would confirm the order on the osascript fallback"
+
+
+def test_the_tkinter_dialog_gives_no_button_a_default_or_a_return_binding():
+    """Tk's `Button` class binds `<space>` and the mouse — never `<Return>` (Tk's own
+    `button.tcl`), so the non-macOS renderer refuses Return by adding nothing. This test
+    fails if a future edit adds the `default=` option or binds a Return key to a button,
+    either of which would hand the confirm button a keystroke.
+
+    `SECURITY.md` § Gate 2 said "the default button is the abandon one" of all three
+    renderers until 2026-09-17; that is the `osascript` mechanism alone (SEC-09).
+    """
+    from ibkr_core_mcp import order_confirm as oc
+
+    button_kwargs: list[dict[str, Any]] = []
+    commands: dict[str, Callable[[], None]] = {}
+
+    def fake_button(parent, **kwargs):
+        button_kwargs.append(kwargs)
+        if kwargs.get("command"):
+            commands[kwargs.get("text", "")] = kwargs["command"]
+        return MagicMock()
+
+    mock_tk = _make_tk_mock("SEND TO IBKR")
+    mock_tk.Button.side_effect = fake_button
+    mock_tk.Tk.return_value.mainloop.side_effect = lambda: commands["SEND TO IBKR"]()
+
+    with patch.object(oc, "tk", mock_tk):
+        oc._show_tkinter_dialog("LIVE ORDER CONFIRMATION", {"Symbol": "AAPL"}, "live", "SEND TO IBKR", "GO BACK")
+
+    assert button_kwargs, "no buttons were built — the check would be vacuous"
+    defaulted = [k.get("text") for k in button_kwargs if k.get("default")]
+    assert not defaulted, f"these tkinter buttons are marked default: {defaulted}"
+
+    dialog = mock_tk.Toplevel.return_value
+    bound = [str(call.args[0]) for call in dialog.bind.call_args_list]
+    assert not [b for b in bound if "Return" in b or "KP_Enter" in b], f"a Return key is bound on the dialog: {bound}"

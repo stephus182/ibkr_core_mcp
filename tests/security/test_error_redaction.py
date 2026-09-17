@@ -192,3 +192,82 @@ def test_the_interpolation_probe_sees_each_form():
         "    log.error('boom', exc_info=True)\n"
     )
     assert _unredacted_interpolations(snippet) == [4, 5, 6, 8, 9, 10, 11, 12]
+
+
+# ── The two log surfaces that were interpolating the absolute path (SEC-10) ────────────
+#
+# Both are driven under a throwaway HOME rather than read, because what matters is the
+# record that is actually emitted. `collapse_home` resolves HOME too, so the code under
+# test and the guard agree on what "home" means without either importing it from the other.
+
+
+def _emitted(logger_name: str, run) -> list[str]:
+    """Every message `run()` emits on `logger_name`."""
+    import logging
+
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            captured.append(record.getMessage())
+
+    logger = logging.getLogger(logger_name)
+    handler = _Capture()
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    try:
+        run()
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    return captured
+
+
+def test_the_sse_token_line_logs_the_token_file_without_the_username(monkeypatch, tmp_path):
+    """`_issue_sse_token` deliberately logs the path and never the token. It logged the
+    absolute path — `/Users/<name>/.ibkr_core/mcp_sse_token` — until 2026-09-17 (SEC-10),
+    in the one line an operator is most likely to paste into an issue."""
+    from ibkr_core_mcp.config import Config
+    from ibkr_core_mcp.mcp_server import _issue_sse_token
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = Config(
+        gateway_url="https://localhost:5055/v1/api",
+        anthropic_api_key="",
+        gdrive_folder_id="",
+        sqlite_path=tmp_path / ".ibkr_core" / "store.db",
+        gdrive_token_file=tmp_path / ".ibkr_core" / "token.json",
+        gdrive_credentials_file=tmp_path / ".ibkr_core" / "creds.json",
+    )
+
+    token: dict[str, str] = {}
+    messages = _emitted("ibkr_core_mcp.mcp_server", lambda: token.update(t=_issue_sse_token(config)))
+
+    line = next(m for m in messages if "SSE bearer token" in m)
+    assert str(tmp_path) not in line, line
+    assert "~/.ibkr_core/mcp_sse_token" in line, line
+    assert token["t"] not in line, "the token value itself must never be logged"
+
+
+def test_the_store_chmod_warning_names_the_file_without_the_username(monkeypatch, tmp_path):
+    """`store._restrict` reports a chmod it could not apply rather than swallowing it, and
+    that message carried the absolute path. Found by the SEC-10 sweep, which the finding
+    itself named only the SSE line — one call site is never the whole class."""
+    from ibkr_core_mcp import store as store_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / ".ibkr_core" / "store.db"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    target.chmod(0o644)
+
+    def refuse(self, mode):
+        raise OSError("Operation not permitted")
+
+    monkeypatch.setattr(Path, "chmod", refuse)
+    messages = _emitted("ibkr_core_mcp.store", lambda: store_module._restrict(target, 0o600))
+
+    assert messages, "the chmod failure was not logged at all — the check would be vacuous"
+    assert str(tmp_path) not in messages[0], messages[0]
+    assert "~/.ibkr_core/store.db" in messages[0], messages[0]

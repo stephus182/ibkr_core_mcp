@@ -18,10 +18,10 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 
 | Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
 |---|---:|---:|---:|---:|---:|
-| `SEC` | 13 | **11** | **2** | — | — |
+| `SEC` | 13 | **13** | **—** | — | — |
 | `WEB` | 9 | **9** | — | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
-| `API` | 21 | **19** | **1** (+1 partial) | — | — |
+| `API` | 21 | **20** | **0** (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
@@ -31,10 +31,10 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `API-R` | **2** | **2** | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| `SEC-R` | **3** | **3** | — | — | — |
-| **Total** | **144** | **88** | **5** (+1 partial) | **0** | **50** |
+| `SEC-R` | **5** | **5** | — | — | — |
+| **Total** | **146** | **93** | **2** (+1 partial) | **0** | **50** |
 
-`88 + 5 + 1 + 0 + 50 = 144`. **There are no unrecorded findings left.** All three blocks
+`93 + 2 + 1 + 0 + 50 = 146`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -80,7 +80,7 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (18, none Critical; +1 partial)
+### Open findings that do have a claim (2, none Critical; +1 partial)
 
 Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
@@ -89,20 +89,18 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `SEC-09` | Nit | "The default button is the abandon one" holds only on the `osascript` fallback |
-| `SEC-10` | Nit | `collapse_home` claims every surface; the SSE bearer-token log line writes the absolute home path |
 | `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
-| `API-15` | Nit | Unguarded response shape |
 | `API-11` | *scope* | **Partial** — 6 of 74 client methods return a Pydantic model; the other 68 are open |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
-> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…08` and `API-08/12/13` left on 2026-09-17. This table is the
+> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13` and `API-15` left on 2026-09-17. This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
-`API-08` and `API-12/13/15` have no ID-tagged row of their own; their claims are recovered by
-position from the Phase 1 combined row (`API-08, 11–15`) and are recorded here so they stop
-depending on that reading.
+`API-08` and `API-12/13/15` had no ID-tagged row of their own; their claims were recovered by
+position from the Phase 1 combined row (`API-08, 11–15`) and were recorded here so they stopped
+depending on that reading. All four are now closed, and `API-15` — six words, no file, no line —
+is written up below with how its subject was located.
 
 ### What has to happen before a tag is even decidable
 
@@ -3564,3 +3562,222 @@ six methods.
 Owner's instruction, given while this was in flight: *"NEVER manufacture a fix"*. Recorded.
 `API-13` is closed as **not reproducing**, with the sweep above as the evidence — the same
 treatment as `SEC-08`'s second half.
+
+---
+
+## Phase 3 — the last three Nits: `SEC-09`, `SEC-10`, `API-15` (and `SEC-R4`, `SEC-R5`)
+
+Three Nits, worked in severity order after the Mediums and Lows were gone. Two of them were
+accurate as filed. The third had six words and no file. What none of them predicted is that
+the smallest finding in the register — a wrong sentence about a button — would lead, by way of
+reading the code the sentence described, to an unpinned behaviour under which a swap of two
+adjacent lines would **place a live order on the abandon click** with the whole suite green.
+
+### `SEC-09` — the claim was true of one renderer in three
+
+`README.md` and `SECURITY.md` both ended the Gate 2 description with *"the default button is
+the abandon one"*. Measured on the real AppKit objects, building the alert exactly as
+`_order_dialog.py` does and reading the key equivalents back:
+
+```
+BEFORE the two setKeyEquivalent_ calls:
+   SEND TO IBKR   keyEquivalent='\r'      <- NSAlert's own default
+   GO BACK        keyEquivalent=''
+AFTER (what ships):
+   SEND TO IBKR   keyEquivalent=''
+   GO BACK        keyEquivalent='\x1b'
+
+buttons that Return would press: NONE
+claim 'the default button is the abandon one' -> False
+claim 'Enter cannot confirm'                  -> True
+```
+
+So the *safety* property holds — and the "BEFORE" line is worth reading twice, because it is
+what the two calls exist to undo: left alone, NSAlert makes **SEND TO IBKR** the Return
+button. The documented *mechanism* was wrong. Checking the third renderer needed Tk, which
+this venv has no `_tkinter` for, so the question was settled from Tk's own library source
+(`/System/Library/Frameworks/Tk.framework/.../button.tcl`): the `Button` class binds
+`<space>`, `<1>`, `<ButtonRelease-1>`, `<Enter>`/`<Leave>` (mouse, not the key) — and no
+`<Return>` or `<KP_Enter>` binding exists anywhere in the script library.
+
+| Renderer | What refuses Return | The filed claim |
+|---|---|---|
+| AppKit (macOS, primary) | Return key equivalent cleared off confirm; Escape given to abandon — **no** button is default | false |
+| `osascript` (macOS fallback) | `default button "GO BACK"` | **true** |
+| `tkinter` (off macOS) | No `default=`, no binding; Tk never binds Return to a Button | false |
+
+Both documents now state the property and name the three mechanisms, and each mechanism has
+the test that checks *it* rather than a restatement of the sentence.
+
+### `SEC-R4` — **Medium, new: the buttons could be swapped and the whole suite stayed green**
+
+`_run_alert` addresses its buttons by index. The first one added is the one AppKit answers
+with `NSAlertFirstButtonReturn` (1000), and that constant is the only response the file turns
+into `CONFIRMED`; index 0 is also the button whose Return key is cleared. The existing test
+asserted that *index 0* got `""` and *index 1* got Escape — it never asserted which title was
+at index 0.
+
+Measured against the full unit run:
+
+```
+  !!  swap the two buttons: abandon becomes index 0 (= CONFIRMED) -> survived  [1537 passed]
+  ok  give the confirm button the Return key back                 -> caught    [1 failed]
+  XX  CONTROL (dead anchor, must be refused)                      -> not-applied
+```
+
+With the two `addButtonWithTitle_` lines swapped, **clicking GO BACK places the order** and
+SEND TO IBKR abandons it, Escape lands on confirm — and 1,537 tests pass. Not a live defect:
+the code is correct today. It is a missing control, of the exact kind this audit has found
+repeatedly (`SEC-01`, `SEC-04`, `SEC-08`) — *a property everything depends on and nothing
+watches*. Per the owner's rule the working security code was **not** restructured; the guard
+that was missing was added.
+
+`test_the_button_that_reports_confirmed_is_the_confirm_button` asserts by title, never by
+position. `test_the_abandon_button_cannot_report_confirmed` drives the other direction:
+1001 (`NSAlertSecondButtonReturn`), -1000 (`NSModalResponseAbort`, the timeout) and 0 must all
+come out as an abandon. Both now catch the swap, and four more:
+
+```
+  ok  widen the verdict to >= (abandon returns 1001)      -> caught
+  ok  the constant names the wrong button                 -> caught
+  ok  treat a timeout abort as a confirmation             -> caught
+  ok  osascript: make CONFIRM the default button          -> caught
+  ok  tkinter: mark the confirm button as the default     -> caught
+  ok  tkinter: bind Return on the dialog                  -> caught
+```
+
+### `SEC-R5` — **Low, new: two documents describe a backend order that occurs on no platform**
+
+Found while reading `order_confirm.py` for `SEC-09`. Its module docstring said *"Three
+backends, tried in order: an AppKit `NSAlert` …, a tkinter modal, and an AppleScript
+`display dialog` fallback."* Driven with each backend stubbed:
+
+```
+macOS, AppKit works                  -> appkit
+macOS, AppKit fails, tk installed    -> appkit -> osascript
+Linux, tk installed                  -> tkinter
+Linux, no tk                         -> (none)  [HumanAuthError: No GUI dialog available]
+```
+
+Two per platform, never three; tkinter is unreachable on macOS and AppleScript is second,
+not third. `_show_confirm_dialog`'s own docstring, 500 lines below, had it right — the
+contradiction was inside one file. `docs/api-reference.md` § Order Management carried the
+same error one step further, naming `tkinter` as *the* Gate 2 dialog: the one renderer an
+order write can never reach, since Gate 1 is macOS-only and raises first. Both corrected;
+`CHANGELOG.md`'s entry was left alone, because tkinter really was the only renderer on the
+day that entry was written.
+
+### `SEC-10` — the docstring was right and the code was two lines short of it
+
+`collapse_home`'s docstring claimed "every surface that shows one to the model **or a log**".
+Reproduced under a throwaway `HOME`, so the real one was never touched:
+
+```
+logged: ibkr-core-mcp: SSE bearer token for this launch written to
+        /var/folders/.../fake-home-0mgufnaa/.ibkr_core/mcp_sse_token — clients must send …
+contains the home directory verbatim : True
+would collapse_home have hidden it   : True
+token value leaked into the log      : False
+```
+
+The token itself is not logged — that part of the design holds. Sweeping the rest of the
+package for the same shape found a **second** surface the finding had not named:
+`store._restrict`'s chmod-failure warning. Two others were examined and excluded with the
+reason written down: `flex_query` already passes `Path(xml_path).name`, the basename, so it
+never had the defect; `local_browser._main`'s three `print`s are the operator's own terminal,
+with `create-profile` refusing to run without a TTY — not a model surface and not a log.
+`mcp_server.read_resource`'s `path` is a `ibkr://` URI, not a filesystem path.
+
+The rule below the finding — *"Never show the **model** an absolute path"* — was never broken;
+every doc scoped the guarantee to model-facing messages and was accurate. What was wrong was
+the function's own docstring, which promised more. The code was widened to meet it rather than
+the claim narrowed, because a username in a log line an operator pastes into an issue is worth
+the two calls.
+
+`collapse_home` is applied by **calling it**, not by installing a logging filter: a library has
+no business reconfiguring the host application's root logger. That makes the surfaces an
+inventory, and an inventory nobody counts is how this one came to be wrong — so
+`test_security_md_states_the_real_number_of_collapse_home_surfaces` reads the count out of
+`SECURITY.md` and the call sites out of the AST, and fails if a fifth appears, if the count
+drifts, or if the count is removed:
+
+```
+  ok  a fifth surface appears, unlisted             -> caught
+  ok  the stated count drifts                       -> caught
+  ok  the count is removed from SECURITY.md         -> caught
+  ok  SSE token line: absolute path again           -> caught
+  ok  store chmod warning: absolute path again      -> caught
+  ok  collapse_home stops replacing anything        -> caught
+```
+
+### `API-15` — six words, no file, no line
+
+The whole record was `Unguarded response shape`, recovered by position from the Phase 1
+combined row (`API-08, 11–15`); the detail went with the Phase 1 agent output, as
+`DATA-03/04/05`'s did. The positional reading is sound — `API-14`, the clause before it, has
+an independent write-up that matches its position — but it gives a claim, not a location.
+
+Located by elimination, each step with a control that could fail:
+
+1. **No subscript on response-derived data anywhere in `client.py`.** An AST scan with taint
+   propagation (a name bound to `_get`/`_post`/`_put`/`.json()`, or to a subscript, attribute
+   or iteration of one) found **0**. A planted control — `d = self._get('/x'); rows =
+   d['items']; return rows[0]['conid']` — reported 3, so the scanner can fail.
+2. Every response that *is* assigned is `isinstance`-guarded, `.get()`-guarded, or handed to
+   `parse_many`, which returns `[]` for anything that is not a list. `get_trades`'s second
+   call is unguarded where its first is guarded — harmless, because `parse_many` guards.
+3. `parse_one` returns an unparseable payload untouched rather than raising.
+
+What was left is the shape assumption nothing guards: **`resp.json()` on a 2xx body.**
+`with_retry` raises on every non-2xx, so the decode only ever sees 200..299 — which is not a
+promise of JSON. Reproduced against a stubbed session:
+
+```
+the gateway's HTML login page    -> requests.exceptions.JSONDecodeError  <-- OUTSIDE IBKRCoreError
+                                    message: Expecting value: line 1 column 1 (char 0)
+an empty 200                     -> requests.exceptions.JSONDecodeError  <-- OUTSIDE IBKRCoreError
+```
+
+That makes it the same species as most of this register: **a claim whose condition is not
+enforced.** `exceptions.py` opens with *"Every error raised by this package derives from
+`IBKRCoreError`, so a caller can catch the whole surface with one `except`"* — and a caller
+doing exactly that did not catch this, receiving a message that names neither the endpoint nor
+what arrived.
+
+Six call sites decoded bare: `_get`, `_post`, `_put`, and the three methods that call
+`self._session.delete` directly (`cancel_order`, `delete_alert`, `delete_watchlist`). Six
+places to keep in step is `API-10`'s shape, so the fix is one function — `client._decode`,
+raising `IBKRAPIError` with the status, the endpoint and at most 400 characters of what
+arrived, the same budget `with_retry` already uses. `ping` is the single named exemption: a
+liveness probe with its own `try`/`except` that answers `False`, so it has no error to raise.
+`test_every_client_request_helper_decodes_through_the_same_guard` keys on the enclosing
+function name, not a line number, and fails if a seventh decode appears beside `_decode`
+instead of through it.
+
+`exceptions.py`'s sentence was corrected rather than left true-by-luck: it now says every
+error the package raises *for itself*, and says what to do at a dependency boundary.
+
+```
+  ok  put the bare resp.json() back in _get         -> caught
+  ok  _decode swallows the failure and returns None -> caught
+  ok  _decode forgets the status code               -> caught
+  ok  _decode drops the endpoint from the message   -> caught
+  ok  _decode stops catching the requests-side error-> caught
+  XX  CONTROL (dead anchor, must be refused)        -> not-applied
+```
+
+`cancel_order` is a gated order-write method, so the security suite was run on its own before
+anything else: **263 passed**, `test_order_write_boundary.py` included.
+
+### What the harness refused, twice
+
+Both refusals were **my invocation**, not the code under test, and both would have produced a
+confident wrong answer under the ad-hoc runner this harness replaced:
+
+- `run_battery(..., ["tests/", "-m", "not integration", "-q", "-x"])` — the runner already
+  appends `-q`, so mine made it `-qq`, and pytest at `-qq` prints no `N passed` summary line.
+  Classified `did-not-run`, refused. Guard 3 (*"pytest did not run" is not "tests failed"*)
+  earning its place on its first real outing.
+- `run_battery(..., ["tests/test_client.py", "tests/security/", "-x"])` — no
+  `-m "not integration"`, so `test_live_ping` was collected and failed against a gateway that
+  is not running. Control not green, refused before scoring a single mutant.

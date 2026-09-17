@@ -6,10 +6,14 @@ confirm. The Enter key deliberately does not confirm — the gate exists to defe
 reflexive acceptance, so it requires a pointed, explicit action. Any cancellation
 or timeout raises `HumanAuthError` and the IBKR endpoint is never contacted.
 
-Three backends, tried in order: an AppKit `NSAlert` run in a subprocess (colour-coded
-by side; see `_order_dialog.py` for why it must be a subprocess), a tkinter modal,
-and an AppleScript `display dialog` fallback. A host with none of them available
-fails closed rather than proceeding unconfirmed.
+Three backends, but never three in one sequence — the platform picks the pair. On macOS:
+an AppKit `NSAlert` run in a subprocess (colour-coded by side; see `_order_dialog.py` for
+why it must be a subprocess), falling back to an AppleScript `display dialog` if that
+subprocess fails. Everywhere else: a tkinter modal, which macOS never reaches. A host with
+no backend available fails closed rather than proceeding unconfirmed. This paragraph read
+"tried in order: ... AppKit, a tkinter modal, and an AppleScript fallback" until 2026-09-17,
+an order that occurs on no platform (audit finding SEC-R5); `_show_confirm_dialog`'s own
+docstring had it right all along.
 """
 
 from __future__ import annotations

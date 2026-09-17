@@ -480,7 +480,14 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
    shape worth naming; otherwise return the decoded response and annotate it as such. This
    step said "return typed model" while **zero of 74 methods did** (audit finding API-11,
    2026-09-16); six do now, and `client.py`'s module docstring lists them by name so the
-   claim can be checked rather than believed.
+   claim can be checked rather than believed. Decode the response with `_decode(resp, path)`,
+   never a bare `resp.json()`: `with_retry` has already raised on any non-2xx, but a 2xx is
+   not a promise of JSON — the gateway serves an HTML page once its session lapses, and that
+   left `IBKRClient` as `requests.exceptions.JSONDecodeError`, straight past the
+   `except IBKRCoreError` that `exceptions.py` tells callers to write (API-15, 2026-09-17).
+   `ping` is the one exemption and
+   `test_every_client_request_helper_decodes_through_the_same_guard` fails if a second
+   appears.
 2. **`models.py`** — add a Pydantic model for the response if it is a new shape. Derive from
    `IBKRResponse`, never from `BaseModel` directly: that base keeps the payload IBKR sent and
    serves it through the mapping protocol, so a typed return can never narrow a 51-key

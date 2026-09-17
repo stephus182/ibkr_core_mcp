@@ -411,7 +411,7 @@ Implemented in `order_confirm.py`.
 
 - Full order details displayed in a modal: on macOS an AppKit dialog run in a subprocess (banner colour-coded by side — green BUY, red SELL, dark red CANCEL, amber when the side is unknown), with an `osascript` fallback; `tkinter` on other platforms
 - 60-second timeout — the dialog auto-cancels unattended
-- **Enter key disabled** — confirmation requires a deliberate mouse click on the button named for the action (SEND TO IBKR, MODIFY ORDER, CANCEL ORDER, CONFIRM REPLY); the default button is the abandon one
+- **Enter key disabled** — confirmation requires a deliberate mouse click on the button named for the action (SEND TO IBKR, MODIFY ORDER, CANCEL ORDER, CONFIRM REPLY). Return confirms on none of the three renderers, but each refuses it by a different mechanism, and `SECURITY.md` § Gate 2 names them. This bullet ended "the default button is the abandon one" until 2026-09-17, which was the `osascript` fallback's mechanism alone (audit finding SEC-09)
 - The body the dialog shows is the body sent: the order dict is copied before the gates
 
 Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a "Stage this order" button click in its Panel UI) before `place_order`/`place_order_and_confirm` is ever invoked.

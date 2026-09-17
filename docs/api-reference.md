@@ -805,7 +805,12 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/event-contr
 Every method in this section enforces two sequential security gates before any API call is made:
 1. **Gate 1:** macOS Touch ID / Face ID (`LAPolicyDeviceOwnerAuthentication`, falls back to the
    device's system password on a failed/cancelled biometric scan, 60s timeout).
-2. **Gate 2:** tkinter modal dialog with full order details (Enter key does not confirm).
+2. **Gate 2:** a modal dialog carrying the full order details. On macOS an AppKit `NSAlert`
+   run in a subprocess, falling back to an AppleScript `display dialog` if that subprocess
+   fails; a `tkinter` modal only off macOS — which an order write never reaches, because
+   Gate 1 is macOS-only and raises first. Return confirms on none of the three; the
+   per-renderer mechanisms are in `SECURITY.md` § Gate 2. This line named `tkinter` as *the*
+   Gate 2 dialog until 2026-09-17 (audit finding SEC-R5).
 
 If either gate fails or times out, `HumanAuthError` is raised and no HTTP call is made. See
 CLAUDE.md's Security & Fingerprint Authentication section for the full policy rationale — the

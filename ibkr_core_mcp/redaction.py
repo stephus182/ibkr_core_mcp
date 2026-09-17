@@ -56,10 +56,22 @@ _REDACTED = "[redacted]"
 def collapse_home(text: str) -> str:
     """Rewrite the operator's home directory as `~` wherever it appears in `text`.
 
-    One definition of "show a path" for every surface that shows one to the model or a log,
+    One definition of "show a path" for the surfaces that show one to the model or a log,
     the way `order_confirm.price_text_safe` is one definition of rendering a broker price.
     What the model needs — which file, under which root — survives; the account name it does
     not need does not.
+
+    It is **called**, not applied globally: a library has no business installing a filter on
+    the host application's logging. The surfaces are therefore an inventory, and
+    `tests/security/test_error_redaction.py` drives each one under a throwaway `HOME` and
+    fails if the real path reaches the record — `redact_error` (all exception text),
+    `claude_tools._import_flex_file`'s allowed-root refusal, `mcp_server._issue_sse_token`'s
+    token-file line and `store._restrict`'s chmod warning. **This docstring read "every
+    surface" until 2026-09-17 while the last two interpolated the absolute path** (audit
+    finding SEC-10, which named the first of them; the second came out of its sweep).
+    `local_browser._main`'s `print`s are deliberately outside the inventory: that is the
+    operator's own terminal — `create-profile` refuses without a TTY — not a model surface
+    and not a log.
 
     OWASP's *A Practical Guide for Secure MCP Server Development* v1.0 §6 (Safe Error
     Handling) lists filesystem paths beside tokens and stack traces in what must not be

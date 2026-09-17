@@ -422,6 +422,48 @@ def _as_reply_dict(data: Any) -> dict[str, Any]:
     return {}
 
 
+def _decode(resp: requests.Response, path: str) -> Any:
+    """IBKR's JSON body — or `IBKRAPIError`, never a `requests` exception.
+
+    `with_retry` has already raised on every non-2xx status, so everything arriving here
+    answered 200..299. That is not a promise of JSON: the Client Portal Gateway serves an
+    HTML page once its session lapses, and an empty 200 is what a proxy in front of it
+    returns. `resp.json()` then raises `requests.exceptions.JSONDecodeError`, which is
+    **outside this package's hierarchy** — so a caller doing exactly what `exceptions.py`
+    tells it to do, `except IBKRCoreError`, did not catch it, and the message it got
+    ("Expecting value: line 1 column 1") named neither the endpoint nor what arrived.
+    Measured 2026-09-17; audit finding API-15.
+
+    One function rather than a `try` repeated at six call sites, for the reason API-10
+    recorded: when a rule has to be spelled out in N places, it ends up holding in N-1.
+    `ping` is the single exemption — a liveness probe that answers False rather than
+    raising — and `test_every_client_request_helper_decodes_through_the_same_guard` fails
+    if a seventh decode appears beside this one instead of through it.
+
+    Args:
+        resp: A response `with_retry` has already accepted as 2xx.
+        path: The request path, for the error message.
+
+    Returns:
+        The decoded body, exactly as IBKR sent it.
+
+    Raises:
+        IBKRAPIError: The body did not decode. Carries the status and, as `with_retry`
+            does for an error status, at most 400 characters of what arrived.
+    """
+    try:
+        return resp.json()
+    except (ValueError, requests.exceptions.InvalidJSONError) as exc:
+        try:
+            preview = resp.text[:400]
+        except Exception:  # a body that cannot even be read is still an API error, not a crash
+            preview = ""
+        raise IBKRAPIError(
+            f"IBKR gateway returned HTTP {resp.status_code} for {path} with a body that is not JSON: {preview}",
+            status_code=resp.status_code,
+        ) from exc
+
+
 class IBKRClient:
     """Wraps all IBKR Client Portal API endpoints. Returns raw dicts.
 
@@ -466,12 +508,12 @@ class IBKRClient:
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.get(url, params=params, timeout=30), path=path)
-        return resp.json()
+        return _decode(resp, path)
 
     def _post(self, path: str, body: dict[str, Any] | None = None) -> Any:
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.post(url, json=body or {}, timeout=30), path=path)
-        return resp.json()
+        return _decode(resp, path)
 
     def _put(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """PUT with an empty JSON body — the shape both FYI write endpoints document.
@@ -482,7 +524,7 @@ class IBKRClient:
         """
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.put(url, params=params, json={}, timeout=30), path=path)
-        return resp.json()
+        return _decode(resp, path)
 
     # ------------------------------------------------------------------
     # Session
@@ -2004,7 +2046,7 @@ class IBKRClient:
         path = f"/iserver/account/{account_id}/order/{order_id}"
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
-        return resp.json()
+        return _decode(resp, path)
 
     def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict[str, Any]]:
         """Confirm an order requiring an explicit IBKR reply (e.g. after a warning).
@@ -2275,7 +2317,7 @@ class IBKRClient:
         path = f"/iserver/account/{account_id}/alert/{alert_id}"
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
-        return resp.json()
+        return _decode(resp, path)
 
     def activate_alert(self, account_id: str, alert_id: str, activate: bool = True) -> dict[str, Any]:
         """Toggle alert on (activate=True) or off (activate=False) without deleting it.
@@ -2312,7 +2354,7 @@ class IBKRClient:
             lambda: self._session.delete(url, params={"id": watchlist_id}, timeout=30),
             path="/iserver/watchlist",
         )
-        return resp.json()
+        return _decode(resp, "/iserver/watchlist")
 
     # ------------------------------------------------------------------
     # FYI (write)

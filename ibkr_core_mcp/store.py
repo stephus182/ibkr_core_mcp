@@ -23,6 +23,7 @@ from typing import Any, Literal
 import pandas as pd
 
 from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.redaction import collapse_home
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ def _restrict(path: Path, mode: int) -> None:
         if path.exists() and stat.S_IMODE(path.stat().st_mode) != mode:
             path.chmod(mode)
     except OSError as exc:
-        log.warning("Could not restrict %s to %o: %s", path, mode, exc)
+        log.warning("Could not restrict %s to %o: %s", collapse_home(str(path)), mode, exc)
 
 
 # SQL that reads a trade date out of `trades.time` regardless of which writer produced it.

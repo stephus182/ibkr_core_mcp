@@ -1,11 +1,21 @@
 """Exception hierarchy for ibkr_core_mcp.
 
-Every error raised by this package derives from `IBKRCoreError`, so a caller can
+Every error this package *raises for itself* derives from `IBKRCoreError`, so a caller can
 catch the whole surface with one `except` and still discriminate on the subclass
 when it needs to. The split exists because the recovery differs per class:
 `IBKRAuthError` means re-authenticate, `IBKRRateLimitError` means back off,
 `HumanAuthError` means a security gate was declined and must not be retried
 automatically, and `ConfigError` means the caller's environment is wrong.
+
+**A dependency's exception is a different thing, and this sentence used to cover it by
+implication.** It read "Every error raised by this package" until 2026-09-17, while a 200
+response carrying a non-JSON body — the HTML page the Client Portal Gateway serves once its
+session lapses — left `IBKRClient` as `requests.exceptions.JSONDecodeError`, outside this
+hierarchy, with a message naming neither the endpoint nor what arrived (audit finding
+API-15). That one is converted at the boundary now: `client._decode` is the single place a
+response is decoded, and it raises `IBKRAPIError`. Where this package wraps a dependency
+whose failure the caller must act on, wrap it at the boundary and add the subclass here
+rather than widening this claim.
 """
 
 

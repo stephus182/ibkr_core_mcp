@@ -164,3 +164,61 @@ def test_empty_side_string_is_also_neutral(monkeypatch: pytest.MonkeyPatch) -> N
     ]
     assert "REVIEW ORDER" in label_calls
     assert "BUY ORDER" not in label_calls
+
+
+def test_the_button_that_reports_confirmed_is_the_confirm_button(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The binding between a button's *title* and what pressing it means.
+
+    `_run_alert` addresses its buttons by index: the first one added is the one AppKit
+    answers with `NSAlertFirstButtonReturn` (1000), which is the single value this file
+    turns into "CONFIRMED", and index 0 is also the button whose Return key is cleared.
+    Nothing tied that index to a title, so swapping the two `addButtonWithTitle_` lines
+    left the suite green while making GO BACK place the order and SEND TO IBKR abandon
+    it — measured against the whole 1,537-test run on 2026-09-17 (audit finding SEC-R4).
+
+    The two assertions here are therefore by title, never by position.
+    """
+    fake = _install_fake_appkit(monkeypatch)
+    alert_mock = fake.NSAlert.alloc.return_value.init.return_value
+    alert_mock.runModal.return_value = 1000  # NSAlertFirstButtonReturn
+
+    titles: list[str] = []
+    alert_mock.addButtonWithTitle_.side_effect = titles.append
+    buttons: dict[int, MagicMock] = {}
+    alert_mock.buttons.return_value.objectAtIndex_.side_effect = lambda i: buttons.setdefault(i, MagicMock())
+
+    from ibkr_core_mcp import _order_dialog
+
+    _order_dialog._run_alert(_base_payload(confirm_label="SEND TO IBKR", abandon_label="GO BACK"))
+
+    assert titles == ["SEND TO IBKR", "GO BACK"], (
+        f"buttons were added in the order {titles}; the first added is the one AppKit "
+        "reports as NSAlertFirstButtonReturn, which _run_alert prints as CONFIRMED"
+    )
+    assert capsys.readouterr().out.strip() == "CONFIRMED"
+
+    by_title = {title: buttons[index] for index, title in enumerate(titles)}
+    by_title["SEND TO IBKR"].setKeyEquivalent_.assert_called_once_with("")
+    by_title["GO BACK"].setKeyEquivalent_.assert_called_once_with("\x1b")
+
+
+def test_the_abandon_button_cannot_report_confirmed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other direction: the second button's response must never mean CONFIRMED.
+
+    AppKit answers 1001 (`NSAlertSecondButtonReturn`) for the abandon button and -1000
+    (`NSModalResponseAbort`) for the timeout. Both have to come out as CANCELLED, or a
+    widened comparison would turn an abandon into a placement.
+    """
+    for response in (1001, -1000, 0):
+        fake = _install_fake_appkit(monkeypatch)
+        alert_mock = fake.NSAlert.alloc.return_value.init.return_value
+        alert_mock.runModal.return_value = response
+
+        from ibkr_core_mcp import _order_dialog
+
+        _order_dialog._run_alert(_base_payload())
+        assert capsys.readouterr().out.strip() == "CANCELLED", f"response {response} was not treated as an abandon"
