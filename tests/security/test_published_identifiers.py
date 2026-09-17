@@ -273,8 +273,9 @@ def test_the_fixture_scan_is_not_vacuous():
     # joined it. Two endpoints are absent from the fixture entirely rather than empty:
     # `unread_count`, which answered HTTP 423 `{"status":"waiting for reply"}` on every
     # attempt — the same flakiness TOOL-12 measured over four consecutive tries against a
-    # healthy authenticated gateway — and `event_contracts`, whose path 404s like its
-    # sibling `/events/show`.
+    # healthy authenticated gateway — and `event_contracts`, which was removed outright on
+    # 2026-09-17: it called a path absent from IBKR's documentation, and the `/forecast/*`
+    # endpoints that replaced it need a subscription this account does not hold (API-R4).
     walked = {e for e, _, _ in scalars}
     assert set(payload) - walked == {"combo_positions", "pa_transactions", "positions_by_conid"}
 

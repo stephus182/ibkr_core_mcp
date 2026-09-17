@@ -206,7 +206,9 @@ def main(out_path: str) -> int:
         "pa_periods_raw": lambda: client.get_pa_periods_raw([account_id]),
         "pa_performance": lambda: client.get_pa_performance([account_id], "1M"),
         "pa_transactions": lambda: client.get_pa_transactions([account_id], [conid]),
-        "event_contracts": lambda: client.get_event_contracts([conid]),
+        # Event contracts (`/forecast/*`) are deliberately NOT captured: this account holds
+        # no event-contract subscription, so every call would record an error envelope rather
+        # than a shape. Add them here the day the subscription exists (API-R4).
         # Futures: worth capturing while a futures session is open, since several of these
         # shapes differ from the equity ones.
         "futures": lambda: client.get_futures(["ES"]),

@@ -255,7 +255,7 @@ Never commit `.env` or any GDrive OAuth credential/token file (e.g. `credentials
 ibkr_core_mcp/
 ├── __init__.py           # Public API — import everything from here
 ├── auth.py               # Auth strategies: BrowserCookieAuth, TokenAuth, NoAuth
-├── client.py             # All 74 IBKR Client Portal API endpoints
+├── client.py             # The IBKR Client Portal API surface (see its module docstring for the count)
 ├── models.py             # Pydantic v2 schemas for all response types
 ├── exceptions.py         # Custom exception hierarchy (IBKRCoreError → subclasses)
 ├── cache.py              # Google Drive parquet cache (market data, shared cross-machine)

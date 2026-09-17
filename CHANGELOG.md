@@ -78,6 +78,20 @@ failed before its fix:
   the `mcp` floor is 1.10 (`transport_security` did not exist before); the audit scripts parse
   the definitions again; the CI audit uses pip-audit's requirements mode and installs nothing.
 
+### Changed
+- **Event Contracts are implemented against IBKR's real endpoints.** `get_event_contracts()`
+  and `get_event_contract()` called `/events/contracts` and `/events/show` — paths absent from
+  IBKR's entire documentation index, which never worked for any caller, entitled or not. They
+  are **removed**, and five methods added against the documented `/forecast/*` endpoints:
+  `get_forecast_categories`, `get_forecast_contract`, `get_forecast_market`,
+  `get_forecast_rules`, `get_forecast_schedules`. Every path and query parameter was read from
+  that endpoint's API-reference page, retrieved with a fabricated control URL in the same batch.
+
+  **None returns a model and none has been executed against a live gateway** — event contracts
+  need a subscription the development account does not hold, and this package validates a model
+  against a captured response rather than against documentation. The tests pin the request each
+  method builds and assert nothing about the response. Audit finding API-R4.
+
 ### Removed
 - **`anthropic` is no longer a base dependency** — moved to the `dev` extra. **No shipped
   module ever imported it**: the only importer in the repository is

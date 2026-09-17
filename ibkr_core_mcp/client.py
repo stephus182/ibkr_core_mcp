@@ -1,4 +1,4 @@
-"""IBKRClient — the complete IBKR Client Portal Web API surface (74 endpoints).
+"""IBKRClient — the IBKR Client Portal Web API surface (78 public methods).
 
 Wraps market data, contracts, portfolio, orders, alerts, watchlists, and session
 management. Rate limiting and 429/503 backoff are handled transparently by
@@ -1871,43 +1871,95 @@ class IBKRClient:
         return self._get("/iserver/watchlist", {"id": watchlist_id})
 
     # ------------------------------------------------------------------
-    # Events Contracts
+    # Event Contracts (read-only)
+    #
+    # IBKR markets these as "Event Contracts" (ForecastEx and CME event/forecast
+    # contracts, modelled on options) and serves them under `/forecast/*`. This package
+    # called `/events/contracts` and `/events/show` until 2026-09-17 — paths that appear
+    # **zero times** in IBKR's complete documentation index and have never worked for
+    # anyone. Those two methods were removed, not repaired (audit finding API-R4); the
+    # precedent is `get_regulatory_snapshot`, deleted in `6a50f06` when its endpoint went.
+    #
+    # **These five are documentation-verified and NOT wire-verified.** Every path, query
+    # parameter and requiredness below was read from IBKR's own API-reference page for the
+    # endpoint (each cited per method, retrieved 2026-09-17 with a fabricated control URL
+    # in the same batch to prove the check could fail). None has been executed against a
+    # live gateway, because event contracts need a subscription this account does not hold.
+    # That is why **none of them returns a model**: this package's rule is that a model is
+    # validated against a captured response, never against a reading of the documentation
+    # (`models.py`, and the six models that were wrong for the package's life). They return
+    # the decoded response and say so. `tests/test_client_event_contracts.py` pins the
+    # request each one builds — which is knowable — and asserts nothing about the response.
     # ------------------------------------------------------------------
 
-    def get_event_contracts(self, conids: list[int]) -> list[dict[str, Any]]:
-        """Event-based contracts (e.g. political outcome contracts). Returns [] if not a list.
+    def get_forecast_categories(self) -> Any:
+        """Event Contract category tree: category ids, parent ids and markets.
 
-        WARNING: this path is not IBKR's. `/events/` appears **zero times** in the complete
-        documentation index (`llms.txt`, 69,149 bytes, re-verified 2026-09-17). The real
-        product is documented under `/forecast/*` — `GET /v1/api/forecast/category/tree` and
-        the rest, read from the page itself, not inferred. Reimplementing this pair against
-        those endpoints is a known gap; see `docs/api-reference.md` § Event Contracts.
+        Takes no parameters. Use the ids it returns for the more granular discovery calls.
 
-        **The 404 this raises is not the evidence for that.** A 404 from the gateway cannot
-        tell an unknown path from a product the account is not entitled to: the owner holds
-        no event-contract subscription by choice, so IBKR answers 404 for this account
-        whatever path is used, and IBKR documents no distinct status for an unentitled
-        product. The index is what settles the path; the status code settles nothing
-        (API-R4, 2026-09-17).
+        Documented errors: 401, 500, 503 — **no 404**, which is worth knowing because an
+        unentitled account is reported some other way (API-R4).
 
-        Source: https://www.interactivebrokers.com/docs/web-api/llms.txt (absence of /events/)
-        Endpoint: GET /events/contracts
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories.md
+        Endpoint: GET /forecast/category/tree
         """
-        data = self._get("/events/contracts", {"conids": ",".join(str(c) for c in conids)})
-        return data if isinstance(data, list) else []
+        return self._get("/forecast/category/tree")
 
-    def get_event_contract(self, conid: int) -> dict[str, Any]:
-        """Details for a specific event contract.
+    def get_forecast_contract(self, conid: int | str) -> Any:
+        """Instrument details for one event contract, including its Yes and No sides.
 
-        WARNING: same as `get_event_contracts` — `/events/` is absent from IBKR's index and
-        the documented product lives under `/forecast/*`. The 404 is equally uninformative:
-        this account is not entitled to event contracts, so it would 404 on the correct path
-        too (API-R4, 2026-09-17).
+        IBKR documents `conid` as a **string** query parameter; it is accepted here as
+        either and validated as numeric, matching every other conid in this file.
 
-        Source: https://www.interactivebrokers.com/docs/web-api/llms.txt (absence of /events/)
-        Endpoint: GET /events/show
+        Args:
+            conid: The event contract's identifier.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract.md
+        Endpoint: GET /forecast/contract/details
         """
-        return self._get("/events/show", {"conid": conid})
+        _validate_conid(conid)
+        return self._get("/forecast/contract/details", {"conid": conid})
+
+    def get_forecast_market(self, underlying_conid: int | str, exchange: str | None = None) -> Any:
+        """Every contract affiliated with one underlying market conid.
+
+        Args:
+            underlying_conid: The market's underlying contract identifier (IBKR's
+                `underlyingConid`, documented required).
+            exchange: Optional exchange; IBKR determines one internally when omitted.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets.md
+        Endpoint: GET /forecast/contract/market
+        """
+        _validate_conid(underlying_conid)
+        params: dict[str, Any] = {"underlyingConid": underlying_conid}
+        if exchange:
+            params["exchange"] = exchange
+        return self._get("/forecast/contract/market", params)
+
+    def get_forecast_rules(self, conid: int | str) -> Any:
+        """Trading rules for one event contract: payout, price increment, source agency.
+
+        Args:
+            conid: The event contract's identifier.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules.md
+        Endpoint: GET /forecast/contract/rules
+        """
+        _validate_conid(conid)
+        return self._get("/forecast/contract/rules", {"conid": conid})
+
+    def get_forecast_schedules(self, conid: int | str) -> Any:
+        """Liquid and extended trading hours for one event contract, by date.
+
+        Args:
+            conid: The event contract's identifier.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule.md
+        Endpoint: GET /forecast/contract/schedules
+        """
+        _validate_conid(conid)
+        return self._get("/forecast/contract/schedules", {"conid": conid})
 
     # ------------------------------------------------------------------
     # Order Management (write — human auth required)

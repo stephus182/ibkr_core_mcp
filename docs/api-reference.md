@@ -781,41 +781,56 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/
 
 ---
 
-## Events Contracts
+## Event Contracts
 
-**Status: wrong namespace, and unverifiable from this account.** Both methods below call
-bare `/events/...` paths. `/events/` appears **zero times** in IBKR's complete documentation
-index (`llms.txt`, 69,149 bytes — re-verified 2026-09-17 alongside a deliberately fabricated
-control URL, which returned the 483-byte `# Page Not Found` body while the real pages returned
-5–6 KB). They raise `IBKRAPIError` (404) on every call.
+**Status: implemented against IBKR's documented endpoints, never executed against a live
+gateway.** Event contracts (ForecastEx and CME event/forecast contracts, modelled on options)
+are served under `/forecast/*`. Every path and query parameter below was read from the
+endpoint's own API-reference page on 2026-09-17, retrieved with a deliberately fabricated
+control URL in the same batch — it returned the 508-byte `# Page Not Found` body while the
+five real pages returned 5.5–6.8 KB, so the retrieval could fail and did not.
 
-**The 404 is not the evidence for that, and this section used to read as though it were**
-(API-R4, 2026-09-17). A 404 cannot distinguish an unknown path from a product the account is
-not entitled to — the owner holds no event-contract subscription by choice, so IBKR answers
-404 for this account whichever path is used, and no IBKR page documents a distinct status for
-an unentitled product. The index settles the path question; the status code settles nothing.
-It follows that **the `/forecast/*` endpoints below cannot be verified live from this account
-either**, so a reimplementation would ship on documentation alone unless the subscription is
-taken — which is precisely the "assumption-based development" CLAUDE.md opens with, and worth
-stating before anyone starts.
+**None of them has been run.** Event contracts need a subscription the development account
+does not hold. That is also why **none returns a model**: this package validates a model
+against a captured response, never against a reading of the documentation — the rule that
+exists because all six original models were wrong for the package's life behind tests built
+to match them. These five return the decoded response and are annotated as such.
+`tests/test_client_event_contracts.py` pins the request each one builds, which is knowable,
+and asserts nothing about the response, which is not.
 
-IBKR *does* document an Event Contracts product (ForecastEx and CME Group event/forecast
-contracts, modeled on options) — but under a **different, undocumented-by-this-client**
-namespace, confirmed by reading the endpoint page rather than the overview:
-`GET /v1/api/forecast/category/tree` (read verbatim from
-`api-reference/trading/trading-event-contracts/get-forecast-categories.md`),
-`GET /forecast/contract/market`,
-`GET /forecast/contract/rules`, `GET /forecast/contract/schedules`, and
-`GET /forecast/contract/details`. Neither `get_event_contracts()` nor `get_event_contract()`
-calls any of these — reimplementing this pair against the `/forecast/*` endpoints is a known
-gap, not yet scheduled.
-Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/event-contracts/introduction
+**What was here before.** `get_event_contracts()` and `get_event_contract()` called
+`/events/contracts` and `/events/show` — paths that appear **zero times** in IBKR's complete
+documentation index and never worked for any caller, entitled or not. They were removed
+rather than repaired, as `get_regulatory_snapshot` was in `6a50f06`. The 404 they returned
+was not the evidence for that: a 404 cannot distinguish an unknown path from an unentitled
+product, and IBKR documents only 401/500/503 for these endpoints — **no 404 at all** (audit
+finding API-R4).
 
-### `get_event_contracts(conids) -> list[dict]`
-**Endpoint:** `GET /events/contracts` (not in IBKR's index; 404 here is also consistent with no entitlement — see Status above)
+### `get_forecast_categories() -> Any`
+**Endpoint:** `GET /forecast/category/tree` — no parameters.
+Category ids, parent ids and markets; the starting point for contract discovery.
+Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories.md
 
-### `get_event_contract(conid) -> dict`
-**Endpoint:** `GET /events/show` (not in IBKR's index; 404 here is also consistent with no entitlement — see Status above)
+### `get_forecast_contract(conid) -> Any`
+**Endpoint:** `GET /forecast/contract/details` — `conid` required.
+Instrument details including the Yes and No side identifiers, question, strike and expiration.
+Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract.md
+
+### `get_forecast_market(underlying_conid, exchange=None) -> Any`
+**Endpoint:** `GET /forecast/contract/market` — `underlyingConid` required, `exchange` optional.
+Every contract affiliated with one underlying market. `exchange` is omitted from the query
+when not given, rather than sent empty — IBKR determines one internally.
+Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets.md
+
+### `get_forecast_rules(conid) -> Any`
+**Endpoint:** `GET /forecast/contract/rules` — `conid` required.
+Payout, price increment, source agency, release and payout times, exchange timezone.
+Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules.md
+
+### `get_forecast_schedules(conid) -> Any`
+**Endpoint:** `GET /forecast/contract/schedules` — `conid` required.
+Liquid and extended trading hours for the coming and prior trading days.
+Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule.md
 
 ---
 

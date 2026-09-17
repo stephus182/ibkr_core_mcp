@@ -4157,6 +4157,51 @@ endpoints cannot be verified live from this account either.** A reimplementation
 documentation alone unless the subscription is taken — the exact "assumption-based
 development" CLAUDE.md opens with, and the reason two IBKR incidents are recorded there.
 
+### Resolution: implemented, not deleted — and the owner reversed my recommendation twice
+
+I first proposed removing the dead pair, and the owner agreed. Then, mid-removal, they
+reversed it:
+
+> *"the only choice for this tool to be valid is to install events contracts handling of the
+> endpoint even if I do not subscribe to it, someone might."*
+
+That is the right call and my framing had been too narrow: I was weighing the cost to *this*
+account, and the package is a library other projects consume.
+
+**And the removal was nearly made on reasoning this repository already forbids.** I argued
+`/events/` is absent from `llms.txt`, therefore the path is not IBKR's. CLAUDE.md says the
+opposite in as many words — *"`llms.txt` membership proves existence but its absence proves
+nothing"* — and `tests/test_client.py` had already recorded this very endpoint as *"unknown
+rather than dead ... firecrawl_search would settle it"*. A previous session got this right and
+I was about to overrule it with the weaker argument. `firecrawl_search` settled it, as
+prescribed: IBKR's own page says the Web API offers *two* endpoints for event-contract
+discovery, and they are `/forecast/*`.
+
+**What shipped.** Five methods against the documented endpoints, every path and parameter read
+from that endpoint's API-reference page — retrieved with Firecrawl because the `.md` variants
+omit the query-parameter tables, alongside a fabricated control URL that returned the 508-byte
+`# Page Not Found` body against 5.5–6.8 KB for the real pages:
+
+| Method | Endpoint | Query |
+|---|---|---|
+| `get_forecast_categories` | `GET /forecast/category/tree` | — |
+| `get_forecast_contract` | `GET /forecast/contract/details` | `conid` required |
+| `get_forecast_market` | `GET /forecast/contract/market` | `underlyingConid` required, `exchange` optional |
+| `get_forecast_rules` | `GET /forecast/contract/rules` | `conid` required |
+| `get_forecast_schedules` | `GET /forecast/contract/schedules` | `conid` required |
+
+**None returns a model, and that is deliberate.** This account holds no event-contract
+subscription, so no response has been observed, and a model validated against documentation
+rather than the wire is the defect that made all six original models wrong. The tests pin the
+**request** — which is knowable without a gateway — and assert nothing about the response.
+IBKR documents 401/500/503 for all five and **no 404**, which is itself a small piece of
+evidence that the 404 this package saw was about the path, not entitlement.
+
+One of my own checks had to be rewritten: asserting `"/events/contracts" not in source` failed
+because the comment explaining the removal names the path. That is API-12's defect exactly — a
+sentence explaining a guard satisfying it — so the check reads the AST for request literals
+instead, and the prose can stay.
+
 This is the third appearance of the same lesson in this audit — *a status code is a lead, not
 a fact* ([[feedback_reflect_before_concluding_defect]]) — after a link checker graded 74 URLs
 "resolving" on status alone and the new docs site answered 200 for pages that do not exist.

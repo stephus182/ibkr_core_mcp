@@ -2267,10 +2267,11 @@ _BARE_ARRAY_ENDPOINTS = {
         "orders/place-order-reply-confirmation: documented ARRAY, and the only shape that page "
         "publishes; live UNVERIFIED — a reply is an order write and is never driven by a test"
     ),
-    "get_event_contracts": (
-        "UNVERIFIED BOTH WAYS — no page under v1/endpoints/ declares GET /events/contracts, and "
-        "it returned HTTP 404 live. Absence from llms.txt proves nothing on its own (CLAUDE.md), "
-        "so this is recorded as unknown rather than dead; firecrawl_search would settle it"
+    "get_forecast_market": (
+        "trading-event-contracts/get-forecast-markets: documented OBJECT with a `contracts` list; "
+        "live UNVERIFIED — event contracts need a subscription this account does not hold, so no "
+        "response has ever been observed. The row it replaced, `get_event_contracts`, called a "
+        "path absent from IBKR's documentation entirely (API-R4)"
     ),
 }
 
