@@ -710,14 +710,26 @@ def test_run_scanner_error(toolkit):
 
 
 def test_get_trading_schedule_happy_path(toolkit):
-    """Returns JSON trading schedule."""
-    toolkit._client.get_trading_schedule.return_value = {
-        "tradingScheduleDate": [{"prop": [{"name": "TRADING_HOURS", "value": "0930-1600"}]}]
-    }
+    """Returns JSON trading schedule.
+
+    Asserted `("STK", "AAPL", "SMART")` until 2026-09-16. That was the handler's default and
+    it returns an empty list from the real endpoint, so this test pinned the defect
+    (TOOL-R1). The payload below is also invented — `tradingScheduleDate` is a key inside a
+    `schedules[]` entry, not a top-level one — which is why a shape test could not notice;
+    it is now the shape the wire actually returns.
+    """
+    toolkit._client.get_trading_schedule.return_value = [
+        {
+            "id": "p102082",
+            "exchange": "ISLAND",
+            "timezone": "America/New_York",
+            "schedules": [{"tradingScheduleDate": "20260917", "sessions": [{"prop": "LIQUID"}]}],
+        }
+    ]
     text, fig = toolkit.execute("get_trading_schedule", {"symbol": "AAPL"})
     assert fig is None
-    assert "TRADING_HOURS" in text
-    toolkit._client.get_trading_schedule.assert_called_once_with("STK", "AAPL", "SMART")
+    assert "LIQUID" in text
+    toolkit._client.get_trading_schedule.assert_called_once_with("STK", "AAPL", "")
 
 
 def test_get_trading_schedule_custom_params(toolkit):
@@ -1047,3 +1059,44 @@ def test_fetch_market_data_still_caches_a_complete_window(toolkit):
     assert "INCOMPLETE" not in text, text
     toolkit._cache.save.assert_called_once()
     assert "Saved to Drive cache" in text, text
+
+
+# ── TOOL-R1: the tool's default exchange returned nothing ─────────────────────
+
+
+def test_get_trading_schedule_omits_exchange_rather_than_defaulting_to_smart(toolkit):
+    """`symbol` is this tool's ONLY required input, and the handler defaulted `exchange`
+    to `"SMART"` — which returns an empty list, because SMART is IBKR's order router and
+    not a venue with published hours.
+
+    So the minimal documented call returned `[]` for every equity. Measured live
+    2026-09-16 on AAPL: `SMART` **0 rows**, `exchange` omitted **141 rows**, `ISLAND` 125.
+    Omitting it returns the most complete answer and is what IBKR's API Reference marks
+    optional, so the default is now "send nothing".
+    """
+    toolkit._client.get_trading_schedule.return_value = [{"id": "p1", "exchange": "ISLAND"}]
+
+    toolkit.execute("get_trading_schedule", {"symbol": "AAPL"})
+
+    toolkit._client.get_trading_schedule.assert_called_once_with("STK", "AAPL", "")
+
+
+def test_get_trading_schedule_still_forwards_an_explicit_exchange(toolkit):
+    """The counter-case: an exchange the caller asked for is passed through untouched.
+    Without this, "omit the default" and "ignore the parameter" are indistinguishable."""
+    toolkit._client.get_trading_schedule.return_value = [{"id": "p1", "exchange": "NYMEX"}]
+
+    toolkit.execute("get_trading_schedule", {"symbol": "CL", "asset_class": "FUT", "exchange": "NYMEX"})
+
+    toolkit._client.get_trading_schedule.assert_called_once_with("FUT", "CL", "NYMEX")
+
+
+def test_get_trading_schedule_description_does_not_promise_a_next_trading_date(toolkit):
+    """The description promised "regular trading hours, pre/post-market sessions, and next
+    trading date". The endpoint returns none of those as named fields — there is no
+    next-trading-date key anywhere in IBKR's response object or on the wire."""
+    tool = next(t for t in toolkit.tools if t["name"] == "get_trading_schedule")
+
+    assert "next trading date" not in tool["description"].lower()
+    assert "default: SMART" not in tool["description"]
+    assert "SMART" in tool["description"], "the SMART trap should be named, not silently dropped"

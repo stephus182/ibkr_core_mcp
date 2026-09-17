@@ -210,7 +210,7 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 | `get_option_chain` | Option chain — expiry months + call/put strikes |
 | `get_futures` | Futures contracts — expiry months, conids |
 | `get_market_snapshot` | Live bid/ask/last/volume for one or more symbols |
-| `get_trading_schedule` | Trading hours and next session for a symbol |
+| `get_trading_schedule` | Per-venue trading sessions and hours for a symbol (omit `exchange`; SMART returns nothing) |
 | `run_scanner` | Market scanner (top gainers, losers, most active, …) |
 | `get_notifications` | IBKR FYI account notifications |
 | `get_alerts` | List IBKR native price alerts |

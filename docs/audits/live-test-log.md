@@ -4,12 +4,50 @@ Accumulated record of machine-executed live tests against a real IBKR Client Por
 Every entry was produced by an automated test run — no manual curl, no simulated responses.
 
 **Test files:**
-- `tests/test_client_live.py` — IBKRClient endpoint coverage (61 tests, `pytest tests/test_client_live.py -v -m integration`)
+- `tests/test_client_live.py` — IBKRClient endpoint coverage (68 tests, `pytest tests/test_client_live.py -v -m integration`)
 - `tests/test_alerts_live.py` — Price alert tools via ClaudeToolkit (11 tests, `pytest tests/test_alerts_live.py -v -m integration`)
 
 **Skip guard:** All tests auto-skip when `ping()` returns False (gateway offline or unauthenticated).
 
 When referencing a "past live test," link here with an anchor, e.g. `[2026-06-30 run 4](#run-2026-06-30-4)`.
+
+---
+
+<a id="run-2026-09-16-3"></a>
+## Run: 2026-09-16 — gateway re-authenticated; trading-schedule settled (release-readiness audit)
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-16, after the owner completed a fresh Chrome login |
+| Purpose | Make good the one debt the audit had recorded as owed — API-R1's `get_trading_schedule` change was shipped with "the live confirmation is still owed" — and close Phase 0's gates 0.6 / 0.8 / 0.11, blocked since the audit began. |
+| Auth method | `BrowserCookieAuth`; `authenticated=True, connected=True, competing=False` |
+| Result | `test_client_live.py` **64 pass · 4 skip · 0 fail**; `test_alerts_live.py` **1 pass · 10 skip · 0 fail** |
+
+### What the endpoint settled, against three disagreeing IBKR pages
+
+| Claim | Evidence |
+|---|---|
+| `conid` and `symbol` are **mutually exclusive**, not both required | Both together: `{"error":"Bad Request: assetClass and exactly one of symbol/conid are required"}`. The narrative page `trading-schedule-by-symbol.md` marks **both** Required; the **API Reference** documents `symbol` and **no `conid` at all**, and matches the wire. API-R1 had been written from the narrative page and shipped a guaranteed 400. |
+| `conid` works as an undocumented alternative | `conid=265598` and `symbol="AAPL"` returned the **same 125 rows** on `ISLAND`. |
+| **Omitting `exchange` returns the most** | AAPL: no exchange **141 rows**, `ISLAND` **125**, `SMART` **0**. |
+| `SMART` is not wrong in general — it is wrong *here* | SMART is IBKR's smart-routing destination and the correct default elsewhere: `get_option_chain("AAPL")` with the default SMART returned a real chain (`call`, `put`, `conid`, `month`, `months`, `symbol`) in the same session. This endpoint's `exchange` asks for a venue with published hours, which SMART has none of, so it returns `[]` rather than an error. |
+| The response object has **six** keys | `id`, `tradeVenueId`, `exchange`, `description`, `timezone`, `schedules[]` — matching the API Reference exactly. The narrative page omits `exchange` and `description`. No `regularTradingHours` / `liquidHours` anywhere. |
+| The **tool** returned nothing on its minimal call | `get_trading_schedule` defaulted `exchange="SMART"`, and `symbol` is its only required input — so `{"symbol": "AAPL"}` answered `[]` for every equity. After the fix, the same call through `ClaudeToolkit.execute` returns **141 rows** (TOOL-R1). |
+
+### Two tests that could not fail, both now pinned
+
+- `test_get_trading_schedule` asserted `isinstance(result, (dict, list))` on a `SMART` call — green for its whole life while the call returned `[]`. It survived the earlier sweep of 38 type-only live assertions because that sweep worked from a list and this test was not on it.
+- `test_get_trading_schedule_happy_path` (unit) asserted the `SMART` default **and** used an invented payload shape (`tradingScheduleDate` as a top-level key; it is nested inside `schedules[]`). Both corrected to what the wire returns.
+
+### Skips, every one accounted for
+
+| Skip | Reason |
+|---|---|
+| watchlist creation | IBKR rate-limited — HTTP 503, not 404, so the endpoint path is correct |
+| `/fyi/unreadnumber` | HTTP 423 — FYI subscription not configured for this account |
+| `create_alert` (×11) | the known gateway operator block: `>=` / `<=` bodies are refused before reaching IBKR |
+| `get_combo_positions` | the account holds no spread positions — nothing for the endpoint to return |
+| `mark_notification_read` | opt-in write, `IBKR_TEST_NOTIFICATION_ID` unset — **awaiting the owner**, since there is no unmark |
 
 ---
 

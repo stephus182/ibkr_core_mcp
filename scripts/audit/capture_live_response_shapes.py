@@ -95,7 +95,9 @@ def main(out_path: str) -> int:
         "secdef": lambda: client.get_secdef([conid]),
         "stocks": lambda: client.get_stocks(["AAPL"]),
         "currency_pairs": lambda: client.get_currency_pairs("USD"),
-        "trading_schedule": lambda: client.get_trading_schedule("STK", "AAPL", "SMART"),
+        # No exchange: SMART is an order router with no published hours and returns [],
+        # which is why this endpoint was captured empty until 2026-09-16 (TOOL-R1).
+        "trading_schedule": lambda: client.get_trading_schedule("STK", "AAPL"),
         "market_snapshot": lambda: client.get_market_snapshot([conid], ["31", "84", "86"]),
         "notifications": lambda: client.get_notifications(5),
         "delivery_options": lambda: client.get_delivery_options(),

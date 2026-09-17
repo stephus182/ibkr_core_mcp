@@ -852,9 +852,11 @@ TOOL_DEFINITIONS = [
         "name": "get_trading_schedule",
         "capabilities": frozenset({"READ_ONLY"}),
         "description": (
-            "Get the trading schedule and session hours for a symbol: "
-            "regular trading hours, pre/post-market sessions, and next trading date. "
-            "Useful for futures (e.g. CL on NYMEX) and equities."
+            "Get the trading schedule for a symbol: per-venue sessions and trading times "
+            "for roughly the next month, with the exchange timezone. Useful for futures "
+            "(e.g. CL on NYMEX) and equities. Leave exchange unset to get every venue — "
+            "do NOT pass SMART, which is an order router with no published hours and "
+            "returns nothing."
         ),
         "input_schema": {
             "type": "object",
@@ -866,7 +868,10 @@ TOOL_DEFINITIONS = [
                 },
                 "exchange": {
                     "type": "string",
-                    "description": "Exchange, e.g. NYMEX, NYSE, NASDAQ (default: SMART)",
+                    "description": (
+                        "Optional venue, e.g. NYMEX, ISLAND. Omit for all venues "
+                        "(the fullest answer). SMART returns nothing."
+                    ),
                 },
             },
             "required": ["symbol"],
@@ -3448,7 +3453,15 @@ class ClaudeToolkit:
         """Return the trading schedule (hours, holidays) for a symbol on its exchange."""
         symbol = inputs["symbol"].upper()
         asset_class = inputs.get("asset_class", "STK")
-        exchange = inputs.get("exchange", "SMART")
+        # Omitted, not "SMART" — and the old default was a reasonable mistake, not a
+        # careless one. SMART is IBKR's smart-routing destination and is the correct
+        # default nearly everywhere in this package (get_option_chain, secdef strikes and
+        # the alert condition all pass it, all verified live 2026-09-16). This endpoint is
+        # the exception: its `exchange` means *a venue with published trading hours*, not a
+        # route, and SMART has none — so it returns an empty list rather than an error.
+        # Measured on AAPL: SMART 0 rows, omitted 141, ISLAND 125. `symbol` is this tool's
+        # only required input, so the minimal call answered `[]` for every equity (TOOL-R1).
+        exchange = inputs.get("exchange", "")
         schedule = self._client.get_trading_schedule(asset_class, symbol, exchange)
         return json.dumps(schedule, indent=2), None
 

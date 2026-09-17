@@ -29,9 +29,10 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
-| **Total** | **137** | **67** | **19** (+1 partial) | **0** | **50** |
+| `TOOL-R` | 1 | 1 | — | — | — |
+| **Total** | **138** | **68** | **19** (+1 partial) | **0** | **50** |
 
-`67 + 19 + 1 + 0 + 50 = 137`. **There are no unrecorded findings left.** All three blocks
+`68 + 19 + 1 + 0 + 50 = 138`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -2646,3 +2647,72 @@ disagreement would have been visible before any code was written.
 
 Gates: ruff, ruff format, mypy (119 files), pytest **1,494 passed**; live
 `test_client_live.py` 64 passed / 4 skipped, `test_alerts_live.py` 1 passed / 10 skipped.
+
+---
+
+## Phase 3 — TOOL-R1: the tool's default made its own minimal call return nothing
+
+Found while sweeping every reference to `get_trading_schedule` after the API-R1 correction —
+the "re-run the finder, don't fix the instances you have open" rule, which here turned up a
+**functional** defect rather than another documentation one.
+
+### The defect
+
+`_get_trading_schedule` read `inputs.get("exchange", "SMART")`, and `symbol` is the tool's
+**only required input**. So the minimal documented call — `{"symbol": "AAPL"}` — sent
+`exchange=SMART` and returned `[]` for every equity. The description meanwhile promised
+"regular trading hours, pre/post-market sessions, and next trading date": three things, of
+which the first two are nested inside `schedules[]` under different names and the third does
+not exist as a field at all.
+
+Measured live on AAPL:
+
+| `exchange` | rows |
+|---|---:|
+| omitted | **141** |
+| `ISLAND` | 125 |
+| `SMART` | **0** |
+
+### Why SMART was a reasonable mistake, which is the part worth keeping
+
+The owner's observation on seeing this: *"SMART looks like the default route."* That is exactly
+right, and it reframes the finding usefully. **SMART is IBKR's smart-routing destination and is
+the correct default nearly everywhere in this package** — `get_option_chain`, secdef strikes
+and the alert condition all pass it. Checked live in the same session rather than assumed:
+`get_option_chain("AAPL")` with the default SMART returns a real chain.
+
+`/trsrv/secdef/schedule` is the exception, and the reason is precise: its `exchange` parameter
+asks for **a venue with published trading hours**, not a route. SMART has none, so the endpoint
+returns an empty list rather than an error — which is why nothing ever surfaced.
+
+So the sweep for other SMART defaults came back clean, and the wording in all four places now
+says *SMART is right almost everywhere, and here is why this endpoint is different* rather than
+the flatter and less useful "SMART is an order router".
+
+### Fixed and verified end to end
+
+The default is now "send nothing", which is what IBKR's API Reference marks optional and what
+returns the fullest answer. Through `ClaudeToolkit.execute` against the live gateway, the same
+minimal call now returns **141 rows** with all six documented keys.
+
+Three unit tests: the omitted default, an explicit exchange still forwarded (so "omit the
+default" and "ignore the parameter" are distinguishable), and the description no longer
+promising a next-trading-date while still naming the SMART trap.
+
+### A second test that was documenting the defect
+
+`test_get_trading_schedule_happy_path` asserted `("STK", "AAPL", "SMART")` — pinning the broken
+default — **and** fed it an invented payload, `tradingScheduleDate` as a top-level key when it
+is nested inside `schedules[]`. A shape test built from a guess could not have noticed either.
+Both corrected to what the wire returns.
+
+### Everything the sweep touched
+
+`claude_tools.py` (description, schema, handler), `client.py`, `README.md`,
+`docs/api-reference.md`, `docs/tools-reference.md`, `docs/ibkr-api-behaviors-reference.md`,
+`scripts/audit/capture_live_response_shapes.py` — which had been capturing this endpoint with
+`SMART`, and is the reason the fixture recorded it as an empty list in the first place. The run
+is logged in `docs/audits/live-test-log.md` under `run-2026-09-16-3`.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,497 passed**; live `test_client_live.py`
+64 passed / 4 skipped, `test_alerts_live.py` 1 passed / 10 skipped.

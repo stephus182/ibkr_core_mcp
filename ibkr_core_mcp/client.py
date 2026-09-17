@@ -1069,9 +1069,14 @@ class IBKRClient:
         so this method requires exactly one and refuses the other two cases locally rather
         than spending a request to be told. Prefer `symbol`, which is the documented one.
 
-        `exchange` matters more than it looks. `exchange="SMART"` returns an **empty list**
-        for AAPL while `exchange="ISLAND"` returns 125 rows; SMART is IBKR's order router,
-        not a venue with published hours. The empty `trading_schedule` in
+        `exchange` matters more than it looks, and **omitting it returns the most**:
+        measured on AAPL, no exchange **141 rows**, `ISLAND` 125, `SMART` **0**.
+
+        SMART is IBKR's smart-routing destination and the right default nearly everywhere —
+        `get_option_chain`, secdef strikes and the alert condition all pass it correctly.
+        Here it is the exception: this `exchange` means *a venue with published trading
+        hours*, not a route, and SMART has none, so the endpoint returns an empty list
+        rather than an error. The empty `trading_schedule` in
         `tests/fixtures/ibkr_live_shapes.json` is that, not a defect and not a missing
         parameter.
 

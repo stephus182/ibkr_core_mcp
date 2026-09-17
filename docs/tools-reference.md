@@ -527,9 +527,15 @@ carries `clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]` (`openingTim
 > whose response object matches the wire in all six keys. See `client.get_trading_schedule`
 > for which page says what.
 
-**Note on `exchange`:** `exchange="SMART"` returns an **empty list** — SMART is IBKR's order
-router, not a venue with published hours. Use a real venue (`ISLAND` returned 125 rows for
-AAPL, measured 2026-09-16).
+**Note on `exchange`: omit it.** Measured live 2026-09-16 on AAPL — no exchange **141 rows**,
+`ISLAND` 125, `SMART` **0**.
+
+SMART is IBKR's smart-routing destination and the correct default nearly everywhere in this
+package (`get_option_chain`, secdef strikes, alert conditions — all verified live). This
+endpoint is the exception: its `exchange` asks for *a venue with published trading hours*, not
+a route. SMART has none, so the call returns an empty list rather than an error. The tool
+defaulted to SMART until 2026-09-16, which meant the minimal call — `symbol` is its only
+required input — answered `[]` for every equity.
 
 **IBKR endpoint:** `GET /trsrv/secdef/schedule`
 
