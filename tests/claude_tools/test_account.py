@@ -69,7 +69,7 @@ def test_execute_get_notifications(toolkit):
 
 def test_get_positions_empty(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = []
+    toolkit._client.get_all_positions.return_value = []
     text, _fig = toolkit.execute("get_positions", {})
     assert "No open positions" in text
 
@@ -77,7 +77,7 @@ def test_get_positions_empty(toolkit):
 def test_get_positions_filters_zero_size(toolkit):
     """position=0 means flat — excluded regardless of instrument type."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [
+    toolkit._client.get_all_positions.return_value = [
         {"contractDesc": "AAPL", "position": 100, "mktValue": 18000.0, "unrealizedPnl": 500.0},
         {"contractDesc": "CLOSED_STOCK", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
         {"contractDesc": "CLOSED_FUTURE", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
@@ -94,7 +94,7 @@ def test_get_positions_filters_zero_size(toolkit):
 def test_get_positions_all_zero_returns_empty(toolkit):
     """All-zero portfolio returns 'No open positions'."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [
+    toolkit._client.get_all_positions.return_value = [
         {"contractDesc": "FLAT_A", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
         {"contractDesc": "FLAT_B", "position": 0, "mktValue": 0.0, "unrealizedPnl": 0.0},
     ]
@@ -105,7 +105,7 @@ def test_get_positions_all_zero_returns_empty(toolkit):
 def test_get_positions_field_fallback(toolkit):
     """Position summary should use contractDesc → ticker → symbol in that order."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [
+    toolkit._client.get_all_positions.return_value = [
         {"contractDesc": "AAPL", "position": 100, "mktValue": 18000.0, "unrealizedPnl": 500.0},
         {"ticker": "TSLA", "position": 10, "mktValue": 2500.0, "unrealizedPnl": -50.0},
         {"symbol": "GOOG", "position": 5, "mktValue": 7500.0, "unrealizedPnl": 100.0},
@@ -123,7 +123,7 @@ def test_get_positions_renders_as_table_with_dollar_signs_and_bold_pnl(toolkit):
     columns (Chainlit escapes raw HTML, so color isn't available — bold
     + sign is the agreed substitute)."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [
+    toolkit._client.get_all_positions.return_value = [
         {"contractDesc": "GLD", "position": 100.0, "mktValue": 36840.0, "unrealizedPnl": -1487.09},
         {"contractDesc": "IGV", "position": 125.0, "mktValue": 11648.75, "unrealizedPnl": 564.06},
     ]
@@ -494,7 +494,7 @@ def test_get_positions_tolerates_null_value_fields(toolkit):
     """IBKR can send present-but-null mktValue/unrealizedPnl — must render as 0.00,
     not crash into _safe_error (audit Appendix C minor, lines 1099-1101)."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [
+    toolkit._client.get_all_positions.return_value = [
         {"contractDesc": "GLD", "position": 100, "mktValue": None, "unrealizedPnl": None},
     ]
     text, _fig = toolkit.execute("get_positions", {})

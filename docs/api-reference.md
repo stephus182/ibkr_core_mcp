@@ -457,6 +457,21 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/p
 
 ---
 
+### `get_all_positions(account_id, max_pages=50) -> list[Position | dict]`
+Every open position, paging until a page comes back empty. **Prefer this over
+`get_positions`** — both in-package callers used to read page 0 and stop (API-17).
+
+It does not need to know the page size, which is why it is safe without a large
+account to test against: measured live 2026-09-16, a page past the end returns `[]`
+rather than an error (page 0 → 2 rows; pages 1, 2, 5 → `[]`). A page shorter than the
+one before it is treated as the last, so no confirming request is spent.
+
+`max_pages` is a runaway guard and hitting it **raises** `IBKRAPIError`. Returning a
+quietly truncated list would repeat API-02 — an incomplete answer that looks complete
+— and this endpoint has no response envelope to carry a warning in.
+
+**Endpoint:** `GET /portfolio/{accountId}/positions/{page}`
+
 ### `get_positions_by_conid(conid) -> list[dict]`
 Position data for a specific contract across all accounts. Returns `[]` if response is not a list.
 **Endpoint:** `GET /portfolio/positions/{conid}`

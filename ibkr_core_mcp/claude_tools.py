@@ -1825,7 +1825,10 @@ class ClaudeToolkit:
         account_id, err = self._first_account_id()
         if err:
             return err, None
-        positions = self._client.get_positions(account_id)
+        # Every page, not just the first. This read `get_positions(account_id)` — page 0 —
+        # until 2026-09-16, so an account past one page was reported with its first page
+        # and no sign there were more (API-17).
+        positions = self._client.get_all_positions(account_id)
         # position=0 means flat — not an open position regardless of instrument type.
         positions = [p for p in positions if p.get("position", 0) != 0]
         if not positions:

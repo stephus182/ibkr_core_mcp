@@ -21,7 +21,7 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `SEC` | 13 | 8 | 5 | — | — |
 | `WEB` | 9 | 4 | 5 | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
-| `API` | 21 | 13 | 7 (+1 partial) | — | — |
+| `API` | 21 | 14 | 6 (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
@@ -30,9 +30,9 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
 | `TOOL-R` | 1 | 1 | — | — | — |
-| **Total** | **138** | **68** | **19** (+1 partial) | **0** | **50** |
+| **Total** | **138** | **69** | **18** (+1 partial) | **0** | **50** |
 
-`68 + 19 + 1 + 0 + 50 = 138`. **There are no unrecorded findings left.** All three blocks
+`69 + 18 + 1 + 0 + 50 = 138`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -78,9 +78,9 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (19, none Critical; +1 partial)
+### Open findings that do have a claim (18, none Critical; +1 partial)
 
-Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`.
+Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
 0600 holders).
 
@@ -100,7 +100,6 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | `TOOL-07` | Low | MCP server refuses to start without `ANTHROPIC_API_KEY`, which no module reads. **Investigate before touching** (owner) |
 | `API-05` | Medium | Positions page size documented as 30; IBKR documents 100. Confirmed from docs, indeterminate live |
 | `API-10` | Medium | `IBKR_AUTH_BROWSER` is honoured on one code path out of three |
-| `API-17` | Medium | Raised by the API-05 investigation; no closure recorded |
 | `API-08` | Low | Stale docstring chunk table |
 | `API-12` | Low | Wrong model citation |
 | `API-13` | Low | Contradictory inline comment |
@@ -2716,3 +2715,74 @@ is logged in `docs/audits/live-test-log.md` under `run-2026-09-16-3`.
 
 Gates: ruff, ruff format, mypy (119 files), pytest **1,497 passed**; live `test_client_live.py`
 64 passed / 4 skipped, `test_alerts_live.py` 1 passed / 10 skipped.
+
+---
+
+## Phase 3 — API-17 closed: paging without ever learning the page size
+
+The last gateway-backed item. API-17 was recorded as *"not reachable on a 2-position account,
+so it is recorded rather than fixed blind"* — and API-05, the page-size question it depends on,
+was recorded as *"confirmed from documentation, indeterminate live"*: this gateway build
+returns **no `pageSize` field at all**, and the account holds two positions.
+
+### The measurement that made the page size irrelevant
+
+Rather than try to settle 30-vs-100, ask what the endpoint does past the end:
+
+| `page` | rows |
+|---|---|
+| 0 | 2 — `GLD`, `IGV` |
+| 1 | **`[]`** |
+| 2 | `[]` |
+| 5 | `[]` |
+
+**A page beyond the data returns an empty list, not an error.** So "read until a page comes
+back empty" is correct whether a page holds 30 rows or 100, and the fix ships safely without an
+account large enough to cross a boundary. API-05's unresolved half stays unresolved and stops
+mattering.
+
+### `get_all_positions`
+
+Pages until empty, with two refinements the measurement justified:
+
+- **A page shorter than the one before it is the last page.** No confirming request is spent on
+  a rate-limited endpoint. Live, the 2-position account cost exactly two calls — page 0 (2
+  rows, and with no previous page there is nothing to call "short"), then page 1 returning
+  empty.
+- **Hitting `max_pages` raises.** Returning a quietly truncated list is precisely API-02 — *"a
+  short answer announced only to a log file"* — and unlike `get_market_history_paginated` this
+  endpoint has no response envelope to carry an `ibkr_core_warning` in. So the guard is loud or
+  it is nothing.
+
+Both callers were switched: `ClaudeToolkit._get_positions` and the `ibkr://positions/current`
+MCP resource.
+
+### Verified live, end to end
+
+Through `ClaudeToolkit.execute` against the authenticated gateway: 2 positions returned, both
+rendered, pages requested `[(0, 2), (1, 0)]`.
+
+### Verification
+
+Five mutants. Never stopping on an empty page, ignoring the short-page shortcut, truncating
+silently at `max_pages`, and reverting the handler to page 0 — all caught. The **no-op control
+survived**.
+
+Worth recording: the *first* no-op was scored **INVALID RUN**, not "caught". Appending `# noqa`
+to `def get_all_positions(` — an unclosed multi-line signature — is a syntax error, and the
+harness refused to score a run whose interpreter never started. That is the guard added this
+morning after a quoting bug scored fifteen crashes as passes, working on a case I created by
+accident.
+
+### One test of mine contradicted another
+
+The first pagination test expected pages `[0, 1, 2, 3]` while the very next test asserted that a
+short page ends the loop without a confirming request. Both could not hold. The short-page rule
+is right, and the expectation was corrected to `[0, 1, 2]` — recorded because it was caught by
+the suite disagreeing with itself rather than by review.
+
+Eleven stubs across three test files were repointed from `get_positions` to `get_all_positions`;
+`tests/test_client_live.py` was deliberately left alone, since it drives the real client.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,501 passed**, `pytest -m security`
+**250 passed**.

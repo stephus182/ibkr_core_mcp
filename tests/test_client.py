@@ -2633,3 +2633,65 @@ def test_get_trading_schedule_refuses_neither_symbol_nor_conid(client):
         client.get_trading_schedule("STK", exchange="ISLAND")
 
     get.assert_not_called()
+
+
+# ── API-17: every caller read page 0 and stopped ──────────────────────────────
+
+
+def test_get_all_positions_pages_until_an_empty_page(client):
+    """A page past the end returns `[]`, not an error — measured live 2026-09-16 on an
+    account holding 2 positions: page 0 → `['GLD', 'IGV']`, pages 1, 2 and 5 → `[]`.
+
+    That settles API-17 without settling API-05. The documented page size is 100 and this
+    gateway build returns no `pageSize` field at all, so the boundary is unobservable here
+    — but a loop that reads until a page comes back empty never needs to know the size.
+    """
+    from unittest.mock import patch
+
+    pages = {0: [{"conid": 1}] * 100, 1: [{"conid": 2}] * 100, 2: [{"conid": 3}] * 7, 3: []}
+    with patch.object(client, "get_positions", side_effect=lambda a, page=0: pages[page]) as gp:
+        result = client.get_all_positions("U1234567")
+
+    assert len(result) == 207
+    # Pages 0, 1, 2 — and NOT 3. Page 2 is short, which already identifies it as the last;
+    # the first version of this test expected a fourth call and contradicted
+    # `test_get_all_positions_stops_on_a_short_page_without_an_extra_request` below.
+    assert [c.kwargs["page"] for c in gp.call_args_list] == [0, 1, 2]
+
+
+def test_get_all_positions_stops_on_a_short_page_without_an_extra_request(client):
+    """A page shorter than the previous one is the last page, so there is no reason to spend
+    another request confirming it. `/portfolio/{id}/positions` is rate-limited and the
+    account this was measured on would otherwise pay a second call to learn nothing."""
+    from unittest.mock import patch
+
+    pages = {0: [{"conid": 1}] * 100, 1: [{"conid": 2}] * 3, 2: []}
+    with patch.object(client, "get_positions", side_effect=lambda a, page=0: pages[page]) as gp:
+        result = client.get_all_positions("U1234567")
+
+    assert len(result) == 103
+    assert gp.call_count == 2, "a short page is the last page — no confirming request"
+
+
+def test_get_all_positions_tells_the_caller_when_it_hits_the_guard(client):
+    """API-02 was 'a short answer announced only to a log file'. A runaway guard that
+    silently truncates is the same defect, so hitting it raises rather than returning a
+    quietly incomplete list — there is no envelope on this endpoint to carry a warning."""
+    from unittest.mock import patch
+
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    with (
+        patch.object(client, "get_positions", side_effect=lambda a, page=0: [{"conid": page}] * 100),
+        pytest.raises(IBKRAPIError, match="max_pages"),
+    ):
+        client.get_all_positions("U1234567", max_pages=3)
+
+
+def test_get_all_positions_handles_an_account_with_nothing(client):
+    """The empty case must not loop and must not raise."""
+    from unittest.mock import patch
+
+    with patch.object(client, "get_positions", return_value=[]) as gp:
+        assert client.get_all_positions("U1234567") == []
+    assert gp.call_count == 1

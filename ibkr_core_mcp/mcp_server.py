@@ -178,7 +178,9 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                     # handler catches every exception — a serialisation failure would answer
                     # with an error object rather than crash, so the resource would look
                     # healthy while carrying nothing.
-                    text = json.dumps(toolkit._client.get_positions(account_id), indent=2, default=json_default)
+                    # get_all_positions, not page 0 alone — see API-17 in client.py.
+                    positions = toolkit._client.get_all_positions(account_id)
+                    text = json.dumps(positions, indent=2, default=json_default)
                 else:
                     # Not silent: no exception, but nothing was read either, and the
                     # reason the helper gave is carried out rather than discarded.

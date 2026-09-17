@@ -1251,10 +1251,10 @@ class IBKRClient:
         `pageSize` field at all (measured 2026-09-16 — every row had `pageSize: None`), and
         the test account holds 2 positions, so the boundary cannot be observed directly.
 
-        **Callers read page 0 and stop.** `ClaudeToolkit._get_positions` and the
-        `ibkr://positions/current` resource both take the default, so an account with more
-        than 100 positions is reported with its first 100 and no indication there are more.
-        Not reachable on the test account; recorded as API-17.
+        **Use `get_all_positions` unless you specifically want one page.** Both callers —
+        `ClaudeToolkit._get_positions` and the `ibkr://positions/current` resource — took
+        this method's default and stopped, so an account past one page was reported with
+        its first page and no indication there were more (API-17, fixed 2026-09-16).
 
         Returns [{"conid": ..., "contractDesc": ..., "position": ..., "mktPrice": ...,
         "mktValue": ..., "unrealizedPnl": ..., "realizedPnl": ...}].
@@ -1266,6 +1266,42 @@ class IBKRClient:
         _validate_page(page)
         data = self._get(f"/portfolio/{account_id}/positions/{page}")
         return parse_many(Position, data)
+
+    def get_all_positions(self, account_id: str, max_pages: int = 50) -> list[Position | dict[str, Any]]:
+        """Every open position, paging until the account runs out.
+
+        `get_positions` returns one page and every caller took the default, so an account
+        with more than one page of positions was reported with its first page and no
+        indication there were more — API-17, the same silently-incomplete shape as API-02.
+
+        **This does not need to know the page size**, which is what makes it safe to ship
+        without an account big enough to test the boundary. Measured live 2026-09-16 on a
+        2-position account: page 0 returned both rows, and pages 1, 2 and 5 each returned
+        `[]` rather than an error. So "read until a page comes back empty" is correct
+        whether IBKR's page holds 30 or 100 — the unresolved half of API-05.
+
+        A page shorter than the one before it is the last page, so no confirming request is
+        spent on a rate-limited endpoint.
+
+        `max_pages` is a runaway guard, and hitting it **raises**. Returning a quietly
+        truncated list would be exactly the defect API-02 was: an incomplete answer that
+        looks complete. There is no response envelope here to carry a warning in.
+        """
+        collected: list[Position | dict[str, Any]] = []
+        previous = -1
+        for page in range(max_pages):
+            rows = self.get_positions(account_id, page=page)
+            if not rows:
+                return collected
+            collected.extend(rows)
+            if previous >= 0 and len(rows) < previous:
+                return collected
+            previous = len(rows)
+        raise IBKRAPIError(
+            f"get_all_positions stopped at max_pages={max_pages} with {len(collected)} "
+            f"positions and more still available. Raise max_pages if this account really "
+            f"holds that many; otherwise this is a paging bug, not a large account."
+        )
 
     def get_positions_by_conid(self, conid: int) -> list[dict[str, Any]]:
         """Position data for a specific contract across all accounts, flattened to one list.

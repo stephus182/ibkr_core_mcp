@@ -166,7 +166,7 @@ async def test_resource_positions_current(toolkit, store):
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
-    toolkit._client.get_positions.return_value = [{"symbol": "AAPL", "position": 100, "mktValue": 18000}]
+    toolkit._client.get_all_positions.return_value = [{"symbol": "AAPL", "position": 100, "mktValue": 18000}]
     server = build_server(toolkit, store)
     content = await _read_resource_text(server, "ibkr://positions/current")
     positions = json.loads(content)
@@ -396,7 +396,7 @@ async def test_read_resource_still_returns_real_data(toolkit, store):
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1"}]
-    toolkit._client.get_positions.return_value = [{"conid": 265598, "position": 100}]
+    toolkit._client.get_all_positions.return_value = [{"conid": 265598, "position": 100}]
     server = build_server(toolkit, store)
 
     payload = json.loads(await _read_resource_text(server, "ibkr://positions/current"))
@@ -534,7 +534,7 @@ async def test_positions_resource_resolves_an_account_row_that_has_only_id(toolk
     from ibkr_core_mcp.mcp_server import build_server
 
     toolkit._client.get_accounts.return_value = [{"id": "U9999999"}]  # no "accountId"
-    toolkit._client.get_positions.return_value = [{"symbol": "GLD", "position": 10}]
+    toolkit._client.get_all_positions.return_value = [{"symbol": "GLD", "position": 10}]
 
     server = build_server(toolkit, store)
     content = await _read_resource_text(server, "ibkr://positions/current")
@@ -542,7 +542,7 @@ async def test_positions_resource_resolves_an_account_row_that_has_only_id(toolk
     assert "no account could be resolved" not in content, content
     positions = json.loads(content)
     assert positions[0]["symbol"] == "GLD"
-    toolkit._client.get_positions.assert_called_once_with("U9999999")
+    toolkit._client.get_all_positions.assert_called_once_with("U9999999")
 
 
 @pytest.mark.asyncio
@@ -569,7 +569,7 @@ async def test_positions_resource_serialises_the_typed_return(toolkit, store):
     assert all(isinstance(p, Position) for p in typed), "fixture no longer exercises the typed path"
 
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
-    toolkit._client.get_positions.return_value = typed
+    toolkit._client.get_all_positions.return_value = typed
     server = build_server(toolkit, store)
 
     content = await _read_resource_text(server, "ibkr://positions/current")

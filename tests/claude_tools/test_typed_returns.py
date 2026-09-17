@@ -28,6 +28,9 @@ def typed_toolkit(toolkit):
     c.get_accounts.return_value = [{"accountId": "U1234567"}]
     c.search_contract.return_value = parse_many(Contract, LIVE["search_contract"])
     c.get_positions.return_value = parse_many(Position, LIVE["positions"])
+    # `_get_positions` reads every page since API-17; `get_positions` is the single-page
+    # call and stays stubbed for anything that still uses it directly.
+    c.get_all_positions.return_value = parse_many(Position, LIVE["positions"])
     c.get_trades.return_value = parse_many(Trade, LIVE["trades"])
     c.get_live_orders.return_value = parse_many(Order, LIVE["live_orders"])
     c.get_notifications.return_value = parse_many(Notification, LIVE["notifications"])
