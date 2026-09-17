@@ -29,6 +29,7 @@ real response rather than against your reading of the documentation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, TypeVar
 
 import pandas as pd
@@ -67,7 +68,10 @@ class IBKRResponse(BaseModel):
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
 
-    _raw: dict[str, Any] = PrivateAttr(default_factory=dict)
+    # `None` means "no payload was ever recorded", which is not the same as "IBKR sent
+    # `{}`". A falsy-check here conflated the two and made an empty response read as a
+    # full object of defaults (API-R5, 2026-09-17).
+    _raw: dict[str, Any] | None = PrivateAttr(default=None)
 
     @model_validator(mode="wrap")
     @classmethod
@@ -93,8 +97,16 @@ class IBKRResponse(BaseModel):
         return dict(self._payload())
 
     def _payload(self) -> dict[str, Any]:
-        """The raw response, or the field values when the model was built in Python."""
-        return self._raw if self._raw else self.model_dump()
+        """The raw response, or the field values when no payload was ever recorded.
+
+        The test is `is not None`, not truthiness. `{}` is a payload IBKR really sends —
+        `get_market_history_paginated` returns it for "no bars", and several endpoints
+        answer it for an account with nothing to report — and treating it as "no payload"
+        made `dict(response)` answer with field names, `len()` with the field count and
+        `bool()` with True. The fallback is for `model_construct()`, which skips validators
+        so nothing is ever recorded (API-R5, 2026-09-17).
+        """
+        return self._raw if self._raw is not None else self.model_dump()
 
     # -- mapping protocol -------------------------------------------------
     # `dict(model)` prefers keys()/__getitem__ over BaseModel.__iter__, so defining
@@ -459,8 +471,433 @@ class CurrencyPair(IBKRResponse):
     conid: int = Field(default=0, description="IBKR contract identifier")
 
 
-def bars_to_dataframe(raw: dict[str, Any]) -> pd.DataFrame:
+class SecDefInfo(IBKRResponse):
+    """One contract's definition, from `/iserver/secdef/info`.
+
+    The single-conid counterpart to `/trsrv/secdef`, which `Contract` serves in batch. The
+    two disagree on spelling — this one sends `secType` and `companyName` where the batch
+    rows send `assetClass` and `name` — which is why they are separate models rather than
+    one that silently reads whichever arrived.
+
+    `maturityDate`, `priceRendering` and `right` arrive as `null` for a stock. The base
+    model drops nulls so the declared defaults apply, and `info["maturityDate"]` still
+    reads `None`.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/secdef-info.md
+    """
+
+    conid: int = Field(default=0, description="IBKR contract identifier")
+    ticker: str = Field(default="", description="Ticker symbol")
+    company_name: str = Field(default="", alias="companyName", description="Issuer name (IBKR field: companyName)")
+    sec_type: str = Field(default="", alias="secType", description="STK, OPT, FUT, ... (IBKR field: secType)")
+    exchange: str = Field(default="", description="Routing destination")
+    listing_exchange: str = Field(
+        default="", alias="listingExchange", description="Primary listing venue (IBKR field: listingExchange)"
+    )
+    valid_exchanges: str = Field(
+        default="", alias="validExchanges", description="Comma-separated venues (IBKR field: validExchanges)"
+    )
+    currency: str = Field(default="", description="Trading currency")
+    strike: float = Field(default=0.0, description="Option strike; 0 for non-options")
+    right: str = Field(default="", description="C or P for options, empty otherwise")
+    maturity_date: str = Field(
+        default="", alias="maturityDate", description="Expiry as IBKR formats it (IBKR field: maturityDate)"
+    )
+
+
+class ContractDetails(IBKRResponse):
+    """One contract, from `/iserver/contract/{conid}/info` or `/info-and-rules`.
+
+    **This is the one IBKR endpoint in this client that answers in snake_case.** Its keys
+    are `con_id`, `company_name` and `r_t_h`, not `conid`/`companyName`/`rth` — measured,
+    not assumed. The model names them `conid` and `regular_trading_hours`; `r_t_h` in
+    particular is unreadable at a call site.
+
+    **One model for both endpoints on purpose.** `/info-and-rules` was measured to be
+    `/info` plus a single `rules` object (2026-09-17) and
+    `test_one_contract_details_model_serves_info_and_info_and_rules` fails if that stops
+    being true. `rules` is empty when the plain endpoint answered.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-information.md
+    """
+
+    conid: int = Field(default=0, alias="con_id", description="IBKR contract identifier (IBKR field: con_id)")
+    symbol: str = Field(default="", description="Ticker symbol")
+    company_name: str = Field(default="", description="Issuer name")
+    instrument_type: str = Field(default="", description="STK, OPT, FUT, ...")
+    currency: str = Field(default="", description="Trading currency")
+    exchange: str = Field(default="", description="Routing destination")
+    valid_exchanges: str = Field(default="", description="Comma-separated venues")
+    local_symbol: str = Field(default="", description="Exchange-local symbol")
+    trading_class: str = Field(default="", description="Trading class, e.g. NMS")
+    category: str = Field(default="", description="Issuer category")
+    industry: str = Field(default="", description="Issuer industry")
+    maturity_date: str = Field(default="", description="Expiry as IBKR formats it; empty for a stock")
+    multiplier: str = Field(default="", description="Contract multiplier as text; empty for a stock")
+    underlying_conid: int = Field(
+        default=0, alias="underlying_con_id", description="Underlying contract (IBKR field: underlying_con_id)"
+    )
+    regular_trading_hours: bool = Field(
+        default=False, alias="r_t_h", description="Trades in regular hours (IBKR field: r_t_h)"
+    )
+    smart_available: bool = Field(default=False, description="SMART routing is available")
+    has_related_contracts: bool = Field(default=False, description="Other listings exist for this issuer")
+    rules: dict[str, Any] = Field(default_factory=dict, description="Order rules; sent only by /info-and-rules")
+
+
+class ContractRules(IBKRResponse):
+    """Order-entry rules for a contract, from `/iserver/contract/rules`.
+
+    This is what the gateway will accept for an order, so its types have to be exact:
+    `increment` is a float and `sizeIncrement` an int in the same payload, and declaring
+    either as the other rewrites a tick size. `incrementType` is an IBKR enum int, not a
+    bool, for the reason `Alert` records.
+
+    `error`, `priceMagnifier`, `displaySize` and `orderOrigination` all arrive `null` on a
+    contract with nothing to report; the base model drops nulls so the defaults apply.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-rules.md
+    """
+
+    order_types: list[str] = Field(
+        default_factory=list, alias="orderTypes", description="Accepted order types (IBKR field: orderTypes)"
+    )
+    order_types_outside: list[str] = Field(
+        default_factory=list,
+        alias="orderTypesOutside",
+        description="Order types valid outside RTH (IBKR field: orderTypesOutside)",
+    )
+    tif_types: list[str] = Field(
+        default_factory=list, alias="tifTypes", description="Accepted time-in-force values (IBKR field: tifTypes)"
+    )
+    cqt_types: list[str] = Field(
+        default_factory=list, alias="cqtTypes", description="Cash-quantity order types (IBKR field: cqtTypes)"
+    )
+    default_size: int = Field(default=0, alias="defaultSize", description="Default quantity (IBKR field: defaultSize)")
+    size_increment: int = Field(
+        default=0, alias="sizeIncrement", description="Quantity step — an int (IBKR field: sizeIncrement)"
+    )
+    increment: float = Field(default=0.0, description="Price step — a float, unlike sizeIncrement")
+    increment_type: int = Field(
+        default=0, alias="incrementType", description="IBKR enum int, not a bool (IBKR field: incrementType)"
+    )
+    limit_price: float = Field(default=0.0, alias="limitPrice", description="Suggested limit (IBKR field: limitPrice)")
+    stopprice: float = Field(default=0.0, description="Suggested stop price (IBKR spells this one lowercase)")
+    cash_ccy: str = Field(default="", alias="cashCcy", description="Cash-quantity currency (IBKR field: cashCcy)")
+    can_trade_acct_ids: list[str] = Field(
+        default_factory=list,
+        alias="canTradeAcctIds",
+        description="Accounts permitted to trade it (IBKR field: canTradeAcctIds)",
+    )
+    algo_eligible: bool = Field(
+        default=False, alias="algoEligible", description="IB algos are available (IBKR field: algoEligible)"
+    )
+    force_order_preview: bool = Field(
+        default=False,
+        alias="forceOrderPreview",
+        description="A whatif preview is mandatory (IBKR field: forceOrderPreview)",
+    )
+    preview: bool = Field(default=False, description="Preview is supported")
+    error: str = Field(default="", description="IBKR's rejection text; empty when it sent null")
+
+
+class FutureContract(IBKRResponse):
+    """One futures contract, from `/trsrv/futures`.
+
+    **Every date here is an int, not a string** — `expirationDate` is `20261219`, and
+    declaring `str` would coerce it into `"20261219"` at every call site that then
+    compares it to an int. Measured against the capture, not read off the documentation.
+
+    `get_futures()` flattens IBKR's `{"ES": [...], "CL": [...]}` envelope, so the symbol
+    key is gone by the time these rows are built — read `symbol` on the row.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
+    """
+
+    conid: int = Field(default=0, description="IBKR contract identifier")
+    symbol: str = Field(default="", description="Root symbol, e.g. ES")
+    expiration_date: int = Field(
+        default=0, alias="expirationDate", description="Expiry as YYYYMMDD int (IBKR field: expirationDate)"
+    )
+    ltd: int = Field(default=0, description="Last trade date as YYYYMMDD int")
+    underlying_conid: int = Field(
+        default=0, alias="underlyingConid", description="Underlying contract (IBKR field: underlyingConid)"
+    )
+    long_futures_cut_off: int = Field(
+        default=0, alias="longFuturesCutOff", description="Long cut-off date (IBKR field: longFuturesCutOff)"
+    )
+    short_futures_cut_off: int = Field(
+        default=0, alias="shortFuturesCutOff", description="Short cut-off date (IBKR field: shortFuturesCutOff)"
+    )
+
+
+class StockSearchResult(IBKRResponse):
+    """One issuer and its listings, from `/trsrv/stocks`.
+
+    The listings live in `contracts`, and each carries **`isUS`** — the flag that makes this
+    endpoint, rather than `/iserver/secdef/search`, the one that can answer "which listing
+    did they mean". `contracts` stays a list of plain dicts: its rows are three keys wide
+    and naming a model for them would buy nothing.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol.md
+    """
+
+    name: str = Field(default="", description="Issuer name")
+    asset_class: str = Field(default="", alias="assetClass", description="Always STK here (IBKR field: assetClass)")
+    chinese_name: str = Field(
+        default="", alias="chineseName", description="Issuer name in Chinese, HTML-escaped (IBKR field: chineseName)"
+    )
+    contracts: list[dict[str, Any]] = Field(
+        default_factory=list, description="Listings, each with conid, exchange and isUS"
+    )
+
+
+class Algo(IBKRResponse):
+    """One IB algorithm available for a contract, from `/iserver/contract/{conid}/algos`.
+
+    Two keys wide, and named anyway: `id` is what goes back to IBKR in an order body and
+    `name` is what a human picks from, so a caller that confuses them sends a valid order
+    with the wrong strategy.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/ib-algo-params.md
+    """
+
+    id: str = Field(default="", description="Algorithm identifier, as sent in an order body")
+    name: str = Field(default="", description="Display name")
+
+
+class TradingSchedule(IBKRResponse):
+    """One venue's trading calendar, from `/trsrv/secdef/schedule`.
+
+    **The id is text with a leading letter** — `p109581` in the capture — so declaring it
+    numeric would corrupt it, the same class of defect as `Watchlist.id`.
+
+    `schedules` stays a list of plain dicts: each holds nested `sessions` and clearing
+    times whose shape varies by venue, and naming a model for it would freeze a shape the
+    capture does not pin.
+
+    This endpoint answers `[]` for `SMART` — pass a real venue. Recorded in
+    `docs/ibkr-api-behaviors-reference.md`.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/trading-schedule.md
+    """
+
+    id: str = Field(default="", description="Schedule identifier, text — may start with a letter")
+    exchange: str = Field(default="", description="Venue code")
+    description: str = Field(default="", description="Venue name")
+    timezone: str = Field(default="", description="IANA timezone, e.g. America/New_York")
+    trade_venue_id: str = Field(
+        default="", alias="tradeVenueId", description="IBKR venue identifier (IBKR field: tradeVenueId)"
+    )
+    schedules: list[dict[str, Any]] = Field(
+        default_factory=list, description="Per-day sessions and clearing cycles, as IBKR sends them"
+    )
+
+
+class MarketHistory(IBKRResponse):
+    """OHLCV bars and their envelope, from `/iserver/marketdata/history`.
+
+    **`high` and `low` are not prices.** IBKR documents both as `%h/%v/%t` strings — the
+    high (or low) price *scaled by `priceFactor`*, the volume divided by 100, and the
+    minutes from the start of the chart — and a real response carries
+    `"17510/472117.45/0"`. Declaring them `float` raises, and because `parse_one` answers a
+    `ValidationError` by handing the payload back untouched, the typing would have silently
+    done nothing on every call rather than failing loudly. The prices a caller wants are in
+    `data`, one bar at a time.
+
+    `serverId` and `priceDisplayValue` look numeric and are text; coercing them changes what
+    goes back to IBKR, the defect `Watchlist.id` records.
+
+    `bars_to_dataframe()` in this module turns `data` into a DataFrame.
+
+    `ibkr_core_warning` is **this package's key, not IBKR's** — namespaced so it can never
+    collide with a field IBKR adds. `get_market_history_paginated` sets it when it stops at
+    its chunk guard with less data than was asked for (API-02).
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+            (response object re-read live 2026-09-17; every field below matched the wire)
+    """
+
+    symbol: str = Field(default="", description="Ticker symbol")
+    text: str = Field(default="", description="Long name of the ticker")
+    data: list[dict[str, Any]] = Field(
+        default_factory=list, description="Bars, each {o, h, l, c, v: float, t: epoch ms int}"
+    )
+    points: int = Field(default=0, description="Number of bars returned")
+    bar_length: int = Field(default=0, alias="barLength", description="Seconds per bar (IBKR field: barLength)")
+    time_period: str = Field(default="", alias="timePeriod", description="Requested duration (IBKR field: timePeriod)")
+    start_time: str = Field(default="", alias="startTime", description="UTC YYYYMMDD-HH:mm:ss (IBKR field: startTime)")
+    high: str = Field(default="", description="`%h/%v/%t` composite — a string, never a price")
+    low: str = Field(default="", description="`%l/%v/%t` composite — a string, never a price")
+    price_factor: int = Field(
+        default=0,
+        alias="priceFactor",
+        description="Divisor for the prices inside high/low. IBKR's prose calls this a String "
+        "and both its own example and the wire send an int (IBKR field: priceFactor)",
+    )
+    volume_factor: int = Field(
+        default=0, alias="volumeFactor", description="Volume multiplier (IBKR field: volumeFactor)"
+    )
+    server_id: str = Field(default="", alias="serverId", description="Request id, text (IBKR field: serverId)")
+    price_display_value: str = Field(
+        default="",
+        alias="priceDisplayValue",
+        description="Text, despite looking numeric (IBKR field: priceDisplayValue)",
+    )
+    md_availability: str = Field(
+        default="", alias="mdAvailability", description="Market-data availability code (IBKR field: mdAvailability)"
+    )
+    mkt_data_delay: int = Field(
+        default=0, alias="mktDataDelay", description="Processing delay in ms (IBKR field: mktDataDelay)"
+    )
+    outside_rth: bool = Field(
+        default=False, alias="outsideRth", description="Data includes extended hours (IBKR field: outsideRth)"
+    )
+    negative_capable: bool = Field(
+        default=False, alias="negativeCapable", description="Values may be negative (IBKR field: negativeCapable)"
+    )
+    ibkr_core_warning: str = Field(
+        default="",
+        description="This package's own key: set by get_market_history_paginated when the "
+        "answer covers less than the period asked for. Empty on a single request.",
+    )
+
+
+class OptionChain(IBKRResponse):
+    """An underlying's option chain, as `IBKRClient.get_option_chain` assembles it.
+
+    **The only shape in this module that IBKR does not send.** It is built from two calls —
+    `/iserver/secdef/search` for the conid and expiry months, then `/iserver/secdef/strikes`
+    for one month — so it cannot drift upstream, and the model pins our own output. If it
+    changes, `get_option_chain` changed.
+
+    `months` is every expiry the underlying lists; `month` is the one `call` and `put` were
+    fetched for, which defaults to the nearest.
+    """
+
+    symbol: str = Field(default="", description="Underlying symbol, upper-cased")
+    conid: int = Field(default=0, description="Underlying contract identifier")
+    month: str = Field(default="", description="The expiry these strikes are for, e.g. JAN26")
+    months: list[str] = Field(default_factory=list, description="Every expiry the underlying lists")
+    call: list[float] = Field(default_factory=list, description="Call strikes for `month`")
+    put: list[float] = Field(default_factory=list, description="Put strikes for `month`")
+
+
+class BrokerageSession(IBKRResponse):
+    """The brokerage session, from `/iserver/accounts`.
+
+    `isPaper` is the flag a caller must not get wrong, and `selectedAccount` is the one
+    every order body inherits when none is given — both are named for that reason.
+
+    `acctProps`, `aliases` and `chartPeriods` are keyed **by account id** or by asset class,
+    so there is no field in them to name; they stay mappings. Naming the block is useful,
+    pretending to type its contents would not be. The same reasoning leaves
+    `/portfolio/{id}/ledger`, `/portfolio/{id}/allocation`, `/iserver/account/pnl/partitioned`
+    and `/pa/performance` without models at all.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/brokerage-accounts.md
+    """
+
+    accounts: list[str] = Field(default_factory=list, description="Account ids in this session")
+    selected_account: str = Field(
+        default="", alias="selectedAccount", description="Default account (IBKR field: selectedAccount)"
+    )
+    is_paper: bool = Field(default=False, alias="isPaper", description="Paper-trading session (IBKR field: isPaper)")
+    is_ft: bool = Field(default=False, alias="isFT", description="Financial-advisor session (IBKR field: isFT)")
+    session_id: str = Field(default="", alias="sessionId", description="Gateway session id (IBKR field: sessionId)")
+    server_info: dict[str, Any] = Field(
+        default_factory=dict, alias="serverInfo", description="serverName/serverVersion (IBKR field: serverInfo)"
+    )
+    acct_props: dict[str, Any] = Field(
+        default_factory=dict, alias="acctProps", description="Per-account properties, keyed by account id"
+    )
+    aliases: dict[str, Any] = Field(default_factory=dict, description="Account aliases, keyed by account id")
+    allow_features: dict[str, Any] = Field(
+        default_factory=dict, alias="allowFeatures", description="Feature flags (IBKR field: allowFeatures)"
+    )
+    groups: list[Any] = Field(default_factory=list, description="Advisor groups")
+    profiles: list[Any] = Field(default_factory=list, description="Allocation profiles")
+
+
+class WatchlistDetail(IBKRResponse):
+    """One watchlist and its contents, from `/iserver/watchlist?id=`.
+
+    **A separate model from `Watchlist` on purpose.** The list row from `/iserver/watchlists`
+    carries `type`, `modified` and `is_open`; this one carries `hash` and `instruments`, and
+    neither key set contains the other — one model would have to make every field optional
+    and would stop telling a caller which endpoint they are holding.
+
+    The id is text and looks numeric — `"1111.11"` in the capture — and goes straight back
+    into the query string, so declaring it numeric would corrupt it (see `Watchlist.id`).
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information.md
+    """
+
+    id: str = Field(default="", description="Watchlist identifier, text — may contain a dot")
+    name: str = Field(default="", description="Watchlist name")
+    hash: str = Field(default="", description="IBKR's content hash for the list")
+    read_only: bool = Field(
+        default=False, alias="readOnly", description="Whether the list can be modified (IBKR field: readOnly)"
+    )
+    instruments: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Members, each with conid/ticker/assetClass; `fullName` is the local symbol",
+    )
+
+
+class MTAAlert(IBKRResponse):
+    """The Mobile Trading Assistant alert, from `/iserver/account/mta`.
+
+    **A separate model from `Alert`, because the shapes differ in both directions** —
+    measured 2026-09-17, this one carries 20 keys the alert-list row does not, and the row
+    carries `order_time`, which this does not.
+
+    **Seven 0/1 fields here are IBKR enum ints, not booleans** — `alert_active`,
+    `alert_repeatable`, `alert_send_message`, `alert_show_popup`, `condition_outside_rth`,
+    `condition_size` and `itws_orders_only` — while `alert_triggered` and
+    `order_not_editable` in the same payload really are bools. Declaring the first group
+    `bool` would rewrite 0/1 into False/True and lose which spelling IBKR used; the
+    alert-body work had to undo exactly that confusion once already.
+
+    `order_id` arrives as an int and goes back out inside a URL path, so it is normalised to
+    text the way `Alert.order_id` and `Order.order_id` are. The int stays readable as
+    `alert["order_id"]`.
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-mta-alert.md
+    """
+
+    order_id: str = Field(default="", description="Alert identifier, as text (IBKR sends an int)")
+    account: str = Field(default="", description="Account the alert belongs to")
+    alert_name: str = Field(default="", description="Alert name")
+    alert_active: int = Field(default=0, description="Enabled flag, 0 or 1 — an enum int, not a bool")
+    alert_repeatable: int = Field(default=0, description="Repeat flag, 0 or 1 — an enum int, not a bool")
+    alert_send_message: int = Field(default=0, description="Send-message flag, 0 or 1 — an enum int, not a bool")
+    alert_show_popup: int = Field(default=0, description="Show-popup flag, 0 or 1 — an enum int, not a bool")
+    itws_orders_only: int = Field(default=0, description="IBKR Mobile orders only, 0 or 1 — an enum int")
+    condition_outside_rth: int = Field(default=0, description="Trigger outside RTH, 0 or 1 — an enum int")
+    condition_size: int = Field(default=0, description="Number of conditions on the alert")
+    alert_triggered: bool = Field(default=False, description="Whether it has fired (a real bool here)")
+    order_not_editable: bool = Field(default=False, description="Whether IBKR refuses edits (a real bool here)")
+    order_status: str = Field(default="", description="IBKR's status text for the alert")
+    tif: str = Field(default="", description="Time in force")
+    conditions: list[dict[str, Any]] = Field(
+        default_factory=list, description="The alert's conditions, as IBKR sends them"
+    )
+    alert_mta_currency: str = Field(default="", description="Currency the MTA alert reports in")
+
+    @field_validator("order_id", mode="before")
+    @classmethod
+    def _id_as_text(cls, value: Any) -> Any:
+        """IBKR sends an int; it is interpolated into a URL path, so keep it as text."""
+        return str(value) if isinstance(value, int) else value
+
+
+def bars_to_dataframe(raw: Mapping[str, Any] | IBKRResponse) -> pd.DataFrame:
     """Convert IBKR market history API response to a standard OHLCV DataFrame.
+
+    Takes the `MarketHistory` model `get_market_history` returns, or the plain dict it
+    returned before 2026-09-17 and still returns when the model cannot validate the
+    response. Both are read through `.get`, so neither needs converting first.
 
     Input format (from /iserver/marketdata/history):
       {"startTime": "...", "data": [{"o": float, "h": float, "l": float,

@@ -21,20 +21,20 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `SEC` | 13 | **13** | **—** | — | — |
 | `WEB` | 9 | **9** | — | — | — |
 | `TOOL` | 12 | **11** | **1** | — | — |
-| `API` | 21 | **20** | **0** (+1 partial) | — | — |
+| `API` | 21 | **21** | **—** | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | 6 | 6 | — | — | — |
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
-| `API-R` | **4** | **4** | — | — | — |
+| `API-R` | **5** | **5** | — | — | — |
 | `TOOL-R` | **2** | **2** | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **149** | **97** | **1** (+1 partial) | **0** | **50** |
+| **Total** | **150** | **99** | **1** | **0** | **50** |
 
-`97 + 1 + 1 + 0 + 50 = 149`. **There are no unrecorded findings left.** All three blocks
+`99 + 1 + 0 + 50 = 150`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -80,7 +80,7 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (1, none Critical; +1 partial)
+### Open findings that do have a claim (1, none Critical)
 
 Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
@@ -89,10 +89,10 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `API-11` | *scope* | **Partial** — **14 of 75** public client methods return a Pydantic model (2026-09-17); the other 61 are open |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
-> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15` and `TOOL-07` left on 2026-09-17. This table is the
+> sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15`, `TOOL-07`
+> and `API-11` left on 2026-09-17. This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -108,7 +108,8 @@ is written up below with how its subject was located.
    terminating condition.
 2. Then the 25 readable open findings, in severity order — all Medium and below except
    `TOOL-01`, which is blocked upstream and cannot be closed here.
-3. `API-11`'s remaining 68 methods (owner-approved scope addition).
+3. ~~`API-11`'s remaining 68 methods~~ — **done 2026-09-17.** 29 methods return models and
+   every captured endpoint that does not carries a recorded reason, machine-checked.
 
 ~~Two things need the owner~~ — **both done 2026-09-16.** The gateway was re-authenticated,
 which unblocked Phase 0 gates 0.6 / 0.8 / 0.11 and settled API-R1, TOOL-R1 and API-17; and
@@ -3173,7 +3174,9 @@ missing.
 
 Fixed at the root rather than by editing the table: the per-finding table is now the source of
 truth for *which* findings are open, and `scripts/audit/check_register.py` checks the counts
-against it — totals, the closed/open/partial/written-off identity, and per-domain open counts.
+against it — totals, the closed/open/written-off identity, and per-domain open counts. (It
+carried a hardcoded `+ 1 partial` for `API-11` until that finding closed on 2026-09-17, at
+which point a checker written around a temporary state called a correct document wrong.)
 Written before the table was corrected and run first, where it named all three disagreements.
 
 ### Two mutants survived in the mutation harness itself
@@ -4225,3 +4228,105 @@ This is the third appearance of the same lesson in this audit — *a status code
 a fact* ([[feedback_reflect_before_concluding_defect]]) — after a link checker graded 74 URLs
 "resolving" on status alone and the new docs site answered 200 for pages that do not exist.
 Here it ran the other way: a 404 was read as proof of absence.
+
+---
+
+## Phase 3 — `API-11` closed, and the two defect classes typing a return opens
+
+`API-11` was filed as a Nit: *"zero of 74 methods return a Pydantic model"* while the docs
+said otherwise. It closed on 2026-09-17 with **29 methods returning models**, 15 new models,
+and — the part that actually closes it — a property rather than a count.
+
+**Typing everything was never the goal, and would have been the wrong one.** `CLAUDE.md` says
+to return a model *"when the response has a shape worth naming; otherwise return the decoded
+response and annotate it as such"*. The real defect was that `otherwise` had never been
+*decided* for anything; it was simply what happened. So the closing test is
+`test_every_captured_endpoint_is_typed_or_reasoned`: every endpoint in
+`tests/fixtures/ibkr_live_shapes.json` either returns a model or appears in
+`_NO_MODEL_BY_DESIGN` with the reason it does not, and the guard fails when a capture belongs
+to neither set. 27 typed, 13 reasoned. The oracle is derived — the endpoint→method mapping is
+read out of `capture_live_response_shapes.py`'s own table, the model set out of `models.py`,
+the annotations out of `client.py` — so only the *reasons* are written by hand, which is the
+one part no derivation can supply. Mutation-tested three ways: drop an exclusion, exclude a
+typed endpoint, un-type a method.
+
+The thirteen are not a backlog. Nine are payloads whose information lives in keys a model
+cannot name (`/portfolio/{id}/ledger` keyed by currency, `/iserver/account/pnl/partitioned`
+keyed by `<account>.Core`, `market_snapshot` keyed by IBKR's numeric field codes, and so on),
+two are `_raw` methods that exist to hand back exactly what arrived, and **three have empty
+captures** — where a model could only be tested against a shape we invented, which is how all
+six original models shipped broken ([[feedback_fixture_from_the_wire_not_by_hand]]).
+
+### The wire disagreed with the reading, twice
+
+`MarketHistory` is the reason to test against a capture rather than a docstring. **`high` and
+`low` are not prices** — IBKR documents both as `%h/%v/%t` strings (high price scaled by
+`priceFactor`, volume/100, minutes from chart start; a real response reads
+`"17510/472117.45/0"`), confirmed live against the endpoint's own page on 2026-09-17. Declaring
+them `float` would raise — and because `parse_one` answers a `ValidationError` by handing the
+payload back untouched, **the typing would have looked like it worked while doing nothing at
+all, on every call**. `serverId` and `priceDisplayValue` are the same trap in miniature: they
+look numeric and are text. `MTAAlert` added five more IBKR enum ints to the two `Alert` already
+documents, beside two fields in the same payload that really are bools.
+
+Three endpoints turned out to share a shape rather than need their own model, each measured
+rather than assumed: `/portfolio/subaccounts` is key-for-key identical to `/portfolio/accounts`
+(24 keys), and `/iserver/contract/{conid}/info-and-rules` is `/info` plus a single `rules`
+object. Both identities are held by a test that fails if they diverge, because two models that
+are supposed to match are two models that will stop matching.
+
+### `API-R5` — an empty payload did not round-trip
+
+`IBKRResponse` promises that `dict(model)` returns exactly what IBKR sent. It did not for `{}`.
+`_payload()` fell back to `model_dump()` whenever `_raw` was *falsy*, and a recorded empty
+payload is falsy — so it could not tell "IBKR sent `{}`" from "this model was never given a
+payload". An empty response came back as a full object of default-valued **field** names:
+`dict(response)` answered `account_id` where IBKR's key is `accountId`, `len()` said 9, and
+`if not response:` flipped from True to False at every call site that checks a response for
+emptiness. That is the narrowing the base class exists to prevent, happening in the base
+class. The test is `is not None` now; the `model_dump()` fallback still serves
+`model_construct()`, which skips validators so nothing is ever recorded.
+
+### The two classes typing a return opens — and what shipped broken because of them
+
+This is the finding inside the finding. **An `IBKRResponse` is a mapping but not a `dict`, and
+`json.dumps` does not know it.** Typing a method therefore breaks callers in two ways that no
+test in this repo could see, because every mock in the tool suite hands its handler a dict.
+Both had already shipped:
+
+| Site | Broke | Effect |
+|---|---|---|
+| `_sorted_with_front_month` | `isinstance(r, dict)` | 21 futures rows → **0**; the tool answered "no futures found" |
+| `_listing_currency` | `isinstance(row, dict)` | `None` for every listing, so every price reported **currency unknown** |
+| `_futures_identity` | `isinstance(info, dict)` | the front-month row lost the `_contract` block that exists so the model never guesses |
+| `claude_tools._get_alerts` | bare `json.dumps` | **shipped broken 2026-09-17**, one day before it was found |
+| `mcp_server` `ibkr://accounts` | bare `json.dumps` | **shipped broken 2026-09-17** — the resource answered 200 with an error body |
+
+None of the three helpers had a single test. The two `json.dumps` sites were caught by the
+`except Exception` around them and turned into error *objects*, which is the failure mode the
+code beside them already warns about for positions.
+
+Listing the five and fixing them is a patch; the next tranche arms the sixth. So the fix is
+one rule per class, read out of the source:
+`test_every_json_dumps_in_the_tool_layer_can_serialise_a_model` parses `claude_tools.py` and
+`mcp_server.py` and fails on any `json.dumps` that does not pass `default=json_default` — it
+found **25 call sites**, not five — and `tests/claude_tools/test_typed_returns.py` now drives
+the affected handlers with models built from the capture. `CLAUDE.md`'s *Adding a New IBKR
+Endpoint* carries both as a step, because the trap is armed by the *next* person to type a
+method, not by this diff.
+
+### Two claims that had expired, found on the way
+
+- `get_trading_schedule`'s docstring explained that the fixture's `trading_schedule` is
+  empty. The 2026-09-17 re-capture had dropped the `exchange` argument and recorded the **141
+  rows** the endpoint really returns, so the paragraph described a fixture that no longer
+  existed — one day old. *A claim whose condition expired*, again.
+- The integration suite asserted `isinstance(result, dict)` for **seven** now-typed methods,
+  two of them typed the previous day. It does not run in CI, so nothing noticed. Those
+  assertions now name the model, which makes the live suite fail when a model stops matching
+  the wire — strictly more than they were checking before.
+- Both count guards — `docs/api-reference.md`'s and `client.py`'s — read an English number
+  word against a hand-written map that stopped at `twenty`. At 23 typed methods they would
+  have failed regardless of whether the docs were right. Numerals now, no map. *An oracle
+  that is a hand-kept list stops checking the day the list stops being kept* — the same
+  lesson as API-12's derived model set, in the guard written to enforce it.

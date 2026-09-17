@@ -10,6 +10,11 @@ the counts. The same shape as WEB-03 ("a fix that reached two of three copies") 
 So the per-finding table is the source of truth for WHICH findings are open, and the
 register's counts are checked against it rather than kept in parallel.
 
+The partial was hardcoded. `API-11` was the register's one "partial" finding, and both the
+arithmetic (`closed + open + 1 + ...`) and the open-id list carried it by name. It closed on
+2026-09-17, at which point a checker written around a temporary state started reporting a
+document that was right as inconsistent. There is no partial column and no partial any more.
+
 Run: python scripts/audit/check_register.py [path-to-audit.md]
 Exit code 0 when every representation agrees, 1 otherwise, with each disagreement named.
 """
@@ -86,11 +91,10 @@ def main(argv: list[str]) -> int:
         problems.append(f"register rows sum to {summed} but the Total row states {stated}")
 
     total, closed, open_, no_claim, written_off = stated
-    if closed + open_ + 1 + no_claim + written_off != total:
-        problems.append(f"{closed} + {open_} + 1 partial + {no_claim} + {written_off} != {total}")
+    if closed + open_ + no_claim + written_off != total:
+        problems.append(f"{closed} + {open_} + {no_claim} + {written_off} != {total}")
 
-    # The per-finding table carries the partial (API-11) alongside the open ones.
-    listed = [i for i in ids if i != "API-11"]
+    listed = ids
     if len(listed) != open_:
         problems.append(f"register says {open_} open; the per-finding table lists {len(listed)}: {sorted(listed)}")
 
@@ -112,9 +116,7 @@ def main(argv: list[str]) -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
-    print(
-        f"register consistent: {total} findings, {closed} closed, {open_} open (+1 partial), {written_off} written off"
-    )
+    print(f"register consistent: {total} findings, {closed} closed, {open_} open, {written_off} written off")
     print(f"per-finding table lists {len(listed)} open ids, matching the register")
     return 0
 

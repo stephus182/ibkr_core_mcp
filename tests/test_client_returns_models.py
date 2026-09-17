@@ -152,6 +152,19 @@ def test_get_account_meta_returns_an_account(client, live):
     assert dict(result) == raw
 
 
+def test_get_subaccounts_returns_accounts(client, live):
+    """`/portfolio/subaccounts` rows carry the same 24 keys as `/portfolio/accounts`."""
+    from ibkr_core_mcp.models import Account
+
+    raw = live["subaccounts"]
+    with _respond(client, raw):
+        result = client.get_subaccounts()
+
+    assert [type(a) for a in result] == [Account] * len(raw)
+    assert [dict(a) for a in result] == raw
+    assert result[0].account_id == raw[0]["accountId"]
+
+
 def test_get_auth_status_returns_a_status(client, live):
     from ibkr_core_mcp.models import AuthStatus
 
@@ -275,3 +288,331 @@ def test_every_method_annotated_as_returning_a_model_is_driven_here():
         f"these methods say they return a model but no test here proves they do: {missing}. "
         "An annotation is a label; only driving the method checks the value."
     )
+
+
+# ---------------------------------------------------------------------------
+# API-11, third tranche (2026-09-17) — the contract family
+# ---------------------------------------------------------------------------
+
+
+def _respond_post(client, payload):
+    """Patch the session so every POST returns `payload`."""
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = payload
+    return patch.object(client._session, "post", return_value=response)
+
+
+def test_get_secdef_info_returns_secdef_info(client, live):
+    from ibkr_core_mcp.models import SecDefInfo
+
+    raw = live["secdef_info"]
+    with _respond(client, raw):
+        result = client.get_secdef_info(265598)
+
+    assert type(result) is SecDefInfo
+    assert dict(result) == raw
+    assert result.conid == raw["conid"]
+
+
+def test_get_contract_info_returns_contract_details(client, live):
+    from ibkr_core_mcp.models import ContractDetails
+
+    raw = live["contract_info"]
+    with _respond(client, raw):
+        result = client.get_contract_info(265598)
+
+    assert type(result) is ContractDetails
+    assert dict(result) == raw
+    assert result.conid == raw["con_id"], "IBKR spells it con_id on this endpoint"
+
+
+def test_get_contract_info_and_rules_returns_contract_details(client, live):
+    from ibkr_core_mcp.models import ContractDetails
+
+    raw = live["contract_info_and_rules"]
+    with _respond(client, raw):
+        result = client.get_contract_info_and_rules(265598)
+
+    assert type(result) is ContractDetails
+    assert dict(result) == raw
+    assert result.rules, "the rules block must reach the caller"
+
+
+def test_get_contract_rules_returns_contract_rules(client, live):
+    from ibkr_core_mcp.models import ContractRules
+
+    raw = live["contract_rules"]
+    with _respond_post(client, raw):
+        result = client.get_contract_rules(265598)
+
+    assert type(result) is ContractRules
+    assert dict(result) == raw
+    assert result.order_types == raw["orderTypes"]
+
+
+def test_get_futures_returns_future_contracts(client, live):
+    from ibkr_core_mcp.models import FutureContract
+
+    raw = live["futures"]
+    with _respond(client, {"ES": raw}):
+        result = client.get_futures(["ES"])
+
+    assert [type(f) for f in result] == [FutureContract] * len(raw)
+    assert [dict(f) for f in result] == raw
+    assert result[0].expiration_date == raw[0]["expirationDate"]
+
+
+def test_get_stocks_returns_stock_search_results(client, live):
+    from ibkr_core_mcp.models import StockSearchResult
+
+    raw = live["stocks"]
+    with _respond(client, {"AAPL": raw}):
+        result = client.get_stocks(["AAPL"])
+
+    assert [type(s) for s in result] == [StockSearchResult] * len(raw)
+    assert [dict(s) for s in result] == raw
+    assert result[0].contracts == raw[0]["contracts"]
+
+
+def test_get_contract_algos_returns_algos(client, live):
+    from ibkr_core_mcp.models import Algo
+
+    raw = live["contract_algos"]
+    with _respond(client, {"algos": raw}):
+        result = client.get_contract_algos(265598)
+
+    assert [type(a) for a in result] == [Algo] * len(raw)
+    assert [dict(a) for a in result] == raw
+
+
+def test_get_trading_schedule_returns_schedules(client, live):
+    from ibkr_core_mcp.models import TradingSchedule
+
+    raw = live["trading_schedule"]
+    assert raw, "the fixture's schedule is empty — this test would assert nothing"
+    with _respond(client, raw):
+        result = client.get_trading_schedule("STK", "AAPL")
+
+    assert [type(s) for s in result] == [TradingSchedule] * len(raw)
+    assert [dict(s) for s in result] == raw
+    assert result[0].id == raw[0]["id"]
+
+
+def test_get_trading_schedule_answers_a_list_when_ibkr_sends_an_object(client):
+    """The annotation says `list`; the method returned whatever arrived until 2026-09-17."""
+    with _respond(client, {"error": "Bad Request"}):
+        assert client.get_trading_schedule("STK", "AAPL") == []
+
+
+# ---------------------------------------------------------------------------
+# API-11, fourth tranche (2026-09-17) — market data
+# ---------------------------------------------------------------------------
+
+
+def test_get_market_history_returns_market_history(client, live):
+    from ibkr_core_mcp.models import MarketHistory
+
+    raw = live["market_history"]
+    with _respond(client, raw):
+        result = client.get_market_history(265598, period="1d", bar="1h")
+
+    assert type(result) is MarketHistory
+    assert dict(result) == raw
+    assert result.data == raw["data"]
+    assert result.high == raw["high"], "the %h/%v/%t composite must arrive unchanged"
+
+
+def test_get_market_history_paginated_returns_market_history(client, live):
+    from ibkr_core_mcp.models import MarketHistory
+
+    raw = live["market_history"]
+    with _respond(client, raw):
+        result = client.get_market_history_paginated(265598, period="1d", bar="1h")
+
+    assert type(result) is MarketHistory
+    assert result.data, "the merged bars must reach the caller"
+
+
+def test_get_market_history_paginated_still_answers_an_empty_dict_for_no_bars(client, live):
+    """`{}` means "no bars" and must stay falsy — a caller's `if not history:` depends on it.
+
+    Left as a plain dict rather than an empty model on purpose: `MarketHistory()` would be
+    a valid, truthy object claiming a symbol of `""` and zero points, which reads like an
+    answer. See API-R5 for the same distinction inside `IBKRResponse`.
+    """
+    with _respond(client, {"data": []}):
+        result = client.get_market_history_paginated(265598, period="5y", bar="1d")
+
+    assert result == {}
+    assert not result
+
+
+def test_get_option_chain_returns_an_option_chain(client, live):
+    from ibkr_core_mcp.models import OptionChain
+
+    search = [{"conid": 265598, "sections": [{"secType": "OPT", "months": "JAN26;FEB26"}]}]
+    strikes = {"call": [100.0, 105.0], "put": [100.0, 105.0]}
+    response = MagicMock()
+    response.status_code = 200
+    response.json.side_effect = [search, strikes]
+    with patch.object(client._session, "get", return_value=response):
+        result = client.get_option_chain("aapl")
+
+    assert type(result) is OptionChain
+    assert result.symbol == "AAPL"
+    assert result.conid == 265598
+    assert result.month == "JAN26"
+    assert result.months == ["JAN26", "FEB26"]
+    assert result.call == strikes["call"]
+    assert dict(result)["put"] == strikes["put"]
+
+
+# ---------------------------------------------------------------------------
+# API-11, fifth tranche (2026-09-17) — session, watchlist detail, MTA alert
+# ---------------------------------------------------------------------------
+
+
+def test_get_brokerage_accounts_returns_a_session(client, live):
+    from ibkr_core_mcp.models import BrokerageSession
+
+    raw = live["brokerage_accounts"]
+    with _respond(client, raw):
+        result = client.get_brokerage_accounts()
+
+    assert type(result) is BrokerageSession
+    assert dict(result) == raw
+    assert result.selected_account == raw["selectedAccount"]
+    assert result.is_paper is raw["isPaper"]
+
+
+def test_get_watchlist_returns_a_watchlist_detail(client, live):
+    from ibkr_core_mcp.models import WatchlistDetail
+
+    raw = live["watchlist"]
+    with _respond(client, raw):
+        result = client.get_watchlist("1111.11")
+
+    assert type(result) is WatchlistDetail
+    assert dict(result) == raw
+    assert result.instruments == raw["instruments"]
+
+
+def test_get_mta_alert_returns_an_mta_alert(client, live):
+    from ibkr_core_mcp.models import MTAAlert
+
+    raw = live["mta_alert"]
+    with _respond(client, raw):
+        result = client.get_mta_alert()
+
+    assert type(result) is MTAAlert
+    assert dict(result) == raw
+    assert result.order_id == str(raw["order_id"])
+
+
+# ---------------------------------------------------------------------------
+# API-11's closing property
+# ---------------------------------------------------------------------------
+
+# Why a captured endpoint may return no model. Every entry is a DECISION with a reason,
+# not a to-do: the guard below fails when a captured endpoint appears in neither set, so a
+# new capture forces the decision to be made rather than skipped. The oracle itself —
+# which endpoints exist, which method each was captured from, which methods return models
+# — is derived from the capture script, `client.py` and `models.py`. This list is only the
+# answer to "and why not this one", which is the part no derivation can supply.
+_NO_MODEL_BY_DESIGN = {
+    "account_allocation": "three blocks keyed by asset class, group and sector — their own keys are the data",
+    "account_ledger": "keyed by currency; the currencies are the data",
+    "delivery_options": "keyed by delivery channel",
+    "pnl": "one key, `upnl`, keyed by `<account>.Core`",
+    "pa_performance": "cps/nav/tpps are nested open blocks, and the scalars beside them are IBKR internals",
+    "scanner_params": "an open catalogue of scanner definitions, not a record",
+    "market_snapshot": "fields are IBKR numeric codes (31, 84, 86), so the keys vary per request",
+    "orders_raw": "a `_raw` method exists to hand back exactly what arrived",
+    "pa_periods_raw": "a `_raw` method exists to hand back exactly what arrived",
+    "pa_periods": "returns list[str] — there is no object to model",
+    "combo_positions": "the capture is empty; a model could only be tested against a shape we invented",
+    "pa_transactions": "the capture is empty; a model could only be tested against a shape we invented",
+    "positions_by_conid": "the capture is empty; a model could only be tested against a shape we invented",
+}
+
+
+def _capture_endpoint_methods():
+    """fixture key -> client method, read from the capture script's own endpoint table."""
+    import ast
+
+    tree = ast.parse((Path(__file__).parents[1] / "scripts" / "audit" / "capture_live_response_shapes.py").read_text())
+    mapping = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str) and isinstance(value, ast.Lambda)):
+                continue
+            for call in ast.walk(value):
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == "client"
+                ):
+                    mapping[key.value] = call.func.attr
+                    break
+    return mapping
+
+
+def test_every_captured_endpoint_is_typed_or_reasoned(live):
+    """API-11's closing property: no captured endpoint is untyped by accident.
+
+    The finding was "zero of 74 methods return a Pydantic model" while the docs claimed
+    otherwise. Typing every method was never the goal — `CLAUDE.md` says to return a model
+    "when the response has a shape worth naming; otherwise return the decoded response and
+    annotate it as such". The defect was that "otherwise" had never been decided for
+    anything; it was just what happened.
+
+    So this asserts the decision exists, endpoint by endpoint, against the endpoints we can
+    actually check: the ones in the live capture. A method with no captured response cannot
+    be typed honestly at all — a model tested against a dict we wrote proves only that the
+    model agrees with itself, which is how all six original models shipped broken.
+
+    Both directions, so a stale exclusion cannot outlive its reason either.
+    """
+    import ast
+    import re
+
+    models = {
+        node.name
+        for node in ast.walk(ast.parse((Path(__file__).parents[1] / "ibkr_core_mcp" / "models.py").read_text()))
+        if isinstance(node, ast.ClassDef)
+        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
+    }
+    assert len(models) >= 20, f"only {len(models)} models found — the derivation is broken"
+
+    returns = {
+        node.name: ast.unparse(node.returns)
+        for node in ast.walk(ast.parse((Path(__file__).parents[1] / "ibkr_core_mcp" / "client.py").read_text()))
+        if isinstance(node, ast.FunctionDef) and node.returns is not None
+    }
+    captured = _capture_endpoint_methods()
+    assert len(captured) >= 40, f"only {len(captured)} endpoints read from the capture script"
+
+    undecided, stale = [], []
+    for key in sorted(live):
+        method = captured.get(key)
+        assert method, f"fixture holds {key!r} but the capture script no longer records how it was captured"
+        typed = any(re.search(rf"\b{m}\b", returns.get(method, "")) for m in models)
+        if typed and key in _NO_MODEL_BY_DESIGN:
+            stale.append(f"{key} ({method}) returns a model now — drop its exclusion")
+        elif not typed and key not in _NO_MODEL_BY_DESIGN:
+            undecided.append(f"{key} ({method}) -> {returns.get(method)}")
+
+    for key in _NO_MODEL_BY_DESIGN:
+        if key not in live:
+            stale.append(f"{key} is excluded but is no longer in the fixture")
+
+    assert not undecided, (
+        "these captured endpoints return no model and no reason is recorded. Either return "
+        "a model from models.py, tested against the capture, or add the endpoint to "
+        f"_NO_MODEL_BY_DESIGN with why: {undecided}"
+    )
+    assert not stale, f"_NO_MODEL_BY_DESIGN is out of date: {stale}"

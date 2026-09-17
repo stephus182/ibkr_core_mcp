@@ -406,27 +406,16 @@ def test_the_api_reference_marks_exactly_the_methods_that_return_models():
 
 
 def test_the_api_reference_states_the_real_number_of_typed_methods():
-    """The count in the header, checked against the code rather than remembered."""
+    """The count in the header, checked against the code rather than remembered.
+
+    This read the count as an English number word against a hand-written map from `six` to
+    `twenty`. The map ran out at twenty-three on 2026-09-17 — a guard that stops working
+    once its subject grows past a list someone typed is the same defect this suite keeps
+    finding elsewhere, so the count is a numeral now and the map is gone.
+    """
     doc = (_REPO / "docs" / "api-reference.md").read_text()
-    words = {
-        "six": 6,
-        "seven": 7,
-        "eight": 8,
-        "nine": 9,
-        "ten": 10,
-        "eleven": 11,
-        "twelve": 12,
-        "thirteen": 13,
-        "fourteen": 14,
-        "fifteen": 15,
-        "sixteen": 16,
-        "seventeen": 17,
-        "eighteen": 18,
-        "nineteen": 19,
-        "twenty": 20,
-    }
-    stated = re.findall(r"\*\*(\w+) return a Pydantic model\*\*", doc)
+    stated = re.findall(r"\*\*(\d+) return a Pydantic model\*\*", doc)
     assert len(stated) == 1, f"the header states the typed-method count {len(stated)} times, expected once"
-    assert words[stated[0].lower()] == len(_methods_returning_models()), (
+    assert int(stated[0]) == len(_methods_returning_models()), (
         f"the header says {stated[0]}; {len(_methods_returning_models())} methods return models"
     )

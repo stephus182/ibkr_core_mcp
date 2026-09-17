@@ -2181,7 +2181,9 @@ def test_get_contract_algos_reads_the_algos_array_out_of_its_wrapper(client):
     """
     payload = {"algos": [{"id": "Adaptive", "name": "Adaptive"}, {"id": "TWAP", "name": "TWAP"}]}
     with patch.object(client, "_get", return_value=payload):
-        assert client.get_contract_algos(51529211) == payload["algos"]
+        # `Algo` rows since 2026-09-17; compare the payload they carry, because
+        # `IBKRResponse.__eq__` is pydantic's, not a dict's.
+        assert [dict(a) for a in client.get_contract_algos(51529211)] == payload["algos"]
 
 
 def test_get_positions_by_conid_flattens_the_account_keyed_wrapper(client):
@@ -2834,29 +2836,14 @@ def test_the_module_docstring_names_every_method_that_returns_a_model():
         f"the module docstring names {sorted(named)}; the code returns models from {sorted(returning)}"
     )
 
-    spelled = re.search(r"\*\*Return types\.\*\*\s+(\w+) endpoints return models", module_doc)
-    assert spelled, "the docstring no longer states how many endpoints return models"
-    words = {
-        "Four": 4,
-        "Five": 5,
-        "Six": 6,
-        "Seven": 7,
-        "Eight": 8,
-        "Nine": 9,
-        "Ten": 10,
-        "Eleven": 11,
-        "Twelve": 12,
-        "Thirteen": 13,
-        "Fourteen": 14,
-        "Fifteen": 15,
-        "Sixteen": 16,
-        "Seventeen": 17,
-        "Eighteen": 18,
-        "Nineteen": 19,
-        "Twenty": 20,
-    }
-    assert words.get(spelled.group(1).capitalize()) == len(returning), (
-        f"the docstring says {spelled.group(1)} endpoints; {len(returning)} return models"
+    # The count was an English number word against a hand-written map from `Four` to
+    # `Twenty`, and the map ran out at 23 on 2026-09-17 — the guard would then have failed
+    # for every future tranche regardless of whether the docstring was right. A numeral
+    # needs no map, and a map nobody maintains is the defect this file keeps finding.
+    stated = re.search(r"\*\*Return types\.\*\*\s+(\d+) endpoints return models", module_doc)
+    assert stated, "the docstring no longer states how many endpoints return models"
+    assert int(stated.group(1)) == len(returning), (
+        f"the docstring says {stated.group(1)} endpoints; {len(returning)} return models"
     )
 
 

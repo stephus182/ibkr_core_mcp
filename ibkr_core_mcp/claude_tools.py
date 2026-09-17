@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
@@ -40,7 +40,7 @@ from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
-from ibkr_core_mcp.models import Account, Trade, json_default
+from ibkr_core_mcp.models import Account, IBKRResponse, Trade, json_default
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.redaction import collapse_home, redact_error
 from ibkr_core_mcp.store import SQLiteStore
@@ -1413,12 +1413,19 @@ def _expiration_key(row: dict[str, Any]) -> int:
         return 0
 
 
-def _sorted_with_front_month(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> list[dict[str, Any]]:
     """`/trsrv/futures` rows sorted by root symbol then expiry, the earliest dated row of
     each root flagged `front_month: true` — the rule `_resolve_snapshot_conid` applies,
-    stated in the result. Rows without a parseable date sort first and are never flagged."""
+    stated in the result. Rows without a parseable date sort first and are never flagged.
+
+    **A typed row is not a `dict`.** This filtered on `isinstance(r, dict)` alone, so when
+    `get_futures` began returning `FutureContract` rows on 2026-09-17 all 21 were dropped
+    and the tool answered with an empty list — with the unit suite green, because its
+    mocks return dicts. `IBKRResponse` is a mapping, not a dict, and every filter that
+    decides whether a client row is usable has to say so.
+    """
     ordered = sorted(
-        (dict(r) for r in rows if isinstance(r, dict)),
+        (dict(r) for r in rows if isinstance(r, dict | IBKRResponse)),
         key=lambda r: (str(r.get("symbol") or ""), _expiration_key(r)),
     )
     flagged: set[str] = set()
@@ -2285,13 +2292,13 @@ class ClaudeToolkit:
             return (
                 f"Unexpected response shape — not a list.\n"
                 f"Response type: {type(raw).__name__}\n"
-                f"Raw response:\n{json.dumps(raw, indent=2)}"
+                f"Raw response:\n{json.dumps(raw, indent=2, default=json_default)}"
             ), None
         if not orders:
             return (
                 "Orders list is genuinely empty in the raw IBKR response.\n"
                 "No orders exist at the server level — not a filtering issue.\n"
-                f"Full raw response:\n{json.dumps(raw, indent=2)}"
+                f"Full raw response:\n{json.dumps(raw, indent=2, default=json_default)}"
             ), None
         # Show every order with all fields + note which would be filtered
         terminal = {"Filled", "Cancelled", "ApiCancelled", "Expired"}
@@ -2381,7 +2388,7 @@ class ClaudeToolkit:
             if dividends:
                 lines.append(f"  Dividends             : {_money_signed(dividends)}")
 
-        return "\n".join(lines) if lines else json.dumps(ledger, indent=2), None
+        return "\n".join(lines) if lines else json.dumps(ledger, indent=2, default=json_default), None
 
     def _get_allocation(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return portfolio allocation breakdown by asset class, sector, and industry."""
@@ -2389,7 +2396,7 @@ class ClaudeToolkit:
         if err:
             return err, None
         allocation = self._client.get_account_allocation(account_id)
-        return json.dumps(allocation, indent=2), None
+        return json.dumps(allocation, indent=2, default=json_default), None
 
     def _get_pa_periods(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return valid period strings for Portfolio Analyst queries from IBKR's /pa/allperiods endpoint.
@@ -2417,7 +2424,7 @@ class ClaudeToolkit:
         return (
             f"get_pa_periods returned no periods. "
             f"Raw IBKR response (use this to identify the correct response key):\n"
-            f"{json.dumps(raw, indent=2)}"
+            f"{json.dumps(raw, indent=2, default=json_default)}"
         ), None
 
     def _get_pa_performance(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -2426,7 +2433,7 @@ class ClaudeToolkit:
         if err:
             return err, None
         perf = self._client.get_pa_performance(account_ids, inputs["period"])
-        return json.dumps(perf, indent=2), None
+        return json.dumps(perf, indent=2, default=json_default), None
 
     def _get_pa_transactions(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Transaction history from IBKR Portfolio Analyst — all origins, not session-scoped.
@@ -2498,7 +2505,7 @@ class ClaudeToolkit:
             return resolved.error, None
         conid = resolved.conid
         info = self._client.get_contract_info_and_rules(conid)
-        return json.dumps(info, indent=2), None
+        return json.dumps(info, indent=2, default=json_default), None
 
     def _get_option_chain(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return the option chain via the documented secdef/search → strikes flow.
@@ -2511,7 +2518,7 @@ class ClaudeToolkit:
         month = inputs.get("month")
         exchange = inputs.get("exchange", "SMART")
         chain = self._client.get_option_chain(symbol, month=month, exchange=exchange)
-        return json.dumps(chain, indent=2), None
+        return json.dumps(chain, indent=2, default=json_default), None
 
     def _run_scanner(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Run an IBKR market scanner for any instrument type (STK, FUT, ETF, etc.)."""
@@ -2981,6 +2988,7 @@ class ClaudeToolkit:
                         "exchange": exchange or "US listing (default)",
                     },
                     indent=2,
+                    default=json_default,
                 ),
                 None,
             )
@@ -3017,7 +3025,7 @@ class ClaudeToolkit:
                 identity = self._futures_identity(row["conid"])
                 if identity is not None:
                     row["_contract"] = identity
-        return json.dumps(rows, indent=2), None
+        return json.dumps(rows, indent=2, default=json_default), None
 
     def _listing_currency(self, conid: int) -> str | None:
         """Return the currency a listing trades in, or None if it could not be read.
@@ -3041,7 +3049,10 @@ class ClaudeToolkit:
         except IBKRCoreError:
             return None
         row = info[0] if isinstance(info, list) and info else info
-        if isinstance(row, dict) and row.get("currency"):
+        # `dict | IBKRResponse`: a typed `SecDefInfo` is a mapping, not a dict, and testing
+        # for `dict` alone answered None for every listing once this endpoint was typed —
+        # which makes the toolkit report "currency unknown" for prices it could read.
+        if isinstance(row, dict | IBKRResponse) and row.get("currency"):
             return str(row["currency"])
         return None
 
@@ -3061,7 +3072,8 @@ class ClaudeToolkit:
             info: Any = self._client.get_contract_info(conid)
         except IBKRCoreError:
             return None
-        if not isinstance(info, dict):
+        # A typed `ContractDetails` is a mapping, not a dict — see `_sorted_with_front_month`.
+        if not isinstance(info, dict | IBKRResponse):
             return None
         local_symbol = str(info.get("local_symbol") or "").strip()
         if not local_symbol:
@@ -3437,7 +3449,7 @@ class ClaudeToolkit:
                 }
             )
 
-        result = json.dumps(enriched, indent=2)
+        result = json.dumps(enriched, indent=2, default=json_default)
         notes = []
         # Ambiguity first: it is a question for the user, not a diagnostic, and it must
         # not be buried under the symbols that did resolve.
@@ -3472,7 +3484,7 @@ class ClaudeToolkit:
         # only required input, so the minimal call answered `[]` for every equity (TOOL-R1).
         exchange = inputs.get("exchange", "")
         schedule = self._client.get_trading_schedule(asset_class, symbol, exchange)
-        return json.dumps(schedule, indent=2), None
+        return json.dumps(schedule, indent=2, default=json_default), None
 
     def _get_alerts(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """List all price alerts configured on the IBKR server for this account."""
@@ -3482,7 +3494,7 @@ class ClaudeToolkit:
         alerts = self._client.get_alerts(account_id)
         if not alerts:
             return "No price alerts configured.", None
-        return json.dumps(alerts, indent=2), None
+        return json.dumps(alerts, indent=2, default=json_default), None
 
     def _create_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Create an IBKR server-side price alert that fires via the mobile app
@@ -3570,7 +3582,7 @@ class ClaudeToolkit:
             if honest:
                 return honest, None
             raise
-        return json.dumps(result, indent=2), None
+        return json.dumps(result, indent=2, default=json_default), None
 
     def _modify_price_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Update price, operator, name, or TIF on an existing alert (patch — unset fields unchanged).
@@ -3638,7 +3650,7 @@ class ClaudeToolkit:
             if honest:
                 return honest, None
             raise
-        return json.dumps(result, indent=2), None
+        return json.dumps(result, indent=2, default=json_default), None
 
     def _delete_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Permanently delete an IBKR price alert by ID for the primary account.
@@ -3650,7 +3662,7 @@ class ClaudeToolkit:
         if err:
             return err, None
         result = self._client.delete_alert(account_id, inputs["alert_id"])
-        return json.dumps(result, indent=2), None
+        return json.dumps(result, indent=2, default=json_default), None
 
     def _activate_alert(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Enable or disable an existing IBKR price alert without deleting it.
@@ -3663,7 +3675,7 @@ class ClaudeToolkit:
             return err, None
         activate = inputs.get("activate", True)
         result = self._client.activate_alert(account_id, inputs["alert_id"], activate)
-        return json.dumps(result, indent=2), None
+        return json.dumps(result, indent=2, default=json_default), None
 
     def _get_watchlists(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return all watchlists and their constituent symbols from the IBKR account.
@@ -3722,14 +3734,17 @@ class ClaudeToolkit:
         # Raw response last so the structure stays transparent and ambiguous field
         # names can be checked against it rather than guessed from the summary.
         lines.append("\nRaw IBKR response:")
-        lines.append(json.dumps(detailed, indent=2, default=str))
+        # `json_default`, not `str`: this block is labelled "Raw IBKR response", and
+        # `default=str` would render anything it did not understand as a Python repr
+        # inside it — a fabricated raw response is worse than an error.
+        lines.append(json.dumps(detailed, indent=2, default=json_default))
         return "\n".join(lines), None
 
     def _get_order_status(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return current status and fill details for a specific order ID."""
         order_id = inputs["order_id"]
         status = self._client.get_order_status(order_id)
-        return json.dumps(status, indent=2), None
+        return json.dumps(status, indent=2, default=json_default), None
 
     def _delete_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Delete one dataset from the Drive market-data cache, keyed by symbol/timeframe/period/end.

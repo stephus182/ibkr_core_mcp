@@ -1,7 +1,7 @@
 # IBKRClient — API Reference
 
 Full reference for the public `IBKRClient` methods. Most return raw dicts/lists from the IBKR
-Client Portal API; **fourteen return a Pydantic model** from `models.py`, and each of those is
+Client Portal API; **29 return a Pydantic model** from `models.py`, and each of those is
 marked in its signature below. A model derives from `IBKRResponse`, which keeps IBKR's payload
 as sent and serves it through the mapping protocol — so `row["accountId"]` and `dict(row)` work
 exactly as before, and a record that fails validation is passed through as the dict it arrived
@@ -82,7 +82,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/val
 
 ## Market Data
 
-### `get_market_history(conid, period, bar, outside_rth) -> dict`
+### `get_market_history(conid, period, bar, outside_rth) -> MarketHistory | dict`
 Single-page OHLCV bars. **Maximum 1000 data points per request; max 5 concurrent requests**
 (both officially documented — exceeding either returns HTTP 429). For requests that may exceed
 the point limit, use `get_market_history_paginated()`.
@@ -122,7 +122,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data
 
 ---
 
-### `get_market_history_paginated(conid, period, bar, outside_rth) -> dict`
+### `get_market_history_paginated(conid, period, bar, outside_rth) -> MarketHistory | dict`
 **This is the endpoint `ClaudeToolkit.fetch_market_data` uses.**
 
 Same parameters and return shape as `get_market_history()`, but automatically paginates
@@ -233,22 +233,22 @@ https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
 
 ---
 
-### `get_contract_info(conid) -> dict`
+### `get_contract_info(conid) -> ContractDetails | dict`
 Full contract metadata: exchange, currency, primary exchange, trading class, multiplier, etc.
 **Endpoint:** `GET /iserver/contract/{conid}/info`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id
 
-### `get_contract_info_and_rules(conid) -> dict`
+### `get_contract_info_and_rules(conid) -> ContractDetails | dict`
 Contract info plus trading rules (min tick, order types, etc.).
 **Endpoint:** `GET /iserver/contract/{conid}/info-and-rules`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/find-all-info-and-rules-for-a-given-contract
 
-### `get_contract_algos(conid) -> list[dict]`
+### `get_contract_algos(conid) -> list[Algo | dict]`
 Available algorithmic order types for a contract. Returns `[]` if none.
 **Endpoint:** `GET /iserver/contract/{conid}/algos`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id
 
-### `get_secdef_info(conid) -> dict`
+### `get_secdef_info(conid) -> SecDefInfo | dict`
 Security definition info (type, symbol, currency, exchange, listing exchange).
 **Endpoint:** `GET /iserver/secdef/info`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid
@@ -307,7 +307,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 
 ---
 
-### `get_option_chain(symbol, month, exchange) -> dict`
+### `get_option_chain(symbol, month, exchange) -> OptionChain | dict`
 Option chain for an underlying, via the documented two-step discovery flow.
 
 | Parameter | Type | Default | Description |
@@ -343,7 +343,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 
 ---
 
-### `get_futures(symbols) -> list[dict]`
+### `get_futures(symbols) -> list[FutureContract | dict]`
 Futures contracts for root symbols.
 
 **Note:** IBKR returns `{"CL": [...], "ES": [...]}` — this method flattens to a list.
@@ -354,7 +354,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 
 ---
 
-### `get_stocks(symbols) -> list[dict]`
+### `get_stocks(symbols) -> list[StockSearchResult | dict]`
 Stock contracts for symbols. Same dict-flattening behaviour as `get_futures()`.
 Each record is one issuer — `{name, assetClass, contracts: [{conid, exchange, isUS}]}` —
 and `isUS` is the **only** US-listing signal any contract endpoint returns. This is the
@@ -366,7 +366,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 
 ---
 
-### `get_trading_schedule(asset_class, symbol="", exchange="", exchange_filter="", conid="") -> list[dict]`
+### `get_trading_schedule(asset_class, symbol="", exchange="", exchange_filter="", conid="") -> list[TradingSchedule | dict]`
 Trading hours, sessions and timezone for a contract. Returns a list of schedule objects
 (verified live 2026-06-30 — `list`, not `dict`; re-verified 2026-09-16).
 
@@ -409,7 +409,7 @@ valid `secType` (only `STK`, `IND`, `BOND`) — this is the only documented FX r
 **Endpoint:** `GET /iserver/currency/pairs`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
 
-### `get_contract_rules(conid, is_buy) -> dict`
+### `get_contract_rules(conid, is_buy) -> ContractRules | dict`
 Order rules for a contract (min tick, valid order types, size constraints).
 **Endpoint:** `POST /iserver/contract/rules`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules
@@ -424,7 +424,7 @@ All accounts associated with the authenticated session. Returns `[]` if response
 **Endpoint:** `GET /portfolio/accounts`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts
 
-### `get_subaccounts() -> list[dict]`
+### `get_subaccounts() -> list[Account | dict]`
 Sub-accounts (for IB Family accounts / advisors). Returns `[]` if response is not a list.
 **Endpoint:** `GET /portfolio/subaccounts`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-subaccounts
@@ -680,7 +680,7 @@ Notification delivery channel configuration.
 **Endpoint:** `GET /fyi/deliveryoptions`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-delivery-options
 
-### `get_mta_alert() -> dict`
+### `get_mta_alert() -> MTAAlert | dict`
 Mobile Trading Alerts — account-level watchdog alerts.
 **Endpoint:** `GET /iserver/account/mta`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-mta-alert
@@ -764,7 +764,7 @@ All watchlists for the account. Returns `[]` if response is not a list.
 **Endpoint:** `GET /iserver/watchlists` — query param `SC=USER_WATCHLIST`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists
 
-### `get_watchlist(watchlist_id) -> dict`
+### `get_watchlist(watchlist_id) -> WatchlistDetail | dict`
 Contents of a specific watchlist. `watchlist_id` is passed as query param `id`.
 **Endpoint:** `GET /iserver/watchlist`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information
@@ -976,7 +976,7 @@ Real-time partitioned P&L — daily, unrealized, realized — across all positio
 **Endpoint:** `GET /iserver/account/pnl/partitioned`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss
 
-### `get_brokerage_accounts() -> dict`
+### `get_brokerage_accounts() -> BrokerageSession | dict`
 List of accounts the user has trading access to, their aliases, the currently selected
 account, and per-account capability flags (`supportsCashQty`, `supportsFractions`,
 `allowCustomerTime`, etc). **Officially documented as required before modifying an order

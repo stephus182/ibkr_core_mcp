@@ -160,10 +160,10 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
         # successful resource response whose body said "you have no positions" — and
         # only type(exc).__name__ was logged, so even the reason was thrown away. The
         # mimeType contract is preserved; the model can read this and say what broke.
-        text = json.dumps({"error": "resource handler did not run", "resource": path})
+        text = json.dumps({"error": "resource handler did not run", "resource": path}, default=json_default)
         try:
             if path == "ibkr://accounts":
-                text = json.dumps(toolkit._client.get_accounts(), indent=2)
+                text = json.dumps(toolkit._client.get_accounts(), indent=2, default=json_default)
             elif path == "ibkr://positions/current":
                 # `_first_account_id`, not an inlined `get_accounts()[0]["accountId"]`.
                 # IBKR varies that key by endpoint — the helper applies the documented
@@ -188,20 +188,21 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                         {
                             "error": account_err or "no account could be resolved, so positions were never read",
                             "resource": path,
-                        }
+                        },
+                        default=json_default,
                     )
             elif path == "ibkr://trades/recent":
-                text = json.dumps(store.get_trades()[:100], indent=2)
+                text = json.dumps(store.get_trades()[:100], indent=2, default=json_default)
             elif path == "ibkr://pnl/live":
                 # Only populated if the server was started with --stream; otherwise
                 # pnl_snapshots stays empty and this always returns {}.
                 latest = store.get_latest_pnl()
-                text = json.dumps(latest if latest is not None else {}, indent=2)
+                text = json.dumps(latest if latest is not None else {}, indent=2, default=json_default)
             else:
-                text = json.dumps({"error": f"unknown resource: {path}", "resource": path})
+                text = json.dumps({"error": f"unknown resource: {path}", "resource": path}, default=json_default)
         except Exception as exc:
             logger.warning("read_resource %s failed: %s", path, redact_error(exc))
-            text = json.dumps({"error": redact_error(exc), "resource": path}, indent=2)
+            text = json.dumps({"error": redact_error(exc), "resource": path}, indent=2, default=json_default)
         return [ReadResourceContents(content=text, mime_type="application/json")]
 
     return server

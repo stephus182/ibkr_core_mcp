@@ -164,3 +164,37 @@ def test_account_summary_parses_scalar_amounts():
     assert s.net_liquidation == 100000.0
     assert s.total_cash == 50000.0
     assert s.unrealized_pnl == 1500.0
+
+
+def test_an_empty_response_round_trips_as_empty():
+    """API-R5: `dict(model)` is documented to round-trip the payload, and did not for `{}`.
+
+    `_payload()` fell back to `model_dump()` whenever `_raw` was falsy, and a recorded empty
+    payload is falsy — so it could not tell "IBKR sent `{}`" from "this model was never
+    given a payload". An empty response came back as nine default-valued FIELD names:
+    `dict(response)` answered `account_id` where IBKR's own key is `accountId`, `len()` said
+    9, and `if not response:` flipped from True to False at every call site that checks a
+    response for emptiness. That is the narrowing this base class exists to prevent,
+    happening in the base class itself.
+    """
+    from ibkr_core_mcp.models import Account, parse_one
+
+    empty = parse_one(Account, {})
+
+    assert type(empty) is Account, "an empty object is still valid input, not a parse failure"
+    assert dict(empty) == {}, "the mapping protocol must round-trip an empty payload"
+    assert len(empty) == 0
+    assert not empty, "a caller testing a response for emptiness must still see it as empty"
+    assert empty.account_id == "", "the typed view still answers with its defaults"
+
+
+def test_a_model_with_no_payload_still_serves_its_fields():
+    """The `model_dump()` fallback exists for a model built without a payload at all, which
+    is `model_construct()` — validators never run, so nothing is recorded. Fixing the empty
+    case above must not take this with it."""
+    from ibkr_core_mcp.models import Account
+
+    built = Account.model_construct()
+
+    assert dict(built) == built.model_dump()
+    assert len(built) == len(Account.model_fields)

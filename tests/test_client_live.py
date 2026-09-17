@@ -34,7 +34,22 @@ import os
 
 import pytest
 
-from ibkr_core_mcp.models import AccountSummary
+from ibkr_core_mcp.models import (
+    Account,
+    AccountSummary,
+    AuthStatus,
+    ContractDetails,
+    ContractRules,
+    MarketHistory,
+    SecDefInfo,
+)
+
+# A typed method answers with its model, or — when `parse_one` could not validate what
+# arrived — with the raw payload. Live, that second case is the interesting one: it means
+# the model has stopped matching the wire, which is the defect this whole fixture-and-model
+# effort exists to catch. So these tests assert the MODEL, not `isinstance(..., dict)`.
+# Seven of them still said `dict` on 2026-09-17, two of those since the previous day's
+# tranche — the integration suite does not run in CI, so nothing noticed.
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -112,7 +127,7 @@ def test_ping(live_client):
 @pytest.mark.integration
 def test_get_auth_status(live_client):
     status = live_client.get_auth_status()
-    assert isinstance(status, dict)
+    assert isinstance(status, AuthStatus), f"AuthStatus no longer parses /iserver/auth/status: {status}"
     assert "authenticated" in status
 
 
@@ -159,7 +174,7 @@ def test_search_contract_returns_conid(live_client):
 def test_get_contract_info(live_client):
     # AAPL conid 265598 is stable
     result = live_client.get_contract_info(265598)
-    assert isinstance(result, dict)
+    assert isinstance(result, ContractDetails), f"ContractDetails no longer parses this response: {result}"
     # The contract asked for is the contract described — `con_id` is the endpoint's own
     # spelling. A wrong or empty body cannot satisfy this.
     conid = result.get("con_id") or result.get("conid")
@@ -171,7 +186,7 @@ def test_get_contract_info(live_client):
 @pytest.mark.integration
 def test_get_contract_info_and_rules(live_client):
     result = live_client.get_contract_info_and_rules(265598)
-    assert isinstance(result, dict)
+    assert isinstance(result, ContractDetails), f"ContractDetails no longer parses this response: {result}"
     # The point of this endpoint is that it returns BOTH halves in one call.
     assert "rules" in result, f"no rules block: {sorted(result)[:10]}"
     conid = result.get("con_id") or result.get("conid")
@@ -192,7 +207,13 @@ def test_get_contract_algos(live_client):
 @pytest.mark.integration
 def test_get_secdef_info(live_client):
     result = live_client.get_secdef_info(265598)
-    assert isinstance(result, dict)
+    # This endpoint answered a LIST on 2026-07-28 and an OBJECT on 2026-09-17, and both are
+    # still handled — `parse_one` passes a list straight through. Record which arrived
+    # rather than asserting one away.
+    assert isinstance(result, SecDefInfo | list), f"unexpected secdef/info shape: {type(result).__name__}"
+    if isinstance(result, list):
+        assert result, "secdef/info returned an empty list"
+        result = result[0]
     conid = result.get("conid")
     assert conid is not None and int(conid) == 265598, f"wrong conid: {conid}"
     assert result.get("currency"), f"no currency in secdef info: {sorted(result)}"
@@ -212,7 +233,7 @@ def test_get_secdef_batch(live_client):
 @pytest.mark.integration
 def test_get_contract_rules(live_client):
     result = live_client.get_contract_rules(265598, is_buy=True)
-    assert isinstance(result, dict)
+    assert isinstance(result, ContractRules), f"ContractRules no longer parses this response: {result}"
     # Order types are the rules a caller actually acts on; their absence makes the response
     # useless even when well-formed.
     assert result.get("orderTypes"), f"no orderTypes in rules: {sorted(result)[:10]}"
@@ -337,7 +358,7 @@ def test_get_market_snapshot_aapl(live_client):
 @pytest.mark.integration
 def test_get_market_history_aapl(live_client):
     result = live_client.get_market_history(265598, period="5d", bar="1d")
-    assert isinstance(result, dict)
+    assert isinstance(result, MarketHistory), f"MarketHistory no longer parses this response: {result}"
     # Bars, not merely an envelope. A well-formed response carrying no data is exactly the
     # shape both history defects took (2026-08-05 stale window, 2026-09-15 dropped bars).
     bars = result.get("data") or []
@@ -785,7 +806,7 @@ def test_alert_crud_roundtrip(live_client, account_id):
 @pytest.mark.integration
 def test_get_account_meta(live_client, account_id):
     result = live_client.get_account_meta(account_id)
-    assert isinstance(result, dict)
+    assert isinstance(result, Account), f"Account no longer parses /portfolio/{{id}}/meta: {result}"
     assert str(result.get("accountId") or result.get("id")) == str(account_id), sorted(result)[:8]
 
 

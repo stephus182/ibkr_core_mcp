@@ -478,10 +478,28 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
 1. **`client.py`** — add method. Return a model from `models.py` when the response has a
    shape worth naming; otherwise return the decoded response and annotate it as such. This
    step said "return typed model" while **zero of 74 methods did** (audit finding API-11,
-   2026-09-16); **fourteen do now** (2026-09-17), and `client.py`'s module docstring lists
+   2026-09-16); **29 do now** (2026-09-17), and `client.py`'s module docstring lists
    them by name so the claim can be checked rather than believed — by a guard whose model
    set is derived from `models.py`, because the first version froze six hand-typed names
-   and stopped noticing the day a seventh model appeared. Decode the response with `_decode(resp, path)`,
+   and stopped noticing the day a seventh model appeared. The "otherwise" branch is a
+   decision, not an omission: every endpoint in `tests/fixtures/ibkr_live_shapes.json`
+   either returns a model or is listed in `_NO_MODEL_BY_DESIGN` with the reason, and
+   `test_every_captured_endpoint_is_typed_or_reasoned` fails when a new capture belongs to
+   neither set.
+
+   **A typed return is not a `dict`, and every caller has to survive that.** An
+   `IBKRResponse` serves the mapping protocol — `.get`, `[]`, `in`, `len`, iteration — but
+   it is not a `dict` and `json.dumps` does not know it. Typing a method therefore breaks
+   two things silently, and both happened here on 2026-09-17: `isinstance(row, dict)`
+   filters turned 21 futures rows into 0 and made `_listing_currency` answer "unknown" for
+   every price, and a bare `json.dumps` turned the `get_alerts` tool and the
+   `ibkr://accounts` resource into error bodies — the unit suite green throughout, because
+   its mocks hand the handlers dicts. So when you type a method: grep its callers for
+   `isinstance(..., dict)` and widen them to `dict | IBKRResponse`, and serialise only
+   through `default=json_default`. Two guards hold the second one and part of the first:
+   `test_every_json_dumps_in_the_tool_layer_can_serialise_a_model` reads the source of
+   `claude_tools.py` and `mcp_server.py`, and `tests/claude_tools/test_typed_returns.py`
+   drives the handlers with models built from the capture instead of hand-written dicts. Decode the response with `_decode(resp, path)`,
    never a bare `resp.json()`: `with_retry` has already raised on any non-2xx, but a 2xx is
    not a promise of JSON — the gateway serves an HTML page once its session lapses, and that
    left `IBKRClient` as `requests.exceptions.JSONDecodeError`, straight past the

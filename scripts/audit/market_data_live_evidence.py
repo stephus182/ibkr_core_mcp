@@ -24,6 +24,7 @@ import itertools
 import sys
 import time
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,13 +33,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ibkr_core_mcp import Config, IBKRClient
 from ibkr_core_mcp.client import _MAX_CHUNKS, _MAX_POINTS, _parse_period_days
+from ibkr_core_mcp.models import IBKRResponse
 
 CONID_AAPL = 265598
 
 _BAR_SECONDS = {"1min": 60, "2min": 120, "5min": 300, "15min": 900, "1h": 3600, "1d": 86400, "1w": 604800}
 
 
-def _stamps(payload: dict[str, Any]) -> list[int]:
+def _stamps(payload: Mapping[str, Any] | IBKRResponse) -> list[int]:
+    """Bar timestamps, from the `MarketHistory` model or the plain dict it replaced."""
     return sorted(b["t"] for b in (payload.get("data") or []) if b.get("t") is not None)
 
 

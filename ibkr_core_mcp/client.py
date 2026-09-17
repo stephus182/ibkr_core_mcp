@@ -4,12 +4,22 @@ Wraps market data, contracts, portfolio, orders, alerts, watchlists, and session
 management. Rate limiting and 429/503 backoff are handled transparently by
 `rate_limiter.py`.
 
-**Return types.** Fourteen endpoints return models from `models.py` — `search_contract` and
+**Return types.** 29 endpoints return models from `models.py` — `search_contract` and
 `get_secdef` (`Contract`), `get_positions` and `get_all_positions` (`Position`),
 `get_trades` (`Trade`), `get_live_orders` (`Order`), `get_account_summary`
-(`AccountSummary`), `get_notifications` (`Notification`), `get_accounts` and
-`get_account_meta` (`Account`), `get_auth_status` (`AuthStatus`), `get_alerts` (`Alert`),
-`get_watchlists` (`Watchlist`) and `get_currency_pairs` (`CurrencyPair`). This said "Six"
+(`AccountSummary`), `get_notifications` (`Notification`), `get_accounts`,
+`get_account_meta` and `get_subaccounts` (`Account`), `get_auth_status` (`AuthStatus`), `get_alerts` (`Alert`),
+`get_mta_alert` (`MTAAlert`), `get_watchlists` (`Watchlist`), `get_watchlist`
+(`WatchlistDetail`), `get_currency_pairs` (`CurrencyPair`), `get_secdef_info`
+(`SecDefInfo`), `get_contract_info` and `get_contract_info_and_rules` (`ContractDetails`),
+`get_contract_rules` (`ContractRules`), `get_futures` (`FutureContract`), `get_stocks`
+(`StockSearchResult`), `get_contract_algos` (`Algo`), `get_trading_schedule`
+(`TradingSchedule`), `get_market_history` and `get_market_history_paginated`
+(`MarketHistory`), `get_option_chain` (`OptionChain`) and `get_brokerage_accounts`
+(`BrokerageSession`). The rest are not untyped by accident: every endpoint in
+`tests/fixtures/ibkr_live_shapes.json` either returns a model or carries a recorded reason
+why it does not, and `test_every_captured_endpoint_is_typed_or_reasoned` fails when a new
+capture belongs to neither set. This said "Six"
 while naming seven, against a real eight, until 2026-09-17: the paging helper added for
 API-17 never reached the list (API-12). Its name is deliberately not repeated in this
 sentence — a mutation that removed it from the list above survived while the prose still
@@ -74,14 +84,26 @@ from ibkr_core_mcp.models import (
     Account,
     AccountSummary,
     Alert,
+    Algo,
     AuthStatus,
+    BrokerageSession,
     Contract,
+    ContractDetails,
+    ContractRules,
     CurrencyPair,
+    FutureContract,
+    MarketHistory,
+    MTAAlert,
     Notification,
+    OptionChain,
     Order,
     Position,
+    SecDefInfo,
+    StockSearchResult,
     Trade,
+    TradingSchedule,
     Watchlist,
+    WatchlistDetail,
     parse_many,
     parse_one,
 )
@@ -640,7 +662,7 @@ class IBKRClient:
 
     def get_market_history(
         self, conid: int, period: str = "1y", bar: str = "1d", outside_rth: bool = False
-    ) -> dict[str, Any]:
+    ) -> MarketHistory | dict[str, Any]:
         """OHLCV bars via iserver/marketdata/history.
 
         ## Case sensitivity (verified live 2026-07-06)
@@ -678,9 +700,12 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
         Endpoint: GET /iserver/marketdata/history
         """
-        return self._get(
-            "/iserver/marketdata/history",
-            {"conid": conid, "period": period.lower(), "bar": bar.lower(), "outsideRth": str(outside_rth).lower()},
+        return parse_one(
+            MarketHistory,
+            self._get(
+                "/iserver/marketdata/history",
+                {"conid": conid, "period": period.lower(), "bar": bar.lower(), "outsideRth": str(outside_rth).lower()},
+            ),
         )
 
     def get_market_history_paginated(
@@ -689,7 +714,7 @@ class IBKRClient:
         period: str = "1y",
         bar: str = "1d",
         outside_rth: bool = False,
-    ) -> dict[str, Any]:
+    ) -> MarketHistory | dict[str, Any]:
         """Fetch OHLCV bars, assembling several requests when one cannot hold the span.
 
         A single request is capped at ~1000 data points, so a long lookback has to be
@@ -873,7 +898,7 @@ class IBKRClient:
         if truncation_warning is not None:
             # Namespaced so it can never collide with a field IBKR adds to its own envelope.
             result_envelope["ibkr_core_warning"] = truncation_warning
-        return {**result_envelope, "data": unique}
+        return parse_one(MarketHistory, {**result_envelope, "data": unique})
 
     def get_market_snapshot(self, conids: list[int], fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Live quote snapshot for one or more contracts. Returns [] if response is not a list.
@@ -963,25 +988,25 @@ class IBKRClient:
         data = self._get("/iserver/secdef/search", {"symbol": symbol, "secType": sec_type})
         return parse_many(Contract, data)
 
-    def get_contract_info(self, conid: int) -> dict[str, Any]:
+    def get_contract_info(self, conid: int) -> ContractDetails | dict[str, Any]:
         """Full contract metadata: exchange, currency, primary exchange, trading class, multiplier.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id.md
         Endpoint: GET /iserver/contract/{conid}/info
         """
         _validate_conid(conid)
-        return self._get(f"/iserver/contract/{conid}/info")
+        return parse_one(ContractDetails, self._get(f"/iserver/contract/{conid}/info"))
 
-    def get_contract_info_and_rules(self, conid: int) -> dict[str, Any]:
+    def get_contract_info_and_rules(self, conid: int) -> ContractDetails | dict[str, Any]:
         """Contract info plus trading rules (min tick, valid order types, etc.).
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/find-all-info-and-rules-for-a-given-contract.md
         Endpoint: GET /iserver/contract/{conid}/info-and-rules
         """
         _validate_conid(conid)
-        return self._get(f"/iserver/contract/{conid}/info-and-rules")
+        return parse_one(ContractDetails, self._get(f"/iserver/contract/{conid}/info-and-rules"))
 
-    def get_contract_algos(self, conid: int) -> list[dict[str, Any]]:
+    def get_contract_algos(self, conid: int) -> list[Algo | dict[str, Any]]:
         """Available algorithmic order types for a contract: [{id, name, parameters}, ...].
 
         The response is an OBJECT wrapping the array — ``{"algos": [...]}`` — matching the
@@ -1000,17 +1025,16 @@ class IBKRClient:
         _validate_conid(conid)
         data = self._get(f"/iserver/contract/{conid}/algos")
         if isinstance(data, dict):
-            rows = data.get("algos")
-            return rows if isinstance(rows, list) else []
-        return data if isinstance(data, list) else []
+            return parse_many(Algo, data.get("algos"))
+        return parse_many(Algo, data)
 
-    def get_secdef_info(self, conid: int) -> dict[str, Any]:
+    def get_secdef_info(self, conid: int) -> SecDefInfo | dict[str, Any]:
         """Security definition info: type, symbol, currency, exchange, listing exchange.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
         Endpoint: GET /iserver/secdef/info
         """
-        return self._get("/iserver/secdef/info", {"conid": conid})
+        return parse_one(SecDefInfo, self._get("/iserver/secdef/info", {"conid": conid}))
 
     def get_option_strikes(
         self, conid: int, sec_type: str, month: str, exchange: str = "SMART"
@@ -1031,7 +1055,9 @@ class IBKRClient:
         )
         return {"call": data.get("call", []), "put": data.get("put", [])}
 
-    def get_option_chain(self, symbol: str, month: str | None = None, exchange: str = "SMART") -> dict[str, Any]:
+    def get_option_chain(
+        self, symbol: str, month: str | None = None, exchange: str = "SMART"
+    ) -> OptionChain | dict[str, Any]:
         """Option chain for an underlying via the documented two-step flow.
 
         1. GET /iserver/secdef/search?symbol=<sym> — required first call (primes the
@@ -1069,14 +1095,17 @@ class IBKRClient:
             "/iserver/secdef/strikes",
             {"conid": conid, "sectype": "OPT", "month": chosen, "exchange": exchange},
         )
-        return {
-            "symbol": symbol.upper(),
-            "conid": conid,
-            "months": months,
-            "month": chosen,
-            "call": strikes.get("call", []),
-            "put": strikes.get("put", []),
-        }
+        return parse_one(
+            OptionChain,
+            {
+                "symbol": symbol.upper(),
+                "conid": conid,
+                "months": months,
+                "month": chosen,
+                "call": strikes.get("call", []),
+                "put": strikes.get("put", []),
+            },
+        )
 
     def get_bond_filters(self, symbol: str, issue_id: str) -> dict[str, Any]:
         """Available filter criteria for bond search.
@@ -1086,7 +1115,7 @@ class IBKRClient:
         """
         return self._get("/iserver/secdef/bond-filters", {"symbol": symbol, "issuerId": issue_id})
 
-    def get_futures(self, symbols: list[str]) -> list[dict[str, Any]]:
+    def get_futures(self, symbols: list[str]) -> list[FutureContract | dict[str, Any]]:
         """Futures contracts for root symbols. Returns [] if response shape is unexpected.
 
         IBKR returns {"CL": [...], "ES": [...]} — this method flattens to a list.
@@ -1095,13 +1124,11 @@ class IBKRClient:
         Endpoint: GET /trsrv/futures
         """
         data = self._get("/trsrv/futures", {"symbols": ",".join(symbols)})
-        if isinstance(data, list):
-            return data
         if isinstance(data, dict):
-            return [c for contracts in data.values() for c in (contracts or [])]
-        return []
+            data = [c for contracts in data.values() for c in (contracts or [])]
+        return parse_many(FutureContract, data)
 
-    def get_stocks(self, symbols: list[str]) -> list[dict[str, Any]]:
+    def get_stocks(self, symbols: list[str]) -> list[StockSearchResult | dict[str, Any]]:
         """Stock contracts for symbols. Same dict-flattening behaviour as get_futures().
 
         The response is keyed by symbol; each value is a list of company records carrying
@@ -1118,11 +1145,9 @@ class IBKRClient:
         Endpoint: GET /trsrv/stocks
         """
         data = self._get("/trsrv/stocks", {"symbols": ",".join(symbols)})
-        if isinstance(data, list):
-            return data
         if isinstance(data, dict):
-            return [c for contracts in data.values() for c in (contracts or [])]
-        return []
+            data = [c for contracts in data.values() for c in (contracts or [])]
+        return parse_many(StockSearchResult, data)
 
     def get_trading_schedule(
         self,
@@ -1131,7 +1156,7 @@ class IBKRClient:
         exchange: str = "",
         exchange_filter: str = "",
         conid: int | str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[TradingSchedule | dict[str, Any]]:
         """Trading hours, sessions, and timezone for a contract.
 
         **IBKR publishes three pages for "trading schedule" and they do not agree.** The
@@ -1164,9 +1189,11 @@ class IBKRClient:
         `get_option_chain`, secdef strikes and the alert condition all pass it correctly.
         Here it is the exception: this `exchange` means *a venue with published trading
         hours*, not a route, and SMART has none, so the endpoint returns an empty list
-        rather than an error. The empty `trading_schedule` in
-        `tests/fixtures/ibkr_live_shapes.json` is that, not a defect and not a missing
-        parameter.
+        rather than an error. The fixture's `trading_schedule` was that empty list until
+        the 2026-09-17 re-capture, which dropped the `exchange` argument and recorded the
+        141 rows the endpoint really returns — so this paragraph described a fixture that
+        no longer existed for a day. The empty case is reproduced by passing
+        `exchange="SMART"`, not by reading the fixture.
 
         Returns IBKR's rows unchanged: `id`, `tradeVenueId`, `exchange`, `description`,
         `timezone`, `schedules[]`. There is no `regularTradingHours` or `liquidHours` —
@@ -1192,7 +1219,7 @@ class IBKRClient:
             params["exchange"] = exchange
         if exchange_filter:
             params["exchangeFilter"] = exchange_filter
-        return self._get("/trsrv/secdef/schedule", params)
+        return parse_many(TradingSchedule, self._get("/trsrv/secdef/schedule", params))
 
     def get_secdef(self, conids: list[int]) -> list[Contract | dict[str, Any]]:
         """Batch security definitions for up to 200 conids: [{conid, currency, ...}, ...].
@@ -1251,13 +1278,13 @@ class IBKRClient:
             return parse_many(CurrencyPair, [c for contracts in data.values() for c in (contracts or [])])
         return []
 
-    def get_contract_rules(self, conid: int, is_buy: bool = True) -> dict[str, Any]:
+    def get_contract_rules(self, conid: int, is_buy: bool = True) -> ContractRules | dict[str, Any]:
         """Order rules for a contract: min tick, valid order types, size constraints.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-rules.md
         Endpoint: POST /iserver/contract/rules
         """
-        return self._post("/iserver/contract/rules", {"conid": conid, "isBuy": is_buy})
+        return parse_one(ContractRules, self._post("/iserver/contract/rules", {"conid": conid, "isBuy": is_buy}))
 
     # ------------------------------------------------------------------
     # Portfolio
@@ -1273,14 +1300,17 @@ class IBKRClient:
         """
         return parse_many(Account, self._get("/portfolio/accounts"))
 
-    def get_subaccounts(self) -> list[dict[str, Any]]:
+    def get_subaccounts(self) -> list[Account | dict[str, Any]]:
         """Sub-accounts for IB Family accounts and advisors. Returns [] if not a list.
+
+        Returns `Account` rows: this endpoint's records were measured key-for-key identical
+        to `/portfolio/accounts` (24 keys, 2026-09-17), so it shares that model rather than
+        getting a second one that would drift from it.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-subaccounts.md
         Endpoint: GET /portfolio/subaccounts
         """
-        data = self._get("/portfolio/subaccounts")
-        return data if isinstance(data, list) else []
+        return parse_many(Account, self._get("/portfolio/subaccounts"))
 
     def get_account_meta(self, account_id: str) -> Account | dict[str, Any]:
         """Account metadata: display name, status, type.
@@ -1805,13 +1835,13 @@ class IBKRClient:
         """
         return self._get("/fyi/deliveryoptions")
 
-    def get_mta_alert(self) -> dict[str, Any]:
+    def get_mta_alert(self) -> MTAAlert | dict[str, Any]:
         """Mobile Trading Alerts — account-level watchdog alerts.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-mta-alert.md
         Endpoint: GET /iserver/account/mta
         """
-        return self._get("/iserver/account/mta")
+        return parse_one(MTAAlert, self._get("/iserver/account/mta"))
 
     def get_alerts(self, account_id: str) -> list[Alert | dict[str, Any]]:
         """All price alerts configured on the account. The orderId field is the alert ID.
@@ -1862,13 +1892,13 @@ class IBKRClient:
                 watchlists.extend(w for w in entries if isinstance(w, dict))
         return parse_many(Watchlist, watchlists)
 
-    def get_watchlist(self, watchlist_id: str) -> dict[str, Any]:
+    def get_watchlist(self, watchlist_id: str) -> WatchlistDetail | dict[str, Any]:
         """Contents of a specific watchlist. Uses the watchlist ID as a query param.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information.md
         Endpoint: GET /iserver/watchlist
         """
-        return self._get("/iserver/watchlist", {"id": watchlist_id})
+        return parse_one(WatchlistDetail, self._get("/iserver/watchlist", {"id": watchlist_id}))
 
     # ------------------------------------------------------------------
     # Event Contracts (read-only)
@@ -2522,7 +2552,7 @@ class IBKRClient:
     # Account / Admin
     # ------------------------------------------------------------------
 
-    def get_brokerage_accounts(self) -> dict[str, Any]:
+    def get_brokerage_accounts(self) -> BrokerageSession | dict[str, Any]:
         """List of accounts the user has trading access to, their aliases, the currently
         selected account, and per-account capability flags (supportsCashQty,
         supportsFractions, allowCustomerTime, etc).
@@ -2535,7 +2565,7 @@ class IBKRClient:
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts.md
         Endpoint: GET /iserver/accounts
         """
-        return self._get("/iserver/accounts")
+        return parse_one(BrokerageSession, self._get("/iserver/accounts"))
 
     def _ensure_accounts_initialized(self) -> None:
         """Calls get_brokerage_accounts() once per session, satisfying the documented
