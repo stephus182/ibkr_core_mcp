@@ -3297,3 +3297,69 @@ The 16 findings anchored only in code or a doc have no test re-checking them; te
 were not individually re-verified in this pass. They are all documentation or annotation
 fixes, so the failure mode is drift rather than regression — but it is drift that nothing
 would catch, which is the same shape as `DOCA-R2` and `API-05`.
+
+---
+
+## Phase 3 — the 16 findings anchored only in code or a doc
+
+The previous pass verified all 31 findings named nowhere in the tree and left a second gap:
+16 whose fix is annotated in code or documentation but which **no test re-checks**. Ten of
+those had not been individually re-verified. All 16 now have been.
+
+**Fifteen hold. One had already re-drifted.**
+
+| ID | Verified by |
+|---|---|
+| `API-04` | `rate_limiter.py:97` records the correction; proactive pacing exists |
+| `API-07` / `TOOL-08` | the dead alert URL survives only in text *recording* that it is dead |
+| `API-09` | `_reconcile_alert_subscriptions` is called in the `--stream` loop |
+| `API-14` | `client.py:1413` — the root fix, pacing honoured |
+| `API-18` | `AccountSummary` documents that neither P&L key appears, and points at `get_pnl` |
+| `API-19` | `_normalize` appears nowhere in `models.py` — the dead validators are gone |
+| `API-R2` / `WEB-06` / `WEB-08` | raised and fixed in this session |
+| `DOCA-19` | all three remaining mentions record the correction, none asserts the old claim |
+| `TOOL-09` | the declaration decision is recorded at the declaration site |
+| `TOOL-11` | the resource calls `get_all_positions`, not page 0 |
+| `TOOL-12` | the unread count degrades to "unavailable" and the list survives |
+| `WEB-01` | the per-request guard covers "every host in its redirect chain"; live-tested today |
+| `DOCB-R1` | **DRIFTED — see below** |
+
+### `DOCB-R1` drifted again, in one day
+
+The headline of `docs/test-coverage.md` read **1,459 unit / 100 integration / 1,559 total**.
+Measured with the file's own documented commands: **1,523 / 102 / 1,625**. The audit's own
+sessions had added 64 unit tests since 2026-09-16. Coverage was the only one of the four
+that held, at 87%.
+
+That file has carried the instruction *"do not edit these numbers by hand; re-run the
+commands below"* since 2026-09-08. It was 30% wrong for eight days, was corrected, and was
+wrong again within a day. **The rule was right twice and followed neither time** — which is
+the argument against rules that depend on remembering, and for checks that do not.
+
+So the counts are now taken from pytest rather than from a person:
+`test_test_coverage_headline_matches_a_real_collection` spawns a collection and fails if the
+headline disagrees. Collection is spawned as a subprocess deliberately — an AST count of
+`def test_` cannot see `parametrize` expansion, and that is precisely where a hand count goes
+wrong. Coverage is *not* checked there: it needs a full instrumented run and does not belong
+in the unit suite.
+
+Two things fell out of writing it:
+
+- **The guard counts itself.** Adding it moved the figure from 1,523 to 1,524, and its first
+  run failed on exactly that. The headline now describes a tree that includes the thing
+  describing it.
+- **The file's own re-measure commands were piped** — `pytest --collect-only … | grep -c`
+  returns `grep`'s status, so a broken collection would have produced a quietly wrong number
+  rather than an error. The same defect the counts had. Rewritten to capture pytest's status
+  first, per `CLAUDE.md`'s "No gate command may be piped".
+
+Checked before committing that the guard is safe in CI, where the `scraper` extra is **not**
+installed: collecting `-m integration` with `import crawl4ai` blocked still exits 0 and finds
+102 tests.
+
+### Where this leaves the closed set
+
+All 79 closed findings have now been verified against the code: 32 anchored by a test, 16
+anchored in code or docs and individually re-checked here, 31 named nowhere and individually
+re-checked in the previous pass. **One regression found across the whole set — a
+documentation count — and it is now machine-checked.**

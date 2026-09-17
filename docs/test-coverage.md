@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,459 unit tests · 100 integration tests (1,559 total) · 87% line coverage (non-integration)** — all four re-measured 2026-09-16 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,524 unit tests · 102 integration tests (1,626 total) · 87% line coverage (non-integration)** — all four re-measured 2026-09-17 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -10,6 +10,15 @@
 > fix added two early returns with no test) and `models.py` dropped 99% → 95% (`IBKRResponse`'s
 > `items()`, `values()` and `.raw` had none either). Both are pinned now and both are back.
 > Re-measured after that: `indicators.py` 100%, `models.py` 98%.
+>
+> **And they drifted again, in one day.** On 2026-09-17 the headline still read 1,459 / 100 /
+> 1,559 while the tree held **1,523 / 102 / 1,625** — the audit's own sessions had added 64
+> unit tests since. Coverage was the only one of the four that held, at 87%. The rule above
+> was right twice and followed neither time, so the counts are now machine-checked:
+> `tests/test_config_docs_consistency.py` collects the suite and fails if this headline
+> disagrees — and the guard counts itself, so adding it moved the figure from 1,523 to
+> **1,524** and the first run of it failed on exactly that. The file now counts a tree
+> that includes the thing counting it. A number a human must remember to update is a number that will be wrong (DOCB-R1).
 
 Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` (requires live gateway)
 
@@ -17,9 +26,15 @@ Run: `pytest -m "not integration"` · Integration only: `pytest -m integration` 
 with `unrecognized arguments`. The `coverage` package itself is present — drive it directly:
 
 ```bash
-pytest --collect-only -q -m "not integration" | grep -cE '^tests/.*::'   # unit count
-pytest --collect-only -q -m integration       | grep -cE '^tests/.*::'   # integration count
-coverage run --source=ibkr_core_mcp -m pytest -m "not integration" -q && coverage report -m
+# The pipe into grep is a COUNT, not a gate: it returns grep's status, so a collection error
+# would yield a quietly wrong number. Capture pytest's own status first (CLAUDE.md, "No gate
+# command may be piped").
+pytest --collect-only -q -m "not integration" -p no:cacheprovider > /tmp/u.txt; echo "exit=$?"
+grep -cE '^tests/.*::' /tmp/u.txt                                        # unit count
+pytest --collect-only -q -m integration -p no:cacheprovider > /tmp/i.txt; echo "exit=$?"
+grep -cE '^tests/.*::' /tmp/i.txt                                        # integration count
+coverage run --source=ibkr_core_mcp -m pytest -m "not integration" -q; echo "exit=$?"
+coverage report -m
 ```
 
 > **Note on the previous reading.** This file carried `~83%` from 2026-07-30 with an explicit

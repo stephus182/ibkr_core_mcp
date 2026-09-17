@@ -229,3 +229,49 @@ def test_the_positions_page_size_agrees_across_every_place_that_states_it():
     assert claimed == {_IBKR_POSITIONS_PAGE_SIZE}, (
         f"positions page size claimed as {claimed}, IBKR documents {_IBKR_POSITIONS_PAGE_SIZE}"
     )
+
+
+# ---------------------------------------------------------------------------
+# docs/test-coverage.md's headline counts (DOCB-R1)
+# ---------------------------------------------------------------------------
+
+
+def test_test_coverage_headline_matches_a_real_collection():
+    """DOCB-R1 drifted twice, the second time in a single day.
+
+    The file has said "do not edit these numbers by hand; re-run the commands below" since
+    2026-09-08. It was 30% wrong for eight days, was corrected on 2026-09-16, and by
+    2026-09-17 read 1,459 / 100 / 1,559 against a real 1,523 / 102 / 1,625 — the audit's own
+    sessions having added 64 unit tests. The rule was right both times and followed neither.
+
+    So the count is taken from pytest, not from a person. Collection is spawned in a
+    subprocess because pytest's own count is the only one that matches what the file claims
+    to state: an AST count of `def test_` functions cannot see `parametrize` expansion, and
+    that is exactly where a hand-count goes wrong. Coverage is deliberately NOT checked here
+    — it needs a full instrumented run, which does not belong in the unit suite.
+    """
+    import subprocess
+    import sys
+
+    doc = (_REPO / "docs" / "test-coverage.md").read_text()
+    stated = re.search(r"\*\*([\d,]+) unit tests · ([\d,]+) integration tests \(([\d,]+) total\)", doc)
+    assert stated, "test-coverage.md no longer states its headline counts; update or remove this guard"
+    unit, integration, total = (int(g.replace(",", "")) for g in stated.groups())
+    assert unit + integration == total, f"the headline does not add up: {unit} + {integration} != {total}"
+
+    def collected(marker):
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", marker, "-p", "no:cacheprovider"],
+            cwd=_REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        lines = [ln for ln in proc.stdout.splitlines() if re.match(r"^tests/.*::", ln)]
+        # Separate "nothing collected" from "collection broke" — a zero read as a real count
+        # is the same failure as scoring a crashed pytest run as a caught mutant.
+        assert lines, f"collection for -m {marker!r} produced no tests (exit {proc.returncode}):\n{proc.stdout[-2000:]}"
+        return len(lines)
+
+    assert collected("not integration") == unit, f"headline says {unit} unit tests"
+    assert collected("integration") == integration, f"headline says {integration} integration tests"
