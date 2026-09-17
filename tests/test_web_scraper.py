@@ -386,7 +386,7 @@ def _make_cfg_with_drive(tmp_path):
     )
 
 
-@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.gdrive_auth.Credentials")
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
@@ -404,7 +404,7 @@ def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path)
     mock_build.assert_called_once_with("drive", "v3", credentials=mock_creds)
 
 
-@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.gdrive_auth.Credentials")
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
@@ -422,7 +422,7 @@ def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
     mock_build.assert_called_once()  # cached after first call
 
 
-@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.gdrive_auth.Credentials")
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
@@ -442,7 +442,7 @@ def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_pa
     mock_svc.files().create.assert_not_called()
 
 
-@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.gdrive_auth.Credentials")
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
@@ -463,7 +463,7 @@ def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, 
     mock_svc.files().create.assert_called()
 
 
-@patch("ibkr_core_mcp.web_scraper.Credentials")
+@patch("ibkr_core_mcp.gdrive_auth.Credentials")
 @patch("ibkr_core_mcp.web_scraper.build")
 def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.config import Config
@@ -817,3 +817,73 @@ def test_save_search_markdown_content_includes_results(tmp_path):
     store.save_search("IBKR flex query", results)
     # At least one upload with content (the search snapshot markdown)
     assert any("IBKR flex query" in c or "Page A" in c for c in uploaded_content)
+
+
+# ── WEB-03: the RefreshError fix that reached two of three call sites ──────────
+
+
+@patch("ibkr_core_mcp.web_scraper.build")
+def test_get_service_reauthenticates_when_the_refresh_token_is_revoked(mock_build, tmp_path):
+    """A revoked Google refresh token must send the operator back through the interactive
+    flow, not raise.
+
+    `gdrive_auth.load_or_refresh_credentials` catches `RefreshError` and returns None, so
+    the caller falls through to `InstalledAppFlow` — added in `b1a4efb` (2026-07-13) after a
+    live run hit it. That commit touched `gdrive_auth.py`, and `cache.GDriveCache` delegates
+    to it, so both recovered. **`web_scraper.WebDocsStore` kept its own copy of the OAuth
+    dance and was not in that commit**, so it called `creds.refresh(Request())` bare and
+    propagated the exception (WEB-03).
+
+    Confirmed against history, not assumed: `git log -S RefreshError -- ibkr_core_mcp/`
+    returns exactly `b1a4efb`, whose file list has no `web_scraper.py`.
+    """
+    from google.auth.exceptions import RefreshError
+
+    from ibkr_core_mcp.web_scraper import WebDocsStore
+
+    cfg = _make_cfg_with_drive(tmp_path)
+    cfg.gdrive_token_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.gdrive_token_file.write_text('{"token": "stale", "refresh_token": "revoked"}')
+
+    expired = MagicMock()
+    expired.valid = False
+    expired.expired = True
+    expired.refresh_token = "revoked"
+    expired.refresh.side_effect = RefreshError("Token has been expired or revoked.")
+
+    fresh = MagicMock()
+    fresh.valid = True
+    fresh.to_json.return_value = '{"token": "new"}'
+
+    mock_svc = MagicMock()
+    mock_build.return_value = mock_svc
+
+    with (
+        patch("ibkr_core_mcp.gdrive_auth.Credentials") as creds_cls,
+        patch("ibkr_core_mcp.web_scraper.InstalledAppFlow") as flow_cls,
+    ):
+        creds_cls.from_authorized_user_file.return_value = expired
+        flow_cls.from_client_secrets_file.return_value.run_local_server.return_value = fresh
+
+        svc = WebDocsStore(cfg)._get_service()
+
+    assert svc is mock_svc
+    flow_cls.from_client_secrets_file.assert_called_once(), "did not fall back to the interactive flow"
+    mock_build.assert_called_once_with("drive", "v3", credentials=fresh)
+
+
+def test_the_drive_token_file_is_written_0600_by_the_shared_helper(tmp_path):
+    """The mode is the control `SECURITY.md` § OAuth Token File Permissions documents, so
+    consolidating onto `gdrive_auth` must not lose it. Asserted on the real filesystem."""
+    import stat
+
+    from ibkr_core_mcp.gdrive_auth import persist_credentials
+
+    token = tmp_path / "nested" / "token.json"
+    creds = MagicMock()
+    creds.to_json.return_value = '{"token": "x"}'
+
+    persist_credentials(token, creds)
+
+    assert token.read_text() == '{"token": "x"}'
+    assert stat.S_IMODE(token.stat().st_mode) == 0o600

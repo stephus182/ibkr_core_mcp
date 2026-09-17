@@ -715,7 +715,18 @@ with os.fdopen(fd, "w") as fh:
 os.chmod(token_path, 0o600)   # O_CREAT's mode applies only on creation; the chmod covers an existing file
 ```
 
-(`gdrive_auth.persist_credentials`, and the same sequence in `cache.GDriveCache._get_service` and `web_scraper.WebDocsStore._get_service`.)
+(`gdrive_auth.persist_credentials` — **the one place it exists.** `cache.GDriveCache` and
+`web_scraper.WebDocsStore` both delegate to it.)
+
+> This read "and the same sequence in `cache.GDriveCache._get_service` and
+> `web_scraper.WebDocsStore._get_service`" until 2026-09-16, and was stale in one direction
+> and about to be stale in the other. `cache.py` had already been refactored to delegate, so
+> the sequence had not been there for some time; `web_scraper.py` still had its own copy, and
+> that copy was the defect — it called `creds.refresh(Request())` with no handler, so a
+> revoked Google refresh token raised instead of re-running the interactive flow (WEB-03).
+> Three implementations of one control is how a fix reaches two of them: `b1a4efb` added
+> `RefreshError` handling on 2026-07-13 and its file list has no `web_scraper.py`.
+> `tests/security/test_documented_controls.py` now fails if this claim and the tree disagree.
 
 This restricts read access to the file owner, preventing other local users from reading the refresh token.
 

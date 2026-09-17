@@ -19,19 +19,19 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | Domain | Total | Closed | Open, with a claim | No claim recorded | Written off |
 |---|---:|---:|---:|---:|---:|
 | `SEC` | 13 | 8 | 5 | — | — |
-| `WEB` | 9 | 2 | 7 | — | — |
+| `WEB` | 9 | 3 | 6 | — | — |
 | `TOOL` | 12 | 10 | 2 | — | — |
 | `API` | 21 | 13 | 7 (+1 partial) | — | — |
 | `DATA` | 25 | 8 | — | — | **17** |
 | `DOCA` | 21 | 6 | — | — | **15** |
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | 6 | 6 | — | — | — |
-| `DOCA-R` | 3 | 3 | — | — | — |
+| `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | 1 | 1 | — | — | — |
-| **Total** | **135** | **63** | **21** (+1 partial) | **0** | **50** |
+| **Total** | **137** | **66** | **20** (+1 partial) | **0** | **50** |
 
-`63 + 21 + 1 + 0 + 50 = 135`. **There are no unrecorded findings left.** All three blocks
+`66 + 20 + 1 + 0 + 50 = 137`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -77,14 +77,15 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (21, none Critical; +1 partial)
+### Open findings that do have a claim (20, none Critical; +1 partial)
 
-Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`.
+Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`.
+Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
+0600 holders).
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-01` | **High** | Correct fix shipped; cannot be exercised while IBKR's gateway refuses every alert operator. Documented, deliberately not closed |
-| `WEB-03` | Medium | `WebDocsStore._get_service` is a third OAuth reimplementation, without `gdrive_auth.py`'s `RefreshError` handling |
 | `WEB-04` | Medium | `firecrawl_search` archives to Drive, verbatim, results it simultaneously marks "⚠ Not usable content" |
 | `WEB-05` | Medium | `docs/web-scraper-reference.md:174` describes the deleted fallback layer as current |
 | `WEB-09` | Low | `_handle_crawl_site` guards the Drive write but not the Drive read |
@@ -2318,3 +2319,159 @@ intended description lines.
 
 Gates: ruff, ruff format, mypy (119 files), pytest **1,486 passed**, `pytest -m security`
 **249 passed**.
+
+---
+
+## Phase 3 — WEB-03: a fix that reached two of three copies
+
+### Checked against policy first, because this touches credentials
+
+`SECURITY.md` § OAuth Token File Permissions, `docs/security-architecture.md`, and the OWASP
+applicability matrix were read before any code was changed. Three things came out of that and
+all three shaped the fix:
+
+- The OWASP matrix already names **`gdrive_auth.py`** as the holder of the 0600 token control
+  (row *"Secrets in vaults; never in env vars, logs or code"*), and *"Credential leakage & token
+  misuse — token files 0600"* is marked covered. Consolidating onto that helper moves the code
+  **towards** the documented architecture, not away from it.
+- OWASP *"Short-lived, scoped tokens"* is `NO-D` here: the Google refresh token is long-lived by
+  Google's design and held at 0600. So the fix must preserve the mode, and a test now asserts
+  it on the real filesystem rather than trusting the call.
+- `docs/external-docs-reference.md` records that the Google Drive quickstart URLs 301-redirect
+  to `/workspace/drive/api/…` and that **the pre-redirect citations are deliberate**. They were
+  left alone. That is the second time this session that reading our own record stopped a
+  "correction" of something intentional.
+
+### The finding
+
+`WebDocsStore._get_service` was a third, independent implementation of the OAuth dance. It
+called `creds.refresh(Request())` **bare**, so `RefreshError` — what Google raises for a revoked
+or expired refresh token — propagated out of every Drive-backed web tool instead of falling back
+to the interactive flow.
+
+Confirmed against history rather than asserted: `git log -S RefreshError -- ibkr_core_mcp/`
+returns exactly one commit, `b1a4efb` (2026-07-13, found by a live run), and **its file list has
+no `web_scraper.py`**. `gdrive_auth.py` got the handler, `cache.py` delegates to it and
+recovered, this file kept its copy and did not. Three implementations of one control is the
+mechanism by which a fix reaches two of them.
+
+`_get_service` now delegates to `load_or_refresh_credentials` / `persist_credentials`. `ruff`
+then removed `Credentials` and `Request` from the module entirely — the duplicate machinery is
+gone rather than merely bypassed.
+
+### DOCA-R5 — the policy's own claim had drifted, in both directions
+
+`SECURITY.md` named three holders of the quoted 0600 sequence: `gdrive_auth.persist_credentials`,
+`cache.GDriveCache._get_service` and `web_scraper.WebDocsStore._get_service`. Measured:
+
+| File | Sequence present |
+|---|---|
+| `gdrive_auth.py` | yes |
+| `cache.py` | **no** — refactored to delegate some time ago; the document never followed |
+| `web_scraper.py` | yes — **and that copy was the defect** |
+
+So the security policy was simultaneously crediting a file that no longer held the control and
+correctly naming one whose holding of it was the bug. Corrected to name the single holder, with
+the old wording quoted.
+
+### The fourth holder, which the new test found and I had not accounted for
+
+The drift guard first asserted `holders == ["gdrive_auth.py"]` and **failed**: `mcp_server.py`
+also contains the sequence. That is the **per-launch SSE bearer token** (`_issue_sse_token`,
+invariant 10, § Transport Security) — a different secret, correctly written 0600, whose own
+comment cites `gdrive_auth` for the same `O_CREAT`/`chmod` reasoning. Not a defect, and not
+something the section under test covers.
+
+It is recorded here because the assertion I wrote was wrong about the tree and the tree was
+right: **two secrets, two writers.** The guard now names both with their reasons, and separately
+asserts the property that actually matters for this section — that neither `cache.py` nor
+`web_scraper.py` carries a copy, and that both still delegate.
+
+### Verification
+
+Five mutants. The **no-op control survived**. Caught: reverting to direct credential loading;
+`gdrive_auth` re-raising `RefreshError` instead of recovering; chmod'ing the token to `0o644`;
+and dropping `persist_credentials` after the interactive flow. One further mutant **did not
+apply** and the harness discarded it rather than scoring it — the guard added this morning,
+working.
+
+Five `@patch` targets in `tests/test_web_scraper.py` were repointed from
+`web_scraper.Credentials` to `gdrive_auth.Credentials`; the fixture writes a real token file, so
+those tests still exercise the loaded-credentials path rather than passing through a different
+branch — checked, not assumed.
+
+Gates: ruff, ruff format, mypy (119 files), pytest **1,489 passed**, `pytest -m security`
+**250 passed**.
+
+---
+
+### Standing note added 2026-09-16 — a check that surprises its author is a finding
+
+Twice in this session a control I had just written failed against the tree and the **tree was
+right**: `mcp_server.py` as a second legitimate 0600 writer (above), and `_ensure_accounts_
+initialized` as a deliberate pre-gate call pinned by a test naming it (SEC-02). Both were
+initially read as "my assertion needs adjusting".
+
+They are findings. What each one measured is a fact about the system that nobody had written
+down, and the adjustment is the smaller half. **Every such surprise is recorded in this report
+from here on**, with what the check expected, what the tree actually held, and why the tree was
+right — not silently folded into the assertion.
+
+---
+
+## Phase 3 — the mutation harness executed a mutant that had already been restored
+
+Found while pushing WEB-03. Four tests failed with `Expected 0o600, got 0o644` against a
+working tree whose source read `0o600` on both lines, unchanged from the previous commit.
+
+### What was actually happening
+
+Tracing `os.chmod` inside `gdrive_auth.persist_credentials` showed it being **called with
+`0o644`** while `inspect.getsource()` on the same function printed `0o600`. The module was
+running from a stale `__pycache__/gdrive_auth.cpython-311.pyc` compiled during the mutation
+run at 22:51.
+
+Python validates a cached `.pyc` by the source's **mtime and size**. The mutation
+`0o600` → `0o644` changes neither: same byte count, and the harness restored the file inside
+the same mtime second because that battery ran a 0.5-second test subset. So the cache entry
+still looked valid, and **every subsequent process in this repository executed the mutant**.
+
+That is not a harness inconvenience. A stale `.pyc` can falsify a mutation result in **both**
+directions: a mutant that never executes reads as SURVIVED, and a mutant that outlives its
+restore reads as a spurious failure — which is what happened here, four tests deep, in a file
+I had not modified.
+
+### Why it did not corrupt this session's conclusions
+
+The three fast batteries were **re-run from a cleared cache with `PYTHONDONTWRITEBYTECODE=1`**,
+rather than reasoned about:
+
+| Battery | Result on re-run |
+|---|---|
+| WEB-03 (incl. the same-length `0o644` edit) | no-op survived; both real mutants caught |
+| TOOL-03/04/05 | no-op survived; all three caught |
+| SEC-02 | no-op survived; the real mutant caught |
+
+Identical to the original readings, and `git diff` clean after each. The slow batteries
+(`analytics`, `backtest`, `cache`, `flex_import`, `pinescript`, `store`) ran the full suite
+between mutation and restore — 35 seconds — so their mtimes could not collide.
+
+### The harness now carries four guards, one per failure this session
+
+| Guard | The failure it came from |
+|---|---|
+| Refuses to report if the mutation text was not found | a `sed` that matched nothing after `ruff format` re-flowed a `frozenset` |
+| Separates "tests failed" from "pytest did not run" | a quoting bug that scored a crash as *caught*, 15 fabricated results |
+| `PYTHONDONTWRITEBYTECODE=1` and `python -B` | this finding |
+| `cmp` the file against its backup after restoring | a backgrounded battery killed mid-mutation, leaving a mutant in the tree |
+
+### And a second lesson, about how it was nearly missed
+
+The gate line that ran before the commit was `pytest … -q 2>&1 | tail -1` joined by `&&`.
+**A pipeline's exit status is the last command's**, so `tail` returned 0 and the chain
+continued through a red suite and committed. It was the **pre-push hook** that refused the
+push — the same failure mode `CLAUDE.md` already records for `gh run watch … | tail`, which
+reported a failed CI run as green on 2026-09-13.
+
+The committed content was never wrong: `gdrive_auth.py` is byte-identical to its parent in that
+commit. Only the verification was.

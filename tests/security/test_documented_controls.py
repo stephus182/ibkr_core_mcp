@@ -109,3 +109,41 @@ def test_every_security_test_file_appears_in_the_suite_inventory():
     assert documented - on_disk == set(), (
         f"SECURITY.md lists suite files that do not exist: {sorted(documented - on_disk)}"
     )
+
+
+def test_the_documented_0600_token_write_lives_where_security_md_says():
+    """`SECURITY.md` § OAuth Token File Permissions quotes the `os.open(..., 0o600)` +
+    `os.chmod` sequence and names where it lives. That claim had drifted in both
+    directions: `cache.GDriveCache._get_service` was still named after it had been
+    refactored to delegate, and `web_scraper.WebDocsStore._get_service` was named
+    correctly — because it held a third independent copy of the OAuth dance, which is
+    exactly what let `b1a4efb`'s `RefreshError` fix reach two call sites out of three
+    (WEB-03).
+
+    The control is now in one place. This test fails if a second copy appears, or if the
+    one copy moves without the document following it.
+    """
+    sequence = "os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600"
+    package = _ROOT / "ibkr_core_mcp"
+    holders = sorted(p.name for p in package.rglob("*.py") if sequence in p.read_text())
+
+    # Two secrets, two writers, and they are different secrets — this test found the second
+    # one itself when a first version asserted a single holder and failed.
+    #   gdrive_auth.py  the Google Drive OAuth refresh token (this section)
+    #   mcp_server.py   the per-launch SSE bearer token (§ Transport Security), whose own
+    #                   comment cites gdrive_auth for the same O_CREAT/chmod reasoning
+    assert holders == ["gdrive_auth.py", "mcp_server.py"], f"the 0600 write now lives in {holders}"
+
+    # The property that matters for the Drive token: ONE implementation, and neither of the
+    # two consumers carries a copy. Both did once; the copy in web_scraper.py is what missed
+    # b1a4efb's RefreshError fix.
+    for consumer in ("cache.py", "web_scraper.py"):
+        assert sequence not in (package / consumer).read_text(), f"{consumer} has its own copy of the token write again"
+        assert "load_or_refresh_credentials" in (package / consumer).read_text(), (
+            f"{consumer} no longer delegates to gdrive_auth"
+        )
+
+    security_md = (_ROOT / "SECURITY.md").read_text()
+    section = security_md[security_md.index("### OAuth Token File Permissions") :][:2000]
+    assert "gdrive_auth.persist_credentials" in section
+    assert "the one place it exists" in section, "the document no longer claims a single holder"

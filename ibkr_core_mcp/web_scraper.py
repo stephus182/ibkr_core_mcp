@@ -39,13 +39,12 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 import requests
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
 
 log = logging.getLogger(__name__)
 
@@ -377,33 +376,28 @@ class WebDocsStore:
     def _get_service(self) -> Any:
         """Return a cached Google Drive API v3 service, running the OAuth flow if needed.
 
-        Mirrors GDriveCache._get_service(): checks for an existing token file, refreshes
-        expired credentials, or falls back to InstalledAppFlow (opens local browser on port 0).
-        Token is written with mode 0o600 (user-only read/write).
+        Delegates token loading/refresh to `gdrive_auth.load_or_refresh_credentials`, the
+        same helper `GDriveCache._get_service` uses. If it returns None — no token file,
+        expired with no refresh token, or a refresh that failed — the interactive
+        `InstalledAppFlow` bootstrap runs and the result is persisted by
+        `gdrive_auth.persist_credentials` at mode 0o600.
+
+        This used to be a third, independent copy of the OAuth dance, and it called
+        `creds.refresh(Request())` with no handler. `RefreshError` — what Google raises for
+        a revoked or expired refresh token — therefore propagated out of every Drive-backed
+        web tool instead of re-authenticating. The handling was added to `gdrive_auth.py`
+        in `b1a4efb` (2026-07-13) after a live run hit it; `cache.py` delegates and
+        recovered, this file kept its copy and did not (audit finding WEB-03, 2026-09-16).
 
         Source: https://developers.google.com/drive/api/quickstart/python
         """
         if self._svc is not None:
             return self._svc
-        creds = None
-        if self._cfg.gdrive_token_file.exists():
-            creds = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
-                str(self._cfg.gdrive_token_file), self._SCOPES
-            )
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(str(self._cfg.gdrive_credentials_file), self._SCOPES)
-                creds = flow.run_local_server(port=0)
-            import os
-
-            self._cfg.gdrive_token_file.parent.mkdir(parents=True, exist_ok=True)
-            token_path = str(self._cfg.gdrive_token_file)
-            fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                fh.write(creds.to_json())
-            os.chmod(token_path, 0o600)
+        creds = load_or_refresh_credentials(self._cfg.gdrive_token_file, self._SCOPES)
+        if creds is None:
+            flow = InstalledAppFlow.from_client_secrets_file(str(self._cfg.gdrive_credentials_file), self._SCOPES)
+            creds = flow.run_local_server(port=0)
+            persist_credentials(self._cfg.gdrive_token_file, creds)
         self._svc = build("drive", "v3", credentials=creds)
         return self._svc
 
