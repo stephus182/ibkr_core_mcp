@@ -72,6 +72,16 @@ def truncate(obj: Any, keep: int = 2) -> Any:
     return obj
 
 
+def _first_watchlist_id(client: Any) -> str:
+    """The account's first watchlist id, so the detail endpoint can be captured at all.
+
+    Returns "" when the account has none, which makes that one capture fail and be skipped
+    rather than taking the run down — the loop already reports and counts a failure.
+    """
+    lists = client.get_watchlists()
+    return str(lists[0].get("id", "")) if lists else ""
+
+
 def main(out_path: str) -> int:
     client = IBKRClient(Config.from_env())
     account = client.get_accounts()[0]
@@ -109,6 +119,29 @@ def main(out_path: str) -> int:
         "brokerage_accounts": lambda: client.get_brokerage_accounts(),
         "scanner_params": lambda: client.get_scanner_params(),
         "pa_periods": lambda: client.get_pa_periods([account_id]),
+        # ---- second capture pass, 2026-09-17 (API-11's remaining 61) --------------
+        # Read-only only. Nothing here writes, and no order or alert endpoint appears:
+        # `get_order_preview` simulates but still POSTs an order body, so it is captured
+        # only with the owner present and asking for it.
+        "subaccounts": lambda: client.get_subaccounts(),
+        "orders_raw": lambda: client.get_orders_raw(),
+        "secdef_info": lambda: client.get_secdef_info(conid),
+        "contract_algos": lambda: client.get_contract_algos(conid),
+        "contract_rules": lambda: client.get_contract_rules(conid),
+        "contract_info_and_rules": lambda: client.get_contract_info_and_rules(conid),
+        "market_history": lambda: client.get_market_history(conid, period="1d", bar="1h"),
+        "option_chain": lambda: client.get_option_chain("AAPL"),
+        "mta_alert": lambda: client.get_mta_alert(),
+        "pa_periods_raw": lambda: client.get_pa_periods_raw([account_id]),
+        "pa_performance": lambda: client.get_pa_performance([account_id], "1M"),
+        "pa_transactions": lambda: client.get_pa_transactions([account_id], [conid]),
+        "event_contracts": lambda: client.get_event_contracts([conid]),
+        # Futures: worth capturing while a futures session is open, since several of these
+        # shapes differ from the equity ones.
+        "futures": lambda: client.get_futures(["ES"]),
+        # A single watchlist, keyed off the first one the account actually has — the list
+        # endpoint is already captured, this is the detail shape.
+        "watchlist": lambda: client.get_watchlist(_first_watchlist_id(client)),
     }
 
     captured: dict[str, Any] = {}
