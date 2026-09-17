@@ -3781,3 +3781,94 @@ confident wrong answer under the ad-hoc runner this harness replaced:
 - `run_battery(..., ["tests/test_client.py", "tests/security/", "-x"])` — no
   `-m "not integration"`, so `test_live_ping` was collected and failed against a gateway that
   is not running. Control not green, refused before scoring a single mutant.
+
+---
+
+## Phase 3 — `TOOL-07`: the investigation the owner asked for, before any change
+
+Owner's flag on this finding: *"Investigate before touching. Establish why the requirement
+exists, how it is used across this repo and consuming projects, and what the original logic
+was. No change until that is understood."* This section is that investigation. **No code was
+changed.**
+
+### What the requirement actually is
+
+Not in `mcp_server` — in `Config.from_env()` (`config.py:120-124`). `mcp_server.main()`
+line 541 calls it, which is why the server refuses to start. Measured with the variable
+scrubbed:
+
+```
+Config.from_env()  -> ConfigError: ANTHROPIC_API_KEY is required but not set
+```
+
+### Both halves of the claim, measured
+
+*"which no module reads"* — **confirmed, two ways.** An AST sweep of the package finds
+**zero** attribute reads of `config.anthropic_api_key`. And after importing the whole
+package, `claude_tools` and `mcp_server` included, `'anthropic' in sys.modules` is `False`:
+
+```
+'anthropic' imported after loading the whole package: False
+attribute reads of config.anthropic_api_key in the package: NONE
+```
+
+The SDK is imported in exactly one file in the repository, `scripts/audit/count_tool_tokens.py`
+— an audit script, not shipped behaviour. `anthropic>=0.28` is nevertheless a **base
+dependency**: every consumer installs it, and nothing in the package imports it.
+
+*"README's stated reason is false"* — **confirmed.** `README.md:376` reads *"Anthropic API key
+(required by `ClaudeToolkit`…)"*. `ClaudeToolkit` reads `flex_token`, `gateway_url`,
+`firecrawl_api_key` and `crawl4ai_profiles_dir` off its config. It never reads
+`anthropic_api_key`.
+
+### What the original logic was
+
+`182e483`, 2026-05-23 — the first `Config` commit, with the check written exactly as it
+stands today. The commit message is `feat: Config dataclass with from_env() loader` and
+records no reasoning. There is no design note to recover: the requirement appears to date
+from when `Config` was assumed to be the thing that configures a Claude-driven app, before
+`ClaudeToolkit` turned out to need nothing from Anthropic itself.
+
+### How it is used in the consuming project
+
+`claudia_ui` drives Claude and **does** need the key — but never through this `Config`.
+`claudia/agent.py:1957` is `self._client = AsyncAnthropic()`, constructed with no argument,
+so the Anthropic SDK reads `ANTHROPIC_API_KEY` from the environment itself. No file in
+`claudia_ui` reads `config.anthropic_api_key`.
+
+### The finding that matters more than the finding
+
+**The requirement has already been routed around three times, independently, each time by
+writing a bespoke environment reader that bypasses `Config` entirely.**
+
+| Where | What it says |
+|---|---|
+| `config.crawl4ai_profiles_dir_from_env()` (this repo, 2026-07-28) | `create-profile` "failed with an error naming a key the operation never uses. The CLI test hid it by *setting* the key rather than asking why it was needed" (`docs/web-scraper-reference.md` § changelog) |
+| `config.py:33-36` | The same, documented at the source |
+| `claudia/gateway_preflight.gateway_url()` (consuming project) | "`Config.from_env()` raises unless `ANTHROPIC_API_KEY` is set, which has nothing to do with reaching the IBKR gateway. A diagnostic that refuses to run because an unrelated key is missing is useless precisely when it is needed" |
+
+Three workarounds, two repositories, none of which removed the cause. That is the answer to
+"how is it used": it is *worked around*, and a fourth workaround is the default outcome of
+leaving it alone.
+
+### A least-privilege angle, noted not fixed
+
+`docs/mcp-server-reference.md` tells operators to put their real `sk-ant-…` into the `env`
+block of Claude Desktop's config file — a long-lived secret written in plaintext and handed
+to a process that provably never uses it. The consuming project already treats giving this
+key to an MCP subprocess as a regression worth a named test
+(`test_sidecar_subprocess_env_excludes_secrets`) — that test guards the **TradingView**
+sidecar, a different subprocess, so it does not cover this server; the principle it encodes
+is the same one.
+
+### Options, for the owner
+
+| | Change | Cost |
+|---|---|---|
+| **A** (recommended) | `from_env()` stops raising; `anthropic_api_key` defaults to `""` and stays on `Config`. Fix README's reason, drop the key from the documented MCP `env` block | Breaking **only** for code that relies on the raise as validation. Measured: `claudia_ui` does not — `AsyncAnthropic()` raises its own clear error |
+| **B** | Keep the requirement; correct only README's false reason | No behaviour change, and leaves the three workarounds plus the plaintext-key instruction standing |
+| **C** | Remove `anthropic_api_key` from `Config` and drop the base dependency | Most honest; breaks any consumer reading the field. `claudia_ui` does not, but other consumers are not enumerable from here |
+
+Separable sub-question either way: `anthropic>=0.28` is a base dependency nothing imports.
+
+**Awaiting the owner's decision. Nothing changed.**
