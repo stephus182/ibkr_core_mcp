@@ -275,3 +275,78 @@ def test_test_coverage_headline_matches_a_real_collection():
 
     assert collected("not integration") == unit, f"headline says {unit} unit tests"
     assert collected("integration") == integration, f"headline says {integration} integration tests"
+
+
+# ---------------------------------------------------------------------------
+# TOOL-R2 — `pyproject.toml` is a claim about what this package is
+# ---------------------------------------------------------------------------
+
+_MODEL_SDKS = ("anthropic", "openai", "google-generativeai", "google-genai", "cohere", "mistralai")
+
+
+def _base_dependencies() -> list[str]:
+    """`[project].dependencies` — what every consumer installs, no extras."""
+    import tomllib
+
+    return list(tomllib.loads((_REPO / "pyproject.toml").read_text())["project"]["dependencies"])
+
+
+def _modules_importing(package: str) -> list[str]:
+    """Every shipped module that imports `package` at any level."""
+    hits = []
+    for source in sorted((_REPO / "ibkr_core_mcp").rglob("*.py")):
+        for node in ast.walk(ast.parse(source.read_text())):
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module] if node.module else []
+            else:
+                continue
+            if any(n == package or n.startswith(f"{package}.") for n in names):
+                hits.append(f"{source.name}:{node.lineno}")
+    return hits
+
+
+def test_no_model_sdk_is_a_base_dependency():
+    """A dependency nothing imports is a claim the package makes about itself that is false.
+
+    `anthropic>=0.28` sat in `[project].dependencies` from the beginning: every consumer
+    installed it, and **no shipped module ever imported it** — the only importer in the
+    repository is `scripts/audit/count_tool_tokens.py`, an audit artifact. Someone reading
+    `pyproject.toml` would conclude this library talks to Anthropic. It does not: it defines
+    tools, and the host application owns the model client (TOOL-07, TOOL-R2, 2026-09-17).
+
+    Stated over a list of vendors rather than one name, for the same reason as
+    `test_config_carries_no_model_vendor_credential`: the rule is "this package does not
+    call a model", not "this package does not call Anthropic".
+    """
+    base = " ".join(_base_dependencies()).lower()
+    present = [sdk for sdk in _MODEL_SDKS if re.search(rf"(?:^| ){re.escape(sdk)}(?:[<>=!~\[ ]|$)", base)]
+
+    assert not present, (
+        f"model SDKs in [project].dependencies: {present}. Every consumer installs these. "
+        "If a shipped module genuinely needs one, say so here; otherwise it belongs in an "
+        "extra beside the script that imports it."
+    )
+
+
+def test_no_shipped_module_imports_a_model_sdk():
+    """The other direction, so the rule above cannot be satisfied by a broken package.
+
+    If a module under `ibkr_core_mcp/` ever does import one, the dependency must come back —
+    and this test failing is how that gets noticed, rather than an ImportError in a consumer.
+    """
+    importers = {sdk: _modules_importing(sdk.replace("-", "_")) for sdk in _MODEL_SDKS}
+    offenders = {sdk: where for sdk, where in importers.items() if where}
+
+    assert not offenders, (
+        f"shipped modules import a model SDK: {offenders}. ClaudeToolkit is a tool "
+        "*definition* layer — CLAUDE.md's rule is that the bar for calling a model from here "
+        "is 'no other design works'. If this is deliberate, add the dependency back to "
+        "[project].dependencies in the same change."
+    )
+
+
+def test_the_import_probe_can_actually_find_an_import():
+    """Vacuity guard: both tests above assert an absence, so the probe must be shown to work."""
+    assert _modules_importing("requests"), "the import probe found no `requests` import — it is broken"

@@ -29,12 +29,12 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCA-R` | 5 | 5 | — | — | — |
 | `DATA-R` | 5 | 5 | — | — | — |
 | `API-R` | **2** | **2** | — | — | — |
-| `TOOL-R` | 1 | 1 | — | — | — |
+| `TOOL-R` | **2** | **2** | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **146** | **94** | **1** (+1 partial) | **0** | **50** |
+| **Total** | **147** | **95** | **1** (+1 partial) | **0** | **50** |
 
-`94 + 1 + 1 + 0 + 50 = 146`. **There are no unrecorded findings left.** All three blocks
+`95 + 1 + 1 + 0 + 50 = 147`. **There are no unrecorded findings left.** All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -3955,3 +3955,75 @@ key name with a working one-line-adapter precedent.** The right move is the cred
 just shipped plus the dependency move — both of which delete dead weight — and *not* a
 speculative rename of 47 sites, which would churn a public surface and break the one real
 consumer to buy something a small adapter already provides on the day a second model appears.
+
+
+---
+
+## `TOOL-R2` — **Low, new: a base dependency nothing imports**
+
+Raised by the `TOOL-07` investigation and closed the same day, on the owner's call:
+
+> *"Someone reading pyproject.toml concludes this library talks to Anthropic. It doesn't.
+> We must absolutely fix then!"*
+
+`anthropic>=0.28` sat in `[project].dependencies`, so every consumer installed it. Measured:
+the only importer in the repository is `scripts/audit/count_tool_tokens.py` — an audit
+artifact — and `'anthropic' in sys.modules` is `False` after loading the whole package. Moved
+to the `dev` extra, where `mypy`'s `scripts/` coverage needs it anyway.
+
+**Verified behaviourally, not by reading the manifest.** The import was blocked at the finder
+level — so any attempt raises `ImportError` exactly as on a base install — and the whole
+package imported: `package imported with anthropic blocked: OK`, `tools still defined: 44`.
+
+Held as a two-sided rule over a list of vendors, like the credential rule before it:
+`test_no_model_sdk_is_a_base_dependency` reads `[project].dependencies`, and
+`test_no_shipped_module_imports_a_model_sdk` walks the package's imports, so the first cannot
+be satisfied by a package that is simply broken. A third test proves the import probe can find
+`requests`, since both of the others assert an absence.
+
+```
+  ok  put anthropic back in base dependencies              -> caught
+  ok  a DIFFERENT vendor's SDK instead (openai)            -> caught
+  ok  and a third (mistralai), so it is not a list of two  -> caught
+  ok  a shipped module starts importing the SDK            -> caught
+  XX  CONTROL (dead anchor, must be refused)               -> not-applied
+```
+
+**The fourth was first reported "caught" for the wrong reason** — the import was inserted
+ahead of the module docstring, which broke collection, so pytest reported `1 error` rather than
+`1 failed`. Re-anchored into the import block. That is the second time in this session the same
+trap appeared; the distinction the harness draws between *did-not-run* and *caught* is what
+made it visible both times.
+
+### Was `anthropic` the only one? — swept, not assumed
+
+The whole base list was checked the same way rather than stopping at the instance, and two
+more dependencies are imported by no module under `ibkr_core_mcp/`. **Both are legitimate,
+and neither is the `anthropic` defect** — which is why the test is scoped to model SDKs and
+was deliberately *not* widened to "every base dependency must be imported", a rule that would
+have produced two false positives:
+
+| Dependency | Why no direct import | Verdict |
+|---|---|---|
+| `pyarrow` | It is pandas' Parquet **engine**, not something this code imports. `cache.py:321/336` call `pd.read_parquet` / `df.to_parquet`, and the engine resolves to `PyArrowImpl` — measured. pandas does not declare it, so this package must, or the Drive cache fails at runtime | **Required** |
+| `google-auth-httplib2` | Used by `googleapiclient`'s transport. `google-api-python-client` already requires `google-auth-httplib2<1.0.0,>=0.2.0` — read from the installed metadata | **Redundant, not dead** |
+
+`anthropic` was the only base dependency used by nothing, on any path.
+
+### A correction to this report
+
+The `TOOL-07` section recommended the move partly because it would shrink the `pip-audit`
+surface. **That was wrong** and is corrected here: CI resolves `.[dev,server,scraper]`
+(`ci.yml`), so a `dev` dependency is audited exactly as a base one is. The real benefits are
+what every consumer installs, and a manifest that describes the package honestly.
+
+### And the question underneath it
+
+The owner asked whether supporting a different model is worth it at all. Measured answer: the
+model-neutral interface **already exists and already ships**. `mcp_server.py` serves 46 tools
+and contains no reference to Anthropic or to any model client — MCP is an open protocol, and
+`inputSchema` is produced from `input_schema` in one line at `mcp_server.py:129`. So there are
+two doors: MCP for anything, and `ClaudeToolkit` as the Anthropic-shaped convenience path for
+a host app that is itself Anthropic-native. Nothing needs building, and a speculative rename of
+`input_schema` across 47 sites would churn a public surface and break the one real consumer to
+buy what a ~10-line adapter provides on the day a second model actually appears.

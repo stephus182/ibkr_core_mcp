@@ -79,6 +79,18 @@ failed before its fix:
   the definitions again; the CI audit uses pip-audit's requirements mode and installs nothing.
 
 ### Removed
+- **`anthropic` is no longer a base dependency** — moved to the `dev` extra. **No shipped
+  module ever imported it**: the only importer in the repository is
+  `scripts/audit/count_tool_tokens.py`, an audit artifact, and `mypy` type-checks `scripts/`,
+  so `dev` is where it belongs. Every consumer was installing an SDK this package never calls,
+  and `pyproject.toml` therefore claimed this library talks to Anthropic. It does not —
+  `ClaudeToolkit` defines tools and the host application owns the model client. Verified by
+  blocking the import at the finder level and loading the whole package: it imports cleanly
+  and all 44 tools are defined. Audit finding TOOL-R2.
+
+  Only affects consumers that relied on `anthropic` arriving transitively; they should
+  declare it themselves, as they already declare every other library they import.
+
 - **BREAKING — `Config.anthropic_api_key` is gone, and `Config.from_env()` no longer requires
   `ANTHROPIC_API_KEY`.** The field was required from the first `Config` commit (`182e483`,
   2026-05-23) and **never had a reader**: zero attribute accesses anywhere in the package, and

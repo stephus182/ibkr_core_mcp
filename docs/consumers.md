@@ -10,6 +10,12 @@
 
 ## Changes consumers should know about
 
+### 2026-09-17 — `anthropic` is no longer a base dependency
+
+Moved to the `dev` extra: no module under `ibkr_core_mcp/` imports it, and the only importer
+in the repository is an audit script. If your project imports `anthropic`, declare it in your
+own dependencies — it was previously arriving by accident.
+
 ### 2026-09-17 — BREAKING: `Config` no longer carries an Anthropic key
 
 `Config.anthropic_api_key` is removed and `Config.from_env()` no longer raises when
