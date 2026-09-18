@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-09-17
+
+The release-readiness audit release: everything since v1.2.2 was audited as one package
+(`docs/audits/release-readiness-audit-2026-09-16.md` — 175 findings, 125 closed, 50 written
+off, none open; the pre-tag security audit found nothing above the bar). **Major version
+because five changes are incompatible**, each marked breaking in its entry below: 29
+`IBKRClient` methods return models rather than dicts; `Config.anthropic_api_key` is gone and
+`Config.from_env()` no longer requires the key; SSE clients must send the bearer token; a
+price alert's `tif` is GTC or GTD only; and `update_delivery_option` takes `device_name` and
+`ui_name`.
+
 ### Security
 Findings of the 2026-09-17 fresh-eye review of the release-readiness branch
 (`docs/audits/release-readiness-audit-2026-09-16.md`, Phase 4), each test-first:
@@ -946,7 +957,8 @@ fail" pattern this audit found in the live suite and the order-write boundary.
 
 ---
 
-[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.2...v2.0.0
 [1.2.2]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.1.0...v1.2.0

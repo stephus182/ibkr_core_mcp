@@ -82,7 +82,7 @@ pip install git+https://github.com/stephus182/ibkr_core_mcp.git
 Or pin to a specific version:
 
 ```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v1.2.2
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v2.0.0
 ```
 
 Or for local development:
