@@ -282,16 +282,21 @@ A confused deputy is a trusted intermediary manipulated into using its privilege
 
 ```python
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
-_ORDER_ID_RE = re.compile(r"^[0-9]+$")
 _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 _NUMERIC_PATH_SEGMENT_RE = re.compile(r"^[0-9]+$")
 # Blocks values like "../../iserver/auth/status", "../order/987654321", etc.
 ```
 
-`_NUMERIC_PATH_SEGMENT_RE` backs `_validate_conid`, `_validate_page` and
-`_validate_notification_id`, added 2026-09-16. Those three values carry `int` annotations
-that do not survive into the interpolation — and `/iserver/secdef/search` returns `conid`
-as a **string** — so a string there is an ordinary value, not a hypothetical misuse.
+`_NUMERIC_PATH_SEGMENT_RE` is the one numeric rule, applied through `_require_numeric` by
+`_validate_order_id` (order and alert IDs), `_validate_conid`, `_validate_page` and
+`_validate_notification_id`. The last three were added 2026-09-16: those values carry
+`int` annotations that do not survive into the interpolation — and `/iserver/secdef/search`
+returns `conid` as a **string** — so a string there is an ordinary value, not a
+hypothetical misuse. Until 2026-09-17 the order-id rule was a separate `_ORDER_ID_RE`,
+byte-identical to this one, behind its own validator with its own message — one rule in
+two places, which is how a fix reaches one copy and not the other (SEC-R7).
+`tests/security/test_documented_controls.py` now fails if two names in `client.py` compile
+one pattern, or if a numeric validator stops going through `_require_numeric`.
 
 `_REPLY_ID_RE` is applied in both places that build `/iserver/reply/{id}` — `reply_order`
 and `_resolve_one_reply`. Only the first validated until 2026-09-16 (SEC-03).
@@ -318,12 +323,13 @@ account id in the same URL. `tests/security/test_path_identifier_validation.py` 
 the property itself: every interpolated value is passed to a validator, or listed with a
 reason (audit findings SEC-03, SEC-04).
 
-`_ORDER_ID_RE` is `[0-9]`, never `\d`. Python's `\d` matches Unicode decimal digits, and
-`int()` accepts them: `\d+` admits `"١٢٣"` (Arabic-Indic), which `int()` reads as 123, and
-`"1٢2"`, which it reads as **122** — a different order id than the string appears to name.
-This block printed the `\d` form until 2026-09-16 while `client.py` had `[0-9]`, so the
-documented mitigation was weaker than the implemented one and a reader copying it would have
-reintroduced the gap; the fix itself is recorded in the audit log at the end of this file.
+`_NUMERIC_PATH_SEGMENT_RE` is `[0-9]`, never `\d`. Python's `\d` matches Unicode decimal
+digits, and `int()` accepts them: `\d+` admits `"١٢٣"` (Arabic-Indic), which `int()` reads
+as 123, and `"1٢2"`, which it reads as **122** — a different order id than the string
+appears to name. This block printed the `\d` form of the then-separate `_ORDER_ID_RE`
+until 2026-09-16 while `client.py` had `[0-9]`, so the documented mitigation was weaker
+than the implemented one and a reader copying it would have reintroduced the gap; the fix
+itself is recorded in the audit log at the end of this file.
 `tests/security/test_documented_controls.py` now fails if the two drift apart again.
 
   (`order_id`/`alert_id` validation was added 2026-07-11 after an audit found `delete_alert(alert_id="../order/<id>")` could collapse to `cancel_order`'s URL — see `docs/audits/security-audit-2026-07-11.md` H-2. `account_id` alone was not sufficient; every path-interpolated identifier needs the same treatment.)
@@ -584,7 +590,7 @@ the rest from the 2026-09-13 audit:
 | `test_tool_capabilities.py` | Every tool declares capabilities; none declares `ORDER_EXECUTION`; `READ_ONLY` never shares a declaration with a mutating capability; every sink a handler touches is declared |
 | `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
-| `test_error_redaction.py` | Secret-shaped material (18 forms, userinfo, OAuth parameters and the quoted JSON forms included) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
+| `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
 | `test_documented_controls.py` | The regexes this document presents as the mitigation are character-for-character what `client.py` compiles, in both directions; the documented `order_id` pattern actually rejects Unicode digits; every file running under `-m security` appears in the table above |
@@ -841,17 +847,33 @@ async def _reject_private_requests(route, request):
     if _is_private(url):
         await route.abort()
         return
+    headers = None  # set at the first cross-origin hop, then kept
     for _ in range(_MAX_REDIRECT_HOPS):
-        response = await route.fetch(url=url, method=method, max_redirects=0)
+        response = await route.fetch(url=url, method=method, max_redirects=0, **({"headers": headers} if headers else {}))
         if response.status not in _REDIRECT_STATUSES:
             await route.fulfill(response=response)
             return
-        url = urllib.parse.urljoin(url, response.headers.get("location"))
+        previous, url = url, urllib.parse.urljoin(url, response.headers.get("location"))
+        if headers is None and _origin(url) != _origin(previous):
+            headers = {k: v for k, v in request.headers.items() if k not in ("authorization", "proxy-authorization")}
         if _is_private(url):
             await route.abort()
             return
     await route.abort()
 ```
+
+**Following by hand also means doing what the browser does to the headers on the way.** The
+Fetch standard's HTTP-redirect step deletes `Authorization` when a hop leaves the current
+URL's origin, and Chromium does so when it follows a 3xx itself; `route.fetch` does not.
+Measured 2026-09-17 with real Chromium against two loopback echo servers: a header a page's
+own script set on its fetch arrived at the other origin whole by default, and an explicit
+`headers=` override without it arrived with the same header set minus that one. So from the
+first cross-origin hop on, the walker passes the intercepted request's headers without
+`Authorization` and `Proxy-Authorization`, and never restores them; same-origin hops pass no
+override. Cookies are not in `request.headers` and are applied per hop from the context's own
+jar, which the same measurement confirmed. Raised by the pre-tag review of 2026-09-17 as
+`SEC-R9`; held by three tests in `tests/test_local_browser.py` (cross-origin drops, same-origin
+keeps, a default-port spelling is the same origin), the first watched failing.
 
 This handler intercepts every request Chromium makes during the page load — the initial
 navigation and every subresource — and re-resolves + re-checks each one at the moment it's
@@ -1056,6 +1078,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 | 2026-07-01 | `eece77b` | New Crawl4AI fallback surface — `local_browser.py` (new), `claude_tools.py` (`_validate_public_url`, `_scrape_with_fallback`) | 2 candidate SSRF findings identified, each independently re-verified against the actual code by a separate filtering pass: DNS-rebinding TOCTOU between `_validate_public_url`'s validation-time DNS resolution and Crawl4AI/Chromium's independent fetch-time resolution (confidence 7/10); unvalidated-redirect-based bypass (confidence 3/10, downgraded per open-redirect precedent but confirmed as a real code gap on read-through). Both fixed in code rather than accepted as residual risk — see `_reject_private_requests` in the SSRF Prevention section above (Playwright-level per-request guard via Crawl4AI's `on_page_context_created` hook, closing both gaps at the actual fetch layer). Path-traversal via a crafted hostname (`profiles_dir / domain`) also hardened: `_safe_domain` now explicitly rejects `..`/`/`/`\`, replacing what had been an incidental block via `_validate_public_url`'s IDNA-encoding failure. No credential exposure or command injection issues found. |
 | 2026-09-13 | `c4b4ba8..e57aabb` | Security *architecture* audit — whether the boundaries are enforceable and whether a lint-clean, typed, green change (possibly by a coding agent) could violate one silently. Read-only trace of every tool to its sinks, then live probes. | 3 confirmed: sandbox arbitrary file **read** (`Styler.from_custom_template` through the un-redacted error channel) and **write** (`to_csv` and five by-name forms) from strategy code — both demonstrated by execution, fixed with an attribute allowlist; SSE transport without Host/Origin validation (SDK default) — fixed. 9 architectural weaknesses closed with structural tests: `tests/security/` (9 files, 138 tests, each structural checker proven to fire on a violating snippet), `capabilities` on all 46 tools, `redact_error`, `.env` isolation, `inet_aton` literal parsing + `100.64.0.0/10`, dict copy before the gates, subprocess allowlist. CI gained `pip-audit` (first run caught nltk PYSEC-2026-3740, no fix, ignored with re-check) and `gitleaks`. GitHub's default CodeQL setup evaluated on its record and kept as a non-gate. Design written up as `docs/security-architecture.md`. A fresh-eye multi-angle code review the same day found the first sandbox fix still reachable through the exposed classes (`pd.Series.apply(series, 'to_csv', …)`) and through dict views, and two pandas idioms it had broken (`df.close`, named aggregation); the transport allowlist refusing a port-less `Host`; the redaction rules letting `refresh_token=` through; the seeder with no per-request guard; the session-wide socket block skipping the first live module's fixtures; and the `mcp` floor too low for `transport_security`. All fixed the same day with the reproducing tests first (audit Addendum D). |
 | 2026-09-14 | `c03e038` | Security guidance recalibration against the OWASP GenAI Security Project's *A Practical Guide for Secure MCP Server Development* v1.0 (Feb 2026), retrieved in full with Firecrawl and archived under `docs/audits/audit-evidence/scrapes/`; the official MCP best-practices page re-read as served (2026-07-28 revision) | 49 OWASP items classified: 21 apply and are covered or exceeded, 8 apply in part, 20 do not apply to a local single-operator deployment. OWASP adopted as the principal external baseline; the six-row MCP mapping retired — two of its rows had come to cite sections that now mean something else (OAuth token scopes; a renamed hijacking section about server-minted handles). Three changes, each test-first. **Invariant 11** (new): MCP argument validation against `inputSchema` held only by SDK default and untested, with `mcp<2` capped because 2.0 removes the decorator carrying that default — now asserted through `_dispatch`, together with the fact the SDK validates only listed tools. **Invariant 10** (widened): the SSE transport gained a per-launch bearer token, first written down as an accepted residual and implemented the same day once the review found no consumer that would break. **Path disclosure**: `redaction.collapse_home` rewrites the operator's home directory as `~` for every model-facing message, closing something the 2026-07-11 audit had noted and left. The read-then-fetch exfiltration chain under prompt injection was investigated and accepted, with what bounds it named. Full matrix, including everything rejected and why: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. |
+| 2026-09-17 | branch `audit/release-readiness-2026-09-16`, session 14 | Pre-tag security audit: the two open `SEC-R` findings of the release-readiness register closed test-first (`SEC-R6` — the committed-file account-number guard covered one length of the class the redactor masks; `SEC-R7` — one numeric path rule compiled under two names), then a diff-wide review of every package and script file the branch changed against this document's threat model, plus CI's two network gates run locally in their exact form (`pip-audit --strict` over a fresh resolve: no known vulnerabilities, 1 recorded ignore; `gitleaks` over the 64-commit range: no leaks) | No finding met the review's bar. Its two below-bar observations were reproduced rather than taken on trust, both real, both fixed test-first: `SEC-R8` (a quoted secret severed before its closing quote passed `redact_error` whole — 20 shapes held now) and `SEC-R9` (the hand-walked redirect chain forwarded `Authorization` across origins, which the browser deletes per the Fetch standard — measured with real Chromium before it was written; live browser suite 13/13 after). Register: `docs/audits/release-readiness-audit-2026-09-16.md` Phase 5 — 175 findings, 115 closed, 10 open (one Medium, eight Low, one Nit, none security), 50 written off. |
 | 2026-07-11 | `4e38655..e587695` | Full codebase — 6-agent parallel audit (one per risk cluster: auth/order gates; backtest sandbox + store; network/SSRF/Drive/Flex; IBKR client + MCP server; `claude_tools.py` LLM-tool layer; gateway Docker/shell infra), every finding independently re-verified by a second adversarial agent before inclusion | 6 findings, all fixed: 4 High — RCE via `DataFrame.eval`/`.query` in the backtest sandbox (H-1); `order_id`/`alert_id` path traversal letting the ungated `delete_alert` tool's URL collapse to `cancel_order`'s (bypassing Touch ID + confirmation dialog) (H-2); gateway Docker container published on all host interfaces instead of loopback (H-3); SSRF guard's IPv4-only DNS resolution failing open on AAAA-only hosts (H-4). 2 Medium — gateway IP allowlist matching full `/8` blocks instead of actual RFC 1918 ranges (M-1); `import_flex_file`'s path-prefix check admitting sibling directories via string-prefix matching instead of a path-boundary check (M-2). 1 candidate finding (Gate-2 dialog/order-dict TOCTOU in `place_order`/`modify_order`) investigated and dropped at verification — no reachable caller in this repo. Each fix went through implementer + independent spec-compliance + independent code-quality review before acceptance; two review rounds found real follow-up issues (a Unicode-digit regex gap in H-2's `_ORDER_ID_RE`, a second stale doc reference for H-3), both fixed forward in separate commits rather than folded silently into the original ones. |
 
 Full audit reports: [`docs/audits/security-audit-2026-05-25.md`](docs/audits/security-audit-2026-05-25.md) · [`docs/audits/security-audit-2026-06-10.md`](docs/audits/security-audit-2026-06-10.md) · [`docs/audits/security-audit-2026-07-11.md`](docs/audits/security-audit-2026-07-11.md) · [`docs/audits/security-architecture-audit-2026-09-13.md`](docs/audits/security-architecture-audit-2026-09-13.md) · [`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`](docs/audits/owasp-mcp-guide-applicability-2026-09-14.md). The living design behind these controls: [`docs/security-architecture.md`](docs/security-architecture.md).

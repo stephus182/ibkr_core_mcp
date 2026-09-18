@@ -430,6 +430,13 @@ async def _abort_quietly(route: Any) -> None:
         log.debug("SSRF guard: route already resolved, abort skipped (%s)", exc)
 
 
+# The Fetch standard names one header to delete on a cross-origin redirect, `Authorization`;
+# `Proxy-Authorization` is dropped with it because it is the same kind of credential for the
+# same reason. Default ports, so `https://a/` and `https://a:443/` read as one origin.
+_CROSS_ORIGIN_DROPPED_HEADERS = frozenset({"authorization", "proxy-authorization"})
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 async def _reject_private_requests(route: Any, request: Any) -> None:
     """Playwright route handler: abort any request whose host is private/loopback/
     link-local/reserved, **including every host in its redirect chain**; otherwise serve it.
@@ -457,6 +464,17 @@ async def _reject_private_requests(route: Any, request: Any) -> None:
     Note `route.fulfill()` serves the final body without a navigation, so `page.url` stays
     at the first URL of the chain even when the content came from the last.
 
+    **A hop to another origin drops `Authorization`.** Following by hand also means doing
+    what the browser does to the headers on the way: the Fetch standard's HTTP-redirect step
+    deletes `Authorization` when the current URL's origin is not same origin with the
+    target's, and Chromium does so when it follows a 3xx itself. `route.fetch` does not —
+    measured 2026-09-17 with real Chromium against two loopback echo servers, a header the
+    page's own script had set on its fetch arrived at the other origin whole — so the walker
+    passes an explicit header set without it from the first cross-origin hop on, and never
+    restores it (SEC-R9). Same-origin hops pass no override, so they carry exactly what the
+    intercepted request carried. Cookies are not in `request.headers` and are applied per
+    hop from the context's own jar, which the same measurement confirmed.
+
     Args:
         route: Playwright `Route` object for the intercepted request.
         request: Playwright `Request` object; `request.url` is the URL about to be fetched.
@@ -470,13 +488,25 @@ async def _reject_private_requests(route: Any, request: Any) -> None:
         host = (urllib.parse.urlparse(candidate).hostname or "").lower()
         return bool(host) and is_private_host(host)
 
+    def _origin(candidate: str) -> tuple[str, str, int | None]:
+        parts = urllib.parse.urlsplit(candidate)
+        scheme = parts.scheme.lower()
+        return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
     if _is_private(url):
         await _abort_quietly(route)
         return
 
+    # None until the chain leaves its origin; from then on the intercepted request's headers
+    # without the credentials a browser would have deleted at that hop.
+    headers: dict[str, str] | None = None
+
     try:
         for _ in range(_MAX_REDIRECT_HOPS):
-            response = await route.fetch(url=url, method=method, max_redirects=0)
+            if headers is None:
+                response = await route.fetch(url=url, method=method, max_redirects=0)
+            else:
+                response = await route.fetch(url=url, method=method, max_redirects=0, headers=headers)
             if response.status not in _REDIRECT_STATUSES:
                 await route.fulfill(response=response)
                 return
@@ -485,7 +515,13 @@ async def _reject_private_requests(route: Any, request: Any) -> None:
                 # A 3xx with nowhere to go: serve it rather than inventing a destination.
                 await route.fulfill(response=response)
                 return
-            url = urllib.parse.urljoin(url, location)
+            previous, url = url, urllib.parse.urljoin(url, location)
+            if headers is None and _origin(url) != _origin(previous):
+                headers = {
+                    name: value
+                    for name, value in dict(request.headers).items()
+                    if name.lower() not in _CROSS_ORIGIN_DROPPED_HEADERS
+                }
             # A browser demotes the method to GET on 301/302/303; 307/308 preserve it.
             if response.status in (301, 302, 303) and method != "HEAD":
                 method = "GET"

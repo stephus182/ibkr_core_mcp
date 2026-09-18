@@ -50,6 +50,12 @@ SECRETS = {
     "python repr": "{'api_key': 'SECRETREPR'}",
     "json spaced value": '{"password": "SECRET PHRASE HERE"}',
     "drive error body": 'HttpError 401: {"error": "invalid_credentials", "access_token": "SECRETDRIVE"}',
+    # SEC-R8, 2026-09-17: a quoted value severed before its closing quote — the shape a
+    # body cut at `with_retry`'s or `_decode`'s 400-character preview has when the cut lands
+    # inside the value — matched neither the quoted branch (no closing quote) nor the
+    # unquoted one (the opening quote is not in its class), and passed through whole.
+    "json severed value": 'HttpError 401: {"error": "x", "access_token": "SECRETSEVERED',
+    "repr severed value": "{'refresh_token': 'SECRETSEVEREDREPR",
 }
 
 

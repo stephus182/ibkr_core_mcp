@@ -45,8 +45,12 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
         # shape an OAuth or Drive error body has (SEC-06, 2026-09-17).
         r"['\"]?\s*[=:]\s*"
         # A quoted value is consumed to its closing quote, so a secret containing spaces
-        # cannot leave its tail behind; an unquoted one stops at the first delimiter.
-        r"(?:'[^']*'|\"[^\"]*\"|[^\s'\"&;,]+)"
+        # cannot leave its tail behind; an unquoted one stops at the first delimiter. The
+        # closing quote is optional: a body cut inside a quoted value — `with_retry` and
+        # `_decode` keep a 400-character preview — has none, and until 2026-09-17 such a
+        # value matched neither branch and passed through whole (SEC-R8). Consuming to the
+        # end of the line in that case over-redacts, which is the safe direction.
+        r"(?:'[^']*'?|\"[^\"]*\"?|[^\s'\"&;,]+)"
     ),
 )
 

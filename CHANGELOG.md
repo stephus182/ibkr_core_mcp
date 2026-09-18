@@ -10,6 +10,55 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Security
+Findings of the 2026-09-17 fresh-eye review of the release-readiness branch
+(`docs/audits/release-readiness-audit-2026-09-16.md`, Phase 4), each test-first:
+- **The committed-file account-number guard covered one length of the class the redactor
+  masks (SEC-R6, Medium).** `tests/security/test_published_identifiers.py` scanned every
+  tracked file for `U` + exactly seven digits, while `scripts/audit/redact_live_payload.py`
+  rewrites `U` + six to nine before the fixture is written — so a six- or eight-digit account
+  number would have passed the guard the capture script refuses. Its comment attributed the
+  seven-digit shape to `client.py`, whose `_ACCOUNT_ID_RE` is a path-safety allow-list and
+  says nothing about length. The guard now matches the redactor's class byte-for-byte, held
+  by `test_the_guard_covers_exactly_the_class_the_redactor_masks` (pattern identity plus
+  per-length probes) and by fire tests at six, seven, eight and nine digits, each watched
+  failing first; the redactor's `\d` became `[0-9]` to match the codebase's rule for every
+  digit class. No exposure: the tree was re-scanned under the widened pattern and the only
+  new matches are two six-digit test placeholders, now listed as such.
+- **One numeric path rule compiled under two names (SEC-R7, Nit).** `client.py` had
+  `_ORDER_ID_RE` and `_NUMERIC_PATH_SEGMENT_RE` as the same `^[0-9]+$`, six lines apart, each
+  behind its own validator with its own message — the shape by which a fix reaches one copy
+  and not the other. `_ORDER_ID_RE` is gone; `_validate_order_id` goes through
+  `_require_numeric` like the conid, page and notification-id validators, and
+  `test_documented_controls.py` fails if two names in `client.py` compile one pattern or a
+  numeric validator stops sharing the rule. Measured side effect: an `int` order id, which
+  used to escape as a raw `TypeError` from `re.fullmatch`, is now accepted as its digits, and
+  `True` is refused with the `ConfigError` every other bad value gets. The H-2 strings,
+  Unicode digits, `-1`, `1.0`, `None` and `""` are refused as before. `SECURITY.md`'s
+  mitigation block and `docs/security-architecture.md`'s invariant-9 row name three regexes
+  now, not four.
+- **A quoted secret severed before its closing quote passed through redaction whole (SEC-R8,
+  Low).** Raised by the pre-tag diff review and reproduced: `{"access_token": "abc123` — the
+  shape an error body has when `with_retry`'s or `_decode`'s 400-character preview cuts inside
+  the value — matched neither the quoted branch of the identifier rule (no closing quote) nor
+  the unquoted one (the opening quote is outside its class), for the JSON and the repr
+  spelling alike; the whole forms were scrubbed. No surface in this package is known to
+  produce such a body, and the pre-branch pattern had the same gap. The closing quote is now
+  optional, so a severed value is consumed to the end of the line — over-redaction, the safe
+  direction; ordinary error text is unchanged. Two shapes added to `test_error_redaction.py`'s
+  table (20 now), watched failing first.
+- **The redirect walker forwarded `Authorization` across origins (SEC-R9, Low).** Raised by the
+  same review. `_reject_private_requests` follows each 3xx by hand so that every hop is checked
+  (2026-09-16), and `route.fetch` forwards the intercepted request's headers to whatever URL it
+  is given — measured with real Chromium against two loopback echo servers: a header a page's
+  own script set arrived at the other origin whole. The Fetch standard deletes `Authorization`
+  on a cross-origin redirect and Chromium does when it follows the hop itself. From the first
+  cross-origin hop on, the walker now passes the request's headers without `Authorization` and
+  `Proxy-Authorization` and never restores them; same-origin hops are unchanged, and a
+  default-port spelling counts as the same origin. The credential at stake is the crawled
+  site's own, sent where that site redirected; the operator's saved logins are cookies, which
+  are applied per hop from the context's jar and were never in the forwarded set. Three tests
+  in `tests/test_local_browser.py`, the first watched failing; the live suite re-run after.
+
 Findings of the 2026-09-14 recalibration against the OWASP GenAI Security Project's
 *A Practical Guide for Secure MCP Server Development* v1.0
 (`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`), each test-first:

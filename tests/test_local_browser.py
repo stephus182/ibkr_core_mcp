@@ -232,6 +232,7 @@ class _FakeRoute:
         self.continued = False
         self.fulfilled = None
         self.fetched = []
+        self.fetched_headers = []  # the `headers=` override per fetch, None when not passed
         self._responses = list(responses or [])
 
     async def abort(self):
@@ -240,8 +241,9 @@ class _FakeRoute:
     async def continue_(self):
         self.continued = True
 
-    async def fetch(self, *, url=None, method=None, max_redirects=None):
+    async def fetch(self, *, url=None, method=None, max_redirects=None, headers=None):
         self.fetched.append((url, method, max_redirects))
+        self.fetched_headers.append(headers)
         if self._responses:
             return self._responses.pop(0)
         return _FakeResponse(200)
@@ -251,9 +253,11 @@ class _FakeRoute:
 
 
 class _FakeRequest:
-    def __init__(self, url, method="GET"):
+    def __init__(self, url, method="GET", headers=None):
         self.url = url
         self.method = method
+        # Playwright's `request.headers`: lower-cased names, cookie headers excluded.
+        self.headers = headers if headers is not None else {"user-agent": "probe"}
 
 
 @pytest.mark.asyncio
@@ -358,6 +362,70 @@ async def test_reject_private_requests_demotes_the_method_to_get_on_a_303(monkey
     route = _FakeRoute([_FakeResponse(303, {"location": "https://other.example/here"}), _FakeResponse(200)])
     await _reject_private_requests(route, _FakeRequest("https://public.example/submit", method="POST"))
     assert [f[1] for f in route.fetched] == ["POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_drops_authorization_on_a_cross_origin_hop(monkeypatch):
+    """SEC-R9. The Fetch standard's HTTP-redirect step: when the current URL's origin is not
+    same origin with the redirect target's, delete `Authorization` from the request — the
+    one header it names. Chromium does this when it follows a 3xx itself; the walker, which
+    follows by hand, forwarded the intercepted request's headers to every hop. **Measured
+    2026-09-17 with real Chromium against two loopback echo servers**: a header the page's
+    own script set on a fetch arrived at the other origin by default, and an explicit
+    `headers=` override without it arrived with the same header set minus that one.
+    """
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+    route = _FakeRoute([_FakeResponse(302, {"location": "https://other.example/here"}), _FakeResponse(200)])
+    request = _FakeRequest(
+        "https://public.example/api",
+        headers={"authorization": "Bearer SITE-TOKEN", "proxy-authorization": "Basic x", "x-probe": "yes"},
+    )
+    await _reject_private_requests(route, request)
+    assert route.aborted is False
+    assert route.fetched_headers[0] is None, "the first fetch is the request as intercepted"
+    assert route.fetched_headers[1] == {"x-probe": "yes"}, route.fetched_headers[1]
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_keeps_headers_on_a_same_origin_hop(monkeypatch):
+    """The counter-case: a same-origin hop is what a session-bound site does on every login
+    redirect, and the browser keeps `Authorization` there. No override is passed at all, so
+    the fetch carries exactly what the intercepted request carried."""
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+    route = _FakeRoute([_FakeResponse(302, {"location": "/there"}), _FakeResponse(200)])
+    request = _FakeRequest("https://public.example/api", headers={"authorization": "Bearer SITE-TOKEN"})
+    await _reject_private_requests(route, request)
+    assert [f[0] for f in route.fetched] == ["https://public.example/api", "https://public.example/there"]
+    assert route.fetched_headers == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_reject_private_requests_treats_a_default_port_as_the_same_origin(monkeypatch):
+    """`https://a.example/` and `https://a.example:443/` are one origin; a hop between the two
+    spellings must not be mistaken for a cross-origin one and stripped."""
+    import socket
+
+    from ibkr_core_mcp.local_browser import _reject_private_requests
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    )
+    route = _FakeRoute([_FakeResponse(302, {"location": "https://public.example:443/there"}), _FakeResponse(200)])
+    request = _FakeRequest("https://public.example/api", headers={"authorization": "Bearer SITE-TOKEN"})
+    await _reject_private_requests(route, request)
+    assert route.fetched_headers == [None, None]
 
 
 @pytest.mark.asyncio
@@ -1425,10 +1493,10 @@ class _TornDownRoute(_FakeRoute):
         self.abort_attempts += 1
         raise RuntimeError("Route.abort: Route is already handled!")
 
-    async def fetch(self, *, url=None, method=None, max_redirects=None):
+    async def fetch(self, *, url=None, method=None, max_redirects=None, headers=None):
         if self._fetch_raises:
             raise RuntimeError("Route.fetch: Target page, context or browser has been closed")
-        return await super().fetch(url=url, method=method, max_redirects=max_redirects)
+        return await super().fetch(url=url, method=method, max_redirects=max_redirects, headers=headers)
 
     async def fulfill(self, *, response=None):
         if self._fulfill_raises:

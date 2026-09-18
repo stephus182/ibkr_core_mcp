@@ -30,13 +30,21 @@ pytestmark = pytest.mark.security
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# IBKR account numbers are `U` + 7 digits (live) — the shape `client.py` validates.
+# The account class the capture redactor masks — `U` + six to nine digits — and nothing
+# narrower: the two controls cover one class, held byte-for-byte by
+# `test_the_guard_covers_exactly_the_class_the_redactor_masks`. Until 2026-09-17 this was
+# `U` + exactly seven digits, with a comment attributing that shape to `client.py`, whose
+# `_ACCOUNT_ID_RE` is a path-safety allow-list (`^[A-Z0-9]{4,12}$`) and says nothing about
+# how long an account number is (SEC-R6). A paper account (`DU…`) is found through its
+# `U` + digits tail, since the left side is unanchored.
+#
 # Deliberately NOT anchored with `\b` on the left: the first version was, and `_` is a
 # word character, so every `flex_U<real>_2026-07-02_2928480049.xml` filename was
 # invisible to it — four of the eight offending files, missed by the check written to
 # find them. The right-hand guard is a negative lookahead so a longer number is not
-# truncated into a false match.
-ACCOUNT_SHAPED = re.compile(r"U[0-9]{7}(?![0-9])")
+# truncated into a false match. `[0-9]`, not `\d`, for the reason SECURITY.md records
+# for `_NUMERIC_PATH_SEGMENT_RE`.
+ACCOUNT_SHAPED = re.compile(r"U[0-9]{6,9}(?![0-9])")
 
 # Fictional numbers this repository uses on purpose. Each is a placeholder in test
 # fixtures or documentation examples, never an account that exists.
@@ -46,6 +54,11 @@ PLACEHOLDERS = frozenset(
         "U0000000",
         "U1111111",
         "U9999999",
+        # Six-digit placeholders, in the class since the guard widened (SEC-R6):
+        # `tests/claude_tools/test_trades.py`'s two fake accounts and the `DU123456`
+        # paper-account example in `tests/test_client.py`.
+        "U123456",
+        "U999999",
     }
 )
 
@@ -124,10 +137,48 @@ def test_the_check_fires_however_the_number_is_embedded(template):
     assert set(ACCOUNT_SHAPED.findall(template.format(CONTROL_ACCOUNT))) == {CONTROL_ACCOUNT}
 
 
+@pytest.mark.parametrize("digits", [6, 7, 8, 9])
+def test_the_check_fires_on_every_length_the_redactor_masks(digits):
+    """SEC-R6. The first version of this guard matched `U` + exactly seven digits while the
+    redactor masks six to nine, so a six- or eight-digit id would have passed the guard the
+    capture script refuses. Assembled at runtime for the same reason as `CONTROL_ACCOUNT`."""
+    number = "U" + ("98" + "7654321")[:digits]
+    assert len(number) == digits + 1
+    assert set(ACCOUNT_SHAPED.findall(f"account {number} here")) - PLACEHOLDERS == {number}
+
+
 def test_the_pattern_does_not_truncate_a_longer_number():
-    """The counter-case for the lookahead. Without it `U12345678` would read as `U1234567`
-    — a placeholder — and a genuinely different number would be silently exempted."""
-    assert ACCOUNT_SHAPED.findall("U12345678") == []
+    """The counter-case for the lookahead. Without it an eight-digit number would read as
+    its first seven digits — possibly a placeholder — and a genuinely different number
+    would be silently exempted; and a ten-digit one, outside the class, would read as a
+    nine-digit id it is not."""
+    eight = CONTROL_ACCOUNT + "0"
+    ten = CONTROL_ACCOUNT + "000"
+    assert ACCOUNT_SHAPED.findall(eight) == [eight]
+    assert ACCOUNT_SHAPED.findall(ten) == []
+
+
+def test_the_guard_covers_exactly_the_class_the_redactor_masks():
+    """SEC-R6. Two controls, one class: what the redactor rewrites before the fixture is
+    written is what this guard refuses in a tracked file. The pattern is frozen HERE, not
+    imported, for the reason `test_the_redactor_has_not_widened_its_own_exemptions` gives
+    — so narrowing the redactor is a two-file change — and compared byte-for-byte, so the
+    two cannot drift by a digit again."""
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts/audit"))
+    import redact_live_payload
+
+    assert ACCOUNT_SHAPED.pattern == redact_live_payload.ACCOUNT_ID_RE.pattern, (
+        "the committed-file guard and the capture redactor no longer match the same account class"
+    )
+    # And the property, stated on probes rather than on spelling: every length the
+    # redactor rewrites, this guard finds; every length it leaves, this guard leaves.
+    for digits in range(4, 12):
+        number = "U" + ("98" + "76543210" + "9")[:digits]
+        masked = redact_live_payload.ACCOUNT_ID_RE.sub("X", number) != number
+        found = bool(ACCOUNT_SHAPED.findall(number))
+        assert masked == found, f"{digits} digits: redactor masks={masked}, guard finds={found}"
 
 
 def test_the_capture_script_still_redacts():

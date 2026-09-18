@@ -31,11 +31,13 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `API-R` | **11** | 6 | **5** | — | — |
 | `TOOL-R` | **6** | 3 | **3** | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| `SEC-R` | **7** | 5 | **2** | — | — |
-| **Total** | **173** | **111** | **12** | **0** | **50** |
+| `SEC-R` | **9** | **9** | — | — | — |
+| **Total** | **175** | **115** | **10** | **0** | **50** |
 
-`111 + 12 + 0 + 50 = 173`. **There are no unrecorded findings left**, and twelve recorded ones
-are open again — session 13's fresh-eye review of the whole branch, *Phase 4* below. All three blocks
+`115 + 10 + 0 + 50 = 175`. **There are no unrecorded findings left**, and ten recorded ones
+are open — session 13's fresh-eye review of the whole branch, *Phase 4* below, less the two
+`SEC-R` findings session 14 closed; session 14's own review raised `SEC-R8` and `SEC-R9` and
+closed both (*Phase 5*). All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -81,16 +83,16 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (12)
+### Open findings that do have a claim (10)
 
-Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
+Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`,
+`SEC-R6` and `SEC-R7` (session 14, *Phase 5*).
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
 0600 holders).
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
 | `TOOL-R4` | Medium | `_alert_write_error` matches the digits `403` anywhere in an error's text, so a 500 with reference 84031 or a 400 for alert 1403 tells the model the write is permanently blocked upstream and not to retry; `with_retry` always sets `status_code`, so the substring fallback only widens |
-| `SEC-R6` | Medium | `tests/security/test_published_identifiers.py`'s account-shaped regex is `U` + exactly 7 digits while the redactor masks and refuses 6 to 9, and its comment cites `client.py`'s `_ACCOUNT_ID_RE`, which is `^[A-Z0-9]{4,12}$`; a 6- or 8-digit id passes the committed-file guard the capture script would refuse |
 | `TOOL-R5` | Low | `_modify_price_alert` sends `outsideRth` as a JSON bool where `_create_price_alert` sends IBKR's 0/1 enum int — the TOOL-02 fix reached one of two bodies, the shape `TOOL-R3` closed for `tif` |
 | `API-R7` | Low | Two structural guards in `tests/test_client.py` (2301, 2906) open `client.py` by a cwd-relative path: both fail with `FileNotFoundError` when pytest runs from outside the repo root, both pass from it; `tests/security/structural.py` already anchors on `__file__` |
 | `DATA-R6` | Low | `vwap`'s default session is the **UTC** calendar day of the naive index `bars_to_dataframe` builds; measured on ES minute bars it reset from 4800 to 5000 at 00:00 UTC inside one CME session, and the docstring says "calendar day" without saying whose |
@@ -100,7 +102,6 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 | `API-R9` | Low | The `IBKRResponse`-subclass oracle is copied into five test files, and the return-annotation match uses substring containment in two of them and word-boundary regexes in three; `Alert` ⊂ `MTAAlert`, `Contract` ⊂ `ContractDetails`, so the first non-model name containing a model name splits the guards |
 | `API-R10` | Low | The dict-of-lists flatten exists in four spellings across `get_futures`, `get_stocks`, `get_currency_pairs` and `get_positions_by_conid`; the first three iterate a string when a 2xx body is `{"error": …}`, returning one-character rows or an empty list with IBKR's message discarded |
 | `API-R11` | Nit | `ENDPOINT_LIMITS` is keyed by `(path, method)` but the pacer discards the method, so per-verb entries would silently share a bucket, and `limits_for`/`_bucket_key` scan the matchers twice per request |
-| `SEC-R7` | Nit | `_NUMERIC_PATH_SEGMENT_RE` is byte-identical to `_ORDER_ID_RE` six lines above, with a second validator and a different message for one rule; `test_documented_controls.py` reads only the first |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
 > sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15`, `TOOL-07`,
@@ -127,7 +128,8 @@ is written up below with how its subject was located.
    every captured endpoint that does not carries a recorded reason, machine-checked.
 4. **The twelve findings of the 2026-09-17 fresh-eye review** (*Phase 4*), in severity order:
    two Medium, eight Low, two Nit. `API-R6`, the one High, closed in the same session — it had
-   silently broken the package's one consumer.
+   silently broken the package's one consumer. `SEC-R6` (Medium) and `SEC-R7` (Nit) closed in
+   session 14 (*Phase 5*); ten remain, one Medium, eight Low, one Nit.
 
 ~~Two things need the owner~~ — **both done 2026-09-16.** The gateway was re-authenticated,
 which unblocked Phase 0 gates 0.6 / 0.8 / 0.11 and settled API-R1, TOOL-R1 and API-17; and
@@ -4448,7 +4450,7 @@ session; two Medium, eight Low and two Nit, open, in the per-finding table above
 |---|---|---|
 | `API-R6` | **High** | **Typed returns silently emptied the package's one consumer.** claudia_ui installs this package editable from this checkout — a symlink per file, so it runs this branch whenever the branch is checked out — and gates every client row on `isinstance(row, dict)` or `isinstance(row, Mapping)`; an `IBKRResponse` passed neither. Measured with models built from the live fixture, inside claudia_ui's venv: `parse_orders` 1 → 0, `parse_positions` 2 → 0, `parse_fills` 4 → 0, `parse_contract_info` → None, the same dicts parsing in full. In ClaudIA: an empty positions table, an empty live-orders table, no live realised P&L, and a Gate 2 dialog without the contract-month line it gained on 2026-09-04 — with its suite green, because its mocks return dicts — and its mypy gate red, six errors in two files against Protocols and annotations declared for `dict`. `docs/consumers.md` had no entry and the `CHANGELOG` did not say breaking. **Closed** — below |
 | `TOOL-R4` | Medium | `_alert_write_error` returns the "permanently blocked upstream, do not retry" text for any exception whose text contains `403`. Probed: `IBKRAPIError(… "ref 84031", status_code=500)` and `IBKRAPIError(… "alert 1403 not found", status_code=400)` both get it; `with_retry` always sets `status_code`, so the substring fallback only widens |
-| `SEC-R6` | Medium | The committed-fixture guard's regex is `U[0-9]{7}` where the redactor's is `U\d{6,9}`, and its comment attributes the 7-digit shape to `client.py`, whose `_ACCOUNT_ID_RE` is `^[A-Z0-9]{4,12}$`. The second SEC-13 control covers one length of the class the first covers; no exposure today, the coverage claim false |
+| `SEC-R6` | Medium | The committed-fixture guard's regex is `U[0-9]{7}` where the redactor's is `U\d{6,9}`, and its comment attributes the 7-digit shape to `client.py`, whose `_ACCOUNT_ID_RE` is `^[A-Z0-9]{4,12}$`. The second SEC-13 control covers one length of the class the first covers; no exposure today, the coverage claim false. **Closed** session 14 — *Phase 5* |
 | `TOOL-R5` | Low | `_modify_price_alert` writes `outsideRth` as a Python bool where create casts to IBKR's 0/1 — TOOL-02's fix on one of two bodies, the `TOOL-R3` shape again; the translated body's IBKR int is overwritten with the bool. No effect while the gateway blocks alert writes |
 | `API-R7` | Low | `tests/test_client.py` 2301 and 2906 read `ibkr_core_mcp/client.py` relative to the working directory. From `/tmp`: 2 failed, `FileNotFoundError`; from the root: 2 passed. `tests/security/structural.py` already anchors on `__file__` |
 | `DATA-R6` | Low | `vwap(anchor="D")` runs on the naive-UTC index `bars_to_dataframe` builds, so a session is a UTC day. Measured on synthetic ES minute bars over one CME session with the first two hours at 4800 and the rest at 5000: VWAP 4800.00 at 23:59 UTC, 5000.00 at 00:00 UTC — the session's prints discarded at 20:00 New York. Wrong for futures, and for equities' extended hours under EST |
@@ -4458,7 +4460,7 @@ session; two Medium, eight Low and two Nit, open, in the per-finding table above
 | `API-R9` | Low | The `IBKRResponse`-subclass oracle is copied into five test files; the return-annotation match is substring containment in `test_client_event_contracts.py` 169 and `test_client_returns_models.py` 272, word-boundary in the other three. `Alert` ⊂ `MTAAlert`, `Contract` ⊂ `ContractDetails` — the first non-model class whose name contains a model name splits the guards |
 | `API-R10` | Low | Four spellings of "flatten a dict of lists" — `get_futures` 1132, `get_stocks` 1153, `get_currency_pairs` 1282, `get_positions_by_conid` 1455; the first three iterate the string of a 2xx `{"error": …}` body and hand `parse_many` one-character rows. The string shape predates the branch; the branch touched all three lines |
 | `API-R11` | Nit | `ENDPOINT_LIMITS` is keyed by `(path, method)`, and `EndpointPacer` drops the method when it builds its matchers, so two verbs on one path would silently share a bucket; `limits_for` and `_bucket_key` scan the list separately on every request |
-| `SEC-R7` | Nit | `_NUMERIC_PATH_SEGMENT_RE` (133) is byte-identical to `_ORDER_ID_RE` (127), with `_require_numeric` a second validator of one rule beside `_validate_order_id`, and different messages; `test_documented_controls.py` reads only the first |
+| `SEC-R7` | Nit | `_NUMERIC_PATH_SEGMENT_RE` (133) is byte-identical to `_ORDER_ID_RE` (127), with `_require_numeric` a second validator of one rule beside `_validate_order_id`, and different messages; `test_documented_controls.py` reads only the first. **Closed** session 14 — *Phase 5* |
 
 Read and found sound: the account joining the Gate 1 scope, `_decode` as the one boundary,
 `get_all_positions` and its raise at the guard, `_fits_in_one_call`, the sliding-window pacer
@@ -4528,3 +4530,139 @@ expired* (`DATA-R7`, `TOOL-R6`, the guard comment in `SEC-R6`). One shape is new
 register: *a check that reads the protocol, not the type* — an object can answer every method
 of a `Mapping`, to the runtime and to the reader, and still not be one to `isinstance` or to
 mypy. The fix for that class is to *be* the type, not to imitate it.
+
+---
+
+## Phase 5 — Pre-tag security audit: `SEC-R6` and `SEC-R7` closed
+
+Session 14 (2026-09-17). Scope: the two open `SEC-R` findings, then a fresh security review
+of the whole branch before a tag is cut. Every claim below was reproduced against the source
+before anything was edited, and every new guard was watched failing against the unchanged
+code first.
+
+### `SEC-R6` — closed
+
+**Reproduced.** `tests/security/test_published_identifiers.py:39` compiled
+`U[0-9]{7}(?![0-9])`; `scripts/audit/redact_live_payload.py:24` compiled `U\d{6,9}(?!\d)`;
+`client.py:123` compiles `^[A-Z0-9]{4,12}$`, a path-safety allow-list that says nothing about
+how long an account number is — so the comment "the shape `client.py` validates" was false,
+and a six-, eight- or nine-digit number would have been masked by the redactor and missed by
+the guard. Measured before the change: the widened pattern run over every tracked file
+outside the verbatim captures found **three files with new matches, all synthetic** —
+two six-digit fake accounts in `tests/claude_tools/test_trades.py`, the six-digit
+paper-account example in `tests/test_client.py`, and the guard's own eight-digit truncation
+counter-case. No exposure.
+
+**Fixed.** The guard is `U[0-9]{6,9}(?![0-9])` — the redactor's class exactly, and the
+redactor's `\d` is now `[0-9]`, the codebase's rule for every digit class — with the comment
+rewritten to say where the class comes from. The two six-digit placeholders are listed with
+their reason; the truncation counter-case is assembled at runtime (an eight-digit number is
+reported whole, a ten-digit one not at all). Three guards, seven tests, each watched failing
+first: fire tests at six, seven, eight and nine digits (an empty result set at six, eight
+and nine; seven passed as the control);
+`test_the_guard_covers_exactly_the_class_the_redactor_masks`, which holds the two patterns
+byte-identical — frozen in the test, not imported, so narrowing the redactor is a two-file
+change — and the property on probes from four to eleven digits (failed on the pattern
+comparison, seven-only against six-to-nine); and the rewritten truncation test (failed with
+an empty result for the eight-digit control). **The first draft of this section quoted those
+failure outputs verbatim and was refused by the widened guard itself** — three
+account-shaped strings in a tracked file — the same way the guard's first commit was refused
+on 2026-09-16. Rewritten in words; that refusal is the guard working.
+
+### `SEC-R7` — closed
+
+**Reproduced.** `client.py:127` and `:133` both compiled `^[0-9]+$`, `_validate_order_id`
+matched the first with "must be numeric" and `_require_numeric` the second with "must be a
+non-negative integer", and `test_documented_controls.py`'s Unicode-digit property read only
+`_ORDER_ID_RE`.
+
+**Fixed.** `_ORDER_ID_RE` is gone. `_validate_order_id` calls `_require_numeric`, as the
+conid, page and notification-id validators do, so the regex and the message exist once.
+`SECURITY.md`'s mitigation block prints three regexes and its prose names the merge;
+`docs/security-architecture.md`'s invariant-9 row likewise. Two new guards, watched failing
+first: `test_no_two_identifier_regexes_compile_the_same_pattern` (failed naming
+`{'r"^[0-9]+$"': ['_ORDER_ID_RE', '_NUMERIC_PATH_SEGMENT_RE']}`) and
+`test_every_numeric_path_validator_shares_the_one_rule` (failed naming
+`_validate_order_id`); the Unicode-digit property now reads the one rule.
+
+**Measured side effect, recorded rather than hidden.** The old validator handed an `int`
+order id to `re.fullmatch` and escaped as a raw `TypeError` — not an `IBKRCoreError`, so
+past the `except` the package tells callers to write; `True` escaped the same way. Both now
+go through `_require_numeric`: an `int` is accepted as its digits, `True` is refused with
+`ConfigError`. Probed after the merge: `""`, `../order/1`, `123/456`, `123#456`, `123 456`,
+`abc123`, `١٢٣`, `1٢2`, `-1`, `1.0`, `None`, `True`, `1.5` all refused; `987654321`, `0`
+and `123` accepted. The 51 validator tests in `tests/test_client.py` are unchanged and green.
+
+### The audit
+
+**Method.** The diff-review skill's shape: one reviewer read every package and script file
+the branch changed — `client.py`'s 1,554 diff lines, `models.py`'s 1,041, `claude_tools.py`'s
+1,013 and the twenty smaller files and six scripts in full — against SECURITY.md's threat
+model and the eleven invariants, reporting only defects it put at 0.7 confidence or better
+of real exploitability, and was told that finding nothing is a valid result. Then the two
+scanners CI runs and this package cannot run in its pre-push hook, in CI's exact form.
+
+**Result: no finding met the bar.** The reviewer's cleared list is in the session record;
+what matters here is that every region it cleared was one this register had already
+fixed test-first (the account in the Gate 1 scope, the reply-id validation in
+`_resolve_one_reply`, the numeric validators, the redirect-walking SSRF guard, the quoted
+JSON redaction forms, the SSE bearer token) and none had regressed. It offered two
+observations below its own bar. **Both were reproduced here rather than taken on trust, both
+turned out to be real, and both are fixed** — the owner's standing rule is that the
+confidence score answers "is it real?", not "should we fix it?"
+
+- `pip-audit --strict` over a fresh resolve of `.[dev,server,scraper]`, requirements mode,
+  the command from `.github/workflows/ci.yml` verbatim under `bash`: **no known
+  vulnerabilities, 1 ignored** (`PYSEC-2026-3740`, nltk, no fixed release, re-check
+  2026-10-13). Note for whoever runs it by hand next: under `zsh` the `$IGNORES` expansion
+  does not word-split and pip-audit refuses the arguments; CI's runner is `bash`.
+- `gitleaks git --log-opts=main..HEAD` with `.gitleaks.toml`: **64 commits, no leaks** — the
+  scan CI's `secret-scan` job runs. A full-history scan (679 commits) reports 23, all older
+  than the branch and all placeholders: 16 in the verbatim IBKR documentation capture
+  (`docs/audits/audit-evidence/scrapes/cpapi-v1.md` — IBKR's own example session cookie and
+  OAuth signatures) and 7 `sk_live_…` fixture strings in two July test files, one since
+  deleted. A working-tree `gitleaks dir` scan reads the untracked venv and build trees too
+  and reports 41; the 16 in tracked files are the same capture lines. None is a credential.
+- `pytest -m security`: 271 passed (264 before this session; the seven are above), then
+  **273** with `SEC-R8`'s two shapes — `SEC-R9`'s three tests live in `test_local_browser.py`,
+  outside the marker. Full unit suite **1,645 passed**, integration 102 collected; `ruff
+  check`, `ruff format --check` and `mypy` clean, each run bare and read on its own.
+
+### `SEC-R8` — Low, raised and closed: a severed quoted secret passed through redaction
+
+**Reproduced.** `redact_error(RuntimeError('x {"access_token": "abc123'))` returned the
+text unchanged, for the JSON and the repr spelling and for `client_secret` and `api_key`
+alike, while the whole forms were scrubbed. The identifier rule's value alternation was
+`'[^']*'|"[^"]*"|[^\s'"&;,]+`: a value cut before its closing quote — the shape a body has
+when `with_retry`'s or `_decode`'s 400-character preview lands inside it — matches neither
+quoted branch (no closing quote) nor the unquoted one (the opening quote is outside its
+class). The pre-branch pattern had the same gap; no surface in this package is known to
+produce such a body. **Fixed:** the closing quote is optional, so a severed value is
+consumed to the end of the line — over-redaction, the safe direction. Probed after: the
+four severed forms scrubbed; an `invalid_grant` body, a Drive 403 sentence, `KeyError:
+'rsi'` and the sandbox's `df['signal']` message unchanged. Two shapes added to
+`test_error_redaction.py`'s table, watched failing first (`'SECRET' not in …`); the table
+holds 20 and the two documents that state that count say so.
+
+### `SEC-R9` — Low, raised and closed: the redirect walker forwarded `Authorization` across origins
+
+**Reproduced, twice, because the first probe was wrong.** `_reject_private_requests`
+follows each 3xx with `route.fetch(url=…, max_redirects=0)` and no `headers=`. Playwright's
+documentation says a passed `headers` replaces the request's and says nothing about the
+default. Measured with real Chromium against two loopback echo servers on different ports:
+the first probe set `Authorization` as a context-level extra header and found it at the
+other origin whether or not an override was passed — a confound, since Playwright applies
+context headers below any override. The second set it from the page's own script, the
+realistic source: **by default it arrived at the other origin whole; with an explicit
+override without it, the same header set arrived minus that one.** The Fetch standard's
+HTTP-redirect step deletes `Authorization` when the hop leaves the current origin
+(confirmed against the standard's own text), and Chromium does so when it follows the hop
+itself — so hand-walking had silently dropped that rule. The credential at stake is the
+crawled site's own, sent where that site chose to redirect; the operator's saved logins are
+cookies, which are not in `request.headers` and are applied per hop from the context's jar
+— the same measurement showed the second origin's cookie, not the first's. **Fixed:** from
+the first cross-origin hop on, the walker passes the request's headers without
+`Authorization` and `Proxy-Authorization` and never restores them; same-origin hops pass no
+override; a default-port spelling is the same origin. Three tests, the cross-origin one
+watched failing (`None == {'x-probe': 'yes'}`); the live browser suite re-run after, result
+recorded in `docs/web-scraper-reference.md` §11.

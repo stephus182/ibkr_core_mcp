@@ -21,7 +21,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-ACCOUNT_ID_RE = re.compile(r"U\d{6,9}(?!\d)")
+# `[0-9]`, not `\d`: the codebase's rule for every digit class (SECURITY.md,
+# `_NUMERIC_PATH_SEGMENT_RE`), and the committed-file guard in
+# `tests/security/test_published_identifiers.py` holds this pattern byte-for-byte so the
+# two controls cannot cover different classes again (SEC-R6).
+ACCOUNT_ID_RE = re.compile(r"U[0-9]{6,9}(?![0-9])")
 PLACEHOLDER_ACCOUNT = "U1234567"
 
 # Endpoints that return the same bytes to every IBKR customer: contract reference data and

@@ -122,14 +122,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # This prevents path traversal in URLs and matches the claude_tools validator.
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 
-# IBKR order/alert IDs are numeric (CP API reference: order/status example
-# ".../order/status/1234567890"; alertId documented as "int. Required").
-_ORDER_ID_RE = re.compile(r"^[0-9]+$")
-
-# conids, positions page indices and FYI notification IDs are all non-negative integers
-# in IBKR's documentation. `[0-9]` rather than `\d`, which matches Unicode digits that
-# int() accepts and a URL path does not — the same correction SECURITY.md records for
-# _ORDER_ID_RE.
+# Every numeric path segment: order and alert IDs (CP API reference: order/status example
+# ".../order/status/1234567890"; alertId documented as "int. Required"), conids, positions
+# page indices and FYI notification IDs — all non-negative integers in IBKR's
+# documentation. `[0-9]` rather than `\d`, which matches Unicode digits that int() accepts
+# and a URL path does not (SECURITY.md § confused deputy). One rule, one regex: until
+# 2026-09-17 a byte-identical `_ORDER_ID_RE` sat six lines above this one behind its own
+# validator and message (SEC-R7); `_require_numeric` is now the single validator.
 _NUMERIC_PATH_SEGMENT_RE = re.compile(r"^[0-9]+$")
 
 # The two delivery channels IBKR documents, and the only two values that form a real path.
@@ -379,10 +378,10 @@ def _validate_order_id(order_id: str) -> None:
     Prevents path traversal in URLs built by f-string interpolation — the same
     threat _validate_account_id addresses for account_id. Applies to order_id
     and alert_id (IBKR reuses the same numeric ID namespace for both — see
-    docs/audits/security-audit-2026-07-11.md H-2).
+    docs/audits/security-audit-2026-07-11.md H-2). The rule is `_require_numeric`'s,
+    shared with conids, page indices and notification IDs (SEC-R7).
     """
-    if not order_id or not _ORDER_ID_RE.fullmatch(order_id):
-        raise ConfigError(f"Invalid order_id/alert_id {order_id!r}: must be numeric.")
+    _require_numeric(order_id, "order_id/alert_id")
 
 
 def _validate_reply_id(reply_id: str) -> None:

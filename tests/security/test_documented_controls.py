@@ -75,18 +75,51 @@ def test_every_implemented_identifier_regex_is_documented():
     assert not missing, f"client.py compiles {missing}, absent from SECURITY.md's mitigation block"
 
 
-def test_the_documented_order_id_regex_rejects_unicode_digits():
+def test_the_documented_numeric_regex_rejects_unicode_digits():
     """States the property the character class exists for, rather than only comparing
-    strings — so this still means something if the spelling changes."""
-    documented = _documented_identifier_regexes()
-    order_id = re.compile(documented["_ORDER_ID_RE"].lstrip("r").strip("\"'"))
+    strings — so this still means something if the spelling changes.
 
-    assert order_id.match("123"), "ASCII digits must be accepted"
+    Read `_NUMERIC_PATH_SEGMENT_RE`, the one numeric rule: it was `_ORDER_ID_RE` until
+    2026-09-17, when a byte-identical second regex under this name was found beside it
+    (SEC-R7) and the two were merged under the more general name.
+    """
+    documented = _documented_identifier_regexes()
+    numeric = re.compile(documented["_NUMERIC_PATH_SEGMENT_RE"].lstrip("r").strip("\"'"))
+
+    assert numeric.match("123"), "ASCII digits must be accepted"
     for unicode_digits in ("١٢٣", "१२३", "1٢2"):
         assert int(unicode_digits) is not None, "int() accepts these, which is the danger"
-        assert not order_id.match(unicode_digits), (
+        assert not numeric.match(unicode_digits), (
             f"the documented regex admits {unicode_digits!r}, which int() silently converts"
         )
+
+
+def test_no_two_identifier_regexes_compile_the_same_pattern():
+    """SEC-R7. `client.py` compiled `_ORDER_ID_RE` and `_NUMERIC_PATH_SEGMENT_RE` as the same
+    `^[0-9]+$`, six lines apart, each behind its own validator with its own message — one
+    rule in two places, which is how a fix reaches one copy and not the other (DOCA-01 was
+    this file's own instance). A rule that exists once cannot drift from itself."""
+    implemented = _implemented_identifier_regexes()
+    by_pattern: dict[str, list[str]] = {}
+    for name, pattern in implemented.items():
+        by_pattern.setdefault(pattern, []).append(name)
+    duplicates = {pattern: names for pattern, names in by_pattern.items() if len(names) > 1}
+
+    assert len(implemented) >= 3, f"only {len(implemented)} regexes parsed — the check would be vacuous"
+    assert not duplicates, f"one rule compiled under several names in client.py: {duplicates}"
+
+
+def test_every_numeric_path_validator_shares_the_one_rule():
+    """The other half of SEC-R7: the four validators of a numeric path segment all go
+    through `_require_numeric`, so the regex and the message exist once. Asserted by name,
+    so a new numeric validator with its own inline regex is reported rather than tolerated."""
+    from tests.security.structural import functions_calling
+
+    source = (_ROOT / "ibkr_core_mcp" / "client.py").read_text()
+    sharing = functions_calling(source, "_require_numeric")
+    expected = {"_validate_order_id", "_validate_conid", "_validate_page", "_validate_notification_id"}
+
+    assert expected <= sharing, f"numeric validators not routed through _require_numeric: {sorted(expected - sharing)}"
 
 
 def test_every_security_test_file_appears_in_the_suite_inventory():
