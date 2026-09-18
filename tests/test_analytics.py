@@ -589,3 +589,17 @@ def test_calmar_is_larger_when_the_drawdown_is_smaller():
     deep = pd.Series([-0.40, 0.20, 0.10])
 
     assert calmar(shallow, periods=1) > calmar(deep, periods=1)
+
+
+def test_the_bar_size_grammar_is_written_once():
+    """`is_intraday_timeframe` says it shares `periods_for_timeframe`'s parsing "so the two
+    cannot drift". Measured 2026-09-17, `analytics.py` held two literal copies of the bar-size
+    pattern, one per function (DATA-R7) — the shape by which a fix reaches one copy and not
+    the other. The pattern is compiled once, and both read it."""
+    import inspect
+
+    from ibkr_core_mcp import analytics
+
+    source = inspect.getsource(analytics)
+    grammar = r"(\d+)\s*(min|h|d|w|m)"
+    assert source.count(grammar) == 1, f"the bar-size grammar appears {source.count(grammar)} times"

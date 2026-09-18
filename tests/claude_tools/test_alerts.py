@@ -660,3 +660,95 @@ def test_the_alert_write_block_is_stated_everywhere_it_matters_until_it_lifts():
         "docs/audits/live-test-log.md must carry a 'Deliberately not covered — alert writes' section "
         "beside the event-contracts one, so an absence in the log is not mistaken for an omission"
     )
+
+
+# ---------------------------------------------------------------------------
+# TOOL-R4 / TOOL-R5 — the alert-write classifier reads the status, and both
+# alert bodies send IBKR's enum int (release-readiness audit 2026-09-16, Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def test_the_alert_write_classifier_reads_the_status_not_the_digits():
+    """`403` inside an error's TEXT is not a 403.
+
+    `_alert_write_error` answered the "permanently blocked upstream, do not retry" text for
+    any exception whose text contained the digits. Probed 2026-09-17 (TOOL-R4): a 500 whose
+    reference number carries them and a 400 for an alert id that does both got it, and the
+    model was told not to retry a transient failure. Every gateway status arrives as an
+    `IBKRAPIError` with `status_code` set by `with_retry`, so the code is the only thing
+    worth reading.
+    """
+    from ibkr_core_mcp.claude_tools import _alert_write_error
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    assert (
+        _alert_write_error(IBKRAPIError("IBKR gateway returned HTTP 500: internal error, ref 84031", status_code=500))
+        is None
+    )
+    assert (
+        _alert_write_error(IBKRAPIError("IBKR gateway returned HTTP 400: alert 1403 not found", status_code=400))
+        is None
+    )
+    # Outside the hierarchy there is no status at all, whatever the text says.
+    assert _alert_write_error(RuntimeError("HTTP 403 from something that is not the gateway")) is None
+    # The counter-case: the real block still gets the honest text.
+    real = IBKRAPIError("IBKR gateway returned HTTP 403: Error 403 - Access Denied", status_code=403)
+    assert _alert_write_error(real) is not None
+
+
+def test_create_price_alert_does_not_report_a_500_as_the_operator_block(toolkit):
+    """End to end: a transient 500 whose text happens to contain `403` must reach the
+    caller as the 500 it is, not as "blocked upstream, do not retry" (TOOL-R4)."""
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598, "symbol": "AAPL"}]
+    toolkit._client.create_alert.side_effect = IBKRAPIError(
+        "IBKR gateway returned HTTP 500: internal error, ref 84031", status_code=500
+    )
+
+    text, fig = toolkit.execute("create_price_alert", {"symbol": "AAPL", "operator": ">", "price": 250.0})
+
+    assert fig is None
+    assert "NOT an account permissions problem" not in text, text
+    assert "HTTP 500" in text, text
+
+
+def test_modify_price_alert_sends_outsideRth_as_ibkrs_enum_int(toolkit):
+    """IBKR documents `outsideRth` as an enum of 0 and 1; a Python bool serialises as
+    `true`. Create casts (TOOL-02); modify wrote the caller's bool over the translated
+    body's int, so the same field went out in two shapes from two handlers (TOOL-R5)."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
+    toolkit._client.get_alert.return_value = dict(_LIVE_ALERT_DETAIL)
+    toolkit._client.create_alert.return_value = {"success": True, "order_id": 1331320792}
+
+    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "1331320792", "outside_rth": True})
+
+    assert_tool_succeeded(text)
+    _, body = toolkit._client.create_alert.call_args[0]
+    assert body["outsideRth"] == 1
+    assert not isinstance(body["outsideRth"], bool), "a bool serialises as true, which is not the documented enum"
+
+
+def test_the_two_alert_vocabularies_share_exactly_the_names_the_maps_say():
+    """The detail response and the create/modify request are two vocabularies, and the
+    source described their overlap twice with different numbers: "26 keys, exactly two
+    shared" above the maps and "34 keys, exactly three" in the modify docstring (TOOL-R6).
+    Both were half right — 26 is the top level, 34 counts the 8 inside `conditions[]`, and
+    the third shared name, `conidex`, is one of those 8. Measured here from the live capture
+    and the maps, so the prose has one number to cite.
+    """
+    from ibkr_core_mcp.claude_tools import _ALERT_CONDITION_TO_REQUEST, _ALERT_DETAIL_TO_REQUEST
+
+    conditions = _LIVE_ALERT_DETAIL["conditions"]
+    assert isinstance(conditions, list)
+    top, nested = set(_LIVE_ALERT_DETAIL), set(conditions[0])
+    assert (len(top), len(nested)) == (26, 8)
+
+    request_top = set(_ALERT_DETAIL_TO_REQUEST.values()) | {"conditions"}
+    request_nested = set(_ALERT_CONDITION_TO_REQUEST.values())
+    assert request_top == _REQUEST_KEYS and request_nested == _CONDITION_KEYS
+    assert len(request_top) + len(request_nested) == 19
+
+    assert top & request_top == {"conditions", "tif"}
+    assert nested & request_nested == {"conidex"}

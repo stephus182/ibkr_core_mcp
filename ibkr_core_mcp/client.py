@@ -454,6 +454,29 @@ def _as_reply_dict(data: Any) -> dict[str, Any]:
     return {}
 
 
+def _flatten_buckets(data: Any, path: str) -> list[Any]:
+    """The rows of a response that is either a bare array or an object of arrays.
+
+    `/trsrv/futures` and `/trsrv/stocks` answer `{"ES": [...], "CL": [...]}` keyed by
+    symbol, `/iserver/currency/pairs` keyed by currency and `/portfolio/positions/{conid}`
+    keyed by account id; each is flattened to one list, and a bare array is itself. Four
+    methods spelled this four ways until 2026-09-17, and three of them iterated the VALUES
+    of whatever object arrived — so a 2xx `{"error": "…"}`, the shape IBKR uses for a
+    rejection, became the characters of its message and `parse_many` was handed
+    one-character rows with IBKR's words discarded (API-R10). An object with no array in it
+    is not a set of buckets: one carrying `error` is raised as `IBKRAPIError` with IBKR's
+    message, and any other is no rows.
+    """
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    buckets = [bucket for bucket in data.values() if isinstance(bucket, list)]
+    if not buckets and "error" in data:
+        raise IBKRAPIError(f"{path} returned an error: {data['error']}")
+    return [row for bucket in buckets for row in bucket]
+
+
 def _decode(resp: requests.Response, path: str) -> Any:
     """IBKR's JSON body — or `IBKRAPIError`, never a `requests` exception.
 
@@ -1119,17 +1142,17 @@ class IBKRClient:
         return self._get("/iserver/secdef/bond-filters", {"symbol": symbol, "issuerId": issue_id})
 
     def get_futures(self, symbols: list[str]) -> list[FutureContract | dict[str, Any]]:
-        """Futures contracts for root symbols. Returns [] if response shape is unexpected.
+        """Futures contracts for root symbols, flattened to one list.
 
-        IBKR returns {"CL": [...], "ES": [...]} — this method flattens to a list.
+        IBKR returns {"CL": [...], "ES": [...]} — `_flatten_buckets` concatenates the
+        arrays, raises `IBKRAPIError` on a 2xx `{"error": …}` object, and answers [] for
+        any other shape.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
         Endpoint: GET /trsrv/futures
         """
         data = self._get("/trsrv/futures", {"symbols": ",".join(symbols)})
-        if isinstance(data, dict):
-            data = [c for contracts in data.values() for c in (contracts or [])]
-        return parse_many(FutureContract, data)
+        return parse_many(FutureContract, _flatten_buckets(data, "/trsrv/futures"))
 
     def get_stocks(self, symbols: list[str]) -> list[StockSearchResult | dict[str, Any]]:
         """Stock contracts for symbols. Same dict-flattening behaviour as get_futures().
@@ -1148,9 +1171,7 @@ class IBKRClient:
         Endpoint: GET /trsrv/stocks
         """
         data = self._get("/trsrv/stocks", {"symbols": ",".join(symbols)})
-        if isinstance(data, dict):
-            data = [c for contracts in data.values() for c in (contracts or [])]
-        return parse_many(StockSearchResult, data)
+        return parse_many(StockSearchResult, _flatten_buckets(data, "/trsrv/stocks"))
 
     def get_trading_schedule(
         self,
@@ -1275,11 +1296,7 @@ class IBKRClient:
         Endpoint: GET /iserver/currency/pairs
         """
         data = self._get("/iserver/currency/pairs", {"currency": currency})
-        if isinstance(data, list):
-            return parse_many(CurrencyPair, data)
-        if isinstance(data, dict):
-            return parse_many(CurrencyPair, [c for contracts in data.values() for c in (contracts or [])])
-        return []
+        return parse_many(CurrencyPair, _flatten_buckets(data, "/iserver/currency/pairs"))
 
     def get_contract_rules(self, conid: int, is_buy: bool = True) -> ContractRules | dict[str, Any]:
         """Order rules for a contract: min tick, valid order types, size constraints.
@@ -1447,15 +1464,10 @@ class IBKRClient:
         """
         _validate_conid(conid)
         data = self._get(f"/portfolio/positions/{conid}")
-        if isinstance(data, dict):
-            # Keyed by account id, one bucket per account holding the contract, so the
-            # key names are account-specific and cannot be looked up by a fixed name.
-            rows: list[dict[str, Any]] = []
-            for bucket in data.values():
-                if isinstance(bucket, list):
-                    rows.extend(r for r in bucket if isinstance(r, dict))
-            return rows
-        return data if isinstance(data, list) else []
+        # Keyed by account id, one bucket per account holding the contract, so the key
+        # names are account-specific and cannot be looked up by a fixed name.
+        rows = _flatten_buckets(data, "/portfolio/positions/{conid}")
+        return [row for row in rows if isinstance(row, dict)]
 
     def get_position(self, account_id: str, conid: int) -> dict[str, Any]:
         """Position for a specific account + contract pair.

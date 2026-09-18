@@ -11,6 +11,8 @@ import ast
 import re
 from pathlib import Path
 
+from tests.security.structural import annotation_names_a_model, response_model_names
+
 _REPO = Path(__file__).resolve().parent.parent
 
 
@@ -353,14 +355,8 @@ def test_the_import_probe_can_actually_find_an_import():
 
 
 def _model_names() -> set[str]:
-    """Every `IBKRResponse` subclass, derived from models.py rather than hand-typed."""
-    tree = ast.parse((_REPO / "ibkr_core_mcp" / "models.py").read_text())
-    return {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef)
-        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
-    }
+    """Every `IBKRResponse` subclass — the one derivation, in `tests/security/structural.py`."""
+    return response_model_names()
 
 
 def _methods_returning_models() -> set[str]:
@@ -373,7 +369,7 @@ def _methods_returning_models() -> set[str]:
         if isinstance(node, ast.FunctionDef)
         and not node.name.startswith("_")
         and node.returns is not None
-        and any(re.search(rf"\b{m}\b", ast.unparse(node.returns)) for m in models)
+        and annotation_names_a_model(ast.unparse(node.returns), models)
     }
 
 
@@ -391,7 +387,7 @@ def test_the_api_reference_marks_exactly_the_methods_that_return_models():
     documented = set()
     for heading in re.findall(r"^### `(\w+)\([^)]*\)\s*->\s*(.+?)`", doc, re.M):
         name, returns = heading
-        if any(re.search(rf"\b{m}\b", returns) for m in models):
+        if annotation_names_a_model(returns, models):
             documented.add(name)
 
     returning = _methods_returning_models()

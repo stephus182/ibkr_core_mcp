@@ -195,7 +195,14 @@ limit. Repeat violators can be blocked permanently.
   `client.py`'s docstring until 2026-09-17, a day after the table itself was corrected.
   Ordinary spaced-out usage never waits.
 - **`with_retry` reacts**, retrying 429/503 with exponential backoff (1s, 2s, 4s over 3
-  attempts) and raising `IBKRRateLimitError` if still failing.
+  attempts) and raising `IBKRRateLimitError` if still failing. Each retry goes back through
+  the pacer before it is sent — a retry is a request too; until 2026-09-17 only the first
+  attempt was paced and the window never saw the others (API-R8).
+- **One budget per path.** The table is keyed by (path, method) as IBKR's is; a path
+  listed under two verbs pools every verb's limits into one bucket, the stricter window
+  binding. Deliberate: separate buckets would be right if IBKR counts the verbs separately
+  and would earn the penalty box if it does not, while pooling costs at most one needless
+  wait (API-R11).
 
 Until 2026-09-16 only the second existed, while this file and two others described the
 first. It was not academic: `get_market_history_paginated` was measured issuing chunk

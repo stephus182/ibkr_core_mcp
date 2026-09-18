@@ -603,7 +603,9 @@ ATR(14), VWAP, Stochastic %K/%D, Williams %R, Volume Ratio.
 VWAP is reported only for intraday `timeframe` values (`5min`, `1h`, …). It measures a
 single trading session, so on daily or coarser bars it has no meaning and the line reads
 `n/a` with the reason rather than printing a number — see
-`docs/api-usage-examples.md` § Conventions.
+`docs/api-usage-examples.md` § Conventions. The session is the UTC day of the bars; this
+tool fetches regular-hours bars only, and a US or European regular session sits inside
+one UTC day, so that boundary is the exchange day for the bars it holds (DATA-R6).
 
 **Prerequisite:** Data must be cached. Call `fetch_market_data` first if needed.
 

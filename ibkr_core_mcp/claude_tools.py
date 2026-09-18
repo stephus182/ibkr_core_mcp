@@ -1314,6 +1314,13 @@ def _format_vwap(last: Any, timeframe: str) -> str:
     printed, for a 1-year daily request, a volume-weighted average of the entire
     year labelled "VWAP". Saying "n/a" is the honest output.
 
+    The session is the UTC calendar day of the bars — `indicators.vwap`'s default, and
+    the only clock `add_all` offers. That is right for the bars this tool can hold:
+    `fetch_market_data` never asks for `outsideRth`, and a US or European regular
+    session sits inside one UTC day. It would be wrong for a CME session, which opens
+    at 18:00 New York and crosses midnight UTC an hour later; `indicators.vwap` takes
+    `tz` and `session_open` for that (DATA-R6, 2026-09-17).
+
     Args:
         last: Final row of the indicator frame.
         timeframe: IBKR bar-size string the bars were loaded at.
@@ -1481,18 +1488,27 @@ def _alert_write_error(exc: Exception) -> str | None:
     `_safe_error`'s generic text ("IBKR gateway returned an error (HTTP 403)") sends a
     reader to check account permissions, which is not the cause and cost this project
     months of the failure being logged as an expected permissions skip.
+
+    Only the status decides. Until 2026-09-17 this also matched the digits `403` anywhere
+    in the exception's text, so a 500 carrying reference 84031 or a 400 for alert 1403
+    told the model the write was permanently blocked upstream and not to retry (TOOL-R4).
+    Every gateway status arrives as an `IBKRAPIError` whose `status_code` `with_retry`
+    set, so the text has nothing to add.
     """
-    status = getattr(exc, "status_code", None)
-    if status == 403 or "403" in str(exc):
+    if isinstance(exc, IBKRAPIError) and exc.status_code == 403:
         return _ALERT_WRITE_403
     return None
 
 
 # GET /iserver/account/alert/{order_id} and POST /iserver/account/{accountId}/alert do not
 # share a vocabulary. Measured against a live gateway 2026-09-16 (build 2023-04-24) using a
-# real alert created on IBKR Mobile: the detail response carries 26 top-level keys, none
-# camelCase; the create/modify request documents 19 fields, none snake_case; exactly two
-# names — `conditions` and `tif` — appear in both.
+# real alert created on IBKR Mobile: the detail response carries 34 keys — 26 at the top
+# level and 8 inside `conditions[]` — none camelCase; the create/modify request documents
+# 19 fields — 12 and 7 — none snake_case; exactly three names appear in both, `conditions`
+# and `tif` at the top level and `conidex` inside the condition. This paragraph and the
+# `_modify_price_alert` docstring counted different levels and disagreed (26 and "two"
+# against 34 and "three") until 2026-09-17 (TOOL-R6). The numbers are stated here only and
+# held by `test_the_two_alert_vocabularies_share_exactly_the_names_the_maps_say`.
 #
 # Detail field -> request field. Read-only detail fields (order_status, alert_triggered,
 # fg_color, bg_color, alert_mta_*, tool_id, condition_size, account, …) have no request
@@ -3613,12 +3629,12 @@ class ClaudeToolkit:
         camelCase keys set on top of it. The two endpoints do not share a vocabulary —
         measured against a real alert, not just documented:
 
-        - `GET /iserver/account/alert/{order_id}` returns snake_case — 34 keys in the
-          documented example, none camelCase (`order_id`, `alert_name`, `alert_message`,
-          `condition_outside_rth`, `conditions[].condition_operator`, …).
-        - The create/modify body is camelCase — 19 documented fields, none snake_case
+        - `GET /iserver/account/alert/{order_id}` returns snake_case (`order_id`,
+          `alert_name`, `alert_message`, `condition_outside_rth`,
+          `conditions[].condition_operator`, …); the create/modify body is camelCase
           (`orderId`, `alertName`, `alertMessage`, `outsideRth`, `conditions[].operator`, …).
-        - **Exactly three names appear in both: `conditions`, `conidex`, `tif`.**
+        - The counts — 34 detail keys, 19 request fields, three names in both — are stated
+          once, above `_ALERT_DETAIL_TO_REQUEST`, and held by a test (TOOL-R6).
 
         `orderId` is not one of them, and it is the field that decides what the call means:
         "omitted or 0 creates, an existing alert id modifies that alert" (see
@@ -3658,7 +3674,9 @@ class ClaudeToolkit:
         if "expire_time" in inputs:
             body["expireTime"] = inputs["expire_time"]
         if "outside_rth" in inputs:
-            body["outsideRth"] = inputs["outside_rth"]
+            # IBKR's enum is 0/1. Create casts (TOOL-02); this wrote the caller's bool over
+            # the translated body's int until 2026-09-17 (TOOL-R5).
+            body["outsideRth"] = int(inputs["outside_rth"])
         if "price" in inputs or "operator" in inputs:
             conditions = body.get("conditions", [])
             if conditions:

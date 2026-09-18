@@ -134,10 +134,20 @@ class EndpointPacer:
         self._max_wait = max_wait
         self._lock = threading.Lock()
         self._calls: dict[tuple[str, int, float], deque[float]] = {}
+        # One budget per PATH, deliberately. The table is keyed by (path, method) as IBKR's
+        # is, and a path listed under two verbs pools every verb's limits into one bucket:
+        # if IBKR counts the verbs separately this costs at most one needless wait, and if
+        # it counts them together separate buckets would earn the fifteen-minute penalty
+        # box. Until 2026-09-17 the pooling was silent and only the first verb's limits
+        # survived (API-R11).
+        pooled: dict[str, tuple[tuple[int, float], ...]] = {}
+        for (pattern, _method), limits in ENDPOINT_LIMITS.items():
+            merged = pooled.get(pattern, ())
+            pooled[pattern] = merged + tuple(limit for limit in limits if limit not in merged)
         # Most specific first: a literal segment must win over a `{placeholder}` one, so
         # /fyi/notifications/more is never charged to /fyi/notifications/{notificationId}.
         self._matchers = sorted(
-            ((_pattern_to_regex(pattern), pattern, limits) for (pattern, _m), limits in ENDPOINT_LIMITS.items()),
+            ((_pattern_to_regex(pattern), pattern, limits) for pattern, limits in pooled.items()),
             key=lambda item: -sum(1 for seg in item[1].split("/") if not seg.startswith("{")),
         )
 
@@ -152,6 +162,19 @@ class EndpointPacer:
         """
         return path.split("?", 1)[0]
 
+    def _match(self, path: str) -> tuple[str, tuple[tuple[int, float], ...]]:
+        """The table pattern a path is charged to and the limits that apply — one scan.
+
+        `limits_for` and a separate bucket lookup each walked the matchers on every
+        request until 2026-09-17 (API-R11); every id under one pattern shares one budget.
+        An unlisted path is charged to `"*"` at the global limit.
+        """
+        endpoint = self._endpoint(path)
+        for regex, pattern, limits in self._matchers:
+            if regex.match(endpoint):
+                return pattern, limits
+        return "*", GLOBAL_LIMIT
+
     def limits_for(self, path: str) -> tuple[tuple[int, float], ...]:
         """Published limits for a concrete request path, or the global 10/second default.
 
@@ -160,13 +183,10 @@ class EndpointPacer:
                 `/fyi/notifications/12345` or `/iserver/account/orders?force=true`.
 
         Returns:
-            One `(requests, window_seconds)` pair per limit that applies.
+            One `(requests, window_seconds)` pair per limit that applies — every verb's,
+            when the table lists the path under more than one.
         """
-        endpoint = self._endpoint(path)
-        for regex, _pattern, limits in self._matchers:
-            if regex.match(endpoint):
-                return limits
-        return GLOBAL_LIMIT
+        return self._match(path)[1]
 
     def acquire(self, path: str) -> float:
         """Block until this path may be requested, then record the request.
@@ -182,8 +202,7 @@ class EndpointPacer:
                 through rather than blocked for a quarter of an hour, so the caller keeps
                 the call and learns it is over the limit.
         """
-        limits = self.limits_for(path)
-        key = self._bucket_key(path)
+        key, limits = self._match(path)
         with self._lock:
             now = self._clock()
             wait, blocking = self._required_wait(key, limits, now)
@@ -205,14 +224,6 @@ class EndpointPacer:
                 self._expire(self._history(key, count, window), now, window)
                 self._history(key, count, window).append(now)
             return wait
-
-    def _bucket_key(self, path: str) -> str:
-        """The table pattern a path is charged to, so every id shares one budget."""
-        endpoint = self._endpoint(path)
-        for regex, pattern, _limits in self._matchers:
-            if regex.match(endpoint):
-                return pattern
-        return "*"
 
     def _history(self, key: str, count: int, window: float) -> deque[float]:
         return self._calls.setdefault((key, count, window), deque())
@@ -258,15 +269,15 @@ def with_retry(
     max_retries: int = _DEFAULT_MAX_RETRIES,
     path: str | None = None,
 ) -> requests.Response:
-    """Pace the request for its endpoint, then call fn(), retrying on 429/503.
+    """Pace every attempt for its endpoint and call fn(), retrying on 429/503.
 
     Args:
         fn: Thunk performing the HTTP call.
         max_retries: Attempts after the first before raising.
-        path: Request path, e.g. `/iserver/marketdata/history`. When given, the request
-            is paced against IBKR's published limit for that endpoint before it is sent.
-            Optional only so that a caller with no path still works; every call site in
-            `client.py` passes one.
+        path: Request path, e.g. `/iserver/marketdata/history`. When given, every attempt
+            — the first and each retry — is paced against IBKR's published limit for that
+            endpoint before it is sent. Optional only so that a caller with no path still
+            works; every call site in `client.py` passes one.
 
     Retry strategy: base 1s, 2× factor, 3 retries (delays: 1s, 2s, 4s).
     No Retry-After header parsing — IBKR Client Portal API does not document
@@ -309,10 +320,13 @@ def with_retry(
         IBKRRateLimitError: on 429 after retries exhausted
         IBKRAPIError: on other 4xx/5xx
     """
-    if path is not None:
-        pace(path)
     attempt = 0
     while True:
+        # Every attempt, not only the first: a retry is a request too. Paced once before
+        # the loop until 2026-09-17, a 503 retry on a 1-per-5-seconds endpoint went out
+        # after the 1 s backoff unpaced, and the pacer's window never recorded it (API-R8).
+        if path is not None:
+            pace(path)
         resp = fn()
         status = resp.status_code
 

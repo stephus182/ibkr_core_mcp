@@ -27,17 +27,17 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | **11** | **11** | — | — | — |
 | `DOCA-R` | **9** | **9** | — | — | — |
-| `DATA-R` | **7** | 5 | **2** | — | — |
-| `API-R` | **11** | 6 | **5** | — | — |
-| `TOOL-R` | **6** | 3 | **3** | — | — |
+| `DATA-R` | **7** | **7** | — | — | — |
+| `API-R` | **11** | **11** | — | — | — |
+| `TOOL-R` | **6** | **6** | — | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
 | `SEC-R` | **9** | **9** | — | — | — |
-| **Total** | **175** | **115** | **10** | **0** | **50** |
+| **Total** | **175** | **125** | **0** | **0** | **50** |
 
-`115 + 10 + 0 + 50 = 175`. **There are no unrecorded findings left**, and ten recorded ones
-are open — session 13's fresh-eye review of the whole branch, *Phase 4* below, less the two
-`SEC-R` findings session 14 closed; session 14's own review raised `SEC-R8` and `SEC-R9` and
-closed both (*Phase 5*). All three blocks
+`125 + 0 + 0 + 50 = 175`. **There are no unrecorded findings left, and none is open.** The
+ten that session 13's fresh-eye review of the whole branch left (*Phase 4* below), less the
+two `SEC-R` findings session 14 closed, were closed in session 15 (*Phase 6*); session 14's
+own review raised `SEC-R8` and `SEC-R9` and closed both (*Phase 5*). All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -83,30 +83,22 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (10)
+### Open findings that do have a claim (0)
 
 Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`,
-`SEC-R6` and `SEC-R7` (session 14, *Phase 5*).
+`SEC-R6` and `SEC-R7` (session 14, *Phase 5*); `TOOL-R4`, `TOOL-R5`, `API-R7`, `DATA-R6`,
+`API-R8`, `DATA-R7`, `TOOL-R6`, `API-R9`, `API-R10` and `API-R11` (session 15, *Phase 6*).
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
 0600 holders).
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
-| `TOOL-R4` | Medium | `_alert_write_error` matches the digits `403` anywhere in an error's text, so a 500 with reference 84031 or a 400 for alert 1403 tells the model the write is permanently blocked upstream and not to retry; `with_retry` always sets `status_code`, so the substring fallback only widens |
-| `TOOL-R5` | Low | `_modify_price_alert` sends `outsideRth` as a JSON bool where `_create_price_alert` sends IBKR's 0/1 enum int — the TOOL-02 fix reached one of two bodies, the shape `TOOL-R3` closed for `tif` |
-| `API-R7` | Low | Two structural guards in `tests/test_client.py` (2301, 2906) open `client.py` by a cwd-relative path: both fail with `FileNotFoundError` when pytest runs from outside the repo root, both pass from it; `tests/security/structural.py` already anchors on `__file__` |
-| `DATA-R6` | Low | `vwap`'s default session is the **UTC** calendar day of the naive index `bars_to_dataframe` builds; measured on ES minute bars it reset from 4800 to 5000 at 00:00 UTC inside one CME session, and the docstring says "calendar day" without saying whose |
-| `API-R8` | Low | `with_retry` paces once before its loop, so a 429/503 retry on a 1-per-5-s endpoint goes out after the 1 s backoff unpaced and is never recorded in the pacer's window |
-| `DATA-R7` | Low | `is_intraday_timeframe`'s docstring says it shares `periods_for_timeframe`'s parsing "so the two cannot drift"; lines 55 and 72 are two literal copies of the regex |
-| `TOOL-R6` | Low | Two prose copies of the alert-vocabulary measurement in `claude_tools.py` disagree — 26 keys and "exactly two" shared names above the table, 34 keys and "exactly three" in the modify docstring — and the table between them maps `conidex`, so "two" is wrong |
-| `API-R9` | Low | The `IBKRResponse`-subclass oracle is copied into five test files, and the return-annotation match uses substring containment in two of them and word-boundary regexes in three; `Alert` ⊂ `MTAAlert`, `Contract` ⊂ `ContractDetails`, so the first non-model name containing a model name splits the guards |
-| `API-R10` | Low | The dict-of-lists flatten exists in four spellings across `get_futures`, `get_stocks`, `get_currency_pairs` and `get_positions_by_conid`; the first three iterate a string when a 2xx body is `{"error": …}`, returning one-character rows or an empty list with IBKR's message discarded |
-| `API-R11` | Nit | `ENDPOINT_LIMITS` is keyed by `(path, method)` but the pacer discards the method, so per-verb entries would silently share a bucket, and `limits_for`/`_bucket_key` scan the matchers twice per request |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
 > sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15`, `TOOL-07`,
 > `API-11` and — last — `TOOL-01` left on 2026-09-17. **The table was empty from that morning until
-the fresh-eye review the same afternoon put twelve rows back** (*Phase 4*). This table is the
+the fresh-eye review the same afternoon put twelve rows back** (*Phase 4*), and it is empty
+again since session 15 closed the last ten (*Phase 6*). This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -129,7 +121,8 @@ is written up below with how its subject was located.
 4. **The twelve findings of the 2026-09-17 fresh-eye review** (*Phase 4*), in severity order:
    two Medium, eight Low, two Nit. `API-R6`, the one High, closed in the same session — it had
    silently broken the package's one consumer. `SEC-R6` (Medium) and `SEC-R7` (Nit) closed in
-   session 14 (*Phase 5*); ten remain, one Medium, eight Low, one Nit.
+   session 14 (*Phase 5*); ~~ten remain, one Medium, eight Low, one Nit~~ — **all ten closed
+   in session 15** (*Phase 6*). **Nothing is open.**
 
 ~~Two things need the owner~~ — **both done 2026-09-16.** The gateway was re-authenticated,
 which unblocked Phase 0 gates 0.6 / 0.8 / 0.11 and settled API-R1, TOOL-R1 and API-17; and
@@ -4666,3 +4659,123 @@ the first cross-origin hop on, the walker passes the request's headers without
 override; a default-port spelling is the same origin. Three tests, the cross-origin one
 watched failing (`None == {'x-probe': 'yes'}`); the live browser suite re-run after, result
 recorded in `docs/web-scraper-reference.md` §11.
+
+---
+
+## Phase 6 — the last ten, closed
+
+Session 15 (2026-09-17). The owner's pre-tag security audit found nothing above the bar and
+left ten open findings — one Medium, eight Low, one Nit — with the bar unchanged: *fix
+everything, then tag*. Every one was reproduced before it was edited; every fix went in
+behind a test watched failing for the right reason; the four gates then ran bare, each
+status read on its own. Two of the ten needed a decision rather than a patch, and both
+decisions are recorded with their reasons.
+
+### The ten, in severity order
+
+**`TOOL-R4` — Medium, closed.** Reproduced as the finding said: `_alert_write_error` given
+`IBKRAPIError("… ref 84031", status_code=500)` returned the "permanently blocked upstream,
+do not retry" text, and so did a 400 for alert 1403. The classifier reads only
+`isinstance(exc, IBKRAPIError) and exc.status_code == 403` now; every gateway status
+arrives that way from `with_retry`, so the text has nothing to add. Held by
+`test_the_alert_write_classifier_reads_the_status_not_the_digits` (the two probes, an
+exception outside the hierarchy, and the real 403 as the counter-case) and, end to end,
+`test_create_price_alert_does_not_report_a_500_as_the_operator_block`, watched failing on
+the block text appearing in the tool's answer.
+
+**`TOOL-R5` — Low, closed.** The modify body carried `outsideRth: True`. It is cast to
+IBKR's 0/1 as create's is; `test_modify_price_alert_sends_outsideRth_as_ibkrs_enum_int`
+watched failing on `isinstance(True, bool)`.
+
+**`API-R7` — Low, closed, and the class had a third member the finding did not name.**
+From `/tmp`, `test_every_client_request_helper_decodes_through_the_same_guard` failed
+with `FileNotFoundError: 'ibkr_core_mcp/client.py'` as recorded. The sweep for the same
+shape found `tests/test_assertion_strength.py` walking `Path("tests")`, which from `/tmp`
+**scanned 0 files, found 0 offenders, and passed** — the worse outcome, a guard that goes
+quiet instead of red. The two `client.py` guards now read the module they import
+(`client_mod.__file__`), the strength scan reads `Path(__file__).parent`, and
+`test_the_strength_scan_actually_sees_the_suite` is its vacuity guard. From `/tmp` after:
+4 passed.
+
+**`DATA-R6` — Low, closed by a decision.** Reproduced with the finding's own bars: five
+naive-UTC prints across a January CME session — two at 4800 before midnight UTC, two at
+5000 after, the next session's open at 6000 — and `vwap(df)` answered 5000.00 at 00:30
+UTC, the session's first two hours discarded at 19:00 New York. `vwap` now takes `tz`
+(the exchange's zone; a naive index is read as UTC, which is what `bars_to_dataframe`
+builds, and an aware one is converted) and `session_open` ("HH:MM" on that clock), so
+`tz="America/New_York", session_open="18:00"` answers 4900.00 there and 6000.00 at the next
+open. **The default is unchanged and now stated**: a session is the calendar day of the
+index as given, the UTC day for IBKR bars. It was not changed because the function does
+not know the instrument, and because the one caller that cannot pass a zone — the
+`add_indicators` tool, through `add_all` — holds regular-hours bars only
+(`fetch_market_data` never asks for `outsideRth`), and a US or European regular session
+sits inside one UTC day; `_format_vwap` says so. Three tests watched failing on
+`TypeError: unexpected keyword argument 'tz'`, the default pinned, an aware index without
+`tz` read on its own clock without pandas' drop-the-zone warning, a malformed
+`session_open` refused by name; `docs/api-usage-examples.md` and `docs/tools-reference.md`
+state the boundary.
+
+**`API-R8` — Low, closed.** Reproduced: with `pace` and `fn` recording into one list, a
+503 then a 200 produced `["pace", "send", "send"]`. The pace call moved inside the loop;
+`test_every_attempt_is_paced_not_only_the_first` requires `pace, send, pace, send`.
+
+**`DATA-R7` — Low, closed.** Two literal copies of the bar-size pattern, one per function.
+One compiled `_BAR_SIZE_RE` read through `_parse_bar_size` by both;
+`test_the_bar_size_grammar_is_written_once` counts the literal in the module source (2 → 1),
+and the existing agreement test still holds the behaviour.
+
+**`TOOL-R6` — Low, closed by measuring.** The live capture's alert detail has 26 top-level
+keys and 8 inside `conditions[]` — 34 — and the documented request has 12 and 7 — 19; the
+names in both are `conditions` and `tif` at the top level and `conidex` inside the
+condition. So "26 and exactly two" and "34 and exactly three" were each half right, counting
+different levels against each other. The numbers are stated once, above
+`_ALERT_DETAIL_TO_REQUEST`, and the modify docstring points there;
+`test_the_two_alert_vocabularies_share_exactly_the_names_the_maps_say` holds them from the
+capture and the maps, and was shown to fail when `conidex` is dropped from the map.
+
+**`API-R9` — Low, closed.** Five copies of the oracle across four test files, two matching
+the return annotation by substring. `tests/security/structural.py` carries the one
+derivation, `response_model_names()`, and the one matcher, `annotation_names_a_model()`
+(word boundary); the five sites call them. `test_the_model_oracle_matches_whole_names_only`
+watched failing on the import, `test_the_model_oracle_has_one_copy` on the four files it
+listed.
+
+**`API-R10` — Low, closed, and a guard tripped on prose for the third time.** Reproduced:
+`get_futures` given a 2xx `{"error": "no bridge"}` returned nine one-character rows;
+`get_positions_by_conid` returned `[]`. One helper, `_flatten_buckets(data, path)`: a list
+is itself, an object's list values are concatenated, an object with no list value that
+carries `error` is raised as `IBKRAPIError` with IBKR's message, anything else is no rows;
+the four methods use it. The parametrised test over the four watched failing `DID NOT
+RAISE`, the empty-object counter-case pinned. Then
+`test_no_new_endpoint_silently_discards_an_object_response` failed on
+`get_positions_by_conid` — whose **docstring** quotes the bare pattern to explain its own
+2026-09-16 fix, and whose code had just lost the `isinstance(data, dict)` branch that
+exempted it. After `API-R4` and the `TOOL-01` close, that is the third guard in two days to
+read prose. It matches from the first statement after the docstring now, and a mutant
+method carrying the bare pattern under an innocent docstring is still named.
+
+**`API-R11` — Nit, closed by a decision.** The table is keyed by (path, method) as IBKR's
+is; the pacer keyed its budget by path and, silently, kept only the first verb's limits.
+The decision is **one budget per path, deliberately, pooling every listed verb's limits**:
+if IBKR counts a path's verbs separately, pooling costs at most one needless wait; if it
+counts them together, separate budgets would earn the fifteen-minute penalty box; the
+table gives no way to know, and the asymmetry decides. `limits_for` and the bucket lookup
+now share one `_match` scan, and the `_bucket_key` that nothing called afterwards is gone.
+`test_two_verbs_on_one_path_pool_their_limits_deliberately` watched failing on
+`((1, 1.0),)`; the reachability test over every table entry still holds.
+
+### Verification
+
+Four gates, four bare commands: `ruff check` clean, `ruff format --check` clean, `mypy`
+clean over 124 files, `pytest -m "not integration"` **1,665 passed** once
+`docs/test-coverage.md`'s headline was re-measured (1,665 / 102 / 1,767, 89% line
+coverage; `indicators.py` and `analytics.py` stay at 100%). `python
+scripts/audit/check_register.py` reads this file consistent: **175 findings, 125 closed,
+0 open, 50 written off**, and the per-finding table lists no open id.
+
+### Status
+
+**Nothing is open.** The recurring shapes were the register's own three: *a fix applied to
+one branch and never swept* (`TOOL-R5`, `API-R7`'s third member), *a claim whose condition
+expired* (`DATA-R7`, `TOOL-R6`), and *a check that reads prose* — now three times. The tag
+is the owner's decision; this branch is what it would tag.

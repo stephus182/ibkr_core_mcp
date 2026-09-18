@@ -23,6 +23,30 @@ PACKAGE_DIR = Path(__file__).resolve().parents[2] / "ibkr_core_mcp"
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 
 
+def response_model_names() -> set[str]:
+    """Every class in `models.py` deriving from `IBKRResponse` — derived, never hand-typed.
+
+    The oracle for "does this method return a model". It was copied into five places across
+    four test files (API-R9, 2026-09-17), two of which matched the return annotation by
+    substring — `Alert` is inside `MTAAlert`, `Contract` inside `ContractDetails` — and
+    three by word boundary, so the first non-model class whose name contained a model's
+    would have split the guards. One copy, here, and `annotation_names_a_model` is the one
+    matcher; `test_the_model_oracle_has_one_copy` refuses a second.
+    """
+    tree = _tree((PACKAGE_DIR / "models.py").read_text())
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
+    }
+
+
+def annotation_names_a_model(annotation: str, models: Iterable[str]) -> bool:
+    """Whether a return annotation names one of `models` as a whole word."""
+    return any(re.search(rf"\b{re.escape(model)}\b", annotation) for model in models)
+
+
 def package_sources() -> Iterator[tuple[Path, str]]:
     """Every `.py` under the package, as (path, source)."""
     for path in sorted(PACKAGE_DIR.rglob("*.py")):

@@ -734,3 +734,79 @@ def test_keltner_channels_use_a_ten_period_atr_by_default():
     assert result["kc_upper"].iloc[-1] != pytest.approx((expected_mid + 2.0 * atr(df, 20)).iloc[-1]), (
         "ATR(10) and ATR(20) must actually differ on this data, or the test is vacuous"
     )
+
+
+def _one_cme_session_in_utc():
+    """ES-style bars over one CME session, indexed the way `bars_to_dataframe` indexes them:
+    naive UTC. January, so New York is UTC-5 and the 18:00 ET Sunday open is 23:00 UTC.
+    Two prints at 4800 before midnight UTC, two at 5000 after it, then the next session's
+    open at 6000."""
+    index = pd.to_datetime(
+        ["2026-01-11 23:00", "2026-01-11 23:30", "2026-01-12 00:00", "2026-01-12 00:30", "2026-01-12 23:00"]
+    )
+    closes = [4800.0, 4800.0, 5000.0, 5000.0, 6000.0]
+    return pd.DataFrame(
+        {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [1_000.0] * 5},
+        index=index,
+    )
+
+
+def test_vwap_session_can_follow_the_exchange_clock_rather_than_utc():
+    """`bars_to_dataframe` indexes bars in naive UTC, so `vwap(anchor="D")` split sessions
+    at midnight UTC — 19:00 or 20:00 in New York, the middle of a CME session. Measured
+    2026-09-17 on ES minute bars: 4800.00 at 23:59 UTC, 5000.00 at 00:00 UTC, the session's
+    earlier prints discarded (DATA-R6). `tz` and `session_open` define the session on the
+    exchange's own clock instead."""
+    from ibkr_core_mcp.indicators import vwap
+
+    session = vwap(_one_cme_session_in_utc(), tz="America/New_York", session_open="18:00")
+
+    assert session.iloc[3] == pytest.approx(4900.0), "midnight UTC is 19:00 in New York — mid-session"
+    assert session.iloc[4] == pytest.approx(6000.0), "18:00 in New York opens a new session"
+
+
+def test_vwap_default_session_is_the_calendar_day_of_the_index_as_given():
+    """The default is unchanged and now stated rather than implied: with no `tz` the session
+    is the calendar day of the index as it stands — the UTC day for a frame from
+    `bars_to_dataframe`. The same bars reset at midnight UTC under it."""
+    from ibkr_core_mcp.indicators import vwap
+
+    assert vwap(_one_cme_session_in_utc()).iloc[3] == pytest.approx(5000.0)
+
+
+def test_vwap_converts_a_timezone_aware_index_rather_than_assuming_utc():
+    """An aware index is converted to `tz`; only a naive one is read as UTC."""
+    from ibkr_core_mcp.indicators import vwap
+
+    df = _one_cme_session_in_utc()
+    df.index = df.index.tz_localize("UTC").tz_convert("Asia/Tokyo")
+
+    session = vwap(df, tz="America/New_York", session_open="18:00")
+
+    assert session.iloc[3] == pytest.approx(4900.0)
+    assert session.iloc[4] == pytest.approx(6000.0)
+
+
+def test_vwap_reads_an_aware_index_on_its_own_clock_when_no_tz_is_given():
+    """No `tz` means the index's own wall clock, aware or not — so an index already in
+    New York time splits at New York midnight, without a warning about dropping the zone."""
+    import warnings
+
+    from ibkr_core_mcp.indicators import vwap
+
+    df = _one_cme_session_in_utc()
+    df.index = df.index.tz_localize("UTC").tz_convert("America/New_York")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        session = vwap(df)
+
+    # 00:30 UTC is 19:30 New York on the same calendar day as the 18:00 open.
+    assert session.iloc[3] == pytest.approx(4900.0)
+
+
+def test_vwap_refuses_a_session_open_it_cannot_parse():
+    from ibkr_core_mcp.indicators import vwap
+
+    with pytest.raises(ValueError, match="HH:MM"):
+        vwap(_one_cme_session_in_utc(), session_open="6pm")

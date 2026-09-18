@@ -254,3 +254,29 @@ def test_spent_calls_do_not_accumulate_for_ever():
             f"limit of {count} per {window}s retained {len(history)} timestamps "
             "after 200 calls — expired entries are never dropped"
         )
+
+
+def test_two_verbs_on_one_path_pool_their_limits_deliberately():
+    """`ENDPOINT_LIMITS` is keyed by (path, method), as IBKR's table is; the pacer keys its
+    budget by PATH, and until 2026-09-17 did so silently — the first verb listed supplied
+    the limits and any other verb's were dropped (API-R11).
+
+    Sharing is the conservative direction: if IBKR counts a path's verbs separately, a
+    pooled budget costs at most one needless wait; if it counts them together, separate
+    budgets earn the fifteen-minute penalty box. So one bucket per path is the decision,
+    and every listed verb's limits apply to it — the stricter window binds.
+    """
+    from unittest.mock import patch
+
+    from ibkr_core_mcp import rate_limiter
+
+    probe = {("/probe/{id}", "GET"): ((1, 1.0),), ("/probe/{id}", "PUT"): ((1, 5.0),)}
+    with patch.dict(rate_limiter.ENDPOINT_LIMITS, probe):
+        pacer, _state, slept = _pacer()
+
+    assert pacer.limits_for("/probe/7") == ((1, 1.0), (1, 5.0))
+
+    pacer.acquire("/probe/7")
+    pacer.acquire("/probe/7")
+
+    assert slept == [5.0], "the stricter verb's window must bind, not the first one listed"

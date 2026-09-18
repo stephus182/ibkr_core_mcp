@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ibkr_core_mcp.models import AccountSummary, Contract, Notification, Order, Position, Trade
+from tests.security.structural import annotation_names_a_model, response_model_names
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ibkr_live_shapes.json"
 
@@ -255,12 +256,7 @@ def test_every_method_annotated_as_returning_a_model_is_driven_here():
     import ibkr_core_mcp.client as client_mod
 
     package = Path(client_mod.__file__).parent
-    model_tree = ast.parse((package / "models.py").read_text())
-    models = {
-        n.name
-        for n in ast.walk(model_tree)
-        if isinstance(n, ast.ClassDef) and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in n.bases)
-    }
+    models = response_model_names()
 
     client_tree = ast.parse((package / "client.py").read_text())
     annotated = {
@@ -269,7 +265,7 @@ def test_every_method_annotated_as_returning_a_model_is_driven_here():
         if isinstance(n, ast.FunctionDef)
         and not n.name.startswith("_")
         and n.returns is not None
-        and any(m in ast.unparse(n.returns) for m in models)
+        and annotation_names_a_model(ast.unparse(n.returns), models)
     }
 
     own = ast.parse(Path(__file__).read_text())
@@ -578,14 +574,8 @@ def test_every_captured_endpoint_is_typed_or_reasoned(live):
     Both directions, so a stale exclusion cannot outlive its reason either.
     """
     import ast
-    import re
 
-    models = {
-        node.name
-        for node in ast.walk(ast.parse((Path(__file__).parents[1] / "ibkr_core_mcp" / "models.py").read_text()))
-        if isinstance(node, ast.ClassDef)
-        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
-    }
+    models = response_model_names()
     assert len(models) >= 20, f"only {len(models)} models found — the derivation is broken"
 
     returns = {
@@ -600,7 +590,7 @@ def test_every_captured_endpoint_is_typed_or_reasoned(live):
     for key in sorted(live):
         method = captured.get(key)
         assert method, f"fixture holds {key!r} but the capture script no longer records how it was captured"
-        typed = any(re.search(rf"\b{m}\b", returns.get(method, "")) for m in models)
+        typed = annotation_names_a_model(returns.get(method, ""), models)
         if typed and key in _NO_MODEL_BY_DESIGN:
             stale.append(f"{key} ({method}) returns a model now — drop its exclusion")
         elif not typed and key not in _NO_MODEL_BY_DESIGN:
@@ -616,3 +606,34 @@ def test_every_captured_endpoint_is_typed_or_reasoned(live):
         f"_NO_MODEL_BY_DESIGN with why: {undecided}"
     )
     assert not stale, f"_NO_MODEL_BY_DESIGN is out of date: {stale}"
+
+
+# ── API-R9: one model oracle, matching whole names ───────────────────────────
+
+
+def test_the_model_oracle_matches_whole_names_only():
+    """`Alert` is a substring of `MTAAlert` and `Contract` of `ContractDetails`. Two of the
+    five copies of the "which methods return a model" oracle used substring containment on
+    the return annotation and three used word boundaries, so the first non-model class whose
+    name contained a model's would have split the guards (API-R9, 2026-09-17). One copy now,
+    in `tests/security/structural.py`, and it matches whole names."""
+    from tests.security.structural import annotation_names_a_model, response_model_names
+
+    models = response_model_names()
+    assert {"Alert", "MTAAlert", "Contract", "ContractDetails"} <= models
+    assert annotation_names_a_model("list[Alert | dict[str, Any]]", {"Alert"})
+    assert annotation_names_a_model("MTAAlert | dict[str, Any]", models)
+    assert not annotation_names_a_model("MTAAlert | dict[str, Any]", {"Alert"}), "substring containment"
+    assert not annotation_names_a_model("dict[str, Any]", models)
+
+
+def test_the_model_oracle_has_one_copy():
+    """The derivation lives in structural.py and nowhere else — five copies is how two of
+    them came to disagree with the other three."""
+    needle = 'b.id == "IBKR' + 'Response"'  # split, so this file does not match itself
+    copies = sorted(
+        str(p.relative_to(Path(__file__).parent))
+        for p in Path(__file__).parent.rglob("*.py")
+        if p.name != "structural.py" and needle in p.read_text()
+    )
+    assert copies == [], copies

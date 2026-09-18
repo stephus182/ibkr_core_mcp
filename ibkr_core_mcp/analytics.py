@@ -33,13 +33,31 @@ _BARS_PER_YEAR_BY_UNIT = {
 
 _INTRADAY_UNITS = frozenset({"min", "h"})
 
+# The bar-size grammar — a count, then a unit; 'm' is a MONTH in IBKR's notation. Compiled
+# once and read by both functions below. `is_intraday_timeframe` promised to share
+# `periods_for_timeframe`'s parsing "so the two cannot drift" while each held its own
+# literal copy of the pattern (DATA-R7, 2026-09-17); `test_the_bar_size_grammar_is_written_once`
+# holds it to one.
+_BAR_SIZE_RE = re.compile(r"(\d+)\s*(min|h|d|w|m)")
+
+
+def _parse_bar_size(timeframe: str) -> tuple[int, str] | None:
+    """(count, unit) for a recognised bar-size string with a positive count, else None."""
+    m = _BAR_SIZE_RE.fullmatch(timeframe.strip().lower())
+    if m is None:
+        return None
+    n = int(m.group(1))
+    return (n, m.group(2)) if n > 0 else None
+
 
 def is_intraday_timeframe(timeframe: str) -> bool:
     """True when a bar-size string denotes bars within a single trading session.
 
-    Shares `periods_for_timeframe`'s vocabulary and parsing so the two cannot drift:
-    '5min' and '1h' are intraday; '1d', '1w' and '1m' (month, in IBKR's notation)
-    are not, and neither is anything unrecognised.
+    Shares `periods_for_timeframe`'s vocabulary and parsing so the two cannot drift —
+    one compiled pattern, `_BAR_SIZE_RE`, read through `_parse_bar_size` by both (it said
+    this while holding its own copy of the pattern until 2026-09-17, DATA-R7): '5min' and
+    '1h' are intraday; '1d', '1w' and '1m' (month, in IBKR's notation) are not, and
+    neither is anything unrecognised.
 
     Added for VWAP, which is defined over one session only — "VWAP is not defined
     for daily, weekly, or monthly periods due to the nature of the calculation"
@@ -52,10 +70,8 @@ def is_intraday_timeframe(timeframe: str) -> bool:
         True for minute and hour bars; False for daily and coarser, and for any
         string `periods_for_timeframe` would reject.
     """
-    m = re.fullmatch(r"(\d+)\s*(min|h|d|w|m)", timeframe.strip().lower())
-    if m is None or int(m.group(1)) <= 0:
-        return False
-    return m.group(2) in _INTRADAY_UNITS
+    parsed = _parse_bar_size(timeframe)
+    return parsed is not None and parsed[1] in _INTRADAY_UNITS
 
 
 def periods_for_timeframe(timeframe: str) -> int | None:
@@ -69,12 +85,10 @@ def periods_for_timeframe(timeframe: str) -> int | None:
 
     Returns None when the string is not a recognized bar size.
     """
-    m = re.fullmatch(r"(\d+)\s*(min|h|d|w|m)", timeframe.strip().lower())
-    if not m:
+    parsed = _parse_bar_size(timeframe)
+    if parsed is None:
         return None
-    n, unit = int(m.group(1)), m.group(2)
-    if n <= 0:
-        return None
+    n, unit = parsed
     return max(1, round(_BARS_PER_YEAR_BY_UNIT[unit] / n))
 
 

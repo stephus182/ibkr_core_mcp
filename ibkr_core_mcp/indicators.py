@@ -191,7 +191,13 @@ def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> p
     )
 
 
-def vwap(df: pd.DataFrame, anchor: str | None = "D") -> pd.Series:
+def vwap(
+    df: pd.DataFrame,
+    anchor: str | None = "D",
+    *,
+    tz: str | None = None,
+    session_open: str | None = None,
+) -> pd.Series:
     """Volume-Weighted Average Price, accumulated within each `anchor` session.
 
     VWAP measures one session. It is not a running average over whatever range of
@@ -218,9 +224,21 @@ def vwap(df: pd.DataFrame, anchor: str | None = "D") -> pd.Series:
     Args:
         df: OHLCV frame; `high`, `low`, `close` and `volume` are read.
         anchor: pandas offset alias naming the session boundary — "D" (default) for
-            a calendar day, "W" for a week, and so on. `None` accumulates across the
-            whole frame, which is the pre-2026-09-16 behaviour and now has to be
-            asked for by name.
+            a calendar day, "W" for a week, and so on, on the clock `tz` selects.
+            `None` accumulates across the whole frame, which is the pre-2026-09-16
+            behaviour and now has to be asked for by name.
+        tz: IANA zone the session is defined in, e.g. "America/New_York". A naive
+            index is read as UTC — that is what `bars_to_dataframe` builds — and an
+            aware one is converted. **With no `tz` a session is the calendar day of the
+            index as given**: the UTC day for IBKR bars, which is the exchange day for
+            regular-hours bars of a US or European listing and is not for a CME
+            session, which opens at 18:00 New York and crosses midnight UTC an hour
+            later. Measured 2026-09-17 on ES minute bars: 4800.00 at 23:59 UTC,
+            5000.00 at 00:00 UTC, the session's earlier prints discarded (DATA-R6).
+            This docstring said "calendar day" without saying whose until then.
+        session_open: "HH:MM" on that clock at which a session begins; bars before it
+            belong to the previous session. `tz="America/New_York",
+            session_open="18:00"` is the CME session. Default midnight.
 
     Returns:
         Series aligned to `df.index`.
@@ -229,7 +247,7 @@ def vwap(df: pd.DataFrame, anchor: str | None = "D") -> pd.Series:
         ValueError: If `anchor` is set and `df.index` is not a DatetimeIndex, since
             there is then no way to tell where one session ends. Falling back to a
             running total is what hid this defect, so it is refused rather than
-            guessed.
+            guessed. Also if `session_open` is not "HH:MM".
     """
     typical = (df["high"] + df["low"] + df["close"]) / 3
     weighted = typical * df["volume"]
@@ -241,8 +259,31 @@ def vwap(df: pd.DataFrame, anchor: str | None = "D") -> pd.Series:
             f"got {type(df.index).__name__}. Pass anchor=None for a whole-frame "
             "cumulative VWAP, or index the frame by timestamp."
         )
-    session = df.index.to_period(anchor)
+    session = _session_labels(df.index, anchor, tz, session_open)
     return weighted.groupby(session).cumsum() / df["volume"].groupby(session).cumsum()
+
+
+def _session_labels(index: pd.DatetimeIndex, anchor: str, tz: str | None, session_open: str | None) -> pd.PeriodIndex:
+    """One label per bar naming its session, on the exchange's clock when one is given.
+
+    The index is moved onto `tz`'s wall clock (a naive index read as UTC), shifted back by
+    `session_open` so a session that opens at 18:00 falls inside one calendar day, and
+    then cut into `anchor` periods. Without `tz` the wall clock is the index's own; an
+    aware index is read on its own clock rather than converted (DATA-R6).
+    """
+    clock = index
+    if tz is not None:
+        aware = clock.tz_localize("UTC") if clock.tz is None else clock
+        clock = aware.tz_convert(tz).tz_localize(None)
+    elif clock.tz is not None:
+        clock = clock.tz_localize(None)
+    if session_open is not None:
+        try:
+            hours, minutes = (int(part) for part in session_open.split(":"))
+        except ValueError:
+            raise ValueError(f"session_open must be 'HH:MM', e.g. '18:00'; got {session_open!r}") from None
+        clock = clock - pd.Timedelta(hours=hours, minutes=minutes)
+    return clock.to_period(anchor)
 
 
 def bollinger_bands(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.DataFrame:

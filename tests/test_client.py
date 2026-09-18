@@ -8,6 +8,7 @@ from unittest.mock import patch as _patch
 import pytest
 
 from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError
+from tests.security.structural import annotation_names_a_model, response_model_names
 
 # The `client` fixture lives in tests/conftest.py (shared with tests/security/).
 
@@ -2298,13 +2299,24 @@ def test_no_new_endpoint_silently_discards_an_object_response():
     import ast
     import pathlib
 
-    source = pathlib.Path("ibkr_core_mcp/client.py").read_text()
+    from ibkr_core_mcp import client as client_mod
+
+    # The module actually imported, not a path relative to wherever pytest was started:
+    # from outside the repo root this raised FileNotFoundError (API-R7, 2026-09-17).
+    source = pathlib.Path(client_mod.__file__).read_text()
     lines = source.splitlines()
     offenders = []
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.FunctionDef):
             continue
-        body = "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        # The code, not the docstring: a method whose docstring QUOTES the bare pattern to
+        # explain its own fix tripped this guard on 2026-09-17 the moment its code stopped
+        # carrying the `isinstance(data, dict)` exemption (API-R10) — the third guard in two
+        # days to read prose. Matching starts at the first statement after the docstring.
+        statements = node.body[1:] if ast.get_docstring(node) is not None else node.body
+        if not statements:
+            continue
+        body = "\n".join(lines[statements[0].lineno - 1 : node.end_lineno])
         if "isinstance(data, list) else []" not in body:
             continue
         if "isinstance(data, dict)" in body:
@@ -2808,13 +2820,7 @@ def test_the_module_docstring_names_every_method_that_returns_a_model():
     # 2026-09-17 tranche — Account, AuthStatus, Alert, Watchlist, CurrencyPair — were
     # invisible to it and the docstring went stale without a single test failing. A check
     # whose oracle is a hand-kept list stops checking the day the list stops being kept.
-    models_tree = ast.parse((pathlib.Path(client_mod.__file__).parent / "models.py").read_text())
-    models = {
-        node.name
-        for node in ast.walk(models_tree)
-        if isinstance(node, ast.ClassDef)
-        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
-    }
+    models = response_model_names()
     assert len(models) >= 6, f"only {len(models)} response models found — the derivation is broken"
     returning = {
         node.name
@@ -2822,7 +2828,7 @@ def test_the_module_docstring_names_every_method_that_returns_a_model():
         if isinstance(node, ast.FunctionDef)
         and not node.name.startswith("_")
         and node.returns is not None
-        and any(re.search(rf"\b{m}\b", ast.unparse(node.returns)) for m in models)
+        and annotation_names_a_model(ast.unparse(node.returns), models)
     }
     assert returning, "no method returns a model any more; update or remove this guard"
 
@@ -2903,7 +2909,9 @@ def test_every_client_request_helper_decodes_through_the_same_guard():
     """
     import ast
 
-    tree = ast.parse(pathlib.Path("ibkr_core_mcp/client.py").read_text())
+    from ibkr_core_mcp import client as client_mod
+
+    tree = ast.parse(pathlib.Path(client_mod.__file__).read_text())
     bare: set[str] = set()
     for function in ast.walk(tree):
         if not isinstance(function, ast.FunctionDef):
@@ -2917,3 +2925,42 @@ def test_every_client_request_helper_decodes_through_the_same_guard():
         "`ping` is the one exemption — a liveness probe with its own try/except that answers "
         "False rather than raising, so it has no error to put in the hierarchy."
     )
+
+
+# ── API-R10: a 2xx error object is a rejection, not a bucket of rows ──────────
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda c: c.get_futures(["ES"]), id="get_futures"),
+        pytest.param(lambda c: c.get_stocks(["AAPL"]), id="get_stocks"),
+        pytest.param(lambda c: c.get_currency_pairs("USD"), id="get_currency_pairs"),
+        pytest.param(lambda c: c.get_positions_by_conid(265598), id="get_positions_by_conid"),
+    ],
+)
+def test_a_keyed_list_endpoint_raises_on_an_error_object_rather_than_fabricating_rows(client, call):
+    """Four methods flatten `{"KEY": [...], ...}` into one list, in four spellings.
+
+    Three of them iterated whatever the object's values were, so a 2xx `{"error": "…"}` —
+    the shape IBKR uses for a rejection — became the characters of the message, and
+    `parse_many` was handed one-character rows: `get_futures` answered
+    `["n", "o", " ", "b", "r", "i", "d", "g", "e"]` for `{"error": "no bridge"}`, with the
+    message discarded (API-R10, 2026-09-17). The fourth returned `[]`, which is what
+    "no positions" looks like. An error is an error: it is raised, with IBKR's words.
+    """
+    from ibkr_core_mcp.exceptions import IBKRAPIError
+
+    with (
+        patch.object(client, "_get", return_value={"error": "no bridge"}),
+        pytest.raises(IBKRAPIError, match="no bridge"),
+    ):
+        call(client)
+
+
+def test_an_empty_keyed_object_is_simply_no_rows(client):
+    """The counter-case: `{"XYZ": []}` and `{}` are legitimate empty answers, not errors."""
+    with patch.object(client, "_get", return_value={"XYZ": []}):
+        assert client.get_futures(["XYZ"]) == []
+    with patch.object(client, "_get", return_value={}):
+        assert client.get_stocks(["XYZ"]) == []

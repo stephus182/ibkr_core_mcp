@@ -515,7 +515,11 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
    `except IBKRCoreError` that `exceptions.py` tells callers to write (API-15, 2026-09-17).
    `ping` is the one exemption and
    `test_every_client_request_helper_decodes_through_the_same_guard` fails if a second
-   appears.
+   appears. A response that is an object of arrays — keyed by symbol, currency or account
+   id — goes through `_flatten_buckets(data, path)`, which concatenates the arrays and
+   raises `IBKRAPIError` on a 2xx `{"error": …}`; four methods spelled that four ways until
+   2026-09-17 and three of them iterated the error message's characters into rows
+   (API-R10).
 2. **`models.py`** — add a Pydantic model for the response if it is a new shape. Derive from
    `IBKRResponse`, never from `BaseModel` directly: that base keeps the payload IBKR sent and
    serves it through the mapping protocol, so a typed return can never narrow a 51-key

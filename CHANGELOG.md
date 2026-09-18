@@ -128,6 +128,11 @@ failed before its fix:
   the definitions again; the CI audit uses pip-audit's requirements mode and installs nothing.
 
 ### Changed
+- **`EndpointPacer` keeps one budget per path and pools every listed verb's limits**
+  (API-R11). `ENDPOINT_LIMITS` is keyed by (path, method) as IBKR's table is; the pacer
+  keyed by path and silently kept only the first verb's limits. Pooling is deliberate — the
+  conservative direction against the fifteen-minute penalty box — and the stricter window
+  binds. One matcher scan per request instead of two.
 - **BREAKING for consumers — 29 `IBKRClient` methods return models, not dicts** (API-11; the
   detail and the full list are under *Fixed* below). A model is a mapping over exactly what
   IBKR sent — `row["mktValue"]`, `.get`, `in`, `len`, iteration and `dict(row)` are unchanged —
@@ -197,6 +202,14 @@ failed before its fix:
   is still the operator's most valuable secret even though this package no longer reads it.
 
 ### Added
+- **`indicators.vwap(df, anchor, *, tz=None, session_open=None)`** (DATA-R6). The session
+  was the calendar day of the frame's index, which for `bars_to_dataframe`'s naive-UTC index
+  is the UTC day — the middle of a CME session, measured on ES bars: 4800.00 at 23:59 UTC,
+  5000.00 at 00:00 UTC, the earlier prints discarded at 19:00 New York. `tz` names the
+  exchange's clock (a naive index is read as UTC, an aware one converted) and `session_open`
+  the "HH:MM" a session begins, so `tz="America/New_York", session_open="18:00"` is the CME
+  day. The default is unchanged and now documented as the UTC day; `add_indicators` holds
+  regular-hours bars only, for which that is the exchange day.
 - **Tool capability registry**: every `TOOL_DEFINITIONS` entry and both server-local tools carry
   a `capabilities` frozenset from `claude_tools.CAPABILITIES`; `ClaudeToolkit.tools` strips it
   before schemas reach the API; `tool_capabilities()` returns the map. The suite asserts the set
@@ -239,6 +252,40 @@ failed before its fix:
   `message_options`, `confirmed`, UTC `at`), including a declined one (claudia_ui gap #38).
 
 ### Fixed
+The last ten findings of the release-readiness register, closed 2026-09-17 (session 15;
+`docs/audits/release-readiness-audit-2026-09-16.md`, Phase 6), each reproduced first and fixed
+behind a test watched failing:
+- **`_alert_write_error` read the digits `403`, not the status (TOOL-R4, Medium).** A 500
+  whose reference number contained them, or a 400 for alert 1403, told the model the alert
+  write was permanently blocked upstream and not to retry. Only an `IBKRAPIError` with
+  `status_code == 403` gets that text now.
+- **`modify_price_alert` sent `outsideRth` as a JSON bool (TOOL-R5).** IBKR documents an
+  enum of 0 and 1; create cast it (TOOL-02) and modify overwrote the translated int with the
+  caller's bool. Both cast.
+- **Three test guards depended on the working directory (API-R7).** Two `client.py` guards
+  raised `FileNotFoundError` from outside the repo root, and the assertion-strength scan
+  walked `Path("tests")` — from anywhere else it scanned nothing, found nothing, and passed.
+  All three are anchored on the module or file they belong to, with a vacuity guard on the
+  scan.
+- **`with_retry` paced the first attempt only (API-R8).** A 429/503 retry went out after the
+  backoff unpaced and unrecorded. Every attempt goes through the pacer.
+- **The bar-size grammar was written twice (DATA-R7).** `is_intraday_timeframe` claimed to
+  share `periods_for_timeframe`'s parsing while holding its own copy of the pattern. One
+  compiled pattern, read by both, held to one copy by a test.
+- **Two alert-vocabulary counts disagreed inside one file (TOOL-R6).** "26 keys, two shared"
+  and "34 keys, three shared" counted different levels of the same object: 26 top-level plus
+  8 inside `conditions[]`, sharing `conditions` and `tif` at the top and `conidex` inside.
+  Stated once, held by a test against the live capture and the translation maps.
+- **The model oracle had five copies, two matching by substring (API-R9).** `Alert` is inside
+  `MTAAlert`; the first non-model class containing a model's name would have split the
+  guards. One derivation and one whole-word matcher in `tests/security/structural.py`.
+- **A 2xx `{"error": …}` became one-character rows (API-R10).** `get_futures`, `get_stocks`
+  and `get_currency_pairs` iterated the message's characters into rows for `parse_many`;
+  `get_positions_by_conid` returned `[]`. One `_flatten_buckets` helper serves all four and
+  **raises `IBKRAPIError` with IBKR's message** on an error object — a behaviour change for
+  a caller that relied on the empty list. The bare-array guard that then tripped on a
+  docstring quoting the old pattern now reads code, not prose.
+
 **Every response model was wrong against real IBKR data** (audit finding API-11, filed as a
 Nit: "zero of 74 methods return a Pydantic model"). Measuring the six models that already
 existed against responses captured from a live gateway found something larger — none of them

@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,645 unit tests · 102 integration tests (1,747 total) · 89% line coverage (non-integration)** — the three counts re-measured 2026-09-17 (session 14; coverage from the earlier run that day) with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,665 unit tests · 102 integration tests (1,767 total) · 89% line coverage (non-integration)** — the three counts re-measured 2026-09-17 (session 15, all from the same run) with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -78,7 +78,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `models.py` | 99% | 100, 337, 976 | Three defensive branches: the non-dict input path in `IBKRResponse._keep_raw_payload`, the `return data` fallback in `AccountSummary._reduce`, and `json_default`'s raise for an object that is neither a model nor JSON-native. IBKR sends a dict on every endpoint captured, so none has a known real-world trigger. |
 | `human_auth.py` | 98% | 101 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 93% | 408, 424, 451–453, 481–484, 488–491, 495–497, 508–511, 799 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
-| `rate_limiter.py` | 98% | 333–334 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
+| `rate_limiter.py` | 98% | 347–348 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
 | `__init__.py` | 92% | 64–65 | Optional-dependency import guard (module absent from environment) |
 | `auth.py` | 93% | 81, 142–143 | `browser_cookie3` import and cookie-apply path — requires a real installed browser's cookie store |
 | `pinescript.py` | 90% | 143–144, 232, 234, 236, 239 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe-inference edge cases for sub-1-minute and multi-day intervals |

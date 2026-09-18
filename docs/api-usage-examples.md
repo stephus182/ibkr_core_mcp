@@ -59,6 +59,7 @@ bb_df    = indicators.bollinger_bands(df)
 atr      = indicators.atr(df)
 vwap     = indicators.vwap(df)        # per-session; needs a DatetimeIndex (see Conventions)
 vwap_all = indicators.vwap(df, anchor=None)   # whole-frame cumulative, opt-in
+vwap_cme = indicators.vwap(df, tz="America/New_York", session_open="18:00")  # a CME session, not the UTC day
 kc_df    = indicators.keltner_channels(df)    # EMA(20) ± 2 × ATR(10) — ATR length is separate
 tr       = indicators.true_range(df)
 ```
@@ -80,7 +81,7 @@ drift back. Don't change any of the following without doing the same.
 | `bollinger_bands` | **Population standard deviation (ddof=0)**. Both StockCharts and TradingView (`ta.stdev`'s `biased=true` default) use it; pandas' `.std()` default is ddof=1, which made every band 2.60% too wide. | NaN for `period - 1` bars |
 | `stochastic` | **Fast** (%K unsmoothed, %D = 3-period SMA of %K). Charting packages often default to Slow, so the lines will differ from theirs — that is the variant, not a bug. | NaN for `k - 1` bars |
 | `keltner_channels` | EMA(`period`) ± `atr_mult` × ATR(`atr_period`), defaulting to ChartSchool's (20, 2.0, **10**) triple. The authorities genuinely differ here — TradingView's `ta.kc` uses an EMA of true range at the basis length — so `atr_period` exists to address either. | follows ATR |
-| `vwap` | **Resets every session** (`anchor="D"`). VWAP is defined over one trading day; accumulating across a whole frame answers no question. Raises on a non-DatetimeIndex rather than silently running cumulatively. On daily or coarser bars it degenerates to the bar's typical price, which is why `add_indicators` reports it only for intraday timeframes. | none |
+| `vwap` | **Resets every session** (`anchor="D"`). VWAP is defined over one trading day; accumulating across a whole frame answers no question. A session is the calendar day of the index as given — the **UTC** day for `bars_to_dataframe` frames, which is the exchange day for regular-hours US and European bars and is not for a CME session (it opens 18:00 New York and crosses midnight UTC an hour later); pass `tz` and `session_open` for the exchange's clock (DATA-R6, 2026-09-17). Raises on a non-DatetimeIndex rather than silently running cumulatively. On daily or coarser bars it degenerates to the bar's typical price, which is why `add_indicators` reports it only for intraday timeframes. | none |
 | `obv`, `williams_r`, `sma` | Verified correct against ChartSchool, unchanged. | per definition |
 
 ## Backtesting

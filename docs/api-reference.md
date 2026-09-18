@@ -350,8 +350,11 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 ### `get_futures(symbols) -> list[FutureContract | dict]`
 Futures contracts for root symbols.
 
-**Note:** IBKR returns `{"CL": [...], "ES": [...]}` — this method flattens to a list.
-Returns `[]` if the response shape is unexpected.
+**Note:** IBKR returns `{"CL": [...], "ES": [...]}` — this method flattens to a list through
+`_flatten_buckets`, the one helper the four keyed-list methods share since 2026-09-17
+(API-R10). A 2xx `{"error": …}` object raises `IBKRAPIError` with IBKR's message — three of
+the four used to iterate the message's characters into one-letter rows — and any other
+non-list shape is `[]`.
 
 **Endpoint:** `GET /trsrv/futures`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol
@@ -359,7 +362,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/se
 ---
 
 ### `get_stocks(symbols) -> list[StockSearchResult | dict]`
-Stock contracts for symbols. Same dict-flattening behaviour as `get_futures()`.
+Stock contracts for symbols. Same flattening as `get_futures()`, through the same helper.
 Each record is one issuer — `{name, assetClass, contracts: [{conid, exchange, isUS}]}` —
 and `isUS` is the **only** US-listing signal any contract endpoint returns. This is the
 endpoint IBKR designates for resolving stock symbols into conids, and conid is assigned
@@ -403,7 +406,8 @@ Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/tr
 Available FX pairs for a target currency.
 
 **Note:** IBKR returns `{"USD": [{"symbol": "USD.SGD", "conid": ..., "ccyPair": "SGD"}, ...]}` —
-this method flattens to a list. Same dict-flattening behaviour as `get_futures()`/`get_stocks()`.
+this method flattens to a list. Same flattening as `get_futures()`/`get_stocks()`, through the
+same helper, so an error object raises rather than parsing as rows.
 
 Corrected 2026-06-30: previously called the undocumented `/iserver/secdef/currency`, which
 always returned `[]` (the response is a dict, not a list, so the old `isinstance(list)` check
@@ -489,7 +493,9 @@ quietly truncated list would repeat API-02 — an incomplete answer that looks c
 **Endpoint:** `GET /portfolio/{accountId}/positions/{page}`
 
 ### `get_positions_by_conid(conid) -> list[dict]`
-Position data for a specific contract across all accounts. Returns `[]` if response is not a list.
+Position data for a specific contract across all accounts, flattened from the account-keyed
+object the gateway sends (or the bare array its page documents) through the same helper as
+`get_futures()`; an error object raises `IBKRAPIError`, any other non-list shape is `[]`.
 **Endpoint:** `GET /portfolio/positions/{conid}`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/position-contract-info
 
@@ -1084,6 +1090,8 @@ flowchart TB
 into a URL, preventing path traversal via f-string-built request paths.
 
 All methods except `ping()` and `tickle()` use `with_retry()` internally (3 retries, 1s base
-backoff, handles 429 and 503). 401 responses are not retried — they raise `IBKRAuthError`
+backoff, handles 429 and 503), and every attempt — the first and each retry — is paced against
+the endpoint's published limit before it is sent (until 2026-09-17 only the first was, API-R8).
+401 responses are not retried — they raise `IBKRAuthError`
 immediately. `ping()` and `tickle()` bypass `with_retry()` entirely — they call the session
 directly with a 5s timeout, catch any exception, and return a `bool`; see their own docstrings.

@@ -96,3 +96,35 @@ def test_backoff_delays_increase_exponentially():
     assert len(sleep_calls) == 3
     assert sleep_calls[1] > sleep_calls[0]
     assert sleep_calls[2] > sleep_calls[1]
+
+
+def test_every_attempt_is_paced_not_only_the_first():
+    """A retry is a request too.
+
+    `with_retry` paced once, before its loop, so a 503 retry on a 1-per-5-seconds
+    endpoint went out after the 1 s backoff unpaced and the pacer's window never saw
+    it — the pacer then believed the next call was free (API-R8, 2026-09-17). Every
+    attempt has to pass through `pace`, in order, before it is sent.
+    """
+    from ibkr_core_mcp import rate_limiter
+
+    events: list[str] = []
+    responses = [_make_response(503), _make_response(200, {"ok": True})]
+
+    def send():
+        events.append("send")
+        return responses.pop(0)
+
+    def fake_pace(path):
+        events.append(f"pace {path}")
+        return 0.0
+
+    with patch.object(rate_limiter, "pace", side_effect=fake_pace), patch("time.sleep"):
+        rate_limiter.with_retry(send, max_retries=2, path="/iserver/account/orders")
+
+    assert events == [
+        "pace /iserver/account/orders",
+        "send",
+        "pace /iserver/account/orders",
+        "send",
+    ]

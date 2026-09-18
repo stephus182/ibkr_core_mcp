@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ibkr_core_mcp.exceptions import ConfigError
+from tests.security.structural import annotation_names_a_model, response_model_names
 
 # Path and query parameters exactly as IBKR's API-reference pages document them.
 # The page slug each row came from is the last element, so a reader can re-check it.
@@ -153,12 +154,7 @@ def test_the_event_contract_endpoints_stay_marked_unvalidated():
 
     package = pathlib.Path(sys.modules[IBKRClient.__module__].__file__ or "").parent
 
-    model_names = {
-        node.name
-        for node in ast.walk(ast.parse((package / "models.py").read_text()))
-        if isinstance(node, ast.ClassDef)
-        and any(isinstance(b, ast.Name) and b.id == "IBKRResponse" for b in node.bases)
-    }
+    model_names = response_model_names()
     client_tree = ast.parse((package / "client.py").read_text())
     typed = {
         node.name
@@ -166,7 +162,7 @@ def test_the_event_contract_endpoints_stay_marked_unvalidated():
         if isinstance(node, ast.FunctionDef)
         and node.name in FORECAST_METHODS
         and node.returns is not None
-        and any(m in ast.unparse(node.returns) for m in model_names)
+        and annotation_names_a_model(ast.unparse(node.returns), model_names)
     }
     assert not typed, (
         f"{sorted(typed)} declare a model return, but no event-contract response has ever been "

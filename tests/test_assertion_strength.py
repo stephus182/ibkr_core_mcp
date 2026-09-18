@@ -51,13 +51,19 @@ ALLOWED_SHALLOW: dict[str, str] = {
 }
 
 
+# Anchored on this file, not on the working directory: `Path("tests")` walked from wherever
+# pytest was started, so from anywhere but the repo root the scan found no files, no
+# offenders, and passed (API-R7, 2026-09-17).
+_TESTS_DIR = pathlib.Path(__file__).resolve().parent
+
+
 def _weak(assertion: str) -> bool:
     return any(p.match(assertion) for p in WEAK_ASSERTION_PATTERNS)
 
 
 def _tests_with_only_weak_assertions() -> list[tuple[str, str]]:
     found = []
-    for path in sorted(pathlib.Path("tests").rglob("test_*.py")):
+    for path in sorted(_TESTS_DIR.rglob("test_*.py")):
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
@@ -92,3 +98,10 @@ def test_the_allowed_shallow_list_has_no_stale_entries():
     shallow = {n for _, n in _tests_with_only_weak_assertions()}
     stale = sorted(set(ALLOWED_SHALLOW) - shallow)
     assert not stale, f"ALLOWED_SHALLOW names tests that are no longer shallow (or no longer exist): {stale}"
+
+
+def test_the_strength_scan_actually_sees_the_suite():
+    """Vacuity guard for the scan above: a walk that finds no test files finds no offenders
+    and passes, which is exactly what happened from outside the repo root (API-R7)."""
+    scanned = list(_TESTS_DIR.rglob("test_*.py"))
+    assert len(scanned) > 50, f"the scan found {len(scanned)} test files"
