@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,630 unit tests · 102 integration tests (1,732 total) · 89% line coverage (non-integration)** — all four re-measured 2026-09-17 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,633 unit tests · 102 integration tests (1,735 total) · 89% line coverage (non-integration)** — all four re-measured 2026-09-17 with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -75,7 +75,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `local_browser.py` | 95% | 161–162, 184, 486–487, 586, 792, 1083, 1190–1196, 1200 | Unparseable IP literal from DNS resolution (`ValueError` continue branch in `is_private_host`), and interactive `create_profile` / CLI paths that need a real TTY and a real browser — covered live, not by unit tests. |
 | `flex_import.py` | 90% | 180, 232–236, 240–241, 269, 273–274, 279–283, 340 | Type-coercion failure branches (`INTEGER`/`REAL` attributes that IBKR has never emitted as non-numeric), the unparseable-date raise in `normalise_datetime`, the blank-`execId` skip and unparseable-timestamp warning in the live-fill path, and the `counts()` accessor. Every one is a defensive branch against IBKR changing a format — the raising behaviour is deliberate (see `flex_import.py`'s refusal-on-unknown-attribute contract), so these fire only on a schema change, which is exactly when you want them loud. |
 | `flex_store.py` | 97% | 126, 134 |
-| `models.py` | 99% | 88, 325, 962 | Three defensive branches: the non-dict input path in `IBKRResponse._keep_raw_payload`, the `return data` fallback in `AccountSummary._normalize`, and `json_default`'s raise for an object that is neither a model nor JSON-native. IBKR sends a dict on every endpoint captured, so none has a known real-world trigger. |
+| `models.py` | 99% | 100, 337, 976 | Three defensive branches: the non-dict input path in `IBKRResponse._keep_raw_payload`, the `return data` fallback in `AccountSummary._reduce`, and `json_default`'s raise for an object that is neither a model nor JSON-native. IBKR sends a dict on every endpoint captured, so none has a known real-world trigger. |
 | `human_auth.py` | 98% | 101 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 93% | 408, 424, 451–453, 481–484, 488–491, 495–497, 508–511, 799 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes |
 | `rate_limiter.py` | 98% | 333–334 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |

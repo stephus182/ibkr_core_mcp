@@ -27,14 +27,15 @@ counts reconcile exactly (13 + 9 + 12 + 21 + 25 + 21 + 19).
 | `DOCB` | 19 | 1 | — | — | **18** |
 | `DOCB-R` | **11** | **11** | — | — | — |
 | `DOCA-R` | **9** | **9** | — | — | — |
-| `DATA-R` | 5 | 5 | — | — | — |
-| `API-R` | **5** | **5** | — | — | — |
-| `TOOL-R` | **3** | **3** | — | — | — |
+| `DATA-R` | **7** | 5 | **2** | — | — |
+| `API-R` | **11** | 6 | **5** | — | — |
+| `TOOL-R` | **6** | 3 | **3** | — | — |
 | `WEB-R` | 2 | 2 | — | — | — |
-| `SEC-R` | **5** | **5** | — | — | — |
-| **Total** | **160** | **110** | **0** | **0** | **50** |
+| `SEC-R` | **7** | 5 | **2** | — | — |
+| **Total** | **173** | **111** | **12** | **0** | **50** |
 
-`110 + 0 + 0 + 50 = 160`. **There are no unrecorded findings left.** All three blocks
+`111 + 12 + 0 + 50 = 173`. **There are no unrecorded findings left**, and twelve recorded ones
+are open again — session 13's fresh-eye review of the whole branch, *Phase 4* below. All three blocks
 (`DOCB` 18, `DOCA` 15, `DATA-03…19` 17) were re-derived in session 9 and produced 15 fresh
 findings — 5 High, 6 Medium, 4 Low — every one closed. Severity order finally has something to
 range over. "Written off" is its own column and not folded into either
@@ -80,7 +81,7 @@ that can be verified. The precedent for answering this is already in this report
 guessed at, and that sweep produced `DATA-25` (a real High). The same is owed to the other
 three blocks.
 
-### Open findings that do have a claim (0)
+### Open findings that do have a claim (12)
 
 Closed since this table was written: `SEC-02`, `TOOL-03`, `TOOL-04`, `TOOL-05`, `WEB-03`, `WEB-04`, `API-17`.
 Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECURITY.md's
@@ -88,10 +89,23 @@ Raised and closed on the way: `DOCA-R4` (the stale plans index), `DOCA-R5` (SECU
 
 | ID | Sev | Claim, in brief |
 |---|---|---|
+| `TOOL-R4` | Medium | `_alert_write_error` matches the digits `403` anywhere in an error's text, so a 500 with reference 84031 or a 400 for alert 1403 tells the model the write is permanently blocked upstream and not to retry; `with_retry` always sets `status_code`, so the substring fallback only widens |
+| `SEC-R6` | Medium | `tests/security/test_published_identifiers.py`'s account-shaped regex is `U` + exactly 7 digits while the redactor masks and refuses 6 to 9, and its comment cites `client.py`'s `_ACCOUNT_ID_RE`, which is `^[A-Z0-9]{4,12}$`; a 6- or 8-digit id passes the committed-file guard the capture script would refuse |
+| `TOOL-R5` | Low | `_modify_price_alert` sends `outsideRth` as a JSON bool where `_create_price_alert` sends IBKR's 0/1 enum int — the TOOL-02 fix reached one of two bodies, the shape `TOOL-R3` closed for `tif` |
+| `API-R7` | Low | Two structural guards in `tests/test_client.py` (2301, 2906) open `client.py` by a cwd-relative path: both fail with `FileNotFoundError` when pytest runs from outside the repo root, both pass from it; `tests/security/structural.py` already anchors on `__file__` |
+| `DATA-R6` | Low | `vwap`'s default session is the **UTC** calendar day of the naive index `bars_to_dataframe` builds; measured on ES minute bars it reset from 4800 to 5000 at 00:00 UTC inside one CME session, and the docstring says "calendar day" without saying whose |
+| `API-R8` | Low | `with_retry` paces once before its loop, so a 429/503 retry on a 1-per-5-s endpoint goes out after the 1 s backoff unpaced and is never recorded in the pacer's window |
+| `DATA-R7` | Low | `is_intraday_timeframe`'s docstring says it shares `periods_for_timeframe`'s parsing "so the two cannot drift"; lines 55 and 72 are two literal copies of the regex |
+| `TOOL-R6` | Low | Two prose copies of the alert-vocabulary measurement in `claude_tools.py` disagree — 26 keys and "exactly two" shared names above the table, 34 keys and "exactly three" in the modify docstring — and the table between them maps `conidex`, so "two" is wrong |
+| `API-R9` | Low | The `IBKRResponse`-subclass oracle is copied into five test files, and the return-annotation match uses substring containment in two of them and word-boundary regexes in three; `Alert` ⊂ `MTAAlert`, `Contract` ⊂ `ContractDetails`, so the first non-model name containing a model name splits the guards |
+| `API-R10` | Low | The dict-of-lists flatten exists in four spellings across `get_futures`, `get_stocks`, `get_currency_pairs` and `get_positions_by_conid`; the first three iterate a string when a 2xx body is `{"error": …}`, returning one-character rows or an empty list with IBKR's message discarded |
+| `API-R11` | Nit | `ENDPOINT_LIMITS` is keyed by `(path, method)` but the pacer discards the method, so per-verb entries would silently share a bucket, and `limits_for`/`_bucket_key` scan the matchers twice per request |
+| `SEC-R7` | Nit | `_NUMERIC_PATH_SEGMENT_RE` is byte-identical to `_ORDER_ID_RE` six lines above, with a second validator and a different message for one rule; `test_documented_controls.py` reads only the first |
 
 > Rows leave this table when the finding closes; the write-up stays in the Phase 3
 > sections below. `WEB-05…09`, `API-05`, `API-10`, `SEC-06…10`, `API-08/12/13`, `API-15`, `TOOL-07`,
-> `API-11` and — last — `TOOL-01` left on 2026-09-17. **The table is empty.** This table is the
+> `API-11` and — last — `TOOL-01` left on 2026-09-17. **The table was empty from that morning until
+the fresh-eye review the same afternoon put twelve rows back** (*Phase 4*). This table is the
 > source of truth for *which* findings are open — the register's counts are checked against
 > it by `scripts/audit/check_register.py`, after the two silently disagreed that same day.
 
@@ -111,6 +125,9 @@ is written up below with how its subject was located.
    the event contracts did, with the real status held by a test rather than by an open row.
 3. ~~`API-11`'s remaining 68 methods~~ — **done 2026-09-17.** 29 methods return models and
    every captured endpoint that does not carries a recorded reason, machine-checked.
+4. **The twelve findings of the 2026-09-17 fresh-eye review** (*Phase 4*), in severity order:
+   two Medium, eight Low, two Nit. `API-R6`, the one High, closed in the same session — it had
+   silently broken the package's one consumer.
 
 ~~Two things need the owner~~ — **both done 2026-09-16.** The gateway was re-authenticated,
 which unblocked Phase 0 gates 0.6 / 0.8 / 0.11 and settled API-R1, TOOL-R1 and API-17; and
@@ -4408,3 +4425,106 @@ three "5 concurrent" copies, the four alert-write surfaces), and *a check that c
 fail* (the path scan's `not <generator>`, the catalog's "last verified" sentence). Three
 guards leave with it — the alert-write status, the docs catalog, and the `tif` vocabulary —
 each watched failing before it was trusted.
+
+---
+
+## Phase 4 — Fresh-eye review of the whole branch
+
+Session 13 (2026-09-17). The owner's standing step once implementation is done: *take a
+fresh eye and review all changes, with special attention to the larger files and the API*.
+The range is `main..HEAD` — 63 commits, 112 files, 42,811 lines added — and every package
+diff was read in full: `client.py` (1,554 diff lines), `models.py` (1,029),
+`claude_tools.py` (1,013), `indicators.py`, `rate_limiter.py`, `mcp_server.py`,
+`local_browser.py`, `analytics.py`, `backtest.py`, `web_scraper.py`, `auth.py`, `config.py`
+and the rest. The code-review skill fanned out ten finders; two finished and eight were
+terminated by the monthly spend limit, so their angles were covered by hand, and **every
+claim kept from the two that finished was re-verified before it was recorded** — five of
+theirs were folded into nits or dropped on that check.
+
+**Thirteen findings, every one reproduced or read directly.** One High, closed in this
+session; two Medium, eight Low and two Nit, open, in the per-finding table above.
+
+| ID | Severity | Finding |
+|---|---|---|
+| `API-R6` | **High** | **Typed returns silently emptied the package's one consumer.** claudia_ui installs this package editable from this checkout — a symlink per file, so it runs this branch whenever the branch is checked out — and gates every client row on `isinstance(row, dict)` or `isinstance(row, Mapping)`; an `IBKRResponse` passed neither. Measured with models built from the live fixture, inside claudia_ui's venv: `parse_orders` 1 → 0, `parse_positions` 2 → 0, `parse_fills` 4 → 0, `parse_contract_info` → None, the same dicts parsing in full. In ClaudIA: an empty positions table, an empty live-orders table, no live realised P&L, and a Gate 2 dialog without the contract-month line it gained on 2026-09-04 — with its suite green, because its mocks return dicts — and its mypy gate red, six errors in two files against Protocols and annotations declared for `dict`. `docs/consumers.md` had no entry and the `CHANGELOG` did not say breaking. **Closed** — below |
+| `TOOL-R4` | Medium | `_alert_write_error` returns the "permanently blocked upstream, do not retry" text for any exception whose text contains `403`. Probed: `IBKRAPIError(… "ref 84031", status_code=500)` and `IBKRAPIError(… "alert 1403 not found", status_code=400)` both get it; `with_retry` always sets `status_code`, so the substring fallback only widens |
+| `SEC-R6` | Medium | The committed-fixture guard's regex is `U[0-9]{7}` where the redactor's is `U\d{6,9}`, and its comment attributes the 7-digit shape to `client.py`, whose `_ACCOUNT_ID_RE` is `^[A-Z0-9]{4,12}$`. The second SEC-13 control covers one length of the class the first covers; no exposure today, the coverage claim false |
+| `TOOL-R5` | Low | `_modify_price_alert` writes `outsideRth` as a Python bool where create casts to IBKR's 0/1 — TOOL-02's fix on one of two bodies, the `TOOL-R3` shape again; the translated body's IBKR int is overwritten with the bool. No effect while the gateway blocks alert writes |
+| `API-R7` | Low | `tests/test_client.py` 2301 and 2906 read `ibkr_core_mcp/client.py` relative to the working directory. From `/tmp`: 2 failed, `FileNotFoundError`; from the root: 2 passed. `tests/security/structural.py` already anchors on `__file__` |
+| `DATA-R6` | Low | `vwap(anchor="D")` runs on the naive-UTC index `bars_to_dataframe` builds, so a session is a UTC day. Measured on synthetic ES minute bars over one CME session with the first two hours at 4800 and the rest at 5000: VWAP 4800.00 at 23:59 UTC, 5000.00 at 00:00 UTC — the session's prints discarded at 20:00 New York. Wrong for futures, and for equities' extended hours under EST |
+| `API-R8` | Low | `with_retry` calls `pace(path)` once, before the loop; a 503 retry on `/iserver/account/orders` goes out after the 1 s backoff unpaced, and the pacer's window never sees it |
+| `DATA-R7` | Low | `is_intraday_timeframe` says it shares `periods_for_timeframe`'s parsing "so the two cannot drift"; `analytics.py` 55 and 72 are two copies of `r"(\d+)\s*(min|h|d|w|m)"` |
+| `TOOL-R6` | Low | `claude_tools.py` 1493 says the alert detail has 26 keys and "exactly two" names shared with the request; the modify docstring at 3616 says 34 and "exactly three"; `_ALERT_CONDITION_TO_REQUEST` between them maps `conidex` → `conidex`, so "two" is wrong — API-03's stale-second-copy shape inside one file |
+| `API-R9` | Low | The `IBKRResponse`-subclass oracle is copied into five test files; the return-annotation match is substring containment in `test_client_event_contracts.py` 169 and `test_client_returns_models.py` 272, word-boundary in the other three. `Alert` ⊂ `MTAAlert`, `Contract` ⊂ `ContractDetails` — the first non-model class whose name contains a model name splits the guards |
+| `API-R10` | Low | Four spellings of "flatten a dict of lists" — `get_futures` 1132, `get_stocks` 1153, `get_currency_pairs` 1282, `get_positions_by_conid` 1455; the first three iterate the string of a 2xx `{"error": …}` body and hand `parse_many` one-character rows. The string shape predates the branch; the branch touched all three lines |
+| `API-R11` | Nit | `ENDPOINT_LIMITS` is keyed by `(path, method)`, and `EndpointPacer` drops the method when it builds its matchers, so two verbs on one path would silently share a bucket; `limits_for` and `_bucket_key` scan the list separately on every request |
+| `SEC-R7` | Nit | `_NUMERIC_PATH_SEGMENT_RE` (133) is byte-identical to `_ORDER_ID_RE` (127), with `_require_numeric` a second validator of one rule beside `_validate_order_id`, and different messages; `test_documented_controls.py` reads only the first |
+
+Read and found sound: the account joining the Gate 1 scope, `_decode` as the one boundary,
+`get_all_positions` and its raise at the guard, `_fits_in_one_call`, the sliding-window pacer
+with its lock held across the sleep, the redirect-walking SSRF guard and its quiet abort, the
+OAuth delegation, the `Config` removal against claudia_ui's real usage (it neither constructs
+`Config(...)` nor reads the field), the event-contract removal (no consumer caller), and every
+model against the fixture.
+
+### The register's own checker, first
+
+Recording twelve open re-derived findings was refused by `scripts/audit/check_register.py`:
+it attributed an open `API-R7` to the `API` row and skipped every `-R` row, so the honest
+table read "API: register says 0 open, the table lists 5" — a row per series could not be
+consistent unless its count sat on the wrong row. It keys on the series now (`API-R6` →
+`API-R`), with `tests/scripts/test_check_register.py` holding the attribution and holding that
+a wrong `-R` count is still named, both watched failing against the old checker first; a
+mutated copy of this register (`API-R` open 5 → 4) is refused with the row named.
+
+### `API-R6` — closed
+
+**Why the package's own guards did not see it.** API-11's two guards are exactly right for
+this package: `test_every_json_dumps_in_the_tool_layer_can_serialise_a_model` reads the
+tool layer's source, and `test_typed_returns.py` drives the handlers with models. Neither
+reads a consumer. The one consumer this package has (`docs/consumers.md`) had the same two
+checks — and the `Mapping` one is the *correct* duck-typed check, which is the part that
+matters: `IBKRResponse` served the whole protocol, but `collections.abc.Mapping` has no
+`__subclasshook__` the way `Sized`, `Iterable` and `Container` do, so serving the protocol
+was not being a `Mapping`.
+
+**The fix, this side.** `IBKRResponse` derives from `collections.abc.Mapping[str, Any]`, held
+by `test_a_typed_response_is_a_mapping_to_isinstance` (watched failing: `0 == 2`). A
+`Mapping.register()` was the first version and was dropped within the hour: it repaired
+`isinstance` and left mypy blind, and claudia_ui's mypy had just reported six errors against
+Protocols declared `-> dict[str, Any]` — the static half of the same finding. Probed before
+the base was adopted: validation, `dict(model)`, `json.dumps(…, default=json_default)`,
+`model_validate(model) is model`, `deepcopy` and `pickle` equality, `model_dump()`,
+`pd.DataFrame([model])`, the empty-payload and `model_construct()` cases, all unchanged;
+`reversed(model)` refused as for any `Mapping`; mypy clean over the package. `json_default` and every model are exported from the
+package root; `docs/consumers.md` carries the migration with the four measurements;
+`CHANGELOG.md` says **BREAKING** under *Changed*; `CLAUDE.md` and `docs/api-reference.md`
+state the contract as it now is.
+
+**The fix, the other side.** In claudia_ui, on branch `fix/typed-rows-are-mappings` from
+`main` at `15c625c`, commit `698b492`: `parse_orders` and `parse_contract_info` widen `dict`
+to `Mapping`, each behind a test feeding a `MappingProxyType` — a mapping that is not a dict,
+without importing this package's model — watched failing first (`0 == 1`, `None is not
+None`); and five declarations widen `dict[str, Any]` to `Mapping[str, Any]` and
+`list[dict[str, Any]]` to `Sequence[Mapping[str, Any]]`, `list` being invariant:
+`ContractInfoSource`, `PositionSource`, `OrderSource`, `TradeSource`,
+`DashboardClient.get_accounts` and `_resolve_account_id`. Its four gates green (2,030 passed,
+mypy clean over 83 files). **Not merged, not pushed, and `core-ref.txt` — the commit that
+repository is supported against — untouched**: that bump is the owner's, after the tag. The
+change is safe in both orders, because a dict is a `Mapping` and satisfies every widened
+declaration under the pinned core too.
+
+**Verified end to end**, in claudia_ui's venv, which resolves this checkout: the four parsers
+re-run against the same fixture-built models after both sides — `parse_orders` 1 of 1,
+`parse_positions` 2 of 2, `parse_fills` 4 of 4, `parse_contract_info` an identity.
+
+### What this session leaves
+
+**173 findings, 111 closed, 12 open, 50 written off.** The twelve are in the per-finding
+table, in severity order, for the next session. The recurring shape was the register's own
+again: *a fix applied to one branch and never swept* — this time this package's own callers
+and not its consumer, and `TOOL-R5` on the other alert body — and *a claim whose condition
+expired* (`DATA-R7`, `TOOL-R6`, the guard comment in `SEC-R6`). One shape is new to the
+register: *a check that reads the protocol, not the type* — an object can answer every method
+of a `Mapping`, to the runtime and to the reader, and still not be one to `isinstance` or to
+mypy. The fix for that class is to *be* the type, not to imitate it.

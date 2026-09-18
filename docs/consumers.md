@@ -10,6 +10,44 @@
 
 ## Changes consumers should know about
 
+### 2026-09-17 — BREAKING: 29 `IBKRClient` methods return models, not dicts
+
+`get_positions`, `get_all_positions`, `get_live_orders`, `get_trades`, `get_accounts`,
+`get_contract_info`, `search_contract` and 22 more — `client.py`'s module docstring names
+every one — return `IBKRResponse` models (audit finding API-11). A model is a **mapping over
+exactly what IBKR sent**: `row["mktValue"]`, `row.get(...)`, `in`, `len`, iteration and
+`dict(row)` all work unchanged, and a record that fails validation is passed through as the
+dict it arrived as. It is **not a `dict`**.
+
+What breaks, measured in ClaudIA on 2026-09-17 with rows built from the live fixture
+(audit finding API-R6):
+
+| ClaudIA parser | Guard | Raw dicts | Typed rows |
+|---|---|---|---|
+| `dashboard_data.parse_orders` | `isinstance(row, dict)` | 1 of 1 | **0 of 1** |
+| `contract_identity.parse_contract_info` | `isinstance(info, dict)` | identity | **None** |
+| `dashboard_data.parse_positions` | `isinstance(row, Mapping)` | 2 of 2 | **0 of 2** |
+| `live_realised.parse_fills` | `isinstance(row, Mapping)` | 4 of 4 | **0 of 4** |
+
+Both suites stayed green throughout, because every mock returns a dict — the blind spot this
+package had already documented for its own handlers.
+
+- **`isinstance(row, Mapping)` guards**: no change required. `IBKRResponse` derives from
+  `collections.abc.Mapping[str, Any]` since the same day; it had served the protocol without
+  being one, because the ABC has no structural hook.
+- **Protocols and annotations written against `dict`**: a method returning `Model | dict[str,
+  Any]` does not satisfy `-> dict[str, Any]`, so mypy goes red on the upgrade — ClaudIA's did,
+  six errors in two files. Declare `Mapping[str, Any]`, and `Sequence[Mapping[str, Any]]` for a
+  list, since `list` is invariant; a `dict` from the older core satisfies both, so the change is
+  safe before and after the pin moves.
+- **`isinstance(row, dict)` guards**: widen to `Mapping`. A model will never be a `dict`. In
+  ClaudIA that is two lines, `parse_orders` and `parse_contract_info`.
+- **`json.dumps(row)`**: pass `default=json_default` — `from ibkr_core_mcp import json_default`.
+- **`row == {...}`**: compare `dict(row)`.
+- **Typing**: every model is importable from the package root, e.g. `from ibkr_core_mcp import
+  ContractDetails`; a method's annotation is `Model | dict[str, Any]`, the dict being the
+  pass-through for a record that would not validate.
+
 ### 2026-09-17 — `anthropic` is no longer a base dependency
 
 Moved to the `dev` extra: no module under `ibkr_core_mcp/` imports it, and the only importer

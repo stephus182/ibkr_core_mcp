@@ -47,7 +47,7 @@ from pydantic_core.core_schema import ValidatorFunctionWrapHandler
 ModelT = TypeVar("ModelT", bound="IBKRResponse")
 
 
-class IBKRResponse(BaseModel):
+class IBKRResponse(BaseModel, Mapping[str, Any]):
     """Base for IBKR response models: typed attributes that discard nothing.
 
     Subclasses declare the fields worth naming and typing. This base keeps the
@@ -64,6 +64,18 @@ class IBKRResponse(BaseModel):
     **One dict behaviour does not carry over: `model == {...}` is False.** Equality is
     pydantic's, by type and field values. Compare `dict(model)` instead. This shows up
     in tests that assert against a response literal, and essentially nowhere else.
+
+    **It is a `collections.abc.Mapping` — a base class, not a registration — and it is not
+    a `dict`, and never will be.** So `isinstance(model, Mapping)` holds at runtime and a
+    `Mapping[str, Any]` annotation is satisfied under mypy. Serving the protocol was not
+    enough: the ABC has no structural hook the way `Sized` or `Iterable` do, and
+    `Mapping.register` is invisible to a type checker. Measured 2026-09-17 in claudia_ui, the
+    one consumer: `parse_positions` kept 0 of 2 positions and `parse_fills` 0 of 4 fills
+    built from the live fixture on `isinstance(row, Mapping)`, with that suite green because
+    its mocks are dicts, and its mypy gate reported six errors against Protocols declared
+    `-> dict[str, Any]` (API-R6). The base adds no behaviour: every mapping method is defined
+    here, `BaseModel` precedes `Mapping` in the MRO, and `reversed(model)` is refused as it is
+    for any `Mapping`.
     """
 
     model_config = {"populate_by_name": True, "extra": "ignore"}

@@ -5,7 +5,8 @@ Client Portal API; **29 return a Pydantic model** from `models.py`, and each of 
 marked in its signature below. A model derives from `IBKRResponse`, which keeps IBKR's payload
 as sent and serves it through the mapping protocol — so `row["accountId"]` and `dict(row)` work
 exactly as before, and a record that fails validation is passed through as the dict it arrived
-as rather than dropped. This paragraph said "all 74 methods return raw dicts/lists" until
+as rather than dropped. A model is a `collections.abc.Mapping` to `isinstance` and is never a
+`dict` (API-R6); serialise one with `json.dumps(row, default=json_default)`. This paragraph said "all 74 methods return raw dicts/lists" until
 2026-09-17 (API-11, API-R3). HTTP errors raise exceptions from
 `ibkr_core_mcp.exceptions`. Every endpoint below is sourced from the official Client Portal Web
 API reference at https://www.interactivebrokers.com/docs/web-api/v1/introduction (anchored

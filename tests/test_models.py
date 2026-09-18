@@ -198,3 +198,26 @@ def test_a_model_with_no_payload_still_serves_its_fields():
 
     assert dict(built) == built.model_dump()
     assert len(built) == len(Account.model_fields)
+
+
+def test_a_typed_response_is_a_mapping_to_isinstance():
+    """API-R6: a caller that keeps rows with `isinstance(row, Mapping)` must keep a model.
+
+    `IBKRResponse` served the whole mapping protocol — `.get`, `[]`, `in`, `len`,
+    iteration, `dict(model)` — but `collections.abc.Mapping` is an ABC with no structural
+    hook, so `isinstance(model, Mapping)` was False. claudia_ui gates every client row on
+    exactly that check in `parse_positions` and `parse_fills`; measured 2026-09-17 against
+    models built from the live fixture it kept 0 of 2 positions and 0 of 4 fills while the
+    same dicts parsed in full — with its unit suite green, because its mocks hand it dicts.
+    `isinstance(model, dict)` stays False and always will; that check is the caller's to
+    widen, and the consumer's other two parsers did.
+    """
+    from collections.abc import Mapping
+
+    from ibkr_core_mcp.models import Order, parse_many
+
+    rows = parse_many(Order, [{"orderId": 1, "status": "Submitted"}, {"orderId": 2, "status": "Filled"}])
+
+    kept = [r for r in rows if isinstance(r, Mapping)]
+    assert len(kept) == 2, "a Mapping filter — the correct duck-typed check — must keep every model row"
+    assert not isinstance(rows[0], dict), "and a model must not pretend to be a dict"

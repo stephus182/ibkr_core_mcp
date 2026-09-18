@@ -15,6 +15,13 @@ arithmetic (`closed + open + 1 + ...`) and the open-id list carried it by name. 
 2026-09-17, at which point a checker written around a temporary state started reporting a
 document that was right as inconsistent. There is no partial column and no partial any more.
 
+The per-row check keys on the SERIES a finding belongs to — `API-R6` is an `API-R` row
+finding, `API-17` an `API` row one. Until 2026-09-17 it keyed on the bare domain and skipped
+every `-R` row, so the first open re-derived findings (session 13) could only have been
+recorded consistently by putting their count on the wrong row; the honest table was rejected
+with "API: register says 0 open, the table lists 5". `tests/scripts/test_check_register.py`
+holds the attribution, and holds that a wrong count on a `-R` row is still named.
+
 Run: python scripts/audit/check_register.py [path-to-audit.md]
 Exit code 0 when every representation agrees, 1 otherwise, with each disagreement named.
 """
@@ -78,6 +85,12 @@ def _open_ids(text: str) -> list[str]:
     return ids
 
 
+def _series(finding_id: str) -> str:
+    """The register row a finding belongs to: `API-R6` -> `API-R`, `API-17` -> `API`."""
+    domain, number = finding_id.split("-", 1)
+    return f"{domain}-R" if number.startswith("R") else domain
+
+
 def main(argv: list[str]) -> int:
     path = Path(argv[1]) if len(argv) > 1 else _DEFAULT
     text = path.read_text()
@@ -104,12 +117,10 @@ def main(argv: list[str]) -> int:
     if len(named) != closed:
         problems.append(f"register says {closed} closed; {len(named)} closed findings are named in the document")
 
-    per_domain = Counter(i.split("-")[0] for i in listed)
-    for domain, values in rows.items():
-        if domain.endswith("-R"):
-            continue
-        if per_domain.get(domain, 0) != values[2]:
-            problems.append(f"{domain}: register says {values[2]} open, the table lists {per_domain.get(domain, 0)}")
+    per_series = Counter(_series(i) for i in listed)
+    for series, values in rows.items():
+        if per_series.get(series, 0) != values[2]:
+            problems.append(f"{series}: register says {values[2]} open, the table lists {per_series.get(series, 0)}")
 
     if problems:
         print(f"REGISTER INCONSISTENT ({len(problems)}):")

@@ -488,18 +488,27 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
    neither set.
 
    **A typed return is not a `dict`, and every caller has to survive that.** An
-   `IBKRResponse` serves the mapping protocol — `.get`, `[]`, `in`, `len`, iteration — but
-   it is not a `dict` and `json.dumps` does not know it. Typing a method therefore breaks
+   `IBKRResponse` serves the mapping protocol — `.get`, `[]`, `in`, `len`, iteration — and
+   **is a `collections.abc.Mapping`** — a base class since 2026-09-17 (API-R6), because the
+   ABC has no structural hook and a `register()` is invisible to mypy — but it is not a
+   `dict`, never will be, and `json.dumps` does not know it. Typing a method therefore breaks
    two things silently, and both happened here on 2026-09-17: `isinstance(row, dict)`
    filters turned 21 futures rows into 0 and made `_listing_currency` answer "unknown" for
    every price, and a bare `json.dumps` turned the `get_alerts` tool and the
    `ibkr://accounts` resource into error bodies — the unit suite green throughout, because
    its mocks hand the handlers dicts. So when you type a method: grep its callers for
-   `isinstance(..., dict)` and widen them to `dict | IBKRResponse`, and serialise only
+   `isinstance(..., dict)` and widen them to `dict | IBKRResponse` (or `Mapping`, which both
+   are), and serialise only
    through `default=json_default`. Two guards hold the second one and part of the first:
    `test_every_json_dumps_in_the_tool_layer_can_serialise_a_model` reads the source of
    `claude_tools.py` and `mcp_server.py`, and `tests/claude_tools/test_typed_returns.py`
-   drives the handlers with models built from the capture instead of hand-written dicts. Decode the response with `_decode(resp, path)`,
+   drives the handlers with models built from the capture instead of hand-written dicts.
+   **Neither guard reads a consumer.** The same two checks in claudia_ui — `isinstance(row,
+   dict)` in two parsers, `isinstance(row, Mapping)` in two more — dropped every position,
+   order and fill on 2026-09-17 with *that* suite green too, because its mocks are dicts, and
+   its mypy gate red against Protocols declared `-> dict[str, Any]` (API-R6). A change to what a method returns is checked against the projects in
+   `docs/consumers.md`, not only against this package's callers, and the migration is
+   written in that file. Decode the response with `_decode(resp, path)`,
    never a bare `resp.json()`: `with_retry` has already raised on any non-2xx, but a 2xx is
    not a promise of JSON — the gateway serves an HTML page once its session lapses, and that
    left `IBKRClient` as `requests.exceptions.JSONDecodeError`, straight past the

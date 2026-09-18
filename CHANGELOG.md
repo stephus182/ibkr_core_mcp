@@ -79,6 +79,22 @@ failed before its fix:
   the definitions again; the CI audit uses pip-audit's requirements mode and installs nothing.
 
 ### Changed
+- **BREAKING for consumers — 29 `IBKRClient` methods return models, not dicts** (API-11; the
+  detail and the full list are under *Fixed* below). A model is a mapping over exactly what
+  IBKR sent — `row["mktValue"]`, `.get`, `in`, `len`, iteration and `dict(row)` are unchanged —
+  and it is **not a `dict`**: `isinstance(row, dict)` is False, `json.dumps(row)` needs
+  `default=json_default`, and `row == {...}` is False. Measured in ClaudIA on 2026-09-17 with
+  rows built from the live fixture, its `parse_orders` kept 0 of 1 orders and
+  `parse_contract_info` answered None on `isinstance(row, dict)`, and `parse_positions` and
+  `parse_fills` kept 0 of 2 and 0 of 4 on `isinstance(row, Mapping)` — `collections.abc.Mapping`
+  has no structural hook, so serving the protocol was not being one — with both suites green
+  because every mock is a dict (API-R6). `IBKRResponse` now **derives from
+  `collections.abc.Mapping[str, Any]`** — a base class, not a `register()`, because a
+  registration is invisible to mypy and ClaudIA's mypy gate was red too, six errors against
+  Protocols declared `-> dict[str, Any]` — which repairs every `Mapping` check and every
+  `Mapping[str, Any]` annotation without a consumer change; a `dict` check or a `dict`
+  annotation is the consumer's to widen. `json_default` and every model are exported from the package root.
+  Migration: `docs/consumers.md`.
 - **Event Contracts are implemented against IBKR's real endpoints.** `get_event_contracts()`
   and `get_event_contract()` called `/events/contracts` and `/events/show` — paths absent from
   IBKR's entire documentation index, which never worked for any caller, entitled or not. They
@@ -310,7 +326,8 @@ built the model's input by hand.
   `_contract` block — with the unit suite green, because every mock hands its handler a dict.
   Widened to `dict | IBKRResponse`; `tests/claude_tools/test_typed_returns.py` drives the
   affected handlers with models built from the capture. `CLAUDE.md` § Adding a New IBKR
-  Endpoint carries both traps as a step.
+  Endpoint carries both traps as a step. The same two checks in the package's one consumer
+  dropped every position, order and fill — API-R6, under *Changed* above.
 - **An empty payload did not round-trip (API-R5).** `IBKRResponse` promises `dict(model)` is
   what IBKR sent; for `{}` it answered nine default-valued *field* names, `len()` said 9 and
   `if not response:` flipped to False, because `_payload()` fell back to `model_dump()` on a
