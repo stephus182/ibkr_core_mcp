@@ -1,12 +1,29 @@
 # ibkr_core_mcp
 
 [![CI](https://github.com/stephus182/ibkr_core_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/stephus182/ibkr_core_mcp/actions/workflows/ci.yml)
+![Python 3.11–3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+[![PyPI](https://img.shields.io/pypi/v/ibkr-core-mcp)](https://pypi.org/project/ibkr-core-mcp/)
 
-Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API and ships batteries-included tooling for algorithmic trading, backtesting, real-time streaming, and Claude AI integration.
+**Interactive Brokers from Python — self-hosted, typed, and under human control.**
 
-> **Who is this for?** IBKR account holders who want to automate market data retrieval, portfolio monitoring, and order staging from Python — or who want to connect an AI assistant to their brokerage.
+`ibkr_core_mcp` is a client for the IBKR **Client Portal Web API** (REST + WebSocket) that also ships
+the pieces around it: a Docker manager for the official gateway, a data layer (Google Drive parquet
+cache, SQLite store, complete-capture Flex statement import), research tooling (sandboxed backtests,
+technical indicators, portfolio analytics, PineScript generation, web research), and two AI surfaces —
+44 Claude tool definitions for the Anthropic SDK and an MCP server exposing 46 tools over stdio or SSE.
+Order execution is gated inside the client: Touch ID, then a confirmation dialog, on every write, with
+no bypass, and the boundary is held by tests.
 
----
+> **What it is not.** It is not a TWS API client — it speaks the Client Portal Web API only. It never
+> calls a model itself; your application owns the LLM. Order writes are macOS-only (Touch ID); every
+> read-only capability runs on Linux and Windows. IBKR's own hosted MCP connector (July 2026) already
+> covers zero-install, read-only portfolio Q&A; this package is the self-hosted route for execution,
+> local data and custom tools.
+
+> **Who is this for?** IBKR account holders who want market data, portfolio monitoring and order
+> staging from Python, or who want to connect an AI assistant or a dashboard to their brokerage
+> without giving it the keys.
 
 📚 Full documentation catalog: [`docs/README.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/README.md)
 
@@ -76,16 +93,16 @@ Full details and per-file API ownership are in [`CLAUDE.md`](https://github.com/
 ## Installation
 
 ```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git
+pip install ibkr-core-mcp                 # library + Claude tool layer
+pip install "ibkr-core-mcp[server]"       # + the MCP server (python -m ibkr_core_mcp.mcp_server)
+pip install "ibkr-core-mcp[scraper]"      # + the local Crawl4AI browser (then: crawl4ai-setup)
 ```
 
-Or pin to a specific version:
+Pin a version: `pip install "ibkr-core-mcp==2.0.1"`. A base install pulls pandas, numpy, pyarrow,
+the Google Drive client stack and exchange_calendars (about 450 MB in a fresh venv, measured
+2026-09-18); the Drive cache is only used if you configure it.
 
-```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v2.0.0
-```
-
-Or for local development:
+From source, for development:
 
 ```bash
 git clone https://github.com/stephus182/ibkr_core_mcp.git
@@ -126,6 +143,12 @@ gm.wait_for_auth(timeout=300)  # poll until authenticated
 4. Open `https://localhost:5055` in your browser
 5. You log in with your IBKR credentials + 2FA
 6. Verify the session is active
+
+Log in at `https://localhost:5055` **in Chrome** — the default auth reads Chrome's cookie store for
+`localhost`. To use another browser set `IBKR_AUTH_BROWSER` to one of `chrome`, `chromium`, `firefox`,
+`safari`, `edge` (any other name is refused). The gateway session expires when idle: call
+`client.tickle()` about once a minute from your process (no keepalive loop ships with the package;
+`docs/gateway-auth-reference.md` § Keeping the session alive shows the launchd daemon ClaudIA uses).
 
 ### 2. Query IBKR
 
@@ -173,7 +196,7 @@ response = ai.messages.create(
 # Route tool calls back through the toolkit
 for block in response.content:
     if block.type == "tool_use":
-        text, _fig = toolkit.execute(block.name, block.input)  # _fig is always None in v1.0
+        text, _fig = toolkit.execute(block.name, block.input)  # the figure slot is reserved and always None
 ```
 
 ---
@@ -236,6 +259,8 @@ See [docs/tools-reference.md](https://github.com/stephus182/ibkr_core_mcp/blob/m
 Expose all 44 tools (+ 2 MCP-only alert tools = 46 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
+pip install "ibkr-core-mcp[server]"   # the MCP SDK is an extra; the base install has no `mcp` module
+
 # stdio transport (Claude Desktop / Cursor)
 python -m ibkr_core_mcp.mcp_server
 
@@ -378,11 +403,11 @@ Full detail, including the credit model and per-host notes:
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` if you want to override any default — nothing is required for a local gateway:
 
 | Variable | Required | Description |
 |---|---|---|
-| `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055/v1/api`) — the `/v1/api` suffix is required; paths are appended verbatim |
+| `IBKR_GATEWAY_URL` | optional | Client Portal URL (default: `https://localhost:5055/v1/api`) — keep the `/v1/api` suffix; paths are appended verbatim |
 | `IBKR_SQLITE_PATH` | optional | SQLite store path (default: `~/.ibkr_core/store.db`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | for GDrive | Root Drive folder — parent of `db/` and `market_data/` subfolders |
 | `GDRIVE_DB_FOLDER_ID` | optional | Explicit folder for claudia.db. If unset, auto-created as `db/` inside `GOOGLE_DRIVE_FOLDER_ID` |

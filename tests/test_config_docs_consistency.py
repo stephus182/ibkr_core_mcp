@@ -509,3 +509,28 @@ def test_env_example_states_the_browser_allow_list():
     assert "any browser_cookie3 backend" not in text
     for name in _ALLOWED_BROWSERS:
         assert name in text, f".env.example does not name allowed browser {name!r}"
+
+
+def _readme_section(title):
+    readme = (_REPO / "README.md").read_text()
+    start = readme.index(f"\n## {title}")
+    end = readme.find("\n## ", start + 1)
+    return readme[start : end if end != -1 else None]
+
+
+def test_readme_mcp_section_names_the_server_extra():
+    """`python -m ibkr_core_mcp.mcp_server` ImportErrors on a base install: `mcp` is imported
+    unguarded (mcp_server.py:21) and lives in the [server] extra."""
+    assert "[server]" in _readme_section("MCP server")
+
+
+def test_readme_quick_start_names_the_cookie_browser():
+    """The default auth reads Chrome's cookie store; a Safari/Firefox login silently fails."""
+    section = _readme_section("Quick start")
+    assert "Chrome" in section and "IBKR_AUTH_BROWSER" in section
+
+
+def test_readme_says_the_session_needs_a_keepalive():
+    """An idle gateway session expires and nothing in the package renews it."""
+    section = _readme_section("Quick start")
+    assert "tickle" in section
