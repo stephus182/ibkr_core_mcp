@@ -479,7 +479,9 @@ def test_tracked_markdown_links_only_to_tracked_paths():
             if target.startswith(_ABSOLUTE_PREFIXES):
                 continue
             resolved = os.path.normpath(os.path.join(os.path.dirname(md), target))
-            if resolved in tracked or ((_REPO / resolved).is_dir() and any(t.startswith(resolved + "/") for t in tracked)):
+            if resolved in tracked or (
+                (_REPO / resolved).is_dir() and any(t.startswith(resolved + "/") for t in tracked)
+            ):
                 continue
             bad.append(f"{md}: {target}")
     assert bad == [], "links to untracked paths:\n" + "\n".join(bad)
