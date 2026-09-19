@@ -10,6 +10,12 @@
 
 ## Changes consumers should know about
 
+### 2.0.1 — the package is on PyPI
+
+`pip install "ibkr-core-mcp>=2.0.1,<3"` replaces the `git+https://…@vX.Y.Z` pin. claudia_ui: its
+`pyproject.toml` dependency and the `core-ref.txt` checkout in its CI both move to the PyPI
+specifier.
+
 ### 2026-09-17 — BREAKING: 29 `IBKRClient` methods return models, not dicts
 
 `get_positions`, `get_all_positions`, `get_live_orders`, `get_trades`, `get_accounts`,

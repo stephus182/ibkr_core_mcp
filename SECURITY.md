@@ -85,7 +85,7 @@ full on 2026-09-14 and mapped item by item in
 | §3 — input schemas; output schemas; sanitization; size limits | Inputs validated against `inputSchema` on the MCP transport (invariant 11, tested since 2026-09-14); outputs are text, with a rule for future structured tools; sanitization covered; sizes measured, no page cap by decision | § Tool inputs and outputs |
 | §4 — structured invocation; human-in-the-loop for high-risk actions | Covered; the order-write checkpoint is *stronger* than an MCP elicitation (out-of-band, server-side, cannot be answered by a client) | § Two-Gate System |
 | §5 — OAuth 2.1/OIDC, delegation, token lifetimes | Not applicable — no remote server, no client token. "Sessions are state, not identity" and "centralize enforcement" hold | § Session Security |
-| §6 — secrets, containers, segmentation, supply chain, CI gates, error handling | CI gates, `pip-audit`, `gitleaks` and error redaction covered — including the filesystem paths on OWASP's list, collapsed to `~` since 2026-09-14; vault, container and segmentation not applicable (loopback binds; a server that must run as the operator; `.env` read once and never logged, though its 0600 mode is the operator's doing, not something this package sets); Actions SHA-pinning declined while CI holds no secret | § Secrets Management, § Security Regression Suite |
+| §6 — secrets, containers, segmentation, supply chain, CI gates, error handling | CI gates, `pip-audit`, `gitleaks` and error redaction covered — including the filesystem paths on OWASP's list, collapsed to `~` since 2026-09-14; vault, container and segmentation not applicable (loopback binds; a server that must run as the operator; `.env` read once and never logged, though its 0600 mode is the operator's doing, not something this package sets); Actions pinned by SHA since 2.0.1 (2026-09-19), when the publish workflow became the first one holding a credential (`id-token: write`); declined before that while CI held no secret | § Secrets Management, § Security Regression Suite |
 | §7 — governance: review, audit logs, non-human identities | Review is a standing practice for one maintainer; the client transcript is the audit trail; NHI not applicable | — |
 | §8 — SAST/SCA, runtime protection, SIEM, Scorecard | ruff `S`, CodeQL, `ast` tests, `pip-audit`; OS-level confinement is the documented next layer for the sandbox; SIEM and Scorecard not applicable | § Security Regression Suite |
 
@@ -617,6 +617,10 @@ CI adds two gates the four code gates cannot provide: `pip-audit` over a **fresh
 venv, installing nothing — weekly as well as per push, ignores only from
 `security/pip-audit-ignores.txt` with a reason and a re-check date) and `gitleaks` over the
 pushed range (`.gitleaks.toml`: default rules plus the Firecrawl and Anthropic key shapes).
+
+Publishing (2.0.1): releases upload through PyPI Trusted Publishing from `.github/workflows/publish.yml`,
+behind a reviewed GitHub environment (`pypi`, tag rule `v*`); no PyPI token exists anywhere, and
+`id-token: write` is granted only to the two publish jobs (`docs/security-architecture.md` § 7).
 
 The distinction matters and has already cost time: auditing the *installed* tree reports
 what this machine happens to have, which is not what CI checks. During this audit a local

@@ -9,6 +9,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-09-19
+
+First PyPI release: `pip install ibkr-core-mcp`. Packaging and documentation only — no package
+code changed since 2.0.0.
+
+### Changed
+- `[build-system]` now requires `setuptools>=77`, the real floor for the PEP 639 `license = "MIT"`
+  string — first supported in setuptools 77.0.1 (68 and 76.1 both refused to build; the old floor only worked because isolated builds
+  resolve the newest setuptools).
+- README links are absolute so the PyPI project page renders them; the header states what the
+  package is and is not; the install section leads with PyPI; the MCP section names the `[server]`
+  extra; the Quick start names Chrome / `IBKR_AUTH_BROWSER` and the session keepalive.
+- `.env.example` no longer lists `ANTHROPIC_API_KEY` and states the five-browser allow-list.
+- `pyproject.toml`: `Development Status :: 5 - Production/Stable`; Documentation / Source /
+  Changelog / Issues / Security URLs; explicit `license-files`.
+- sdist no longer ships a partial `tests/` tree (`MANIFEST.in`).
+- Releases are published by `.github/workflows/publish.yml` through PyPI Trusted Publishing
+  (TestPyPI rehearsal, reviewed `pypi` environment, PEP 740 attestations).
+- CI: top-level `permissions: contents: read`, actions pinned by SHA, Python 3.13 lane, Dependabot.
+- CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates added.
+- Tracked documents no longer link into the gitignored `docs/plans/` folder (dead links in clones);
+  five new documentation guards in `tests/test_config_docs_consistency.py`.
+
 ## [2.0.0] — 2026-09-17
 
 The release-readiness audit release: everything since v1.2.2 was audited as one package
@@ -764,6 +787,13 @@ fail" pattern this audit found in the live suite and the order-write boundary.
 
 ---
 
+## [1.2.1] — 2026-07-14
+
+### Fixed
+- `docs/api-usage-examples.md`: two print statements used `:.1f}%` instead of `:.1%` for `max_drawdown` (a negative fraction), which would silently print a 30% drawdown as "-0.3%"; the Portfolio Analytics 1-minute-bar example passed `periods=1440` (minutes/day) instead of `98280` (bars/year), mis-annualizing Sharpe/Sortino/CAGR/Calmar by ~68x
+
+---
+
 ## [1.2.0] — 2026-07-14
 
 ### Added
@@ -776,13 +806,6 @@ fail" pattern this audit found in the live suite and the order-write boundary.
 - `_scrape_with_fallback`'s "Crawl4AI fallback used" reporting no longer overcounts — it now returns an explicit `used_fallback` flag instead of inferring from a non-empty note; `WebDocsStore.save_crawl` disambiguates filenames that collide after slugifying (e.g. `/a-b` vs `/a_b`)
 - `gdrive_auth.load_or_refresh_credentials()` docstring promises it never raises, but an uncaught `RefreshError` from a revoked/expired token could propagate anyway — now caught and treated as no-credentials, matching the documented contract
 - `pyproject.toml`'s `version` field was never bumped for the `v1.1.0` tag (stayed at `1.0.0`) — since `__version__` is derived via `importlib.metadata`, any `v1.1.0` install silently self-reported `1.0.0`. Corrected to `1.2.0` here; that stale `v1.1.0` tag itself is left as-is rather than rewritten.
-
----
-
-## [1.2.1] — 2026-07-14
-
-### Fixed
-- `docs/api-usage-examples.md`: two print statements used `:.1f}%` instead of `:.1%` for `max_drawdown` (a negative fraction), which would silently print a 30% drawdown as "-0.3%"; the Portfolio Analytics 1-minute-bar example passed `periods=1440` (minutes/day) instead of `98280` (bars/year), mis-annualizing Sharpe/Sortino/CAGR/Calmar by ~68x
 
 ---
 

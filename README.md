@@ -1,14 +1,31 @@
 # ibkr_core_mcp
 
 [![CI](https://github.com/stephus182/ibkr_core_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/stephus182/ibkr_core_mcp/actions/workflows/ci.yml)
+![Python 3.11–3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+[![PyPI](https://img.shields.io/pypi/v/ibkr-core-mcp)](https://pypi.org/project/ibkr-core-mcp/)
 
-Python library for Interactive Brokers clients. Wraps the IBKR Client Portal API and ships batteries-included tooling for algorithmic trading, backtesting, real-time streaming, and Claude AI integration.
+**Interactive Brokers from Python — self-hosted, typed, and under human control.**
 
-> **Who is this for?** IBKR account holders who want to automate market data retrieval, portfolio monitoring, and order staging from Python — or who want to connect an AI assistant to their brokerage.
+`ibkr_core_mcp` is a client for the IBKR **Client Portal Web API** (REST + WebSocket) that also ships
+the pieces around it: a Docker manager for the official gateway, a data layer (Google Drive parquet
+cache, SQLite store, complete-capture Flex statement import), research tooling (sandboxed backtests,
+technical indicators, portfolio analytics, PineScript generation, web research), and two AI surfaces —
+44 Claude tool definitions for the Anthropic SDK and an MCP server exposing 46 tools over stdio or SSE.
+Order execution is gated inside the client: Touch ID, then a confirmation dialog, on every write, with
+no bypass, and the boundary is held by tests.
 
----
+> **What it is not.** It is not a TWS API client — it speaks the Client Portal Web API only. It never
+> calls a model itself; your application owns the LLM. Order writes are macOS-only (Touch ID); every
+> read-only capability runs on Linux and Windows. IBKR's own hosted MCP connector (July 2026) already
+> covers zero-install, read-only portfolio Q&A; this package is the self-hosted route for execution,
+> local data and custom tools.
 
-📚 Full documentation catalog: [`docs/README.md`](docs/README.md)
+> **Who is this for?** IBKR account holders who want market data, portfolio monitoring and order
+> staging from Python, or who want to connect an AI assistant or a dashboard to their brokerage
+> without giving it the keys.
+
+📚 Full documentation catalog: [`docs/README.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/README.md)
 
 ## Feature overview
 
@@ -69,23 +86,23 @@ This library is built on official documented APIs. Any contribution touching API
 | Firecrawl API | https://docs.firecrawl.dev/api-reference/endpoint/scrape |
 | Crawl4AI (local browser) | https://docs.crawl4ai.com/ |
 
-Full details and per-file API ownership are in [`CLAUDE.md`](CLAUDE.md#conventions).
+Full details and per-file API ownership are in [`CLAUDE.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/CLAUDE.md#conventions).
 
 ---
 
 ## Installation
 
 ```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git
+pip install ibkr-core-mcp                 # library + Claude tool layer
+pip install "ibkr-core-mcp[server]"       # + the MCP server (python -m ibkr_core_mcp.mcp_server)
+pip install "ibkr-core-mcp[scraper]"      # + the local Crawl4AI browser (then: crawl4ai-setup)
 ```
 
-Or pin to a specific version:
+Pin a version: `pip install "ibkr-core-mcp==2.0.1"`. A base install pulls pandas, numpy, pyarrow,
+the Google Drive client stack and exchange_calendars (about 450 MB in a fresh venv, measured
+2026-09-18); the Drive cache is only used if you configure it.
 
-```bash
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v2.0.0
-```
-
-Or for local development:
+From source, for development:
 
 ```bash
 git clone https://github.com/stephus182/ibkr_core_mcp.git
@@ -126,6 +143,12 @@ gm.wait_for_auth(timeout=300)  # poll until authenticated
 4. Open `https://localhost:5055` in your browser
 5. You log in with your IBKR credentials + 2FA
 6. Verify the session is active
+
+Log in at `https://localhost:5055` **in Chrome** — the default auth reads Chrome's cookie store for
+`localhost`. To use another browser set `IBKR_AUTH_BROWSER` to one of `chrome`, `chromium`, `firefox`,
+`safari`, `edge` (any other name is refused). The gateway session expires when idle: call
+`client.tickle()` about once a minute from your process (no keepalive loop ships with the package;
+`docs/gateway-auth-reference.md` § Keeping the session alive shows the launchd daemon ClaudIA uses).
 
 ### 2. Query IBKR
 
@@ -173,14 +196,14 @@ response = ai.messages.create(
 # Route tool calls back through the toolkit
 for block in response.content:
     if block.type == "tool_use":
-        text, _fig = toolkit.execute(block.name, block.input)  # _fig is always None in v1.0
+        text, _fig = toolkit.execute(block.name, block.input)  # the figure slot is reserved and always None
 ```
 
 ---
 
 ## Available tools (Claude AI / MCP)
 
-See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs and output shapes.
+See [docs/tools-reference.md](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/tools-reference.md) for full parameter docs and output shapes.
 
 | Tool | Description |
 |---|---|
@@ -236,6 +259,8 @@ See [docs/tools-reference.md](docs/tools-reference.md) for full parameter docs a
 Expose all 44 tools (+ 2 MCP-only alert tools = 46 total) to any MCP-compatible client (Claude Desktop, Cursor, etc.):
 
 ```bash
+pip install "ibkr-core-mcp[server]"   # the MCP SDK is an extra; the base install has no `mcp` module
+
 # stdio transport (Claude Desktop / Cursor)
 python -m ibkr_core_mcp.mcp_server
 
@@ -245,7 +270,7 @@ python -m ibkr_core_mcp.mcp_server --transport sse --port 5174 --stream
 
 Every tool carries a declared `capabilities` set (read-only, compute, Drive, SQLite, IBKR
 account state, sandbox, web fetch, …); no tool declares order execution, and the test suite
-asserts it. See [`docs/security-architecture.md`](docs/security-architecture.md) § 2 and § 6.8.
+asserts it. See [`docs/security-architecture.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/security-architecture.md) § 2 and § 6.8.
 
 ---
 
@@ -275,7 +300,7 @@ alerts can be *listed, deleted and toggled* through `get_alerts` / `delete_alert
 but **creating or modifying one is not possible through the Client Portal Gateway as published**:
 the gateway refuses any request body carrying `>=` or `<=` before IBKR sees it, and IBKR's alert
 engine refuses the three operators the gateway lets through — measured 2026-09-16, elimination
-table in [`docs/ibkr-api-behaviors-reference.md`](docs/ibkr-api-behaviors-reference.md) § Price
+table in [`docs/ibkr-api-behaviors-reference.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/ibkr-api-behaviors-reference.md) § Price
 alerts. `create_price_alert` and `modify_price_alert` are kept, say so in their descriptions, and
 return that explanation instead of an alert; the day the gateway changes, they work unchanged.
 
@@ -307,7 +332,7 @@ vectorised-strategy vocabulary (arithmetic, rolling/ewm/expanding/groupby, index
 in-memory converters); every `to_*` writer, `style`, `plot` and pandas' expression engine are
 unreachable, and the string form of `apply`/`agg`/`transform` faces the same list. 4,096-character
 limit; 10-second watchdog. Rationale and the audit that motivated the allowlist:
-[SECURITY.md](SECURITY.md#code-execution-security--backtest-sandbox).
+[SECURITY.md](https://github.com/stephus182/ibkr_core_mcp/blob/main/SECURITY.md#code-execution-security--backtest-sandbox).
 
 ---
 
@@ -360,7 +385,7 @@ The session lives under `CRAWL4AI_PROFILES_DIR` (default
 `~/.ibkr_core/crawl4ai_profiles/<domain>/`) and is reused automatically on later scrapes of that
 domain. Every URL reaching the local browser is SSRF-validated first, and a second
 Playwright-level guard re-checks every navigation, redirect and subresource — see
-[SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
+[SECURITY.md](https://github.com/stephus182/ibkr_core_mcp/blob/main/SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
 
 **Live tests are mandatory for this subsystem**, because every defect in it was found by running
 a tool rather than by a test failing:
@@ -371,18 +396,18 @@ pytest tests/test_web_tools_live.py -v -m integration     # 12 tests, ~30s
 ```
 
 Full detail, including the credit model and per-host notes:
-[`docs/web-scraper-reference.md`](docs/web-scraper-reference.md).
+[`docs/web-scraper-reference.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/web-scraper-reference.md).
 
 
 ---
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` if you want to override any default — nothing is required for a local gateway:
 
 | Variable | Required | Description |
 |---|---|---|
-| `IBKR_GATEWAY_URL` | ✅ | Client Portal URL (default: `https://localhost:5055/v1/api`) — the `/v1/api` suffix is required; paths are appended verbatim |
+| `IBKR_GATEWAY_URL` | optional | Client Portal URL (default: `https://localhost:5055/v1/api`) — keep the `/v1/api` suffix; paths are appended verbatim |
 | `IBKR_SQLITE_PATH` | optional | SQLite store path (default: `~/.ibkr_core/store.db`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | for GDrive | Root Drive folder — parent of `db/` and `market_data/` subfolders |
 | `GDRIVE_DB_FOLDER_ID` | optional | Explicit folder for claudia.db. If unset, auto-created as `db/` inside `GOOGLE_DRIVE_FOLDER_ID` |
@@ -399,7 +424,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it (see [CLAUDE.md — Security & Fingerprint Authentication](CLAUDE.md#security--fingerprint-authentication)):
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it (see [CLAUDE.md — Security & Fingerprint Authentication](https://github.com/stephus182/ibkr_core_mcp/blob/main/CLAUDE.md#security--fingerprint-authentication)):
 
 ### Gate 1 — Touch ID (macOS LocalAuthentication)
 
@@ -426,7 +451,7 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 
 `GatewayManager` runs the IBKR Client Portal Gateway as a Docker container bound to `localhost:5055` only. The container has no privileged access and exposes no host filesystem mounts.
 
-**Web scraping (`search_site`, `crawl_site`, `fetch_page`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
+**Web scraping (`search_site`, `crawl_site`, `fetch_page`) is SSRF-guarded at two independent layers** — a pre-fetch URL check, plus a Playwright-level per-request check on every Crawl4AI fetch (initial navigation, redirects, and subresources) that closes DNS-rebinding and redirect-based bypasses the pre-fetch check alone can't. See [SECURITY.md](https://github.com/stephus182/ibkr_core_mcp/blob/main/SECURITY.md#ssrf-prevention-web-scraping--the-local-browser).
 
 ### Machine-checked, not just documented
 
@@ -446,9 +471,9 @@ run and of CI):
 
 CI adds `pip-audit` over a **fresh resolve** of `.[dev,server,scraper]` — requirements mode, installing nothing, so it audits what a user would get rather than what this machine happens to have — and `gitleaks` over every pushed range. The
 design — principals, privilege tiers, the trust-boundary map, each invariant with its enforcing
-test, the decision log, change recipes — is [`docs/security-architecture.md`](docs/security-architecture.md);
-the control inventory is [SECURITY.md](SECURITY.md); the audit with its probe evidence is
-[`docs/audits/security-architecture-audit-2026-09-13.md`](docs/audits/security-architecture-audit-2026-09-13.md).
+test, the decision log, change recipes — is [`docs/security-architecture.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/security-architecture.md);
+the control inventory is [SECURITY.md](https://github.com/stephus182/ibkr_core_mcp/blob/main/SECURITY.md); the audit with its probe evidence is
+[`docs/audits/security-architecture-audit-2026-09-13.md`](https://github.com/stephus182/ibkr_core_mcp/blob/main/docs/audits/security-architecture-audit-2026-09-13.md).
 
 ---
 

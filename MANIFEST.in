@@ -1,0 +1,3 @@
+# setuptools' default sdist globs tests/test*.py without conftest.py or fixtures — an
+# un-runnable partial copy (37 files, measured 2026-09-18). Ship the package, not the suite.
+prune tests

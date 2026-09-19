@@ -436,3 +436,103 @@ def test_every_tracked_reference_and_audit_document_is_in_the_docs_catalog():
 
     orphans = [str(p.relative_to(_REPO)) for p in tracked if p.name not in catalog]
     assert not orphans, f"documents missing from docs/README.md's catalog: {orphans}"
+
+
+# ---------------------------------------------------------------------------
+# PyPI project page: README links must be absolute
+# ---------------------------------------------------------------------------
+# readme_renderer emits relative links verbatim, so `docs/README.md` becomes
+# https://pypi.org/project/ibkr-core-mcp/docs/README.md — a 404 (measured with
+# readme_renderer 46.0 on 2026-09-18, docs/plans/2026-09-18-research-appendices/
+# track-a-publishing.md §2 row 17). In-page anchors (#section) are rewritten and work.
+
+_MD_LINK_RE = re.compile(r"\]\(([^)\s#]+)(#[^)]*)?\)")
+_ABSOLUTE_PREFIXES = ("http://", "https://", "mailto:")
+
+
+def test_readme_has_no_relative_links():
+    readme = (_REPO / "README.md").read_text()
+    relative = [t for t, _ in _MD_LINK_RE.findall(readme) if not t.startswith(_ABSOLUTE_PREFIXES)]
+    assert relative == [], f"relative links break on the PyPI page: {relative}"
+
+
+def _git_ls_files(*patterns):
+    import subprocess
+
+    out = subprocess.run(["git", "ls-files", *patterns], cwd=_REPO, capture_output=True, text=True, check=True).stdout
+    return out.split()
+
+
+def test_tracked_markdown_links_only_to_tracked_paths():
+    """`docs/plans/` is gitignored (owner rule 2026-07-24), so every clone lacks it; CLAUDE.md
+    and docs/README.md linked into it until 2026-09-19 — dead links from the two entry-point
+    documents (research note, fresh-eye finding 7)."""
+    import os
+
+    tracked = set(_git_ls_files())
+    bad = []
+    for md in _git_ls_files("*.md"):
+        if md.startswith("docs/audits/"):
+            continue  # dated records, never retroactively edited (docs/README.md § Audits); two of them link to old plans
+        text = (_REPO / md).read_text()
+        for target, _ in _MD_LINK_RE.findall(text):
+            if target.startswith(_ABSOLUTE_PREFIXES):
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(md), target))
+            if resolved in tracked or (
+                (_REPO / resolved).is_dir() and any(t.startswith(resolved + "/") for t in tracked)
+            ):
+                continue
+            bad.append(f"{md}: {target}")
+    assert bad == [], "links to untracked paths:\n" + "\n".join(bad)
+
+
+_ENV_READ_RE = re.compile(r'os\.(?:environ(?:\.get)?\(?\[?|getenv\()\s*"([A-Z0-9_]+)"')
+
+
+def test_env_example_lists_only_variables_the_package_reads():
+    """`.env.example` said ANTHROPIC_API_KEY was 'Required' after Config dropped it in 2.0.0."""
+    known = set()
+    for py in (_REPO / "ibkr_core_mcp").rglob("*.py"):
+        known |= set(_ENV_READ_RE.findall(py.read_text()))
+    listed = {
+        line.split("=", 1)[0]
+        for line in (_REPO / ".env.example").read_text().splitlines()
+        if re.match(r"^[A-Z0-9_]+=", line)
+    }
+    assert listed <= known, f"listed in .env.example but read nowhere in the package: {sorted(listed - known)}"
+
+
+def test_env_example_states_the_browser_allow_list():
+    """The comment said 'any browser_cookie3 backend name' against a five-name allow-list."""
+    from ibkr_core_mcp.auth import _ALLOWED_BROWSERS
+
+    text = (_REPO / ".env.example").read_text()
+    assert "any browser_cookie3 backend" not in text
+    for name in _ALLOWED_BROWSERS:
+        assert name in text, f".env.example does not name allowed browser {name!r}"
+
+
+def _readme_section(title):
+    readme = (_REPO / "README.md").read_text()
+    start = readme.index(f"\n## {title}")
+    end = readme.find("\n## ", start + 1)
+    return readme[start : end if end != -1 else None]
+
+
+def test_readme_mcp_section_names_the_server_extra():
+    """`python -m ibkr_core_mcp.mcp_server` ImportErrors on a base install: `mcp` is imported
+    unguarded (mcp_server.py:21) and lives in the [server] extra."""
+    assert "[server]" in _readme_section("MCP server")
+
+
+def test_readme_quick_start_names_the_cookie_browser():
+    """The default auth reads Chrome's cookie store; a Safari/Firefox login silently fails."""
+    section = _readme_section("Quick start")
+    assert "Chrome" in section and "IBKR_AUTH_BROWSER" in section
+
+
+def test_readme_says_the_session_needs_a_keepalive():
+    """An idle gateway session expires and nothing in the package renews it."""
+    section = _readme_section("Quick start")
+    assert "tickle" in section

@@ -2,7 +2,7 @@
 
 Standalone pip-installable Python package providing a complete IBKR Client Portal API client, Google Drive parquet cache, SQLite store, backtest sandbox, technical indicators, portfolio analytics, Claude AI tool layer, and PineScript generation utilities.
 
-**Design spec:** `docs/plans/2026-05-22-ibkr-core-mcp-design.md`
+**Design spec:** `docs/plans/2026-05-22-ibkr-core-mcp-design.md` — a local working document; `docs/plans/` is gitignored, so it is not present in clones.
 
 ---
 
@@ -10,10 +10,13 @@ Standalone pip-installable Python package providing a complete IBKR Client Porta
 
 ```bash
 # From GitHub (any consuming project)
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git
+pip install ibkr-core-mcp
 
 # Pinned version
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git@v2.0.0
+pip install "ibkr-core-mcp==2.0.1"
+
+# From an unreleased commit
+pip install git+https://github.com/stephus182/ibkr_core_mcp.git@<sha>
 
 # Local editable dev
 pip install -e /path/to/ibkr_core_mcp
@@ -168,12 +171,26 @@ artifacts committed as run, not maintained code.
 
 ## Publishing a New Version
 
-```bash
-git tag -l --sort=-v:refname | head -1    # check current latest tag first — don't reuse one
-git tag vX.Y.Z                             # semver — bump patch/minor/major as appropriate
-git push origin vX.Y.Z
-```
-Consumers pin to: `pip install git+https://github.com/stephus182/ibkr_core_mcp.git@vX.Y.Z`
+Releases go to PyPI through `.github/workflows/publish.yml` (Trusted Publishing; no API token
+anywhere). Per version:
+
+1. `CHANGELOG.md`: move `[Unreleased]` items under `## [X.Y.Z] — YYYY-MM-DD` — the workflow refuses
+   a tag without that heading.
+2. `pyproject.toml`: `version = "X.Y.Z"` — the workflow refuses a tag that differs.
+3. Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
+   --exit-status` (no pipe) green.
+4. `git tag -l --sort=-v:refname | head -1` (never reuse a tag); `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. Optional rehearsal: Actions → *Publish to PyPI* → *Run workflow* on `main` → uploads to TestPyPI only;
+   verify with `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "ibkr-core-mcp==X.Y.Z"` in a fresh venv.
+6. `gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z` — publishing the Release
+   triggers the workflow: gates → build (tag/version/changelog check) → TestPyPI → **waits for your
+   approval on the `pypi` environment** → PyPI, with PEP 740 attestations.
+7. Verify: `pip install "ibkr-core-mcp==X.Y.Z"` in a fresh venv, `pip check`, the project page renders.
+8. `docs/consumers.md` and claudia_ui's pin.
+
+PyPI files are immutable: a bad upload means a new version, never a re-upload; prefer yanking to
+deleting (deleting frees the name). Consumers pin to `ibkr-core-mcp==X.Y.Z` (or `>=X.Y.Z,<X+1`);
+`pip install git+…@vX.Y.Z` still works for unreleased commits.
 
 **Reading a CI run.** `gh run view <id> --json conclusion,jobs`, or `gh run watch <id>
 --exit-status` with **no pipe** — `… | tail` returns `tail`'s exit status and reported a failed
