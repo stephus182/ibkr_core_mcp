@@ -58,8 +58,8 @@ Required for `BrowserCookieAuth` to read the IBKR gateway session cookie automat
 # Editable dev install (run in PowerShell or WSL2 terminal)
 pip install -e ".[dev,server]"
 
-# Or from GitHub
-pip install git+https://github.com/stephus182/ibkr_core_mcp.git
+# Or from PyPI
+pip install "ibkr-core-mcp[server]"
 ```
 
 ---

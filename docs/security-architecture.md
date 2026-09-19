@@ -514,6 +514,12 @@ or `--exit-status` without a pipe.
 
 ---
 
+**Publishing (added 2.0.1).** `.github/workflows/publish.yml` is the one workflow that holds a
+privileged credential: `id-token: write` on its two publish jobs, exchanged for a short-lived PyPI
+token by Trusted Publishing (PyPI publisher bound to owner / repo / workflow filename / environment).
+The `pypi` environment requires a reviewer and a `v*` tag rule, so an upload needs a human click after
+the gates and the build; TestPyPI needs no reviewer. Actions are pinned by SHA; Dependabot bumps them.
+
 ## 8. Decision log
 
 Dated, so a future reader can tell a decision from a default.
