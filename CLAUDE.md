@@ -192,6 +192,21 @@ PyPI files are immutable: a bad upload means a new version, never a re-upload; p
 deleting (deleting frees the name). Consumers pin to `ibkr-core-mcp==X.Y.Z` (or `>=X.Y.Z,<X+1`);
 `pip install git+…@vX.Y.Z` still works for unreleased commits.
 
+**The README's PyPI badge can read "package or version not found" for up to 12 hours after a
+release, and nothing is wrong.** The badge is `img.shields.io/pypi/v/ibkr-core-mcp`, and it was
+merged before the first upload, so the first render said "not found" — and two caches in series
+kept saying it after 2.0.1 was live (2026-09-19): shields serves the SVG with
+`cache-control: max-age=43200, s-maxage=43200`, and GitHub then re-serves it through its Camo
+image proxy with its own cache. Measured 40 minutes after the upload: shields' own JSON and SVG
+already said `v2.0.1`, the owner's browser already showed the blue badge, and this machine's
+Camo edge still served the red one — three answers at once, one per cache node. Check the truth
+with `curl -s https://img.shields.io/pypi/v/ibkr-core-mcp.json` or the PyPI JSON API, never with
+the README render. GitHub documents a purge — `curl -X PURGE <camo.githubusercontent.com URL>`,
+the URL taken from the rendered README — but says to use it sparingly and only after waiting
+has failed, and here it did not help: the edge re-fetched from a shields node that was itself
+still stale. Waiting works; the shields `expires` header names the deadline.
+Source: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-anonymized-urls
+
 **Reading a CI run.** `gh run view <id> --json conclusion,jobs`, or `gh run watch <id>
 --exit-status` with **no pipe** — `… | tail` returns `tail`'s exit status and reported a failed
 run as green on 2026-09-13. The two GitHub-side scanners (CodeQL default setup, Dependabot
