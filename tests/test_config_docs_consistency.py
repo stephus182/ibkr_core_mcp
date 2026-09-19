@@ -483,3 +483,29 @@ def test_tracked_markdown_links_only_to_tracked_paths():
                 continue
             bad.append(f"{md}: {target}")
     assert bad == [], "links to untracked paths:\n" + "\n".join(bad)
+
+
+_ENV_READ_RE = re.compile(r'os\.(?:environ(?:\.get)?\(?\[?|getenv\()\s*"([A-Z0-9_]+)"')
+
+
+def test_env_example_lists_only_variables_the_package_reads():
+    """`.env.example` said ANTHROPIC_API_KEY was 'Required' after Config dropped it in 2.0.0."""
+    known = set()
+    for py in (_REPO / "ibkr_core_mcp").rglob("*.py"):
+        known |= set(_ENV_READ_RE.findall(py.read_text()))
+    listed = {
+        line.split("=", 1)[0]
+        for line in (_REPO / ".env.example").read_text().splitlines()
+        if re.match(r"^[A-Z0-9_]+=", line)
+    }
+    assert listed <= known, f"listed in .env.example but read nowhere in the package: {sorted(listed - known)}"
+
+
+def test_env_example_states_the_browser_allow_list():
+    """The comment said 'any browser_cookie3 backend name' against a five-name allow-list."""
+    from ibkr_core_mcp.auth import _ALLOWED_BROWSERS
+
+    text = (_REPO / ".env.example").read_text()
+    assert "any browser_cookie3 backend" not in text
+    for name in _ALLOWED_BROWSERS:
+        assert name in text, f".env.example does not name allowed browser {name!r}"
