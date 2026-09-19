@@ -180,7 +180,7 @@ anywhere). Per version:
 3. Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
    --exit-status` (no pipe) green.
 4. `git tag -l --sort=-v:refname | head -1` (never reuse a tag); `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Optional rehearsal: Actions → *Publish to PyPI* → *Run workflow* on `main` → uploads to TestPyPI only;
+5. Optional rehearsal (needs a separate TestPyPI account with its own pending publisher, environment `testpypi`): Actions → *Publish to PyPI* → *Run workflow* on `main` → uploads to TestPyPI only;
    verify with `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "ibkr-core-mcp==X.Y.Z"` in a fresh venv.
 6. `gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z` — publishing the Release
    triggers the workflow: gates → build (tag/version/changelog check) → TestPyPI → **waits for your

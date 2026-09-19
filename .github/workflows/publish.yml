@@ -72,9 +72,10 @@ jobs:
           path: dist/
 
   publish-to-testpypi:
-    # Runs on every release and on manual dispatch. First use converts the TestPyPI
-    # "pending" publisher and creates the project there.
-    name: Publish to TestPyPI
+    # Optional rehearsal, manual dispatch only: needs a TestPyPI account and its own pending
+    # publisher (environment `testpypi`). The real release never depends on it.
+    name: Publish to TestPyPI (manual rehearsal only)
+    if: github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -95,7 +96,7 @@ jobs:
   publish-to-pypi:
     name: Publish to PyPI
     if: github.event_name == 'release'
-    needs: [build, publish-to-testpypi]
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: pypi            # required reviewer = the owner; deployment tag rule v*
