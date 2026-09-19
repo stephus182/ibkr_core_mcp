@@ -436,3 +436,21 @@ def test_every_tracked_reference_and_audit_document_is_in_the_docs_catalog():
 
     orphans = [str(p.relative_to(_REPO)) for p in tracked if p.name not in catalog]
     assert not orphans, f"documents missing from docs/README.md's catalog: {orphans}"
+
+
+# ---------------------------------------------------------------------------
+# PyPI project page: README links must be absolute
+# ---------------------------------------------------------------------------
+# readme_renderer emits relative links verbatim, so `docs/README.md` becomes
+# https://pypi.org/project/ibkr-core-mcp/docs/README.md — a 404 (measured with
+# readme_renderer 46.0 on 2026-09-18, docs/plans/2026-09-18-research-appendices/
+# track-a-publishing.md §2 row 17). In-page anchors (#section) are rewritten and work.
+
+_MD_LINK_RE = re.compile(r"\]\(([^)\s#]+)(#[^)]*)?\)")
+_ABSOLUTE_PREFIXES = ("http://", "https://", "mailto:")
+
+
+def test_readme_has_no_relative_links():
+    readme = (_REPO / "README.md").read_text()
+    relative = [t for t, _ in _MD_LINK_RE.findall(readme) if not t.startswith(_ABSOLUTE_PREFIXES)]
+    assert relative == [], f"relative links break on the PyPI page: {relative}"
