@@ -45,7 +45,7 @@ Every living document, grouped by what you'd be doing when you need it.
 > The gate policy itself — Touch ID → visual confirmation, enforced inside `IBKRClient`,
 > with **one Touch ID for a whole confirmation chain and a dialog for every reply in it** —
 > is specified in `CLAUDE.md` and `README.md`'s Security section, and its rationale is in
-> [`plans/archive/security-orders/HISTORY.md`](plans/archive/security-orders/HISTORY.md).
+> `plans/archive/security-orders/HISTORY.md` (local, gitignored).
 
 ### Tool layers (Claude + MCP)
 
@@ -80,24 +80,27 @@ Every living document, grouped by what you'd be doing when you need it.
 
 ## Plans (`docs/plans/`)
 
+**This folder is gitignored** (owner rule 2026-07-24): the files below exist on the maintainer's
+machine and are described here for completeness; a clone of the repository does not contain them.
+
 What was decided and how — a design spec captures the why/what, an implementation plan the
 how, for both features and fixes. Filenames carry a `YYYY-MM-DD-<topic>` prefix so sorting
 by name gives chronological order; a `-design.md`/`-plan.md` suffix distinguishes the two
 documents for one topic where both exist.
 
-**Start at [`plans/INDEX.md`](plans/INDEX.md).** Reorganized 2026-08-11: the root holds only
+**Start at `plans/INDEX.md`.** Reorganized 2026-08-11: the root holds only
 live plans; finished work moves to `plans/archive/<theme>/`, where each theme's `HISTORY.md`
 distils what it decided and why. Read the `HISTORY.md` before the originals — those were
 written to be executed, not read.
 
 | Theme | Covers |
 |---|---|
-| [`archive/web-scraper/`](plans/archive/web-scraper/HISTORY.md) | Firecrawl → fallback ladder → cloud rung → all of it deleted; the four-tool end state |
-| [`archive/docs/`](plans/archive/docs/HISTORY.md) | Docs reorg, the IBKR docs-site move and its 200-that-means-404 traps, `ruff D` |
-| [`archive/security-orders/`](plans/archive/security-orders/HISTORY.md) | The two human-auth gates, chained reply confirmation, the six-finding security pass |
-| [`archive/core-buildout/`](plans/archive/core-buildout/HISTORY.md) | Phases 1–3 (foundation, Pydantic, MCP + streaming), publication readiness |
-| [`archive/testing-audits/`](plans/archive/testing-audits/HISTORY.md) | The `claude_tools` audit; the flat-file → `tests/claude_tools/` restructure |
-| [`archive/infrastructure/`](plans/archive/infrastructure/HISTORY.md) | Backtest subprocess isolation; `GatewayManager` silent-exception fix |
+| `archive/web-scraper/` | Firecrawl → fallback ladder → cloud rung → all of it deleted; the four-tool end state |
+| `archive/docs/` | Docs reorg, the IBKR docs-site move and its 200-that-means-404 traps, `ruff D` |
+| `archive/security-orders/` | The two human-auth gates, chained reply confirmation, the six-finding security pass |
+| `archive/core-buildout/` | Phases 1–3 (foundation, Pydantic, MCP + streaming), publication readiness |
+| `archive/testing-audits/` | The `claude_tools` audit; the flat-file → `tests/claude_tools/` restructure |
+| `archive/infrastructure/` | Backtest subprocess isolation; `GatewayManager` silent-exception fix |
 
 ⚠️ **A plan's checkboxes and `Status:` line are not status signals.** Several shipped plans
 show every box unticked. Verify against the code.

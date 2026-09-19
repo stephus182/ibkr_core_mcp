@@ -454,3 +454,32 @@ def test_readme_has_no_relative_links():
     readme = (_REPO / "README.md").read_text()
     relative = [t for t, _ in _MD_LINK_RE.findall(readme) if not t.startswith(_ABSOLUTE_PREFIXES)]
     assert relative == [], f"relative links break on the PyPI page: {relative}"
+
+
+def _git_ls_files(*patterns):
+    import subprocess
+
+    out = subprocess.run(["git", "ls-files", *patterns], cwd=_REPO, capture_output=True, text=True, check=True).stdout
+    return out.split()
+
+
+def test_tracked_markdown_links_only_to_tracked_paths():
+    """`docs/plans/` is gitignored (owner rule 2026-07-24), so every clone lacks it; CLAUDE.md
+    and docs/README.md linked into it until 2026-09-19 — dead links from the two entry-point
+    documents (research note, fresh-eye finding 7)."""
+    import os
+
+    tracked = set(_git_ls_files())
+    bad = []
+    for md in _git_ls_files("*.md"):
+        if md.startswith("docs/audits/"):
+            continue  # dated records, never retroactively edited (docs/README.md § Audits); two of them link to old plans
+        text = (_REPO / md).read_text()
+        for target, _ in _MD_LINK_RE.findall(text):
+            if target.startswith(_ABSOLUTE_PREFIXES):
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(md), target))
+            if resolved in tracked or ((_REPO / resolved).is_dir() and any(t.startswith(resolved + "/") for t in tracked)):
+                continue
+            bad.append(f"{md}: {target}")
+    assert bad == [], "links to untracked paths:\n" + "\n".join(bad)
