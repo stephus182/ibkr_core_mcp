@@ -766,8 +766,9 @@ def test_search_archives_a_mixed_set_but_marks_the_unusable_results(mock_wds_cls
     mock_wds.save_search.assert_called_once()
     notes = mock_wds.save_search.call_args.kwargs.get("notes")
     assert notes is not None, "save_search was given no quality annotations"
-    assert "https://bad.example" in notes
-    assert "https://good.example" not in notes, "a usable result must not be marked"
+    # The annotations are keyed by URL; compare the key set exactly so the blocked
+    # result is marked, the usable one is not, and nothing else sneaks in.
+    assert set(notes) == {"https://bad.example"}, notes
     assert "file-id-123" in result
 
 
