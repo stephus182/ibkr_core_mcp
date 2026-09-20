@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,672 unit tests · 102 integration tests (1,774 total) · 89% line coverage (non-integration)** — the three counts re-measured 2026-09-19 (2.0.1 release branch, all from the same run) with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,684 unit tests · 102 integration tests (1,786 total) · 89% line coverage (non-integration)** — the three counts re-measured 2026-09-19 (after the 2.0.1 release: 12 tests added for the wheel smoke test; re-measured again in the next commit) with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28

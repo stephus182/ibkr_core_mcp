@@ -183,10 +183,30 @@ anywhere). Per version:
 5. Optional rehearsal (needs a separate TestPyPI account with its own pending publisher, environment `testpypi`): Actions → *Publish to PyPI* → *Run workflow* on `main` → uploads to TestPyPI only;
    verify with `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "ibkr-core-mcp==X.Y.Z"` in a fresh venv.
 6. `gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z` — publishing the Release
-   triggers the workflow: gates → build (tag/version/changelog check) → TestPyPI → **waits for your
-   approval on the `pypi` environment** → PyPI, with PEP 740 attestations.
+   triggers the workflow: gates → build (tag/version/changelog check, `twine check`, then the wheel
+   smoke test below) → TestPyPI → **waits for your approval on the `pypi` environment** → PyPI, with
+   PEP 740 attestations.
 7. Verify: `pip install "ibkr-core-mcp==X.Y.Z"` in a fresh venv, `pip check`, the project page renders.
 8. `docs/consumers.md` and claudia_ui's pin.
+
+**The wheel is checked as an artifact before it can upload** (2026-09-19). `publish.yml`'s build
+job runs `scripts/verify_wheel.py` after `twine check`: a fresh venv under `$RUNNER_TEMP`,
+`pip install dist/*.whl`, `pip check`, then a probe under `python -I` from outside the checkout that
+requires `ibkr_core_mcp.__file__` to sit in the venv, `__version__` and the installed metadata to
+equal `pyproject.toml`'s version, every `__all__` name to resolve, the gateway's Dockerfile,
+`conf.yaml` and shell scripts plus `py.typed` and `_order_dialog.py` to be present, and
+`ibkr_core_mcp.mcp_server` to import once `[server]` is installed from the same wheel. Everything
+before it runs against `pip install -e .`, which cannot see a file dropped from `package-data`, and
+an import probe run from the repo root resolves to the checkout — measured 2026-09-19: the dev
+venv's interpreter reported `2.0.1` from the repo root (the checkout's `ibkr_core_mcp.egg-info`,
+found through the current directory on `sys.path`) and `1.2.2` from anywhere else (site-packages'
+stale editable dist-info). To rehearse locally: `pip install build` in a scratch venv, run
+`python -m build /path/to/repo --outdir dist` **from another directory** — from the repo root a
+leftover strict-editable `build/` tree shadows the `build` module (`No module named
+build.__main__`) — then `python scripts/verify_wheel.py --dist dist`. Watched failing on 2026-09-19
+against a wheel with `conf.yaml` deleted and against `--expect-version 9.9.9`, and passing on the
+2.0.1 wheel. The sdist gets no step of its own: `python -m build` builds the wheel *from* the sdist,
+so an sdist that cannot produce the wheel already fails the build step.
 
 PyPI files are immutable: a bad upload means a new version, never a re-upload; prefer yanking to
 deleting (deleting frees the name). Consumers pin to `ibkr-core-mcp==X.Y.Z` (or `>=X.Y.Z,<X+1`);

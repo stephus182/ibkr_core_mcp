@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **The built wheel is installed and probed before it can be published.** `publish.yml`'s build
+  job now runs `scripts/verify_wheel.py` between `twine check` and the artifact upload: a fresh
+  venv under `$RUNNER_TEMP`, `pip install dist/*.whl`, `pip check`, then a probe under `python -I`
+  from outside the checkout — `ibkr_core_mcp.__file__` must be in the venv, `__version__` and the
+  installed metadata must equal `pyproject.toml`'s version, every `__all__` name must resolve, the
+  gateway's Dockerfile, `conf.yaml` and shell scripts plus `py.typed` and `_order_dialog.py` must
+  be present, and `ibkr_core_mcp.mcp_server` must import once `[server]` is installed from the same
+  wheel. Every earlier gate runs against `pip install -e .`, which cannot see a file dropped from
+  `package-data`, and an import probe from the repo root resolves to the checkout (measured: the
+  dev venv's interpreter reported 2.0.1 from the repo root, via the checkout's `egg-info`, and
+  1.2.2 from anywhere else). Watched failing against a wheel with `conf.yaml` deleted and against
+  a wrong expected version; passing on the 2.0.1 wheel. The expected version is PEP 440-normalised
+  the way setuptools writes it, so a `2.1.0-rc1` in `pyproject.toml` matches the wheel's `2.1.0rc1`.
+  No sdist step: `python -m build` already builds the wheel from the sdist. Unit tests:
+  `tests/scripts/test_verify_wheel.py`.
+
+
 ## [2.0.1] — 2026-09-19
 
 First PyPI release: `pip install ibkr-core-mcp`. Packaging and documentation only — no package

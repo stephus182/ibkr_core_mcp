@@ -65,6 +65,12 @@ jobs:
           python -m build
       - name: Check
         run: twine check --strict dist/*
+      - name: Smoke-test the built wheel in a fresh venv
+        # `twine check` reads metadata and the gates ran against `pip install -e .`; neither
+        # installs the wheel. This installs it (base, then `[server]`) into a venv under
+        # $RUNNER_TEMP, runs `pip check`, and probes it with `python -I` from outside the
+        # checkout: version, public API, the gateway's packaged Docker files, mcp_server.
+        run: python scripts/verify_wheel.py --dist dist
       - name: Store the distribution packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
