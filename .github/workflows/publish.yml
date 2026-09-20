@@ -48,6 +48,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Tag must equal pyproject version and have a CHANGELOG entry (release runs)
+        # Both comparisons are literal, as are the README and `docs/consumers.md` pins. That is
+        # only safe because `[project].version` is required to be PEP 440 canonical already
+        # (`test_pyproject_version_is_already_pep440_canonical`, run by the `gates` job above):
+        # setuptools normalises when it builds, so a pyproject `2.1.0-rc1` would ship as
+        # `2.1.0rc1` and no tag could match both this step and the wheel.
         if: github.event_name == 'release'
         env:
           TAG: ${{ github.ref_name }}

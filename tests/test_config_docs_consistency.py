@@ -439,6 +439,74 @@ def test_every_tracked_reference_and_audit_document_is_in_the_docs_catalog():
 
 
 # ---------------------------------------------------------------------------
+# The release version has exactly one spelling (PEP 440 canonical form)
+# ---------------------------------------------------------------------------
+# setuptools normalises `[project].version` when it builds: a pyproject `2.1.0-rc1` ships as
+# `2.1.0rc1` in the wheel filename and in METADATA, and so in `importlib.metadata.version()`,
+# in `__version__` and on the PyPI page (measured 2026-09-19, setuptools 83.0.0).
+#
+# Nothing else in the release normalises. `publish.yml`'s build job compares `${TAG#v}` to
+# `[project].version` literally and greps `CHANGELOG.md` for `^## \[$ver\]`; the README pin,
+# `docs/consumers.md` and every consumer's requirement are literal text. So a legal
+# non-canonical version has no spelling that satisfies all of them — measured 2026-09-19 by
+# running that step's shell against a scratch pyproject saying `2.1.0-rc1`: tag `v2.1.0rc1`,
+# the form PyPI will display and consumers will pin, fails the tag step; tag `v2.1.0-rc1`
+# passes it and releases a wheel whose version is spelled differently from the tag, the
+# CHANGELOG heading and the docs. `scripts/verify_wheel.py` normalises its own side
+# (`canonical_version`) and so cannot catch this; it runs after the tag step in any case.
+#
+# Requiring the canonical form at the source makes every literal comparison agree by
+# construction, and fails in the four gates — at commit time, and in `publish.yml`'s `gates`
+# job before `build` — instead of after the tag is pushed.
+#
+# PEP 440 § Normalization, "Pre-release separators" ("The normal form ... is without a
+# separator") and "Pre-release spelling" (`c`/`pre`/`preview` -> `rc`, `alpha` -> `a`):
+# https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization
+
+
+def _is_pep440_canonical(version: str) -> bool:
+    """True when `version` is already spelled the way every packaging tool will rewrite it."""
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        return str(Version(version)) == version
+    except InvalidVersion:
+        return False
+
+
+def _pyproject_version() -> str:
+    import tomllib
+
+    return str(tomllib.loads((_REPO / "pyproject.toml").read_text())["project"]["version"])
+
+
+def test_pyproject_version_is_already_pep440_canonical():
+    from packaging.version import InvalidVersion, Version
+
+    version = _pyproject_version()
+    try:
+        canonical = repr(str(Version(version)))
+    except InvalidVersion:
+        canonical = "a valid PEP 440 version"
+    assert _is_pep440_canonical(version), (
+        f"[project].version is {version!r}; packaging tools rewrite it to {canonical}. The tag "
+        f"check, the CHANGELOG heading, the README pin and docs/consumers.md all compare "
+        f"literally, so only the canonical spelling agrees with the wheel and with PyPI."
+    )
+
+
+def test_the_canonical_form_check_rejects_the_spellings_it_exists_for():
+    """Vacuity guard: every release so far has been a plain `X.Y.Z`, which is canonical no
+    matter what the check does — including if it always returned True."""
+    assert not _is_pep440_canonical("2.1.0-rc1"), "a `-` pre-release separator is normalised away"
+    assert not _is_pep440_canonical("2.1.0.rc1"), "a `.` pre-release separator is normalised away"
+    assert not _is_pep440_canonical("2.1.0-post1"), "`-post1` normalises to `.post1`"
+    assert not _is_pep440_canonical("02.1.0"), "a leading zero is normalised away"
+    assert not _is_pep440_canonical("not-a-version"), "an unparseable version is not canonical"
+    assert _is_pep440_canonical("2.1.0rc1") and _is_pep440_canonical("2.0.1"), "canonical spellings must pass"
+
+
+# ---------------------------------------------------------------------------
 # PyPI project page: README links must be absolute
 # ---------------------------------------------------------------------------
 # readme_renderer emits relative links verbatim, so `docs/README.md` becomes

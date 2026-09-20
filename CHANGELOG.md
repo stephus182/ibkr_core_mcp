@@ -26,6 +26,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   No sdist step: `python -m build` already builds the wheel from the sdist. Unit tests:
   `tests/scripts/test_verify_wheel.py`.
 
+- **`[project].version` must be PEP 440 canonical, enforced by a unit test.** setuptools
+  normalises when it builds — a pyproject `2.1.0-rc1` ships as `2.1.0rc1` in the wheel filename
+  and METADATA, and so in `__version__` and on PyPI (measured with setuptools 83.0.0) — while
+  `publish.yml`'s tag step compares `${TAG#v}` to `[project].version` literally and greps
+  `CHANGELOG.md` for `^## [$ver]`, and the README pin and `docs/consumers.md` are literal text.
+  Measured against that step's own shell: with a pyproject `2.1.0-rc1`, tag `v2.1.0rc1` — the form
+  PyPI displays and consumers pin — fails the tag step, and tag `v2.1.0-rc1` passes it and would
+  release a wheel spelled differently from its own tag. `scripts/verify_wheel.py` normalises its
+  side and runs after the tag step, so it cannot catch this.
+  `test_pyproject_version_is_already_pep440_canonical` now refuses a non-canonical version in the
+  four gates — at commit time, and in the `gates` job before `build` — which makes every literal
+  comparison agree by construction; the tag step keeps its literal comparison and gains a comment
+  saying why that is safe. Watched failing against a pyproject saying `2.0.1-rc1`, with a vacuity
+  guard for the check itself. Never fired to date: every release so far has been a plain `X.Y.Z`.
+  PEP 440 § Normalization:
+  https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization
+
 ### Changed
 - **The per-process pacing limitation is stated where a user will actually meet it.**
   `EndpointPacer` budgets per process while IBKR's limit is per IP — documented since 2.0.0 in

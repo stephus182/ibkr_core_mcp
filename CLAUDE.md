@@ -176,7 +176,13 @@ anywhere). Per version:
 
 1. `CHANGELOG.md`: move `[Unreleased]` items under `## [X.Y.Z] — YYYY-MM-DD` — the workflow refuses
    a tag without that heading.
-2. `pyproject.toml`: `version = "X.Y.Z"` — the workflow refuses a tag that differs.
+2. `pyproject.toml`: `version = "X.Y.Z"` — the workflow refuses a tag that differs, and it
+   compares literally, so the version must already be **PEP 440 canonical**: write `2.1.0rc1`,
+   never `2.1.0-rc1`, `2.1.0.rc1`, `2.1.0-post1` or `02.1.0`. setuptools normalises when it
+   builds, so a non-canonical string would ship under a spelling the tag, the CHANGELOG heading
+   and the doc pins do not use. `test_pyproject_version_is_already_pep440_canonical` refuses it
+   in the four gates, before a tag exists.
+   Source: https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization
 3. Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
    --exit-status` (no pipe) green.
 4. `git tag -l --sort=-v:refname | head -1` (never reuse a tag); `git tag vX.Y.Z && git push origin vX.Y.Z`.
@@ -184,8 +190,9 @@ anywhere). Per version:
    verify with `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "ibkr-core-mcp==X.Y.Z"` in a fresh venv.
 6. `gh release create vX.Y.Z --verify-tag --generate-notes --title vX.Y.Z` — publishing the Release
    triggers the workflow: gates → build (tag/version/changelog check, `twine check`, then the wheel
-   smoke test below) → TestPyPI → **waits for your approval on the `pypi` environment** → PyPI, with
-   PEP 740 attestations.
+   smoke test below) → **waits for your approval on the `pypi` environment** → PyPI, with
+   PEP 740 attestations. TestPyPI is not in this path — `4a70f8b` made that job
+   `workflow_dispatch`-only (step 5).
 7. Verify: `pip install "ibkr-core-mcp==X.Y.Z"` in a fresh venv, `pip check`, the project page renders.
 8. `docs/consumers.md` and claudia_ui's pin.
 
