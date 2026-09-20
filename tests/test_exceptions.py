@@ -55,6 +55,15 @@ def test_api_error_carries_status_code():
     assert "bad request" in str(err)
 
 
+def test_rate_limit_error_carries_status_code_like_api_error():
+    """`with_retry` raises one class for 429 and 503; the tool layer needs to tell them apart
+    (a 429 is a fifteen-minute penalty box, a 503 is the gateway being down). 0 when unknown,
+    so callers can branch without it ever being None — the same contract as `IBKRAPIError`."""
+    assert IBKRRateLimitError("x", status_code=429).status_code == 429
+    assert IBKRRateLimitError("x").status_code == 0
+    assert "x" in str(IBKRRateLimitError("x", status_code=503))
+
+
 def test_catch_all_via_base():
     with pytest.raises(IBKRCoreError):
         raise IBKRAuthError("session expired")

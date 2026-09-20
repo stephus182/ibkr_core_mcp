@@ -26,6 +26,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   No sdist step: `python -m build` already builds the wheel from the sdist. Unit tests:
   `tests/scripts/test_verify_wheel.py`.
 
+### Changed
+- **The per-process pacing limitation is stated where a user will actually meet it.**
+  `EndpointPacer` budgets per process while IBKR's limit is per IP — documented since 2.0.0 in
+  `rate_limiter.py`, `docs/gateway-auth-reference.md` and this changelog, none of which the PyPI
+  page shows. The README's Quick start now says so; `IBKRRateLimitError`'s message on a 429 names
+  the fifteen-minute penalty box and the per-process budget (a 503 claims neither); the tool
+  layer's text no longer advises "retry in a few seconds" against a fifteen-minute box; the
+  exception's docstring, `docs/mcp-server-reference.md` (the server is one of the processes) and
+  `docs/api-reference.md`'s exception table carry the same fact. The fresh-eye review of this
+  change then caught two over-statements, both fixed: `IBKRRateLimitError` now carries
+  `.status_code` (429 or 503; 0 when unknown — `IBKRAPIError`'s contract) and the tool layer
+  branches on it, so a 503 is reported as the gateway being unavailable rather than a penalty
+  box; and the README says the pacer *warns* when it cannot pace (it never holds a call past
+  65 s) instead of promising that one process never breaks a limit — the 429 texts name that
+  in-process cause too. Held by a README guard in `tests/test_config_docs_consistency.py`, two
+  `with_retry` message tests, three `_safe_error` tests and one constructor test.
 
 ## [2.0.1] — 2026-09-19
 

@@ -41,3 +41,28 @@ def test_safe_error_mapping(tool, exc, expected_substrs):
     assert any(substr in msg.lower() for substr in expected_substrs), (
         f"expected one of {expected_substrs!r} in {msg.lower()!r}"
     )
+
+
+def test_rate_limit_text_on_a_429_names_the_penalty_box_and_the_per_process_scope():
+    """The advice was "Retry in a few seconds" until 2026-09-19 — against IBKR's documented
+    fifteen-minute penalty box on the IP, and with the usual cause (another process on the same
+    machine; pacing is per process, the limit per IP) unmentioned. The model relays this text."""
+    msg = _safe_error("some_tool", IBKRRateLimitError("429", status_code=429))
+    assert "penalty box" in msg
+    assert "per process" in msg
+    assert "few seconds" not in msg
+
+
+def test_rate_limit_text_on_a_503_does_not_claim_a_penalty_box():
+    """`with_retry` raises the same class on 503 — the gateway being unavailable, not a pacing
+    verdict. Telling the model the IP is in a penalty box would send the user hunting for a second
+    process and waiting fifteen minutes for a gateway that was merely down (review, 2026-09-19)."""
+    msg = _safe_error("some_tool", IBKRRateLimitError("503", status_code=503))
+    assert "503" in msg
+    assert "penalty box" not in msg
+
+
+def test_rate_limit_text_with_an_unknown_status_claims_neither():
+    msg = _safe_error("some_tool", IBKRRateLimitError("429"))
+    assert "rate limit" in msg.lower()
+    assert "penalty box" not in msg

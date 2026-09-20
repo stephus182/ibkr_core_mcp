@@ -28,7 +28,26 @@ class IBKRAuthError(IBKRCoreError):
 
 
 class IBKRRateLimitError(IBKRCoreError):
-    """Gateway returned 429 and retries exhausted."""
+    """Gateway returned 429 or 503 and retries are exhausted; `.status_code` says which.
+
+    On a 429 the IP is in IBKR's fifteen-minute penalty box, for every endpoint. The pacer that
+    should have prevented it (`rate_limiter.EndpointPacer`) budgets per process while IBKR
+    counts per IP, so the first suspect is another process on this machine — a script, a test
+    run, the MCP server — talking to the same gateway; the second is this process having been
+    warned that a call was over the limit and sent anyway (the pacer never holds a call longer
+    than 65 s). A 503 is the gateway being unavailable and means neither.
+    """
+
+    def __init__(self, message: str, status_code: int = 0) -> None:
+        """Record the message and the HTTP status that exhausted the retries.
+
+        Args:
+            message: Human-readable description of the failure.
+            status_code: 429 or 503 from the gateway; 0 when unknown, so callers can branch
+                on it without it ever being None — the same contract as `IBKRAPIError`.
+        """
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class IBKRAPIError(IBKRCoreError):

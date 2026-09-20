@@ -64,6 +64,40 @@ def test_other_http_error_raises_api_error():
     assert exc_info.value.status_code == 500
 
 
+def test_the_429_error_names_the_penalty_box_and_the_per_process_budget():
+    """The moment the limit bites is the moment the user learns it exists.
+
+    `EndpointPacer`'s budget is per process and IBKR's limit is per IP (its class docstring),
+    so the usual cause of a 429 here is a second script, a test run or the MCP server on the
+    same machine. Until 2026-09-19 the exception said "Rate limit exceeded after 3 retries
+    (HTTP 429)" and nothing else, and the README said nothing about rate limits at all.
+    """
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
+
+    with patch("time.sleep"), pytest.raises(IBKRRateLimitError) as info:
+        with_retry(MagicMock(return_value=_make_response(429)), max_retries=1)
+    message = str(info.value)
+    assert info.value.status_code == 429
+    assert "HTTP 429" in message
+    assert "fifteen-minute penalty box" in message
+    assert "per process" in message
+    # The other in-process cause: the pacer sends a call it cannot pace within 65 s, after warning.
+    assert "warn" in message.lower()
+
+
+def test_the_503_error_does_not_claim_a_penalty_box():
+    """A 503 is the gateway being unavailable, not a pacing violation — the two must not be conflated."""
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
+
+    with patch("time.sleep"), pytest.raises(IBKRRateLimitError) as info:
+        with_retry(MagicMock(return_value=_make_response(503)), max_retries=1)
+    assert info.value.status_code == 503
+    assert "HTTP 503" in str(info.value)
+    assert "penalty box" not in str(info.value)
+
+
 def test_503_retries_then_raises():
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
     from ibkr_core_mcp.rate_limiter import with_retry

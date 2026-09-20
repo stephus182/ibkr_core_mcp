@@ -35,6 +35,13 @@ Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_conf
 }
 ```
 
+**One IP, one rate budget — and the server is one of the processes.** The server paces its own
+IBKR requests against IBKR's published per-endpoint limits, but that budget is per process and
+IBKR's limit is per IP: a script or a test run against the same gateway while the server is up
+shares the limit without sharing the pacer, and breaking it earns HTTP 429 plus a fifteen-minute
+penalty box on the IP for every endpoint — all 46 tools included. Details and the practical rule:
+[`gateway-auth-reference.md`](gateway-auth-reference.md) § Rate limits.
+
 ## HTTP/SSE — dashboard and chatbots
 
 ```bash

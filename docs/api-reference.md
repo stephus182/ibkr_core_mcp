@@ -1080,7 +1080,7 @@ flowchart TB
 | Exception | When raised |
 |-----------|-------------|
 | `IBKRAuthError` | HTTP 401 — session expired or not authenticated |
-| `IBKRRateLimitError` | HTTP 429 after 3 retries with exponential backoff |
+| `IBKRRateLimitError` | HTTP 429 or 503 after 3 retries with exponential backoff; `.status_code` says which (0 when unknown). On a 429 the IP is in IBKR's fifteen-minute penalty box for every endpoint; the pacer budgets per process while IBKR counts per IP, so another process on this machine talking to the gateway is the usual cause, or this process sent a call the pacer warned was over its 65 s cap — the message says so. A 503 is the gateway being unavailable |
 | `IBKRAPIError` | Other HTTP 4xx/5xx errors (has `.status_code` attribute) |
 | `ConfigError` | Invalid `gateway_url` (not localhost), or invalid `account_id`/`order_id`/`alert_id`/`reply_id` format caught by input validation before any request is sent |
 | `HumanAuthError` | Touch ID denied, timed out, or unavailable; or the user declined/cancelled the Gate 2 confirmation dialog |

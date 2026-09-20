@@ -264,6 +264,27 @@ def pace(path: str) -> float:
     return _pacer.acquire(path)
 
 
+def _rate_limit_message(status: int, max_retries: int) -> str:
+    """The text a user sees at the moment a limit bites — the one place it is certain to be read.
+
+    A 429 is IBKR's pacing verdict, and both its consequence and its usual cause need saying:
+    the IP is in the fifteen-minute penalty box for every endpoint, and `EndpointPacer`'s budget
+    is per process while the limit is per IP, so another process on this machine is the first
+    thing to look for. A 503 is the gateway being unavailable and says none of that. Until
+    2026-09-19 the message was "Rate limit exceeded after 3 retries (HTTP 429)" and nothing
+    else, and the README did not mention rate limits at all.
+    """
+    message = f"Rate limit exceeded after {max_retries} retries (HTTP {status})."
+    if status == 429:
+        message += (
+            " IBKR has put this IP in its fifteen-minute penalty box, for every endpoint. Two causes to"
+            " check: this package paces requests per process while IBKR counts per IP, so another script,"
+            " test run or MCP server on this machine shares the limit without sharing the budget; and the"
+            " pacer never holds a call longer than 65 s — past that it warned and sent the request anyway."
+        )
+    return message
+
+
 def with_retry(
     fn: Callable[[], requests.Response],
     max_retries: int = _DEFAULT_MAX_RETRIES,
@@ -317,7 +338,7 @@ def with_retry(
 
     Raises:
         IBKRAuthError: on 401 (no retry — session must be re-established)
-        IBKRRateLimitError: on 429 after retries exhausted
+        IBKRRateLimitError: on 429 or 503 after retries exhausted; `.status_code` says which
         IBKRAPIError: on other 4xx/5xx
     """
     attempt = 0
@@ -336,7 +357,7 @@ def with_retry(
             raise IBKRAuthError("IBKR session not authenticated (401)")
         if status in (429, 503):
             if attempt >= max_retries:
-                raise IBKRRateLimitError(f"Rate limit exceeded after {max_retries} retries (HTTP {status})")
+                raise IBKRRateLimitError(_rate_limit_message(status, max_retries), status_code=status)
             backoff = _BASE_BACKOFF * (2**attempt)
             time.sleep(backoff)
             attempt += 1

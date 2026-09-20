@@ -536,3 +536,16 @@ def test_readme_says_the_session_needs_a_keepalive():
     """An idle gateway session expires and nothing in the package renews it."""
     section = _readme_section("Quick start")
     assert "tickle" in section
+
+
+def test_readme_says_the_pacing_budget_is_per_process_and_the_limit_per_ip():
+    """A script, a test run and the MCP server on one machine share IBKR's per-IP limit without
+    sharing `EndpointPacer`'s per-process budget, and breaking it costs a fifteen-minute penalty
+    box on every endpoint. Until 2026-09-19 the README said nothing about rate limits at all — the
+    limitation lived in a class docstring, one reference document and the changelog."""
+    section = _readme_section("Quick start")
+    assert "penalty box" in section
+    assert "per process" in section
+    # The pacer sends a call it cannot pace within 65 s, after warning — so the README may not
+    # promise that one process "never" breaks a limit (review, 2026-09-19).
+    assert "warns" in section

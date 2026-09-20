@@ -1255,7 +1255,19 @@ def _safe_error(tool: str, exc: Exception) -> str:
     if isinstance(exc, IBKRAuthError):
         return f"Tool '{tool}' failed: IBKR session not authenticated. Re-open the gateway and log in."
     if isinstance(exc, IBKRRateLimitError):
-        return f"Tool '{tool}' failed: IBKR rate limit hit. Retry in a few seconds."
+        if exc.status_code == 429:
+            return (
+                f"Tool '{tool}' failed: IBKR rate limit hit (HTTP 429). This IP is in IBKR's fifteen-minute penalty"
+                " box for every endpoint. Usual cause: another process on this machine talking to the gateway —"
+                " pacing is per process, the limit per IP — or this process sending a call the pacer warned was"
+                " over the limit. Wait before retrying."
+            )
+        if exc.status_code == 503:
+            return (
+                f"Tool '{tool}' failed: IBKR gateway answered HTTP 503 repeatedly — unavailable, not a pacing"
+                " violation. Check the gateway container is up and authenticated, then retry."
+            )
+        return f"Tool '{tool}' failed: IBKR rate limit hit. Wait before retrying."
     if isinstance(exc, IBKRAPIError):
         return f"Tool '{tool}' failed: IBKR gateway returned an error (HTTP {exc.status_code})."
     if isinstance(exc, CacheError):

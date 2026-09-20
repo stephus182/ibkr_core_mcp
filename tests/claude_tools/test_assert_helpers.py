@@ -36,7 +36,9 @@ from .conftest import assert_tool_failed, assert_tool_succeeded
 # A branch added there without a row here means the new error string is unverified.
 _EVERY_SAFE_ERROR_INPUT = [
     IBKRAuthError("no session"),
-    IBKRRateLimitError("429"),
+    IBKRRateLimitError("429", status_code=429),
+    IBKRRateLimitError("503", status_code=503),
+    IBKRRateLimitError("unknown status"),
     IBKRAPIError("bad request", status_code=400),
     CacheError("drive down"),
     BacktestSyntaxError("bad syntax"),

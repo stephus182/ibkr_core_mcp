@@ -172,6 +172,15 @@ conid     = contracts[0]["conid"]
 bars      = client.get_market_history(conid, period="1Y", bar="1d")
 ```
 
+**Rate limits: IBKR counts per IP, this package paces per process.** `IBKRClient` spaces its own
+requests against IBKR's published per-endpoint limits (`rate_limiter.ENDPOINT_LIMITS`) and warns when it
+cannot — it never holds a call longer than 65 s, so a 1-request-per-15-minutes endpoint called twice goes
+out anyway. And nothing is shared between processes. A script, a test run and the MCP server on
+the same machine each keep their own budget while IBKR adds them up, and exceeding a limit returns
+HTTP 429 and puts the **IP in a fifteen-minute penalty box, across every endpoint**. Treat everything on
+this machine that talks to the gateway as one budget: don't run two of them flat out at once, and don't
+relaunch a hot loop in a fresh process. Details: `docs/gateway-auth-reference.md` § Rate limits.
+
 ### 3. Use Claude AI tools
 
 ```python
