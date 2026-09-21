@@ -2291,10 +2291,24 @@ class IBKRClient:
         the parent's to learn its quantity — on `/iserver/account/order/status`, which is
         rate-limited (measured HTTP 503, 2026-09-21). A failed read would then either block
         modifies or skip the check silently, and a control with a silent skip is not a control.
-        The caller that already holds the status is the one that should enforce it: claudia_ui
-        refuses `propose_modify` unless `get_order_status` ran in the same turn, so it has the
-        parent link in hand at no extra cost. Stated here so nobody reads the placement-time
-        rule as covering the whole lifecycle.
+        **No caller is relied upon for this, and none should be read as covering it.** The
+        invariant this package holds is *a bracket is never created oversized*, not *a bracket
+        is never oversized*: after submission the rule is deliberately unenforced, and a
+        consumer that never checks will not be stopped here. That is a real gap, stated rather
+        than delegated. (claudia_ui happens to hold the parent link already, refusing
+        `propose_modify` unless `get_order_status` ran in the same turn — that is one
+        consumer's design, not a reason this one is safe. An earlier version of this paragraph
+        named it as though it were, which for a published package reads as coverage a
+        different caller does not have.)
+
+        A `_parent_quantity` display key would cost no reads and is **not** a cheaper version
+        of this control: a key the caller may omit is skipped in silence whenever it is
+        omitted, which is the same disqualification as the failed read above, and it cannot be
+        made mandatory — knowing that an order *is* a bracket child requires the very status
+        read being avoided. Considered and rejected 2026-09-21; it is weaker than the option
+        already declined, not a middle ground.
+
+        Stated here so nobody reads the placement-time rule as covering the whole lifecycle.
 
         **Modifying a held bracket child does NOT detach it** — measured live 2026-09-21: a
         price-only modify whose body deliberately omitted `parentId` left `parent_order_id`
