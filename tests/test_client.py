@@ -586,12 +586,25 @@ def test_modify_order_and_confirm_decline_mid_chain(client):
 # example given, for both endpoints and both the reply-required and terminal shapes:
 #   [{"id": "...", "message": [...], "isSuppressed": false, "messageIds": [...]}]
 #   [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
-# modify_order()'s own EXISTING return type in this codebase is a bare dict though
-# (unchanged by this task — see modify_order_and_confirm()'s docstring), so the two
-# normalizers exist to reconcile that mismatch: _as_reply_list() is used by
-# place_order_and_confirm() (list-shaped contract) and _as_reply_dict() by
-# modify_order_and_confirm() (dict-shaped contract), regardless of which raw shape
-# the reply POST actually returns.
+# _as_reply_list() is used by place_order_and_confirm() (list-shaped contract) and
+# _as_reply_dict() by modify_order_and_confirm() (dict-shaped contract), regardless of
+# which raw shape the reply POST actually returns.
+#
+# CORRECTED 2026-09-21. This block used to say "modify_order()'s own EXISTING return type
+# in this codebase is a bare dict though (unchanged by this task)". **It is not, and never
+# was** — `modify_order` returns `self._post(...)` unwrapped, `_post` returns `Any`, and a
+# live modify on 2026-09-21 returned
+# `[{"order_id": "1275120921", "local_order_id": "CLAUDIA-...", "order_status": "Submitted",
+# "encrypt_message": "1"}]` — an array, matching IBKR's documented example to the field.
+#
+# That one belief was the entire blind spot. Everything around it was right: the docs were
+# read, both normalizers were written, and the list-shaped *reply* case was tested
+# end-to-end. Only the INITIAL response was left unnormalised, so
+# `while "id" in response` ran as a list-MEMBERSHIP test against it — `"id" in [{"id": ...}]`
+# is False — and a modify that raised a precaution returned that precaution as though it
+# were the result. The human was never shown it, never answered it, and the modification was
+# never applied. The tests could not catch it because every one of them mocked the initial
+# response as a bare dict, which IBKR does not send.
 # ---------------------------------------------------------------------------
 
 
@@ -659,6 +672,56 @@ def test_modify_order_and_confirm_handles_ibkr_documented_list_shaped_reply(clie
         ]
         result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
     assert result == {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
+
+
+def test_modify_reply_survives_ibkr_array_shaped_INITIAL_response(client):
+    """The case every previous test missed: `modify_order`'s OWN response is an array.
+
+    IBKR documents this endpoint as returning an array and a live modify on 2026-09-21
+    returned one. Before the 2026-09-21 fix `while "id" in response` was a membership test
+    here, so this precaution was returned as the terminal result: no dialog, no answer, and
+    the modification silently not applied. Fails against that code.
+    """
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            # IBKR's documented precaution shape — ARRAY-wrapped, as the module comment says.
+            _make_ok_response([{"id": "11111111-1111-4111-8111-111111111111", "message": ["Price band warning."]}]),
+            _make_ok_response([{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]),
+        ]
+        result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 180.0})
+
+    # The human was asked. That is the property that was lost.
+    mock_reply_dlg.assert_called_once()
+    assert mock_post.call_count == 2
+    assert result == {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
+
+
+def test_modify_with_no_reply_returns_the_array_wrapped_terminal_unwrapped(client):
+    """The live 2026-09-21 shape: an array-wrapped terminal response and no precaution.
+
+    The real modify that day raised no reply at all — the place of the same order raised a
+    value-limit precaution and the modify, still over the same limit, raised none. The
+    terminal entry must be unwrapped, and no dialog may be shown.
+    """
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response(
+            [{"order_id": "1275120921", "order_status": "Submitted", "encrypt_message": "1"}]
+        )
+        result = client.modify_order_and_confirm("U1234567", "1275120921", {"price": 7250.0})
+
+    mock_reply_dlg.assert_not_called()
+    mock_post.assert_called_once()
+    assert result == {"order_id": "1275120921", "order_status": "Submitted", "encrypt_message": "1"}
 
 
 # ---------------------------------------------------------------------------

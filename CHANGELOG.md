@@ -10,6 +10,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **A modify that raised an IBKR precaution silently did nothing.** `modify_order_and_confirm`
+  fed `modify_order`'s response straight into `while "id" in response`. On a dict that is a
+  key test; on a **list it is a membership test** — `"id" in [{"id": ...}]` is `False`.
+
+  IBKR documents this endpoint as returning an array, for both the terminal response and a
+  precaution, and a live modify on 2026-09-21 returned
+  `[{"order_id": "1275120921", "local_order_id": "CLAUDIA-...", "order_status": "Submitted",
+  "encrypt_message": "1"}]` — matching their example to the field. So the loop never ran on a
+  precaution: it was returned **as though it were the result**. The human was never shown it,
+  never answered it, and the modification was never applied, while the caller held an object
+  that looked like a result.
+
+  `_as_reply_dict` already existed for exactly this — its docstring says "modify_order's
+  shape" — and was applied to every response in the loop **except the first one**. It now
+  normalises the first one too. `modify_order`'s annotation claimed `dict[str, Any]` while
+  `_post` returns `Any`, so mypy could not see the narrowing was false; it is now the union
+  IBKR actually sends.
+
+  **One belief was the whole blind spot.** The docs had been read, both normalizers written,
+  and the list-shaped *reply* case tested end-to-end. Only "modify_order's own return type in
+  this codebase is a bare dict" was wrong, and every test encoded it by mocking the initial
+  response as a dict IBKR never sends. Two tests now use the real array shape, and they are
+  verified to fail against the old behaviour by neutralising the normaliser in memory rather
+  than editing the source.
+
+  Impact is bounded where a caller verifies: claudia_ui's read-back compares requested against
+  observed fields, so an unapplied modify is reported "not confirmed" rather than as success.
+  For a caller without that backstop — this is public API of a published package — it was a
+  false-success risk. The modify reply chain is still **un-exercised live**: the 2026-09-21
+  modify raised no precaution at all, though the place of the same order did.
+
 - **`preview_order` read four keys the whatif does not send, and discarded IBKR's refusal.**
   A preview exists to answer "can this account support this order". It answered `N/A`, and
   when IBKR said no it did not say so at all.

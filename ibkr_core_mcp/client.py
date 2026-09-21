@@ -2124,7 +2124,7 @@ class IBKRClient:
         order: dict[str, Any],
         *,
         authorization: OrderWriteAuthorization | None = None,
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """Modify an existing order. Requires Touch ID (Gate 1) + tkinter dialog (Gate 2).
 
         `authorization` (2026-09-11): the value `modify_order_and_confirm` earned for this
@@ -2468,14 +2468,35 @@ class IBKRClient:
         method's docstring — applied to modify_order() instead of place_order(). IBKR's
         reply-chain shape for modify is documented as the same {"id", "message", ...}
         pattern as place_order's chain (per the CP API reply docs cited on
-        reply_order()). Note: modify_order()'s own return type is a single dict (not a
-        list), so this method checks for "id"/"message" directly on that dict.
+        reply_order()).
 
-        This method was added proactively — it has the identical never-loops-replies
-        gap that place_order() had before place_order_and_confirm() was added — but
-        that gap has NOT been verified live for modify_order specifically (no live
-        modify test has been run as of 2026-07-06; only the place_order 3-reply chain
-        is live-verified, see place_order_and_confirm()'s docstring).
+        **The first response is normalised, and that is the whole point (fixed 2026-09-21).**
+        This read `response = self.modify_order(...)` and then `while "id" in response`. On a
+        dict that is a key test; on a **list it is a membership test**, and IBKR documents this
+        endpoint as returning an array — both for the terminal response
+        (`[{"order_id": ..., "order_status": "Submitted", "encrypt_message": "1"}]`, measured
+        live 2026-09-21 to the field) and for a precaution
+        (`[{"id": ..., "message": [...], "messageOptions": [...]}]`). So a modify that raised a
+        precaution returned that precaution **as though it were the result**: the human was
+        never shown it, never answered it, and the modification was never applied. Reproduced
+        offline against IBKR's own documented reply array before the fix. `modify_order`'s
+        annotation said `dict[str, Any]` while `_post` returns `Any`, so mypy could not see the
+        narrowing was false — the annotation is now the union IBKR actually sends.
+
+        `_as_reply_dict` already existed for exactly this ("modify_order's shape") and was
+        applied to every response in the loop **except the first one**. A modify is one ticket,
+        so one entry; `_as_reply_dict` collapsing the array is right here for the same reason
+        `_as_reply_list` is right for `place_order`'s array.
+
+        Live 2026-09-21: a parent-price modify was accepted with **no reply chain at all** —
+        the place of the same order raised a value-limit precaution at 365,000 USD and the
+        modify at 362,500 USD, still over the same 100,000 USD limit, raised none. So IBKR does
+        not re-raise that precaution on modify, and **the modify reply chain remains
+        un-exercised live**; only the place_order 3-reply chain has been (see
+        place_order_and_confirm()'s docstring). The fix above rests on IBKR's documented shape
+        plus an offline reproduction, not on a live precaution.
+
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
                 https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
@@ -2488,7 +2509,7 @@ class IBKRClient:
         label = f"{_order_label(order)} (order {order_id})"
         authorization = _authorize_order_write(f"modify IBKR order {order_id}", scope, label)
         log.info("Gate 1: granted for %s (%s)", scope, label)
-        response = self.modify_order(account_id, order_id, order, authorization=authorization)
+        response = _as_reply_dict(self.modify_order(account_id, order_id, order, authorization=authorization))
         while "id" in response:
             response = _as_reply_dict(
                 self._resolve_one_reply(response, reply_log, authorization=authorization, scope=scope)
