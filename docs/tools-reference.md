@@ -490,7 +490,13 @@ Futures contracts for one or more root symbols — expiry months, conids, exchan
 | `symbols` | array[string] | ✅ | Root symbols, e.g. `["CL", "ES", "GC"]` |
 
 **Output:** JSON array of futures contracts with `conid`, `symbol`, `exchange`, `expirationDate`,
-**sorted by expiry per root symbol; the earliest row carries `front_month: true`** (2026-09-10 —
+**sorted by expiry per root symbol; the earliest STILL-TRADEABLE row carries `front_month: true`**
+(the qualifier is load-bearing: IBKR keeps returning a contract after its last trade date, so the
+earliest row alone flagged an *expired* one for days after each roll — measured 2026-09-20, ESU6
+`ltd` 20260918 still among 22 ES rows two days later; claudia_ui gap #58. Tradeability is decided
+by `ltd`, which differs from `expirationDate` — ES Dec-26 reports 20261218 and 20261217 — and a row
+with no usable date is kept, since an unknown date is not a claim that a contract expired. Expired
+rows are still listed; they are merely never flagged.) (2026-09-10 —
 `/trsrv/futures` itself returns the rows in no date order, Dec 2026 first for ES, and a model once
 read list position as a volume ranking; claudia_ui gap #37). **That row also carries `_contract`**
 (2026-09-11) — `local_symbol` (e.g. `ESU6`), `month` (`SEP26`), `expires`, `name`, `multiplier` —
