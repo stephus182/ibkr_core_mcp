@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Why `Inactive` is not a terminal status, written down with its source.** The
+  `_TERMINAL_STATUSES` comment explained `Filled`/`Cancelled` and was silent on `Inactive`,
+  which is exactly the kind of omission a later reader "fixes". IBKR defines that status as
+  covering two situations at once — an order that "is invalid or triggered an error", and one
+  where "the order is to short shares but the order is being held while shares are being
+  located". Only the second can still become working, and the status alone cannot tell them
+  apart, so filtering it would hide a live order. A test pins it.
+
+  Measured the same day: the dead branch really is dead — a bracket parent left `Inactive` when
+  its child was refused answers HTTP 400 saying the order id does not exist, while still
+  listing in the live book. It is shown because it exists and excluded from `_CONFIRMED["place"]`
+  because existing is not working. Both are right, and neither is a reason to filter it.
+
+  Source: https://interactivebrokers.github.io/tws-api/order_submission.html — scraped, after
+  the reasoning had first been asserted from memory.
+
 ### Fixed
 - **H1 was enforced in only one of the two reachable paths.** `_bracket_tickets` refused a child
   larger than its parent; `confirm_bracket_dialog` did not. That dialog already repeats the link

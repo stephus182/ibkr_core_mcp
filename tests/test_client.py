@@ -3656,3 +3656,24 @@ def test_cancel_detail_does_not_append_an_EMPTY_state(client):
         mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
         client.cancel_order("U1234567", "9876543210")
     assert seen["det"]["_current_description"] == "Sell 10 AAPL Limit 150.00, GTC"
+
+
+def test_an_INACTIVE_order_is_NOT_filtered_out_of_the_live_book(client):
+    """`Inactive` must stay visible, and this pins that against a plausible "fix".
+
+    IBKR defines the status as covering two situations at once — "it is invalid or triggered
+    an error" and "the order is to short shares but the order is being held while shares are
+    being located" (tws-api order_submission). The second can still become working, so adding
+    `Inactive` to `_TERMINAL_STATUSES` would hide a live order. The status alone cannot tell
+    the two apart, which is exactly why the filter must not try.
+    """
+    rows = [
+        {"orderId": 1, "status": "Inactive", "ticker": "ES", "side": "SELL", "totalSize": 1},
+        {"orderId": 2, "status": "Filled", "ticker": "ES", "side": "BUY", "totalSize": 1},
+        {"orderId": 3, "status": "Submitted", "ticker": "AAPL", "side": "BUY", "totalSize": 10},
+    ]
+    with _patch.object(client, "_read_live_orders", return_value=rows):
+        live = client.get_live_orders()
+    statuses = {o["status"] for o in live}
+    assert "Inactive" in statuses, "an Inactive order can still become working — never filter it"
+    assert "Filled" not in statuses, "a fill is an execution, not a live order"

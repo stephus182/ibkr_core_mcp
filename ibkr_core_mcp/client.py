@@ -1633,6 +1633,19 @@ class IBKRClient:
 
     # Statuses that indicate an order is still active in the market.
     # Filled/Cancelled orders are executions, not live orders.
+    #
+    # `Inactive` is deliberately NOT here, and a future reader should not "fix" that. IBKR
+    # defines it as covering two situations at once: "it is invalid or triggered an error"
+    # AND "the order is to short shares but the order is being held while shares are being
+    # located" — the second can still become working, so filtering the status out would hide
+    # a live order. The status alone cannot tell the two apart.
+    # Source: https://interactivebrokers.github.io/tws-api/order_submission.html
+    #
+    # Measured 2026-09-21: the dead branch is genuinely dead — a bracket parent left `Inactive`
+    # when its child was refused answers `HTTP 400 {"error":"OrderID ... doesn't exist"}` to a
+    # cancel while still listing here. It is shown because it exists; it is excluded from
+    # `_CONFIRMED["place"]` because existing is not working. Both are correct, and neither is
+    # a reason to filter it.
     _TERMINAL_STATUSES = frozenset(
         {
             "Filled",
