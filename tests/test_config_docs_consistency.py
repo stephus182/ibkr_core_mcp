@@ -650,3 +650,70 @@ def test_the_readme_pin_guard_can_see_a_stale_pin():
     guard that finds no pins and asserts nothing is indistinguishable from a correct one."""
     assert _README_EXACT_PIN.findall('pip install "ibkr-core-mcp==2.0.1"') == ["2.0.1"]
     assert _README_EXACT_PIN.findall("nothing to see here") == []
+
+
+# A BARE `client.` is an IBKRClient instance. `ibkr_core_mcp.client.foo(...)` is the
+# module path and is a different claim, so the lookbehind excludes a preceding dot.
+_DOC_CLIENT_CALL = re.compile(r"(?<![.\w])client\.([a-z_][a-z0-9_]*)\s*\(")
+_DOC_CLIENT_REBIND = re.compile(r"^\s*client\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
+
+
+def _blocks_and_prose(text: str) -> list[tuple[str, str]]:
+    """Split markdown into ('code'|'prose', chunk) on fence boundaries.
+
+    Anchored on the fences rather than on line ranges, because a guard that reads prose
+    otherwise trips on the prose explaining it — hit three times in two days in this repo.
+    """
+    parts, kind = [], "prose"
+    buf: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            parts.append((kind, "".join(buf)))
+            buf, kind = [], "code" if kind == "prose" else "prose"
+            continue
+        buf.append(line)
+    parts.append((kind, "".join(buf)))
+    return parts
+
+
+def test_every_documented_client_method_actually_exists_on_IBKRClient():
+    """`client.foo(...)` in the living docs means an `IBKRClient` instance, and must resolve.
+
+    `docs/consumers.md` listed the 2.1.0 bracket API in one table whose other two rows read
+    `IBKRClient.place_bracket_and_confirm(...)` and `IBKRClient.get_bracket_preview(...)`,
+    and whose third read `client.pair_bracket_response(tickets, entries)`. That one is a
+    **module-level function** in `ibkr_core_mcp.client`, not a method — `IBKRClient` has no
+    such attribute — so a consumer following the table it was written for gets
+    `AttributeError`. `docs/api-reference.md` and `docs/order-management-examples.md` both
+    spell it correctly, which is the giveaway: one document out of step with its siblings.
+
+    This is the class, not the instance. Nothing checked that a documented method call
+    resolves, so any renamed or mis-transcribed method reads as correct forever.
+
+    A fenced block that rebinds `client` to something else is skipped — `FirecrawlClient` in
+    `docs/web-scraper-reference.md` is a legitimate rebinding, not a defect.
+    """
+    from ibkr_core_mcp import IBKRClient
+
+    docs = [*sorted((_REPO / "docs").glob("*.md")), _REPO / "README.md", _REPO / "CLAUDE.md"]
+    offenders: dict[str, set[str]] = {}
+    checked = 0
+    for doc in docs:
+        if not doc.exists():
+            continue
+        for kind, chunk in _blocks_and_prose(doc.read_text()):
+            rebound = _DOC_CLIENT_REBIND.findall(chunk)
+            if kind == "code" and rebound and any(n != "IBKRClient" for n in rebound):
+                continue
+            for name in _DOC_CLIENT_CALL.findall(chunk):
+                checked += 1
+                if not hasattr(IBKRClient, name):
+                    offenders.setdefault(name, set()).add(doc.relative_to(_REPO).as_posix())
+
+    assert checked >= 10, (
+        f"only {checked} documented `client.` calls were inspected — the pattern stopped "
+        "matching and this guard is measuring nothing."
+    )
+    assert not offenders, "documented `client.` calls that IBKRClient does not have: " + "; ".join(
+        f"client.{n}() in {sorted(f)}" for n, f in sorted(offenders.items())
+    )

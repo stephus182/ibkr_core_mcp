@@ -10,6 +10,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **The live verification pass — and the one defect it found in a document rather than in code.**
+  `get_bracket_preview` ships in this release and had never been executed against a gateway;
+  its only coverage was unit tests against responses written to match it, which this repo
+  already treats as no evidence. Run as a `whatif` against AAPL (simulates, places nothing),
+  it returned the same nine-key object as the single-order whatif, with a key set **identical**
+  to the captured `order_preview` fixture — so the reader control is pinned to a current shape.
+  Full record: `docs/audits/live-test-log.md` § Run 2026-09-21. Result: **88 pass · 14 skip ·
+  0 fail** across all 102 integration tests.
+
+  - **The live response settles the `warn`/`warns` fix below with measurement.** It carries
+    both fields and they are **not** equivalent: `warns[0]` is byte-identical to `warn`, and
+    `warns[1]` is a "Mandatory Cap Price" warning **absent from `warn`**. So reading `warns`
+    and de-duplicating are proven live. But the live payload has `warns ⊇ {warn}`, so it
+    **cannot** prove that reading `warn` is necessary — a `warns`-only reader would look
+    correct against it. That half was executed separately against IBKR's *documented*
+    response object, where `warns` does not appear and a `warns`-only reader surfaces **zero**
+    warnings. Each half now carries its own evidence, because a control that passes for the
+    wrong reason is the failure this whole release was reviewed for.
+
+  - **`docs/consumers.md` documented a method that does not exist.** Its "New public API"
+    table listed two rows as `IBKRClient.place_bracket_and_confirm(...)` and
+    `IBKRClient.get_bracket_preview(...)`, and the third as
+    `client.pair_bracket_response(tickets, entries)` — but that is a **module-level function**
+    in `ibkr_core_mcp.client`, and `IBKRClient` has no such attribute, so a consumer following
+    the table written for them gets `AttributeError`. `docs/api-reference.md` and
+    `docs/order-management-examples.md` both spell it correctly; one document out of step with
+    its siblings, in the document that drives the consumer migration. Nothing checked that a
+    documented method call resolves, so
+    `test_every_documented_client_method_actually_exists_on_IBKRClient` now does, across 28
+    call sites in the living docs, skipping fenced blocks that rebind `client` to something
+    else (`FirecrawlClient` is a legitimate rebinding). Watched failing on the real defect
+    before the fix, and on a renamed method.
+
+  - **Two live skip messages named a cause the status never established.**
+    `IBKRRateLimitError` is raised for 429 **and** 503, and its own docstring says a 503 "is
+    the gateway being unavailable and means neither" — yet `test_watchlist_roundtrip` and
+    `test_alert_crud_roundtrip` both reported "rate limited" without reading `.status_code`.
+    Measured: the watchlist path is 503 every time, never 429; the alert path is 503 inside a
+    full run but **403 in isolation**, which is the real, already-documented cause its own
+    message had been hiding. Both now report the status they saw. No product code changed.
+
+  - **`pair_bracket_response` cannot be live-covered without placing a real bracket**, and the
+    gated path exists so that no automated run can. Its two sibling gaps in the live-test log
+    each carry a guard that fails the day the gap closes; this one did not — the same "rule
+    held on one path and not its twin" shape this release was reviewed for.
+    `test_the_bracket_submission_pairing_stays_marked_unvalidated` holds three properties, each
+    mutation-verified failing with the unmutated control green.
+
 - **A second review pass, over the parts of the release the first one never reached.** The
   first pass was scoped to the bracket seam, which left `claude_tools.py` (+171),
   `scripts/verify_wheel.py` (+302, new and never reviewed at all), `exceptions.py`,
