@@ -357,11 +357,22 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, or `reply_order` must pass
-both gates — in order — before **any order-write request** reaches IBKR.
+Every call to `place_order`, `modify_order`, `cancel_order`, `reply_order`, or
+`place_bracket_and_confirm` must pass both gates — in order — before **any order-write
+request** reaches IBKR. Those five are the whole set: they are what `GATED_OWNERS` in
+`tests/security/test_order_write_boundary.py` is checked against, and no other function in
+`client.py` may build an order-write URL.
+
+`place_bracket_and_confirm` was missing from this sentence and from the table below until
+2026-09-21, while it had been in `GATED_OWNERS` and in `SECURITY.md` since it shipped — so
+the developer guide said the bracket path was ungated, which is the opposite of the truth
+and the more dangerous direction to be wrong in. The same omission was live in four more
+documents. It is now machine-checked for the whole class rather than per file:
+`test_every_document_that_enumerates_the_gated_writes_enumerates_them_ALL` derives the list
+from `GATED_OWNERS` and fails on any tracked document that lists most of them and omits one.
 
 This read "before any network call reaches IBKR" until 2026-09-16 and that was wrong: on a
-fresh session each of the four opens with `_ensure_accounts_initialized()`, which issues
+fresh session each of them opens with `_ensure_accounts_initialized()`, which issues
 `GET /iserver/accounts` — IBKR's documented prerequisite for order operations — before
 Gate 1. The ordering is deliberate (`test_place_order_initializes_accounts_before_touch_id`
 requires it by name) so a dead session fails fast rather than after two human gates.
@@ -392,8 +403,9 @@ contacts nothing on a decline.
 | `modify_order_and_confirm` | The same, for modify: one Touch ID for the chain, then the modify dialog, then a reply dialog per chained reply, until a terminal response |
 | `cancel_order` | Touch ID → cancel dialog |
 | `reply_order` | Touch ID → reply dialog |
+| `place_bracket_and_confirm` | **One** Touch ID bound to the *whole ticket array* (so a child altered after the fingerprint falls outside it), then **one** Gate 2 dialog carrying the parent and every child, then a reply dialog per pending reply on *any* ticket until every chain is terminal. Two dialogs are deliberately not offered: they would permit the parent to be sent with the child declined, which is the one state a bracket exists to prevent |
 
-`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step.
+`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`; it is not a branch of the single-order path, which stays live-proven and unmodified. Its read-only twin is `get_bracket_preview` (ungated, like `get_order_preview`), and `pair_bracket_response` tells the caller which returned entry is which leg — IBKR's response is **not** index-aligned with the submission.
 
 **Explicitly ungated.** What these share is not that they read — it is that none can place,
 modify, cancel or confirm an order. They are *not* all read-only.

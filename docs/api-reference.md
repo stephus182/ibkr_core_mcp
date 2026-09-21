@@ -27,7 +27,7 @@ Any other `IBKR_GATEWAY_URL` raises `ConfigError` at construction time.
 
 **Account/order ID initialization:** Every order read/write method (`get_live_orders`,
 `get_orders_raw`, `get_order_status`, `place_order`, `modify_order`, `cancel_order`,
-`reply_order`, `get_order_preview`) calls `get_brokerage_accounts()` once per client instance
+`reply_order`, `place_bracket_and_confirm`, `get_order_preview`, `get_bracket_preview`) calls `get_brokerage_accounts()` once per client instance
 before its own request — the official docs require `GET /iserver/accounts` to run before
 order operations. The call is cached on `_accounts_initialized`; callers never need to invoke
 `get_brokerage_accounts()` directly under normal use.
@@ -985,8 +985,18 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/plac
 
 ### `modify_order_and_confirm(account_id, order_id, order) -> dict` — recommended entry point
 Same loop/display/decline semantics as `place_order_and_confirm()`, applied to `modify_order()`
-instead. Note: `modify_order()`'s own return type is a single dict (not a list), so this method
-checks for `"id"`/`"message"` directly on that dict rather than on a list's first element.
+instead.
+
+**This paragraph said `modify_order()` "returns a single dict (not a list), so this method
+checks for `"id"`/`"message"` directly on that dict" until 2026-09-21, and that belief was
+the entire defect.** IBKR documents this endpoint as returning an **array**, and a live
+modify on 2026-09-21 returned one, matching their example to the field. `"id" in response`
+is a key test on a dict and a *membership* test on a list, so it was `False` for every real
+precaution: the warning was never shown, never answered, and the modification was never
+applied, while the caller held an object that looked like a result. Every response in the
+loop is now normalised through `_as_reply_dict` — including the first, which was the one it
+had never been applied to — and `modify_order()`'s annotation is the union IBKR actually
+sends rather than a `dict` that let mypy believe the narrowing was sound.
 
 This method was added proactively to close the same never-loops-replies gap that `place_order()`
 had before `place_order_and_confirm()` was added, but the gap has **not been live-verified for
@@ -1001,9 +1011,82 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modi
 
 ### `get_order_preview(account_id, order) -> dict`
 Whatif preview — cost, commission, margin impact. No order placed, no security gates. Same
-underscore-field-stripping as `place_order()`.
+underscore-field-stripping as `place_order()`. One ticket; a bracket has its own entry point
+below. Both post through the private `_whatif`, which is the only function permitted to build
+the whatif path.
 **Endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order
+
+---
+
+## Brackets
+
+A bracket is a parent order plus its held children in **one** POST of a ticket array, linked
+by `cOID` on the parent and `parentId` on each child. One request matters: the pair is atomic
+at IBKR, so there is no window in which a child is live alone. Two independent orders are
+never a substitute — a standalone opposite-side order is live immediately and can *open* the
+wrong position rather than close one.
+
+`place_order` / `place_order_and_confirm` are neither reused nor modified by any of this. They
+are the live-proven single-order path, and the way to keep a proven path proven is not to
+branch it.
+
+### `place_bracket_and_confirm(account_id, parent, children, *, reply_log=None) -> list[dict]` — Touch ID gated
+Places the whole bracket behind **one** Gate 1 and **one** Gate 2, then resolves **every**
+ticket's reply chain.
+
+- **Gate 1 is bound to the whole array.** The authorization scope hashes every leg, so a child
+  altered between the fingerprint and the POST falls outside it and prompts again.
+- **Gate 2 is one dialog showing every leg** (`confirm_bracket_dialog`). Two dialogs would
+  permit the parent to be sent with the child declined, which is the one state a bracket
+  exists to prevent: a resting position with no exit.
+- **Every ticket's reply is answered, not just the first.** The single-order idiom
+  `while response and "id" in response[0]` inspects the parent only, so a precaution raised
+  against the *child* would never be shown and that leg would be silently dropped.
+- Returns the terminal entries, accumulated and de-duplicated on exact equality, in the order
+  first seen. A reply's response shape for a bracket is not yet measured live, and
+  accumulating is what makes the method independent of which shape it turns out to be.
+
+Refuses **before any gate** (`ValueError`, from `_bracket_tickets`) if the pair is not a
+bracket: no parent `cOID`, no children, a child whose `parentId` does not name the parent, a
+child carrying its own `cOID`, a child on a different contract, a child on the parent's own
+side or carrying no side, or a child larger than the parent. Refused rather than corrected —
+order parameters are immutable — and before Gate 1 rather than after, so the human is never
+fingerprinted for a bracket that was never placeable.
+
+**Endpoint:** `POST /iserver/account/{accountId}/orders`, then `POST /iserver/reply/{replyId}` per pending reply
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+
+### `get_bracket_preview(account_id, parent, children) -> dict`
+Whatif for a parent plus attached children. Read-only, **no security gates**, like
+`get_order_preview()`. Both legs are sent, because a preview of the parent alone prices
+something the user is not about to submit. Runs the same `_bracket_tickets` validation as the
+write path, so a pair that could not be placed is not priced either.
+
+Note what a preview **cannot** tell you: measured live 2026-09-20, a child on a *different
+instrument* returns a whatif response byte-identical to a valid one, because IBKR previews the
+first ticket and discards the rest. A mismatched bracket previews clean. That is why the
+contract check lives in the validation and not in a reading of the response.
+**Endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact
+
+### `pair_bracket_response(tickets, entries) -> BracketPairing`
+Pure, no network. Says which returned entry belongs to which submitted ticket.
+
+**IBKR's response is not index-aligned with the submission** — two separate live sends on
+2026-09-21 both returned `[child, parent]` for a `[parent, child]` array, so pairing
+`entries[i]` with `tickets[i]` reads the parent's status off the child. Matching is by
+identifier: the parent is the entry whose `local_order_id` echoes the `cOID` that was sent,
+and a child is one whose `parent_order_id` is the parent's `order_id`.
+
+`BracketPairing` carries `parent`, `children`, `unmatched`, `problems` and an `ok` property.
+It deliberately does **not** claim a per-child mapping: IBKR echoes no identifier of ours on a
+child, so `children` is the *set* of child entries. `place_bracket_and_confirm` runs this
+itself and **logs** each problem rather than raising — by that point the orders exist, and
+throwing would destroy the only account of what happened.
+
+Accepts and returns `Mapping[str, Any]`, not `dict`: a typed IBKR row is a `Mapping` and is
+not a `dict`, and a `dict` filter here would silently discard every row a caller supplied.
 
 ---
 
@@ -1024,7 +1107,7 @@ account, and per-account capability flags (`supportsCashQty`, `supportsFractions
 or querying open orders.** `IBKRClient._ensure_accounts_initialized()` calls this once per
 client instance (cached) and runs automatically at the top of every order read/write
 method (`get_live_orders`, `get_orders_raw`, `get_order_status`, `place_order`, `modify_order`,
-`cancel_order`, `reply_order`, `get_order_preview`) — callers do not need to call this
+`cancel_order`, `reply_order`, `place_bracket_and_confirm`, `get_order_preview`, `get_bracket_preview`) — callers do not need to call this
 directly under normal use.
 
 **Returns:** a `BrokerageSession` over the 12-key object IBKR sends — `accounts` (list of account ID strings), `selectedAccount`, `isPaper`, `isFT`, `sessionId`, `serverInfo`, `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles` (measured 2026-09-17; verified live as an object, NOT a bare list, on 2026-06-30). `session.is_paper` and `session.selected_account` are the two a caller branches on; the account-keyed blocks stay mappings.

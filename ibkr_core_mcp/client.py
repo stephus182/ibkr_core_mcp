@@ -63,9 +63,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -550,9 +551,14 @@ class BracketPairing:
     prose for a human, because the caller's job is to decide what to tell one.
     """
 
-    parent: dict[str, Any] | None
-    children: tuple[dict[str, Any], ...]
-    unmatched: tuple[dict[str, Any], ...]
+    # `Mapping`, not `dict`: a typed IBKR row is a `collections.abc.Mapping` and is NOT a
+    # `dict` (see `models.IBKRResponse`). Declared this way from the release that first
+    # publishes this type, because widening it later would be the breaking change — a
+    # consumer annotating `dict[str, Any]` would go red, which is exactly what happened to
+    # claudia_ui's Protocols on 2026-09-17 (API-R6). Raw wire dicts satisfy it unchanged.
+    parent: Mapping[str, Any] | None
+    children: tuple[Mapping[str, Any], ...]
+    unmatched: tuple[Mapping[str, Any], ...]
     problems: tuple[str, ...]
 
     @property
@@ -561,7 +567,7 @@ class BracketPairing:
         return not self.problems
 
 
-def pair_bracket_response(tickets: list[dict[str, Any]], entries: list[dict[str, Any]]) -> BracketPairing:
+def pair_bracket_response(tickets: Sequence[Mapping[str, Any]], entries: Sequence[Mapping[str, Any]]) -> BracketPairing:
     """Pair a bracket's terminal entries to the tickets that were sent. Pure, no network.
 
     Closes three gaps found on 2026-09-21, all of which a read-back would otherwise carry:
@@ -586,7 +592,11 @@ def pair_bracket_response(tickets: list[dict[str, Any]], entries: list[dict[str,
         return BracketPairing(None, (), tuple(entries), ("no tickets were submitted",))
     parent_ticket, child_tickets = tickets[0], tickets[1:]
     coid = str(parent_ticket.get("cOID") or "")
-    rows = [e for e in entries if isinstance(e, dict)]
+    # `Mapping`, not `dict`. This is public API, so `entries` may be rows a caller already
+    # holds — and a typed IBKR row is a Mapping and is not a dict, so a `dict` filter
+    # discarded every one of them and reported the whole bracket missing rather than
+    # raising. Silent, and in the direction of a false alarm about live orders.
+    rows = [e for e in entries if isinstance(e, Mapping)]
 
     parent_entry = next((e for e in rows if str(e.get("local_order_id") or "") == coid), None)
     problems: list[str] = []
@@ -594,8 +604,8 @@ def pair_bracket_response(tickets: list[dict[str, Any]], entries: list[dict[str,
         problems.append(f"no terminal entry carries the parent's cOID ({coid!r})")
     parent_oid = str(parent_entry.get("order_id") or "") if parent_entry else ""
 
-    children: list[dict[str, Any]] = []
-    unmatched: list[dict[str, Any]] = []
+    children: list[Mapping[str, Any]] = []
+    unmatched: list[Mapping[str, Any]] = []
     for entry in rows:
         if entry is parent_entry:
             continue
@@ -641,11 +651,21 @@ def _as_bracket_quantity(value: Any, leg: str) -> float:
 
     A value that cannot be compared must not pass the "child is never larger than the parent"
     check by default — that would leave a hard rule any malformed input walks through.
+
+    **`NaN` is the purest such value and defeated this until 2026-09-21.** `float("nan")`
+    parses, so it arrived here as a number and `nan > 1.0` is `False` — an "uncomparable
+    quantity is refused" rule walked through by the one quantity that is literally
+    uncomparable, on both reachable paths at once, which is why the parity harness between
+    this and `confirm_bracket_dialog` could not have found it either. Infinities go the same
+    way: `inf` would refuse correctly but `-inf` would not, and neither is an order size.
     """
     try:
-        return float(value)
+        quantity = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"A bracket {leg}'s quantity must be a number, not {value!r}") from None
+    if not math.isfinite(quantity):
+        raise ValueError(f"A bracket {leg}'s quantity must be a finite number, not {value!r}")
+    return quantity
 
 
 class IBKRClient:
@@ -2357,13 +2377,30 @@ class IBKRClient:
         `_multiplier_unknown` is set for FUT/FOP because an order-status read never carries
         the contract multiplier, and price x quantity on a future is not an estimate — it is
         the notional divided by the multiplier.
+
+        **`limit_price` and `stop_price` are read although IBKR documents neither.** They are
+        absent from both the field list and the example response object on the order-status
+        page, which for prices carries only `average_price`. They are nonetheless real —
+        measured live 2026-09-04 on three resting orders — so the read stays and the fact is
+        written down rather than left for a contributor to "correct" against the docs. A stop
+        reports `limit_price` as the empty string, which is why `or` is the right operator
+        here and a `None` check would not be. Full evidence:
+        `docs/ibkr-api-behaviors-reference.md` § Order status carries prices IBKR does not
+        document.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
         """
         try:
             status = self.get_order_status(order_id)
         except Exception:  # display only: never block a cancel because a READ failed
             log.warning("cancel dialog: could not read order %s for display detail", order_id)
             return None
-        if not isinstance(status, dict) or not status:
+        # `Mapping`, not `dict`: `get_order_status` returns a raw dict today, and the day it
+        # is typed like the 29 already are, a `dict` check would make this return None and
+        # every cancel dialog would degrade to "Order detail: NOT AVAILABLE" — silently, with
+        # the unit suite green, because its mocks are dicts. CLAUDE.md's rule, applied before
+        # the typing rather than after it.
+        if not isinstance(status, Mapping) or not status:
             return None
         details: dict[str, Any] = {
             "ticker": status.get("symbol") or status.get("contract_description_1"),
@@ -2413,7 +2450,13 @@ class IBKRClient:
         require_touch_id(f"confirm an IBKR order reply {reply_id}")
         confirm_reply_dialog(reply_id)
         data = self._post(f"/iserver/reply/{reply_id}", {"confirmed": ibkr_confirmed})
-        return data if isinstance(data, list) else []
+        # `_as_reply_list`, like the other two callers of this endpoint. This read
+        # `data if isinstance(data, list) else []` until 2026-09-21, which threw away
+        # whatever IBKR said in any non-list body — the same discard `place_order` was
+        # fixed for, where a documented `{"error": ...}` rejection reached the caller as
+        # `[]`. IBKR publishes only the array shape here, so this may never fire; the
+        # point is that one endpoint is not read three ways.
+        return _as_reply_list(data)
 
     def _resolve_one_reply(
         self,
@@ -2637,6 +2680,10 @@ class IBKRClient:
         terminal: list[dict[str, Any]] = []
         answered: set[str] = set()
         while True:
+            # `dict` and not `Mapping` here, deliberately: `response` is `_as_reply_list` over
+            # a `_post` body, so these rows are JSON this method decoded a moment ago and can
+            # never be a typed model. The two checks that read data a CALLER may supply —
+            # `pair_bracket_response` and `_cancel_dialog_details` — take `Mapping`.
             pending = [entry for entry in response if isinstance(entry, dict) and "id" in entry]
             for entry in response:
                 if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
@@ -2781,14 +2828,51 @@ class IBKRClient:
         Only a STATED violation is refused, as with `conid`: a child carrying no quantity is
         normal. A quantity that cannot be compared is refused rather than assumed compliant.
 
+        **Every child is the opposite side of the parent, and both sides are required.** A
+        same-side child does not close the position — released, it doubles it, which is the
+        most direct form of the harm H1 and the link rule exist to prevent. This lived only
+        in `confirm_bracket_dialog` until 2026-09-21, which meant the preview priced a
+        same-side pair happily and the place path took Touch ID before refusing — exactly
+        what moving the contract rule and H1 here was done to stop, left behind for the
+        third and fourth members of the same class.
+
+        Requiring the side is not a departure from the "only a STATED violation" convention
+        but a consequence of it: `conid` and `quantity` are legitimately DERIVED from the
+        parent, so an absence is normal, whereas IBKR documents `side` as **required** with
+        exactly two allowed values. A child's side is the parent's inverse — nothing derives
+        it — and a parent's side is derivable from nothing. An absent side is a malformed
+        ticket, not an inherited one. The comparison is case-insensitive because IBKR's own
+        two pages disagree: the field table says `BUY`/`SELL`, the bracket example writes
+        `"Buy"`/`"Sell"`. The caller's own casing is passed through untouched.
+
         Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
         """
         ref = parent.get("cOID")
-        if not ref or not children:
+        # Blank-after-strip, not merely falsy: `cOID="   "` passed a bare truthiness test,
+        # and `confirm_bracket_dialog` refuses it — so the builder accepted a pair the
+        # dialog would reject, and `get_bracket_preview`, which has no dialog, priced it
+        # (parity harness, 2026-09-21). IBKR matches `parentId` to this value literally;
+        # whitespace is not an identifier.
+        if ref is None or not str(ref).strip() or not children:
             raise ValueError("A bracket needs a parent cOID and at least one child")
+        # The banner is the dialog's concern; here the parent's side is what makes the
+        # opposite-side rule below evaluable at all. Without it the pair is unverifiable,
+        # which is not the same as valid.
+        parent_side = str(parent.get("side") or "").strip().upper()
+        if not parent_side:
+            raise ValueError("A bracket parent must carry a side")
         for kid in children:
             if kid.get("parentId") != ref or kid.get("cOID"):
                 raise ValueError("Each bracket child must carry parentId == the parent's cOID and no cOID")
+            # Opposite side, or it is not a bracket — see the docstring. `side` is a
+            # required two-value enum, so "different" and "opposite" are the same test.
+            # Repeated in `confirm_bracket_dialog`, which is public API callable without
+            # this method; checked here so the place path refuses BEFORE Touch ID and
+            # `get_bracket_preview` inherits it.
+            child_side = str(kid.get("side") or "").strip().upper()
+            if not child_side or child_side == parent_side:
+                raise ValueError("Each bracket child must be the opposite side of the parent")
             # Same contract, or the pair is not a bracket. Nothing downstream can see this:
             # the whatif was measured on 2026-09-20 to return a byte-identical response for a
             # child on a DIFFERENT instrument, because it previews the first ticket and

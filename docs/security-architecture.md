@@ -112,7 +112,7 @@ flowchart TB
         T6["SANDBOX EXECUTION<br/>run_backtest — model<br/>code, in a child process"]
     end
 
-    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
+    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order · place_bracket_and_confirm<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
 
     M --> REACH
     H == "Gate 1 · Touch ID, then Gate 2 · an explicit click —<br/>once per write, with a dialog for every reply" ==> OE
@@ -162,7 +162,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 
 | Sink | Only through | Guarded by |
 |---|---|---|
-| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
+| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply`, `place_bracket_and_confirm` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
 | `POST …/orders/whatif` | `_whatif`, called by `get_order_preview` (one ticket) and `get_bracket_preview` (bracket array) | AST test that only `_whatif` builds the path; both entry points asserted to call no gate |
 | IBKR alerts / watchlists / FYI / account switch | `IBKRClient` ungated writers | Identifier regexes; capability declaration `ACCOUNT_STATE` |
 | Google Drive | `GDriveCache`, `WebDocsStore` | Cache-key regexes, slugs `[a-z0-9-]`, OAuth token file 0600 |
@@ -221,11 +221,25 @@ unit run, of the pre-push hook, and of CI.
 
 ### 6.1 Order writes — two gates and one authorization
 
-`place_order`, `modify_order`, `cancel_order` and `reply_order` each run **Gate 1**
+`place_order`, `modify_order`, `cancel_order`, `reply_order` and `place_bracket_and_confirm`
+each run **Gate 1**
 (`human_auth.require_touch_id`, `LAPolicyDeviceOwnerAuthentication`, 60 s) and then **Gate 2**
 (`order_confirm.*`, a modal with the full order and an explicit button; Enter does not
 confirm; 60 s auto-cancel) *before* the first network call. The gates are inside the client
 methods, not in a wrapper, so there is no way to call the method and skip them.
+
+`place_bracket_and_confirm` is the fifth, added for the 2.1.0 bracket seam: a parent plus its
+held children in **one** POST of a ticket array. It is not a branch of `place_order` — the
+single-order path is live-proven and gains no code — so it builds the order-write URL itself
+and therefore carries its own gates. Its Gate 1 scope hashes the **whole array**, not the
+parent, so a child altered between the fingerprint and the POST falls outside the
+authorization (the SEC-07 defect, pointed at the child); its Gate 2 is **one**
+`confirm_bracket_dialog` carrying every leg, because two dialogs would permit the parent to
+be sent with the child declined — the one state a bracket exists to prevent. It was absent
+from this section, from the table in § 4 and from the diagram in § 3 until 2026-09-21, while
+present in `GATED_OWNERS` and `SECURITY.md` throughout; the omission is now machine-checked
+across every tracked document by
+`test_every_document_that_enumerates_the_gated_writes_enumerates_them_ALL`.
 
 The chained variants `place_order_and_confirm` / `modify_order_and_confirm` take **one**
 fingerprint per write and pass an `OrderWriteAuthorization` down the call chain: bound to the

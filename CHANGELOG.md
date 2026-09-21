@@ -9,6 +9,157 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Seven rules held on one of two reachable paths, found by a pre-release review of the
+  bracket seam.** The 2026-09-21 review that produced H1-at-Gate-2 and the README omission
+  established the shape; this pass looked for the rest of the class deliberately. None was a
+  logic error and all gates were green throughout.
+
+  1. **`is_future` could not recognise IBKR's own `secType`.** The check compared the whole
+     string to `FUT`/`FOP`, and IBKR spells this field conid-first — `"265598@STK"` in its
+     Python example, `"265598:STK"` in its JSON one, the only two worked examples the
+     endpoint publishes. So the signal matched **no documented body at all**: measured, an
+     ES order carrying `secType: "649180671:FUT"` printed `Total (est.): 7,300.00` for a
+     contract standing for 365,000 — the same 50x-wrong notional the signal had been added
+     days earlier to prevent, reached through the door the fix's own citation names. Parsed
+     through `_asset_class` now; the bare form is still accepted. The single test behind the
+     signal fed `"FUT"` and called it "the documented `secType` field" — a value invented to
+     match the reader, the pattern this changelog warns about three times elsewhere. Three
+     equity spellings hold the widened parse from swallowing stocks, whose price really is
+     money. Source:
+     https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
+
+  2. **The opposite-side rule was enforced only at Gate 2.** `_bracket_tickets` checked the
+     link, the contract and H1; the parent-has-a-side and child-is-opposite rules lived only
+     in `confirm_bracket_dialog`. Measured: `get_bracket_preview` accepted a BUY parent with
+     a BUY child and POSTed both tickets, and on the place path **Touch ID was taken and only
+     then was the pair refused** — verbatim what moving the contract rule into the ticket
+     builder had been done to stop, left behind for the third and fourth members of the same
+     class. A same-side child is the most direct form of the harm H1 exists to prevent:
+     released, it opens exposure instead of closing it. `side` is *required*, not
+     checked-when-stated, and that follows from the convention rather than departing from it
+     — `conid` and `quantity` are legitimately derived from the parent, whereas IBKR
+     documents `side` as required with exactly two allowed values, and a child's side is the
+     parent's inverse, which nothing derives. The comparison is case-insensitive because
+     IBKR's two pages disagree: the field table says `BUY`/`SELL`, the bracket example writes
+     `"Buy"`/`"Sell"`.
+
+     The refusal table in `test_preview_is_not_execution.py` is now pinned to each row's own
+     **message**. Every fixture in it omitted `side`, so when the rule arrived all eight rows
+     kept passing while raising for the *new* reason — eight tests measuring one thing, and a
+     table that had silently stopped testing what it said.
+
+  3. **`place_bracket_and_confirm` was missing from five more documents.** The guard written
+     for the README omission read exactly two files, so the same defect was live in
+     `CLAUDE.md` (whose "Gated endpoints" table listed six rows and whose opening sentence
+     named four writes), `docs/security-architecture.md` (the trust-boundary table, the
+     diagram and § 6.1), `docs/api-reference.md`, `docs/order-management-examples.md` and
+     `docs/windows-setup.md`. A reader of any of them concludes the bracket path is ungated.
+     `test_every_document_that_enumerates_the_gated_writes_enumerates_them_ALL` now derives
+     the list from `GATED_OWNERS` and checks **every tracked markdown file** that names most
+     of them, with two reasoned exclusions: `CHANGELOG.md`, whose dated entries are correct
+     history, and `docs/audits/`, evidence committed as run. The fifth document was found by
+     the guard, not by the review. Its first threshold was calibrated against the wrong set —
+     the seven names a reader thinks of, rather than the five `GATED_OWNERS` holds — and
+     inspected nothing at all; its own vacuity check caught that, which is why that test
+     exists. `docs/api-reference.md` also gained the bracket seam and lost a paragraph still
+     asserting that `modify_order` "returns a single dict (not a list)", the belief the
+     modify-loop fix removed from the code and not from the docs. The new usage example in
+     `docs/order-management-examples.md` is executed verbatim by a probe against the real
+     dialog logic, not just written.
+
+  4. **Three of `confirm_bracket_dialog`'s documented refusals had an escape clause its twin
+     does not.** `and parent.get("quantity") is not None` meant a parent stating no quantity
+     turned H1 **off** rather than making the pair unverifiable — a child of 5, or of
+     `"abc"`, was accepted — which is exactly what `_bracket_tickets` forbids in words: "a
+     quantity that cannot be compared is refused rather than assumed compliant, so the rule
+     cannot be walked through by a malformed value". And `if parent_coid and link !=
+     parent_coid` meant a parent carrying no `cOID` silently disabled the dialog's own
+     "a child linked to some other order" refusal, which its docstring lists. A child
+     carrying its own `cOID`, which IBKR forbids and the ticket builder refuses, was accepted
+     too. All are unreachable through `place_bracket_and_confirm` — and that is the point,
+     since the only reason to repeat these rules in the dialog is that it is public API
+     callable without the ticket builder, which is the one path on which they did not hold.
+
+  5. **A futures bracket printed its two legs in different units.** `secType` and
+     `manualIndicator` reach `is_future` but were not in `_CONTRACT_DISPLAY_KEYS`, so a
+     parent recognised as a future only through them passed no class to its child: measured,
+     one ES bracket rendered `Parent — Price 7,300.00` beside
+     `Profit taker — Price 7,400.00 USD` — index points labelled as dollars on the leg the
+     human has never seen before, and 7,400 points is 370,000 USD. That is the divergence the
+     inheritance list exists to prevent, and whose comment says a `USD` suffix on the child's
+     price "was wrong, and the measurement above is what replaced it" — a measurement taken
+     with `_multiplier` set, before these two doors existed. Inherited through a separate
+     `_CONTRACT_CLASS_KEYS`, because unlike the other four these are real IBKR body fields
+     rather than display keys: they are merged into a local copy used only to build rows, and
+     a test verified discriminating by `child.update(inherited)` holds that Gate 2 never
+     edits the tickets it is shown. Not reachable from claudia_ui, which always sets a
+     multiplier key — the same caveat as the two Gate 2 defects fixed above it.
+
+  6. **Two new readers narrowed IBKR data with `isinstance(..., dict)`.** A typed
+     `IBKRResponse` is a `collections.abc.Mapping` and is **not** a `dict`; CLAUDE.md records
+     that pattern turning 21 futures rows into 0 and instructs callers to widen. The bracket
+     seam added four such filters while its own new preview reader used `Mapping` — two
+     conventions in one release. Both failures are silent: `pair_bracket_response` is public
+     API and would discard every row a caller supplied, then report the whole bracket
+     missing; `_cancel_dialog_details` returns None the day `get_order_status` is typed, as
+     29 of 74 methods already are, degrading every Gate 2 cancel dialog to "Order detail: NOT
+     AVAILABLE" with the unit suite green, because its mocks are dicts. Both now take
+     `Mapping`, and `BracketPairing` declares `Mapping` fields in the release that first
+     publishes the type, since widening later is what breaks a consumer. The two filters
+     reading `_post` output directly keep `dict` and say why: that data is JSON decoded a
+     moment earlier and can never be a model.
+
+  7. **`reply_order` was the one caller of `/iserver/reply/{id}` not normalising through
+     `_as_reply_list`** — the helper named for that endpoint in its own docstring. It did
+     `data if isinstance(data, list) else []`, discarding whatever IBKR said in a non-list
+     body, which is the discard `place_order` was fixed for on 2026-09-16. Stated plainly:
+     IBKR publishes only the array shape here, so unlike the place-order case there is no
+     documented object to point at. This closes a difference between three call sites of one
+     endpoint; its worst case is that it never fires.
+
+  **The fresh-eye review of these fixes found four more, three of them in the fix for item 2
+  itself.** It built a parity harness driving `_bracket_tickets` and `confirm_bracket_dialog`
+  with malformed brackets, to falsify rather than restate the claim that the two now hold the
+  same rules — the claim being made two items above this one.
+
+  - The dialog normalised the parent link with `str(...).strip()` where the builder compares
+    raw, so `parentId=" C-1 "` against `cOID="C-1"`, and a str `"1"` against an int `1`, were
+    refused before Gate 1 and **approved at Gate 2**. That is the standalone path, which is
+    the only reason the dialog repeats these rules; and IBKR matches `parentId` to `cOID`
+    literally, so a difference that survives to the wire is a child that will not attach.
+    Gate 2 must not be more permissive than the check before Gate 1.
+  - The builder accepted a whitespace-only `cOID` on a bare truthiness test, which the dialog
+    refuses — so the builder passed a pair the dialog would reject, and `get_bracket_preview`,
+    having no dialog, priced it.
+  - **`NaN` walked through H1 on both paths at once.** `float("nan")` parses, so it arrived as
+    a number, and `nan > 1.0` is `False`: the one quantity that literally cannot be compared
+    defeated the rule whose comment — added in the same diff — says an uncomparable quantity
+    is refused rather than assumed compliant. Both docstrings claimed it; neither did it.
+    Non-finite quantities are now refused on both paths.
+
+  The parity table is a test now, and each row asserts the **right** verdict rather than only
+  that the two agree: a parity check on its own agrees perfectly about a rule both sides get
+  wrong, which is exactly what NaN was. That is the general lesson of this pass — a control
+  comparing two implementations cannot see a shared blind spot, so it needs an absolute
+  assertion beside it.
+
+  Also recorded rather than left to be rediscovered: `GET /iserver/account/order/status/{id}`
+  returns `limit_price` and `stop_price`, **neither of which IBKR documents** — measured live
+  2026-09-04 on three resting orders, evidence that until now lived only in claudia_ui.
+  `_cancel_dialog_details` depends on both, and a contributor checking the docs would have
+  found nothing and removed the read. Now in `docs/ibkr-api-behaviors-reference.md`, in the
+  method's docstring, and as an allow-list in the reader control whose entries are each
+  required to carry a measurement.
+
+  `_cancel_dialog_details` also joins `tests/test_readers_against_live_shapes.py`, whose
+  `READERS` list held one row while this release added a reader indexing fourteen keys. Its
+  endpoint **cannot** be live-captured — the capture script is read-only and the response
+  needs a resting order — so the shape is pinned from IBKR's published example, the same
+  fallback already used for `modify_order`, and labelled as the weaker evidence it is. The
+  control was watched failing twice: against a reader indexing `limitPrice`, and against the
+  `isinstance(..., dict)` of item 6, which it catches independently.
+
 ### Added
 - **Why `Inactive` is not a terminal status, written down with its source.** The
   `_TERMINAL_STATUSES` comment explained `Filled`/`Cancelled` and was silent on `Inactive`,

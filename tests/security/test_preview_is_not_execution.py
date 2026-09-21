@@ -55,7 +55,11 @@ def test_the_whatif_endpoint_is_built_in_exactly_one_place():
 
 def test_get_bracket_preview_posts_only_to_whatif(client):
     with patch.object(client, "_post", return_value={}) as post:
-        client.get_bracket_preview("U1234567", {"cOID": "REF", "conid": 1}, [{"parentId": "REF", "conid": 1}])
+        client.get_bracket_preview(
+            "U1234567",
+            {"cOID": "REF", "conid": 1, "side": "BUY"},
+            [{"parentId": "REF", "conid": 1, "side": "SELL"}],
+        )
     assert post.call_count == 1
     assert post.call_args.args[0].endswith("/orders/whatif")
 
@@ -69,7 +73,11 @@ def test_get_bracket_preview_runs_no_gate(client):
         patch("ibkr_core_mcp.client.require_touch_id") as touch,
         patch("ibkr_core_mcp.client.confirm_order_dialog") as dialog,
     ):
-        client.get_bracket_preview("U1234567", {"cOID": "REF", "conid": 1}, [{"parentId": "REF", "conid": 1}])
+        client.get_bracket_preview(
+            "U1234567",
+            {"cOID": "REF", "conid": 1, "side": "BUY"},
+            [{"parentId": "REF", "conid": 1, "side": "SELL"}],
+        )
     touch.assert_not_called()
     dialog.assert_not_called()
 
@@ -78,39 +86,52 @@ def test_bracket_preview_sends_both_legs_and_strips_display_keys(client):
     with patch.object(client, "_post", return_value={}) as post:
         client.get_bracket_preview(
             "U1234567",
-            {"cOID": "REF", "conid": 1, "_companyName": "ACME"},
-            [{"parentId": "REF", "conid": 1, "_multiplier": 50}],
+            {"cOID": "REF", "conid": 1, "side": "BUY", "_companyName": "ACME"},
+            [{"parentId": "REF", "conid": 1, "side": "SELL", "_multiplier": 50}],
         )
     orders = post.call_args.args[1]["orders"]
     assert len(orders) == 2, "both legs must reach the preview, or it prices the wrong thing"
     assert not [k for t in orders for k in t if k.startswith("_")], "display-only keys must be stripped"
 
 
+_BUY = {"side": "BUY"}
+_SELL = {"side": "SELL"}
+
+
 @pytest.mark.parametrize(
-    "parent, children, why",
+    "parent, children, expected",
     [
-        ({"conid": 1}, [{"parentId": "REF"}], "no cOID on the parent"),
-        ({"cOID": "REF"}, [], "no children"),
-        ({"cOID": "REF"}, [{"parentId": "OTHER"}], "child points at a different parent"),
-        ({"cOID": "REF"}, [{"parentId": "REF", "cOID": "OWN"}], "child carries its own cOID"),
+        ({"conid": 1} | _BUY, [{"parentId": "REF"} | _SELL], "parent cOID"),
+        ({"cOID": "REF"} | _BUY, [], "at least one child"),
+        ({"cOID": "REF"} | _BUY, [{"parentId": "OTHER"} | _SELL], "parentId == the parent's cOID"),
+        ({"cOID": "REF"} | _BUY, [{"parentId": "REF", "cOID": "OWN"} | _SELL], "no cOID"),
         (
-            {"cOID": "REF", "conid": 1},
-            [{"parentId": "REF", "conid": 2}],
-            "child is on a different contract — the whatif is blind to this (gap #36, Phase 0)",
+            {"cOID": "REF", "conid": 1} | _BUY,
+            [{"parentId": "REF", "conid": 2} | _SELL],
+            "same contract as the parent",
         ),
+        ({"cOID": "REF", "conid": 1} | _BUY, [{"parentId": "REF", "conid": 1} | _BUY], "opposite side"),
+        ({"cOID": "REF", "conid": 1}, [{"parentId": "REF", "conid": 1} | _SELL], "parent must carry a side"),
+        ({"cOID": "REF", "conid": 1} | _BUY, [{"parentId": "REF", "conid": 1}], "opposite side"),
     ],
 )
-def test_bracket_tickets_refuses_an_unlinked_pair(client, parent, children, why):
+def test_bracket_tickets_refuses_an_unlinked_pair(client, parent, children, expected):
     """An unlinked "bracket" is two independent live orders - the exact outcome the user rule
-    forbids, because a standalone opposite-side order can open the wrong position."""
-    with pytest.raises(ValueError):
+    forbids, because a standalone opposite-side order can open the wrong position.
+
+    Each row is pinned to the MESSAGE it is about, not merely to `ValueError`. Every fixture
+    here once omitted `side`; when the side rules joined this helper on 2026-09-21 each row
+    would have kept passing while raising for the new reason instead of its own — a table of
+    eight tests all measuring one thing. Matching the message is what stops that recurring.
+    """
+    with pytest.raises(ValueError, match=expected):
         client._bracket_tickets(parent, children)
 
 
 def test_bracket_tickets_accepts_a_child_with_no_conid_of_its_own(client):
     """The contract rule refuses a STATED mismatch, never an absence: a child's conid is
     derived from the parent, so a ticket without one is the normal case."""
-    tickets = client._bracket_tickets({"cOID": "REF", "conid": 1}, [{"parentId": "REF"}])
+    tickets = client._bracket_tickets({"cOID": "REF", "conid": 1, "side": "BUY"}, [{"parentId": "REF", "side": "SELL"}])
     assert len(tickets) == 2
 
 

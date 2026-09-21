@@ -163,3 +163,29 @@ What this package should do about it is be honest: a `403` here means this, not 
 account lacks permission", and the alert write tools should say so rather than surfacing
 an opaque gateway error.
 
+
+## Order status carries prices IBKR does not document
+
+`GET /iserver/account/order/status/{orderId}` returns `limit_price` on a limit order and
+`stop_price` on a stop. **Neither appears in IBKR's documentation** — not in the field list,
+not in the example response object, which for prices carries only `average_price` ("the
+average price of execution") and `exit_strategy_display_price`.
+
+They are real. Measured live 2026-09-04 on three resting orders: `limit_price` `'150.00'`
+and `'7660.00'` on limit orders, `stop_price` `'7732.00'` on a stop with `limit_price` set
+to the empty string. A STOP_LIMIT sets both. The measurement and the readback logic built on
+it live in claudia_ui's `order_flow._price_readback_fields`; this entry exists because a
+contributor reading only IBKR's page would find nothing and conclude the read was a mistake.
+
+Two consumers in this package depend on it:
+
+- `_cancel_dialog_details` reads `limit_price or stop_price` into the Gate 2 cancel dialog's
+  `price` row. The empty string on a stop is why `or` is correct rather than a `None` check.
+- `tests/test_readers_against_live_shapes.py` pins the endpoint's shape from IBKR's published
+  example and allow-lists exactly these two keys, each entry carrying its measurement. A key
+  added to that allow-list without one fails `test_every_allow_listed_key_carries_its_evidence`.
+
+Verified 2026-09-21: the page was re-fetched (5,977 B, with a fabricated control URL in the
+same batch returning 440 B `# Page Not Found`) and still documents neither field.
+
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md

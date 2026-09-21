@@ -131,7 +131,7 @@ ClaudIA is designed to restore itself automatically on any machine. All persiste
 
 ## Touch ID Gate (Blocker)
 
-`ibkr_core_mcp` requires **fingerprint authentication** before any order reaches IBKR (`place_order`, `modify_order`, `cancel_order`, `reply_order`). On macOS this uses Apple's `LocalAuthentication` framework.
+`ibkr_core_mcp` requires **fingerprint authentication** before any order reaches IBKR (`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`). On macOS this uses Apple's `LocalAuthentication` framework.
 
 On Windows, `LocalAuthentication` is unavailable. Calling any order write method raises:
 

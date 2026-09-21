@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import html
 import json as _json
+import math
 import re
 import subprocess
 import sys
@@ -69,6 +70,32 @@ def _contract_size_suffix(order: dict[str, Any], multiplier: float | None) -> st
     return ""
 
 
+def _asset_class(sec_type: Any) -> str:
+    """The asset class out of IBKR's `secType`, which carries the conid in front of it.
+
+    IBKR's place-order body spells this field `"265598@STK"` (their Python example) and
+    `"265598:STK"` (their JSON example) — the conid, a separator, then the class. The
+    `api-reference` field table calls it "IB asset class identifier" and shows no format,
+    so those two examples are the only statement IBKR makes about it.
+
+    Comparing the whole string to `FUT`/`FOP` therefore matched no documented body at all:
+    an ES order carrying `secType: "649180671:FUT"` was not recognised as a future and
+    printed `Total (est.): 7,300.00` for a contract standing for 365,000 (review
+    2026-09-21). A bare `"FUT"` is still accepted — a caller may send one, and every
+    spelling names one asset class.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
+            https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+
+    Args:
+        sec_type: The body's `secType`, in any of IBKR's spellings.
+
+    Returns:
+        The asset class in upper case, or `""` when the field is absent or empty.
+    """
+    return re.split(r"[:@]", str(sec_type or "").strip().upper())[-1]
+
+
 def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     """The typed rows every Gate 2 dialog shows for an order (place, modify, cancel).
 
@@ -115,13 +142,15 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # blind to a futures order whose caller simply did not set them — reproduced live
     # 2026-09-21, printing `Total (est.): 7,300.00` for one ES contract worth 365,000.
     # `manualIndicator` is CME Rule 536-B and is FUT/FOP-only; `secType` is IBKR's own
-    # field. Either establishes the instrument class without the caller volunteering a
-    # display key. A body carrying NONE of the four is still unrecognised — narrowed,
-    # not closed, and said so rather than implied.
+    # field, read through `_asset_class` because IBKR spells it `"649180671:FUT"` rather
+    # than `"FUT"` — matching the whole string recognised no documented body at all
+    # (review 2026-09-21). Either establishes the instrument class without the caller
+    # volunteering a display key. A body carrying NONE of the four is still unrecognised —
+    # narrowed, not closed, and said so rather than implied.
     is_future = (
         multiplier is not None
         or bool(order.get("_multiplier_unknown"))
-        or str(order.get("secType") or "").strip().upper() in ("FUT", "FOP")
+        or _asset_class(order.get("secType")) in ("FUT", "FOP")
         or bool(order.get("manualIndicator"))
     )
     price_ccy = "" if is_future else ccy
@@ -373,6 +402,22 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
 # contract would hide the mismatch behind the parent's own name.
 _CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", "_currency")
 
+# The other two signals `_order_rows` uses to decide an instrument's class. Unlike the four
+# above these are REAL IBKR body fields, not `_`-prefixed display keys, and they are
+# inherited for exactly the same reason: a bracket's legs are one instrument, so a leg that
+# does not inherit the class is described differently from its own parent.
+#
+# Added 2026-09-21 with the signals themselves. Without them one ES bracket rendered
+# `Parent — Price 7,300.00` beside `Profit taker — Price 7,400.00 USD` — index points
+# labelled as dollars on the leg the human has never seen before, which is the divergence
+# the list above exists to prevent and which the comment above claimed was measured not to
+# happen. That measurement was taken with `_multiplier` set, before these two doors existed.
+#
+# They are merged into a LOCAL copy used only to build display rows. Nothing here is sent:
+# `place_bracket_and_confirm` posts the tickets `_bracket_tickets` built from the caller's
+# own dicts, and `test_the_dialogs_inherited_keys_never_reach_the_wire` holds that.
+_CONTRACT_CLASS_KEYS = ("secType", "manualIndicator")
+
 _HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
 
 
@@ -404,11 +449,19 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
 
     Raises:
         HumanAuthError: The user did not confirm, or the pair is not a bracket — no child, a
-            parent with no side, a child on the parent's own side, a child carrying no
-            `parentId`, a child linked to some other order, or a child naming a different
-            contract from the parent. Each is a refusal, never a correction: order parameters
-            are immutable, and a "bracket" that fails these is a different instruction from
-            the one the human was shown.
+            parent with no side, a parent with no `cOID`, a child on the parent's own side, a
+            child carrying no `parentId`, a child linked to some other order, a child carrying
+            its own `cOID`, a child naming a different contract from the parent, or a child
+            larger than the parent (H1) including one whose quantity cannot be compared with
+            the parent's. Each is a refusal, never a correction: order parameters are
+            immutable, and a "bracket" that fails these is a different instruction from the
+            one the human was shown.
+
+            Every one of these is also refused by `client._bracket_tickets`, before Gate 1.
+            The two lists are kept identical on purpose: the only reason to repeat a rule
+            here is that this function is public API callable without that helper, and a
+            rule missing from one of the two is enforced on neither path when the other is
+            taken. Three of them had an escape clause here and not there until 2026-09-21.
 
     Sources: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md,
         https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value.md
@@ -418,8 +471,19 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
     parent_side = str(parent.get("side", "")).strip().upper()
     if not parent_side:
         raise HumanAuthError("Bracket confirmation refused: the parent carries no side")
+    # A parent with no cOID makes the link check below unevaluable, and until 2026-09-21
+    # that silently DISABLED it (`if parent_coid and ...`): a child whose `parentId` named
+    # someone else's resting order rendered as a normal bracket on the last screen before
+    # the write. Attaching to another order is worse than being standalone, not better.
+    # `_bracket_tickets` has required this since it shipped; this is the same rule on the
+    # other reachable path.
     parent_coid = str(parent.get("cOID") or "").strip()
-    inherited = {key: parent[key] for key in _CONTRACT_DISPLAY_KEYS if key in parent}
+    if not parent_coid:
+        raise HumanAuthError(
+            "Bracket confirmation refused: the parent carries no cOID, so a child's parentId "
+            "cannot be checked against it"
+        )
+    inherited = {key: parent[key] for key in (*_CONTRACT_DISPLAY_KEYS, *_CONTRACT_CLASS_KEYS) if key in parent}
 
     parent_rows = _order_rows(parent, account_id)
     details: dict[str, Any] = {
@@ -437,14 +501,28 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         child_side = str(child.get("side", "")).strip().upper()
         if not child_side or child_side == parent_side:
             raise HumanAuthError("Bracket confirmation refused: a child must be the opposite side of the parent")
-        link = str(child.get("parentId") or "").strip()
-        if not link:
+        link = child.get("parentId")
+        if link is None or not str(link).strip():
             raise HumanAuthError(
                 "Bracket confirmation refused: a child carries no parentId, so it would reach "
                 "IBKR as a standalone order and be live immediately"
             )
-        if parent_coid and link != parent_coid:
+        # Compared RAW, exactly as `_bracket_tickets` does, and deliberately not through
+        # `str(...).strip()`. IBKR links a child to its parent by matching this value to the
+        # parent's `cOID` literally, so a difference that survives to the wire is a child
+        # that will not attach. Normalising here approved two pairs the builder refused —
+        # `parentId=" C-1 "` against `cOID="C-1"`, and a str `"1"` against an int `1` — on
+        # the one path this dialog exists to cover, the standalone call (parity harness,
+        # 2026-09-21). Gate 2 must not be more permissive than the check before Gate 1.
+        if link != parent.get("cOID"):
             raise HumanAuthError("Bracket confirmation refused: a child's parentId does not name this parent")
+        # IBKR: a cOID "should not be set for the child of a bracket order". `_bracket_tickets`
+        # refuses one; this did not, so the rule held on one of two reachable paths.
+        # Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+        if child.get("cOID"):
+            raise HumanAuthError(
+                "Bracket confirmation refused: a child carries its own cOID, which IBKR forbids on a bracket child"
+            )
         # A child on the wrong instrument, refused here as well as in `client._bracket_tickets`,
         # which checks it with the other structural rules so a place is refused before Touch ID.
         # This copy is defence in depth and is not redundant: this dialog is public API and can
@@ -468,11 +546,33 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         # API and callable without `_bracket_tickets`, and it is the LAST screen before an
         # irreversible write. Only a stated violation is refused; a child carrying no quantity
         # is derived from the parent and is normal.
-        if child.get("quantity") is not None and parent.get("quantity") is not None:
+        #
+        # The parent's quantity is NOT part of that "only a stated violation" allowance. It
+        # was until 2026-09-21 — `and parent.get("quantity") is not None` — which meant a
+        # parent stating no quantity turned H1 off entirely rather than making the pair
+        # unverifiable, and a child of 5 or of "abc" sailed through. `_bracket_tickets`
+        # states the principle this broke: a quantity that cannot be compared is refused
+        # rather than assumed compliant, so the rule cannot be walked through by a
+        # malformed value. `float(None)` raises TypeError, which is the refusal.
+        child_qty, parent_qty = child.get("quantity"), parent.get("quantity")
+        if child_qty is not None:
             try:
-                oversized = float(child["quantity"]) > float(parent["quantity"])
+                if parent_qty is None:
+                    raise ValueError("the parent states no quantity to compare against")
+                child_size, parent_size = float(child_qty), float(parent_qty)
+                # NaN defeats every comparison — `nan > 1.0` is False — so it is the one
+                # quantity that literally cannot be compared, and it walked through H1 here
+                # AND in `_bracket_tickets` until 2026-09-21. Both said uncomparable values
+                # are refused; neither did it, which is why a parity check between the two
+                # would have agreed and proved nothing.
+                if not (math.isfinite(child_size) and math.isfinite(parent_size)):
+                    raise ValueError("a leg's quantity is not a finite number")
+                oversized = child_size > parent_size
             except (TypeError, ValueError):
-                raise HumanAuthError("Bracket confirmation refused: a leg's quantity is not a number") from None
+                raise HumanAuthError(
+                    "Bracket confirmation refused: a leg's quantity is missing or not a number, so the "
+                    "child cannot be shown to be no larger than the parent"
+                ) from None
             if oversized:
                 raise HumanAuthError("Bracket confirmation refused: a child is larger than the parent")
         # LMT reads as the profit taker; anything else is the protective leg. The label is

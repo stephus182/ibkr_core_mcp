@@ -324,6 +324,35 @@ def test_cancel_order_aborts_if_dialog_cancelled(client):
     mock_del.assert_not_called()
 
 
+def test_reply_order_does_not_DISCARD_a_body_that_is_not_a_list(client):
+    """All three callers of `/iserver/reply/{id}` must read its body the same way.
+
+    `_as_reply_list` is named for this endpoint — its docstring says so — and
+    `place_order_and_confirm` and `place_bracket_and_confirm` both normalise through it.
+    `reply_order`, the method whose whole job IS this endpoint, instead did
+    `data if isinstance(data, list) else []`, so any non-list body became an empty list
+    with whatever IBKR said inside it thrown away. That is the same discard `place_order`
+    was fixed for on 2026-09-16, where a documented `{"error": ...}` rejection reached the
+    caller as `[]` — indistinguishable from "nothing happened".
+
+    **Evidence level, stated rather than implied:** IBKR documents only the array shape for
+    this endpoint, so unlike the place-order case there is no published object shape to
+    point at. This closes a difference between three call sites of one endpoint; its worst
+    case is that it never fires. It cannot lose information, only keep it.
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+    """
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response({"error": "We cannot accept an order at the limit price"})
+        result = client.reply_order("abc123def456")
+    assert result == [{"error": "We cannot accept an order at the limit price"}], (
+        f"IBKR's own words were discarded: {result!r}"
+    )
+
+
 def test_reply_order_aborts_if_dialog_cancelled(client):
 
     with (
@@ -3507,6 +3536,243 @@ def test_an_unparseable_quantity_does_not_silently_pass_the_H1_check(client):
     parent, children = _bracket_pair()
     with pytest.raises(ValueError, match="quantity"):
         client._bracket_tickets(parent, [dict(children[0], quantity="two")])
+
+
+# --- The two bracket rule sets must agree, ticket by ticket ------------------------------
+# `_bracket_tickets` and `confirm_bracket_dialog` hold the same seven rules deliberately: the
+# builder so a violating bracket is refused before Gate 1 and so `get_bracket_preview`
+# inherits it, the dialog because it is public API callable without the builder. "The same
+# rules" was asserted in prose and nowhere checked, and a parity harness driving both with
+# malformed brackets found three disagreements the prose had missed.
+#
+# Parity alone is NOT sufficient and must not be the only guard here: a rule both sides get
+# wrong agrees perfectly. NaN was exactly that — `float("nan") > 1.0` is False, so an
+# uncomparable quantity walked through H1 on BOTH paths while the comment added beside it
+# said such a quantity is refused rather than assumed compliant. Hence the absolute tests
+# below as well.
+
+
+def _builder_verdict(client, parent, child):
+    try:
+        client._bracket_tickets(parent, [child])
+        return "accept"
+    except ValueError:
+        return "refuse"
+
+
+def _dialog_verdict(parent, child):
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    try:
+        with _patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"):
+            confirm_bracket_dialog(parent, [child], "U1234567")
+        return "accept"
+    except HumanAuthError:
+        return "refuse"
+
+
+_PARITY_PARENT = {"conid": 1, "side": "SELL", "quantity": 1, "cOID": "C-1", "orderType": "LMT", "price": 10}
+_PARITY_CHILD = {"conid": 1, "side": "BUY", "quantity": 1, "parentId": "C-1", "orderType": "LMT", "price": 9}
+
+_PARITY_CASES = [
+    ("a valid bracket", {}, {}, "accept"),
+    ("an oversized child", {}, {"quantity": 9}, "refuse"),
+    ("a same-side child", {}, {"side": "SELL"}, "refuse"),
+    ("a child with no side", {}, {"side": None}, "refuse"),
+    ("a parent with no side", {"side": None}, {}, "refuse"),
+    ("a child on another contract", {}, {"conid": 2}, "refuse"),
+    ("a child with its own cOID", {}, {"cOID": "OWN"}, "refuse"),
+    ("a child with no parentId", {}, {"parentId": None}, "refuse"),
+    ("a child naming another parent", {}, {"parentId": "OTHER"}, "refuse"),
+    ("an unparseable child quantity", {}, {"quantity": "two"}, "refuse"),
+    ("a parent stating no quantity", {"quantity": None}, {"quantity": 5}, "refuse"),
+    # The three the parity harness found on 2026-09-21.
+    ("a parentId padded with spaces", {}, {"parentId": " C-1 "}, "refuse"),
+    ("an int cOID against a str parentId", {"cOID": 1}, {"parentId": "1"}, "refuse"),
+    ("a whitespace-only parent cOID", {"cOID": "   "}, {"parentId": "   "}, "refuse"),
+    # Both sides got this one wrong, so parity could never have caught it.
+    ("a NaN child quantity", {}, {"quantity": float("nan")}, "refuse"),
+    ("a NaN child quantity as text", {}, {"quantity": "nan"}, "refuse"),
+]
+
+
+@pytest.mark.parametrize(
+    ("why", "parent_over", "child_over", "expected"), _PARITY_CASES, ids=[c[0] for c in _PARITY_CASES]
+)
+def test_the_two_bracket_rule_sets_reach_the_SAME_verdict(client, why, parent_over, child_over, expected):
+    """Both the pre-Gate-1 builder and the Gate 2 dialog, on one ticket pair, must agree —
+    and must agree on the RIGHT answer, which is why `expected` is asserted and not merely
+    that the two match."""
+    parent = {k: v for k, v in (_PARITY_PARENT | parent_over).items() if v is not None}
+    child = {k: v for k, v in (_PARITY_CHILD | child_over).items() if v is not None}
+    builder = _builder_verdict(client, parent, child)
+    dialog = _dialog_verdict(parent, child)
+    assert builder == dialog, f"_bracket_tickets says {builder}, confirm_bracket_dialog says {dialog}, for {why}"
+    assert builder == expected, f"both paths {builder} {why}; expected {expected}"
+
+
+def test_a_NaN_quantity_cannot_walk_through_H1_on_either_path(client):
+    """NaN defeats every comparison — `float("nan") > 1.0` is False — so it is the purest
+    case of "a quantity that cannot be compared", which both docstrings say is refused
+    rather than assumed compliant. Both said it and neither did it."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = dict(_PARITY_PARENT)
+    child = dict(_PARITY_CHILD, quantity=float("nan"))
+    with pytest.raises(ValueError, match="number"):
+        client._bracket_tickets(parent, [child])
+    with (
+        _patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="number"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+# --- A typed IBKR row is a Mapping and is NOT a dict -------------------------------------
+# CLAUDE.md states the rule and the incident behind it: "`isinstance(row, dict)` filters
+# turned 21 futures rows into 0", and "when you type a method: grep its callers for
+# `isinstance(..., dict)` and widen them to `dict | IBKRResponse` (or `Mapping`, which both
+# are)". The 2.1.0 bracket seam added four new `isinstance(..., dict)` filters while its own
+# new preview reader used `Mapping` — two conventions in one release.
+#
+# Two of the four read data that is raw JSON from `_post` by construction and can never be a
+# model; those keep `dict` and say why in a comment. The two below read data that can be a
+# model TODAY if a caller supplies one, or TOMORROW when `get_order_status` is typed — 29 of
+# 74 client methods already are. Both fail closed and SILENTLY: the cancel dialog degrades to
+# "NOT AVAILABLE", the pairing reports every leg missing. Neither raises.
+
+
+def test_pair_bracket_response_pairs_TYPED_rows_not_only_raw_dicts(client):
+    """`pair_bracket_response` is public API. A caller holding typed rows — from
+    `get_live_orders`, say — must not have every entry silently discarded."""
+    from ibkr_core_mcp.client import pair_bracket_response
+    from ibkr_core_mcp.models import IBKRResponse
+
+    parent_entry = IBKRResponse.model_validate(
+        {"order_id": "900", "order_status": "Submitted", "local_order_id": "CLAUDIA-1"}
+    )
+    child_entry = IBKRResponse.model_validate(
+        {"order_id": "901", "order_status": "PreSubmitted", "parent_order_id": "900"}
+    )
+    paired = pair_bracket_response([_PARENT_TICKET, _CHILD_TICKET], [child_entry, parent_entry])
+    assert paired.ok, paired.problems
+    assert paired.parent is parent_entry
+    assert paired.children == (child_entry,)
+
+
+def test_cancel_dialog_detail_survives_a_TYPED_order_status(client):
+    """`_cancel_dialog_details` narrows `get_order_status`'s return with
+    `isinstance(status, dict)`. That method returns a raw dict today, so nothing is broken
+    — and the day it is typed, like the 29 already are, every cancel dialog silently loses
+    its order detail and shows "NOT AVAILABLE" instead. The unit suite would stay green
+    throughout, because its mocks are dicts. This is the test that would not be."""
+    from ibkr_core_mcp.models import IBKRResponse
+
+    status = IBKRResponse.model_validate(
+        {
+            "symbol": "ES",
+            "side": "S",
+            "total_size": "1.0",
+            "order_type": "LIMIT",
+            "tif": "GTC",
+            "company_name": "E-mini S&P 500",
+            "currency": "USD",
+            "limit_price": "7725.00",
+            "sec_type": "FUT",
+            "order_status": "Submitted",
+            "order_description_with_contract": "Sell 1 ES Dec18'26 Limit 7725.00, GTC",
+        }
+    )
+    with _patch.object(client, "get_order_status", return_value=status):
+        details = client._cancel_dialog_details("9999999999")
+    assert details is not None, "a typed status silently produced NO dialog detail at all"
+    assert details["ticker"] == "ES"
+    assert details["side"] == "SELL"
+    assert details["price"] == "7725.00"
+    assert "Submitted" in details["_current_description"]
+
+
+# --- The opposite-side rule, enforced with the other structural rules ---------------------
+# Found 2026-09-21 by asking which of `confirm_bracket_dialog`'s refusals `_bracket_tickets`
+# does NOT repeat. The contract rule and H1 were both moved here precisely so a violating
+# bracket is refused BEFORE Touch ID and so `get_bracket_preview` inherits the check; the
+# side rules — the third and fourth members of the same class — were left behind in the
+# dialog. Measured before the fix: a BUY parent + BUY child previewed clean and POSTed both
+# tickets to the whatif, and on the place path Touch ID was taken and only THEN was the pair
+# refused. A child on the parent's own side is the most direct form of the harm H1 exists to
+# prevent: released, it OPENS exposure instead of closing it.
+#
+# `side` is required, not merely checked-when-stated, and that is not a departure from the
+# `conid`/`quantity` convention but a consequence of it: those two are legitimately DERIVED
+# from the parent, so an absence is normal. A child's side is the parent's INVERSE, which
+# IBKR cannot derive and does not document deriving, and a parent's side is derivable from
+# nothing at all. An absent side is a malformed ticket, not an inherited one.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+
+
+def test_place_bracket_refuses_a_child_on_the_PARENTS_OWN_SIDE_before_touch_id(client):
+    """A same-side child does not close the position — released, it doubles it. Refused with
+    the other structural rules, so the human is never fingerprinted for it."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as mock_dlg,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="opposite side"),
+    ):
+        client.place_bracket_and_confirm("U1234567", parent, [dict(children[0], side=parent["side"])])
+    mock_tid.assert_not_called()
+    mock_dlg.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_bracket_preview_refuses_a_same_side_child_too(client):
+    """The preview inherits the rule, as it does for the contract and for H1 — and the whatif
+    would have priced it happily, being blind to the child (measured 2026-09-20)."""
+    parent, children = _bracket_pair()
+    with (
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="opposite side"),
+    ):
+        client.get_bracket_preview("U1234567", parent, [dict(children[0], side=parent["side"])])
+    mock_post.assert_not_called()
+
+
+def test_place_bracket_refuses_a_parent_carrying_NO_side_before_touch_id(client):
+    """Without the parent's side the opposite-side rule cannot be evaluated at all, so the
+    pair is unverifiable rather than valid."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="side"),
+    ):
+        client.place_bracket_and_confirm("U1234567", {k: v for k, v in parent.items() if k != "side"}, children)
+    mock_tid.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_bracket_tickets_refuses_a_child_carrying_NO_side(client):
+    """Unlike `conid` and `quantity`, a side is not derived from the parent — it is the
+    parent's inverse, which nothing downstream infers. An absence is a malformed ticket."""
+    parent, children = _bracket_pair()
+    with pytest.raises(ValueError, match="side"):
+        client._bracket_tickets(parent, [{k: v for k, v in children[0].items() if k != "side"}])
+
+
+def test_bracket_tickets_ACCEPTS_the_normal_opposite_side_pair_in_IBKRS_OWN_CASING(client):
+    """The discriminating half. IBKR's own bracket example writes `"side": "Buy"` and
+    `"Sell"` in mixed case, so a case-sensitive comparison would refuse every bracket built
+    from the documented body.
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+    """
+    parent, children = _bracket_pair()
+    tickets = client._bracket_tickets(
+        dict(parent, side="Buy"),
+        [dict(children[0], side="Sell")],
+    )
+    assert [t["side"] for t in tickets] == ["Buy", "Sell"], "the casing the caller sent must reach IBKR unchanged"
 
 
 # --- pair_bracket_response: which entry belongs to which ticket ---------------------------

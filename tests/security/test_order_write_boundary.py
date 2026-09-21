@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import re
+import subprocess
 from typing import Any
 
 import pytest
@@ -524,3 +525,89 @@ def test_every_public_gated_write_is_named_in_the_README_and_SECURITY_docs():
         text = (root / doc).read_text()
         missing = sorted(name for name in public if name not in text)
         assert not missing, f"{doc} never names these gated order writes: {missing}"
+
+
+# A document that enumerates the gated writes and omits one tells the reader that write is
+# UNGATED. That happened on 2026-09-21 with `place_bracket_and_confirm` and README, and the
+# guard written in response read exactly two files — so the same omission survived in FIVE
+# more documents, including CLAUDE.md's own "Gated endpoints" table and the trust-boundary
+# map in docs/security-architecture.md. A control scoped to the instance is not a control
+# for the class. This is the class, and the fifth document (`docs/windows-setup.md`, whose
+# fingerprint paragraph lists four of the five) was found by this guard rather than by the
+# review that prompted it.
+#
+# "Enumerates" is a measured threshold, not a guess. Against the five PUBLIC members of
+# `GATED_OWNERS`, the living documents split cleanly: seven name four or five of them and
+# are genuinely listing the gated writes, while the two that mention one or two in passing
+# (`docs/test-coverage.md`, `docs/ibkr-api-behaviors-reference.md`) name three and omit
+# `place_order` or `modify_order`, which no real enumeration would. Hence four.
+#
+# The first version of this guard used a threshold of five, calibrated by hand against the
+# wrong set — the seven names a reader thinks of, rather than the five `GATED_OWNERS`
+# actually holds (`place_order_and_confirm` and `modify_order_and_confirm` are not in it;
+# they delegate rather than build the URL). At five nothing was inspected at all and the
+# guard passed over an empty set. `test_the_enumeration_guard_actually_INSPECTS_some_documents`
+# is what caught that, which is the whole reason it exists.
+_ENUMERATION_THRESHOLD = 4
+
+# Two exclusions, both principled rather than convenient.
+_NOT_AN_ENUMERATION = {
+    # Dated entries describing what was true when written. An entry from 2026-09-16 naming
+    # the five writes that existed then is correct, and editing it would falsify the record
+    # — the same reason CLAUDE.md gives for leaving cpapi-v1 URLs in audit artifacts.
+    "CHANGELOG.md",
+}
+_NOT_AN_ENUMERATION_DIRS = (
+    # Evidence artifacts, committed as run and not maintained.
+    "docs/audits/",
+)
+
+
+def _living_markdown_naming_gated_writes(root: pathlib.Path) -> dict[str, list[str]]:
+    """Tracked markdown that enumerates the public gated writes → the ones it omits."""
+    public = sorted(name for name in GATED_OWNERS if not name.startswith("_"))
+    listed = subprocess.run(
+        ["git", "ls-files", "*.md"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
+    out: dict[str, list[str]] = {}
+    for rel in listed:
+        if rel in _NOT_AN_ENUMERATION or rel.startswith(_NOT_AN_ENUMERATION_DIRS):
+            continue
+        text = (root / rel).read_text()
+        # Word boundaries: a bare `in` counts `place_order` as present in any document that
+        # only ever says `place_order_and_confirm`, which inflates the count of documents
+        # that are not enumerating anything.
+        present = [name for name in public if re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", text)]
+        if len(present) >= _ENUMERATION_THRESHOLD:
+            out[rel] = [name for name in public if name not in present]
+    return out
+
+
+def test_every_document_that_enumerates_the_gated_writes_enumerates_them_ALL():
+    """The class-level version of the README omission."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    incomplete = {doc: missing for doc, missing in _living_markdown_naming_gated_writes(root).items() if missing}
+    assert not incomplete, (
+        "these documents list the Touch-ID-gated order writes but omit one, which reads to a "
+        f"reader as 'that method is ungated': {incomplete}"
+    )
+
+
+def test_the_enumeration_guard_actually_INSPECTS_some_documents():
+    """The vacuity check. If the threshold, the exclusions or the `git ls-files` call ever
+    stop matching anything, the test above passes over an empty set and guards nothing —
+    which is how a control spends the attention that would have noticed the gap. The four
+    documents named here are the ones the 2026-09-21 omission was found in, plus the two the
+    original guard covered."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    inspected = set(_living_markdown_naming_gated_writes(root))
+    for required in (
+        "README.md",
+        "SECURITY.md",
+        "CLAUDE.md",
+        "docs/security-architecture.md",
+        "docs/api-reference.md",
+        "docs/order-management-examples.md",
+        "docs/windows-setup.md",
+    ):
+        assert required in inspected, f"{required} is no longer inspected by the enumeration guard"

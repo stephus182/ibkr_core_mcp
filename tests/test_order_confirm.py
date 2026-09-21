@@ -1506,6 +1506,122 @@ def test_bracket_dialog_never_overrides_a_display_key_the_child_carries():
     assert d["Profit taker — Symbol"] == "ES — ITS OWN LABEL"
 
 
+# The two futures signals added on 2026-09-21 — `secType` and `manualIndicator` — are read
+# by `_order_rows` but were not inherited by a bracket child, so one ES bracket rendered:
+#
+#   Parent — Price         7,300.00        (recognised as a future: no currency on points)
+#   Profit taker — Price   7,400.00 USD    (not recognised: index points labelled dollars)
+#
+# which is the divergence `_CONTRACT_DISPLAY_KEYS` exists to prevent, and which its own
+# comment says was measured NOT to happen — a measurement taken with `_multiplier` set,
+# before the two new doors existed. 7,400 points is 370,000 USD, not 7,400.
+
+
+@pytest.mark.parametrize("signal", [{"manualIndicator": True}, {"secType": "649180671:FUT"}])
+def test_bracket_dialog_legs_agree_on_the_instrument_class_however_it_was_declared(signal):
+    """Both legs of one futures bracket must price in the same units. A child inherits the
+    parent's instrument class whichever of the four signals established it."""
+    parent = {
+        "cOID": "C-1",
+        "conid": 1,
+        "ticker": "ES",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7300.0,
+        "_currency": "USD",
+        **signal,
+    }
+    child = {
+        "parentId": "C-1",
+        "conid": 1,
+        "ticker": "ES",
+        "side": "SELL",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7400.0,
+    }
+    d = _bracket_details(parent, [child])
+    assert "USD" not in d["Parent — Price"], d["Parent — Price"]
+    assert "USD" not in d["Profit taker — Price"], (
+        f"index points labelled as currency on the leg the human has never seen: {d['Profit taker — Price']!r}"
+    )
+
+
+def test_bracket_dialog_still_shows_the_currency_on_BOTH_legs_of_an_equity_bracket():
+    """The discriminating half. Inheriting the instrument class must not suppress the
+    currency for a stock, whose price really is quoted in money — a blanket change would
+    strip `USD` from every equity bracket."""
+    parent = {
+        "cOID": "C-1",
+        "conid": 265598,
+        "ticker": "AAPL",
+        "side": "BUY",
+        "quantity": 10,
+        "orderType": "LMT",
+        "price": 150.0,
+        "secType": "265598:STK",
+        "_currency": "USD",
+    }
+    child = {
+        "parentId": "C-1",
+        "conid": 265598,
+        "ticker": "AAPL",
+        "side": "SELL",
+        "quantity": 10,
+        "orderType": "LMT",
+        "price": 160.0,
+    }
+    d = _bracket_details(parent, [child])
+    assert "USD" in d["Parent — Price"], d["Parent — Price"]
+    assert "USD" in d["Profit taker — Price"], d["Profit taker — Price"]
+
+
+def test_bracket_dialog_does_not_MUTATE_the_tickets_it_is_shown():
+    """The inheritance must stay inside the dialog's own display copy.
+
+    Two of the inherited keys — `secType` and `manualIndicator` — are REAL IBKR body
+    fields, not `_`-prefixed display keys, so writing them onto the caller's child dict
+    would add fields to a ticket the caller never declared. Gate 2 reads the order; it does
+    not edit it.
+
+    This is deliberately a test of the DIALOG and not of `place_bracket_and_confirm`: that
+    method builds its ticket array before the dialog runs, so no change here could reach
+    the wire through it, and a test written against it would be unable to fail. Verified
+    discriminating by replacing the merged copy with `child.update(inherited)`, which fails
+    on the `secType` assertion below.
+    """
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {
+        "cOID": "C-1",
+        "conid": 1,
+        "ticker": "ES",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7300.0,
+        "secType": "649180671:FUT",
+        "manualIndicator": True,
+        "_currency": "USD",
+        "_companyName": "ESZ6",
+    }
+    child = {
+        "parentId": "C-1",
+        "conid": 1,
+        "ticker": "ES",
+        "side": "SELL",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7400.0,
+    }
+    parent_before, child_before = dict(parent), dict(child)
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    assert child == child_before, f"Gate 2 edited the child ticket: {child!r}"
+    assert parent == parent_before, f"Gate 2 edited the parent ticket: {parent!r}"
+
+
 def test_bracket_dialog_formats_every_value_through_the_one_row_builder():
     """Review item 8 — one formatter, not two.
 
@@ -1646,8 +1762,25 @@ def test_a_futures_order_with_manual_indicator_never_prints_price_times_quantity
     assert "multiplier unknown" in total
 
 
-def test_a_futures_order_declared_by_sec_type_never_prints_price_times_quantity():
-    """The same guarantee through the documented `secType` field rather than 536-B."""
+# IBKR's place-order body spells `secType` with the CONID IN FRONT of the asset class —
+# `"265598@STK"` in its Python example and `"265598:STK"` in its JSON example, the only two
+# worked examples the endpoint publishes. The `api-reference` field table calls it "IB asset
+# class identifier" and gives no format at all. A matcher comparing the WHOLE string to
+# "FUT"/"FOP" therefore recognises no body IBKR documents, and an ES order carrying
+# `secType: "649180671:FUT"` printed `Total (est.): 7,300.00` for a contract standing for
+# 365,000 — the same 50x-wrong notional the multiplier rules exist to prevent, reached
+# through the signal added to prevent it (review 2026-09-21).
+#
+# The bare form is kept: a caller may still send one, and refusing it would narrow the
+# guarantee. Every spelling is one asset class, so every spelling must classify.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
+#         https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+_FUTURES_SEC_TYPES = ["FUT", "FOP", "649180671:FUT", "649180671@FUT", "649180671:FOP", "fut"]
+
+
+@pytest.mark.parametrize("sec_type", _FUTURES_SEC_TYPES)
+def test_a_futures_order_is_recognised_however_ibkr_spells_secType(sec_type):
+    """The guarantee through `secType` rather than 536-B, for every spelling IBKR uses."""
     total = _total_row(
         {
             "ticker": "ES",
@@ -1656,11 +1789,31 @@ def test_a_futures_order_declared_by_sec_type_never_prints_price_times_quantity(
             "orderType": "LMT",
             "price": 7300.00,
             "tif": "GTC",
-            "secType": "FUT",
+            "secType": sec_type,
         }
     )
-    assert "7,300.00" not in total, total
+    assert "7,300.00" not in total, f"printed a 50x-wrong notional as fact for {sec_type!r}: {total!r}"
     assert "multiplier unknown" in total
+
+
+@pytest.mark.parametrize("sec_type", ["STK", "265598:STK", "265598@STK"])
+def test_a_stock_order_STILL_prints_its_total_however_secType_is_spelled(sec_type):
+    """The discriminating half of the parse. Widening the match must not swallow equities:
+    a stock's multiplier is 1, so price x quantity is the right number and must keep
+    printing. A parse that returned the conid, or the whole string, would break this."""
+    total = _total_row(
+        {
+            "ticker": "AAPL",
+            "side": "BUY",
+            "quantity": 10,
+            "orderType": "LMT",
+            "price": 150.00,
+            "tif": "DAY",
+            "secType": sec_type,
+            "_currency": "USD",
+        }
+    )
+    assert "1,500.00" in total, total
 
 
 def test_a_stock_order_without_multiplier_keys_STILL_prints_its_total():
@@ -1719,6 +1872,115 @@ def test_bracket_dialog_ALSO_refuses_a_child_larger_than_the_parent():
     ):
         confirm_bracket_dialog(parent, [child], "U1234567")
     mock_show.assert_not_called()
+
+
+# `confirm_bracket_dialog`'s `Raises:` lists six refusals. Three of them had an escape
+# clause its twin `_bracket_tickets` does not have, measured 2026-09-21 by driving each:
+#
+#   child 5, parent states NO quantity                   -> ACCEPTED (H1 skipped entirely)
+#   child quantity 'abc', parent states NO quantity      -> ACCEPTED
+#   parent has NO cOID, child parentId = another order   -> ACCEPTED
+#
+# All three are unreachable through `place_bracket_and_confirm`, which runs the ticket
+# builder first — and that is the point: the ONLY reason these rules are repeated in the
+# dialog is that it is public API callable without the ticket builder, which is exactly the
+# path on which they did not hold. `_bracket_tickets` states the principle the dialog broke:
+# "A quantity that cannot be compared is refused rather than assumed compliant, so the rule
+# cannot be walked through by a malformed value."
+
+
+def test_bracket_dialog_refuses_an_oversized_child_when_the_PARENT_states_no_quantity():
+    """`and parent.get("quantity") is not None` was the walk-through: a parent with no
+    quantity disabled H1 rather than making the pair unverifiable."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "orderType": "LMT", "price": 10.0}
+    child = {"parentId": "C-1", "conid": 1, "side": "BUY", "quantity": 5, "orderType": "LMT", "price": 9.0}
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="quantity"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+def test_bracket_dialog_refuses_an_UNPARSEABLE_child_quantity_even_with_no_parent_quantity():
+    """The same hole, reached with a malformed value instead of a large one. With a parent
+    quantity present this already refused; without one it did not run at all."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "orderType": "LMT", "price": 10.0}
+    child = {"parentId": "C-1", "conid": 1, "side": "BUY", "quantity": "abc", "orderType": "LMT", "price": 9.0}
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="quantity"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+def test_bracket_dialog_refuses_a_parent_carrying_NO_cOID():
+    """The docstring lists "a child linked to some other order" as a refusal, and the check
+    was `if parent_coid and link != parent_coid` — so a parent with no cOID silently disabled
+    it. A child whose `parentId` cannot be checked against this parent may be attaching to
+    someone else's resting order, which is worse than being standalone, and the dialog is the
+    last screen before the write. `_bracket_tickets` has required a parent cOID all along.
+    """
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"conid": 1, "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 10.0}
+    child = {
+        "parentId": "SOMEONE-ELSES-ORDER",
+        "conid": 1,
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 9.0,
+    }
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="cOID"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+def test_bracket_dialog_refuses_a_child_carrying_its_OWN_cOID():
+    """IBKR: a cOID "should not be set for the child of a bracket order". `_bracket_tickets`
+    refuses one; the dialog did not, so the rule held on one of two reachable paths.
+    Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+    """
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 10.0}
+    child = {
+        "parentId": "C-1",
+        "cOID": "CHILD-OWN",
+        "conid": 1,
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 9.0,
+    }
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="cOID"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+def test_bracket_dialog_still_accepts_a_child_that_carries_NO_quantity():
+    """The discriminating half of the H1 tightening. A child's quantity is DERIVED from the
+    parent, so an absent one is the normal case and must not be swept up by refusing an
+    absent PARENT quantity. Refusing this would refuse a legitimate bracket."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 10.0}
+    child = {"parentId": "C-1", "conid": 1, "side": "BUY", "orderType": "LMT", "price": 9.0}
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_called_once()
 
 
 def test_bracket_dialog_accepts_an_equal_and_a_smaller_child():
