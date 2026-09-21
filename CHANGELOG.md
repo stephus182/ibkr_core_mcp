@@ -9,6 +9,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **`pair_bracket_response()` / `BracketPairing` — which terminal entry belongs to which
+  bracket ticket.** Closes three gaps found live on 2026-09-21, any one of which a read-back
+  would otherwise have carried:
+  - **The terminal response is not index-aligned with the submission.** Two separate live sends
+    both returned `[child, parent]` for a `[parent, child]` array, so pairing `entries[i]` with
+    `tickets[i]` reads the parent's status off the child. Matching is by identifier instead: the
+    parent is the entry whose `local_order_id` echoes our `cOID`; a child is one whose
+    `parent_order_id` is the parent's `order_id`.
+  - **Nothing confirmed IBKR had ATTACHED the child.** The `cOID`↔`parentId` link was validated
+    twice *before* the POST and never checked afterwards — so an accepted-but-unattached child
+    would be a live independent opposite-side order that every existing check called success.
+  - **Nothing asserted one entry per ticket**, so a dropped leg was invisible.
+
+  It deliberately does **not** claim a per-child mapping: IBKR echoes no identifier of ours on a
+  child (the parent carries `local_order_id`; a child carries only its own `order_id` and
+  `parent_order_id`, and a `cOID` on a child is forbidden), so `children` is the *set* of child
+  entries. With one child the distinction is invisible; with two it is a fact versus a guess.
+
+  `place_bracket_and_confirm` runs it and **logs** each problem rather than raising — by that
+  point the orders exist, and throwing would destroy the only account of what happened. The
+  caller decides what to tell a human; this decides that nobody can fail to be told.
+
+### Changed
+- **A bracket child may never be larger than the parent (user hard rule, 2026-09-21), enforced
+  in `_bracket_tickets`.** A child of 2 against a parent of 1 would, once released, close 1 and
+  *open* 1 the other way — the same harm the link rule prevents, reached through quantity. It
+  sits with the link and contract rules, so a violating bracket is refused **before Gate 1**
+  rather than after the human has been fingerprinted, and `get_bracket_preview` inherits the
+  check because it validates through the same helper. Refused, never clamped: silently shrinking
+  a leg would break order-parameter immutability. A ceiling, not an equality — a *smaller* child
+  is legitimate (scaling out) and an equal one is IBKR's own definition of a profit taker. Only a
+  **stated** violation is refused, as with `conid`: a child carrying no quantity is derived from
+  the parent and is normal. A quantity that cannot be compared is refused rather than assumed
+  compliant, so the rule cannot be walked through by a malformed value.
+
 ### Fixed
 - **Gate 2 could degrade silently when a caller omitted display-only keys — in one case to
   less information, in the other to a WRONG number presented as fact.** Both were reproduced

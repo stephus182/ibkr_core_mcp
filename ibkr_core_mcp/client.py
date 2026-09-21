@@ -66,6 +66,7 @@ import logging
 import re
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -522,6 +523,107 @@ def _decode(resp: requests.Response, path: str) -> Any:
             f"IBKR gateway returned HTTP {resp.status_code} for {path} with a body that is not JSON: {preview}",
             status_code=resp.status_code,
         ) from exc
+
+
+@dataclass(frozen=True)
+class BracketPairing:
+    """Which terminal entry belongs to which bracket ticket, and what did not add up.
+
+    `place_bracket_and_confirm` returns IBKR's terminal entries in IBKR's order. **That order
+    is not the order the tickets were submitted in** — measured live 2026-09-21 on two separate
+    sends, both of which returned `[child, parent]` for a `[parent, child]` submission. Any
+    read-back pairing `entries[i]` with `tickets[i]` is therefore wrong, and this exists so no
+    caller has to rediscover that.
+
+    Matching is by identifier: the parent is the entry whose `local_order_id` echoes the
+    `cOID` we chose, and a child is an entry whose `parent_order_id` is the parent's
+    `order_id`.
+
+    **A specific submitted child cannot be mapped to a specific returned entry**, and this
+    deliberately does not pretend otherwise. IBKR echoes no identifier of ours on a child: the
+    parent carries `local_order_id`, a child carries only its own `order_id` plus
+    `parent_order_id`, and a `cOID` on a child is forbidden (`_bracket_tickets` refuses one).
+    So `children` is the SET of child entries, not a per-ticket list. With v1's single child
+    that distinction is invisible; with two it is the difference between a fact and a guess.
+
+    `problems` is empty when every ticket got an entry and every child names the parent. It is
+    prose for a human, because the caller's job is to decide what to tell one.
+    """
+
+    parent: dict[str, Any] | None
+    children: tuple[dict[str, Any], ...]
+    unmatched: tuple[dict[str, Any], ...]
+    problems: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        """Every ticket accounted for and every child linked to the parent."""
+        return not self.problems
+
+
+def pair_bracket_response(tickets: list[dict[str, Any]], entries: list[dict[str, Any]]) -> BracketPairing:
+    """Pair a bracket's terminal entries to the tickets that were sent. Pure, no network.
+
+    Closes three gaps found on 2026-09-21, all of which a read-back would otherwise carry:
+
+    * nothing confirmed IBKR had actually **attached** the child — we validated our own intent
+      twice before the POST and never checked the result, so an accepted-but-unattached child
+      would be a live independent opposite-side order that every check reported as success;
+    * nothing asserted **one entry per ticket**, so a dropped leg was invisible;
+    * the response order is not the submission order (see `BracketPairing`).
+
+    `tickets` is the list `_bracket_tickets` produced — parent first, then children.
+    """
+    if not tickets:
+        return BracketPairing(None, (), tuple(entries), ("no tickets were submitted",))
+    parent_ticket, child_tickets = tickets[0], tickets[1:]
+    coid = str(parent_ticket.get("cOID") or "")
+    rows = [e for e in entries if isinstance(e, dict)]
+
+    parent_entry = next((e for e in rows if str(e.get("local_order_id") or "") == coid), None)
+    problems: list[str] = []
+    if parent_entry is None:
+        problems.append(f"no terminal entry carries the parent's cOID ({coid!r})")
+    parent_oid = str(parent_entry.get("order_id") or "") if parent_entry else ""
+
+    children: list[dict[str, Any]] = []
+    unmatched: list[dict[str, Any]] = []
+    for entry in rows:
+        if entry is parent_entry:
+            continue
+        link = entry.get("parent_order_id")
+        if link is None:
+            unmatched.append(entry)
+        elif parent_oid and str(link) != parent_oid:
+            # The catastrophic shape: a child attached to SOMETHING ELSE.
+            problems.append(f"a child names parent_order_id {link!r}, which is not this parent ({parent_oid!r})")
+            unmatched.append(entry)
+        else:
+            children.append(entry)
+
+    if len(children) != len(child_tickets):
+        problems.append(f"{len(child_tickets)} child ticket(s) submitted, {len(children)} linked back")
+    if len(rows) != len(tickets):
+        problems.append(f"{len(tickets)} ticket(s) submitted, {len(rows)} terminal entry/entries returned")
+    for entry in unmatched:
+        # IBKR's own words, when it gave any — a refused leg says why, and that sentence is
+        # the most useful thing a human can be shown.
+        said = entry.get("text") or entry.get("order_status")
+        problems.append(f"an entry matched no ticket: {said!r}" if said else "an entry matched no ticket")
+
+    return BracketPairing(parent_entry, tuple(children), tuple(unmatched), tuple(problems))
+
+
+def _as_bracket_quantity(value: Any, leg: str) -> float:
+    """A bracket leg's quantity as a number, or refuse.
+
+    A value that cannot be compared must not pass the "child is never larger than the parent"
+    check by default — that would leave a hard rule any malformed input walks through.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"A bracket {leg}'s quantity must be a number, not {value!r}") from None
 
 
 class IBKRClient:
@@ -2483,6 +2585,14 @@ class IBKRClient:
                 if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
                     terminal.append(entry)
             if not pending:
+                # Verify before returning, so a caller that never calls pair_bracket_response
+                # still leaves a record. NOT raised: the orders are already placed by now, and
+                # swallowing IBKR's response to throw would destroy the only account of what
+                # happened. The caller decides what to tell a human; this decides that nobody
+                # can fail to be told.
+                pairing = pair_bracket_response(tickets, terminal)
+                for problem in pairing.problems:
+                    log.error("Bracket response did not pair cleanly: %s", problem)
                 return terminal
             latest: list[dict[str, Any]] = []
             for entry in pending:
@@ -2604,6 +2714,16 @@ class IBKRClient:
         tickets that are not linked are two INDEPENDENT live orders, and a standalone
         opposite-side order can open the wrong position rather than close one.
 
+        **A child is never larger than the parent** (user hard rule, 2026-09-21). A child of 2
+        against a parent of 1 would, once released, close 1 and OPEN 1 the other way — the same
+        harm the link rule prevents, reached through quantity instead. The child's quantity is
+        *derived* from the parent's in claudia_ui, but this is public API, and a rule that holds
+        only because every caller remembers is not enforced. IBKR does not document what it does
+        with an oversized child, so this refuses rather than relies on the broker.
+
+        Only a STATED violation is refused, as with `conid`: a child carrying no quantity is
+        normal. A quantity that cannot be compared is refused rather than assumed compliant.
+
         Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
         """
         ref = parent.get("cOID")
@@ -2627,6 +2747,17 @@ class IBKRClient:
                 and str(kid["conid"]) != str(parent["conid"])
             ):
                 raise ValueError("Each bracket child must name the same contract as the parent")
+            # H1 — see the docstring. A ceiling, not an equality: scaling out with a smaller
+            # child is legitimate, and equal is IBKR's own definition of a profit taker
+            # ("the same order quantity as the parent").
+            if kid.get("quantity") is not None:
+                kid_qty = _as_bracket_quantity(kid["quantity"], "child")
+                parent_qty = _as_bracket_quantity(parent.get("quantity"), "parent")
+                if kid_qty > parent_qty:
+                    raise ValueError(
+                        f"A bracket child may never be larger than the parent: "
+                        f"child {kid_qty:g} > parent {parent_qty:g}"
+                    )
         return [{k: v for k, v in t.items() if not k.startswith("_")} for t in (parent, *children)]
 
     def get_bracket_preview(

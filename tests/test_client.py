@@ -3433,3 +3433,183 @@ def test_caller_supplied_details_are_NOT_overwritten_by_a_fetch(client):
         mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
         client.cancel_order("U1234567", "9876543210", mine)
     assert seen["det"] is mine
+
+
+# --- H1: the child is NEVER larger than the parent ----------------------------------------
+# User hard rule, 2026-09-21: "Obviously your child can NEVER be larger than the parent !!
+# hard rule !!" Enforced here, with the other structural rules, so a violating bracket is
+# refused BEFORE Touch ID and `get_bracket_preview` inherits the check by construction.
+#
+# Why it belongs in code at all, when the child's quantity is DERIVED from the parent's: the
+# derivation lives in claudia_ui, and this is public API. The same reasoning as the link and
+# contract checks — a rule that only holds because every caller remembers is not enforced.
+
+
+def test_place_bracket_refuses_a_child_LARGER_than_the_parent_before_touch_id(client):
+    """The hard rule. A child of 2 against a parent of 1 would, once released, close 1 and
+    OPEN 1 in the opposite direction — the exact harm the never-split rule exists to prevent,
+    reached through quantity instead of through an unlinked ticket."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as mock_dlg,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="larger than the parent"),
+    ):
+        client.place_bracket_and_confirm("U1234567", parent, [dict(children[0], quantity=2)])
+    mock_tid.assert_not_called()
+    mock_dlg.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_bracket_preview_refuses_a_child_larger_than_the_parent_too(client):
+    """The preview runs the same validation, so a violating pair cannot be priced either —
+    and the whatif would have priced it happily, being blind to the child (measured
+    2026-09-20)."""
+    parent, children = _bracket_pair()
+    with (
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="larger than the parent"),
+    ):
+        client.get_bracket_preview("U1234567", parent, [dict(children[0], quantity=99)])
+    mock_post.assert_not_called()
+
+
+def test_a_child_EQUAL_to_the_parent_is_accepted(client):
+    """The discriminating half, and the normal case: IBKR's own definition of a profit taker
+    is 'the same order quantity as the parent'. A rule that refused this would refuse every
+    real bracket."""
+    parent, children = _bracket_pair()
+    tickets = client._bracket_tickets(parent, [dict(children[0], quantity=1)])
+    assert [t["quantity"] for t in tickets] == [1, 1]
+
+
+def test_a_child_SMALLER_than_the_parent_is_accepted(client):
+    """Scaling out is legitimate — take profit on part of the position. H1 is a ceiling, not
+    an equality."""
+    parent, children = _bracket_pair()
+    tickets = client._bracket_tickets(dict(parent, quantity=5), [dict(children[0], quantity=2)])
+    assert [t["quantity"] for t in tickets] == [5, 2]
+
+
+def test_a_child_with_NO_quantity_is_accepted_because_it_is_derived(client):
+    """Only a STATED violation is refused — the same convention as the conid check. A child
+    carrying no quantity is normal; it is derived from the parent."""
+    parent, children = _bracket_pair()
+    kid = {k: v for k, v in children[0].items() if k != "quantity"}
+    tickets = client._bracket_tickets(parent, [kid])
+    assert "quantity" not in tickets[1]
+
+
+def test_an_unparseable_quantity_does_not_silently_pass_the_H1_check(client):
+    """A quantity that cannot be compared must not be treated as compliant. Refuse rather
+    than guess — the alternative is a hard rule that any malformed value walks through."""
+    parent, children = _bracket_pair()
+    with pytest.raises(ValueError, match="quantity"):
+        client._bracket_tickets(parent, [dict(children[0], quantity="two")])
+
+
+# --- pair_bracket_response: which entry belongs to which ticket ---------------------------
+# Three gaps found 2026-09-21, all live: nothing confirmed IBKR had ATTACHED the child,
+# nothing asserted one entry per ticket, and the response order is not the submission order.
+
+_PARENT_TICKET = {"cOID": "CLAUDIA-1", "conid": 1, "side": "SELL", "quantity": 1}
+_CHILD_TICKET = {"parentId": "CLAUDIA-1", "conid": 1, "side": "BUY", "quantity": 1}
+_PARENT_ENTRY = {"order_id": "900", "order_status": "Submitted", "local_order_id": "CLAUDIA-1"}
+_CHILD_ENTRY = {"order_id": "901", "order_status": "PreSubmitted", "parent_order_id": "900"}
+
+
+def test_pairing_matches_by_identifier_when_the_response_is_REVERSED():
+    """The live shape. Both sends on 2026-09-21 returned [child, parent] for a [parent, child]
+    submission, so index pairing would swap the legs — reading the parent's status off the
+    child and vice versa."""
+    from ibkr_core_mcp.client import pair_bracket_response
+
+    paired = pair_bracket_response([_PARENT_TICKET, _CHILD_TICKET], [_CHILD_ENTRY, _PARENT_ENTRY])
+    assert paired.ok, paired.problems
+    assert paired.parent is _PARENT_ENTRY
+    assert paired.children == (_CHILD_ENTRY,)
+
+
+def test_pairing_reports_a_child_attached_to_SOMETHING_ELSE():
+    """The catastrophic shape, and the one nothing checked: IBKR accepts the array but the
+    child is not attached to our parent. It is then a live independent opposite-side order."""
+    from ibkr_core_mcp.client import pair_bracket_response
+
+    stray = dict(_CHILD_ENTRY, parent_order_id="777")
+    paired = pair_bracket_response([_PARENT_TICKET, _CHILD_TICKET], [_PARENT_ENTRY, stray])
+    assert not paired.ok
+    assert any("not this parent" in p for p in paired.problems), paired.problems
+    assert paired.children == ()
+
+
+def test_pairing_reports_a_DROPPED_leg():
+    """One entry per ticket was documented and never asserted."""
+    from ibkr_core_mcp.client import pair_bracket_response
+
+    paired = pair_bracket_response([_PARENT_TICKET, _CHILD_TICKET], [_PARENT_ENTRY])
+    assert not paired.ok
+    assert any("child ticket(s) submitted, 0 linked back" in p for p in paired.problems), paired.problems
+
+
+def test_pairing_keeps_IBKRS_WORDS_for_a_refused_leg_the_M9_shape():
+    """Measured live: a non-tick child came back as order_id '-1', order_status 'Failed', with
+    the reason in `text` and NO parent_order_id — while the parent landed anyway. The pairing
+    must surface that sentence, not drop the entry."""
+    from ibkr_core_mcp.client import pair_bracket_response
+
+    failed = {
+        "order_id": "-1",
+        "order_status": "Failed",
+        "text": "The price 7330.10 does not conform to the minimum price variation of 0.25.",
+    }
+    inactive_parent = dict(_PARENT_ENTRY, order_status="Inactive")
+    paired = pair_bracket_response([_PARENT_TICKET, _CHILD_TICKET], [failed, inactive_parent])
+    assert not paired.ok
+    assert paired.parent is inactive_parent
+    assert paired.unmatched == (failed,)
+    assert any("minimum price variation" in p for p in paired.problems), paired.problems
+
+
+def test_pairing_reports_a_missing_parent_rather_than_guessing_one():
+    from ibkr_core_mcp.client import pair_bracket_response
+
+    paired = pair_bracket_response([_PARENT_TICKET, _CHILD_TICKET], [_CHILD_ENTRY])
+    assert paired.parent is None
+    assert any("cOID" in p for p in paired.problems), paired.problems
+
+
+def test_pairing_does_NOT_claim_a_per_child_mapping():
+    """IBKR echoes no identifier of ours on a child, so two children cannot be told apart in
+    the response. `children` is a SET of entries, never a per-ticket list — the type itself
+    has to refuse to imply otherwise."""
+    from ibkr_core_mcp.client import pair_bracket_response
+
+    kid2 = {"order_id": "902", "order_status": "PreSubmitted", "parent_order_id": "900"}
+    paired = pair_bracket_response(
+        [_PARENT_TICKET, _CHILD_TICKET, dict(_CHILD_TICKET)],
+        [_PARENT_ENTRY, _CHILD_ENTRY, kid2],
+    )
+    assert paired.ok, paired.problems
+    assert {id(c) for c in paired.children} == {id(_CHILD_ENTRY), id(kid2)}
+
+
+def test_place_bracket_LOGS_a_response_that_does_not_pair(client, caplog):
+    """The check must not be opt-in. A caller that never calls `pair_bracket_response` still
+    leaves a record — and the bracket is NOT raised over, because the orders are already
+    placed and throwing would destroy the only account of what happened."""
+    import logging
+
+    parent, children = _bracket_pair()
+    stray = {"order_id": "901", "order_status": "PreSubmitted", "parent_order_id": "999"}
+    landed = {"order_id": "900", "order_status": "Submitted", "local_order_id": "CLAUDIA-1"}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+        caplog.at_level(logging.ERROR, logger="ibkr_core_mcp.client"),
+    ):
+        mock_post.return_value = _make_ok_response([landed, stray])
+        result = client.place_bracket_and_confirm("U1234567", parent, children)
+    assert result == [landed, stray], "IBKR's response must survive the check intact"
+    assert any("not this parent" in r.getMessage() for r in caplog.records), caplog.text
