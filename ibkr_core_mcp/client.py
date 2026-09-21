@@ -2371,19 +2371,68 @@ class IBKRClient:
             )
         return response
 
-    def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
-        """Whatif order preview — cost, commission, margin impact. Read-only, no security gates.
+    def _whatif(self, account_id: str, orders: list[dict[str, Any]]) -> dict[str, Any]:
+        """The ONE place that builds the whatif path. Read-only, no security gates.
+
+        Both preview entry points come through here — a single ticket and a bracket array —
+        so the `/orders/whatif` literal is written once. The risk this guards is not a method
+        previewing too much, it is a second method spelling the path for itself and one day
+        dropping `/whatif`: that copy-paste was lint-clean and fully typed on 2026-09-13
+        (docs/audits/security-architecture-audit-2026-09-13.md, B2). Pinned by
+        `tests/security/test_preview_is_not_execution.py`, which asserts this is the only
+        function in `client.py` building it.
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
         Endpoint: POST /iserver/account/{accountId}/orders/whatif
         """
         _validate_account_id(account_id)
         self._ensure_accounts_initialized()
-        order = dict(order)
+        return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": orders})
+
+    def get_order_preview(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
+        """Whatif order preview — cost, commission, margin impact. Read-only, no security gates.
+
+        One ticket. A bracket cannot come through here — it is one request carrying an array,
+        so it has its own entry point (`get_bracket_preview`); both post through `_whatif`.
+
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
+        Endpoint: POST /iserver/account/{accountId}/orders/whatif
+        """
         # Strip display-only fields (underscore-prefixed) — same convention as place_order.
         # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
-        api_order = {k: v for k, v in order.items() if not k.startswith("_")}
-        return self._post(f"/iserver/account/{account_id}/orders/whatif", {"orders": [api_order]})
+        api_order = {k: v for k, v in dict(order).items() if not k.startswith("_")}
+        return self._whatif(account_id, [api_order])
+
+    def _bracket_tickets(self, parent: dict[str, Any], children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Validate the parent→child link and strip display fields.
+
+        `cOID` on the parent, `parentId == cOID` on every child, no `cOID` on a child — IBKR's
+        stated rules for a bracket ticket array. Refusing an unlinked pair is the point: two
+        tickets that are not linked are two INDEPENDENT live orders, and a standalone
+        opposite-side order can open the wrong position rather than close one.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+        """
+        ref = parent.get("cOID")
+        if not ref or not children:
+            raise ValueError("A bracket needs a parent cOID and at least one child")
+        for kid in children:
+            if kid.get("parentId") != ref or kid.get("cOID"):
+                raise ValueError("Each bracket child must carry parentId == the parent's cOID and no cOID")
+        return [{k: v for k, v in t.items() if not k.startswith("_")} for t in (parent, *children)]
+
+    def get_bracket_preview(
+        self, account_id: str, parent: dict[str, Any], children: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Whatif for a bracket — the endpoint previews "an order ticket or bracket of orders".
+
+        Read-only, no gates, like `get_order_preview`. Both legs are sent, because a preview of
+        the parent alone prices something the user is not about to submit.
+
+        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact.md
+        Endpoint: POST /iserver/account/{accountId}/orders/whatif
+        """
+        return self._whatif(account_id, self._bracket_tickets(parent, children))
 
     # ------------------------------------------------------------------
     # Alerts (write)

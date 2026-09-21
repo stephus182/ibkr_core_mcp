@@ -172,7 +172,7 @@ it is held by construction: `ORDER_EXECUTION` is not a capability any tool can d
 
 | `IBKRClient` method | Reason |
 |---|---|
-| `get_order_preview` | IBKR `whatif` endpoint — simulates, never executes |
+| `get_order_preview`, `get_bracket_preview` | IBKR `whatif` endpoint — simulates, never executes; both post through the single `_whatif` builder |
 | `get_live_orders` / `get_order_status` / `get_orders_raw` | Read-only |
 
 *Ungated non-order `ACCOUNT_STATE` mutations* — these do change state on IBKR's servers. They are
@@ -586,7 +586,7 @@ the rest from the 2026-09-13 audit:
 | File | Property held |
 |---|---|
 | `test_order_write_boundary.py` | The three order-write endpoints are built only inside the gated methods; each runs a gate before its first network call; the model layer never names an order write; `OrderWriteAuthorization` is minted in one function; the body Gate 2 shows is the body sent |
-| `test_preview_is_not_execution.py` | `/orders/whatif` is built only by `get_order_preview`, which runs no gate; `preview_order` touches no other order method |
+| `test_preview_is_not_execution.py` | `/orders/whatif` is built in exactly one place (`_whatif`); every preview entry point — `get_order_preview` and `get_bracket_preview` — runs no gate; a bracket with an unlinked child is refused; `preview_order` touches no other order method |
 | `test_tool_capabilities.py` | Every tool declares capabilities; none declares `ORDER_EXECUTION`; `READ_ONLY` never shares a declaration with a mutating capability; every sink a handler touches is declared |
 | `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |

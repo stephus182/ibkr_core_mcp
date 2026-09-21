@@ -146,7 +146,8 @@ web page content ─────► assess_quality (honesty flag) ────�
 IBKR reply message ───► reply_message_text (HTML strip) ─────► Gate 2 dialog                  (rendered to the human)
 
 host app (in-process) ► _validate_account_id/_order_id ──────► IBKRClient.place_order ───────► Gate 1 ─► Gate 2 ─► POST /orders  [ORDER EXECUTION]
-                                                              IBKRClient.get_order_preview ──► POST /orders/whatif  [ORDER PREVIEW, ungated]
+                                                              IBKRClient._whatif ──► POST /orders/whatif  [ORDER PREVIEW, ungated]
+                                                                ↑ get_order_preview (one ticket) · get_bracket_preview (parent + children)
 
 exceptions (any) ─────► _safe_error (type → sentence)  ──────► tool result
                         redact_error (detail, scrubbed) ─────► tool result / log
@@ -162,7 +163,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 | Sink | Only through | Guarded by |
 |---|---|---|
 | `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
-| `POST …/orders/whatif` | `get_order_preview` | AST test that only it builds the path and it calls no gate |
+| `POST …/orders/whatif` | `_whatif`, called by `get_order_preview` (one ticket) and `get_bracket_preview` (bracket array) | AST test that only `_whatif` builds the path; both entry points asserted to call no gate |
 | IBKR alerts / watchlists / FYI / account switch | `IBKRClient` ungated writers | Identifier regexes; capability declaration `ACCOUNT_STATE` |
 | Google Drive | `GDriveCache`, `WebDocsStore` | Cache-key regexes, slugs `[a-z0-9-]`, OAuth token file 0600 |
 | SQLite | `SQLiteStore`, `flex_store` | Bound parameters; allowlisted dynamic fragments; generated schema |
@@ -183,7 +184,7 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 | # | Invariant | Mechanism | Enforcement (`tests/security/`) | To change deliberately |
 |---|---|---|---|---|
 | 1 | No order reaches IBKR except through the four gated `IBKRClient` methods, and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before the first network call, checked **transitively** so a helper one call deeper is seen, with `_ensure_accounts_initialized` the single named exemption (IBKR's documented order prerequisite; a GET of the operator's own account list); `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
-| 2 | Preview is not execution | `get_order_preview` posts to `/orders/whatif`, calls no gate | `test_preview_is_not_execution.py`: path asserted; literal built once; `preview_order` touches only `get_order_preview` | None foreseeable |
+| 2 | Preview is not execution | Every preview posts to `/orders/whatif` through `_whatif` and calls no gate | `test_preview_is_not_execution.py`: path asserted; literal built once (**still one builder after `get_bracket_preview` was added 2026-09-20** — the set stayed size 1 because both entry points delegate); both entry points asserted gate-free; `preview_order` touches only `get_order_preview` | None foreseeable |
 | 3 | Every tool declares its capabilities; `ORDER_EXECUTION` has no legal spelling | `capabilities` on all 46 definitions from a vocabulary that omits `ORDER_EXECUTION`; `tools` strips the field; the MCP server derives `ToolAnnotations` from the same set | `test_tool_capabilities.py`: declared, known, non-empty; the forbidden name absent from the vocabulary; `READ_ONLY` exclusive; dispatch dict and definitions name the same tools; every sink the handler's source touches is declared; annotations derived | New tool: declare; new sink in an existing handler: add to the declaration **and** the mutating-tool list in the test |
 | 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open/import; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
 | 5 | Every externally derived URL is checked before the fetch and on every request afterwards | `_validate_public_url` (layer 1: scheme, host, literal parsing with `inet_aton`, DNS); `_reject_private_requests` (layer 2, Playwright route); `_reject_private_httpx_request` (layer 2 for the seeder) | `test_ssrf_boundary.py`: 20-row literal table; validate-before-reach ordering in every handler; both crawler entry points install the Playwright guard; `search_site` installs the httpx hook | New fetch tool: call `_validate_public_url` before constructing anything; if it is not a browser, say in its docstring that it has layer 1 only |
@@ -283,6 +284,16 @@ model and against unattended automation, not against the process.
 `get_order_preview` builds the same body shape and posts to `/orders/whatif`. It is ungated
 because the endpoint simulates. The structural risk is that the two paths are one literal
 apart, which is why the literal, its owner, and the handler's reach are all pinned by tests.
+
+`get_bracket_preview` was added 2026-09-20 for the attached-profit-taker work. A bracket is
+one request carrying an *array* of tickets, so it cannot go through `get_order_preview`, which
+posts a single one. The obvious implementation — a second method spelling `/orders/whatif` for
+itself — is precisely the copy-paste this control exists to catch, so instead both delegate to
+a private `_whatif` that owns the literal. The invariant therefore **grew stronger rather than
+weaker**: the assertion is still a set of exactly one builder, while the previewable surface
+widened. `_bracket_tickets` refuses a pair whose child does not carry `parentId == the parent's
+cOID`, because two unlinked tickets are two independent live orders — and a standalone
+opposite-side order can open a position rather than close one.
 
 ### 6.3 The backtest sandbox
 

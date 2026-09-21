@@ -41,8 +41,65 @@ def test_get_order_preview_runs_no_gate(client):
     dialog.assert_not_called()
 
 
-def test_the_whatif_endpoint_is_built_only_by_get_order_preview():
-    assert set(functions_using_url_templates(CLIENT, (WHATIF,))) == {"get_order_preview"}
+def test_the_whatif_endpoint_is_built_in_exactly_one_place():
+    """The control is "the literal exists once", not "one method may preview".
+
+    `get_bracket_preview` was added 2026-09-20 for the attached-profit-taker work: a bracket
+    is one request carrying an array of tickets, so it cannot go through `get_order_preview`,
+    which posts a single ticket. Rather than let a second method spell `/orders/whatif` for
+    itself - the copy-paste this guard exists to catch - both delegate to `_whatif`, which
+    owns the literal. So this assertion stayed a set of ONE as the surface grew.
+    """
+    assert set(functions_using_url_templates(CLIENT, (WHATIF,))) == {"_whatif"}
+
+
+def test_get_bracket_preview_posts_only_to_whatif(client):
+    with patch.object(client, "_post", return_value={}) as post:
+        client.get_bracket_preview("U1234567", {"cOID": "REF", "conid": 1}, [{"parentId": "REF", "conid": 1}])
+    assert post.call_count == 1
+    assert post.call_args.args[0].endswith("/orders/whatif")
+
+
+def test_get_bracket_preview_runs_no_gate(client):
+    """A bracket preview must be as ungated as a single-order preview. It is the one bracket
+    method the model can reach, so a gate creeping in here would be a gate the model triggers.
+    """
+    with (
+        patch.object(client, "_post", return_value={}),
+        patch("ibkr_core_mcp.client.require_touch_id") as touch,
+        patch("ibkr_core_mcp.client.confirm_order_dialog") as dialog,
+    ):
+        client.get_bracket_preview("U1234567", {"cOID": "REF", "conid": 1}, [{"parentId": "REF", "conid": 1}])
+    touch.assert_not_called()
+    dialog.assert_not_called()
+
+
+def test_bracket_preview_sends_both_legs_and_strips_display_keys(client):
+    with patch.object(client, "_post", return_value={}) as post:
+        client.get_bracket_preview(
+            "U1234567",
+            {"cOID": "REF", "conid": 1, "_companyName": "ACME"},
+            [{"parentId": "REF", "conid": 1, "_multiplier": 50}],
+        )
+    orders = post.call_args.args[1]["orders"]
+    assert len(orders) == 2, "both legs must reach the preview, or it prices the wrong thing"
+    assert not [k for t in orders for k in t if k.startswith("_")], "display-only keys must be stripped"
+
+
+@pytest.mark.parametrize(
+    "parent, children, why",
+    [
+        ({"conid": 1}, [{"parentId": "REF"}], "no cOID on the parent"),
+        ({"cOID": "REF"}, [], "no children"),
+        ({"cOID": "REF"}, [{"parentId": "OTHER"}], "child points at a different parent"),
+        ({"cOID": "REF"}, [{"parentId": "REF", "cOID": "OWN"}], "child carries its own cOID"),
+    ],
+)
+def test_bracket_tickets_refuses_an_unlinked_pair(client, parent, children, why):
+    """An unlinked "bracket" is two independent live orders - the exact outcome the user rule
+    forbids, because a standalone opposite-side order can open the wrong position."""
+    with pytest.raises(ValueError):
+        client._bracket_tickets(parent, children)
 
 
 def test_get_order_preview_calls_no_gate_in_source():

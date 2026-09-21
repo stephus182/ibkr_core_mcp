@@ -10,6 +10,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`get_bracket_preview` — whatif for a parent + attached children, read-only and ungated.**
+  A bracket is one request carrying an *array* of tickets, so it cannot go through
+  `get_order_preview`, which posts a single one. `_bracket_tickets` validates IBKR's stated
+  link rules first — `cOID` on the parent, `parentId == cOID` on every child, no `cOID` on a
+  child — and refuses anything else, because two unlinked tickets are two INDEPENDENT live
+  orders and a standalone opposite-side order can open a position rather than close one.
+  Display-only `_`-prefixed keys are stripped, as on every order path.
+
+  **The whatif literal still has exactly one builder.** Rather than let a second method spell
+  `/orders/whatif` for itself — the copy-paste `test_preview_is_not_execution.py` exists to
+  catch — both entry points delegate to a private `_whatif`. So the structural assertion
+  stayed a set of size one while the previewable surface grew; it now names `_whatif`.
+  Security invariant 2 and its four references in `docs/security-architecture.md`, plus
+  `SECURITY.md`'s control inventory, were updated in the same commit. No new *tool*:
+  `ClaudeToolkit` exposes nothing that writes, and this adds nothing the model can call.
+  Seven tests, including both entry points asserted gate-free.
+
+  Groundwork for claudia_ui's attached-profit-taker work (its Known Gaps #36), Phase 0 —
+  the measurement that answers what IBKR's docs leave unsaid about brackets. The write half
+  (`place_bracket_and_confirm`, `confirm_bracket_dialog`) is deliberately **not** here.
+
 - **The built wheel is installed and probed before it can be published.** `publish.yml`'s build
   job now runs `scripts/verify_wheel.py` between `twine check` and the artifact upload: a fresh
   venv under `$RUNNER_TEMP`, `pip install dist/*.whl`, `pip check`, then a probe under `python -I`
