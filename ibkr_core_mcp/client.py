@@ -573,6 +573,14 @@ def pair_bracket_response(tickets: list[dict[str, Any]], entries: list[dict[str,
     * the response order is not the submission order (see `BracketPairing`).
 
     `tickets` is the list `_bracket_tickets` produced — parent first, then children.
+
+    **Public on purpose** (decided 2026-09-21, before the 2.1.0 release pinned it). What it
+    encodes is IBKR's wire format, which is this package's job; `place_bracket_and_confirm`
+    already calls it, so moving it to the caller would either duplicate the rule or lose the
+    check; and a protocol rule living in two repositories drifts silently with nothing able to
+    see it. The alternative considered was keeping it private until a consumer existed — it was
+    rejected because a frozen dataclass can GAIN fields without breaking anyone, so being
+    slightly incomplete is cheap to fix while being duplicated is not.
     """
     if not tickets:
         return BracketPairing(None, (), tuple(entries), ("no tickets were submitted",))
