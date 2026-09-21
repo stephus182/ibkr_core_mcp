@@ -3,7 +3,18 @@ from unittest.mock import patch
 
 import pytest
 
+from ibkr_core_mcp.claude_tools import _today_date
+
 from .conftest import assert_tool_failed, assert_tool_succeeded
+
+
+def _dated(days: int) -> int:
+    """A YYYYMMDD int `days` from today. Dates are computed, never hardcoded: a fixture
+    pinned to 20260918 silently changed meaning the day that contract expired (gap #58)."""
+    from datetime import timedelta
+
+    return int((_today_date() + timedelta(days=days)).strftime("%Y%m%d"))
+
 
 pytestmark = pytest.mark.market_data
 
@@ -117,8 +128,8 @@ def test_execute_get_market_snapshot_fut_uses_futures_endpoint_not_search(toolki
     Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
     """
     toolkit._client.get_futures.return_value = [
-        {"symbol": "ES", "conid": 111, "expirationDate": 20260918},
-        {"symbol": "ES", "conid": 222, "expirationDate": 20260619},
+        {"symbol": "ES", "conid": 111, "expirationDate": _dated(90), "ltd": _dated(90)},
+        {"symbol": "ES", "conid": 222, "expirationDate": _dated(30), "ltd": _dated(30)},
     ]
     toolkit._client.get_market_snapshot.return_value = [{"conid": 222, "31": "5800.0", "6509": "R"}]
     text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
@@ -570,8 +581,8 @@ def test_search_contract_ind_no_results(toolkit):
 def test_get_futures_happy_path(toolkit):
     """Returns JSON-formatted futures contracts."""
     toolkit._client.get_futures.return_value = [
-        {"symbol": "ESZ6", "conid": 551601958, "expirationDate": 20261218},
-        {"symbol": "ESH7", "conid": 551601959, "expirationDate": 20270319},
+        {"symbol": "ESZ6", "conid": 551601958, "expirationDate": _dated(90), "ltd": _dated(90)},
+        {"symbol": "ESH7", "conid": 551601959, "expirationDate": _dated(180), "ltd": _dated(180)},
     ]
     text, fig = toolkit.execute("get_futures", {"symbols": ["ES"]})
     assert fig is None
@@ -784,11 +795,12 @@ def test_get_futures_is_sorted_by_expiry_and_flags_the_front_month(toolkit):
     """claudia_ui gap #37 (2026-09-10): /trsrv/futures listed Dec 2026 first and the model
     read list position as a volume ranking. Rows come back sorted per root symbol with the
     earliest flagged, so the front month is stated, not inferred."""
+    near, far = _dated(30), _dated(120)
     toolkit._client.get_futures.return_value = [
-        {"symbol": "ES", "conid": 515416632, "expirationDate": 20261218},
-        {"symbol": "NQ", "conid": 3, "expirationDate": 20261218},
-        {"symbol": "ES", "conid": 649180671, "expirationDate": 20260918},
-        {"symbol": "NQ", "conid": 4, "expirationDate": 20260918},
+        {"symbol": "ES", "conid": 515416632, "expirationDate": far, "ltd": far},
+        {"symbol": "NQ", "conid": 3, "expirationDate": far, "ltd": far},
+        {"symbol": "ES", "conid": 649180671, "expirationDate": near, "ltd": near},
+        {"symbol": "NQ", "conid": 4, "expirationDate": near, "ltd": near},
     ]
     text, _fig = toolkit.execute("get_futures", {"symbols": ["ES", "NQ"]})
     rows = json.loads(text)
@@ -798,6 +810,45 @@ def test_get_futures_is_sorted_by_expiry_and_flags_the_front_month(toolkit):
         ("NQ", 4, True),
         ("NQ", 3, False),
     ]
+
+
+def test_front_month_skips_a_contract_whose_last_trade_date_has_passed(toolkit):
+    """Gap #58, measured live 2026-09-20 two days after the Sep roll: /trsrv/futures still
+    returned ESU6 (ltd 20260918) among 22 ES rows, and "earliest expiry" picked it. IBKR then
+    answers an order with `{"error":"Order is already expired."}` — but only after Gate 1 and
+    Gate 2 — while get_market_snapshot quietly returned the dead contract's stale price."""
+    expired, live = _dated(-2), _dated(90)
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 649180671, "expirationDate": expired, "ltd": expired},
+        {"symbol": "ES", "conid": 515416632, "expirationDate": live, "ltd": live},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
+    flagged = [r for r in rows if r["front_month"]]
+    assert [r["conid"] for r in flagged] == [515416632], "the expired contract must not be the front month"
+
+
+def test_front_month_prefers_ltd_over_expiration_date(toolkit):
+    """They differ: ES Dec-26 reports expirationDate 20261218 and ltd 20261217 (measured
+    2026-09-20). The last trade date is the one that decides whether it can still be traded."""
+    live = _dated(60)
+    toolkit._client.get_futures.return_value = [
+        # Expiry still in the future, but trading has already stopped.
+        {"symbol": "ES", "conid": 111, "expirationDate": _dated(1), "ltd": _dated(-1)},
+        {"symbol": "ES", "conid": 222, "expirationDate": live, "ltd": live},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [222]
+
+
+def test_a_contract_with_no_usable_date_is_kept_not_silently_dropped(toolkit):
+    """An unknown date is not a claim that the contract expired. Dropping it would make a
+    tradeable contract invisible, which is worse than the ordering being imperfect."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 333},
+        {"symbol": "ES", "conid": 444, "expirationDate": _dated(60), "ltd": _dated(60)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
+    assert {r["conid"] for r in rows} == {333, 444}, "a row with no date must still be listed"
 
 
 _ES_INFO = {
@@ -813,8 +864,8 @@ def test_fut_snapshot_names_the_resolved_contract_once_per_conid(toolkit):
     """A futures quote carries `_contract` — IBKR's local symbol, month token, expiry and
     name (measured 2026-09-10 on ES 649180671) — read once per conid and cached."""
     toolkit._client.get_futures.return_value = [
-        {"symbol": "ES", "conid": 515416632, "expirationDate": 20261218},
-        {"symbol": "ES", "conid": 649180671, "expirationDate": 20260918},
+        {"symbol": "ES", "conid": 515416632, "expirationDate": _dated(120), "ltd": _dated(120)},
+        {"symbol": "ES", "conid": 649180671, "expirationDate": _dated(30), "ltd": _dated(30)},
     ]
     toolkit._client.get_contract_info.return_value = _ES_INFO
     toolkit._client.get_market_snapshot.return_value = [{"conid": 649180671, "31": "7601.0", "6509": "R"}]
@@ -840,7 +891,9 @@ def test_fut_snapshot_omits_the_contract_block_when_the_read_fails(toolkit):
     """A failed contract-info read leaves the block out — never a guessed name."""
     from ibkr_core_mcp.exceptions import IBKRAPIError
 
-    toolkit._client.get_futures.return_value = [{"symbol": "ES", "conid": 649180671, "expirationDate": 20260918}]
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 649180671, "expirationDate": _dated(30), "ltd": _dated(30)}
+    ]
     toolkit._client.get_contract_info.side_effect = IBKRAPIError("HTTP 500")
     toolkit._client.get_market_snapshot.return_value = [{"conid": 649180671, "31": "7601.0", "6509": "R"}]
     text, _fig = toolkit.execute("get_market_snapshot", {"symbols": ["ES"], "sec_type": "FUT"})
@@ -854,8 +907,8 @@ def test_get_futures_names_the_front_month_in_ibkr_terms(toolkit):
     per-conid cache — one contract-info call for the one row the model quotes, not one per
     expiry — so both paths quote a measured string."""
     toolkit._client.get_futures.return_value = [
-        {"symbol": "ES", "conid": 515416632, "expirationDate": 20261218},
-        {"symbol": "ES", "conid": 649180671, "expirationDate": 20260918},
+        {"symbol": "ES", "conid": 515416632, "expirationDate": _dated(120), "ltd": _dated(120)},
+        {"symbol": "ES", "conid": 649180671, "expirationDate": _dated(30), "ltd": _dated(30)},
     ]
     toolkit._client.get_contract_info.return_value = {
         "local_symbol": "ESU6",
@@ -884,7 +937,9 @@ def test_get_futures_omits_the_contract_block_rather_than_guess(toolkit):
     derived symbol — and the sort and flag are unaffected."""
     from ibkr_core_mcp.exceptions import IBKRCoreError
 
-    toolkit._client.get_futures.return_value = [{"symbol": "ES", "conid": 649180671, "expirationDate": 20260918}]
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 649180671, "expirationDate": _dated(30), "ltd": _dated(30)}
+    ]
     toolkit._client.get_contract_info.side_effect = IBKRCoreError("down")
     (row,) = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
     assert row["front_month"] and "_contract" not in row

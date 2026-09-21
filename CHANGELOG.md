@@ -9,6 +9,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **A bare futures root resolved to an EXPIRED contract for days after each roll.** Measured
+  live 2026-09-20, two days after the September roll: `/trsrv/futures` still returned ESU6
+  (`ltd` 20260918) among 22 ES rows, and every resolution site took the lowest expiry with no
+  comparison against today — `_resolve_snapshot_conid` and `_sorted_with_front_month` here,
+  and `order_flow.py` in claudia_ui. So "ES" meant a contract that had stopped trading.
+
+  Two impacts, and the quiet one was worse. An **order** failed safe but late: IBKR answers
+  `{"error":"Order is already expired."}` only *after* the proposal is built, Touch ID is taken
+  and Gate 2 is approved, so a human authenticated an order that could never work. **Market
+  data** failed silently: `get_market_snapshot("ES")` returned the dead contract's stale price,
+  81 points from the tradeable one, with no error and no warning — a market fact the model
+  states and a user may act on.
+
+  The front month is now the earliest row **still tradeable**, decided by `ltd` (they differ:
+  ES Dec-26 reports `expirationDate` 20261218 and `ltd` 20261217, and trading stops at `ltd`).
+  A row with **no usable date is kept** — an unknown date is not a claim that a contract
+  expired, and dropping it would hide a tradeable contract. Expired rows are still **listed**
+  by `get_futures`; they are merely never flagged `front_month`. If every row has passed, the
+  resolver returns an honest error naming the latest date rather than resolving a dead contract.
+
+  Live-verified after the fix: of 22 ES rows IBKR returned, the one expired row is no longer
+  the front month, `515416632` (ltd 20261217) is, and all 22 remain listed.
+
+  This also de-rots six test fixtures that hardcoded real 2026-09 expiries. They were correct
+  when written and silently changed meaning at the roll — the same defect as the code's. Dates
+  in fixtures are now computed relative to today. The captured live fixture redacts its date
+  fields to `1111111`, which is not a valid `YYYYMMDD`; that was harmless while nothing read
+  them and is now given plausible dates so the file keeps testing typed rows rather than
+  failing on redaction. The `_resolve_snapshot_conid` docstring claiming `/trsrv/futures`
+  "returns all non-expired contracts" is corrected — it was measured false.
+
+  claudia_ui carries the same rule in its own order path; tracked as its Known Gaps #58.
+
 ### Added
 - **`get_bracket_preview` — whatif for a parent + attached children, read-only and ungated.**
   A bracket is one request carrying an *array* of tickets, so it cannot go through

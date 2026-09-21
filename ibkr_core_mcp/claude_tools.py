@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
@@ -1446,11 +1446,52 @@ def _iso_date(yyyymmdd: Any) -> str | None:
     return f"{text[:4]}-{text[4:6]}-{text[6:]}"
 
 
-def _expiration_key(row: dict[str, Any]) -> int:
+def _expiration_key(row: Mapping[str, Any]) -> int:
     try:
         return int(row.get("expirationDate") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _today_date() -> date:
+    """Today in UTC. A date field carries no timezone, and `ltd`'s own is the exchange's, so
+    exactness is not achievable from it; `>=` keeps a contract through its last trade date,
+    which errs toward keeping rather than dropping."""
+    return datetime.now(tz=UTC).date()
+
+
+def _last_trade_key(row: Mapping[str, Any]) -> int:
+    """`ltd` when IBKR supplies one, else `expirationDate`, else 0 for "unknown".
+
+    They differ: ES Dec-26 reports `expirationDate` 20261218 and `ltd` 20261217 (measured
+    2026-09-20). Trading stops at `ltd`, so that is the field that decides tradeability.
+    """
+    for key in ("ltd", "expirationDate"):
+        try:
+            value = int(row.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value:
+            return value
+    return 0
+
+
+def _still_tradeable(rows: Sequence[Any], today: int) -> list[Any]:
+    """Rows whose last trade date has not passed.
+
+    **Gap #58, measured live 2026-09-20**, two days after the September roll: `/trsrv/futures`
+    still returned ESU6 (`ltd` 20260918) among 22 ES rows, and "earliest expiry" therefore made
+    an expired contract the front month. IBKR rejects an order on it with
+    `{"error":"Order is already expired."}` — but only after the proposal is built, Touch ID is
+    taken and Gate 2 is approved — while `get_market_snapshot` quietly returned its stale price,
+    81 points from the tradeable contract, with no error at all. The docstring claiming
+    `/trsrv/futures` "returns all non-expired contracts" was measured false.
+
+    A row with **no usable date is kept**: an unknown date is not a claim that the contract
+    expired, and dropping it would hide a tradeable contract
+    ([[feedback-unknown-is-not-a-negative-claim]]).
+    """
+    return [r for r in rows if _last_trade_key(r) == 0 or _last_trade_key(r) >= today]
 
 
 def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1468,10 +1509,16 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
         (dict(r) for r in rows if isinstance(r, dict | IBKRResponse)),
         key=lambda r: (str(r.get("symbol") or ""), _expiration_key(r)),
     )
+    # The flag must name a contract that can still be traded. IBKR keeps returning a
+    # contract after its last trade date, so "earliest dated row" alone flagged an expired
+    # one for days after each roll (gap #58, measured 2026-09-20). Expired rows are still
+    # LISTED — the caller asked for the chain — they are merely never flagged as front.
+    today = int(_today_date().strftime("%Y%m%d"))
+    tradeable_ids = {id(r) for r in _still_tradeable(ordered, today)}
     flagged: set[str] = set()
     for row in ordered:
         sym = str(row.get("symbol") or "")
-        is_front = sym not in flagged and _expiration_key(row) > 0
+        is_front = sym not in flagged and _expiration_key(row) > 0 and id(row) in tradeable_ids
         row["front_month"] = is_front
         if is_front:
             flagged.add(sym)
@@ -3167,8 +3214,10 @@ class ClaudeToolkit:
         - IND/BOND: /iserver/secdef/search (search_contract). If exchange is given,
           filters on `description` (the exchange code — there is no `exchange` key on
           these results) and errors when nothing matches, rather than substituting.
-        - FUT: /trsrv/futures (get_futures) — returns all non-expired contracts for the
-          root symbol; picks the lowest expirationDate (front month).
+        - FUT: /trsrv/futures (get_futures) — returns the contracts for the root symbol,
+          INCLUDING ones already past their last trade date (measured 2026-09-20: ESU6,
+          ltd 20260918, still returned two days later). So the front month is the earliest
+          row that is still tradeable, not simply the lowest expirationDate (gap #58).
         - CASH: /iserver/currency/pairs (get_currency_pairs) — symbol must be 'BASE.QUOTE'
           (e.g. 'EUR.USD'). Queries pairs for the base currency, then matches the
           'BASE.QUOTE' symbol exactly. NOT resolved via /iserver/secdef/search — CASH
@@ -3184,10 +3233,22 @@ class ClaudeToolkit:
             futures = self._client.get_futures([sym])
             if not futures:
                 return _Resolved(0, None, f"No futures contracts found for root symbol {sym}.")
+            # Front month = earliest contract STILL TRADEABLE. IBKR keeps returning a contract
+            # after its last trade date, so "earliest expiry" alone resolves a bare root to a
+            # dead contract for days after each roll (gap #58).
+            tradeable = _still_tradeable(futures, int(_today_date().strftime("%Y%m%d")))
+            if not tradeable:
+                latest = max((_last_trade_key(f) for f in futures), default=0)
+                return _Resolved(
+                    0,
+                    None,
+                    f"Every futures contract IBKR returned for {sym} has passed its last trade date "
+                    f"(latest {latest or 'unknown'}). Refusing to resolve an expired contract.",
+                )
             try:
-                front = min(futures, key=lambda f: int(f.get("expirationDate") or 0))
+                front = min(tradeable, key=_expiration_key)
             except (ValueError, TypeError):
-                front = futures[0]
+                front = tradeable[0]
             conid = front.get("conid")
             try:
                 conid_int = int(conid) if conid else 0

@@ -21,6 +21,15 @@ from tests.claude_tools.conftest import assert_tool_succeeded
 LIVE = json.loads((Path(__file__).parents[1] / "fixtures" / "ibkr_live_shapes.json").read_text())
 
 
+def _dated(days: int) -> int:
+    """A YYYYMMDD int `days` from today — computed, never hardcoded (gap #58)."""
+    from datetime import timedelta
+
+    from ibkr_core_mcp.claude_tools import _today_date
+
+    return int((_today_date() + timedelta(days=days)).strftime("%Y%m%d"))
+
+
 @pytest.fixture
 def typed_toolkit(toolkit):
     """A toolkit whose client returns what the real one now returns."""
@@ -123,7 +132,15 @@ def typed_contract_toolkit(toolkit):
     from ibkr_core_mcp.models import ContractDetails, FutureContract, MarketHistory, OptionChain, SecDefInfo
 
     c = toolkit._client
-    c.get_futures.return_value = parse_many(FutureContract, LIVE["futures"])
+    # The capture's date fields are redacted to `1111111`, which is not a valid YYYYMMDD.
+    # That was harmless while nothing read them, but front-month selection now asks whether a
+    # contract can still be traded (gap #58), and a non-date can never answer yes. Give the
+    # rows plausible ascending dates so this file keeps testing what it is about — typed rows
+    # surviving the handlers — rather than failing on redaction.
+    futures = [dict(r) for r in LIVE["futures"]]
+    for offset, row in enumerate(futures):
+        row["expirationDate"] = row["ltd"] = _dated(30 + offset * 90)
+    c.get_futures.return_value = parse_many(FutureContract, futures)
     c.get_secdef_info.return_value = parse_one(SecDefInfo, LIVE["secdef_info"])
     c.get_contract_info.return_value = parse_one(ContractDetails, LIVE["contract_info"])
     c.get_market_history_paginated.return_value = parse_one(MarketHistory, LIVE["market_history"])

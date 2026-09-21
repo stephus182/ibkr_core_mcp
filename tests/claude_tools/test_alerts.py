@@ -6,6 +6,16 @@ import pytest
 
 from .conftest import assert_tool_failed, assert_tool_succeeded
 
+
+def _dated(days: int) -> int:
+    """A YYYYMMDD int `days` from today — computed, never hardcoded (gap #58)."""
+    from datetime import timedelta
+
+    from ibkr_core_mcp.claude_tools import _today_date
+
+    return int((_today_date() + timedelta(days=days)).strftime("%Y%m%d"))
+
+
 pytestmark = pytest.mark.alerts
 
 
@@ -57,8 +67,8 @@ def test_execute_create_price_alert_futures_resolves_via_get_futures(toolkit):
     search_contract doesn't support FUT per client.py's documented endpoint scope."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U123"}]
     toolkit._client.get_futures.return_value = [
-        {"conid": 12345, "symbol": "CL", "expirationDate": "20260918"},
-        {"conid": 12346, "symbol": "CL", "expirationDate": "20261016"},
+        {"conid": 12345, "symbol": "CL", "expirationDate": _dated(45), "ltd": _dated(45)},
+        {"conid": 12346, "symbol": "CL", "expirationDate": _dated(75), "ltd": _dated(75)},
     ]
     toolkit._client.create_alert.return_value = {"orderId": 7}
     toolkit.execute("create_price_alert", {"symbol": "CL", "sec_type": "FUT", "operator": ">=", "price": 85.0})
