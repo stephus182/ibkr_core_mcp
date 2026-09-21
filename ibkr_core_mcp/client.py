@@ -108,6 +108,7 @@ from ibkr_core_mcp.models import (
     parse_one,
 )
 from ibkr_core_mcp.order_confirm import (
+    confirm_bracket_dialog,
     confirm_cancel_dialog,
     confirm_modify_dialog,
     confirm_order_dialog,
@@ -2324,6 +2325,116 @@ class IBKRClient:
                 self._resolve_one_reply(response[0], reply_log, authorization=authorization, scope=scope)
             )
         return response
+
+    def place_bracket_and_confirm(
+        self,
+        account_id: str,
+        parent: dict[str, Any],
+        children: list[dict[str, Any]],
+        *,
+        reply_log: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Place a bracket — a parent plus its held children — in ONE request, behind one
+        Gate 1 and one Gate 2, then resolve **every** ticket's reply chain.
+
+        `place_order` / `place_order_and_confirm` are deliberately NOT reused and NOT
+        modified. They are the live-proven single-order path; a bracket is a different
+        transaction shape (an array, an index-aligned reply chain, a child that is held
+        rather than working), and the way to keep a proven path proven is to not branch it.
+
+        **One request.** The pair is atomic at IBKR: there is no window in which the child is
+        live alone. Two independent orders are never a substitute — a standalone opposite-side
+        limit is live immediately and can OPEN the wrong position rather than close one.
+
+        **One Gate 1, bound to the whole array.** The scope hashes the full ticket list, not
+        the parent, so a child altered between Touch ID and the POST is outside the
+        authorization and prompts again — the defect audit finding SEC-07 closed for the
+        account id, pointed at the child.
+
+        **One Gate 2**, showing every leg (`confirm_bracket_dialog`). Two dialogs would let the
+        parent be sent with the child declined, which is the one state a bracket exists to
+        prevent.
+
+        **Every ticket's reply is answered, not just the first.** IBKR's reply array is
+        index-aligned with the submitted ticket array, so the single-order idiom
+        ``while response and "id" in response[0]`` inspects the parent only: a precaution
+        raised against the CHILD would never be shown, never answered, and that leg silently
+        dropped — leaving a resting position with no exit. Every entry carrying an ``id`` is
+        resolved, in index order, back-to-back with no unrelated request interleaved (IBKR
+        503s a reply left pending while other requests are made).
+
+        **What it returns, and why that shape.** The terminal entries — everything IBKR said
+        that was not a question — in the order first seen, de-duplicated. The composition of a
+        *reply's* response for a bracket is M6 and is **not yet measured**: Phase 0 could not
+        settle it, because the whatif previews only the first ticket and discards the rest
+        (measured live 2026-09-20). Both plausible shapes are handled without loss — a reply
+        response that repeats the whole array does not duplicate a leg, and one that covers
+        only its own ticket does not drop the other's terminal entry, which the read-back needs
+        the order id from. Accumulating rather than replacing is what makes the method
+        shape-independent; do not "simplify" it back to replacing the response until a live
+        send has settled M6.
+
+        Args:
+            account_id: The account the bracket is sent to.
+            parent: The parent ticket, carrying `cOID`, plus display-only `_` keys.
+            children: One or more child tickets, each `parentId` == the parent's `cOID`.
+            reply_log: When given, receives one record per resolved reply (see
+                `_resolve_one_reply`); the bracket needs it doubly, its chain being per ticket.
+
+        Returns:
+            The terminal entries IBKR returned, de-duplicated, in the order first seen.
+
+        Raises:
+            ValueError: The pair is not a linked bracket (from `_bracket_tickets`) — raised
+                before any gate, since there is nothing legitimate to authorise.
+            HumanAuthError: Touch ID failed, or the human declined the dialog or any reply.
+            IBKRAPIError: IBKR re-sent a reply id that was already answered — a loop, not a
+                chain, and every round of it would prompt a human again.
+
+        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+        Endpoint: POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
+        """
+        _validate_account_id(account_id)
+        self._ensure_accounts_initialized()
+        # Private copies: a caller mutating its dicts between the dialog and the POST changes
+        # nothing here, as `place_order` has done since audit 2026-09-13 B9.
+        parent = dict(parent)
+        children = [dict(kid) for kid in children]
+        # Validates the cOID↔parentId link and strips display-only keys. Before any gate: an
+        # unlinked pair is not a bracket, so there is nothing legitimate to authorise.
+        tickets = self._bracket_tickets(parent, children)
+        # Gate 1, once, over the WHOLE array — see the docstring.
+        scope = _order_write_scope("place_bracket", account_id, {"orders": tickets})
+        label = _order_label(parent)
+        authorization = _authorize_order_write(
+            f"place an IBKR bracket — {label} + {len(children)} attached", scope, label
+        )
+        log.info("Gate 1: granted for %s (%s)", scope, label)
+        # Gate 2, once, both legs.
+        confirm_bracket_dialog(parent, children, account_id)
+        response = _as_reply_list(self._post(f"/iserver/account/{account_id}/orders", {"orders": tickets}))
+        terminal: list[dict[str, Any]] = []
+        answered: set[str] = set()
+        while True:
+            pending = [entry for entry in response if isinstance(entry, dict) and "id" in entry]
+            for entry in response:
+                if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
+                    terminal.append(entry)
+            if not pending:
+                return terminal
+            latest: list[dict[str, Any]] = []
+            for entry in pending:
+                reply_id = str(entry["id"])
+                if reply_id in answered:
+                    # Answering the same precaution twice is not a chain. Each round costs a
+                    # human dialog, so an unguarded loop would prompt forever.
+                    raise IBKRAPIError(f"IBKR re-sent reply {reply_id}, which was already answered")
+                answered.add(reply_id)
+                latest.extend(
+                    _as_reply_list(self._resolve_one_reply(entry, reply_log, authorization=authorization, scope=scope))
+                )
+            response = latest
 
     def modify_order_and_confirm(
         self,

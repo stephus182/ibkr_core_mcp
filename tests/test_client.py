@@ -7,7 +7,7 @@ from unittest.mock import patch as _patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError
+from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError
 from tests.security.structural import annotation_names_a_model, response_model_names
 
 # The `client` fixture lives in tests/conftest.py (shared with tests/security/).
@@ -2964,3 +2964,284 @@ def test_an_empty_keyed_object_is_simply_no_rows(client):
         assert client.get_futures(["XYZ"]) == []
     with patch.object(client, "_get", return_value={}):
         assert client.get_stocks(["XYZ"]) == []
+
+
+# ---------------------------------------------------------------------------
+# place_bracket_and_confirm — one request, one Gate 1, one Gate 2, every reply
+# answered (claudia_ui gap #36, Phase 1 Task 1.2)
+# ---------------------------------------------------------------------------
+
+_RID_1 = "11111111-1111-4111-8111-111111111111"
+_RID_2 = "22222222-2222-4222-8222-222222222222"
+
+
+def _bracket_pair() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    parent = {
+        "conid": 649180671,
+        "cOID": "CLAUDIA-1",
+        "ticker": "ES",
+        "side": "SELL",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7725.0,
+        "tif": "GTC",
+        "_companyName": "ESU6 · SEP26",
+        "_multiplier": 50,
+    }
+    child = {
+        "conid": 649180671,
+        "parentId": "CLAUDIA-1",
+        "ticker": "ES",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7700.0,
+        "tif": "GTC",
+    }
+    return parent, [child]
+
+
+def test_place_bracket_posts_one_array_carrying_the_link_and_no_display_keys(client):
+    """One request, not two: the pair is atomic at IBKR, with no window in which the child
+    is live alone."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "1"}, {"order_id": "2"}])
+        client.place_bracket_and_confirm("U1234567", parent, children)
+    mock_post.assert_called_once()
+    assert mock_post.call_args[0][0] == f"{client._base}/iserver/account/U1234567/orders"
+    body = mock_post.call_args.kwargs["json"]
+    assert [o.get("cOID") for o in body["orders"]] == ["CLAUDIA-1", None]
+    assert [o.get("parentId") for o in body["orders"]] == [None, "CLAUDIA-1"]
+    assert all(not k.startswith("_") for o in body["orders"] for k in o), "display-only keys reached IBKR"
+
+
+def test_place_bracket_runs_touch_id_once_then_the_bracket_dialog_then_posts(client):
+    """D4: one Touch ID and ONE Gate 2 for the pair. Two dialogs would permit the parent to
+    go with the child declined — the state a bracket exists to prevent."""
+    parent, children = _bracket_pair()
+    seq: list[str] = []
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: seq.append("touch")),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog", side_effect=lambda *a: seq.append("dialog")),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=lambda *a: seq.append("SINGLE-DIALOG")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+
+        def _record_post(*_a: Any, **_k: Any) -> Any:
+            seq.append("post")
+            return _make_ok_response([{"order_id": "1"}])
+
+        mock_post.side_effect = _record_post
+        client.place_bracket_and_confirm("U1234567", parent, children)
+    assert seq == ["touch", "dialog", "post"]
+
+
+def test_place_bracket_resolves_a_reply_that_arrives_on_the_SECOND_ticket(client):
+    """THE defect review item 1 names (2026-09-08).
+
+    The reply array's indices correspond to the indices of the tickets in the submission.
+    `while response and "id" in response[0]` — correct for one ticket — inspects the parent
+    only, so a precaution raised against the CHILD is never shown, never answered, and the
+    child is silently dropped while the parent goes live alone: a resting position with no
+    exit, which is the one outcome a bracket exists to prevent.
+    """
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"order_id": "1"}, {"id": _RID_2, "message": ["Child precaution."]}]),
+            _make_ok_response([{"order_id": "2", "order_status": "PreSubmitted"}]),
+        ]
+        result = client.place_bracket_and_confirm("U1234567", parent, children)
+    mock_reply_dlg.assert_called_once()
+    assert mock_reply_dlg.call_args[0][0] == _RID_2
+    assert {e.get("order_id") for e in result} == {"1", "2"}
+
+
+def test_place_bracket_keeps_a_terminal_leg_while_another_leg_still_replies(client):
+    """The plan's loop replaces the whole response with the reply's response, which DROPS the
+    parent's terminal entry — and the read-back needs its order id to confirm the leg."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"order_id": "PARENT-1"}, {"id": _RID_2, "message": ["Child precaution."]}]),
+            # A per-ticket reply response: it says nothing about the parent.
+            _make_ok_response([{"order_id": "CHILD-2", "order_status": "PreSubmitted"}]),
+        ]
+        result = client.place_bracket_and_confirm("U1234567", parent, children)
+    assert {e.get("order_id") for e in result} == {"PARENT-1", "CHILD-2"}
+
+
+def test_place_bracket_does_not_duplicate_when_a_reply_returns_the_whole_array(client):
+    """The other plausible shape (M6 is unmeasured): the reply's response repeats every
+    ticket. The terminal set must not then carry the parent twice."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"order_id": "PARENT-1"}, {"id": _RID_2, "message": ["Child precaution."]}]),
+            _make_ok_response([{"order_id": "PARENT-1"}, {"order_id": "CHILD-2"}]),
+        ]
+        result = client.place_bracket_and_confirm("U1234567", parent, children)
+    assert [e.get("order_id") for e in result] == ["PARENT-1", "CHILD-2"]
+
+
+def test_place_bracket_answers_every_pending_reply_in_index_order_back_to_back(client):
+    """IBKR 503s a reply left pending while other requests are made, so the chain runs
+    back-to-back; index order is the order the human sees the legs in."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog") as mock_reply_dlg,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response(
+                [{"id": _RID_1, "message": ["Parent precaution."]}, {"id": _RID_2, "message": ["Child."]}]
+            ),
+            _make_ok_response([{"order_id": "PARENT-1"}]),
+            _make_ok_response([{"order_id": "CHILD-2"}]),
+        ]
+        result = client.place_bracket_and_confirm("U1234567", parent, children)
+    assert [c[0][0] for c in mock_reply_dlg.call_args_list] == [_RID_1, _RID_2]
+    posted = [c[0][0] for c in mock_post.call_args_list]
+    assert posted[1] == f"{client._base}/iserver/reply/{_RID_1}"
+    assert posted[2] == f"{client._base}/iserver/reply/{_RID_2}"
+    assert {e.get("order_id") for e in result} == {"PARENT-1", "CHILD-2"}
+
+
+def test_place_bracket_refuses_a_reply_id_it_has_already_answered(client):
+    """A precaution re-sent after it was confirmed is a loop, not a chain. Each round needs a
+    human dialog, so this would otherwise prompt forever."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = itertools.repeat(
+            _make_ok_response([{"id": _RID_1, "message": ["Same precaution, again."]}])
+        )
+        with pytest.raises(IBKRAPIError, match="already"):
+            client.place_bracket_and_confirm("U1234567", parent, children)
+
+
+def test_place_bracket_gate_1_is_bound_to_every_leg_not_just_the_parent(client):
+    """One Gate 1 covers the whole transaction, so the scope must hash the whole ticket
+    ARRAY. Bound to the parent alone, a child could be altered after Touch ID and still ride
+    the authorization (the defect SEC-07 fixed for the account, pointed at the child)."""
+    parent, children = _bracket_pair()
+    altered = [dict(children[0], price=1.0)]
+    scopes: list[str] = []
+
+    def _capture(reason, scope, label, *a, **k):
+        scopes.append(scope)
+        from ibkr_core_mcp.human_auth import OrderWriteAuthorization
+
+        return OrderWriteAuthorization(scope, label, __import__("time").monotonic(), 300.0)
+
+    for kids in (children, altered):
+        with (
+            _patch("ibkr_core_mcp.client._authorize_order_write", side_effect=_capture),
+            _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+            _patch.object(client._session, "post") as mock_post,
+        ):
+            mock_post.return_value = _make_ok_response([{"order_id": "1"}])
+            client.place_bracket_and_confirm("U1234567", parent, kids)
+    assert scopes[0] != scopes[1], "the child's price is outside the authorization's scope"
+
+
+def test_place_bracket_refuses_an_unlinked_child_before_any_gate(client):
+    """Two unlinked tickets are two INDEPENDENT live orders; the opposite-side one can open a
+    position rather than close one. Refused before Touch ID — nothing to authorise."""
+    parent, _ = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as mock_dlg,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError),
+    ):
+        client.place_bracket_and_confirm("U1234567", parent, [{"side": "BUY", "quantity": 1}])
+    mock_tid.assert_not_called()
+    mock_dlg.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_place_bracket_declining_a_reply_tells_ibkr_and_raises(client):
+    """Same decline semantics as the single-order chain: IBKR is told {"confirmed": false}
+    before the raise, rather than left with the reply pending."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=HumanAuthError("no")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"order_id": "1"}, {"id": _RID_2, "message": ["Child precaution."]}]),
+            _make_ok_response({}),
+        ]
+        with pytest.raises(HumanAuthError):
+            client.place_bracket_and_confirm("U1234567", parent, children)
+    assert mock_post.call_args_list[-1].kwargs.get("json") == {"confirmed": False}
+
+
+def test_place_bracket_logs_every_reply_when_a_reply_log_is_given(client):
+    """gap #38: a waved-through precaution must leave a trace. The bracket needs it doubly —
+    its chain is per ticket."""
+    parent, children = _bracket_pair()
+    reply_log: list[dict[str, Any]] = []
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.side_effect = [
+            _make_ok_response([{"id": _RID_1, "message": ["Parent."]}, {"id": _RID_2, "message": ["Child."]}]),
+            _make_ok_response([{"order_id": "PARENT-1"}]),
+            _make_ok_response([{"order_id": "CHILD-2"}]),
+        ]
+        client.place_bracket_and_confirm("U1234567", parent, children, reply_log=reply_log)
+    assert [r["reply_id"] for r in reply_log] == [_RID_1, _RID_2]
+    assert all(r["confirmed"] for r in reply_log)
+
+
+def test_place_bracket_keeps_ibkrs_words_when_it_refuses_the_bracket(client):
+    """IBKR's documented Alternate Response Object is a bare OBJECT, not an array.
+
+    Read as a list it becomes `[]` — an order IBKR refused for a stated reason, reported to
+    the caller as an empty response with IBKR's own words discarded. That was live on the
+    single-order path until 2026-09-16; the bracket path must not reintroduce it.
+    """
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response(
+            {"error": "We cannot accept an order at the limit price you selected."}
+        )
+        result = client.place_bracket_and_confirm("U1234567", parent, children)
+    assert result == [{"error": "We cannot accept an order at the limit price you selected."}]

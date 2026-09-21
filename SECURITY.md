@@ -142,15 +142,26 @@ place_order()   ──► require_touch_id() ──► confirm_dialog() ──�
 modify_order()  ──► require_touch_id() ──► modify_dialog()  ──► POST /iserver/account/{id}/order/{orderId}
 cancel_order()  ──► require_touch_id() ──► cancel_dialog()  ──► DELETE /iserver/account/{id}/order/{orderId}
 reply_order()   ──► require_touch_id() ──► reply_dialog()   ──► POST /iserver/reply/{replyId}
+place_bracket_and_confirm()
+                ──► require_touch_id() ──► bracket_dialog() ──► POST /iserver/account/{id}/orders
 ```
 
-`place_order_and_confirm` / `modify_order_and_confirm` run the write's gates once and then, for
-each precaution reply IBKR returns, the reply dialog (covered by the write's
-`OrderWriteAuthorization`, so no second fingerprint). The order dict is copied at method entry,
-so the body the dialog shows is the body sent. Since 2026-09-13 this whole shape is read from
-the source by `tests/security/test_order_write_boundary.py`: those five functions are the only
-ones that may build an order-write URL, each must call a gate before its first network call,
-and `claude_tools.py` / `mcp_server.py` may not name any of them.
+`place_order_and_confirm` / `modify_order_and_confirm` / `place_bracket_and_confirm` run the
+write's gates once and then, for each precaution reply IBKR returns, the reply dialog (covered
+by the write's `OrderWriteAuthorization`, so no second fingerprint). The order dict is copied at
+method entry, so the body the dialog shows is the body sent. Since 2026-09-13 this whole shape
+is read from the source by `tests/security/test_order_write_boundary.py`: those six functions
+are the only ones that may build an order-write URL, each must call a gate before its first
+network call, and `claude_tools.py` / `mcp_server.py` may not name any of them.
+
+`place_bracket_and_confirm` (2026-09-21) is the one write that does **not** delegate to a
+single-order method: a bracket is one POST of an *array* of tickets, and the live-proven
+single-order path must not gain a branch for it. So it builds the place endpoint itself and
+carries its own gates — one Touch ID whose scope hashes the **whole ticket array**, so a child
+altered after the fingerprint falls outside the authorization, and one Gate 2 showing every
+leg. Its reply chain is resolved per ticket, index-aligned: the single-order idiom of reading
+`response[0]` would leave a precaution raised against the child unanswered and drop that leg,
+leaving a resting position with no exit.
 
 ### Gated vs. Ungated Endpoints
 
@@ -162,6 +173,7 @@ and `claude_tools.py` / `mcp_server.py` may not name any of them.
 | `modify_order` | Change summary (old → new) |
 | `cancel_order` | Cancellation confirmation |
 | `reply_order` | IBKR reply confirmation |
+| `place_bracket_and_confirm` | Every leg on one screen: parent, each held child, one notional named as the parent's |
 
 **Explicitly ungated.** What these have in common is not that they read — it is that none of
 them can place, modify, cancel or confirm an order. That is the property the gates protect, and
@@ -1053,7 +1065,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 The following rules are enforced at PR review. Any PR that violates them will be rejected:
 
 1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's account and body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
-2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`.
+2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`.
 3. **Never make an authorization global or persistent, and never let a reply skip its dialog** — one biometric per order write, one dialog per message. The device-password fallback under `LAPolicyDeviceOwnerAuthentication` is Apple's recovery path and stays.
 4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution. Every new tool declares its `capabilities`; `ORDER_EXECUTION` may never appear, and a handler that touches a sink its declaration omits fails `tests/security/test_tool_capabilities.py`.
 5. **Never forward raw exception messages to the LLM or a log** — `_safe_error` for tool error returns; `redact_error` wherever detail is needed. `tests/security/test_error_redaction.py` fails on a bare `{exc}`, `str(exc)` or `log.warning(..., exc)` in `claude_tools.py` / `mcp_server.py`.

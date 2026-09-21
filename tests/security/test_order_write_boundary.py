@@ -40,13 +40,27 @@ ORDER_WRITE_PATTERNS = (
     r"/iserver/account/\{\}/order/\{\}$",  # POST modify, DELETE cancel
     r"/iserver/reply/\{\}$",  # POST reply
 )
-GATED_OWNERS = {"place_order", "modify_order", "cancel_order", "reply_order", "_resolve_one_reply"}
+GATED_OWNERS = {
+    "place_order",
+    "modify_order",
+    "cancel_order",
+    "reply_order",
+    "_resolve_one_reply",
+    # A bracket is one POST of an ARRAY of tickets, so it builds the place endpoint itself
+    # rather than calling `place_order` — the single-order path is live-proven and must not
+    # gain a branch (claudia_ui gap #36). It therefore owns the URL and must gate it.
+    "place_bracket_and_confirm",
+}
 GATE_CALLS = (
     "require_touch_id",
+    # Gate 1 for a chained write: it runs `require_touch_id` and returns the authorization
+    # that write's replies ride on, so a method calling it has fingerprinted the human.
+    "_authorize_order_write",
     "confirm_order_dialog",
     "confirm_modify_dialog",
     "confirm_cancel_dialog",
     "confirm_reply_dialog",
+    "confirm_bracket_dialog",
 )
 NETWORK_CALLS = ("_post", "_get", "_put", "with_retry")
 ORDER_WRITE_NAMES = {
@@ -56,6 +70,7 @@ ORDER_WRITE_NAMES = {
     "reply_order",
     "place_order_and_confirm",
     "modify_order_and_confirm",
+    "place_bracket_and_confirm",
     "_resolve_one_reply",
     "_authorize_order_write",
     "OrderWriteAuthorization",
@@ -277,9 +292,15 @@ def test_no_gated_method_reaches_the_network_indirectly_before_a_gate():
 
 
 def test_the_transitive_probe_sees_the_exempted_call():
-    """The control. Without the exemption the probe must report all four gated methods —
-    otherwise `test_no_gated_method_reaches_the_network_indirectly_before_a_gate` passes
-    because the probe is blind, not because the property holds."""
+    """The control. Without the exemption the probe must report every gated method that
+    opens with `_ensure_accounts_initialized()` — otherwise
+    `test_no_gated_method_reaches_the_network_indirectly_before_a_gate` passes because the
+    probe is blind, not because the property holds.
+
+    Five of them since 2026-09-21: `place_bracket_and_confirm` opens the same way, because a
+    bracket needs the account list resolved exactly as a single order does. `_resolve_one_reply`
+    is absent because it does not make that call — it runs inside a chain whose opening write
+    already did."""
     reaching = methods_reaching_the_network(CLIENT, NETWORK_CALLS)
     assert "_ensure_accounts_initialized" in reaching
 
@@ -289,7 +310,7 @@ def test_the_transitive_probe_sees_the_exempted_call():
         gates = call_lines(fn, GATE_CALLS)
         if [ln for ln in call_lines(fn, reaching - {name}) if ln < min(gates)]:
             seen.add(name)
-    assert seen == {"place_order", "modify_order", "cancel_order", "reply_order"}, seen
+    assert seen == {"place_order", "modify_order", "cancel_order", "reply_order", "place_bracket_and_confirm"}, seen
 
 
 def test_the_transitive_probe_ignores_a_helper_that_touches_nothing():

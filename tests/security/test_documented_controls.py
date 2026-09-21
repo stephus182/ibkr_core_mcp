@@ -219,6 +219,12 @@ _GATED_ORDER_WRITES = frozenset(
         "modify_order_and_confirm",
         "cancel_order",
         "reply_order",
+        # A bracket write: one POST of an ARRAY of tickets, behind one Touch ID scoped to the
+        # whole array and one Gate 2 showing every leg. It is listed here rather than left to
+        # the inventory clause below — that clause is for UNGATED mutations, and passing by
+        # being mentioned somewhere in SECURITY.md would be a weaker claim than being known
+        # to be gated (claudia_ui gap #36, 2026-09-21).
+        "place_bracket_and_confirm",
     }
 )
 

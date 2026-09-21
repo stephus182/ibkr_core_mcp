@@ -44,6 +44,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   claudia_ui carries the same rule in its own order path; tracked as its Known Gaps #58.
 
 ### Added
+- **`place_bracket_and_confirm` — a bracket placed in ONE request, behind one Gate 1 and one
+  Gate 2, with EVERY ticket's reply answered.** `place_order` / `place_order_and_confirm` are
+  neither reused nor modified: they are the live-proven single-order path, and the way to keep a
+  proven path proven is not to branch it. One request also means the pair is atomic at IBKR —
+  there is no window in which the child is live alone, which is why two independent orders are
+  never a substitute.
+
+  **Gate 1 is bound to the whole ticket array, not to the parent.** The scope hashes every leg,
+  so a child altered between Touch ID and the POST falls outside the authorization and prompts
+  again. That is the defect audit finding SEC-07 closed for the account id, pointed at the child.
+
+  **Every ticket's reply is answered.** IBKR's reply array is index-aligned with the submitted
+  ticket array, so the single-order idiom `while response and "id" in response[0]` inspects the
+  parent only: a precaution raised against the CHILD would never be shown, never answered, and
+  that leg silently dropped — leaving a resting position with no exit, the one outcome a bracket
+  exists to prevent. Every entry carrying an `id` is resolved, in index order, back-to-back (IBKR
+  503s a reply left pending while other requests are made). A reply id IBKR re-sends after it was
+  answered raises rather than looping: each round costs a human dialog, so an unguarded loop would
+  prompt forever.
+
+  **It returns the terminal entries — everything IBKR said that was not a question — accumulated
+  rather than replaced.** The composition of a *reply's* response for a bracket is **not yet
+  measured**: Phase 0 could not settle it, because the whatif previews only the first ticket and
+  discards the rest. Both plausible shapes are handled without loss — a reply response repeating
+  the whole array does not duplicate a leg, and one covering only its own ticket does not drop the
+  other's terminal entry, whose order id the read-back needs. Accumulating is what makes this
+  shape-independent; it should not be "simplified" back to replacing the response until a live
+  send has settled the question.
+
+  Registered in the security controls rather than left to be noticed: it is the sixth function
+  permitted to build an order-write URL, it joins the Gate 2 dialog table and the never-move-the-gates
+  rule in `SECURITY.md`, and `tests/security/test_order_write_boundary.py` now reads it from the
+  source like the other five — including the transitive probe, whose expected set it joins because
+  it opens with `_ensure_accounts_initialized()` exactly as every other write does.
+
 - **`confirm_bracket_dialog` — Gate 2 for a bracket: ONE dialog carrying the parent and every
   child.** One dialog, not one per leg, is the whole point: two dialogs would permit the parent
   to be sent with the child declined, which is precisely the state a bracket exists to prevent —
