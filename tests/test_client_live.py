@@ -554,8 +554,15 @@ def test_watchlist_roundtrip(live_client):
     # Create with AAPL (conid 265598)
     try:
         created = live_client.create_watchlist("_test_ibkr_audit", [{"C": 265598}])
-    except IBKRRateLimitError:
-        pytest.skip("IBKR rate limited watchlist creation — endpoint path is correct (503 is not 404)")
+    except IBKRRateLimitError as e:
+        # `IBKRRateLimitError` is raised for 429 AND 503, and its own docstring says a 503
+        # "is the gateway being unavailable and means neither" — so the old message here,
+        # "IBKR rate limited watchlist creation", asserted a cause this code never measured.
+        # Measured 2026-09-21: 503 on every attempt, never 429. Report the status the run
+        # actually saw; a 429 and a 503 call for different responses from a reader.
+        pytest.skip(
+            f"create_watchlist exhausted retries on HTTP {e.status_code} — endpoint path is correct (not a 404)"
+        )
         return
     assert created.get("id") or created.get("name"), f"create returned no identifier: {sorted(created)}"
 
@@ -753,8 +760,10 @@ def test_alert_crud_roundtrip(live_client, account_id):
     }
     try:
         created = live_client.create_alert(account_id=account_id, alert=alert_payload)
-    except IBKRRateLimitError:
-        pytest.skip("Rate limited creating alert — endpoint path is correct")
+    except IBKRRateLimitError as e:
+        # Same correction as test_watchlist_roundtrip: 429 and 503 share this exception and
+        # only 429 is a rate limit. Do not name a cause the status did not establish.
+        pytest.skip(f"create_alert exhausted retries on HTTP {e.status_code} — endpoint path is correct")
         return
     except IBKRAPIError as e:
         if "403" in str(e):

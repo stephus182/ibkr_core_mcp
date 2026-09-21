@@ -39,6 +39,33 @@ What that means in practice, and what it does not:
 day a captured response appears** — which is the signal that the subscription now exists and
 these should be typed, given live coverage, and moved into this log properly.
 
+## Deliberately not covered — bracket submission pairing (`pair_bracket_response`)
+
+The third area known not to be executed, and the only one introduced by `2.1.0`.
+
+`get_bracket_preview` **is** live-verified as of 2026-09-21 (below) — `whatif` simulates, so it
+costs nothing to run. `pair_bracket_response` is not, and cannot be: it maps IBKR's
+*submission* response back onto the legs that were sent, and IBKR only produces that response
+when a real bracket is really placed. There is no `whatif` equivalent, and the placement path
+is gated behind Touch ID and a confirmation dialog precisely so that no automated run can take
+it.
+
+What that means in practice, and what it does not:
+
+- The rule it encodes — IBKR's bracket response is **not** index-aligned with the submission —
+  is read from IBKR's own bracket-orders page, not from memory.
+- Its behaviour is pinned by unit tests in `tests/test_client.py` against responses written to
+  match that rule. Per this repo's own standard, *a fixture whose shape you chose cannot tell
+  you whether the shape is right* — so those tests establish the mapping is self-consistent,
+  **not** that it matches the wire.
+- No live test references it, and none should be added that can only ever skip: a live test
+  that always skips reads as coverage and is not.
+- A search of the consuming project (`claudia_ui`) for a persisted real submission response
+  found none — only chat messages *about* orders — so the gap could not be closed from
+  existing evidence either.
+
+The first real bracket placement is the event that closes this, and it is a human action.
+
 ## Deliberately not covered — alert writes (IBKR `create_alert` and modify)
 
 The second area known not to be executed, by measurement rather than by decision.
@@ -72,6 +99,91 @@ published* — in the two tool descriptions, `README.md`, `docs/tools-reference.
 requires it in all of them. **The unlock is a line in this log**: record a passing run here
 as `alert-write round trip: PASS`, and that same test then fails until the phrase is removed
 from every surface — so the warning cannot outlive the block.
+
+---
+
+<a id="run-2026-09-21-1"></a>
+## Run: 2026-09-21 — full suite before the `2.1.0` bracket release; `get_bracket_preview` live-proven for the first time
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-21 |
+| Purpose | Run the whole integration suite either side of the `2.1.0` bracket review, and execute the one piece of that release a live gateway can reach without placing an order. |
+| Gateway | container `ibkr_core_gateway` · Temurin 21.0.11+10 (Java 21.0.11) |
+| Auth method | `BrowserCookieAuth`; session verified out of band (`authenticated=True connected=True competing=False`) |
+| Account | `UXXXX699` |
+| Result | **88 pass · 14 skip · 0 fail** across all 102 integration tests |
+| Result (`-m "not integration"`, what CI runs) | 1,845 pass |
+
+| File | Collected | Result | Runtime |
+|---|---|---|---|
+| `tests/test_client_live.py` | 68 | 64 pass · 4 skip | 76.2 s |
+| `tests/test_alerts_live.py` | 11 | 1 pass · 10 skip | 56.5 s |
+| `tests/test_web_tools_live.py` | 12 | 12 pass | 25 s |
+| `tests/test_web_scraper_live.py` + `_drive_live` + `_dev_cache_live` + `test_crawl4ai_live.py` | 9 | 9 pass | 18 s |
+| `tests/test_client.py` (integration-marked) | 2 | 2 pass | 1.1 s |
+
+The ten alert-write skips are the HTTP 403 block recorded above, unchanged and re-measured.
+
+### Finding: `get_bracket_preview` had never been executed against a gateway
+
+It is the headline read-only feature of `2.1.0` and no live test referenced it — its only
+coverage was unit tests against responses written by hand. Executed 2026-09-21 against AAPL
+(conid `265598`, last `338.65`): a `BUY 1 LMT` parent at `270.92` with a `SELL 1 LMT` take at
+`440.25` and a `SELL 1 STP` at `237.05`, prices chosen far enough out that the ticket could
+never be marketable. **`whatif` only — nothing was placed, and the endpoint is ungated because
+it cannot place.**
+
+It returned a nine-key object whose key set is **identical** to the captured `order_preview`
+fixture in `tests/fixtures/ibkr_live_shapes.json` — so the bracket `whatif` and the
+single-order `whatif` return the same shape, and the reader control is testing a current
+capture rather than a stale one.
+
+### Finding: the live response carries `warn` AND `warns`, and they are not equivalent
+
+This is the case `_preview_warning_lines` was rewritten for during the `2.1.0` review, and it
+is now measured rather than reasoned:
+
+| field | content |
+|---|---|
+| `warn` | one string — the "limit price more than the allowed amount away from the reference price" warning |
+| `warns[0]` | **byte-identical** to `warn` |
+| `warns[1]` | "Confirm Mandatory Cap Price" — **absent from `warn`** |
+
+Each half of the reader now has its own evidence, and they required *different* evidence:
+
+- reading `warns` is necessary — the second warning exists only there (**live**);
+- de-duplicating is necessary — the first exists in both, and a naive union would show it
+  twice (**live**);
+- reading `warn` is necessary — on IBKR's **documented** response object `warns` does not
+  appear at all, and fed that shape a `warns`-only reader surfaces **zero** warnings
+  (executed against the documented shape).
+
+The live payload alone cannot establish the third: there `warns ⊇ {warn}`, so a `warns`-only
+reader would have looked perfectly correct against it. Recorded explicitly, because "the
+control passed" for the wrong reason is the failure mode this release was reviewed for.
+
+### Finding: two skip messages named a cause the status never established
+
+`IBKRRateLimitError` is raised for 429 **and** 503, and its own docstring says a 503 "is the
+gateway being unavailable and means neither". Two live tests caught it and reported "rate
+limited" without reading `.status_code`:
+
+| test | what the message claimed | what was measured |
+|---|---|---|
+| `test_watchlist_roundtrip` | "IBKR rate limited watchlist creation" | **503** on every attempt, never 429 |
+| `test_alert_crud_roundtrip` | "Rate limited creating alert" | 503 inside the full run, but **403 in isolation** — the real, already-documented cause |
+
+The second is the damaging one: the true 403 cause was invisible for as long as the message
+asserted a different one. Both now interpolate `e.status_code`, so a future run reports what
+it saw instead of what someone expected. No product code changed.
+
+### Note on the rate limiter, again
+
+A full-suite run repeated immediately re-fires `/pa/transactions` inside its 900 s window and
+the pacer warns and sends anyway. It did **not** earn a 429 this time — every retry exhausted
+on 503 instead — but the per-process budget versus per-IP limit finding from 2026-09-16 stands
+unchanged. Do not re-run a live suite back to back.
 
 ---
 

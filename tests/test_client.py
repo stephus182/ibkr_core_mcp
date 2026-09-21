@@ -3943,3 +3943,54 @@ def test_an_INACTIVE_order_is_NOT_filtered_out_of_the_live_book(client):
     statuses = {o["status"] for o in live}
     assert "Inactive" in statuses, "an Inactive order can still become working — never filter it"
     assert "Filled" not in statuses, "a fill is an execution, not a live order"
+
+
+def test_the_bracket_submission_pairing_stays_marked_unvalidated():
+    """`pair_bracket_response` maps IBKR's *submission* response back onto the legs sent, and
+    that response only exists when a real bracket is really placed. There is no `whatif`
+    equivalent, and the placement path is gated behind Touch ID and a dialog precisely so no
+    automated run can take it — so this is a **known and accepted** gap, not an oversight.
+
+    Its sibling `get_bracket_preview` *is* live-verified (2026-09-21), which is exactly the
+    risk: the two ship together, read alike, and only one has ever met the wire. The two other
+    not-covered areas in `docs/audits/live-test-log.md` each carry a guard like this one; this
+    one did not until 2026-09-21, which is the "a rule held on one path and not its twin"
+    shape the 2.1.0 review was looking for.
+
+    Three properties, each an unlock path rather than a prohibition:
+
+    1. No live test references it. A live test that can only ever skip reads as coverage and
+       is not — the failure that let a rewritten scraper test go unverified on 2026-07-30.
+    2. No captured bracket *submission* shape. **If one appears, this test fails** — it means
+       a real bracket was placed, and whoever captured it should validate the mapping against
+       it rather than against responses written to match it.
+    3. The live-test log still says so. If the note is deleted while the gap remains, the
+       absence stops being recorded and silently reads as coverage.
+    """
+    import json
+    import pathlib
+
+    tests_dir = pathlib.Path(__file__).parent
+
+    live = (tests_dir / "test_client_live.py").read_text()
+    assert "pair_bracket_response" not in live, (
+        "the live suite references pair_bracket_response, which cannot run without placing a "
+        "real bracket order — a live test that always skips reads as coverage and is not. If a "
+        "real placement was captured, validate the mapping against it and delete this test."
+    )
+
+    fixture = json.loads((tests_dir / "fixtures" / "ibkr_live_shapes.json").read_text())
+    captured = sorted(k for k in fixture if "bracket" in k.lower() and "preview" not in k.lower())
+    assert not captured, (
+        f"a bracket submission response is now captured ({captured}) — a real bracket was "
+        "placed. Validate pair_bracket_response against that capture, give it live coverage, "
+        "and delete this test."
+    )
+
+    log = (tests_dir.parent / "docs" / "audits" / "live-test-log.md").read_text()
+    heading = "## Deliberately not covered — bracket submission pairing (`pair_bracket_response`)"
+    assert heading in log, (
+        "docs/audits/live-test-log.md no longer records that bracket submission pairing is "
+        "unvalidated, but nothing here shows it became validated. Either restore the section "
+        "or close the gap for real."
+    )
