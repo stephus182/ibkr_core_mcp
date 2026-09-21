@@ -60,26 +60,37 @@ class KeyWatcher(Mapping[str, Any]):
     the assertion is made once, at the end, over everything that missed.
     """
 
-    def __init__(self, data: Mapping[str, Any], path: str = "", missed: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        data: Mapping[str, Any],
+        path: str = "",
+        missed: list[str] | None = None,
+        read: list[str] | None = None,
+    ) -> None:
         self._data = data
         self._path = path
         self.missed: list[str] = [] if missed is None else missed
+        # Hits as well as misses, so the control can run in BOTH directions — see
+        # `test_a_reader_leaves_no_key_IBKR_DOES_send_unread`.
+        self.read: list[str] = [] if read is None else read
 
     def _wrap(self, key: str, value: Any) -> Any:
         if isinstance(value, Mapping):
-            return KeyWatcher(value, f"{self._path}{key}.", self.missed)
+            return KeyWatcher(value, f"{self._path}{key}.", self.missed, self.read)
         return value
 
     def __getitem__(self, key: str) -> Any:
         if key not in self._data:
             self.missed.append(f"{self._path}{key}")
             raise KeyError(key)
+        self.read.append(f"{self._path}{key}")
         return self._wrap(key, self._data[key])
 
     def get(self, key: str, default: Any = None) -> Any:
         if key not in self._data:
             self.missed.append(f"{self._path}{key}")
             return default
+        self.read.append(f"{self._path}{key}")
         return self._wrap(key, self._data[key])
 
     def __iter__(self) -> Iterator[str]:
@@ -310,3 +321,83 @@ def test_every_allow_listed_key_carries_its_evidence() -> None:
     it is an escape hatch, which is how the redaction guard went vacuous on 2026-09-21."""
     for key, why in _MEASURED_BUT_UNDOCUMENTED.items():
         assert "Measured" in why or "measured" in why, f"{key} is allow-listed with no measurement: {why!r}"
+
+
+# ---------------------------------------------------------------------------------------
+# The same control, run in the OTHER direction
+# ---------------------------------------------------------------------------------------
+# The control at the top of this file records key lookups that MISSED, so it catches a
+# reader indexing a key IBKR does not send. It is blind to the opposite defect — a key IBKR
+# DOES send that no reader ever looks at — because a key nobody reads produces no lookup and
+# therefore no record.
+#
+# That blind spot shipped a defect on 2026-09-21, in the same release that added the
+# control. `_format_order_preview` read `warns` and never read `warn`, which is the field
+# IBKR documents (`warns` appears zero times across both doc pages). Fed IBKR's own
+# documented response object verbatim, the warning — "you are trying to submit an order
+# without having market data … may result in erroneous or unexpected trades" — was dropped
+# and the model saw a clean preview. Every existing control was green: the live capture
+# happens to carry both fields, with `warn` repeating `warns[0]`, so no lookup missed.
+#
+# A key IBKR sends is either read or deliberately ignored, and "deliberately" has to be
+# written down or it is indistinguishable from "overlooked".
+_IGNORED_BY_DESIGN: dict[str, dict[str, str]] = {
+    "order_preview": {
+        "accruedInterest": (
+            "null on every capture and on IBKR's documented example; it belongs to bond "
+            "previews, and rendering an empty row on every equity and futures preview would "
+            "be noise. Read it the day a bond preview needs it."
+        ),
+        "amount.total": (
+            "`amount` + `commission`, which the two lines above it already show separately. "
+            "Showing the sum as well invites the model to treat it as a third figure."
+        ),
+    },
+}
+
+
+def _paths_in(shape: Mapping[str, Any], prefix: str = "") -> set[str]:
+    """Every addressable path in a payload: each key, plus each key inside a nested mapping."""
+    paths: set[str] = set()
+    for key, value in shape.items():
+        path = f"{prefix}{key}"
+        paths.add(path)
+        if isinstance(value, Mapping):
+            paths |= _paths_in(value, f"{path}.")
+    return paths
+
+
+@pytest.mark.parametrize(("endpoint", "name", "reader"), READERS, ids=[r[1] for r in READERS])
+def test_a_reader_leaves_no_key_IBKR_DOES_send_unread(endpoint: str, name: str, reader: Any) -> None:
+    """The other direction: data IBKR sent that nothing looked at."""
+    shape = json.loads(FIXTURES.read_text())[endpoint]
+    watcher = KeyWatcher(shape)
+    reader(watcher)
+    unread = sorted(_paths_in(shape) - set(watcher.read) - set(_IGNORED_BY_DESIGN.get(endpoint, {})))
+    assert not unread, (
+        f"{name} never reads {len(unread)} key(s) the live `{endpoint}` shape carries: {unread}. "
+        f"Either read them, or add each to _IGNORED_BY_DESIGN['{endpoint}'] with the reason. "
+        f"This is how `warn` went unread while `warns` was read, on the field IBKR documents."
+    )
+
+
+def test_the_unread_control_catches_a_key_that_is_read_by_NOTHING() -> None:
+    """The vacuity check, reproducing the 2026-09-21 defect exactly: a reader that looks at
+    `warns` and not `warn` must be caught."""
+    shape = json.loads(FIXTURES.read_text())["order_preview"]
+    watcher = KeyWatcher(shape)
+    watcher.get("warns")  # the plural only — the pre-fix reader
+    unread = _paths_in(shape) - set(watcher.read) - set(_IGNORED_BY_DESIGN["order_preview"])
+    assert "warn" in unread, f"the control cannot see an unread key: {sorted(unread)}"
+
+
+def test_every_ignored_key_is_really_in_the_shape_and_carries_a_reason() -> None:
+    """An entry naming a key the payload no longer has is an exemption guarding nothing, and
+    it makes the list look better audited than it is — the same failure as a stale name in
+    conftest's DNS exemption set."""
+    payload = json.loads(FIXTURES.read_text())
+    for endpoint, ignored in _IGNORED_BY_DESIGN.items():
+        present = _paths_in(payload[endpoint])
+        for key, why in ignored.items():
+            assert key in present, f"_IGNORED_BY_DESIGN['{endpoint}'] names {key!r}, absent from the shape"
+            assert len(why) > 40, f"{endpoint}.{key} is exempted without a reason: {why!r}"

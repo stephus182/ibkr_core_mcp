@@ -1447,13 +1447,6 @@ def _iso_date(yyyymmdd: Any) -> str | None:
     return f"{text[:4]}-{text[4:6]}-{text[6:]}"
 
 
-def _expiration_key(row: Mapping[str, Any]) -> int:
-    try:
-        return int(row.get("expirationDate") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _today_date() -> date:
     """Today in UTC. A date field carries no timezone, and `ltd`'s own is the exchange's, so
     exactness is not achievable from it; `>=` keeps a contract through its last trade date,
@@ -1500,6 +1493,14 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
     each root flagged `front_month: true` — the rule `_resolve_snapshot_conid` applies,
     stated in the result. Rows without a parseable date sort first and are never flagged.
 
+    **One field decides.** Ordering and the flag use `_last_trade_key` — `ltd`, falling back
+    to `expirationDate` — the same function that decides tradeability. They used
+    `_expiration_key`, which read `expirationDate` alone, so the two disagreed about what
+    "has a date" means: a tradeable row reporting only `ltd` was never flagged, and where
+    the two fields rank differently the front month was chosen by the field this docstring
+    says does not decide. Latent rather than observed — IBKR sends both for ES — and fixed
+    because one rule cannot have two definitions (review 2026-09-21).
+
     **A typed row is not a `dict`.** This filtered on `isinstance(r, dict)` alone, so when
     `get_futures` began returning `FutureContract` rows on 2026-09-17 all 21 were dropped
     and the tool answered with an empty list — with the unit suite green, because its
@@ -1508,7 +1509,7 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
     """
     ordered = sorted(
         (dict(r) for r in rows if isinstance(r, dict | IBKRResponse)),
-        key=lambda r: (str(r.get("symbol") or ""), _expiration_key(r)),
+        key=lambda r: (str(r.get("symbol") or ""), _last_trade_key(r)),
     )
     # The flag must name a contract that can still be traded. IBKR keeps returning a
     # contract after its last trade date, so "earliest dated row" alone flagged an expired
@@ -1519,7 +1520,7 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
     flagged: set[str] = set()
     for row in ordered:
         sym = str(row.get("symbol") or "")
-        is_front = sym not in flagged and _expiration_key(row) > 0 and id(row) in tradeable_ids
+        is_front = sym not in flagged and _last_trade_key(row) > 0 and id(row) in tradeable_ids
         row["front_month"] = is_front
         if is_front:
             flagged.add(sym)
@@ -1550,6 +1551,53 @@ def _preview_movement(result: Mapping[str, Any], key: str, label: str) -> str:
     return f"  {label + ':':<22}{current} → {after}   (change {change})"
 
 
+def _preview_warning_lines(result: Mapping[str, Any]) -> list[str]:
+    """Every distinct warning the whatif carried, in `warn` and in `warns`.
+
+    **IBKR documents `warn`, a single String, and does not document `warns` at all** — zero
+    occurrences across the v1 endpoint page and the api-reference page, both checked
+    2026-09-21 with a fabricated control URL in the same batch. Live responses carry both,
+    with `warn` repeating `warns[0]`, which is why reading only the plural looked right.
+
+    Fed IBKR's own documented response object verbatim, reading only `warns` dropped the
+    warning entirely and the model saw a clean preview — the same defect the `error`/`warns`
+    fix was written for, one field over, and on the field IBKR actually publishes. The
+    `warns`-only reader could not be caught by `tests/test_readers_against_live_shapes.py`
+    either: that control records keys a reader looks up and MISSES, so it sees a key read
+    that does not exist and is blind to a key that exists and is never read.
+
+    Both are read and de-duplicated on the normalised text, so the usual case where they
+    repeat each other still shows one warning, and a `warn` carrying something of its own is
+    never dropped.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
+            https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact.md
+
+    Args:
+        result: The decoded whatif response.
+
+    Returns:
+        The header line and one bullet per distinct warning, or `[]` when there are none.
+    """
+    raw: list[Any] = list(result.get("warns") or [])
+    single = result.get("warn")
+    if single:
+        raw.append(single)
+    seen: set[str] = set()
+    texts: list[str] = []
+    for item in raw:
+        text = " ".join(reply_message_text(str(item)).split())
+        if text and text not in seen:
+            seen.add(text)
+            texts.append(text)
+    if not texts:
+        return []
+    return [
+        f"  Warnings ({len(texts)}) — each becomes a confirmation prompt on placement:",
+        *(f"    - {text}" for text in texts),
+    ]
+
+
 def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
     """Render a whatif response for the model, refusal first.
 
@@ -1565,6 +1613,8 @@ def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
     dialogs use — IBKR sends `<h4>Confirm Mandatory Cap Price</h4>…` in that array. The
     stripped text keeps the tag's line break, so whitespace runs are collapsed to keep one
     warning on one line; a bullet list that wraps unindented is not a list.
+
+    Warnings come from `warn` AND `warns` — see `_preview_warning_lines`.
     """
     lines = [headline]
     error = result.get("error")
@@ -1579,10 +1629,7 @@ def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
     lines.append(_preview_movement(result, "maintenance", "Maintenance margin"))
     lines.append(_preview_movement(result, "equity", "Equity with loan"))
     lines.append(_preview_movement(result, "position", "Position"))
-    warns = [str(w) for w in (result.get("warns") or []) if w]
-    if warns:
-        lines.append(f"  Warnings ({len(warns)}) — each becomes a confirmation prompt on placement:")
-        lines.extend(f"    - {' '.join(reply_message_text(w).split())}" for w in warns)
+    lines.extend(_preview_warning_lines(result))
     return "\n".join(lines)
 
 
@@ -3299,10 +3346,13 @@ class ClaudeToolkit:
                     f"Every futures contract IBKR returned for {sym} has passed its last trade date "
                     f"(latest {latest or 'unknown'}). Refusing to resolve an expired contract.",
                 )
-            try:
-                front = min(tradeable, key=_expiration_key)
-            except (ValueError, TypeError):
-                front = tradeable[0]
+            # Only rows with a known date compete for "earliest". `min` over
+            # `_expiration_key` keyed an undated row to 0, so a row carrying NO date beat
+            # every dated one and a bare root resolved to the contract we know least about.
+            # If nothing is dated there is no earliest, and the first tradeable row is as
+            # good an answer as exists — an unknown date is still not a claim of expiry.
+            dated = [f for f in tradeable if _last_trade_key(f) > 0]
+            front = min(dated, key=_last_trade_key) if dated else tradeable[0]
             conid = front.get("conid")
             try:
                 conid_int = int(conid) if conid else 0

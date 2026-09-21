@@ -10,6 +10,67 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **A second review pass, over the parts of the release the first one never reached.** The
+  first pass was scoped to the bracket seam, which left `claude_tools.py` (+171),
+  `scripts/verify_wheel.py` (+302, new and never reviewed at all), `exceptions.py`,
+  `rate_limiter.py` and the front-month futures fix unexamined. Three findings, one of them
+  reproduced against IBKR's own published payload.
+
+  - **`preview_order` never read `warn`, the field IBKR documents.** The whatif response
+    object publishes `warn` (String, singular) and `error`; **`warns` appears zero times**
+    across the v1 endpoint page and the api-reference page, both re-fetched 2026-09-21 with
+    a fabricated control URL in the same batch. The reader took `warns` and ignored `warn`.
+    Fed IBKR's documented response object verbatim, its only warning — *"you are trying to
+    submit an order without having market data for this instrument … may result in erroneous
+    or unexpected trades"* — was dropped and the model saw a clean preview. That is the same
+    defect the `error`/`warns` fix in this release was written for, one field over, on the
+    field IBKR actually publishes. Both are read now and de-duplicated on the normalised
+    text, so the live shape (where `warn` repeats `warns[0]`) still shows one warning and a
+    `warn` carrying something of its own is never lost.
+
+  - **The reader control was one-directional, which is why the above survived it.**
+    `tests/test_readers_against_live_shapes.py` records key lookups that **missed**, so it
+    catches a reader indexing a key IBKR does not send and is structurally blind to a key
+    IBKR *does* send that nothing reads — a key nobody reads produces no lookup and so no
+    record. Every control was green while `warn` went unread. `KeyWatcher` now records hits
+    as well, and a second control requires every key in a captured shape to be read or
+    declared in `_IGNORED_BY_DESIGN` with a reason (`accruedInterest` and `amount.total`,
+    each with one). Watched failing against the real pre-fix reader, not a synthetic one.
+
+  - **The two futures date functions disagreed about what "has a date" means.**
+    `_last_trade_key` reads `ltd` then `expirationDate` and decided tradeability;
+    `_expiration_key` read `expirationDate` alone and decided ordering and flagging. So a
+    tradeable row reporting only `ltd` was never flagged front month; where the two fields
+    rank differently the front month was chosen by the field the docstring says does **not**
+    decide; and `min(tradeable, key=_expiration_key)` keyed an undated row to 0, so a row
+    with no date at all beat every dated one and a bare root resolved to the contract we know
+    least about. Not observed live — IBKR sends both fields for ES — so this is a latent
+    inconsistency, fixed because one rule cannot have two definitions. `_expiration_key` is
+    deleted; `_last_trade_key` decides everywhere, and only dated rows compete for "earliest".
+
+  - **Nothing held the README's version pin against `[project].version`.** The PEP 440
+    guard's own failure message names "the tag check, the CHANGELOG heading, the README pin
+    and docs/consumers.md" as comparing literally, and only the first two were enforced.
+    Measured during this release: bumping `[project].version` to 2.1.0 left `README.md`
+    saying `pip install "ibkr-core-mcp==2.0.1"` with all four gates green — and the README is
+    the PyPI **long description**, so the 2.1.0 project page would have opened telling
+    readers to pin the previous version. A guard now holds the `==` example against
+    `pyproject.toml`, watched failing against exactly that mutation. `docs/consumers.md`'s
+    `>=2.0.1,<3` is deliberately not checked: it is a compatibility floor, and moving it each
+    release would tell consumers to raise a bound that has not changed.
+
+  `docs/consumers.md` gained its 2.1.0 entry — the publishing checklist's step 8, which had
+  no entry at all for this release: the new public names, `BracketPairing`'s `Mapping` field
+  types, the three classes of bracket that are now refused, and `reply_order` no longer
+  discarding a non-list body.
+
+  Also done in this pass, and not previously: `scripts/verify_wheel.py` was **rehearsed
+  locally** against a real built artifact for the first time — `python -m build` from outside
+  the repo, then the verifier — and passed end to end, including the `[server]` extra install
+  and the isolated `python -I` probe. The security regression suite (294 tests) was run on its
+  own. `IBKRRateLimitError`'s new `status_code` was checked against `IBKRAPIError`'s contract
+  (both default 0; they are siblings, not parent and child, so there is no override hazard).
+
 - **Seven rules held on one of two reachable paths, found by a pre-release review of the
   bracket seam.** The 2026-09-21 review that produced H1-at-Gate-2 and the README omission
   established the shape; this pass looked for the rest of the class deliberately. None was a

@@ -10,6 +10,47 @@
 
 ## Changes consumers should know about
 
+### 2.1.0 — brackets, and three stricter refusals
+
+**New public API.** A bracket — a parent order plus its held children — is one POST of a
+ticket array, and it has its own entry point rather than a branch of the single-order path:
+
+| Name | What it is |
+|---|---|
+| `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved |
+| `IBKRClient.get_bracket_preview(account_id, parent, children)` | Whatif for both legs. Read-only, ungated, like `get_order_preview` |
+| `client.pair_bracket_response(tickets, entries)` → `BracketPairing` | Which returned entry is which leg |
+
+**IBKR's bracket response is not index-aligned with the submission.** Two separate live
+sends returned `[child, parent]` for a `[parent, child]` array, so pairing `entries[i]` with
+`tickets[i]` reads the parent's status off the child. Use `pair_bracket_response`; it matches
+by identifier. It is public for exactly this reason — the rule is IBKR protocol knowledge and
+belongs in one repository, not copied into each consumer.
+
+`BracketPairing`'s fields are typed `Mapping[str, Any]`, **not** `dict`. Raw wire dicts
+satisfy that unchanged; a consumer annotating `dict[str, Any]` will go red under mypy, which
+is why the type is declared this way in the release that first publishes it rather than
+widened later.
+
+**Three things that used to be accepted are now refused.** None is reachable from a correct
+bracket, and all were unreachable from claudia_ui, which does not yet use this seam:
+
+- `_bracket_tickets` and `confirm_bracket_dialog` now refuse a child on the parent's own side
+  or carrying no side, a parent carrying no `cOID` or no side, a child carrying its own
+  `cOID`, and a child quantity that cannot be compared with the parent's (including `NaN`).
+  The refusal happens **before Gate 1**, so no fingerprint is taken for a bracket that could
+  never be placed.
+- `reply_order` now returns IBKR's body wrapped in a list when it is not already one, instead
+  of discarding it as `[]`. A caller reading `result[0]` on a non-empty response is unchanged;
+  a caller relying on `[]` to mean "non-list body" was relying on information loss.
+- Gate 2 refuses rather than approving when a bracket's quantities cannot be compared.
+
+**Fixes a consumer may notice.** `preview_order` now reports IBKR's refusal and every
+warning, and reads the margin and commission keys IBKR actually sends (four of its five
+figures were `N/A` on every real call before). A futures order is recognised from IBKR's own
+`secType` spelling (`"265598:FUT"`), so its notional is no longer printed as
+`price × quantity`. A bare futures root resolves to a contract that is still tradeable.
+
 ### 2.0.1 — the package is on PyPI
 
 `pip install "ibkr-core-mcp>=2.0.1,<3"` replaces the `git+https://…@vX.Y.Z` pin. claudia_ui: its

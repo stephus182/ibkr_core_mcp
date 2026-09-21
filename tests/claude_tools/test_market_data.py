@@ -840,6 +840,55 @@ def test_front_month_prefers_ltd_over_expiration_date(toolkit):
     assert [r["conid"] for r in rows if r["front_month"]] == [222]
 
 
+# One field must decide. `_last_trade_key` reads `ltd` then `expirationDate` and settles
+# tradeability; `_expiration_key` read `expirationDate` ALONE and settled both the ordering
+# and which row gets flagged, so the two disagreed about what "has a date" even means:
+#
+#   * a tradeable row reporting only `ltd` was never flagged front month, because
+#     `_expiration_key` returned 0 for it;
+#   * where `ltd` and `expirationDate` rank differently, the front month was chosen by
+#     `expirationDate` — the field this code's own docstring says does NOT decide;
+#   * worst, `_resolve_snapshot_conid` picked `min(tradeable, key=_expiration_key)`, and an
+#     undated row keys to 0, so a row with NO date beat every dated one and became the
+#     contract a bare root resolves to.
+#
+# Not observed live — IBKR sends both fields for ES — so this is a latent inconsistency
+# rather than a measured defect, and it is fixed because the two functions must agree, not
+# because a wire shape was seen.
+
+
+def test_front_month_is_flagged_on_a_row_that_reports_only_ltd(toolkit):
+    """`ltd` decides tradeability, so a row carrying only `ltd` is dated for every purpose."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 555, "ltd": _dated(30)},
+        {"symbol": "ES", "conid": 666, "ltd": _dated(120)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["ES"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [555], rows
+
+
+def test_front_month_ORDERING_follows_ltd_not_expiration_date(toolkit):
+    """Both tradeable; `ltd` ranks them one way and `expirationDate` the other. Trading stops
+    at `ltd`, so `ltd` chooses the front month."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "XX", "conid": 777, "ltd": _dated(10), "expirationDate": _dated(90)},
+        {"symbol": "XX", "conid": 888, "ltd": _dated(40), "expirationDate": _dated(50)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["XX"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [777], rows
+
+
+def test_resolving_a_bare_root_never_prefers_an_UNDATED_contract(toolkit):
+    """`min(..., key=_expiration_key)` keyed an undated row to 0, so it beat every dated one
+    and a bare root resolved to the contract we know least about."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 999},  # no date at all
+        {"symbol": "ES", "conid": 649180671, "expirationDate": _dated(30), "ltd": _dated(30)},
+    ]
+    resolved = toolkit._resolve_snapshot_conid("ES", "FUT", None)
+    assert resolved.conid == 649180671, f"resolved the undated contract: {resolved}"
+
+
 def test_a_contract_with_no_usable_date_is_kept_not_silently_dropped(toolkit):
     """An unknown date is not a claim that the contract expired. Dropping it would make a
     tradeable contract invisible, which is worse than the ordering being imperfect."""

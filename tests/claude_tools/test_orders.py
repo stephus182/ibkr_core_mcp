@@ -110,6 +110,55 @@ def test_an_accepted_preview_does_not_claim_a_refusal(toolkit):
     assert "REFUSED" not in _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
 
 
+# IBKR DOCUMENTS `warn` (singular String) and does not document `warns` at all — zero
+# occurrences across both the v1 endpoint page and the api-reference page, checked
+# 2026-09-21 with a fabricated control URL in the same batch. The live capture carries
+# both, with `warn` duplicating `warns[0]`, which is why reading only the plural looked
+# correct. Fed IBKR's OWN documented response object verbatim, the reader dropped the
+# warning entirely and the model saw a clean preview: the same defect the `warns`/`error`
+# fix was written for, one field over, and on the field IBKR actually publishes.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
+#         https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact.md
+IBKR_DOCUMENTED_PREVIEW = {
+    "amount": {"amount": "1,977.60 USD (10 Shares)", "commission": "1 USD", "total": "1,978.60 USD"},
+    "equity": {"current": "215,415,594", "change": "-1", "after": "215,415,593"},
+    "initial": {"current": "116,965", "change": "652", "after": "117,617"},
+    "maintenance": {"current": "106,332", "change": "592", "after": "106,924"},
+    "position": {"current": "0", "change": "10", "after": "10"},
+    "warn": (
+        "21/You are trying to submit an order without having market data for this instrument. \n"
+        "IB strongly recommends against this kind of blind trading which may result in \n"
+        "erroneous or unexpected trades."
+    ),
+    "error": None,
+}
+
+
+def test_preview_surfaces_the_documented_singular_warn_field(toolkit):
+    """IBKR's own documented response object, verbatim. Its only warning lives in `warn`."""
+    text = _preview(toolkit, IBKR_DOCUMENTED_PREVIEW)
+    assert "blind trading" in text, f"IBKR's warning never reached the model: {text}"
+    assert "Warnings (1)" in text, text
+
+
+def test_preview_does_not_show_a_warning_twice_when_warn_repeats_warns(toolkit):
+    """The discriminating half. In every live capture `warn` duplicates `warns[0]`, so
+    reading both must not double-count — the count stays at the number of DISTINCT
+    warnings."""
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
+    assert "Warnings (2)" in text, text
+    assert text.count("exceeds the value limit") == 1, text
+
+
+def test_preview_shows_a_warn_that_is_NOT_in_warns(toolkit):
+    """If the two ever carry different text, neither may be dropped."""
+    payload = dict(LIVE_PREVIEW_ACCEPTED, warn="99/A warning IBKR put only in the singular field.")
+    text = _preview(toolkit, payload)
+    assert "only in the singular field" in text, text
+    assert "Confirm Mandatory Cap Price" in text, text
+    assert "Warnings (3)" in text, text
+
+
 def test_preview_surfaces_ibkr_warnings_with_html_stripped_onto_one_line(toolkit):
     text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
     assert "Warnings (2)" in text, text

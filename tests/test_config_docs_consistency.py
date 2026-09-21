@@ -617,3 +617,36 @@ def test_readme_says_the_pacing_budget_is_per_process_and_the_limit_per_ip():
     # The pacer sends a call it cannot pace within 65 s, after warning — so the README may not
     # promise that one process "never" breaks a limit (review, 2026-09-19).
     assert "warns" in section
+
+
+# The version in `pyproject.toml` is also written, literally, in prose that ships. Nothing
+# checked that, and the check above says so in its own failure message — "the tag check, the
+# CHANGELOG heading, the README pin and docs/consumers.md all compare literally" — while only
+# the first two are enforced anywhere. Measured 2026-09-21 during the 2.1.0 release: bumping
+# `[project].version` to 2.1.0 left `README.md` saying `pip install "ibkr-core-mcp==2.0.1"`
+# with all four gates green. The README is the PyPI **long description**, so that page would
+# have opened on the 2.1.0 release telling readers to pin the previous version.
+#
+# Only the `==` example pin is checked. `docs/consumers.md`'s `>=2.0.1,<3` is a compatibility
+# FLOOR and is meant to stay where it is: moving it every release would tell consumers to
+# raise a bound that has not actually changed.
+_README_EXACT_PIN = re.compile(r'ibkr-core-mcp==([0-9][^"\'`\s]*)')
+
+
+def test_the_readme_example_pin_names_the_version_being_shipped():
+    readme = (_REPO / "README.md").read_text()
+    pins = set(_README_EXACT_PIN.findall(readme))
+    version = _pyproject_version()
+    assert pins, "README no longer shows an `ibkr-core-mcp==X.Y.Z` pin; update or remove this guard"
+    assert pins == {version}, (
+        f"README pins {sorted(pins)} while [project].version is {version!r}. The README is the "
+        f"PyPI long description, so the release page would advertise the wrong version."
+    )
+
+
+def test_the_readme_pin_guard_can_see_a_stale_pin():
+    """Vacuity guard. Every release so far has bumped both by hand, so this check would pass
+    for free if the regex stopped matching — which is the failure mode that matters, since a
+    guard that finds no pins and asserts nothing is indistinguishable from a correct one."""
+    assert _README_EXACT_PIN.findall('pip install "ibkr-core-mcp==2.0.1"') == ["2.0.1"]
+    assert _README_EXACT_PIN.findall("nothing to see here") == []
