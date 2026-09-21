@@ -10,6 +10,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **`preview_order` read four keys the whatif does not send, and discarded IBKR's refusal.**
+  A preview exists to answer "can this account support this order". It answered `N/A`, and
+  when IBKR said no it did not say so at all.
+
+  The tool read `result["commission"]`, `result["equity"]["amount"]`,
+  `result["initMarginChange"]` and `result["maintMarginChange"]`. The response carries
+  `amount.commission`, `equity.current`, `initial.change` and `maintenance.change`. So four of
+  the five rendered lines were `N/A` on **every real call**, while the numbers sat in the
+  response — measured live 2026-09-21 on ESZ6: `initial.change` 24,583 and
+  `maintenance.change` 18,459, both present, both discarded. Only `equity.change` was read
+  correctly.
+
+  Worse, `error` and `warns` were never read. A preview IBKR **refused** rendered identically
+  to one it accepted. Measured live the same day on a `BUY 2 ES` this account cannot support:
+  IBKR returned *"The Available Funds in your Commodities segment are insufficient … your
+  Commodities Net Liquidation Value [43378.26 USD] must exceed the new total initial Margin of
+  [49207.72 USD]"* plus three warnings, and the model saw a clean five-line preview with a
+  `-4` buying-power effect. This is a read tool — it places nothing, and both gates plus
+  IBKR's own placement-time check still stand behind any order — but it reported something
+  false about account capacity, in the direction of over-confidence.
+
+  Now: the refusal is printed **before any figure**, warnings are listed with HTML stripped
+  (`reply_message_text`, the helper the reply dialogs already use) one per line, and each
+  figure comes from the key IBKR uses, rendered as `current → after (change …)`. A block IBKR
+  omits is named absent rather than rendered as a number — the same rule the Gate 2 rows
+  follow. IBKR's own `"—"` for a commission it will not quote passes through as IBKR's value.
+
+  **The tests could not have caught this.** The mock was invented to match the reader —
+  `{"commission": "1.05", "equity": {"amount": 99000}, "initMarginChange": "500",
+  "maintMarginChange": "300"}` — and the assertions checked the *request* payload and that the
+  text contained `"Order Preview"`, never a rendered figure. A double easier than the real
+  thing keeps a broken path green forever. Every preview mock in the suite is now the shape
+  captured live, and five tests pin the rendering, the refusal ordering, the discriminating
+  case (an accepted preview must not claim a refusal), the warning format and the
+  absent-block rule.
+
 - **A bare futures root resolved to an EXPIRED contract for days after each roll.** Measured
   live 2026-09-20, two days after the September roll: `/trsrv/futures` still returned ESU6
   (`ltd` 20260918) among 22 ES rows, and every resolution site took the lowest expiry with no

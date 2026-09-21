@@ -42,6 +42,7 @@ from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
 from ibkr_core_mcp.models import Account, IBKRResponse, Trade, json_default
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
+from ibkr_core_mcp.order_confirm import reply_message_text
 from ibkr_core_mcp.redaction import collapse_home, redact_error
 from ibkr_core_mcp.store import SQLiteStore
 from ibkr_core_mcp.streaming import SNAPSHOT_FIELD_NAMES
@@ -1525,6 +1526,66 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
     return ordered
 
 
+_PREVIEW_ABSENT = "— (not reported by IBKR)"
+
+
+def _preview_movement(result: Mapping[str, Any], key: str, label: str) -> str:
+    """One `current → after (change …)` line from a whatif block, or a stated absence.
+
+    The whatif returns `equity`, `initial`, `maintenance` and `position` as
+    `{current, change, after}` objects. Until 2026-09-21 this tool read
+    `initMarginChange` / `maintMarginChange` / `equity.amount` — **three keys IBKR does
+    not send** — so every margin figure rendered `N/A` while the numbers sat in the
+    response. Measured live that day on ESZ6: `initial.change` 24,583 and
+    `maintenance.change` 18,459 were both present and both discarded.
+
+    A block IBKR did not send is named as absent, never rendered as a number.
+    """
+    block = result.get(key)
+    if not isinstance(block, Mapping):
+        return f"  {label + ':':<22}{_PREVIEW_ABSENT}"
+    current, change, after = block.get("current"), block.get("change"), block.get("after")
+    if current is None and after is None:
+        return f"  {label + ':':<22}{_PREVIEW_ABSENT}"
+    return f"  {label + ':':<22}{current} → {after}   (change {change})"
+
+
+def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
+    """Render a whatif response for the model, refusal first.
+
+    **The refusal is the point.** `error` and `warns` were not read at all until
+    2026-09-21, so a preview IBKR REFUSED rendered identically to one it accepted —
+    measured live on a `BUY 2 ES` the account could not support, which returned
+    "The Available Funds in your Commodities segment are insufficient…" plus three
+    warnings, none of which reached the model. A preview exists to answer "can this
+    account support this order"; discarding the answer made it worse than silence,
+    because the reply still looked like a result.
+
+    HTML in a warning is stripped with `reply_message_text`, the same helper the reply
+    dialogs use — IBKR sends `<h4>Confirm Mandatory Cap Price</h4>…` in that array. The
+    stripped text keeps the tag's line break, so whitespace runs are collapsed to keep one
+    warning on one line; a bullet list that wraps unindented is not a list.
+    """
+    lines = [headline]
+    error = result.get("error")
+    if error:
+        lines.append("  ⚠ IBKR REFUSED THIS ORDER — it would NOT be accepted as submitted:")
+        lines.append(f"      {reply_message_text(str(error))}")
+    amount = result.get("amount")
+    amount = amount if isinstance(amount, Mapping) else {}
+    lines.append(f"  {'Order value:':<22}{amount.get('amount', _PREVIEW_ABSENT)}")
+    lines.append(f"  {'Commission est.:':<22}{amount.get('commission', _PREVIEW_ABSENT)}")
+    lines.append(_preview_movement(result, "initial", "Initial margin"))
+    lines.append(_preview_movement(result, "maintenance", "Maintenance margin"))
+    lines.append(_preview_movement(result, "equity", "Equity with loan"))
+    lines.append(_preview_movement(result, "position", "Position"))
+    warns = [str(w) for w in (result.get("warns") or []) if w]
+    if warns:
+        lines.append(f"  Warnings ({len(warns)}) — each becomes a confirmation prompt on placement:")
+        lines.extend(f"    - {' '.join(reply_message_text(w).split())}" for w in warns)
+    return "\n".join(lines)
+
+
 _ALERT_WRITE_403 = (
     "Cannot create or modify a price alert: the IBKR Client Portal Gateway refuses this "
     "request before it reaches IBKR (opaque HTTP 403).\n"
@@ -2882,15 +2943,8 @@ class ClaudeToolkit:
             order["auxPrice"] = float(stop_price)
 
         result = self._client.get_order_preview(account_id, order)
-        lines = [
-            f"Order Preview: {action} {quantity} {symbol} ({order_type})",
-            f"  Commission est.:      {result.get('commission', 'N/A')}",
-            f"  Equity with loan:     {result.get('equity', {}).get('amount', 'N/A')}",
-            f"  Initial margin:       {result.get('initMarginChange', 'N/A')}",
-            f"  Maintenance margin:   {result.get('maintMarginChange', 'N/A')}",
-            f"  Buying power effect:  {result.get('equity', {}).get('change', 'N/A')}",
-        ]
-        return "\n".join(lines), None
+        headline = f"Order Preview: {action} {quantity} {symbol} ({order_type})"
+        return _format_order_preview(result, headline), None
 
     def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return real-time account/model-partition P&L (daily + unrealized), not per-position.

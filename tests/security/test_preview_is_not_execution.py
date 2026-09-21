@@ -131,7 +131,17 @@ def test_the_preview_tool_reaches_only_the_whatif_method(mock_config):
         {"name": "TEST", "assetClass": "STK", "contracts": [{"conid": 265598, "exchange": "NASDAQ", "isUS": True}]}
     ]
     client.get_accounts.return_value = [{"accountId": "U1234567"}]
-    client.get_order_preview.return_value = {"commission": "1.00", "equity": {"amount": "1", "change": "0"}}
+    # IBKR's real whatif shape (captured live 2026-09-21), not one invented to match the
+    # reader — see LIVE_PREVIEW_ACCEPTED in tests/claude_tools/test_orders.py for why.
+    client.get_order_preview.return_value = {
+        "amount": {"amount": "185 USD", "commission": "1.00 USD", "total": "186.00 USD"},
+        "equity": {"current": "51,058", "change": "-1", "after": "51,057"},
+        "initial": {"current": "8,033", "change": "185", "after": "8,218"},
+        "maintenance": {"current": "7,651", "change": "139", "after": "7,790"},
+        "position": {"current": "0", "change": "1", "after": "1"},
+        "error": None,
+        "warns": [],
+    }
     toolkit = ClaudeToolkit(client, MagicMock(), MagicMock(), mock_config)
 
     text, _ = toolkit.execute("preview_order", {"symbol": "TEST", "action": "BUY", "quantity": 1})

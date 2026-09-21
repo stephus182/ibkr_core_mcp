@@ -6,6 +6,120 @@ from .conftest import assert_tool_failed
 
 pytestmark = pytest.mark.orders
 
+# The shape `POST /iserver/account/{acct}/orders/whatif` ACTUALLY returns, captured live on
+# 2026-09-21 against ESZ6 (conid 515416632). It is here because the mock that stood in these
+# tests until that date was invented to match the code rather than IBKR:
+#
+#     {"commission": "1.05", "equity": {"amount": ...}, "initMarginChange": "500",
+#      "maintMarginChange": "300"}
+#
+# IBKR sends none of those four keys. `_preview_order` read all four, so every margin figure
+# and the commission rendered "N/A" on every real call, and the tests stayed green because
+# they asserted the REQUEST payload and that the text contained "Order Preview" — never a
+# single rendered figure. A double easier than the real thing keeps a broken path green
+# forever; this constant exists so that cannot recur.
+LIVE_PREVIEW_ACCEPTED = {
+    "amount": {"amount": "362,500 USD", "commission": "2.24 USD", "total": "362,502.24 USD"},
+    "equity": {"current": "51,058", "change": "-2", "after": "51,056"},
+    "initial": {"current": "8,033", "change": "24,603", "after": "32,636"},
+    "maintenance": {"current": "7,651", "change": "18,474", "after": "26,125"},
+    "position": {"current": "-1", "change": "1", "after": "0"},
+    "warn": "5/The estimated order value of 362,500 USD exceeds the value limit of 100,000 USD.",
+    "error": None,
+    "warns": [
+        "5/The estimated order value of 362,500 USD exceeds the value limit of 100,000 USD.",
+        "25/<h4>Confirm Mandatory Cap Price</h4>To avoid trading at a price that is not "
+        "consistent with a fair and orderly market, IB may set a cap (for a buy order) or "
+        "floor (for a sell order).",
+    ],
+    "accruedInterest": None,
+}
+
+# Same endpoint, same account, an order it cannot support — captured live 2026-09-21 on a
+# BUY 2 ES. Note IBKR's own "—" for a commission it will not quote: that em-dash is IBKR's
+# value, not this package's absence marker.
+LIVE_PREVIEW_REFUSED = {
+    "amount": {"amount": "725,000 USD", "commission": "—", "total": "—"},
+    "equity": {"current": "51,034", "change": "-4", "after": "51,029"},
+    "initial": {"current": "8,033", "change": "49,208", "after": "57,241"},
+    "maintenance": {"current": "7,651", "change": "36,949", "after": "44,600"},
+    "position": {"current": "-1", "change": "2", "after": "1"},
+    "error": (
+        "The Available Funds in your Commodities segment are insufficient to cover the "
+        "change in the margin requirements in your Commodities segment should this order "
+        "execute. In order to obtain the desired position, your Commodities Net "
+        "Liquidation Value [43378.26 USD]  must exceed the new total initial Margin of "
+        "[49207.72 USD]."
+    ),
+    "warns": [
+        "5/The estimated order value of 725,000 USD exceeds the value limit of 100,000 USD.",
+        "12/The closing order quantity is greater than your current position.",
+    ],
+}
+
+
+def _preview(toolkit, response, **over):
+    """Run preview_order against `response` and return the rendered text."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = dict(response)
+    inputs = {"symbol": "AAPL", "action": "BUY", "quantity": 1, "order_type": "MKT"}
+    inputs.update(over)
+    text, _ = toolkit.execute("preview_order", inputs)
+    return text
+
+
+def test_preview_renders_every_figure_ibkr_actually_sends(toolkit):
+    """Each figure comes from the key IBKR uses, not the key the code used to guess.
+
+    Fails against the pre-2026-09-21 reader, which produced "N/A" for four of five lines.
+    """
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
+    assert "362,500 USD" in text, text  # amount.amount
+    assert "2.24 USD" in text, text  # amount.commission, NOT result["commission"]
+    assert "24,603" in text, text  # initial.change, NOT initMarginChange
+    assert "18,474" in text, text  # maintenance.change, NOT maintMarginChange
+    assert "51,058" in text, text  # equity.current, NOT equity.amount
+    assert "N/A" not in text, text
+
+
+def test_a_preview_ibkr_refused_says_so_before_any_figure(toolkit):
+    """The refusal is the answer a preview exists to give.
+
+    Until 2026-09-21 `error` was never read, so this response rendered identically to an
+    accepted one and the model reported a clean preview for an order IBKR would not take.
+    """
+    text = _preview(toolkit, LIVE_PREVIEW_REFUSED, quantity=2)
+    assert "REFUSED" in text, text
+    assert "Available Funds" in text, text
+    # Before the figures, so it cannot be skimmed past.
+    assert text.index("REFUSED") < text.index("Order value"), text
+
+
+def test_an_accepted_preview_does_not_claim_a_refusal(toolkit):
+    """The discriminating half: `error: None` must not render as a refusal."""
+    assert "REFUSED" not in _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
+
+
+def test_preview_surfaces_ibkr_warnings_with_html_stripped_onto_one_line(toolkit):
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
+    assert "Warnings (2)" in text, text
+    assert "Confirm Mandatory Cap Price" in text, text
+    assert "<h4>" not in text, text
+    for line in text.splitlines():
+        if "Confirm Mandatory Cap Price" in line:
+            assert line.lstrip().startswith("- "), f"warning wrapped off its bullet: {line!r}"
+            break
+    else:
+        raise AssertionError("the cap-price warning never appeared")
+
+
+def test_a_block_ibkr_omits_is_named_absent_never_rendered_as_a_number(toolkit):
+    """No block, no guess — the same rule the Gate 2 rows follow."""
+    text = _preview(toolkit, {"amount": {"amount": "1 USD"}})
+    assert "not reported by IBKR" in text, text
+    assert "None" not in text, text
+
 
 def test_execute_get_live_orders_filters_filled(toolkit):
     # The client-layer filtering is already tested in test_client.py;
@@ -29,12 +143,7 @@ def test_execute_get_live_orders_shows_working_orders(toolkit):
 def test_preview_order_lmt_includes_price(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit._client.get_order_preview.return_value = {
-        "commission": "1.05",
-        "equity": {"amount": 99000, "change": -18200},
-        "initMarginChange": "500",
-        "maintMarginChange": "300",
-    }
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
     text, _fig = toolkit.execute(
         "preview_order",
         {
@@ -53,7 +162,7 @@ def test_preview_order_lmt_includes_price(toolkit):
 def test_preview_order_mkt_no_price(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit._client.get_order_preview.return_value = {"commission": "0.00"}
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
     toolkit.execute("preview_order", {"symbol": "AAPL", "action": "BUY", "quantity": 10, "order_type": "MKT"})
     call_order = toolkit._client.get_order_preview.call_args[0][1]
     assert "price" not in call_order
@@ -65,7 +174,7 @@ def test_preview_order_stp_maps_stop_price_to_price(toolkit):
     Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit._client.get_order_preview.return_value = {"commission": "1.00"}
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
     text, _ = toolkit.execute(
         "preview_order",
         {
@@ -88,7 +197,7 @@ def test_preview_order_stop_limit_maps_limit_to_price_and_stop_to_aux(toolkit):
     Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
-    toolkit._client.get_order_preview.return_value = {"commission": "1.00"}
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
     toolkit.execute(
         "preview_order",
         {
@@ -437,7 +546,7 @@ def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
     """
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_futures.return_value = [{"conid": 515416632, "symbol": "ES", "expirationDate": "20261218"}]
-    toolkit._client.get_order_preview.return_value = {"commission": "2.24"}
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
 
     toolkit.execute(
         "preview_order",
