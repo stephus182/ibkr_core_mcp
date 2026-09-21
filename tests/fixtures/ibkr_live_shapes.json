@@ -2272,6 +2272,39 @@
     ],
     "symbol": "REDACTED"
   },
+  "order_preview": {
+    "amount": {
+      "amount": "REDACTED",
+      "commission": "REDACTED",
+      "total": "REDACTED"
+    },
+    "equity": {
+      "current": "REDACTED",
+      "change": "1111.11",
+      "after": "REDACTED"
+    },
+    "initial": {
+      "current": "REDACTED",
+      "change": "1111.11",
+      "after": "REDACTED"
+    },
+    "maintenance": {
+      "current": "REDACTED",
+      "change": "1111.11",
+      "after": "REDACTED"
+    },
+    "position": {
+      "current": "1111.11",
+      "change": "1111.11",
+      "after": "1111.11"
+    },
+    "warn": "REDACTED",
+    "error": null,
+    "warns": [
+      "REDACTED"
+    ],
+    "accruedInterest": null
+  },
   "orders_raw": {
     "orders": [
       {

@@ -530,6 +530,11 @@ _NO_MODEL_BY_DESIGN = {
     "combo_positions": "the capture is empty; a model could only be tested against a shape we invented",
     "pa_transactions": "the capture is empty; a model could only be tested against a shape we invented",
     "positions_by_conid": "the capture is empty; a model could only be tested against a shape we invented",
+    "order_preview": (
+        "margin/commission blocks IBKR renders as pre-formatted strings ('250,000 USD', '1111.11'), "
+        "plus `warns` whose entries are HTML — a model would have to parse presentation, and the "
+        "shape is guarded where it matters by tests/test_readers_against_live_shapes.py"
+    ),
 }
 
 

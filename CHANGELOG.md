@@ -9,6 +9,51 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **A control for the class the `preview_order` defect belonged to: a reader may not index a
+  key IBKR does not send.** The defect was possible because the whatif's shape was missing
+  from `tests/fixtures/ibkr_live_shapes.json`, so every test invented one — and an invented
+  shape matches whatever the reader already does.
+
+  The omission was deliberate and documented: the capture script is read-only and records
+  that `get_order_preview` "simulates but still POSTs an order body, so it is captured only
+  with the owner present and asking for it". That condition was met on 2026-09-21, so it is
+  now captured through `scripts/audit/redact_live_payload.py` and registered (41 endpoints),
+  with a price deliberately far from the market.
+
+  `tests/test_readers_against_live_shapes.py` runs a reader against that captured shape
+  through a mapping that records every key lookup which **missed**, then asserts there were
+  none. Values are irrelevant — the fixture's are all `REDACTED` / `1111.11` — because the
+  defect was never about values, so a redacted shape proves it exactly as well as a live one.
+
+  `modify_order` is deliberately **not** registered: it is a real write against a resting
+  order, a capture script that writes is not a capture script, and the registry's own guard
+  (`test_every_captured_endpoint_is_typed_or_reasoned`) enforces that every entry be
+  reproducible by the capture script. Its shape is pinned from IBKR's documented example in
+  `tests/test_client.py` instead.
+
+### Security
+- **The redaction guard covered one file while real account balances were committed in
+  another.** `tests/security/test_published_identifiers.py` holds a redactor and two
+  allow-lists against `tests/fixtures/ibkr_live_shapes.json` — and only that file. On
+  2026-09-21 equity with loan value, Commodities net liquidation value and margin
+  requirements were committed to this public repository inside a hand-written test constant
+  named `LIVE_PREVIEW_ACCEPTED`, two directories away, with every guard green. The control
+  covered the instance, not the class.
+
+  A `LIVE_*` payload written as a dict/list **literal** must now be declared synthetic with
+  a reason. A constant built from the redacted fixture is a function call, not a literal, so
+  it is never flagged — no exemption is needed and none is offered.
+
+  The first version of this test had one, `"ibkr_live_shapes" not in path.read_text()`, and
+  it made the control **vacuous**: the file mentions that name in a comment, so the very
+  mistake being guarded walked through it. Proven by re-running the check with the
+  declaration removed — it reported nothing — and the clause was deleted rather than
+  patched. A control that cannot fail is worse than none: it also spends the attention that
+  would have noticed the gap.
+
+  Limits are stated in the test: it keys on the constant's NAME and does not inspect values.
+
 ### Fixed
 - **A modify that raised an IBKR precaution silently did nothing.** `modify_order_and_confirm`
   fed `modify_order`'s response straight into `while "id" in response`. On a dict that is a

@@ -358,3 +358,98 @@ def test_the_fixture_still_validates_against_the_models():
     payload = json.loads(FIXTURE.read_text())
     assert len(json.dumps(payload)) > 20_000, "the fixture has been gutted, not redacted"
     assert payload["positions"] and payload["trades"] and payload["account_summary"]
+
+
+# ── Captured payloads OUTSIDE the fixture ─────────────────────────────────────
+#
+# Added 2026-09-21, after real account balances — equity with loan value, Commodities net
+# liquidation value, initial and maintenance margin — were committed to this PUBLIC
+# repository inside a hand-written test constant called `LIVE_PREVIEW_ACCEPTED`.
+#
+# Everything above guards `tests/fixtures/ibkr_live_shapes.json` and **only** that file.
+# It passed while the leak sat two directories away. The control covered the instance, not
+# the class.
+#
+# A full solution would recognise a captured IBKR payload anywhere in the suite, which is
+# not decidable from source. This is the tractable part of it: a constant whose NAME claims
+# live provenance must say which kind it is. Naming something `LIVE_*` and pasting real
+# figures into it is exactly the mistake that happened, and it now fails here until the
+# author declares the constant synthetic — a line a reviewer can see.
+#
+# Limits, stated so this is not mistaken for more than it is:
+#   * it keys on the NAME. A real payload in a constant called `_SAMPLE` is not caught.
+#   * it does not inspect values. A constant declared synthetic is taken at its word.
+# What it does buy: you cannot add a payload that *claims* to be live without a deliberate,
+# reviewable declaration, and the declaration is where "did you redact this?" gets asked.
+
+# Constants whose name says LIVE and whose values are FABRICATED. Each needs a reason.
+SYNTHETIC_LIVE_CONSTANTS = {
+    # Keys and nesting captured from the whatif on 2026-09-21; every figure replaced.
+    # The shape is what catches a reader indexing keys IBKR does not send, so the numbers
+    # carry no weight — and a whatif response is nothing but account balances.
+    ("tests/claude_tools/test_orders.py", "LIVE_PREVIEW_ACCEPTED"),
+    ("tests/claude_tools/test_orders.py", "LIVE_PREVIEW_REFUSED"),
+    # One alert detail body. Pre-dates this control; kept as declared rather than silently
+    # grandfathered, so its provenance is written down like the others.
+    ("tests/claude_tools/test_alerts.py", "_LIVE_ALERT_DETAIL"),
+}
+
+
+def _live_named_constants():
+    """Module-level constants in tests/ whose name claims live provenance."""
+    import ast
+
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict | ast.List):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and "LIVE" in target.id.upper():
+                    yield str(path.relative_to(REPO_ROOT)), target.id
+
+
+def test_every_live_named_payload_constant_is_declared_synthetic():
+    """A `LIVE_*` constant written as a dict/list LITERAL must be declared synthetic.
+
+    Fails for a NEW `LIVE_*` payload nobody has declared — the 2026-09-21 mistake, caught
+    where it would be made rather than after it is published.
+
+    **There is deliberately no exemption for "the file reads the fixture".** The first
+    version of this test had one — `"ibkr_live_shapes" not in path.read_text()` — and it
+    made the whole control VACUOUS: `test_orders.py` mentions that filename in a comment,
+    so the mistake this test exists to catch walked straight through it. Proven by
+    re-running the check with the declaration removed: it reported nothing.
+
+    None is needed. `_live_named_constants` only yields dict/list **literals**; a constant
+    built from the fixture is a Call (`json.loads(...)`) and is never yielded. So the
+    scanner cannot see a registry-derived constant, and every literal it does see is a
+    hand-written payload that has to be declared.
+    """
+    undeclared = [
+        (path, name) for path, name in _live_named_constants() if (path, name) not in SYNTHETIC_LIVE_CONSTANTS
+    ]
+    assert not undeclared, (
+        "payload constants claim live provenance but are not declared synthetic and do not "
+        f"read the redacted fixture: {undeclared}. Either build it from "
+        "tests/fixtures/ibkr_live_shapes.json, or add it to SYNTHETIC_LIVE_CONSTANTS with "
+        "the reason its values are fabricated. Real account figures must not be committed: "
+        "both repositories are public."
+    )
+
+
+def test_the_declared_synthetic_list_has_not_gone_stale():
+    """A declaration for a constant that no longer exists is a stale exemption — it reads
+    as coverage and provides none, the same failure this whole file exists to prevent."""
+    present = set(_live_named_constants())
+    stale = [entry for entry in SYNTHETIC_LIVE_CONSTANTS if entry not in present]
+    assert not stale, f"declared synthetic, but no longer in the tree: {stale}"
+
+
+def test_the_live_constant_scan_is_not_vacuous():
+    """If the walker finds nothing, both tests above pass for free."""
+    found = list(_live_named_constants())
+    assert len(found) >= 3, f"the scan found {len(found)} live-named constants: {found}"

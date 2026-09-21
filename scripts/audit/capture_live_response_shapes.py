@@ -191,9 +191,32 @@ def main(out_path: str) -> int:
         "scanner_params": lambda: client.get_scanner_params(),
         "pa_periods": lambda: client.get_pa_periods([account_id]),
         # ---- second capture pass, 2026-09-17 (API-11's remaining 61) --------------
-        # Read-only only. Nothing here writes, and no order or alert endpoint appears:
-        # `get_order_preview` simulates but still POSTs an order body, so it is captured
-        # only with the owner present and asking for it.
+        # Read-only only. Nothing here writes, and no order or alert endpoint appears.
+        #
+        # `get_order_preview` is the one exception, added 2026-09-21 with the owner present
+        # and asking — the condition this comment already set. It POSTs an order body to
+        # `/orders/whatif`, which simulates and places nothing, and it is the ONLY entry
+        # here that posts anything. It earns the exception: a reader indexing keys the
+        # whatif does not send shipped undetected precisely because this shape was missing,
+        # and every test then invented one (see tests/test_readers_against_live_shapes.py).
+        # The price is deliberately absurd so the simulated order is never near the market.
+        #
+        # `modify_order` is NOT here and must not be. It is a real write against a resting
+        # order; its shape is pinned from IBKR's documented example in tests/test_client.py
+        # instead. A capture script that writes is not a capture script.
+        "order_preview": lambda: client.get_order_preview(
+            account_id,
+            {
+                "conid": conid,
+                "orderType": "LMT",
+                "side": "BUY",
+                "tif": "DAY",
+                "quantity": 1,
+                "price": 1.00,
+                "ticker": "AAPL",
+                "acctId": account_id,
+            },
+        ),
         "subaccounts": lambda: client.get_subaccounts(),
         "orders_raw": lambda: client.get_orders_raw(),
         "secdef_info": lambda: client.get_secdef_info(conid),
