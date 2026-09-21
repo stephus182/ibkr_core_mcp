@@ -44,6 +44,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   claudia_ui carries the same rule in its own order path; tracked as its Known Gaps #58.
 
 ### Added
+- **`confirm_bracket_dialog` — Gate 2 for a bracket: ONE dialog carrying the parent and every
+  child.** One dialog, not one per leg, is the whole point: two dialogs would permit the parent
+  to be sent with the child declined, which is precisely the state a bracket exists to prevent —
+  a resting position with no exit. The human approves the pair as one instruction or sends
+  nothing. `place_order` / `place_order_and_confirm` / `confirm_order_dialog` are untouched; the
+  live-proven single-order path gains no branch.
+
+  **It formats nothing.** Every value on screen comes from `_order_rows`, the same typed row
+  builder the place, modify and cancel dialogs use, so the currency rule (ISO code or nothing),
+  the price-precision rule, the futures-notional rule and the missing-price wording cannot drift
+  between a single order and a bracket leg. This function composes and labels only.
+
+  **The child is shown as held, never as working.** `PreSubmitted` is a working state for a
+  single order and a held one for a bracket child, and that difference is the one thing the
+  human needs to understand about the second leg.
+
+  **Exactly one notional row, and it names whose it is** — `Parent notional (est.)`. A bracket's
+  legs are opposite, so a row called `Total` would be read as their sum; the child's notional is
+  left off rather than printed beside the parent's and mentally added.
+
+  **Five refusals, each a refusal and never a correction:** no child; a parent carrying no side
+  (the opposite-side rule is unverifiable without it, and the banner is the pre-attentive cue);
+  a child on the parent's own side; a child carrying no `parentId` (it would reach IBKR as a
+  standalone order, live immediately); and a child naming a **different contract** from the
+  parent.
+
+  That last one matters because **nothing upstream can catch it**. `_bracket_tickets` validates
+  the `cOID`↔`parentId` link and says nothing about the instrument, and the whatif cannot help:
+  measured live 2026-09-20, a child on a *different instrument* returns a response byte-identical
+  to a valid one, because the preview reads the first ticket and discards the rest. Gate 2 is the
+  only surface that can see it.
+
+  **Display keys are inherited from the parent, and only after that check.** A bracket child is
+  the same contract by construction, so a child carrying no `_companyName` / `_multiplier` /
+  `_currency` of its own takes the parent's. Measured 2026-09-21 by rendering one ES bracket both
+  ways: without inheritance the child's `Symbol` row drops to `ES` where the parent reads
+  `ES — ESU6 · SEP26 · expires 2026-09-18`, and its `Quantity` to `1` where the parent reads
+  `1 (×50 per contract)` — one instrument, one dialog, two descriptions, with the month and the
+  multiplier missing from the leg the human has never seen before. Inheritance fills gaps only, a
+  key the child carries always wins, and it runs *after* the contract check so it can never print
+  the parent's own name over a mismatched child. (The price rows do not diverge: a bare child
+  carries no `_currency` either. An earlier draft of this claimed a `USD` suffix on the child's
+  price; that was wrong, and the measurement above replaced it.)
+
+  Two legs of one kind — a scale-out — are kept distinct (`Profit taker`, `Profit taker 2`)
+  rather than collapsing onto one set of rows, which would have the human authorise two live
+  children having been shown one.
+
 - **`get_bracket_preview` — whatif for a parent + attached children, read-only and ungated.**
   A bracket is one request carrying an *array* of tickets, so it cannot go through
   `get_order_preview`, which posts a single one. `_bracket_tickets` validates IBKR's stated
@@ -99,6 +147,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization
 
 ### Changed
+- **The "every Gate 2 dialog" controls now enumerate the dialogs structurally.**
+  `test_every_gate2_dialog_passes_an_explicit_abandon_label` and
+  `test_no_gate2_dialog_offers_two_buttons_sharing_a_first_word` assert over a list written by
+  hand, under a comment warning that a control of this kind "has to cover the class or it will
+  pass again the next time a dialog is added". Adding a fifth dialog is exactly that moment: it
+  would have been silently exempt from both. The list is now itself asserted against the module —
+  every public `confirm_*_dialog` must appear in it — so the next dialog cannot be added without
+  either joining the controls or failing the suite.
+
 - **The per-process pacing limitation is stated where a user will actually meet it.**
   `EndpointPacer` budgets per process while IBKR's limit is per IP — documented since 2.0.0 in
   `rate_limiter.py`, `docs/gateway-auth-reference.md` and this changelog, none of which the PyPI

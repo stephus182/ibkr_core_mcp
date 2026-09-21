@@ -425,11 +425,45 @@ def _invoke_every_gate2_dialog():
         ("confirm_modify_dialog", lambda: oc.confirm_modify_dialog("8001", {"side": "SELL", "quantity": 2}, "U123")),
         ("confirm_cancel_dialog", lambda: oc.confirm_cancel_dialog("8001", "U123", {"side": "BUY", "quantity": 1})),
         ("confirm_reply_dialog", lambda: oc.confirm_reply_dialog("r-1", "some warning")),
+        (
+            "confirm_bracket_dialog",
+            lambda: oc.confirm_bracket_dialog(
+                {"ticker": "ES", "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 7725.0, "cOID": "C-1"},
+                [
+                    {
+                        "ticker": "ES",
+                        "side": "BUY",
+                        "quantity": 1,
+                        "orderType": "LMT",
+                        "price": 7700.0,
+                        "parentId": "C-1",
+                    }
+                ],
+                "U123",
+            ),
+        ),
     )
     for name, call in cases:
         with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
             call()
         yield name, mock_show.call_args.kwargs
+
+
+def test_the_gate2_dialog_enumeration_covers_every_confirm_dialog():
+    """The two controls below are only as wide as the list above, and that list is written
+    by hand — so a dialog added without a case in it is silently exempt from both. That is
+    the exact failure the class-level framing exists to prevent ("it will pass again the
+    next time a dialog is added"), so the list is itself asserted against the module.
+    """
+    import ibkr_core_mcp.order_confirm as oc
+
+    public = {
+        name
+        for name in dir(oc)
+        if name.startswith("confirm_") and name.endswith("_dialog") and callable(getattr(oc, name))
+    }
+    covered = {name for name, _ in _invoke_every_gate2_dialog()}
+    assert public == covered, f"Gate 2 dialogs not enumerated: {sorted(public - covered)}"
 
 
 def test_every_gate2_dialog_passes_an_explicit_abandon_label():
@@ -1321,3 +1355,258 @@ def test_the_tkinter_dialog_gives_no_button_a_default_or_a_return_binding():
     dialog = mock_tk.Toplevel.return_value
     bound = [str(call.args[0]) for call in dialog.bind.call_args_list]
     assert not [b for b in bound if "Return" in b or "KP_Enter" in b], f"a Return key is bound on the dialog: {bound}"
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 for a bracket — one dialog, both legs (claudia_ui gap #36, Phase 1 Task 1.1)
+# ---------------------------------------------------------------------------
+
+
+def _bracket_parent() -> dict[str, Any]:
+    return {
+        "ticker": "ES",
+        "side": "SELL",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7725.0,
+        "tif": "GTC",
+        "cOID": "CLAUDIA-1",
+        "_multiplier": 50,
+        "_currency": "USD",
+        "_companyName": "ESU6 · SEP26 · expires 2026-09-18",
+    }
+
+
+def _bracket_child(**overrides: Any) -> dict[str, Any]:
+    child = {
+        "ticker": "ES",
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7700.0,
+        "tif": "GTC",
+        "parentId": "CLAUDIA-1",
+    }
+    child.update(overrides)
+    return child
+
+
+def _bracket_call(parent: dict[str, Any], children: list[dict[str, Any]]) -> dict[str, Any]:
+    """Every kwarg `confirm_bracket_dialog` hands the shared renderer."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_bracket_dialog(parent, children, "U1234567")
+    return dict(mock_show.call_args.kwargs)
+
+
+def _bracket_details(parent: dict[str, Any], children: list[dict[str, Any]]) -> dict[str, Any]:
+    """Just the display rows."""
+    return dict(_bracket_call(parent, children)["details"])
+
+
+def test_bracket_dialog_shows_both_legs_in_one_call():
+    """One Gate 2 for the pair: the human sees the parent AND the child before SEND.
+
+    D4 — two dialogs would allow the parent to go with the child declined, the exact
+    state the design forbids.
+    """
+    kwargs = _bracket_call(_bracket_parent(), [_bracket_child()])
+    assert kwargs["title"] == "⚠  LIVE BRACKET ORDER CONFIRMATION"
+    assert kwargs["confirm_label"] == "SEND TO IBKR"
+    assert kwargs["abandon_label"] == "DO NOT SEND"
+    d = kwargs["details"]
+    assert d["Account"] == "U1234567"
+    assert d["Parent — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Parent — Quantity"] == "1 (×50 per contract)"
+    assert d["Parent — Order Type"] == "LMT"
+    assert d["Parent — Price"] == "7,725.00"
+    assert d["Parent — TIF"] == "GTC"
+    assert d["Profit taker — Action"] == "BUY"
+    assert d["Profit taker — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Profit taker — Order Type"] == "LMT"
+    assert d["Profit taker — Price"] == "7,700.00"
+    assert d["Profit taker — TIF"] == "GTC"
+
+
+def test_bracket_dialog_says_the_child_is_held_never_working():
+    """`PreSubmitted` is a working state for a single order and a HELD one for a bracket
+    child (review 2026-09-08 item 2). The dialog must never call the child working."""
+    d = _bracket_details(_bracket_parent(), [_bracket_child()])
+    assert d["Profit taker"] == "held by IBKR until the parent fills"
+    rendered = " ".join(f"{k}: {v}" for k, v in d.items()).lower()
+    assert "working" not in rendered
+
+
+def test_bracket_dialog_labels_the_notional_as_the_parents_only():
+    """Review item 8: a bracket's two legs are OPPOSITE, so a row called `Total` would be
+    read as their sum. Exactly one notional row, and it names whose it is."""
+    d = _bracket_details(_bracket_parent(), [_bracket_child()])
+    assert d["Parent notional (est.)"] == "386,250.00 USD (×50 multiplier)"
+    assert "Total (est.)" not in d
+    notionals = [k for k in d if "notional" in k.lower() or "total" in k.lower()]
+    assert notionals == ["Parent notional (est.)"], notionals
+
+
+def test_bracket_dialog_side_colour_is_the_parents():
+    """`_extract_side` reads `Action`: it must be the PARENT's side. The banner is the
+    pre-attentive cue, and a bracket's child is always the opposite side."""
+    d = _bracket_details(_bracket_parent(), [_bracket_child()])
+    assert d["Action"] == "SELL"
+
+
+def test_bracket_dialog_refuses_a_child_on_the_same_side():
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"), pytest.raises(HumanAuthError, match="opposite"):
+        confirm_bracket_dialog(_bracket_parent(), [_bracket_child(side="SELL")], "U1234567")
+
+
+def test_bracket_dialog_refuses_a_child_with_no_parent_link():
+    """A child without `parentId` is a standalone opposite-side order — live immediately,
+    able to open the wrong position (user rule 2026-09-07)."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    child = _bracket_child()
+    del child["parentId"]
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"), pytest.raises(HumanAuthError, match="parent"):
+        confirm_bracket_dialog(_bracket_parent(), [child], "U1234567")
+
+
+def test_bracket_dialog_refuses_a_child_linked_to_a_different_parent():
+    """Defence in depth behind `_bracket_tickets`: a `parentId` that is not this parent's
+    `cOID` links the leg to some other order."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"), pytest.raises(HumanAuthError, match="parent"):
+        confirm_bracket_dialog(_bracket_parent(), [_bracket_child(parentId="SOMEONE-ELSE")], "U1234567")
+
+
+def test_bracket_dialog_refuses_an_empty_child_list():
+    """A bracket with no child is a plain order and must go through `confirm_order_dialog`,
+    which the single-order tests pin."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"), pytest.raises(HumanAuthError, match="no child"):
+        confirm_bracket_dialog(_bracket_parent(), [], "U1234567")
+
+
+def test_bracket_dialog_child_inherits_the_parents_contract_display_keys():
+    """Both legs are the SAME contract (D2), so both must render the same way.
+
+    Measured 2026-09-21 by rendering one ES bracket both ways through `_order_rows`: without
+    inheritance the child's Symbol row drops to `ES` where the parent reads
+    `ES — ESU6 · SEP26 · expires 2026-09-18`, and its Quantity to `1` where the parent reads
+    `1 (×50 per contract)`. One instrument, one dialog, two descriptions — and the leg
+    missing its month and multiplier is the one the human has never seen before.
+
+    The price rows do NOT diverge: a bare child carries no `_currency` either, so both
+    render `7,7xx.00`. An earlier version of this test asserted `"USD" not in` the child's
+    price, which passes with or without the fix — a test that cannot fail is not a control.
+    """
+    d = _bracket_details(_bracket_parent(), [_bracket_child()])
+    assert d["Profit taker — Symbol"] == d["Parent — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Profit taker — Quantity"] == d["Parent — Quantity"] == "1 (×50 per contract)"
+
+
+def test_bracket_dialog_never_overrides_a_display_key_the_child_carries():
+    """Inheritance fills gaps; it never overwrites what the caller established."""
+    d = _bracket_details(_bracket_parent(), [_bracket_child(_companyName="ITS OWN LABEL", _multiplier=50)])
+    assert d["Profit taker — Symbol"] == "ES — ITS OWN LABEL"
+
+
+def test_bracket_dialog_formats_every_value_through_the_one_row_builder():
+    """Review item 8 — one formatter, not two.
+
+    Every currency, precision, multiplier and missing-price rule lives in `_order_rows`.
+    A second formatter for the bracket would drift from it silently, which is how the
+    same price came to render two ways in one dialog before (claudia_ui gap #46). This
+    pins the call, not the appearance: mutate `_order_rows` and this test goes red.
+    """
+    import ibkr_core_mcp.order_confirm as oc
+
+    with (
+        patch.object(oc, "_order_rows", wraps=oc._order_rows) as spy,
+        patch.object(oc, "_show_confirm_dialog"),
+    ):
+        oc.confirm_bracket_dialog(_bracket_parent(), [_bracket_child()], "U1234567")
+    assert spy.call_count == 2, "each leg must be rendered by the shared row builder"
+
+
+def test_bracket_dialog_shows_a_stop_loss_child_under_its_own_name():
+    """D1 makes the profit taker v1, but the signature takes a list and a `stop_loss`
+    sibling is designed to be additive — a STP child must not be labelled a profit taker."""
+    d = _bracket_details(_bracket_parent(), [_bracket_child(orderType="STP", price=None, auxPrice=7800.0)])
+    assert d["Stop loss"] == "held by IBKR until the parent fills"
+    assert "Profit taker" not in d
+
+
+def test_bracket_dialog_shows_the_outside_rth_attribute_of_each_leg():
+    """R4 (user, 2026-09-21): the child inherits the parent's `outsideRTH`. The dialog
+    shows what each ticket actually carries — it derives nothing here."""
+    d = _bracket_details(_bracket_parent() | {"outsideRTH": True}, [_bracket_child(outsideRTH=True)])
+    assert d["Parent — Outside RTH"] == "Yes"
+    assert d["Profit taker — Outside RTH"] == "Yes"
+
+
+def test_bracket_dialog_refuses_a_parent_with_no_side():
+    """The opposite-side rule is unverifiable without the parent's side, and the banner
+    colour is the pre-attentive cue. Unknown must not be able to pass as checked."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = _bracket_parent()
+    del parent["side"]
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"), pytest.raises(HumanAuthError, match="side"):
+        confirm_bracket_dialog(parent, [_bracket_child()], "U1234567")
+
+
+def test_bracket_dialog_shows_every_child_when_two_are_the_same_kind():
+    """Two legs of one kind must not collapse into one set of rows.
+
+    The rows are keyed by the leg's label, so a second profit taker (a scale-out) would
+    overwrite the first — and the human would authorise two live children having seen one.
+    """
+    d = _bracket_details(
+        _bracket_parent(),
+        [_bracket_child(price=7700.0), _bracket_child(price=7650.0)],
+    )
+    assert d["Profit taker"] == "held by IBKR until the parent fills"
+    assert d["Profit taker 2"] == "held by IBKR until the parent fills"
+    assert d["Profit taker — Price"] == "7,700.00"
+    assert d["Profit taker 2 — Price"] == "7,650.00"
+
+
+def test_bracket_dialog_refuses_a_child_on_a_different_contract():
+    """Gate 2 is the ONLY surface that can catch this.
+
+    `client._bracket_tickets` validates the cOID↔parentId link and nothing about the
+    instrument. The whatif cannot help either: Phase 0 measured live on 2026-09-20 that a
+    child on a *different instrument* returns a response byte-identical to a valid one,
+    because the preview reads the first ticket and silently discards the rest (claudia_ui
+    gap #36). So a bracket whose "profit taker" is on another contract would preview clean,
+    pass the client's validation, and reach IBKR as a resting order on an instrument the
+    human never authorised.
+
+    It must be refused BEFORE the display keys are inherited — inheriting the parent's
+    `_companyName` onto a mismatched child would render the parent's own contract name on
+    the child's rows and hide the mismatch on the last screen before the send.
+    """
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = _bracket_parent() | {"conid": 649180671}
+    child = _bracket_child(conid=999999999)
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog"), pytest.raises(HumanAuthError, match="contract"):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+
+
+def test_bracket_dialog_accepts_a_child_that_names_the_same_contract():
+    """The check is a mismatch refusal, not a requirement that the child carry a conid."""
+    d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child(conid=649180671)])
+    assert d["Profit taker"] == "held by IBKR until the parent fills"
+
+
+def test_bracket_dialog_accepts_a_child_that_carries_no_conid_of_its_own():
+    """The child's conid is derived from the parent (D2), so a ticket without one is normal
+    and must not be refused — only a stated mismatch is."""
+    d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child()])
+    assert d["Profit taker"] == "held by IBKR until the parent fills"

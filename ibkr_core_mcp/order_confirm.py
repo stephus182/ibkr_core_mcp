@@ -343,6 +343,142 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     )
 
 
+# Display-only keys that describe the CONTRACT rather than the ticket. A bracket's child is
+# the same contract as its parent by construction (the child's conid, sec_type and quantity
+# are derived, not asked for), so a child carrying none of its own inherits these.
+#
+# Measured 2026-09-21, rendering one ES bracket both ways through `_order_rows`: without
+# inheritance the child's Symbol row drops to `ES` where the parent reads
+# `ES — ESU6 · SEP26`, and its Quantity to `1` where the parent reads `1 (×50 per
+# contract)`. One instrument, one dialog, two descriptions — and the leg missing its month
+# and multiplier is the one the human has never seen before. (The price rows do NOT diverge:
+# a bare child carries no `_currency` either, so both render `7,7xx.00`. An earlier version
+# of this comment claimed a `USD` suffix on the child's price; that was wrong, and the
+# measurement above is what replaced it.)
+#
+# Inheritance fills gaps only — a key the child carries always wins — and it runs only AFTER
+# the conid check below, because inheriting a contract label onto a child that is NOT that
+# contract would hide the mismatch behind the parent's own name.
+_CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", "_currency")
+
+_HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
+
+
+def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]], account_id: str) -> None:
+    """Gate 2 for a bracket: ONE dialog carrying the parent and every child.
+
+    One dialog, not one per leg, is the whole point (design decision D4): two dialogs would
+    permit the parent to be sent with the child declined, which is precisely the state a
+    bracket exists to prevent — a resting position with no exit. The human approves the pair
+    as one instruction or sends nothing.
+
+    Every value on screen is formatted by `_order_rows`, the same builder the place, modify
+    and cancel dialogs use, so the currency rule (ISO code or nothing), the price precision
+    rule, the futures-notional rule and the missing-price wording cannot drift between a
+    single order and a bracket leg. This function composes and labels; it formats nothing.
+
+    The child is shown as **held**, never as working. `PreSubmitted` is a working state for a
+    single order and a held one for a bracket child, and the difference is the only thing the
+    human needs to understand about the second leg.
+
+    Exactly one notional row is shown and it names whose it is. A bracket's legs are opposite,
+    so a row called `Total` would be read as their sum; the child's notional is left off
+    rather than printed beside the parent's and mentally added (review 2026-09-08 item 8).
+
+    Args:
+        parent: The parent ticket in IBKR body shape, carrying `cOID`, plus display-only keys.
+        children: One or more child tickets, each `parentId`-linked to the parent's `cOID`.
+        account_id: The account the bracket will be sent to.
+
+    Raises:
+        HumanAuthError: The user did not confirm, or the pair is not a bracket — no child, a
+            parent with no side, a child on the parent's own side, a child carrying no
+            `parentId`, a child linked to some other order, or a child naming a different
+            contract from the parent. Each is a refusal, never a correction: order parameters
+            are immutable, and a "bracket" that fails these is a different instruction from
+            the one the human was shown.
+
+    Sources: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md,
+        https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value.md
+    """
+    if not children:
+        raise HumanAuthError("Bracket confirmation refused: no child order in the bracket")
+    parent_side = str(parent.get("side", "")).strip().upper()
+    if not parent_side:
+        raise HumanAuthError("Bracket confirmation refused: the parent carries no side")
+    parent_coid = str(parent.get("cOID") or "").strip()
+    inherited = {key: parent[key] for key in _CONTRACT_DISPLAY_KEYS if key in parent}
+
+    parent_rows = _order_rows(parent, account_id)
+    details: dict[str, Any] = {
+        "Account": parent_rows.pop("Account"),
+        "Action": parent_rows.pop("Action"),  # the PARENT's side — it decides the banner colour
+    }
+    notional = parent_rows.pop("Total (est.)", None)
+    for key, value in parent_rows.items():
+        details[f"Parent — {key}"] = value
+    if notional is not None:
+        details["Parent notional (est.)"] = notional
+
+    seen: dict[str, int] = {}
+    for child in children:
+        child_side = str(child.get("side", "")).strip().upper()
+        if not child_side or child_side == parent_side:
+            raise HumanAuthError("Bracket confirmation refused: a child must be the opposite side of the parent")
+        link = str(child.get("parentId") or "").strip()
+        if not link:
+            raise HumanAuthError(
+                "Bracket confirmation refused: a child carries no parentId, so it would reach "
+                "IBKR as a standalone order and be live immediately"
+            )
+        if parent_coid and link != parent_coid:
+            raise HumanAuthError("Bracket confirmation refused: a child's parentId does not name this parent")
+        # Nothing upstream can catch a child on the wrong instrument. `client._bracket_tickets`
+        # validates the cOID↔parentId link and says nothing about the contract, and the whatif
+        # cannot help: measured live 2026-09-20, a child on a DIFFERENT instrument returns a
+        # response byte-identical to a valid one, because the preview reads the first ticket and
+        # discards the rest (claudia_ui gap #36, Phase 0). This dialog is the only surface that
+        # can see it. Checked here, before the display keys are inherited: inheriting the
+        # parent's `_companyName` onto a mismatched child would print the parent's own contract
+        # name on the child's rows and hide the mismatch on the last screen before the send.
+        # A child carrying no conid is normal — it is derived from the parent — so only a
+        # STATED mismatch is refused, never an absence.
+        parent_conid, child_conid = parent.get("conid"), child.get("conid")
+        if parent_conid is not None and child_conid is not None and str(child_conid) != str(parent_conid):
+            raise HumanAuthError("Bracket confirmation refused: a child is on a different contract from the parent")
+        # LMT reads as the profit taker; anything else is the protective leg. The label is
+        # cosmetic — the link and the side are what were just checked.
+        kind = "Profit taker" if str(child.get("orderType") or "").strip().upper() in ("LMT", "LIMIT") else "Stop loss"
+        seen[kind] = seen.get(kind, 0) + 1
+        if seen[kind] > 1:
+            # Two legs of one kind (a scale-out) must not collapse onto one set of rows: the
+            # rows are keyed by this label, so the second would overwrite the first and the
+            # human would authorise two live children having been shown one.
+            kind = f"{kind} {seen[kind]}"
+        rows = _order_rows({**inherited, **child}, account_id)
+        rows.pop("Account", None)
+        rows.pop("Total (est.)", None)
+        details[kind] = _HELD_UNTIL_PARENT_FILLS
+        for key, value in rows.items():
+            details[f"{kind} — {key}"] = value
+
+    # No `action=`: a bracket IS a placement, so the banner stays the parent's side and colour
+    # — the exposure being opened — exactly as the place dialog's does. `_banner` special-cases
+    # only CANCEL and MODIFY, the two acts whose verb must beat the side. The word BRACKET is
+    # carried by the title, and each leg is named on its own rows.
+    _show_confirm_dialog(
+        title="⚠  LIVE BRACKET ORDER CONFIRMATION",
+        details=details,
+        disclaimer=(
+            "This is a LIVE bracket. The parent order is sent to Interactive Brokers now; "
+            "each child becomes live the moment the parent fills. Real financial transactions "
+            "may result that cannot be undone."
+        ),
+        confirm_label="SEND TO IBKR",
+        abandon_label="DO NOT SEND",
+    )
+
+
 def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str) -> None:
     """Gate 2 for modify_order. Raises HumanAuthError if the user does not confirm.
 
