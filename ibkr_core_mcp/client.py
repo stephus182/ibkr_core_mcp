@@ -2489,8 +2489,8 @@ class IBKRClient:
         `_as_reply_list` is right for `place_order`'s array.
 
         Live 2026-09-21: a parent-price modify was accepted with **no reply chain at all** —
-        the place of the same order raised a value-limit precaution at 365,000 USD and the
-        modify at 362,500 USD, still over the same 100,000 USD limit, raised none. So IBKR does
+        the place of the same order raised the account's value-limit precaution, and the modify
+        to a slightly lower price, still over that same limit, raised none. So IBKR does
         not re-raise that precaution on modify, and **the modify reply chain remains
         un-exercised live**; only the place_order 3-reply chain has been (see
         place_order_and_confirm()'s docstring). The fix above rests on IBKR's documented shape

@@ -135,9 +135,9 @@ def test_the_preview_tool_reaches_only_the_whatif_method(mock_config):
     # reader — see LIVE_PREVIEW_ACCEPTED in tests/claude_tools/test_orders.py for why.
     client.get_order_preview.return_value = {
         "amount": {"amount": "185 USD", "commission": "1.00 USD", "total": "186.00 USD"},
-        "equity": {"current": "51,058", "change": "-1", "after": "51,057"},
-        "initial": {"current": "8,033", "change": "185", "after": "8,218"},
-        "maintenance": {"current": "7,651", "change": "139", "after": "7,790"},
+        "equity": {"current": "60,000", "change": "-1", "after": "59,999"},
+        "initial": {"current": "10,000", "change": "185", "after": "10,185"},
+        "maintenance": {"current": "9,000", "change": "139", "after": "7,790"},
         "position": {"current": "0", "change": "1", "after": "1"},
         "error": None,
         "warns": [],

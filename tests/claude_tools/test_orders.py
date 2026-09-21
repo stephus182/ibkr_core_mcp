@@ -18,16 +18,25 @@ pytestmark = pytest.mark.orders
 # they asserted the REQUEST payload and that the text contained "Order Preview" — never a
 # single rendered figure. A double easier than the real thing keeps a broken path green
 # forever; this constant exists so that cannot recur.
+#
+# **The KEYS and nesting are IBKR's, captured live. The NUMBERS are synthetic.** Both
+# repositories are public, and a whatif response is full of account balances — equity
+# with loan value, net liquidation, margin requirements. What makes these fixtures
+# catch the defect is the SHAPE the reader indexes into, so nothing is lost by
+# replacing the figures. `tests/fixtures/ibkr_live_shapes.json` has a redactor and a
+# security test for this; a hand-written capture in an ordinary test file has neither,
+# which is how real balances reached a public commit on 2026-09-21 before being
+# scrubbed at HEAD.
 LIVE_PREVIEW_ACCEPTED = {
-    "amount": {"amount": "362,500 USD", "commission": "2.24 USD", "total": "362,502.24 USD"},
-    "equity": {"current": "51,058", "change": "-2", "after": "51,056"},
-    "initial": {"current": "8,033", "change": "24,603", "after": "32,636"},
-    "maintenance": {"current": "7,651", "change": "18,474", "after": "26,125"},
+    "amount": {"amount": "250,000 USD", "commission": "2.50 USD", "total": "250,002.50 USD"},
+    "equity": {"current": "60,000", "change": "-2", "after": "59,998"},
+    "initial": {"current": "10,000", "change": "20,000", "after": "30,000"},
+    "maintenance": {"current": "9,000", "change": "15,000", "after": "24,000"},
     "position": {"current": "-1", "change": "1", "after": "0"},
-    "warn": "5/The estimated order value of 362,500 USD exceeds the value limit of 100,000 USD.",
+    "warn": "5/The estimated order value of 250,000 USD exceeds the value limit of 100,000 USD.",
     "error": None,
     "warns": [
-        "5/The estimated order value of 362,500 USD exceeds the value limit of 100,000 USD.",
+        "5/The estimated order value of 250,000 USD exceeds the value limit of 100,000 USD.",
         "25/<h4>Confirm Mandatory Cap Price</h4>To avoid trading at a price that is not "
         "consistent with a fair and orderly market, IB may set a cap (for a buy order) or "
         "floor (for a sell order).",
@@ -39,20 +48,20 @@ LIVE_PREVIEW_ACCEPTED = {
 # BUY 2 ES. Note IBKR's own "—" for a commission it will not quote: that em-dash is IBKR's
 # value, not this package's absence marker.
 LIVE_PREVIEW_REFUSED = {
-    "amount": {"amount": "725,000 USD", "commission": "—", "total": "—"},
-    "equity": {"current": "51,034", "change": "-4", "after": "51,029"},
-    "initial": {"current": "8,033", "change": "49,208", "after": "57,241"},
-    "maintenance": {"current": "7,651", "change": "36,949", "after": "44,600"},
+    "amount": {"amount": "500,000 USD", "commission": "—", "total": "—"},
+    "equity": {"current": "60,000", "change": "-4", "after": "59,996"},
+    "initial": {"current": "10,000", "change": "40,000", "after": "50,000"},
+    "maintenance": {"current": "9,000", "change": "30,000", "after": "39,000"},
     "position": {"current": "-1", "change": "2", "after": "1"},
     "error": (
         "The Available Funds in your Commodities segment are insufficient to cover the "
         "change in the margin requirements in your Commodities segment should this order "
         "execute. In order to obtain the desired position, your Commodities Net "
-        "Liquidation Value [43378.26 USD]  must exceed the new total initial Margin of "
-        "[49207.72 USD]."
+        "Liquidation Value [99999.00 USD]  must exceed the new total initial Margin of "
+        "[111111.00 USD]."
     ),
     "warns": [
-        "5/The estimated order value of 725,000 USD exceeds the value limit of 100,000 USD.",
+        "5/The estimated order value of 500,000 USD exceeds the value limit of 100,000 USD.",
         "12/The closing order quantity is greater than your current position.",
     ],
 }
@@ -75,11 +84,11 @@ def test_preview_renders_every_figure_ibkr_actually_sends(toolkit):
     Fails against the pre-2026-09-21 reader, which produced "N/A" for four of five lines.
     """
     text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED)
-    assert "362,500 USD" in text, text  # amount.amount
-    assert "2.24 USD" in text, text  # amount.commission, NOT result["commission"]
-    assert "24,603" in text, text  # initial.change, NOT initMarginChange
-    assert "18,474" in text, text  # maintenance.change, NOT maintMarginChange
-    assert "51,058" in text, text  # equity.current, NOT equity.amount
+    assert "250,000 USD" in text, text  # amount.amount
+    assert "2.50 USD" in text, text  # amount.commission, NOT result["commission"]
+    assert "20,000" in text, text  # initial.change, NOT initMarginChange
+    assert "15,000" in text, text  # maintenance.change, NOT maintMarginChange
+    assert "60,000" in text, text  # equity.current, NOT equity.amount
     assert "N/A" not in text, text
 
 

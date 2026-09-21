@@ -56,8 +56,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   Worse, `error` and `warns` were never read. A preview IBKR **refused** rendered identically
   to one it accepted. Measured live the same day on a `BUY 2 ES` this account cannot support:
   IBKR returned *"The Available Funds in your Commodities segment are insufficient … your
-  Commodities Net Liquidation Value [43378.26 USD] must exceed the new total initial Margin of
-  [49207.72 USD]"* plus three warnings, and the model saw a clean five-line preview with a
+  Commodities Net Liquidation Value [99999.00 USD] must exceed the new total initial Margin of
+  [111111.00 USD]"* plus three warnings, and the model saw a clean five-line preview with a
   `-4` buying-power effect. This is a read tool — it places nothing, and both gates plus
   IBKR's own placement-time check still stand behind any order — but it reported something
   false about account capacity, in the direction of over-confidence.
