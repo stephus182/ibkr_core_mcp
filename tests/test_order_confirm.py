@@ -947,15 +947,6 @@ def test_modify_dialog_changes_row_covers_every_field_kind():
     )
 
 
-def test_confirm_cancel_dialog_without_order_keeps_the_id_only_shape():
-    """A caller without detail still gets the order-id-only dialog, unchanged."""
-    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
-        from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
-
-        confirm_cancel_dialog("ORD456", "U1234567")
-    assert mock_show.call_args.kwargs["details"] == {"Order ID": "ORD456", "Account": "U1234567"}
-
-
 def test_reply_dialog_title_names_the_order_when_told():
     """With Gate 1 once per write (2026-09-11) this dialog is the only gate on a reply,
     so its title says which order it is about; the standalone reply path stays as it was."""
@@ -1612,3 +1603,99 @@ def test_bracket_dialog_accepts_a_child_that_carries_no_conid_of_its_own():
     and must not be refused — only a stated mismatch is."""
     d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child()])
     assert d["Profit taker"] == "held by IBKR until the parent fills"
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 must not degrade SILENTLY when a caller omits display-only keys.
+# Both defects below were reproduced LIVE on 2026-09-21 by probe scripts that
+# called this package directly, not through claudia_ui. claudia_ui's own path
+# always supplies the keys (_apply_futures_display_facts sets either
+# _multiplier or _multiplier_unknown, never neither), so neither defect is
+# reachable from the shipping UI — but order_confirm is public API and the
+# guarantee cannot rest on every caller remembering.
+# ---------------------------------------------------------------------------
+
+
+def _total_row(order: dict[str, object]) -> str:
+    from ibkr_core_mcp.order_confirm import confirm_order_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_order_dialog(order, "U1234567")
+    return str(mock_show.call_args.kwargs["details"].get("Total (est.)"))
+
+
+def test_a_futures_order_with_manual_indicator_never_prints_price_times_quantity():
+    """The live defect: an ES body carrying manualIndicator (CME 536-B, FUT/FOP only) but
+    neither multiplier key printed `Total (est.): 7,300.00` for a contract worth 365,000.
+
+    That is not an estimate, it is the notional divided by 50 — the same wrong number the
+    2026-09-04 fix was written for, reached through a door that fix did not cover.
+    """
+    total = _total_row(
+        {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "LMT",
+            "price": 7300.00,
+            "tif": "GTC",
+            "manualIndicator": True,
+        }
+    )
+    assert "7,300.00" not in total, f"printed a 50x-wrong notional as fact: {total!r}"
+    assert "multiplier unknown" in total
+
+
+def test_a_futures_order_declared_by_sec_type_never_prints_price_times_quantity():
+    """The same guarantee through the documented `secType` field rather than 536-B."""
+    total = _total_row(
+        {
+            "ticker": "ES",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "LMT",
+            "price": 7300.00,
+            "tif": "GTC",
+            "secType": "FUT",
+        }
+    )
+    assert "7,300.00" not in total, total
+    assert "multiplier unknown" in total
+
+
+def test_a_stock_order_without_multiplier_keys_STILL_prints_its_total():
+    """The discriminating half. A stock's multiplier is 1, so price x quantity is correct and
+    must keep printing — claudia_ui sends no `secType` and no multiplier keys for equities, so
+    a blanket refusal would blank the total on every real stock dialog."""
+    total = _total_row(
+        {
+            "ticker": "AAPL",
+            "side": "BUY",
+            "quantity": 10,
+            "orderType": "LMT",
+            "price": 150.00,
+            "tif": "DAY",
+            "_currency": "USD",
+        }
+    )
+    assert "1,500.00" in total, total
+
+
+def test_cancel_dialog_without_detail_NAMES_the_gap_instead_of_hiding_it():
+    """Reproduced live 2026-09-21: a detail-less cancel rendered Order ID + Account and nothing
+    else, so the human authorised the cancellation of an order id they could not verify. An
+    order id is not human-checkable; with several orders resting, nothing on that screen
+    distinguishes a disposable test order from the stop protecting a real position.
+
+    The id-only SHAPE is not the defect — being silent about it is. This previously asserted
+    the bare two-key dict (test renamed from ..._keeps_the_id_only_shape).
+    """
+    from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_cancel_dialog("ORD456", "U1234567")
+    details = mock_show.call_args.kwargs["details"]
+    assert details["Order ID"] == "ORD456"
+    assert details["Account"] == "U1234567"
+    joined = " ".join(f"{k} {v}" for k, v in details.items()).lower()
+    assert "not available" in joined, f"degraded silently: {details!r}"

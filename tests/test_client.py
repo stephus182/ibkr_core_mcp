@@ -3328,3 +3328,108 @@ def test_place_bracket_refuses_a_child_on_another_contract_before_touch_id(clien
     mock_tid.assert_not_called()
     mock_dlg.assert_not_called()
     mock_post.assert_not_called()
+
+
+# --- cancel_order fetches its own dialog detail when the caller supplies none -------------
+# User-flagged 2026-09-21 after a probe script reproduced it live: the Gate 2 cancel dialog
+# rendered an order id and an account number and nothing else. An order id is not something
+# a human can verify against the order they mean, and a cancel cannot be undone.
+
+
+def test_cancel_without_details_FETCHES_them_so_the_dialog_is_never_an_opaque_id(client):
+    """The fix. The caller passes nothing; the dialog still receives real order detail."""
+    status = {
+        "symbol": "AAPL",
+        "side": "S",
+        "total_size": "10.0",
+        "order_type": "LIMIT",
+        "limit_price": "150.00",
+        "tif": "GTC",
+        "company_name": "APPLE INC",
+        "currency": "USD",
+        "sec_type": "STK",
+        "order_description_with_contract": "Sell 10 AAPL Limit 150.00, GTC",
+    }
+    seen = {}
+    with (
+        _patch.object(client, "get_order_status", return_value=status),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: seen.update({"det": order}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        client.cancel_order("U1234567", "9876543210")
+    det = seen["det"]
+    assert det["ticker"] == "AAPL"
+    assert det["side"] == "SELL"  # IBKR's 'S' mapped to a word a human reads
+    assert det["price"] == "150.00"
+    assert det["_current_description"] == "Sell 10 AAPL Limit 150.00, GTC"
+
+
+def test_cancel_detail_fetch_marks_a_FUTURE_multiplier_unknown(client):
+    """An order-status read never carries the contract multiplier, and price x quantity on a
+    future is the notional divided by it — so the dialog must be told to refuse the number."""
+    status = {
+        "symbol": "ES",
+        "side": "B",
+        "total_size": "1.0",
+        "order_type": "LIMIT",
+        "limit_price": "7300.00",
+        "tif": "DAY",
+        "sec_type": "FUT",
+    }
+    seen = {}
+    with (
+        _patch.object(client, "get_order_status", return_value=status),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: seen.update({"det": order}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        client.cancel_order("U1234567", "9876543210")
+    assert seen["det"]["_multiplier_unknown"] is True
+
+
+def test_a_failed_detail_read_does_NOT_block_the_cancel(client):
+    """Display is not permission. `/iserver/account/order/status` is rate-limited — measured
+    HTTP 503 live on 2026-09-21 — and a cancel must not become impossible because a display
+    read failed. The dialog names the gap instead (see test_order_confirm)."""
+    seen = {}
+    with (
+        _patch.object(client, "get_order_status", side_effect=RuntimeError("HTTP 503")),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: seen.update({"det": order}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        client.cancel_order("U1234567", "9876543210")
+    assert seen["det"] is None
+    mock_del.assert_called_once()
+
+
+def test_caller_supplied_details_are_NOT_overwritten_by_a_fetch(client):
+    """claudia_ui already reads the order before Touch ID and passes richer detail than a
+    status read gives. The fetch is a fallback, never a second source of truth."""
+    mine = {"ticker": "GLD", "side": "SELL", "quantity": 1, "_multiplier": 50}
+    seen = {}
+    with (
+        _patch.object(client, "get_order_status", side_effect=AssertionError("must not fetch")),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: seen.update({"det": order}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        client.cancel_order("U1234567", "9876543210", mine)
+    assert seen["det"] is mine

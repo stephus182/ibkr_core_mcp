@@ -2174,11 +2174,59 @@ class IBKRClient:
         # Cancel is a single write with no reply chain, so no authorization value — but
         # the log must still witness the fingerprint (2026-09-11: 8 of 12 prompts logged).
         log.info("Gate 1: granted for cancel:%s", order_id)
+        # A caller that supplied no detail gets it fetched, so Gate 2 cannot fall back to an
+        # opaque order id. Deliberately placed AFTER Gate 1 and before Gate 2: the security
+        # invariant is that NO network call precedes the gates (SEC-02,
+        # tests/security/test_order_write_boundary.py), and an earlier placement broke it —
+        # caught by that test, and reordered rather than exempted. Gate 1 proves the human is
+        # present; Gate 2 is the dialog that needs the facts. Read-only either way.
+        if order_details is None:
+            order_details = self._cancel_dialog_details(order_id)
         confirm_cancel_dialog(order_id, account_id, order_details)
         path = f"/iserver/account/{account_id}/order/{order_id}"
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
         return _decode(resp, path)
+
+    def _cancel_dialog_details(self, order_id: str) -> dict[str, Any] | None:
+        """Best-effort display detail for the Gate 2 cancel dialog, in IBKR body shape.
+
+        Exists so `cancel_order`'s dialog cannot fall back to an order id and an account
+        number — which is what a caller passing no `order_details` used to get, silently.
+        An order id is not something a human can verify against the order they mean.
+
+        Read-only and failure-tolerant on purpose: a cancel must not become impossible
+        because a *display* read failed, and `/iserver/account/order/status` is rate-limited
+        (measured 2026-09-21: HTTP 503 after a dense run of calls). Returning None lets the
+        dialog state the gap instead of pretending it does not exist.
+
+        `_multiplier_unknown` is set for FUT/FOP because an order-status read never carries
+        the contract multiplier, and price x quantity on a future is not an estimate — it is
+        the notional divided by the multiplier.
+        """
+        try:
+            status = self.get_order_status(order_id)
+        except Exception:  # display only: never block a cancel because a READ failed
+            log.warning("cancel dialog: could not read order %s for display detail", order_id)
+            return None
+        if not isinstance(status, dict) or not status:
+            return None
+        details: dict[str, Any] = {
+            "ticker": status.get("symbol") or status.get("contract_description_1"),
+            "side": {"S": "SELL", "B": "BUY"}.get(str(status.get("side") or "").upper()),
+            "quantity": status.get("total_size") or status.get("size"),
+            "orderType": status.get("order_type"),
+            "tif": status.get("tif"),
+            "_companyName": status.get("company_name"),
+            "_currency": status.get("currency"),
+            "_current_description": status.get("order_description_with_contract"),
+        }
+        price = status.get("limit_price") or status.get("stop_price")
+        if price not in (None, ""):
+            details["price"] = price
+        if str(status.get("sec_type") or "").upper() in ("FUT", "FOP"):
+            details["_multiplier_unknown"] = True
+        return {k: v for k, v in details.items() if v not in (None, "")}
 
     def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict[str, Any]]:
         """Confirm an order requiring an explicit IBKR reply (e.g. after a warning).

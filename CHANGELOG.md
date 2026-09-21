@@ -9,6 +9,39 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Gate 2 could degrade silently when a caller omitted display-only keys — in one case to
+  less information, in the other to a WRONG number presented as fact.** Both were reproduced
+  live on 2026-09-21 by scripts calling this package directly. Neither is reachable from
+  claudia_ui, whose order path always supplies the keys; but `order_confirm` is public API and
+  the guarantee cannot rest on every caller remembering.
+
+  1. **A futures order without either multiplier key printed `price × quantity` as its
+     notional.** `is_future` was derived *only* from `_multiplier` / `_multiplier_unknown`, so
+     an ES order that set neither was not recognised as a future at all: it printed
+     `Total (est.): 7,300.00` for one contract standing for 365,000, and appended a currency
+     to a price quoted in index points. That is the same wrong number the 2026-09-04 fix was
+     written for, reached through a door that fix did not cover. `is_future` now also accepts
+     IBKR's own `secType` (`FUT`/`FOP`) and `manualIndicator` (CME Rule 536-B, futures-only),
+     and a future whose multiplier is unknown by *any* of those routes now prints the honest
+     "contract multiplier unknown" line. **Narrowed, not closed:** a futures body carrying none
+     of the four signals is still unrecognised, and the code says so rather than implying
+     otherwise. A stock without the keys still prints its total, since its multiplier is 1 —
+     pinned by its own test, because a blanket refusal would blank every equity dialog.
+
+  2. **A cancel with no `order_details` showed an order id and an account number, and nothing
+     else.** An order id is not something a human can verify against the order they mean; with
+     several orders resting, that screen cannot distinguish a disposable test order from the
+     stop protecting a real position, and a cancel cannot be undone. `cancel_order` now fetches
+     the detail itself when the caller supplies none — read-only, before Gate 1, mirroring what
+     claudia_ui already does — and a caller's own details are never overwritten. When the read
+     fails the dialog **names the gap** ("Order detail: NOT AVAILABLE") instead of degrading in
+     silence. The read is failure-tolerant on purpose: display is not permission, and
+     `/iserver/account/order/status` is rate-limited (measured HTTP 503 the same day).
+
+  A passing test asserted the id-only dialog as correct behaviour, which is why it read as
+  intentional; it is replaced by one that keeps the shape and requires the gap to be stated.
+
 ### Added
 - **A control for the class the `preview_order` defect belonged to: a reader may not index a
   key IBKR does not send.** The defect was possible because the whatif's shape was missing

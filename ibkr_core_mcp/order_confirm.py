@@ -111,7 +111,19 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # in currency; the money figure is the multiplied total. `Price: 7,900.00 USD` was wrong
     # (user, 2026-09-11). No unit is printed rather than a guessed one: no IB field names
     # the quotation unit, and "points" would be wrong for crude or a bond future.
-    is_future = multiplier is not None or bool(order.get("_multiplier_unknown"))
+    # Four independent signals, because relying on the display keys alone made this
+    # blind to a futures order whose caller simply did not set them — reproduced live
+    # 2026-09-21, printing `Total (est.): 7,300.00` for one ES contract worth 365,000.
+    # `manualIndicator` is CME Rule 536-B and is FUT/FOP-only; `secType` is IBKR's own
+    # field. Either establishes the instrument class without the caller volunteering a
+    # display key. A body carrying NONE of the four is still unrecognised — narrowed,
+    # not closed, and said so rather than implied.
+    is_future = (
+        multiplier is not None
+        or bool(order.get("_multiplier_unknown"))
+        or str(order.get("secType") or "").strip().upper() in ("FUT", "FOP")
+        or bool(order.get("manualIndicator"))
+    )
     price_ccy = "" if is_future else ccy
     # "MARKET" belongs to the one order type that legitimately sends no price. Applied to
     # every type, it described an order the body did not carry: a LMT with a null price read
@@ -131,7 +143,7 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     else:
         price_str = "— (no price sent)"
     try:
-        if order.get("_multiplier_unknown"):
+        if order.get("_multiplier_unknown") or (is_future and multiplier is None):
             # A futures order whose multiplier the caller could not learn. price × qty here
             # is not an estimate, it is wrong by the multiplier — live 2026-09-04 it printed
             # 7,735.00 for one ES contract standing for 386,750 USD. Say so instead.
@@ -534,7 +546,15 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         if current:
             details["Currently at IBKR"] = str(current)
     else:
-        details = {"Order ID": order_id, "Account": account_id}
+        # An order id is not human-checkable. With several orders resting, nothing here
+        # distinguishes a disposable test order from the stop protecting a real position,
+        # and a cancel cannot be undone. The id-only shape is not the defect — being
+        # SILENT about it is (user-flagged 2026-09-21, after a caller reproduced it live).
+        details = {
+            "Order ID": order_id,
+            "Account": account_id,
+            "Order detail": "NOT AVAILABLE — symbol, side, quantity and price could not be read",
+        }
     _show_confirm_dialog(
         title="⚠  CANCEL ORDER CONFIRMATION",
         details=details,
