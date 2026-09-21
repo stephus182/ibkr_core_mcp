@@ -1577,19 +1577,21 @@ def test_bracket_dialog_shows_every_child_when_two_are_the_same_kind():
 
 
 def test_bracket_dialog_refuses_a_child_on_a_different_contract():
-    """Gate 2 is the ONLY surface that can catch this.
+    """A mismatched contract is refused in TWO places, and this is the second of them.
 
-    `client._bracket_tickets` validates the cOID↔parentId link and nothing about the
-    instrument. The whatif cannot help either: Phase 0 measured live on 2026-09-20 that a
-    child on a *different instrument* returns a response byte-identical to a valid one,
-    because the preview reads the first ticket and silently discards the rest (claudia_ui
-    gap #36). So a bracket whose "profit taker" is on another contract would preview clean,
-    pass the client's validation, and reach IBKR as a resting order on an instrument the
-    human never authorised.
+    `client._bracket_tickets` checks it with the other structural rules, so the place path
+    refuses before Touch ID. This copy is not redundant: `confirm_bracket_dialog` is public
+    API and can be called without that method, and the check must run BEFORE the display keys
+    are inherited a few lines below — inheriting the parent's `_companyName` onto a mismatched
+    child would render the parent's own contract name on the child's rows and hide the
+    mismatch on the last screen before the send.
 
-    It must be refused BEFORE the display keys are inherited — inheriting the parent's
-    `_companyName` onto a mismatched child would render the parent's own contract name on
-    the child's rows and hide the mismatch on the last screen before the send.
+    Neither copy can be replaced by the preview. Phase 0 measured live on 2026-09-20 that a
+    child on a *different instrument* returns a whatif response byte-identical to a valid one,
+    because the preview reads the first ticket and silently discards the rest (claudia_ui gap
+    #36). A bracket whose "profit taker" is on another contract previews clean, so without
+    these two checks it would reach IBKR as a resting order on an instrument the human never
+    authorised.
     """
     from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
 

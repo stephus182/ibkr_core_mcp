@@ -79,6 +79,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   source like the other five — including the transitive probe, whose expected set it joins because
   it opens with `_ensure_accounts_initialized()` exactly as every other write does.
 
+  Two of those controls did **not** fail when the method appeared, because each was parametrized
+  over a list written by hand, and a review found the new write silently exempt from both: the
+  behavioural half of SEC-02 (a denied Gate 1 sends no order write, over four methods) and the
+  body-the-dialog-showed-is-the-body-sent check (over two). Both now exercise the bracket — the
+  second with a case of its own, since a bracket's body is an array and the mutation can land on
+  the child — and SEC-02's case list is itself asserted to cover every public gated write, so the
+  next write cannot be added without either joining the control or failing the suite. This is the
+  same hand-written-list gap that let a fifth Gate 2 dialog escape its class-level checks the same
+  day; the lists are what keep failing, not the properties.
+
 - **`confirm_bracket_dialog` — Gate 2 for a bracket: ONE dialog carrying the parent and every
   child.** One dialog, not one per leg, is the whole point: two dialogs would permit the parent
   to be sent with the child declined, which is precisely the state a bracket exists to prevent —
@@ -99,17 +109,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   legs are opposite, so a row called `Total` would be read as their sum; the child's notional is
   left off rather than printed beside the parent's and mentally added.
 
-  **Five refusals, each a refusal and never a correction:** no child; a parent carrying no side
+  **Five refusals, each a refusal and never a correction** (the contract one shared with
+  `_bracket_tickets`, see above): no child; a parent carrying no side
   (the opposite-side rule is unverifiable without it, and the banner is the pre-attentive cue);
   a child on the parent's own side; a child carrying no `parentId` (it would reach IBKR as a
   standalone order, live immediately); and a child naming a **different contract** from the
   parent.
 
-  That last one matters because **nothing upstream can catch it**. `_bracket_tickets` validates
-  the `cOID`↔`parentId` link and says nothing about the instrument, and the whatif cannot help:
-  measured live 2026-09-20, a child on a *different instrument* returns a response byte-identical
-  to a valid one, because the preview reads the first ticket and discards the rest. Gate 2 is the
-  only surface that can see it.
+  That last one is checked in **two** places, and neither is redundant. `_bracket_tickets` checks
+  it with the other structural rules, so the place path refuses before Touch ID rather than after
+  it; this dialog checks it again because it is public API callable without that method, and
+  because the check has to run before the display keys are inherited. Neither can be replaced by
+  a preview: measured live 2026-09-20, a child on a *different instrument* returns a whatif
+  response byte-identical to a valid one, because the preview reads the first ticket and discards
+  the rest. **A mismatched bracket previews clean.**
 
   **Display keys are inherited from the parent, and only after that check.** A bracket child is
   the same contract by construction, so a child carrying no `_companyName` / `_multiplier` /

@@ -93,6 +93,11 @@ def test_bracket_preview_sends_both_legs_and_strips_display_keys(client):
         ({"cOID": "REF"}, [], "no children"),
         ({"cOID": "REF"}, [{"parentId": "OTHER"}], "child points at a different parent"),
         ({"cOID": "REF"}, [{"parentId": "REF", "cOID": "OWN"}], "child carries its own cOID"),
+        (
+            {"cOID": "REF", "conid": 1},
+            [{"parentId": "REF", "conid": 2}],
+            "child is on a different contract — the whatif is blind to this (gap #36, Phase 0)",
+        ),
     ],
 )
 def test_bracket_tickets_refuses_an_unlinked_pair(client, parent, children, why):
@@ -100,6 +105,13 @@ def test_bracket_tickets_refuses_an_unlinked_pair(client, parent, children, why)
     forbids, because a standalone opposite-side order can open the wrong position."""
     with pytest.raises(ValueError):
         client._bracket_tickets(parent, children)
+
+
+def test_bracket_tickets_accepts_a_child_with_no_conid_of_its_own(client):
+    """The contract rule refuses a STATED mismatch, never an absence: a child's conid is
+    derived from the parent, so a ticket without one is the normal case."""
+    tickets = client._bracket_tickets({"cOID": "REF", "conid": 1}, [{"parentId": "REF"}])
+    assert len(tickets) == 2
 
 
 def test_get_order_preview_calls_no_gate_in_source():

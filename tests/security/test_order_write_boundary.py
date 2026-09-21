@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import re
+from typing import Any
 
 import pytest
 
@@ -250,6 +251,39 @@ def test_a_body_mutated_after_the_dialog_is_not_the_body_sent(client, method):
     assert sent["quantity"] == 1, "the body sent is not the body the dialog showed"
 
 
+def test_a_bracket_mutated_after_the_dialog_is_not_the_bracket_sent(client):
+    """The same property for the bracket, which the parametrized test above cannot express:
+    its body is an ARRAY, and the mutation can land on the child rather than the parent.
+
+    `place_bracket_and_confirm` copies both at entry AND builds the ticket array before the
+    dialog opens, so the request body is frozen before the human looks at it.
+    """
+    from unittest.mock import patch
+
+    parent = {"conid": 1, "cOID": "C-1", "side": "SELL", "quantity": 1, "orderType": "MKT"}
+    child = {"conid": 1, "parentId": "C-1", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 2.0}
+    shown: dict[str, dict[str, Any]] = {}
+
+    def dialog(shown_parent, shown_children, _account):
+        shown["parent"] = dict(shown_parent)
+        shown["child"] = dict(shown_children[0])
+        # Both of the CALLER's dicts change while the human is looking.
+        parent["quantity"] = 999
+        child["price"] = 0.01
+
+    with (
+        patch("ibkr_core_mcp.client.require_touch_id"),
+        patch("ibkr_core_mcp.client.confirm_bracket_dialog", side_effect=dialog),
+        patch.object(client, "_post", return_value=[{"order_id": "1"}]) as post,
+    ):
+        client.place_bracket_and_confirm("U1234567", parent, [child])
+
+    sent_parent, sent_child = post.call_args.args[1]["orders"]
+    assert shown["parent"]["quantity"] == 1 and shown["child"]["price"] == 2.0
+    assert sent_parent["quantity"] == 1, "the parent sent is not the parent the dialog showed"
+    assert sent_child["price"] == 2.0, "the child sent is not the child the dialog showed"
+
+
 # ── The gate-ordering check, transitively ──────────────────────────────────────
 
 
@@ -328,15 +362,37 @@ def test_no_pre_gate_exemption_outlives_its_call_site():
         assert used, f"{name} is exempted but no gated method calls it"
 
 
-@pytest.mark.parametrize(
-    ("name", "call"),
-    [
-        ("place_order", lambda c: c.place_order("U1234567", {"conid": 265598, "side": "BUY", "quantity": 1})),
-        ("modify_order", lambda c: c.modify_order("U1234567", "123", {"conid": 265598, "quantity": 1})),
-        ("cancel_order", lambda c: c.cancel_order("U1234567", "123")),
-        ("reply_order", lambda c: c.reply_order("11111111-1111-4111-8111-111111111111")),
-    ],
-)
+# Every PUBLIC gated write, each driven with a denied Gate 1. Held in a named constant so
+# `test_the_denied_gate_case_list_covers_every_public_gated_write` can assert it is complete:
+# a write added without a case here would be silently exempt from the behavioural half of
+# SEC-02, which is the failure this whole file exists to prevent one level up.
+_DENIED_GATE_CASES = [
+    ("place_order", lambda c: c.place_order("U1234567", {"conid": 265598, "side": "BUY", "quantity": 1})),
+    ("modify_order", lambda c: c.modify_order("U1234567", "123", {"conid": 265598, "quantity": 1})),
+    ("cancel_order", lambda c: c.cancel_order("U1234567", "123")),
+    ("reply_order", lambda c: c.reply_order("11111111-1111-4111-8111-111111111111")),
+    (
+        "place_bracket_and_confirm",
+        lambda c: c.place_bracket_and_confirm(
+            "U1234567",
+            {"conid": 265598, "cOID": "C-1", "side": "BUY", "quantity": 1},
+            [{"conid": 265598, "parentId": "C-1", "side": "SELL", "quantity": 1}],
+        ),
+    ),
+]
+
+
+def test_the_denied_gate_case_list_covers_every_public_gated_write():
+    """The list above is written by hand; `GATED_OWNERS` is what the source is checked
+    against. A write present in one and absent from the other is exempt from this control
+    without anything saying so — the same hand-written-list gap that let a fifth Gate 2
+    dialog escape its own class-level checks (2026-09-21)."""
+    covered = {name for name, _ in _DENIED_GATE_CASES}
+    public = {name for name in GATED_OWNERS if not name.startswith("_")}
+    assert covered == public, f"never driven against a denied Gate 1: {sorted(public - covered)}"
+
+
+@pytest.mark.parametrize(("name", "call"), _DENIED_GATE_CASES)
 def test_a_denied_gate_1_sends_no_order_write_however_fresh_the_session(client, name, call):
     """The behavioural half of SEC-02, and the property the documents now state.
 
@@ -367,6 +423,7 @@ def test_a_denied_gate_1_sends_no_order_write_however_fresh_the_session(client, 
             patch("ibkr_core_mcp.client.confirm_modify_dialog"),
             patch("ibkr_core_mcp.client.confirm_cancel_dialog"),
             patch("ibkr_core_mcp.client.confirm_reply_dialog"),
+            patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
             pytest.raises(HumanAuthError),
         ):
             call(client)

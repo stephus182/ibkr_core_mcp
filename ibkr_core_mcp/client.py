@@ -318,9 +318,13 @@ def _order_write_scope(kind: str, account_id: str, body: Mapping[str, Any], orde
     loudly instead of quietly minting the weaker scope.
 
     Args:
-        kind: "place", "modify" or "cancel".
+        kind: "place", "modify", "cancel" or "place_bracket". It is part of the scope, so an
+            authorization earned for one kind can never cover another — a bracket's
+            authorization is not a single order's, even where the parent body matches.
         account_id: The account the write is aimed at — part of the transaction.
-        body: The order body about to be sent.
+        body: The order body about to be sent. For a bracket this is the whole ticket array
+            wrapped as `{"orders": [...]}`, so every leg is inside the scope; bound to the
+            parent alone, a child could be altered after the fingerprint and still ride it.
         order_id: The live order's id for modify/cancel, part of the scope.
 
     Returns:
@@ -2370,7 +2374,16 @@ class IBKRClient:
         (measured live 2026-09-20). Both plausible shapes are handled without loss — a reply
         response that repeats the whole array does not duplicate a leg, and one that covers
         only its own ticket does not drop the other's terminal entry, which the read-back needs
-        the order id from. Accumulating rather than replacing is what makes the method
+        the order id from.
+
+        The de-duplication is on **exact equality**, deliberately and narrowly: a leg IBKR
+        restates with *different* content — say `PreSubmitted` and then `Submitted` for one
+        order id — is kept as a second entry rather than collapsed, because choosing which of
+        two statements from IBKR to discard is not a choice this layer can make correctly
+        while M6 is unmeasured. The caller reads each leg back from IBKR anyway. Do not
+        "improve" this into keying on `order_id` without that measurement.
+
+        Accumulating rather than replacing is what makes the method
         shape-independent; do not "simplify" it back to replacing the response until a live
         send has settled M6.
 
@@ -2530,6 +2543,21 @@ class IBKRClient:
         for kid in children:
             if kid.get("parentId") != ref or kid.get("cOID"):
                 raise ValueError("Each bracket child must carry parentId == the parent's cOID and no cOID")
+            # Same contract, or the pair is not a bracket. Nothing downstream can see this:
+            # the whatif was measured on 2026-09-20 to return a byte-identical response for a
+            # child on a DIFFERENT instrument, because it previews the first ticket and
+            # discards the rest. Checked here, with the other structural rules, so a place is
+            # refused BEFORE Touch ID rather than after it, and so a preview of a mismatched
+            # pair is refused rather than quietly priced as the parent alone. Only a STATED
+            # mismatch is refused: a child carrying no conid is normal, being derived from the
+            # parent. `confirm_bracket_dialog` repeats the check as defence in depth — it is
+            # public API and callable without this method.
+            if (
+                parent.get("conid") is not None
+                and kid.get("conid") is not None
+                and str(kid["conid"]) != str(parent["conid"])
+            ):
+                raise ValueError("Each bracket child must name the same contract as the parent")
         return [{k: v for k, v in t.items() if not k.startswith("_")} for t in (parent, *children)]
 
     def get_bracket_preview(

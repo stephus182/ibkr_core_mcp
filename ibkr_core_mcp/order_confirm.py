@@ -433,14 +433,19 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
             )
         if parent_coid and link != parent_coid:
             raise HumanAuthError("Bracket confirmation refused: a child's parentId does not name this parent")
-        # Nothing upstream can catch a child on the wrong instrument. `client._bracket_tickets`
-        # validates the cOID↔parentId link and says nothing about the contract, and the whatif
-        # cannot help: measured live 2026-09-20, a child on a DIFFERENT instrument returns a
-        # response byte-identical to a valid one, because the preview reads the first ticket and
-        # discards the rest (claudia_ui gap #36, Phase 0). This dialog is the only surface that
-        # can see it. Checked here, before the display keys are inherited: inheriting the
-        # parent's `_companyName` onto a mismatched child would print the parent's own contract
-        # name on the child's rows and hide the mismatch on the last screen before the send.
+        # A child on the wrong instrument, refused here as well as in `client._bracket_tickets`,
+        # which checks it with the other structural rules so a place is refused before Touch ID.
+        # This copy is defence in depth and is not redundant: this dialog is public API and can
+        # be called without that method, and the check must run BEFORE the display keys are
+        # inherited a few lines below — inheriting the parent's `_companyName` onto a mismatched
+        # child would print the parent's own contract name on the child's rows and hide the
+        # mismatch on the last screen before the send.
+        #
+        # Neither copy can be dropped in favour of the preview. Measured live 2026-09-20: a
+        # child on a DIFFERENT instrument returns a whatif response byte-identical to a valid
+        # one, because the preview reads the first ticket and discards the rest (claudia_ui
+        # gap #36, Phase 0). A mismatched bracket previews clean.
+        #
         # A child carrying no conid is normal — it is derived from the parent — so only a
         # STATED mismatch is refused, never an absence.
         parent_conid, child_conid = parent.get("conid"), child.get("conid")

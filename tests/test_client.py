@@ -3245,3 +3245,23 @@ def test_place_bracket_keeps_ibkrs_words_when_it_refuses_the_bracket(client):
         )
         result = client.place_bracket_and_confirm("U1234567", parent, children)
     assert result == [{"error": "We cannot accept an order at the limit price you selected."}]
+
+
+def test_place_bracket_refuses_a_child_on_another_contract_before_touch_id(client):
+    """A mismatched contract is refused with the other structural rules, BEFORE Gate 1.
+
+    It used to be caught only by `confirm_bracket_dialog`, which runs after Touch ID — so
+    the human was fingerprinted for a bracket that was then refused. The dialog keeps its own
+    copy of the check as defence in depth (it is public API), but nothing reaches it here.
+    """
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as mock_dlg,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="same contract"),
+    ):
+        client.place_bracket_and_confirm("U1234567", parent, [dict(children[0], conid=999999999)])
+    mock_tid.assert_not_called()
+    mock_dlg.assert_not_called()
+    mock_post.assert_not_called()
