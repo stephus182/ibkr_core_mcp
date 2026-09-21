@@ -10,6 +10,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **H1 was enforced in only one of the two reachable paths.** `_bracket_tickets` refused a child
+  larger than its parent; `confirm_bracket_dialog` did not. That dialog already repeats the link
+  and contract rules, and its own docstring says why — it is public API, callable without the
+  ticket builder, and it is the last screen before an irreversible write. A rule enforced in one
+  of two reachable paths is enforced in neither when the other is taken. Caught by asking why the
+  dialog repeated two structural rules and not the third, in the same review that found the
+  README omission below.
+
 - **README named four of the five public gated order writes.** `place_bracket_and_confirm` has
   been in the code's own `GATED_OWNERS` set and in SECURITY.md since it shipped, and was absent
   from **both** of README's enumerations — the macOS requirement and the security section, each

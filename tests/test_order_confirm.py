@@ -1699,3 +1699,35 @@ def test_cancel_dialog_without_detail_NAMES_the_gap_instead_of_hiding_it():
     assert details["Account"] == "U1234567"
     joined = " ".join(f"{k} {v}" for k, v in details.items()).lower()
     assert "not available" in joined, f"degraded silently: {details!r}"
+
+
+def test_bracket_dialog_ALSO_refuses_a_child_larger_than_the_parent():
+    """H1 at Gate 2, not only at `_bracket_tickets`.
+
+    The dialog already repeats the link and contract rules, and its docstring gives the reason:
+    it is public API and callable without the ticket builder. H1 belongs in that same set — this
+    is the last screen before an irreversible write, and a rule enforced in only one of two
+    reachable paths is enforced in neither when the other one is taken.
+    """
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 10.0}
+    child = {"parentId": "C-1", "conid": 1, "side": "BUY", "quantity": 2, "orderType": "LMT", "price": 9.0}
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="larger than the parent"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+def test_bracket_dialog_accepts_an_equal_and_a_smaller_child():
+    """The discriminating half — H1 is a ceiling, not an equality, and equal is the normal case."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "quantity": 5, "orderType": "LMT", "price": 10.0}
+    for qty in (5, 2):
+        child = {"parentId": "C-1", "conid": 1, "side": "BUY", "quantity": qty, "orderType": "LMT", "price": 9.0}
+        with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+            confirm_bracket_dialog(parent, [child], "U1234567")
+        mock_show.assert_called_once()

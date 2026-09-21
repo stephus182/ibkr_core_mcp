@@ -463,6 +463,18 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         parent_conid, child_conid = parent.get("conid"), child.get("conid")
         if parent_conid is not None and child_conid is not None and str(child_conid) != str(parent_conid):
             raise HumanAuthError("Bracket confirmation refused: a child is on a different contract from the parent")
+        # H1 — a child is never larger than the parent (user hard rule, 2026-09-21). Repeated
+        # here for the same reason as the link and contract rules above: this function is public
+        # API and callable without `_bracket_tickets`, and it is the LAST screen before an
+        # irreversible write. Only a stated violation is refused; a child carrying no quantity
+        # is derived from the parent and is normal.
+        if child.get("quantity") is not None and parent.get("quantity") is not None:
+            try:
+                oversized = float(child["quantity"]) > float(parent["quantity"])
+            except (TypeError, ValueError):
+                raise HumanAuthError("Bracket confirmation refused: a leg's quantity is not a number") from None
+            if oversized:
+                raise HumanAuthError("Bracket confirmation refused: a child is larger than the parent")
         # LMT reads as the profit taker; anything else is the protective leg. The label is
         # cosmetic — the link and the side are what were just checked.
         kind = "Profit taker" if str(child.get("orderType") or "").strip().upper() in ("LMT", "LIMIT") else "Stop loss"
