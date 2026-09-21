@@ -12,6 +12,7 @@ tool handler would have been lint-clean, fully typed and gate-free
 from __future__ import annotations
 
 import ast
+import pathlib
 import re
 from typing import Any
 
@@ -499,3 +500,27 @@ def test_no_read_only_section_header_sits_above_a_write():
             offenders[title] = inside
 
     assert not offenders, f"section headers labelled read-only that contain writes: {offenders}"
+
+
+def test_every_public_gated_write_is_named_in_the_README_and_SECURITY_docs():
+    """A gated write missing from the documented list reads as an UNGATED one.
+
+    Found 2026-09-21: `place_bracket_and_confirm` had been in `GATED_OWNERS` and in
+    SECURITY.md since it shipped, and was absent from BOTH of README's enumerations — the
+    macOS requirement and the security section — each of which lists the write methods Touch
+    ID gates. A reader checking whether the bracket path is gated would have concluded it is
+    not, which is the opposite of the truth and the more dangerous direction to be wrong in.
+
+    `test_documented_controls.py` guards SECURITY.md's *regex* against the code; nothing
+    guarded the *enumeration*, so the omission was invisible. This is the class-level version:
+    the list is derived from `GATED_OWNERS`, never written out again.
+
+    Its limit, stated rather than implied: this asserts the name APPEARS, not that the
+    sentence around it is true. It catches omission, which is the failure that happened.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    public = {name for name in GATED_OWNERS if not name.startswith("_")}
+    for doc in ("README.md", "SECURITY.md"):
+        text = (root / doc).read_text()
+        missing = sorted(name for name in public if name not in text)
+        assert not missing, f"{doc} never names these gated order writes: {missing}"

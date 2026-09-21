@@ -3613,3 +3613,46 @@ def test_place_bracket_LOGS_a_response_that_does_not_pair(client, caplog):
         result = client.place_bracket_and_confirm("U1234567", parent, children)
     assert result == [landed, stray], "IBKR's response must survive the check intact"
     assert any("not this parent" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_cancel_detail_shows_WHICH_STATE_the_order_is_in(client):
+    """An `Inactive` order shows in the live book, presents as cancellable through both gates,
+    and then answers HTTP 400 "OrderID ... doesn't exist" — observed live 2026-09-21, after the
+    human had already authorised it. IBKR's own description names the order but not its state,
+    which is the fact someone about to cancel most needs."""
+    status = {
+        "symbol": "ES",
+        "order_status": "Inactive",
+        "order_description_with_contract": "Sell 1 ES Dec18'26 Limit 8332.50, Day",
+    }
+    seen = {}
+    with (
+        _patch.object(client, "get_order_status", return_value=status),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: seen.update({"det": order}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        client.cancel_order("U1234567", "9876543210")
+    assert seen["det"]["_current_description"] == "Sell 1 ES Dec18'26 Limit 8332.50, Day (Inactive)"
+
+
+def test_cancel_detail_does_not_append_an_EMPTY_state(client):
+    """No status, no parenthesis — never a bare '()' where a fact should be."""
+    status = {"symbol": "AAPL", "order_description_with_contract": "Sell 10 AAPL Limit 150.00, GTC"}
+    seen = {}
+    with (
+        _patch.object(client, "get_order_status", return_value=status),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch(
+            "ibkr_core_mcp.client.confirm_cancel_dialog",
+            side_effect=lambda o_id, a, order=None: seen.update({"det": order}),
+        ),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        client.cancel_order("U1234567", "9876543210")
+    assert seen["det"]["_current_description"] == "Sell 10 AAPL Limit 150.00, GTC"

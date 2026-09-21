@@ -614,6 +614,20 @@ def pair_bracket_response(tickets: list[dict[str, Any]], entries: list[dict[str,
     return BracketPairing(parent_entry, tuple(children), tuple(unmatched), tuple(problems))
 
 
+def _described_with_status(status: Mapping[str, Any]) -> str | None:
+    """IBKR's own description of an order, with its status when that adds something.
+
+    `order_description_with_contract` reads "Sell 1 ES Dec18'26 Limit 8332.50, Day" and says
+    nothing about whether the order is working, held or inactive — which is the fact a human
+    about to cancel most needs.
+    """
+    described = status.get("order_description_with_contract")
+    if not described:
+        return None
+    state = str(status.get("order_status") or "").strip()
+    return f"{described} ({state})" if state else str(described)
+
+
 def _as_bracket_quantity(value: Any, leg: str) -> float:
     """A bracket leg's quantity as a number, or refuse.
 
@@ -2229,6 +2243,23 @@ class IBKRClient:
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Modify an existing order. Requires Touch ID (Gate 1) + tkinter dialog (Gate 2).
 
+        **H1 is NOT enforced here, and that boundary is deliberate.** `_bracket_tickets`
+        refuses a bracket child larger than its parent at *submission*; nothing stops a later
+        modify from raising a child's quantity above the parent's. Enforcing it here would cost
+        two reads before every modify — the order's own status to learn `parent_order_id`, then
+        the parent's to learn its quantity — on `/iserver/account/order/status`, which is
+        rate-limited (measured HTTP 503, 2026-09-21). A failed read would then either block
+        modifies or skip the check silently, and a control with a silent skip is not a control.
+        The caller that already holds the status is the one that should enforce it: claudia_ui
+        refuses `propose_modify` unless `get_order_status` ran in the same turn, so it has the
+        parent link in hand at no extra cost. Stated here so nobody reads the placement-time
+        rule as covering the whole lifecycle.
+
+        **Modifying a held bracket child does NOT detach it** — measured live 2026-09-21: a
+        price-only modify whose body deliberately omitted `parentId` left `parent_order_id`
+        unchanged, and the response echoed it. A TIF or quantity modify of a held child has not
+        been tested.
+
         `authorization` (2026-09-11): the value `modify_order_and_confirm` earned for this
         exact replacement body and order id. When it covers them, Gate 1 is not repeated;
         Gate 2 always runs. Called directly with none, it prompts as it always has.
@@ -2321,7 +2352,12 @@ class IBKRClient:
             "tif": status.get("tif"),
             "_companyName": status.get("company_name"),
             "_currency": status.get("currency"),
-            "_current_description": status.get("order_description_with_contract"),
+            # IBKR's own sentence, plus the state it is in. Measured 2026-09-21: an
+            # `Inactive` order shows in the live book, presents as cancellable through both
+            # gates, and then answers `HTTP 400 {"error":"OrderID ... doesn't exist"}` — so the
+            # human authorised something that was never possible. Showing the status does not
+            # prevent that, but it stops it being a surprise.
+            "_current_description": _described_with_status(status),
         }
         price = status.get("limit_price") or status.get("stop_price")
         if price not in (None, ""):

@@ -9,7 +9,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **README named four of the five public gated order writes.** `place_bracket_and_confirm` has
+  been in the code's own `GATED_OWNERS` set and in SECURITY.md since it shipped, and was absent
+  from **both** of README's enumerations — the macOS requirement and the security section, each
+  of which lists the methods Touch ID gates. A reader checking whether the bracket path is gated
+  would have concluded it is not: wrong in the more dangerous direction. Found by a review asking
+  whether anything core-side was still outstanding, not by a test, because no test looked.
+
+  A guard now derives that list from `GATED_OWNERS` instead of restating it, so the same omission
+  cannot recur — `test_documented_controls.py` already guarded SECURITY.md's *regex* against the
+  code, and nothing guarded the *enumeration*. It was verified discriminating by deleting the name
+  from README in a scratch copy and confirming it failed. Its limit is stated in the test: it
+  asserts the name appears, not that the sentence around it is true.
+
 ### Added
+- **`modify_order` states the H1 boundary.** `_bracket_tickets` refuses a bracket child larger
+  than its parent at submission; nothing stops a later modify raising a child's quantity above
+  the parent's. Enforcing it in `modify_order` would cost two reads before every modify, on a
+  rate-limited endpoint, and a failed read would either block modifies or skip the check in
+  silence — and a control with a silent skip is not a control. The caller that already holds the
+  order status is the one that should enforce it. Documented rather than half-built, so nobody
+  reads the placement-time rule as covering the whole lifecycle. The same docstring records that
+  modifying a held child does **not** detach it (measured live 2026-09-21, price-only, `parentId`
+  deliberately omitted) and that a TIF or quantity modify of a held child is still untested.
+
+- **The cancel dialog names the order's STATE.** An `Inactive` order shows in the live book,
+  presents as cancellable through both gates, and then answers HTTP 400 saying the order id does
+  not exist — observed live 2026-09-21, after the human had already authorised it. IBKR's own
+  description names the order but not whether it is working, held or inactive, which is the fact
+  someone about to cancel most needs. Showing it does not prevent the refusal; it stops it being
+  a surprise.
 - **`pair_bracket_response()` / `BracketPairing` — which terminal entry belongs to which
   bracket ticket.** Closes three gaps found live on 2026-09-21, any one of which a read-back
   would otherwise have carried:
