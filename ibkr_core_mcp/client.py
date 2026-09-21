@@ -2053,10 +2053,17 @@ class IBKRClient:
         between risk invalidating it (503 on the next reply attempt). See CLAUDE.md's
         Order Management section and the audit report for the live-verified pattern.
 
-        US Futures and Futures Options (FUT/FOP): caller must include both manualIndicator=True
-        and extOperator="<user>" in the order dict. Required since May 1, 2025 for CME Group
-        Rule 536-B compliance. IBKR returns HTTP 400 without them for FUT/FOP orders.
-        order_flow.py adds these automatically when sec_type is "FUT" or "FOP".
+        US Futures and Futures Options (FUT/FOP): caller must include manualIndicator=True
+        in the order dict, for CME Group Rule 536-B compliance (required since May 1, 2025).
+        order_flow.py adds it automatically when sec_type is "FUT" or "FOP".
+
+        Do NOT send extOperator. The docs list it beside manualIndicator, but IBKR rejects
+        any non-empty value on this account class as undocumented field 8089 (whatif
+        isolation 2026-07-23; re-confirmed live 2026-09-20 on ES Dec-26, where two whatifs
+        differing only in this field returned a full margin impact without it and
+        HTTP 500 {"error":"Can not contain field # 8089"} with it). manualIndicator alone
+        is accepted — this docstring previously claimed HTTP 400 without both, which the
+        measurement contradicts.
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
                 https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
 
@@ -2091,8 +2098,9 @@ class IBKRClient:
         # Strip display-only fields (underscore-prefixed, e.g. _companyName).
         # These carry Gate-2 dialog metadata and are not valid IBKR request fields.
         # Note: ticker IS a valid IBKR field (optional) and is NOT stripped.
-        # manualIndicator / extOperator are FUT/FOP only (CME Rule 536-B) — caller adds them
-        # for futures; omit here to avoid type-rejection on equity orders.
+        # manualIndicator is FUT/FOP only (CME Rule 536-B) — caller adds it for futures;
+        # omit here to avoid type-rejection on equity orders. extOperator is NOT sent at
+        # all: IBKR rejects any non-empty value as field 8089 (see place_order's docstring).
         # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [api_order]})

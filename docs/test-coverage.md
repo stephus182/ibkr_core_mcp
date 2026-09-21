@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**1,695 unit tests · 102 integration tests (1,797 total) · 89% line coverage (non-integration)** — the three counts re-measured 2026-09-19 (after the 2.0.1 release: 21 tests added for the wheel smoke test and the rate-limit visibility pass, then 2 for the PEP 440 canonical-version guard; coverage unchanged, as that guard reads `pyproject.toml` and no shipped module) with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
+**1,696 unit tests · 102 integration tests (1,798 total) · 89% line coverage (non-integration)** — the three counts re-measured 2026-09-20 (one test added: a FUT preview must carry `manualIndicator` and must not carry `extOperator`, the M7 / field-8089 fix; coverage re-run and unchanged at 89%). Previously re-measured 2026-09-19 (after the 2.0.1 release: 21 tests added for the wheel smoke test and the rate-limit visibility pass, then 2 for the PEP 440 canonical-version guard; coverage unchanged, as that guard reads `pyproject.toml` and no shipped module) with the commands below, per-module figures included, not carried over. Do not edit these numbers by hand; re-run the commands below.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28

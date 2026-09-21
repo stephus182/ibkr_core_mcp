@@ -2813,8 +2813,16 @@ class ClaudeToolkit:
         if sec_type in ("FUT", "FOP"):
             # Required for US Futures and Futures Options — CME Group Rule 536-B
             # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+            #
+            # `extOperator` is documented beside `manualIndicator`, but IBKR rejects any
+            # non-empty value on this account class as undocumented field 8089 — the
+            # finding that made `place_order` stop sending it (2026-07-23). This path kept
+            # sending it, so EVERY futures preview failed while the placement it previews
+            # worked. Re-confirmed live 2026-09-20: two whatifs on ES Dec-26 identical but
+            # for this field — without it accepted with full margin impact, with it
+            # HTTP 500 {"error":"Can not contain field # 8089"}. Do not reinstate it
+            # without a live probe saying IBKR changed its mind.
             order["manualIndicator"] = True
-            order["extOperator"] = "ClaudIA"
         # Price-field mapping per the CP API place-order spec: `price` is the limit
         # for LMT/STOP_LIMIT, the stop for STP, the option price cap for MIDPRICE;
         # `auxPrice` is the stop for STOP_LIMIT.

@@ -417,3 +417,40 @@ def test_execute_get_live_orders_reports_outside_rth_in_three_states(toolkit):
     assert "outsideRTH=yes" in lines[1]
     assert "outsideRTH=no" in lines[2]
     assert "outsideRTH=not-reported" in lines[3]
+
+
+def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
+    """A FUT whatif must carry `manualIndicator` and must NOT carry `extOperator`.
+
+    CME Rule 536-B requires `manualIndicator` on US futures. `extOperator` is documented
+    beside it, but IBKR rejects any non-empty value on this account class as undocumented
+    field 8089 — the finding that made `place_order` stop sending it (2026-07-23).
+    `_preview_order` kept sending `extOperator: "ClaudIA"`, so every futures preview
+    failed while the placement path worked.
+
+    Re-confirmed live 2026-09-20 against the gateway, two whatifs on ES Dec-26 (conid
+    515416632) identical but for this one field:
+      without -> accepted, full margin impact, `"error": null`
+      with    -> HTTP 500 {"error":"Can not contain field # 8089"}
+
+    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    """
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.get_futures.return_value = [{"conid": 515416632, "symbol": "ES", "expirationDate": "20261218"}]
+    toolkit._client.get_order_preview.return_value = {"commission": "2.24"}
+
+    toolkit.execute(
+        "preview_order",
+        {
+            "symbol": "ES",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "LMT",
+            "limit_price": 7110.0,
+            "sec_type": "FUT",
+        },
+    )
+
+    call_order = toolkit._client.get_order_preview.call_args[0][1]
+    assert call_order["manualIndicator"] is True
+    assert "extOperator" not in call_order
