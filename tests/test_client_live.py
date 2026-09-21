@@ -38,9 +38,11 @@ from ibkr_core_mcp.models import (
     Account,
     AccountSummary,
     AuthStatus,
+    BrokerageSession,
     ContractDetails,
     ContractRules,
     MarketHistory,
+    MTAAlert,
     SecDefInfo,
 )
 
@@ -401,11 +403,11 @@ def test_get_subaccounts(live_client):
 
 @pytest.mark.integration
 def test_get_brokerage_accounts(live_client):
-    # GET /iserver/accounts returns a dict with "accounts" key (not a bare list)
     result = live_client.get_brokerage_accounts()
-    assert isinstance(result, dict)
-    assert "accounts" in result
-    assert len(result["accounts"]) > 0
+    assert isinstance(result, BrokerageSession)
+    # The account list is what this endpoint exists to answer; an empty one is a failure
+    # wearing a success's shape.
+    assert result.accounts, "no accounts on the brokerage session"
 
 
 @pytest.mark.integration
@@ -696,9 +698,9 @@ def test_get_unread_count(live_client):
 @pytest.mark.integration
 def test_get_mta_alert(live_client):
     result = live_client.get_mta_alert()
-    assert isinstance(result, dict)
-    # The MTA alert always exists for an account; an empty dict means it was not read.
-    assert result.get("account") or result.get("order_id"), sorted(result)[:8]
+    assert isinstance(result, MTAAlert)
+    # The MTA alert always exists for an account; neither field set means it was not read.
+    assert result.account or result.order_id
 
 
 # ---------------------------------------------------------------------------

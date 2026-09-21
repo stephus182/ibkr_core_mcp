@@ -114,6 +114,7 @@ Dated filenames, not retroactively edited.
 
 | Audit | What it covers |
 |---|---|
+| [`integration-suite-audit-2026-09-20.md`](audits/integration-suite-audit-2026-09-20.md) | First full-suite run against a live gateway after the `v2.0.1` release — four findings CI cannot reach, incl. `preview_order` sending `extOperator` so every futures whatif was rejected |
 | [`live-test-log.md`](audits/live-test-log.md) | **Running log** — every live integration run against a real gateway/Drive/Firecrawl, dated. Append, don't rewrite |
 | [`claude-tools-audit-2026-07.md`](audits/claude-tools-audit-2026-07.md) | The full `claude_tools.py` audit — 42 tool descriptions vs official docs, token measurements, the follow-up register |
 | [`2026-08-10-flex-dataset-audit.md`](audits/2026-08-10-flex-dataset-audit.md) | Flex dataset completeness — the live data-loss window and the row deleted |

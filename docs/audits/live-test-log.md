@@ -76,6 +76,44 @@ from every surface — so the warning cannot outlive the block.
 ---
 
 <a id="run-2026-09-16-3"></a>
+## Run: 2026-09-20 — first full-suite run since the `v2.0.1` release; four findings
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-20 |
+| Purpose | First run of the **whole** suite against a live gateway since the `v2.0.1` PyPI release (2026-09-19) and the API-11 typing work (2026-09-17). Run as a validation pass, not to add coverage. |
+| Gateway | container `ibkr_core_gateway`, jar `a27ed421` · Java 21.0.11 |
+| Auth method | `BrowserCookieAuth`; session verified LIVE out of band (`authenticated=True connected=True competing=False collision=False`) |
+| Account | `UXXXX699` |
+| Result (full) | **1,784 pass · 14 skip · 0 fail** after the fixes; **1,780 pass · 4 fail** before |
+| Result (`-m "not integration"`, what CI runs) | 1,696 pass — green both before and after, which is the point |
+| Runtime | 186.8 s full |
+
+### Findings
+
+Four, all invisible to CI because the integration suite needs a gateway CI does not have.
+Full write-up with evidence: [`integration-suite-audit-2026-09-20.md`](integration-suite-audit-2026-09-20.md).
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | `_preview_order` sent `extOperator` on FUT/FOP, so **every futures whatif was rejected** while the placement path it previews worked | Two whatifs on ES Dec-26 (conid `515416632`), identical but for that field: without it accepted with full margin impact and `"error": null`; with it `HTTP 500 {"error":"Can not contain field # 8089"}` |
+| 2 | `test_get_brokerage_accounts` asserted `dict` against the typed `BrokerageSession` | API-11 debt — seven siblings were migrated 2026-09-17, this was missed |
+| 3 | `test_get_mta_alert` asserted `dict` against the typed `MTAAlert` | same class, same date |
+| 4 | The crawl error-page guard tested nothing, for two independent reasons | its target stopped being an error page (44-byte `403` → **31,608-byte** styled `404`), and an unstubbed store turned a missing `credentials.json` into the failure message, hiding the subject |
+
+Each of findings 2–4 was confirmed **pre-existing** by stashing the finding-1 fix and
+re-running them, before any of them was touched.
+
+### Note on what a green CI run means here
+
+Findings 2–4 are test defects and finding 1 is a product defect, but all four share one
+property: `pytest -m "not integration"` was green with every one of them present, on every
+push, including the release. A green CI run is evidence about the part of the suite CI can
+see and silence about the rest. The full suite is worth running whenever a gateway happens to
+be authenticated, and at minimum either side of a release.
+
+---
+
 ## Run: 2026-09-16 — gateway re-authenticated; trading-schedule settled (release-readiness audit)
 
 | Field | Value |

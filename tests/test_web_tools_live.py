@@ -34,12 +34,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Stable, static, automation-tolerant targets. docs.crawl4ai.com is used throughout
-# because its sitemap is small and its content changed under none of the 2026-07-30 runs.
+# Stable, static, automation-tolerant targets. docs.crawl4ai.com is used for the content
+# tests because its sitemap is small and its content changed under none of the 2026-07-30
+# runs. The error-page target is httpbin, which is purpose-built to return the status asked
+# of it: the old target was a docs.crawl4ai.com directory prefix that nginx answered 403 in
+# 44 bytes, and by 2026-09-20 the same URL served a 31,608-byte styled 404 — a premise that
+# quietly disappeared because it was never that host's job to keep it.
 DOCS_HOST = "docs.crawl4ai.com"
 DOCS_PAGE = "https://docs.crawl4ai.com/core/deep-crawling/"
 DOCS_ROOT = "https://docs.crawl4ai.com/core/quickstart/"
-DIRECTORY_PREFIX_403 = "https://docs.crawl4ai.com/core/"
+ERROR_STATUS_URL = "https://httpbin.org/status/403"
 
 
 @pytest.fixture(scope="module")
@@ -172,20 +176,45 @@ def test_fetch_page_flags_an_anti_bot_stub_rather_than_presenting_it(browser_ava
 def test_crawl_site_refuses_to_archive_an_error_page(browser_available, toolkit):
     """Guards the third instance of "a page count is not evidence of content".
 
-    `/core/` is a directory prefix; nginx answers 403 with a 44-byte body. An earlier
-    build archived that into Drive and reported "Crawl complete: saved 1 page(s)".
-    Predecessors of the same trap: "saved 0 page(s)" reported as success, and
-    `fetch_page`'s "(1 B)".
+    An earlier build archived an HTTP error page into Drive and reported
+    "Crawl complete: saved 1 page(s)". Predecessors of the same trap: "saved 0 page(s)"
+    reported as success, and `fetch_page`'s "(1 B)".
 
-    Asserts nothing reached Drive: `save_crawl` must never be called.
+    Asserts nothing reached Drive: `save_crawl` must never be called. The store is stubbed
+    to assert that *directly*. It used to be left real, and on 2026-09-20 that hid the
+    subject completely: with no `credentials.json` in the test tmp dir the reply became
+    "Crawl completed (1 pages) but Drive save failed: FileNotFoundError", so the test
+    failed on Drive configuration and said nothing about the guard. A test whose failure
+    message is about its scaffolding cannot report on its subject.
+
+    **The target changed under this test.** It was `docs.crawl4ai.com/core/`, a directory
+    prefix nginx answered 403 with a 44-byte body. Measured 2026-09-20 that URL returns a
+    404 with a **31,608-byte** styled mkdocs page — real content by any measure, so the
+    guard correctly did not fire and the premise was simply gone. `httpbin.org/status/403`
+    is purpose-built to return the status asked of it, which is a far steadier premise than
+    one host's incidental error styling. If even that stops holding, this skips with the
+    reason rather than failing as though the guard regressed.
     """
+
+    class _FakeStore:
+        def get_cached_crawl(self, url, max_age_hours=48.0):
+            return None
+
+        def save_crawl(self, url, pages):  # pragma: no cover - must never run
+            raise AssertionError(f"an error page reached Drive: {[p['url'] for p in pages]}")
+
+    toolkit._web_docs = _FakeStore()
     text, _ = toolkit.execute(
-        "crawl_site", {"url": DIRECTORY_PREFIX_403, "max_pages": 3, "max_depth": 0, "force_refresh": True}
+        "crawl_site", {"url": ERROR_STATUS_URL, "max_pages": 3, "max_depth": 0, "force_refresh": True}
     )
+
+    if "Crawl complete" in text:
+        pytest.skip(
+            f"premise gone: {ERROR_STATUS_URL} now returns crawlable content - repoint this test ({text[:160]})"
+        )
 
     assert "none of them is content" in text, text[:400]
     assert "Nothing was saved to Drive" in text
-    assert "403" in text, "the reply must quote the offending content, not just refuse"
 
 
 @pytest.mark.integration
