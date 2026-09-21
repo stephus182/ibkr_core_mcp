@@ -3994,3 +3994,49 @@ def test_the_bracket_submission_pairing_stays_marked_unvalidated():
         "unvalidated, but nothing here shows it became validated. Either restore the section "
         "or close the gap for real."
     )
+
+
+def test_every_public_name_in_client_py_is_exported_from_the_package():
+    """`client.py`'s public module-level names must all be in `ibkr_core_mcp.__all__`.
+
+    This rule is specific to `client.py` and the reason is structural, not stylistic.
+    `indicators`, `analytics` and `pinescript` are exported as **module namespaces**, so
+    `ibkr_core_mcp.indicators.rsi` reaches a public function that is deliberately not in
+    `__all__` itself. `client` is not exported that way. So a public name in `client.py` is
+    reachable from the package only if `__all__` carries it — otherwise a consumer must
+    reach into the submodule, and CLAUDE.md's "`__init__.py` — Public API — import everything
+    from here" is false for that name.
+
+    It was false for two of the three, and both were introduced by 2.1.0:
+    `pair_bracket_response` and `BracketPairing` were declared public, documented in
+    `docs/api-reference.md` and `docs/consumers.md`, and absent from `__all__` — while
+    `IBKRClient` beside them was exported. The same one-of-two-paths asymmetry this release
+    was reviewed for, in the package's own front door.
+
+    Deriving the list from the module rather than restating it is the point: a future public
+    name in `client.py` joins this check automatically.
+    """
+    import ast
+    import pathlib
+    import sys
+
+    import ibkr_core_mcp
+    from ibkr_core_mcp.client import IBKRClient
+
+    source = pathlib.Path(sys.modules[IBKRClient.__module__].__file__ or "")
+    tree = ast.parse(source.read_text())
+    public = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and not node.name.startswith("_")
+    ]
+    assert public, "found no public definitions in client.py — this guard is measuring nothing"
+
+    missing = [name for name in public if name not in ibkr_core_mcp.__all__]
+    assert not missing, (
+        f"{missing} are public in client.py but absent from ibkr_core_mcp.__all__. `client` is "
+        "not exported as a module namespace, so a consumer cannot reach them without importing "
+        "the submodule. Export them or make them private."
+    )
+    for name in public:
+        assert hasattr(ibkr_core_mcp, name), f"__all__ names {name!r} but it does not resolve"

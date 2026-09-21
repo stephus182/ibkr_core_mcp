@@ -19,7 +19,7 @@ ticket array, and it has its own entry point rather than a branch of the single-
 |---|---|
 | `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved |
 | `IBKRClient.get_bracket_preview(account_id, parent, children)` | Whatif for both legs. Read-only, ungated, like `get_order_preview` |
-| `ibkr_core_mcp.client.pair_bracket_response(tickets, entries)` → `BracketPairing` | Which returned entry is which leg. A **module-level function**, not a method on `IBKRClient` — import it as `from ibkr_core_mcp.client import pair_bracket_response` |
+| `pair_bracket_response(tickets, entries)` → `BracketPairing` | Which returned entry is which leg. A **module-level function**, not a method on `IBKRClient` — `from ibkr_core_mcp import pair_bracket_response` |
 
 **IBKR's bracket response is not index-aligned with the submission.** Two separate live
 sends returned `[child, parent]` for a `[parent, child]` array, so pairing `entries[i]` with

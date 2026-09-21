@@ -156,7 +156,8 @@ else:
     parent_order_id = pairing.parent["order_id"] if pairing.parent else None
 ```
 
-`pair_bracket_response` and `BracketPairing` import from `ibkr_core_mcp.client`. The pairing
+`pair_bracket_response` and `BracketPairing` import from `ibkr_core_mcp`, like the rest of
+the package's public API — they are module-level names, not methods on `IBKRClient`. The pairing
 is checked and logged by `place_bracket_and_confirm` itself, so a caller that never calls it
 still leaves a record; calling it yourself is how you get the order ids.
 

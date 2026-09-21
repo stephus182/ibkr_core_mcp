@@ -9,7 +9,7 @@ from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth, NoAuth, TokenAut
 from ibkr_core_mcp.backtest import BacktestResult, run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.claude_tools import ClaudeToolkit
-from ibkr_core_mcp.client import IBKRClient
+from ibkr_core_mcp.client import BracketPairing, IBKRClient, pair_bracket_response
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import (
     BacktestError,
@@ -84,6 +84,10 @@ __all__ = [
     "SQLiteStore",
     "ClaudeToolkit",
     "FlexQueryClient",
+    # Brackets — module-level, unlike the two bracket methods on IBKRClient. `client` is
+    # not exported as a namespace, so these are reachable only from here.
+    "pair_bracket_response",
+    "BracketPairing",
     # Auth
     "AuthStrategy",
     "BrowserCookieAuth",

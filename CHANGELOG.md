@@ -270,6 +270,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `isinstance(..., dict)` of item 6, which it catches independently.
 
 ### Added
+- **`pair_bracket_response` and `BracketPairing` are exported from the package.**
+  `from ibkr_core_mcp import pair_bracket_response, BracketPairing` — previously they were
+  public by decision and documented as such, but reachable only by importing the
+  `ibkr_core_mcp.client` submodule. `client.py` has exactly three public module-level names
+  and `__all__` carried one of them, while `CLAUDE.md` states that `__init__.py` is the
+  package's public API and everything is imported from there. That sentence was false for the
+  two names this release introduces — the same one-of-two-paths asymmetry the release was
+  reviewed for, in the package's own front door.
+
+  The rule is specific to `client.py` and the reason is structural rather than stylistic:
+  `indicators`, `analytics` and `pinescript` are exported as **module namespaces**, so their
+  public functions are reachable without being in `__all__`. `client` is not, so a public name
+  there is unreachable from the package unless `__all__` carries it.
+  `test_every_public_name_in_client_py_is_exported_from_the_package` derives the list from the
+  module rather than restating it, so a future public name joins the check automatically; it
+  was watched failing on exactly these two.
+
+  `docs/consumers.md` and `docs/order-management-examples.md` were updated in the same change
+  so there is **one** canonical spelling. The submodule path still works and is not deprecated
+  — nothing breaks — but the docs now name a single way to import these, because two spellings
+  for one name is the ambiguity that produced the defect above.
+
 - **Why `Inactive` is not a terminal status, written down with its source.** The
   `_TERMINAL_STATUSES` comment explained `Filled`/`Cancelled` and was silent on `Inactive`,
   which is exactly the kind of omission a later reader "fixes". IBKR defines that status as
