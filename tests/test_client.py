@@ -3747,6 +3747,130 @@ def test_cancel_dialog_detail_survives_a_TYPED_order_status(client):
     assert "Submitted" in details["_current_description"]
 
 
+# --- A6: the cancel dialog discloses OCA membership ----------------------------------------
+#
+# Every field name and value type below is copied from a LIVE read on 2026-09-22 of two
+# resting CL Nov'26 brackets. The measurement: on each CHILD, `oca_group_id` equals that
+# child's `parent_order_id` AND the parent's own `order_id`, with `oca_group_type`
+# "ReduceOnFillNonBlock"; the PARENT carries neither key, but does carry
+# `children_order_ids`. IBKR documents none of them.
+_LIVE_BRACKET_CHILD_STATUS: dict[str, Any] = {
+    "symbol": "CL",
+    "side": "S",
+    "total_size": "1.0",
+    "size": "1.0",
+    "cum_fill": "0",
+    "order_type": "LIMIT",
+    "tif": "GTC",
+    "company_name": "Light Sweet Crude Oil",
+    "currency": "USD",
+    "limit_price": "90.50",
+    "sec_type": "FUT",
+    "order_status": "PreSubmitted",
+    "order_description_with_contract": "Sell 1 CL Nov'26 Limit 90.50, GTC",
+    "parent_order_id": "<parent>",
+    "oca_group_id": "<parent>",
+    "oca_group_type": "ReduceOnFillNonBlock",
+}
+_LIVE_BRACKET_PARENT_STATUS: dict[str, Any] = {
+    "symbol": "CL",
+    "side": "B",
+    "total_size": "1.0",
+    "size": "1.0",
+    "cum_fill": "0",
+    "order_type": "LIMIT",
+    "tif": "GTC",
+    "company_name": "Light Sweet Crude Oil",
+    "currency": "USD",
+    "limit_price": "88.50",
+    "sec_type": "FUT",
+    "order_status": "Submitted",
+    "order_description_with_contract": "Buy 1 CL Nov'26 Limit 88.50, GTC",
+    "children_order_ids": "<child>",
+}
+
+
+def _cancel_dialog_rows(client, status):
+    """Drive the real reader and the real dialog; only the renderer is stubbed."""
+    from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
+
+    with _patch.object(client, "get_order_status", return_value=status):
+        details = client._cancel_dialog_details("1")
+    with _patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_cancel_dialog("1", "U1234567", details)
+    return mock_show.call_args.kwargs["details"]
+
+
+def test_cancelling_a_bracket_child_warns_that_the_linked_legs_go_too(client):
+    """The dialog shows ONE order and the human approves ONE order, but cancelling a leg of
+    an OCA group takes the group with it. The HELD case is the worse one: both children die
+    while the parent stays working, so the position opens later with no protection and there
+    is no moment at which the user could notice — the position did not exist when its
+    protection was removed.
+
+    `get_order_status` returns the membership and `_cancel_dialog_details` dropped it: core
+    knew and did not say."""
+    rows = _cancel_dialog_rows(client, _LIVE_BRACKET_CHILD_STATUS)
+    warning = rows["⚠ Linked orders"]
+    assert "ReduceOnFillNonBlock" in warning
+    assert "may cancel" in warning
+    # Dated and hedged: the field is undocumented, so this is an observation, not a promise.
+    assert "2026-09-22" in warning
+    assert "does not document" in warning
+
+
+def test_cancelling_a_bracket_PARENT_warns_from_its_own_field_not_from_an_absent_one(client):
+    """The asymmetry, and the thing not to over-claim. A parent carries NO `oca_group_id`, so
+    no parent-side warning may be synthesised from it. The same live read shows a parent DOES
+    carry `children_order_ids` — so the warning is made from a field that is present, saying
+    what can be said from the data in hand."""
+    rows = _cancel_dialog_rows(client, _LIVE_BRACKET_PARENT_STATUS)
+    assert "⚠ Attached orders" in rows
+    assert "child orders attached" in rows["⚠ Attached orders"]
+    # Not the child's warning: a parent is not in an OCA group and must not claim to be.
+    assert "⚠ Linked orders" not in rows
+
+
+def test_the_cancel_dialog_shows_an_execution_attribute_IBKR_SENDS_BACK(client):
+    """A1 site (b), the stronger form: not "the caller did not tell us" but "we knew and did
+    not say". `get_order_status` returns `all_or_none` and `outside_rth`, and this reader
+    built its display dict from eight named fields and dropped both.
+
+    Measured live 2026-09-22 on a resting AAPL order: both present as real booleans. A
+    FUTURE carries neither, because IBKR refuses All-or-None on futures outright — so an
+    earlier pass that sampled only futures wrongly concluded the field does not exist.
+    """
+    status = dict(_LIVE_BRACKET_PARENT_STATUS, sec_type="STK", symbol="AAPL")
+    status.pop("children_order_ids")
+    status |= {"all_or_none": True, "outside_rth": True}
+    rows = _cancel_dialog_rows(client, status)
+    assert rows["All-or-None"] == "Yes"
+    assert rows["Outside RTH"] == "Yes"
+
+
+def test_the_cancel_dialog_stays_quiet_about_an_attribute_that_is_merely_DEFAULT(client):
+    """The counter-case, and the reason the rule is "surface when TRUE" rather than "copy the
+    field". Both attributes are effectively ALWAYS present on a stock — measured `False` on
+    the live AAPL order — so copying them unconditionally would stamp "All-or-None: No" and
+    "Outside RTH: No" on every cancel dialog. That is the noise claudia_ui gap #40 cleaned
+    off this screen, and re-adding it would be a regression dressed as a feature."""
+    status = dict(_LIVE_BRACKET_PARENT_STATUS, sec_type="STK", symbol="AAPL")
+    status.pop("children_order_ids")
+    status |= {"all_or_none": False, "outside_rth": False}
+    rows = _cancel_dialog_rows(client, status)
+    assert "All-or-None" not in rows
+    assert "Outside RTH" not in rows
+
+
+def test_an_unlinked_order_gets_no_linkage_warning_at_all(client):
+    """The counter-case, and what makes the two tests above discriminating. A warning printed
+    on every cancel is a warning read on none, and this dialog was cleaned up precisely to
+    stop it carrying noise (claudia_ui gap #40)."""
+    plain = {k: v for k, v in _LIVE_BRACKET_PARENT_STATUS.items() if k != "children_order_ids"}
+    rows = _cancel_dialog_rows(client, plain)
+    assert not [key for key in rows if str(key).startswith("⚠")], rows
+
+
 # --- The opposite-side rule, enforced with the other structural rules ---------------------
 # Found 2026-09-21 by asking which of `confirm_bracket_dialog`'s refusals `_bracket_tickets`
 # does NOT repeat. The contract rule and H1 were both moved here precisely so a violating

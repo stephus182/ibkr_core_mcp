@@ -241,6 +241,33 @@ _MEASURED_BUT_UNDOCUMENTED: dict[str, str] = {
         "Measured the same day on a stop ('7732.00', with limit_price ''), same source, "
         "also absent from IBKR's documented response."
     ),
+    "oca_group_id": (
+        "Measured live 2026-09-22 on two independent resting CL Nov'26 brackets. On each "
+        "CHILD it equals that child's `parent_order_id` AND the parent's own `order_id` — "
+        "compared by value, so IBKR groups a bracket's children on the parent's order id. "
+        "A PARENT carries neither this key nor `parent_order_id`. Absent from IBKR's "
+        "order-status field list and example, and from every page in its llms.txt index."
+    ),
+    "children_order_ids": (
+        "Measured in the same 2026-09-22 read, on the PARENT of each of those two brackets, "
+        "as a string. It is what lets the cancel dialog warn from the parent's side without "
+        "inferring anything from the `oca_group_id` a parent does not carry. Also absent "
+        "from IBKR's documented order-status response."
+    ),
+    "all_or_none": (
+        "Measured live 2026-09-22 on a resting AAPL order: present as a real boolean, `False` "
+        "on an order placed without the attribute. A FUTURE carries it nowhere — IBKR refuses "
+        "All-or-None on futures (`HTTP 500 invalid order attribute : All or None`, paired "
+        "control `allOrNone: false` accepted) — so a futures-only sample wrongly suggests the "
+        "field does not exist, which an earlier pass concluded. Absent from IBKR's documented "
+        "order-status response."
+    ),
+    "outside_rth": (
+        "Measured in the same AAPL read, as a real boolean. Note the spelling: the ORDER BODY "
+        "field is `outsideRTH` (and `outsideRth` in IBKR's own curl example) while the STATUS "
+        "field is snake_case `outside_rth` — three spellings of one attribute across one API. "
+        "Also absent from IBKR's documented order-status response."
+    ),
 }
 
 

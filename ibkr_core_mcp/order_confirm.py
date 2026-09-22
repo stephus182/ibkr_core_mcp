@@ -533,6 +533,88 @@ _CONTRACT_CLASS_KEYS = ("secType", "manualIndicator", "ticker")
 _HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
 
 
+def _multi_child_disclosure(parent: dict[str, Any], children: list[dict[str, Any]]) -> str | None:
+    """What a human seeing several full-size children against one parent is not being told.
+
+    A two-child bracket renders two full-size SELLs under a one-lot BUY. Nothing on the
+    screen says only one of them can fill, so the arithmetic reads as an instruction to sell
+    twice what is being bought — the alarming reading, and the wrong one.
+
+    **This is a DISCLOSURE, never a guardrail.** The legs are supposed to total more than the
+    parent: IBKR's own published bracket is a full-size profit taker AND a full-size stop on
+    one position (50/50/50), so refusing the aggregate would refuse the standard shape. H1 is
+    enforced per child, and `_bracket_tickets`' docstring records why.
+
+    What is said, and the standing of each claim:
+
+    - The arithmetic is CERTAIN. It comes from the dialog's own inputs and needs nothing from
+      IBKR.
+    - The grouping is MEASURED, dated, and stated as an observation rather than a guarantee:
+      on 2026-09-22, two resting brackets each reported `oca_group_id` equal to the parent's
+      own order id with `oca_group_type: "ReduceOnFillNonBlock"`. **This dialog cannot verify
+      the link for the order about to be submitted** — `oca_group_id` exists only after IBKR
+      has accepted the tickets — so the sentence says what was seen before, not what will be.
+    - The partial-fill case is stated as UNKNOWN, because it is. The children are sized to the
+      full parent quantity and IBKR documents nothing about what becomes of them if the parent
+      fills only partially. Deliberately not policed: core could only correct an oversized
+      child by issuing a `modify_order`, and an invariant that only an order write can repair
+      is not enforceable from here.
+
+    Args:
+        parent: The parent ticket.
+        children: Its child tickets.
+
+    Returns:
+        The disclosure, or None when there is at most one child, or when the children are
+        stated and do not exceed the parent (a scale-out, where the alarming reading does
+        not arise).
+    """
+    if len(children) < 2:
+        return None
+    parent_qty = _as_float_or_none(parent.get("quantity"))
+    # An absent child quantity is DERIVED from the parent (`_bracket_tickets` says so), so it
+    # counts as a full-size leg rather than as zero — counting it as zero would suppress the
+    # disclosure on exactly the all-derived bracket that most needs it.
+    child_total = 0.0
+    for child in children:
+        qty = _as_float_or_none(child.get("quantity"))
+        if qty is None:
+            qty = parent_qty
+        if qty is None:
+            child_total = math.nan
+            break
+        child_total += qty
+    if parent_qty is not None and math.isfinite(child_total):
+        if child_total <= parent_qty:
+            return None  # a genuine scale-out: the legs do not oversubscribe the parent
+        known = True
+    else:
+        known = False
+    totals = (
+        f"These {len(children)} children total {_quantity_text(child_total)} "
+        f"against a parent of {_quantity_text(parent_qty)}. "
+        if known
+        else f"These {len(children)} children are each sized to the full parent quantity. "
+    )
+    return (
+        totals + "They are exits for ONE position, not additional orders: IBKR groups a "
+        "parent's children so that one filling cancels the others (observed 2026-09-22 on "
+        "resting brackets, which reported an OCA group of type ReduceOnFillNonBlock; this "
+        "dialog cannot verify the link for the order about to be submitted, because IBKR "
+        "assigns it only after accepting the tickets). IBKR does not document what becomes "
+        "of the children if the parent fills only PARTIALLY."
+    )
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    """`value` as a finite float, or None — NaN and infinities are not quantities."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]], account_id: str) -> None:
     """Gate 2 for a bracket: ONE dialog carrying the parent and every child.
 
@@ -703,6 +785,10 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         for key, value in rows.items():
             details[f"{kind} — {key}"] = value
 
+    disclosure = _multi_child_disclosure(parent, children)
+    if disclosure:
+        details["Children together"] = disclosure
+
     # No `action=`: a bracket IS a placement, so the banner stays the parent's side and colour
     # — the exposure being opened — exactly as the place dialog's does. `_banner` special-cases
     # only CANCEL and MODIFY, the two acts whose verb must beat the side. The word BRACKET is
@@ -769,6 +855,28 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         current = order.get("_current_description")
         if current:
             details["Currently at IBKR"] = str(current)
+        # A6 — this dialog shows ONE order and the human approves ONE order, but cancelling a
+        # leg of an OCA group takes the whole group with it. The held case is the worse one:
+        # both children die while the parent stays working, so the position opens later with
+        # no protection, and there is no moment at which the user could notice — the position
+        # did not exist when its protection was removed. Dated and attributed, because
+        # `oca_group_id` is undocumented and this is an observation, not a guarantee.
+        group_type = order.get("_oca_group_type")
+        if group_type:
+            details["⚠ Linked orders"] = (
+                f"This order belongs to an OCA group ({group_type}). Cancelling it may cancel "
+                "the other orders in that group — for a bracket, the other exit leg. Observed "
+                "2026-09-22: a bracket's children are grouped on the parent's own order id. "
+                "IBKR does not document this field, so treat it as a warning, not a promise."
+            )
+        # The other end of the same relationship, and deliberately a DIFFERENT field: a
+        # bracket parent carries no `oca_group_id`, so nothing is inferred for it from an
+        # absent value. It does carry `children_order_ids`, which says what can be said.
+        if order.get("_has_attached_children"):
+            details["⚠ Attached orders"] = (
+                "This order has child orders attached to it. Cancelling a parent normally "
+                "cancels its children too, so the exits for this position may go with it."
+            )
     else:
         # An order id is not human-checkable. With several orders resting, nothing here
         # distinguishes a disposable test order from the stop protecting a real position,

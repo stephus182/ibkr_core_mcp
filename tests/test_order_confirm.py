@@ -1666,6 +1666,84 @@ def test_bracket_dialog_refuses_an_empty_child_list():
         confirm_bracket_dialog(_bracket_parent(), [], "U1234567")
 
 
+def _bracket(parent_qty=1, child_qtys=(1, 1)):
+    """A parent and one child per entry in `child_qtys`; None means the quantity is DERIVED."""
+    parent = {
+        "conid": 1,
+        "cOID": "C-1",
+        "side": "BUY",
+        "quantity": parent_qty,
+        "ticker": "F",
+        "orderType": "LMT",
+        "price": 13.0,
+        "tif": "GTC",
+    }
+    kinds = ["LMT", "STP", "STP", "STP"]
+    children = []
+    for i, qty in enumerate(child_qtys):
+        kid = {"parentId": "C-1", "side": "SELL", "orderType": kinds[i], "price": 14.0 + i, "tif": "GTC"}
+        if qty is not None:
+            kid["quantity"] = qty
+        children.append(kid)
+    return parent, children
+
+
+def test_a_multi_child_bracket_discloses_that_the_children_outsize_the_parent():
+    """A two-child bracket renders two full-size SELLs under a one-lot BUY, and nothing said
+    only one of them can fill — so the arithmetic read as an instruction to sell twice what
+    was being bought. That is the alarming reading and the wrong one.
+
+    The disclosure is NOT a guardrail: IBKR's own published bracket is a full-size profit
+    taker AND a full-size stop on one position (50/50/50), so refusing the aggregate would
+    refuse the standard shape. See `_bracket_tickets` for why H1 stays per-child.
+    """
+    details = _bracket_details(*_bracket(parent_qty=1, child_qtys=(1, 1)))
+    disclosure = details["Children together"]
+    assert "total 2 against a parent of 1" in disclosure
+    assert "one filling cancels the others" in disclosure
+    # Dated and hedged, never stated as a permanent guarantee about THIS order.
+    assert "2026-09-22" in disclosure
+    assert "cannot verify the link for the order about to be submitted" in disclosure
+    # The partial-fill unknown is disclosed, not policed.
+    assert "PARTIALLY" in disclosure
+
+
+@pytest.mark.parametrize(
+    ("why", "parent_qty", "child_qtys"),
+    [
+        ("a single child cannot outsize anything by aggregation", 1, (1,)),
+        ("a genuine scale-out does not oversubscribe the parent", 3, (1, 1)),
+        ("equal aggregate is not an excess", 2, (1, 1)),
+    ],
+)
+def test_the_aggregate_disclosure_stays_quiet_when_there_is_nothing_to_disclose(why, parent_qty, child_qtys):
+    """The counter-cases, and what makes the test above discriminating rather than a banner
+    printed on every bracket. A warning shown always is a warning read never."""
+    details = _bracket_details(*_bracket(parent_qty=parent_qty, child_qtys=child_qtys))
+    assert "Children together" not in details, why
+
+
+def test_a_child_with_no_stated_quantity_counts_as_full_size_in_the_disclosure():
+    """`_bracket_tickets` documents an absent child quantity as DERIVED from the parent, so
+    an all-derived two-child bracket is two full-size legs and the arithmetic is still
+    exact. Counting an absent quantity as ZERO would suppress the disclosure on exactly the
+    bracket that most needs it — the one whose legs the caller never sized by hand."""
+    details = _bracket_details(*_bracket(parent_qty=1, child_qtys=(None, None)))
+    assert "total 2 against a parent of 1" in details["Children together"]
+
+
+def test_the_disclosure_drops_the_arithmetic_when_the_parent_states_no_quantity():
+    """The only case where the numbers cannot be stated. The disclosure must still appear —
+    the mutual-exclusivity point does not depend on arithmetic — but it must not invent a
+    total it cannot compute, which is this package's rule everywhere else on this dialog
+    (an unknown is named, never guessed)."""
+    parent, children = _bracket(parent_qty=1, child_qtys=(None, None))
+    del parent["quantity"]
+    disclosure = _bracket_details(parent, children)["Children together"]
+    assert "each sized to the full parent quantity" in disclosure
+    assert "total" not in disclosure.split("They are exits")[0]
+
+
 def test_bracket_dialog_child_inherits_the_parents_contract_display_keys():
     """Both legs are the SAME contract (D2), so both must render the same way.
 

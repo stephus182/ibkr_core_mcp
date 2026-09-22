@@ -2436,6 +2436,44 @@ class IBKRClient:
             details["price"] = price
         if str(status.get("sec_type") or "").upper() in ("FUT", "FOP"):
             details["_multiplier_unknown"] = True
+        # A6 — cancelling one leg of an OCA group cancels the whole group. The endpoint
+        # returns the membership and this method dropped it, which is the same shape as the
+        # `all_or_none` case below: core knew and did not say. Measured 2026-09-22 on two
+        # resting brackets: a CHILD reports `oca_group_id` equal to its `parent_order_id`
+        # and to the parent's own `order_id`, with `oca_group_type` "ReduceOnFillNonBlock".
+        #
+        # Only a child carries it. A PARENT reports no `oca_group_id` at all, so no
+        # parent-side warning is synthesised from an absent field — but the same read shows
+        # a parent DOES carry `children_order_ids`, which says the same thing from the other
+        # end and is surfaced on its own row rather than inferred.
+        #
+        # `oca_group_id`, `oca_group_type` and `children_order_ids` are documented on ZERO
+        # IBKR pages — the same real-but-undocumented class as `limit_price`/`stop_price`
+        # above. Written down so a contributor does not "correct" it against the docs.
+        if status.get("oca_group_id"):
+            details["_oca_group_type"] = status.get("oca_group_type") or "unknown"
+        if status.get("children_order_ids"):
+            details["_has_attached_children"] = True
+        # A1 site (b) — execution attributes IBKR sends BACK, which this method read past.
+        # The stronger form of the same defect as the placement dialog's: not "the caller did
+        # not tell us" but "we knew and did not say".
+        #
+        # Measured live 2026-09-22 on a resting AAPL order: the status carries `all_or_none`
+        # and `outside_rth` as real booleans (both `False` on an order placed without them).
+        # A FUTURE carries neither — IBKR refuses All-or-None on futures outright (`HTTP 500
+        # {"error":"invalid order attribute : All or None"}`, with the paired control
+        # `allOrNone: false` accepted) — so a futures-only sample says nothing here, and an
+        # earlier pass that looked only at futures wrongly concluded the field did not exist.
+        #
+        # Shown only when TRUE, and that is the whole design. The fields are effectively
+        # ALWAYS present on a stock, so copying them unconditionally would stamp
+        # "All-or-None: No" and "Outside RTH: No" on every cancel dialog — precisely the
+        # noise claudia_ui gap #40 cleaned off this screen. An attribute that is set changes
+        # what cancelling means; one that is not set is the default and says nothing.
+        if status.get("all_or_none"):
+            details["allOrNone"] = True
+        if status.get("outside_rth"):
+            details["outsideRTH"] = True
         return {k: v for k, v in details.items() if v not in (None, "")}
 
     def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict[str, Any]]:

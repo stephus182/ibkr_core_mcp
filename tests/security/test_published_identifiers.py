@@ -392,11 +392,28 @@ SYNTHETIC_LIVE_CONSTANTS = {
     # One alert detail body. Pre-dates this control; kept as declared rather than silently
     # grandfathered, so its provenance is written down like the others.
     ("tests/claude_tools/test_alerts.py", "_LIVE_ALERT_DETAIL"),
+    # Two order-status bodies for the A6 cancel-cascade tests. FIELD NAMES and value TYPES
+    # are from a live read of two resting brackets on 2026-09-22 — that is the whole point,
+    # since the defect was core reading `oca_group_id` and not showing it. Every identifier
+    # is a placeholder (`<parent>`, `<child>`), the prices are the contract's own quoted
+    # levels rather than anything account-scoped, and no quantity, balance or order id from
+    # the owner's account appears.
+    ("tests/test_client.py", "_LIVE_BRACKET_CHILD_STATUS"),
+    ("tests/test_client.py", "_LIVE_BRACKET_PARENT_STATUS"),
 }
 
 
 def _live_named_constants():
-    """Module-level constants in tests/ whose name claims live provenance."""
+    """Module-level constants in tests/ whose name claims live provenance.
+
+    Both `X = {...}` (ast.Assign) and `X: dict[str, Any] = {...}` (ast.AnnAssign) count.
+    Only the first did until 2026-09-22, and the gap is worth stating because it is a
+    SILENT one: adding a type annotation to a `LIVE_*` constant removed it from this guard's
+    view entirely, so the declaration requirement stopped applying to it and
+    `test_the_declared_synthetic_list_has_not_gone_stale` reported the declaration as the
+    stale thing. Found by annotating a constant to satisfy mypy — a change with no security
+    intent at all, which is exactly how this kind of hole gets opened.
+    """
     import ast
 
     for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
@@ -405,9 +422,17 @@ def _live_named_constants():
         except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
             continue
         for node in tree.body:
-            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict | ast.List):
+            targets: list[ast.expr]
+            if isinstance(node, ast.AnnAssign):
+                targets = [node.target] if node.value is not None else []
+                value = node.value
+            elif isinstance(node, ast.Assign):
+                targets, value = list(node.targets), node.value
+            else:
                 continue
-            for target in node.targets:
+            if not isinstance(value, ast.Dict | ast.List):
+                continue
+            for target in targets:
                 if isinstance(target, ast.Name) and "LIVE" in target.id.upper():
                     yield str(path.relative_to(REPO_ROOT)), target.id
 
