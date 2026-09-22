@@ -845,6 +845,8 @@ _TYPED_ROW_KEYS = {
     # The two rules are opposites by design — what changes how the order EXECUTES must be
     # visible, what merely identifies or routes it must not clutter the last human screen.
     "All-or-None",
+    # A5: named when the bracket-parent check could not be completed. Never silent.
+    "Bracket size check",
 }
 
 

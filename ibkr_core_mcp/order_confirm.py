@@ -828,6 +828,13 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
     current = order.get("_current_description")
     if current:
         details["Currently at IBKR"] = str(current)
+    # A5 — when the bracket-parent check could not be completed, the dialog SAYS so. A
+    # control that skips in silence is not a control, and this is the one path where the
+    # library declines to verify something it normally does. The same shape
+    # `confirm_cancel_dialog` uses when it cannot read the order at all.
+    h1_check = order.get("_h1_check")
+    if h1_check:
+        details["Bracket size check"] = str(h1_check)
     _show_confirm_dialog(
         title="⚠  MODIFY ORDER CONFIRMATION",
         details=details,

@@ -76,7 +76,7 @@ import urllib3
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError
+from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError, OrderValidationError
 from ibkr_core_mcp.human_auth import (
     ORDER_WRITE_AUTHORIZATION_TTL_S,
     OrderWriteAuthorization,
@@ -2334,6 +2334,15 @@ class IBKRClient:
             require_touch_id(f"modify IBKR order {order_id}")
         else:
             log.info("Gate 1: modify covered by authorization %s", scope)
+        # H1 after submission. Sited exactly where `cancel_order`'s display read is, and for
+        # the same reason: SEC-02 requires a gate before any network call on a gated write,
+        # so this cannot precede Gate 1 (an earlier placement of the cancel read broke that
+        # invariant, was caught by tests/security/test_order_write_boundary.py, and was
+        # reordered rather than exempted). The refusal therefore lands AFTER Touch ID. That
+        # is acceptable and is not a defect: nothing has been written at this point.
+        gap = self._refuse_child_larger_than_parent_fill(order_id, order)
+        if gap:
+            order["_h1_check"] = gap
         confirm_modify_dialog(order_id, order, account_id)
         # Display-only `_`-prefixed keys (the futures label, multiplier, currency,
         # `_changes`, `_current_description`) never reach IBKR — the same convention as
@@ -2375,6 +2384,97 @@ class IBKRClient:
         url = f"{self._base}{path}"
         resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
         return _decode(resp, path)
+
+    def _refuse_child_larger_than_parent_fill(self, order_id: str, order: dict[str, Any]) -> str | None:
+        """H1 on the modify path: a bracket child may never be larger than the position its
+        parent actually created.
+
+        `_bracket_tickets` refuses an oversized child at SUBMISSION. Nothing stopped a later
+        modify from raising one — and IBKR permits it. Measured 2026-09-22 with the parent
+        filled at 1: the released child was raised to SELL 2 and IBKR accepted it. Had it
+        filled, 2 sold against 1 long is SHORT 1 — exactly the harm H1 exists to prevent,
+        reached through modify instead of through placement.
+
+        **The comparison is against `cum_fill`, not `total_size`.** Filled, not ordered: a
+        child may only ever be as large as the position the parent has actually created. A
+        parent working for 5 with 1 filled supports a child of 1.
+
+        **`size` is never read.** IBKR documents it as the REMAINING unfilled quantity
+        ("will reflect 0.0 if order is filled in full"), so using it here would invert the
+        comparison exactly when the parent is fully filled. `_cancel_dialog_details` falls
+        back `total_size or size` for a DISPLAY row, which is harmless there and would be a
+        silent inversion here. Every one of these fields arrives as a STRING (measured
+        2026-09-22: `total_size`, `cum_fill` and `size` are all `str`).
+
+        **A released child's status is indistinguishable from a held one's.** Both report
+        `PreSubmitted` — a stop reads that until it triggers, whether or not its parent has
+        filled — so held-vs-released is decided by the PARENT's fill state and never by the
+        child's status string.
+
+        Failure is not refusal. `/iserver/account/order/status` is rate-limited (measured
+        HTTP 503 after a dense run), and a read that fails must not block an urgent modify;
+        the gap is named on Gate 2 instead, the same pattern `confirm_cancel_dialog` uses
+        when it cannot read an order at all. A control with a SILENT skip is not a control —
+        this one says so on the screen.
+
+        This method replaces a docstring paragraph that declined to do any of it, on the
+        grounds that it would cost a rate-limited read and that a control with a silent skip
+        is not a control. Both objections were already answered by shipped code in this file:
+        `cancel_order` pays exactly this cost between the gates, and `confirm_cancel_dialog`
+        names its gap rather than skipping quietly.
+
+        Args:
+            order_id: The order being modified.
+            order: The replacement body, read for its requested `quantity`.
+
+        Returns:
+            A sentence for Gate 2 when the check could not be completed, else None.
+
+        Raises:
+            OrderValidationError: The order is a bracket child and the requested quantity
+                exceeds the parent's filled quantity. Nothing has been written.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
+        """
+        requested = order.get("quantity")
+        if requested is None:
+            return None  # not a quantity change; nothing for H1 to compare
+        try:
+            status = self.get_order_status(order_id)
+        except Exception:
+            log.warning("H1 check: could not read order %s", order_id)
+            return "NOT CHECKED — this order could not be read, so it was not verified against a bracket parent"
+        if not isinstance(status, Mapping) or not status:
+            return "NOT CHECKED — this order could not be read, so it was not verified against a bracket parent"
+        parent_id = status.get("parent_order_id")
+        if not parent_id:
+            return None  # not a bracket child — H1 does not apply
+        try:
+            parent = self.get_order_status(str(parent_id))
+        except Exception:
+            log.warning("H1 check: could not read parent of order %s", order_id)
+            return "NOT CHECKED — this order is a bracket child, but its parent could not be read"
+        if not isinstance(parent, Mapping) or not parent:
+            return "NOT CHECKED — this order is a bracket child, but its parent could not be read"
+        try:
+            filled = float(parent.get("cum_fill") or 0)
+            wanted = float(requested)
+        except (TypeError, ValueError):
+            return "NOT CHECKED — a quantity could not be read as a number"
+        if not (math.isfinite(filled) and math.isfinite(wanted)):
+            return "NOT CHECKED — a quantity was not a finite number"
+        if filled <= 0:
+            # The parent has filled nothing, so the child is still held and IBKR ignores a
+            # quantity change on it anyway (measured 2026-09-22, both directions, stable at
+            # +4/+8/+15s). Refusing here would be noise about a change that does not happen.
+            return None
+        if wanted > filled:
+            raise OrderValidationError(
+                f"A bracket child may never be larger than the position its parent created: "
+                f"requested {wanted:g} against a parent filled {filled:g}. "
+                f"Nothing was sent to IBKR."
+            )
+        return None
 
     def _cancel_dialog_details(self, order_id: str) -> dict[str, Any] | None:
         """Best-effort display detail for the Gate 2 cancel dialog, in IBKR body shape.

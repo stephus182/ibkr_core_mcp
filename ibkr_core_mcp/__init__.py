@@ -26,6 +26,7 @@ from ibkr_core_mcp.exceptions import (
     IBKRAuthError,
     IBKRCoreError,
     IBKRRateLimitError,
+    OrderValidationError,
     StoreError,
     StreamingError,
 )
@@ -147,6 +148,7 @@ __all__ = [
     "BacktestRuntimeError",
     "ConfigError",
     "HumanAuthError",
+    "OrderValidationError",
     "FlexQueryError",
     "StreamingError",
     "require_touch_id",

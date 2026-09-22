@@ -101,6 +101,32 @@ class HumanAuthError(IBKRCoreError):
     """Raised when Touch ID is denied, times out, unavailable, or the user cancels the confirmation dialog."""
 
 
+class OrderValidationError(IBKRCoreError, ValueError):
+    """Raised when this package refuses an order write because it would break a safety rule.
+
+    Not a broker rejection and not a human declining: the library itself is refusing to send
+    the request. Today that means H1 — a bracket child may never be larger than the position
+    its parent actually created (`IBKRClient.modify_order`).
+
+    **It inherits from both `IBKRCoreError` and `ValueError` on purpose**, and each parent is
+    load-bearing:
+
+    - `IBKRCoreError` is the base `exceptions.py` tells every caller to catch, and a refusal
+      that escaped it would surface as an unhandled crash in a host app.
+    - `ValueError` is what `IBKRClient._bracket_tickets` already raises for the SAME rule at
+      submission time, and what `docs/order-management-examples.md` shows callers catching.
+      One rule broken on two paths must not need two `except` clauses.
+
+    The distinct NAME matters as much as the bases. Raising `HumanAuthError` here would have
+    been type-correct — it is an `IBKRCoreError`, and `confirm_bracket_dialog` uses it for
+    this very rule — but a consuming app classifies failures by exception type name, and
+    claudia_ui's would have reported this refusal to the operator as "Touch ID authentication
+    failed or was cancelled" (`order_flow._FAILURE_PATTERNS`, read 2026-09-22). The human
+    authenticated perfectly well; the library declined the order. A wrong explanation on a
+    refused order write sends the operator to debug the wrong thing.
+    """
+
+
 class FlexQueryError(IBKRCoreError):
     """Raised when a Flex Query request fails, times out, or returns unexpected XML."""
 

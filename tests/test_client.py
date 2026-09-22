@@ -3747,6 +3747,184 @@ def test_cancel_dialog_detail_survives_a_TYPED_order_status(client):
     assert "Submitted" in details["_current_description"]
 
 
+# --- A5: H1 after submission -------------------------------------------------------------
+#
+# `_bracket_tickets` refuses an oversized child at SUBMISSION; nothing stopped a later modify
+# from raising one, and IBKR permits it. Measured live 2026-09-22 with the parent filled at 1:
+# the released child was raised to SELL 2 and IBKR accepted it. Had it filled, 2 sold against
+# 1 long is SHORT 1 — the harm H1 exists to prevent, reached through modify.
+#
+# Field spellings and value TYPES below are from a live order-status read the same day:
+# `total_size`, `cum_fill` and `size` all arrive as STRINGS.
+
+
+def _h1_client(client, child, parent=None):
+    """Drive modify_order with both gates stubbed and `get_order_status` answering a bracket."""
+
+    def _status(order_id):
+        if parent is not None and str(order_id) == "2222222222":
+            return parent
+        return child
+
+    return _patch.object(client, "get_order_status", side_effect=_status)
+
+
+_H1_CHILD = {"order_id": "1111111111", "parent_order_id": "2222222222", "symbol": "F", "side": "S",
+             "order_status": "PreSubmitted", "total_size": "1.0", "cum_fill": "0", "size": "1.0"}  # fmt: skip
+
+
+def test_modify_refuses_raising_a_released_child_above_what_the_parent_filled(client):
+    """The defect, and the one IBKR itself allows. The parent filled 1; raising the child to
+    2 would, if it filled, leave the account SHORT 1."""
+    from ibkr_core_mcp.exceptions import OrderValidationError
+
+    parent = {"order_id": "2222222222", "cum_fill": "1", "total_size": "1.0", "size": "0.0"}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog") as dialog,
+        _h1_client(client, _H1_CHILD, parent),
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(OrderValidationError, match="never be larger"),
+    ):
+        client.modify_order("U1234567", "1111111111", {"quantity": 2})
+    mock_post.assert_not_called(), "an order write was sent despite the refusal"
+    dialog.assert_not_called(), "Gate 2 ran for an order that was never going to be sent"
+
+
+def test_the_h1_refusal_is_catchable_as_BOTH_of_the_types_callers_are_told_to_catch(client):
+    """`exceptions.py` tells callers to catch `IBKRCoreError`; `_bracket_tickets` raises
+    `ValueError` for this same rule and the docs show callers catching that. One rule broken
+    on two paths must not need two `except` clauses — hence the dual base.
+
+    And the NAME must not contain "HumanAuth": claudia_ui classifies failures by exception
+    type name and would otherwise report this as "Touch ID authentication failed or was
+    cancelled", sending the operator to debug an authentication that worked perfectly."""
+    from ibkr_core_mcp.exceptions import IBKRCoreError, OrderValidationError
+
+    assert issubclass(OrderValidationError, IBKRCoreError)
+    assert issubclass(OrderValidationError, ValueError)
+    assert "HumanAuth" not in OrderValidationError.__name__
+
+
+@pytest.mark.parametrize(
+    ("why", "requested", "parent"),
+    [
+        ("reducing a child is always safe", 1, {"cum_fill": "2", "total_size": "2.0"}),
+        ("equal to the filled quantity is the normal case", 2, {"cum_fill": "2", "total_size": "2.0"}),
+        (
+            "a parent that has filled NOTHING holds a child IBKR ignores anyway",
+            5,
+            {"cum_fill": "0", "total_size": "5.0"},
+        ),
+    ],
+)
+def test_the_h1_check_does_not_over_refuse(client, why, requested, parent):
+    """The counter-cases. A guard that refused these would block ordinary work, and they are
+    what make the refusal above discriminating rather than a blanket veto on bracket
+    children."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _h1_client(client, _H1_CHILD, dict(parent, order_id="2222222222")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "1111111111"}])
+        client.modify_order("U1234567", "1111111111", {"quantity": requested})
+    mock_post.assert_called_once(), why
+
+
+def test_the_h1_check_compares_against_cum_fill_and_never_against_size(client):
+    """`size` is IBKR's REMAINING unfilled quantity — "will reflect 0.0 if order is filled in
+    full". A parent fully filled at 2 reports `cum_fill: '2'` and `size: '0.0'`, so comparing
+    against `size` would refuse EVERY modify exactly when the parent is done filling. The
+    display reader `_cancel_dialog_details` falls back `total_size or size`, which is
+    harmless for a row and would be a silent inversion here."""
+    parent = {"order_id": "2222222222", "cum_fill": "2", "total_size": "2.0", "size": "0.0"}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _h1_client(client, _H1_CHILD, parent),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "1111111111"}])
+        client.modify_order("U1234567", "1111111111", {"quantity": 2})
+    mock_post.assert_called_once(), "compared against `size` (0.0) instead of cum_fill (2)"
+
+
+def test_the_h1_check_compares_against_cum_fill_and_never_against_total_size(client):
+    """FILLED, not ORDERED — the distinction the whole rule rests on, and the one a test
+    using a fully-filled parent cannot see.
+
+    A parent WORKING for 5 with only 1 filled has created a position of 1. A child of 2 is
+    oversized against that position and must be refused, even though 2 is comfortably under
+    the parent's ordered size. Comparing against `total_size` would wave it through and leave
+    the account short by 1 if it filled.
+
+    Added 2026-09-22 after a mutation survived: swapping `cum_fill` for `total_size` passed
+    every other test in this block, because each of them used a parent whose ordered and
+    filled quantities were the same number.
+    """
+    from ibkr_core_mcp.exceptions import OrderValidationError
+
+    parent = {"order_id": "2222222222", "cum_fill": "1", "total_size": "5.0", "size": "4.0"}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _h1_client(client, _H1_CHILD, parent),
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(OrderValidationError, match="parent filled 1"),
+    ):
+        client.modify_order("U1234567", "1111111111", {"quantity": 2})
+    mock_post.assert_not_called()
+
+
+def test_a_plain_order_is_not_subjected_to_the_bracket_rule(client):
+    """No `parent_order_id` means no bracket, so nothing to compare. One read, no refusal."""
+    plain = {"order_id": "3333333333", "symbol": "AAPL", "total_size": "1.0", "cum_fill": "0"}
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch.object(client, "get_order_status", return_value=plain) as read,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "3333333333"}])
+        client.modify_order("U1234567", "3333333333", {"quantity": 9})
+    mock_post.assert_called_once()
+    assert read.call_count == 1, "a non-bracket modify paid for a second status read"
+
+
+def test_a_failed_read_names_the_gap_on_gate_2_instead_of_blocking_the_modify(client):
+    """`/iserver/account/order/status` is rate-limited — measured HTTP 503 after a dense run
+    — and a read that fails must never block an urgent modify. But a control that skips in
+    SILENCE is not a control, so the dialog says it could not check. Same pattern
+    `confirm_cancel_dialog` uses when it cannot read the order at all."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog") as dialog,
+        _patch.object(client, "get_order_status", side_effect=RuntimeError("503")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "3333333333"}])
+        client.modify_order("U1234567", "3333333333", {"quantity": 2})
+    mock_post.assert_called_once(), "a failed DISPLAY read blocked a modify"
+    body = dialog.call_args[0][1]
+    assert "NOT CHECKED" in body["_h1_check"]
+
+
+def test_a_modify_that_changes_no_quantity_costs_no_read_at_all(client):
+    """A price-only modify cannot break H1, so it must not pay a rate-limited read."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_modify_dialog"),
+        _patch.object(client, "get_order_status") as read,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "3333333333"}])
+        client.modify_order("U1234567", "3333333333", {"price": 12.5})
+    read.assert_not_called()
+    mock_post.assert_called_once()
+
+
 # --- A6: the cancel dialog discloses OCA membership ----------------------------------------
 #
 # Every field name and value type below is copied from a LIVE read on 2026-09-22 of two
