@@ -623,7 +623,7 @@ def test_modify_order_and_confirm_decline_mid_chain(client):
 # in this codebase is a bare dict though (unchanged by this task)". **It is not, and never
 # was** — `modify_order` returns `self._post(...)` unwrapped, `_post` returns `Any`, and a
 # live modify on 2026-09-21 returned
-# `[{"order_id": "1275120921", "local_order_id": "CLAUDIA-...", "order_status": "Submitted",
+# `[{"order_id": "1234567890", "local_order_id": "CLAUDIA-...", "order_status": "Submitted",
 # "encrypt_message": "1"}]` — an array, matching IBKR's documented example to the field.
 #
 # That one belief was the entire blind spot. Everything around it was right: the docs were
@@ -744,13 +744,13 @@ def test_modify_with_no_reply_returns_the_array_wrapped_terminal_unwrapped(clien
         _patch.object(client._session, "post") as mock_post,
     ):
         mock_post.return_value = _make_ok_response(
-            [{"order_id": "1275120921", "order_status": "Submitted", "encrypt_message": "1"}]
+            [{"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}]
         )
-        result = client.modify_order_and_confirm("U1234567", "1275120921", {"price": 7250.0})
+        result = client.modify_order_and_confirm("U1234567", "1234567890", {"price": 7250.0})
 
     mock_reply_dlg.assert_not_called()
     mock_post.assert_called_once()
-    assert result == {"order_id": "1275120921", "order_status": "Submitted", "encrypt_message": "1"}
+    assert result == {"order_id": "1234567890", "order_status": "Submitted", "encrypt_message": "1"}
 
 
 # ---------------------------------------------------------------------------

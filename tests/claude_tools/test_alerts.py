@@ -231,13 +231,15 @@ def test_create_price_alert_explains_the_gateway_operator_block_on_403(toolkit):
     assert "ibkr-api-behaviors-reference" in text, "the reader is not pointed at the evidence"
 
 
-# The LIVE response from GET /iserver/account/alert/1331320792, captured 2026-09-16 from an
+# The LIVE response from GET /iserver/account/alert/{id}, captured 2026-09-16 from an
+# alert created on IBKR Mobile. The id is synthetic (1234567890); every other value is as
+# IBKR sent it. This repository is public and an order id is account data.
 # authenticated Client Portal Gateway (build 2023-04-24) against a real alert created on
 # IBKR Mobile. Not a documentation example — this is what the gateway actually returns, and
 # it is snake_case throughout: 26 top-level keys, none camelCase.
 _LIVE_ALERT_DETAIL = {
     "account": "U1234567",
-    "order_id": 1331320792,
+    "order_id": 1234567890,
     "alert_name": "AAPL <= 1.00",
     "tif": "GTC",
     "expire_time": None,
@@ -342,7 +344,7 @@ def test_the_translated_body_carries_orderId_so_it_is_a_modify():
 
     body = _alert_detail_to_request(_LIVE_ALERT_DETAIL)
 
-    assert body["orderId"] == 1331320792
+    assert body["orderId"] == 1234567890
 
 
 def test_the_translated_body_carries_no_field_ibkr_did_not_document():
@@ -379,14 +381,14 @@ def test_modify_price_alert_sends_a_translated_modify_body(toolkit):
     caller's patch applied to the TRANSLATED field names rather than beside the stale ones."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
     toolkit._client.get_alert.return_value = dict(_LIVE_ALERT_DETAIL)
-    toolkit._client.create_alert.return_value = {"success": True, "order_id": 1331320792}
+    toolkit._client.create_alert.return_value = {"success": True, "order_id": 1234567890}
 
-    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "1331320792", "name": "AAPL audit", "price": 2.50})
+    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "1234567890", "name": "AAPL audit", "price": 2.50})
 
     assert_tool_succeeded(text)
     account_id, body = toolkit._client.create_alert.call_args[0]
     assert account_id == "U1234567"
-    assert body["orderId"] == 1331320792, "a modify without orderId creates a second alert"
+    assert body["orderId"] == 1234567890, "a modify without orderId creates a second alert"
     assert body["alertName"] == "AAPL audit"
     # `str(2.50)` is "2.5" — the handler stringifies the caller's float as-is, which is
     # pre-existing behaviour and what IBKR receives. Asserted as it is, not as it looks.
@@ -730,9 +732,9 @@ def test_modify_price_alert_sends_outsideRth_as_ibkrs_enum_int(toolkit):
     body's int, so the same field went out in two shapes from two handlers (TOOL-R5)."""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234567"}]
     toolkit._client.get_alert.return_value = dict(_LIVE_ALERT_DETAIL)
-    toolkit._client.create_alert.return_value = {"success": True, "order_id": 1331320792}
+    toolkit._client.create_alert.return_value = {"success": True, "order_id": 1234567890}
 
-    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "1331320792", "outside_rth": True})
+    text, _ = toolkit.execute("modify_price_alert", {"alert_id": "1234567890", "outside_rth": True})
 
     assert_tool_succeeded(text)
     _, body = toolkit._client.create_alert.call_args[0]

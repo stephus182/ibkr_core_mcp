@@ -57,8 +57,8 @@ class IBKRResponse(BaseModel, Mapping[str, Any]):
     used to return keeps working unchanged.
 
     Reading a raw key gives IBKR's own value and type; reading the attribute gives the
-    normalised one. They can legitimately differ — `Order.order_id` is `"1986940574"`
-    where `order["orderId"]` is `1986940574` — and where they do, the field's
+    normalised one. They can legitimately differ — `Order.order_id` is `"1234567890"`
+    where `order["orderId"]` is `1234567890` (a synthetic id; the contrast is str vs int) — and where they do, the field's
     description says so.
 
     **One dict behaviour does not carry over: `model == {...}` is False.** Equality is

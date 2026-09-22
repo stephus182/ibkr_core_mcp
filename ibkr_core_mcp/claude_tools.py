@@ -1537,8 +1537,9 @@ def _preview_movement(result: Mapping[str, Any], key: str, label: str) -> str:
     `{current, change, after}` objects. Until 2026-09-21 this tool read
     `initMarginChange` / `maintMarginChange` / `equity.amount` — **three keys IBKR does
     not send** — so every margin figure rendered `N/A` while the numbers sat in the
-    response. Measured live that day on ESZ6: `initial.change` 24,583 and
-    `maintenance.change` 18,459 were both present and both discarded.
+    response. Measured live that day on ESZ6, where `initial.change` and `maintenance.change`
+    were both present and both discarded. (The figures are account balances and this
+    repository is public, so they are deliberately not reproduced.)
 
     A block IBKR did not send is named as absent, never rendered as a number.
     """

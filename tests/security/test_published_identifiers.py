@@ -453,3 +453,93 @@ def test_the_live_constant_scan_is_not_vacuous():
     """If the walker finds nothing, both tests above pass for free."""
     found = list(_live_named_constants())
     assert len(found) >= 3, f"the scan found {len(found)} live-named constants: {found}"
+
+
+# ---------------------------------------------------------------------------------------
+# The CLASS the account-number guard does not cover: IBKR order and alert ids, and account
+# balance figures. Added 2026-09-22.
+#
+# Why this exists. `ACCOUNT_SHAPED` matches `U[0-9]{6,9}` and nothing else, so on 2026-09-22
+# a sweep found seven tracked files publishing identifiers from the owner's live account —
+# four order ids, one alert id (six times), and a pair of margin figures duplicated in the
+# CHANGELOG and in `claude_tools.py` — with the whole suite green throughout. Commit
+# 7209ce1, whose own message is "remove real account figures from test fixtures and
+# CHANGELOG", had scrubbed two numbers 48 lines away from a pair it left untouched.
+#
+# That is the same failure mode this file already records for the account-number pattern
+# (SEC-13: "a control scoped to one field class is not a control"), one field class over.
+#
+# An order id is not a credential — it cannot be acted on without the account and a session
+# — but CLAUDE.md's standing rule for this PUBLIC repository names it explicitly alongside
+# balances, positions, P&L and fill history, and the rule is what is being enforced here.
+#
+# The approach is deliberately a DENY-LIST OF KNOWN-REAL VALUES rather than a shape pattern.
+# A bare 10-digit number is indistinguishable from a conid, a timestamp or a port, so a
+# shape rule would either drown in false positives or be tuned until it found nothing. What
+# is enforceable is: once a real identifier has been identified, it never comes back.
+PUBLISHED_REAL_IDENTIFIERS = frozenset(
+    {
+        "1331320792",  # alert id, created on IBKR Mobile 2026-09-16
+        "1986940574",  # order id, live-orders read 2026-09-16
+        "1793215935",  # order id, stop-price modify 2026-09-10
+        "1275120921",  # order id, modify reply-array measurement 2026-09-21
+        "24,583",  # ESZ6 initial margin change, 2026-09-21
+        "18,459",  # ESZ6 maintenance margin change, 2026-09-21
+    }
+)
+
+# Synthetic stand-ins that replaced them. Present in the tree on purpose, and asserted
+# present below so this guard cannot pass by scanning nothing.
+SYNTHETIC_IDENTIFIER_STANDINS = frozenset({"1234567890"})
+
+
+def _identifier_scan_corpus() -> list[tuple[str, str]]:
+    """(path, text) for every tracked file the two checks below read.
+
+    ONE walker, deliberately, shared by the guard and by its vacuity control. Written as two
+    loops first, and the mutation showed why that is wrong: emptying the guard's own loop
+    left the control passing, because the control walked the tree separately and still saw
+    everything. A control that cannot observe the thing it certifies is decoration
+    (2026-09-22).
+
+    This file is skipped because the deny-list must NAME the values it forbids, so the guard
+    flags itself otherwise — which it did on its first run, the same shape this repository
+    has been bitten by three times: a source-reading test tripping on the prose explaining
+    it. The path is spelled from `__file__` so it cannot drift.
+    """
+    own_path = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
+    corpus: list[tuple[str, str]] = []
+    for path in _tracked_files():
+        if path.startswith(VERBATIM_CAPTURES) or path == own_path:
+            continue
+        try:
+            corpus.append((path, (REPO_ROOT / path).read_text(errors="ignore")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return corpus
+
+
+def test_no_tracked_file_republishes_a_known_real_identifier():
+    """The class guard. Every value here was live in a tracked file on 2026-09-22 and was
+    removed; this is what stops one coming back in a later edit or a revert."""
+    offenders: dict[str, list[str]] = {}
+    for path, text in _identifier_scan_corpus():
+        found = sorted(value for value in PUBLISHED_REAL_IDENTIFIERS if value in text)
+        if found:
+            offenders[path] = found
+    assert not offenders, "identifiers from the owner's live account are back in a PUBLIC repository: " + "; ".join(
+        f"{p} -> {', '.join(v)}" for p, v in sorted(offenders.items())
+    )
+
+
+def test_the_identifier_scan_is_not_vacuous():
+    """The control this file demands of every other check it holds, and it reads the SAME
+    corpus as the guard above — so a walker that goes blind fails here too. That is not
+    hypothetical: the account-number guard sat green over seven offending files because its
+    pattern covered one field class, and an empty walker is the cheaper version of the same
+    mistake."""
+    corpus = _identifier_scan_corpus()
+    assert len(corpus) > 100, f"the scan corpus holds {len(corpus)} files"
+    blob = "".join(text for _, text in corpus)
+    missing = sorted(s for s in SYNTHETIC_IDENTIFIER_STANDINS if s not in blob)
+    assert not missing, f"the scan cannot see the synthetic stand-ins it replaced them with: {missing}"

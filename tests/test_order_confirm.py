@@ -783,7 +783,7 @@ def test_cancel_and_modify_dialogs_declare_their_action():
 def test_both_sides_of_a_change_are_formatted_alike():
     """A diff is read by comparing two values, so they must be rendered the same way.
 
-    Live 2026-09-10 on order 1793215935, one stop-price change rendered three ways: the
+    Live 2026-09-10 on one order, one stop-price change rendered three ways: the
     chat card said `stop_price: 7900.0 → 7950`, Gate 2 said `stop price 7900.0 → 7950.0`.
     Each surface printed whatever type the value arrived as — a float from the proposal's
     `previous_value`, an int from the model's replacement body.

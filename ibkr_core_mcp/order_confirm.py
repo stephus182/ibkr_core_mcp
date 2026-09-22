@@ -411,7 +411,7 @@ def change_value_text(field: str, value: Any) -> str:
     """One rendering of a changed field's value, shared by every surface that shows a diff.
 
     A diff exists to be compared at a glance, so the two sides of the arrow have to be
-    formatted alike. Until 2026-09-10 they were not: on order 1793215935 one stop-price
+    formatted alike. Until 2026-09-10 they were not: on one live order a stop-price
     change rendered as `stop_price: 7900.0 -> 7950` in the chat card and `stop price
     7900.0 -> 7950.0` on Gate 2, because each surface printed whatever type the value
     happened to arrive as — a float from the proposal's `previous_value`, an int from the

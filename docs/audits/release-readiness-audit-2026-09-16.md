@@ -743,12 +743,12 @@ identical warmup on `/iserver/account/trades` by reading first and retrying on e
 
 Settled by measurement, not by reading the code. On a warm session, three consecutive plain
 reads with no `force=true` ahead of them each returned the open order (conid 265598, orderId
-1986940574):
+<order-id>):
 
 ```
-plain read #1: 0.10s  n=1  ids=[1986940574]
-plain read #2: 4.97s  n=1  ids=[1986940574]   <- the 5 s is our own pacing
-plain read #3: 5.02s  n=1  ids=[1986940574]
+plain read #1: 0.10s  n=1  ids=[<order-id>]
+plain read #2: 4.97s  n=1  ids=[<order-id>]   <- the 5 s is our own pacing
+plain read #3: 5.02s  n=1  ids=[<order-id>]
 ```
 
 | `get_live_orders()` | before | after |
@@ -984,7 +984,7 @@ handler, do not fix blind.** It should be fixed together with the upstream opera
 verified against a real alert.
 
 **UNBLOCKED 2026-09-16.** The owner created a real alert on IBKR Mobile (`AAPL <= 1.00`,
-GTC, order_id 1331320792), which made the read path observable and changed the decision from
+GTC, order_id <alert-id>), which made the read path observable and changed the decision from
 "do not fix blind" to "fix, then test".
 
 ### The live shape settles it
@@ -1419,7 +1419,7 @@ branch was unexercised. Both now have one, and all sixteen mutations die.
 
 Live verification (gateway authenticated, single process): all seven endpoints returned typed
 records, **zero passthrough rows**, `dict(model) == model.raw` on every one.
-`get_live_orders` returned `order_id='1986940574'` from a raw `int` — the exact value that
+`get_live_orders` returned `order_id='<order-id>'` from a raw `int` — the exact value that
 raised before the fix.
 
 ---
