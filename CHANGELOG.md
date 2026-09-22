@@ -7,27 +7,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [2.1.0] — 2026-09-22
 
 ### Fixed
-- **The live verification pass — and the one defect it found in a document rather than in code.**
-  `get_bracket_preview` ships in this release and had never been executed against a gateway;
-  its only coverage was unit tests against responses written to match it, which this repo
-  already treats as no evidence. Run as a `whatif` against AAPL (simulates, places nothing),
-  it returned the same nine-key object as the single-order whatif, with a key set **identical**
-  to the captured `order_preview` fixture — so the reader control is pinned to a current shape.
-  Full record: `docs/audits/live-test-log.md` § Run 2026-09-21. Result: **88 pass · 14 skip ·
-  0 fail** across all 102 integration tests.
+- **The release was verified against a live gateway before it shipped — 88 pass · 14 skip ·
+  0 fail across all 102 integration tests — and two of the defects below are ones no unit test
+  could have seen.** `get_bracket_preview` is live-proven for the first time: no live *test*
+  had ever referenced the new preview, and although it had been driven by hand during the
+  2026-09-20 bracket probes, its only coverage in the suite was unit tests against responses
+  written to match it, which this repo already treats as no evidence. Run as a `whatif` against
+  AAPL (simulates, places nothing), it returned the same nine-key object as the single-order
+  whatif, with a key set **identical** to the captured `order_preview` fixture — so the reader
+  control is pinned to a current shape. Full record: `docs/audits/live-test-log.md`
+  § Run 2026-09-21.
 
-  - **The live response settles the `warn`/`warns` fix below with measurement.** It carries
-    both fields and they are **not** equivalent: `warns[0]` is byte-identical to `warn`, and
-    `warns[1]` is a "Mandatory Cap Price" warning **absent from `warn`**. So reading `warns`
-    and de-duplicating are proven live. But the live payload has `warns ⊇ {warn}`, so it
-    **cannot** prove that reading `warn` is necessary — a `warns`-only reader would look
-    correct against it. That half was executed separately against IBKR's *documented*
-    response object, where `warns` does not appear and a `warns`-only reader surfaces **zero**
-    warnings. Each half now carries its own evidence, because a control that passes for the
-    wrong reason is the failure this whole release was reviewed for.
+  - **The live response settles this release's `preview_order` warning fix with measurement.**
+    It carries both fields and they are **not** equivalent: `warns[0]` is byte-identical to
+    `warn`, and `warns[1]` is a "Mandatory Cap Price" warning **absent from `warn`**. So
+    reading `warns` and de-duplicating are proven live. But the live payload has
+    `warns ⊇ {warn}`, so it **cannot** prove that reading `warn` is necessary — a
+    `warns`-only reader would look correct against it. That half was executed separately
+    against IBKR's *documented* response object, where `warns` does not appear and a
+    `warns`-only reader surfaces **zero** warnings. Each half now carries its own evidence,
+    because a control that passes for the wrong reason is exactly what this release was
+    reviewed for.
 
   - **`docs/consumers.md` documented a method that does not exist.** Its "New public API"
     table listed two rows as `IBKRClient.place_bracket_and_confirm(...)` and
@@ -51,18 +54,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     full run but **403 in isolation**, which is the real, already-documented cause its own
     message had been hiding. Both now report the status they saw. No product code changed.
 
-  - **`pair_bracket_response` cannot be live-covered without placing a real bracket**, and the
-    gated path exists so that no automated run can. Its two sibling gaps in the live-test log
-    each carry a guard that fails the day the gap closes; this one did not — the same "rule
-    held on one path and not its twin" shape this release was reviewed for.
+  - **`pair_bracket_response` has no automated live test and cannot be given one.** Covering it
+    means placing a real bracket, and the two human gates exist so that no unattended run can.
+    The behaviour it encodes *was* measured — two operator-driven sends on 2026-09-21, both of
+    which returned `[child, parent]` for a `[parent, child]` submission — but a measurement
+    taken by hand once is not a control that fails again tomorrow. Its two sibling gaps in the
+    live-test log each carry a guard that fails the day the gap closes; this one did not.
     `test_the_bracket_submission_pairing_stays_marked_unvalidated` holds three properties, each
     mutation-verified failing with the unmutated control green.
 
-- **A second review pass, over the parts of the release the first one never reached.** The
-  first pass was scoped to the bracket seam, which left `claude_tools.py` (+171),
-  `scripts/verify_wheel.py` (+302, new and never reviewed at all), `exceptions.py`,
-  `rate_limiter.py` and the front-month futures fix unexamined. Three findings, one of them
-  reproduced against IBKR's own published payload.
+- **Three defects outside the bracket seam — in `claude_tools.py`, in the reader control that
+  should have caught the first of them, and in the two futures date functions.** One of the
+  three was reproduced against IBKR's own published payload, not against a fixture.
 
   - **`preview_order` never read `warn`, the field IBKR documents.** The whatif response
     object publishes `warn` (String, singular) and `error`; **`warns` appears zero times**
@@ -76,7 +79,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     text, so the live shape (where `warn` repeats `warns[0]`) still shows one warning and a
     `warn` carrying something of its own is never lost.
 
-  - **The reader control was one-directional, which is why the above survived it.**
+  - **The reader control was one-directional, which is why an unread field survived it.**
     `tests/test_readers_against_live_shapes.py` records key lookups that **missed**, so it
     catches a reader indexing a key IBKR does not send and is structurally blind to a key
     IBKR *does* send that nothing reads — a key nobody reads produces no lookup and so no
@@ -119,10 +122,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   own. `IBKRRateLimitError`'s new `status_code` was checked against `IBKRAPIError`'s contract
   (both default 0; they are siblings, not parent and child, so there is no override hazard).
 
-- **Seven rules held on one of two reachable paths, found by a pre-release review of the
-  bracket seam.** The 2026-09-21 review that produced H1-at-Gate-2 and the README omission
-  established the shape; this pass looked for the rest of the class deliberately. None was a
-  logic error and all gates were green throughout.
+- **Seven bracket rules held on one of the two paths that can reach them, and a rule enforced
+  on one of two reachable paths is enforced on neither.** `_bracket_tickets` and
+  `confirm_bracket_dialog` are both public, and each is reachable without the other. None of
+  the seven was a logic error and every gate was green throughout: each was found by asking
+  what a rule's twin does, never by a failing test.
 
   1. **`is_future` could not recognise IBKR's own `secType`.** The check compared the whole
      string to `FUT`/`FOP`, and IBKR spells this field conid-first — `"265598@STK"` in its
@@ -158,8 +162,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
      kept passing while raising for the *new* reason — eight tests measuring one thing, and a
      table that had silently stopped testing what it said.
 
-  3. **`place_bracket_and_confirm` was missing from five more documents.** The guard written
-     for the README omission read exactly two files, so the same defect was live in
+  3. **README named four of the five public gated order writes — and so did five more
+     documents.** `place_bracket_and_confirm` had been in the code's own `GATED_OWNERS` set
+     and in `SECURITY.md` since it shipped, and was absent from **both** of README's
+     enumerations: the macOS requirement and the security section, each of which lists the
+     methods Touch ID gates. That is wrong in the more dangerous direction, and README is the
+     PyPI long description, so many readers see no other file. The guard written for that
+     omission read exactly two files, so the same defect was still live in
      `CLAUDE.md` (whose "Gated endpoints" table listed six rows and whose opening sentence
      named four writes), `docs/security-architecture.md` (the trust-boundary table, the
      diagram and § 6.1), `docs/api-reference.md`, `docs/order-management-examples.md` and
@@ -171,7 +180,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
      the guard, not by the review. Its first threshold was calibrated against the wrong set —
      the seven names a reader thinks of, rather than the five `GATED_OWNERS` holds — and
      inspected nothing at all; its own vacuity check caught that, which is why that test
-     exists. `docs/api-reference.md` also gained the bracket seam and lost a paragraph still
+     exists. Both guards were verified discriminating — the name deleted from a document in a
+     scratch copy, the check watched failing — and both state their limit in the test: they
+     assert that the name appears, not that the sentence around it is true.
+
+     `docs/api-reference.md` also gained the bracket seam and lost a paragraph still
      asserting that `modify_order` "returns a single dict (not a list)", the belief the
      modify-loop fix removed from the code and not from the docs. The new usage example in
      `docs/order-management-examples.md` is executed verbatim by a probe against the real
@@ -203,7 +216,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
      rather than display keys: they are merged into a local copy used only to build rows, and
      a test verified discriminating by `child.update(inherited)` holds that Gate 2 never
      edits the tickets it is shown. Not reachable from claudia_ui, which always sets a
-     multiplier key — the same caveat as the two Gate 2 defects fixed above it.
+     multiplier key — the same caveat as the two Gate 2 display defects elsewhere in this
+     release.
 
   6. **Two new readers narrowed IBKR data with `isinstance(..., dict)`.** A typed
      `IBKRResponse` is a `collections.abc.Mapping` and is **not** a `dict`; CLAUDE.md records
@@ -212,8 +226,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
      conventions in one release. Both failures are silent: `pair_bracket_response` is public
      API and would discard every row a caller supplied, then report the whole bracket
      missing; `_cancel_dialog_details` returns None the day `get_order_status` is typed, as
-     29 of 74 methods already are, degrading every Gate 2 cancel dialog to "Order detail: NOT
-     AVAILABLE" with the unit suite green, because its mocks are dicts. Both now take
+     29 of the client's methods already are, degrading every Gate 2 cancel dialog to "Order
+     detail: NOT AVAILABLE" with the unit suite green, because its mocks are dicts. Both now take
      `Mapping`, and `BracketPairing` declares `Mapping` fields in the release that first
      publishes the type, since widening later is what breaks a consumer. The two filters
      reading `_post` output directly keep `dict` and say why: that data is JSON decoded a
@@ -227,10 +241,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
      documented object to point at. This closes a difference between three call sites of one
      endpoint; its worst case is that it never fires.
 
-  **The fresh-eye review of these fixes found four more, three of them in the fix for item 2
-  itself.** It built a parity harness driving `_bracket_tickets` and `confirm_bracket_dialog`
-  with malformed brackets, to falsify rather than restate the claim that the two now hold the
-  same rules — the claim being made two items above this one.
+  **Fixing those seven produced four more, three of them in the opposite-side-rule fix
+  itself.** A parity harness drives `_bracket_tickets` and `confirm_bracket_dialog` with
+  malformed brackets, to falsify rather than restate the claim that the two now hold the same
+  rules.
 
   - The dialog normalised the parent link with `str(...).strip()` where the builder compares
     raw, so `parentId=" C-1 "` against `cOID="C-1"`, and a str `"1"` against an int `1`, were
@@ -267,7 +281,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   needs a resting order — so the shape is pinned from IBKR's published example, the same
   fallback already used for `modify_order`, and labelled as the weaker evidence it is. The
   control was watched failing twice: against a reader indexing `limitPrice`, and against the
-  `isinstance(..., dict)` of item 6, which it catches independently.
+  `isinstance(..., dict)` narrowing in `_cancel_dialog_details`, which it catches
+  independently.
 
 ### Added
 - **`pair_bracket_response` and `BracketPairing` are exported from the package.**
@@ -294,11 +309,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 - **Why `Inactive` is not a terminal status, written down with its source.** The
   `_TERMINAL_STATUSES` comment explained `Filled`/`Cancelled` and was silent on `Inactive`,
-  which is exactly the kind of omission a later reader "fixes". IBKR defines that status as
-  covering two situations at once — an order that "is invalid or triggered an error", and one
-  where "the order is to short shares but the order is being held while shares are being
-  located". Only the second can still become working, and the status alone cannot tell them
-  apart, so filtering it would hide a live order. A test pins it.
+  which is exactly the kind of omission a later reader "fixes". **IBKR publishes two
+  definitions of the status that disagree** (both re-fetched 2026-09-22 with fabricated
+  control URLs): the TWS API page lists four possible reasons — invalid/errored, held while
+  shares are located, placed manually while the exchange is closed, or blocked untransmitted
+  by a precautionary setting — while the Web API page gives a different single definition
+  matching only the last of those. No count is asserted, because none can be: the status
+  carries no reason code, so no test can say which reason produced a given `Inactive`, and no
+  experiment shows an enumeration is complete. The conclusion does not depend on it — under
+  every published reason at least one state can still become working, so filtering the status
+  would hide a live order. A test pins it.
 
   Measured the same day: the dead branch really is dead — a bracket parent left `Inactive` when
   its child was refused answers HTTP 400 saying the order id does not exist, while still
@@ -314,21 +334,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and contract rules, and its own docstring says why — it is public API, callable without the
   ticket builder, and it is the last screen before an irreversible write. A rule enforced in one
   of two reachable paths is enforced in neither when the other is taken. Caught by asking why the
-  dialog repeated two structural rules and not the third, in the same review that found the
-  README omission below.
-
-- **README named four of the five public gated order writes.** `place_bracket_and_confirm` has
-  been in the code's own `GATED_OWNERS` set and in SECURITY.md since it shipped, and was absent
-  from **both** of README's enumerations — the macOS requirement and the security section, each
-  of which lists the methods Touch ID gates. A reader checking whether the bracket path is gated
-  would have concluded it is not: wrong in the more dangerous direction. Found by a review asking
-  whether anything core-side was still outstanding, not by a test, because no test looked.
-
-  A guard now derives that list from `GATED_OWNERS` instead of restating it, so the same omission
-  cannot recur — `test_documented_controls.py` already guarded SECURITY.md's *regex* against the
-  code, and nothing guarded the *enumeration*. It was verified discriminating by deleting the name
-  from README in a scratch copy and confirming it failed. Its limit is stated in the test: it
-  asserts the name appears, not that the sentence around it is true.
+  dialog repeated two structural rules and not the third, in the same review that found
+  README's own enumeration of the gated writes one name short.
 
 ### Added
 - **`modify_order` states the H1 boundary.** `_bracket_tickets` refuses a bracket child larger
@@ -411,8 +418,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
      else.** An order id is not something a human can verify against the order they mean; with
      several orders resting, that screen cannot distinguish a disposable test order from the
      stop protecting a real position, and a cancel cannot be undone. `cancel_order` now fetches
-     the detail itself when the caller supplies none — read-only, before Gate 1, mirroring what
-     claudia_ui already does — and a caller's own details are never overwritten. When the read
+     the detail itself when the caller supplies none, mirroring what claudia_ui already does,
+     and a caller's own details are never overwritten. The read sits **after Gate 1 and before
+     Gate 2**: no network call may precede the fingerprint on a gated write (security invariant
+     SEC-02), and an earlier placement of this read broke that — caught by
+     `tests/security/test_order_write_boundary.py` and reordered rather than exempted. Gate 1
+     proves the human is present; Gate 2 is the screen that needs the facts. When the read
      fails the dialog **names the gap** ("Order detail: NOT AVAILABLE") instead of degrading in
      silence. The read is failure-tolerant on purpose: display is not permission, and
      `/iserver/account/order/status` is rate-limited (measured HTTP 503 the same day).
@@ -497,6 +508,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   false-success risk. The modify reply chain is still **un-exercised live**: the 2026-09-21
   modify raised no precaution at all, though the place of the same order did.
 
+- **Every futures preview was rejected, because `preview_order` sent `extOperator`.** The tool
+  set `extOperator="ClaudIA"` on FUT/FOP bodies. That is the exact non-empty value IBKR rejects
+  on this account class as undocumented field 8089 — the 2026-07-23 finding that had already
+  made `place_order` stop sending it — and this path kept sending it, so the preview failed for
+  every futures order whose placement worked. Measured live 2026-09-20 against the gateway: two
+  whatifs on ES Dec-26 identical but for this one field returned, without it, an acceptance
+  carrying the full margin impact and `"error": null`, and with it
+  `HTTP 500 {"error":"Can not contain field # 8089"}`. `manualIndicator` alone is accepted, so
+  CME Rule 536-B compliance is unaffected and it is still sent.
+
+  Two prose copies of the reversed conclusion went with it, each instructing the opposite of
+  what the code does: `place_order`'s docstring told callers to include `extOperator="<user>"`
+  and claimed IBKR answers HTTP 400 without it — the measurement contradicts both — and the
+  display-key comment said the caller adds `extOperator` for futures. The test is a FUT preview
+  that must carry `manualIndicator` and must not carry `extOperator`; it was red before the
+  change on the `extOperator` assertion alone, with `manualIndicator` already passing, so it
+  pins the defect and not merely the path. Source:
+  https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+
 - **`preview_order` read four keys the whatif does not send, and discarded IBKR's refusal.**
   A preview exists to answer "can this account support this order". It answered `N/A`, and
   when IBKR said no it did not say so at all.
@@ -565,7 +595,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   failing on redaction. The `_resolve_snapshot_conid` docstring claiming `/trsrv/futures`
   "returns all non-expired contracts" is corrected — it was measured false.
 
-  claudia_ui carries the same rule in its own order path; tracked as its Known Gaps #58.
+  claudia_ui resolves the front month in its own order path and needs the same rule; it is
+  tracked there.
 
 ### Added
 - **`place_bracket_and_confirm` — a bracket placed in ONE request, behind one Gate 1 and one

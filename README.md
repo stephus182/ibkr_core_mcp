@@ -98,7 +98,7 @@ pip install "ibkr-core-mcp[server]"       # + the MCP server (python -m ibkr_cor
 pip install "ibkr-core-mcp[scraper]"      # + the local Crawl4AI browser (then: crawl4ai-setup)
 ```
 
-Pin a version: `pip install "ibkr-core-mcp==2.0.1"`. A base install pulls pandas, numpy, pyarrow,
+Pin a version: `pip install "ibkr-core-mcp==2.1.0"`. A base install pulls pandas, numpy, pyarrow,
 the Google Drive client stack and exchange_calendars (about 450 MB in a fresh venv, measured
 2026-09-18); the Drive cache is only used if you configure it.
 

@@ -1703,12 +1703,27 @@ class IBKRClient:
     # Statuses that indicate an order is still active in the market.
     # Filled/Cancelled orders are executions, not live orders.
     #
-    # `Inactive` is deliberately NOT here, and a future reader should not "fix" that. IBKR
-    # defines it as covering two situations at once: "it is invalid or triggered an error"
-    # AND "the order is to short shares but the order is being held while shares are being
-    # located" — the second can still become working, so filtering the status out would hide
-    # a live order. The status alone cannot tell the two apart.
+    # `Inactive` is deliberately NOT here, and a future reader should not "fix" that.
+    #
+    # **IBKR publishes two definitions of this status that disagree** (both re-fetched
+    # 2026-09-22, each with a fabricated control URL in the same batch that returned a
+    # ~390-byte "Page Not Found"). The TWS API page lists FOUR possible reasons: the order
+    # "is invalid or triggered an error"; it "is to short shares but the order is being held
+    # while shares are being located"; it was "placed manually in TWS while the exchange is
+    # closed"; or it is "blocked by TWS due to a precautionary setting" and sits untransmitted.
+    # The Web API page gives a different single definition — "you are in the process of
+    # creating an order and you have not yet activated or transmitted it" — which corresponds
+    # to the fourth of those and to none of the first three.
+    #
+    # This comment claimed "two situations at once" until 2026-09-22. That understated the
+    # page it cited and ignored the page that contradicts it. **No count is asserted here now**,
+    # because none can be: the status string carries no reason code, so no live test can say
+    # which reason produced a given `Inactive`, and no experiment can show an enumeration is
+    # complete. What matters does not depend on the count — under EVERY published reason, at
+    # least one is a state that can still become working, so filtering the status out of the
+    # live book would hide a live order, and the status alone cannot tell the cases apart.
     # Source: https://interactivebrokers.github.io/tws-api/order_submission.html
+    #         https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value.md
     #
     # Measured 2026-09-21: the dead branch is genuinely dead — a bracket parent left `Inactive`
     # when its child was refused answers `HTTP 400 {"error":"OrderID ... doesn't exist"}` to a

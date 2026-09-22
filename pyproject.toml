@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ibkr_core_mcp"
-version = "2.0.1"
+version = "2.1.0"
 description = "Interactive Brokers from Python, end to end: complete Client Portal Web API connectivity (78 endpoints, REST + WebSocket, Docker gateway), market and historical data management with a Google Drive cloud cache, Flex statements, 44 Claude tools + MCP server for any Python or MCP client, backtests and analytics — orders behind Touch ID + confirmation."
 readme = "README.md"
 license = "MIT"
