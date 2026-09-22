@@ -467,7 +467,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
   IBKR documents this endpoint as returning an array, for both the terminal response and a
   precaution, and a live modify on 2026-09-21 returned
-  `[{"order_id": "1275120921", "local_order_id": "CLAUDIA-...", "order_status": "Submitted",
+  `[{"order_id": "…", "local_order_id": "CLAUDIA-…", "order_status": "Submitted",
   "encrypt_message": "1"}]` — matching their example to the field. So the loop never ran on a
   precaution: it was returned **as though it were the result**. The human was never shown it,
   never answered it, and the modification was never applied, while the caller held an object
@@ -500,9 +500,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `result["initMarginChange"]` and `result["maintMarginChange"]`. The response carries
   `amount.commission`, `equity.current`, `initial.change` and `maintenance.change`. So four of
   the five rendered lines were `N/A` on **every real call**, while the numbers sat in the
-  response — measured live 2026-09-21 on ESZ6: `initial.change` 24,583 and
-  `maintenance.change` 18,459, both present, both discarded. Only `equity.change` was read
-  correctly.
+  response — measured live 2026-09-21 on ESZ6, where `initial.change` and
+  `maintenance.change` were both present and both discarded. Only `equity.change` was read
+  correctly. (The figures themselves are account balances and are deliberately not
+  reproduced here; the defect is which keys were read, not what they held.)
 
   Worse, `error` and `warns` were never read. A preview IBKR **refused** rendered identically
   to one it accepted. Measured live the same day on a `BUY 2 ES` this account cannot support:

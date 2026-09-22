@@ -3112,6 +3112,60 @@ def test_place_bracket_posts_one_array_carrying_the_link_and_no_display_keys(cli
     assert all(not k.startswith("_") for o in body["orders"] for k in o), "display-only keys reached IBKR"
 
 
+def test_the_dialogs_inherited_keys_never_reach_the_wire(client):
+    """`confirm_bracket_dialog` fills a child's MISSING contract keys from the parent so the
+    two legs are described alike on one screen (`_CONTRACT_DISPLAY_KEYS`,
+    `_CONTRACT_CLASS_KEYS`). Those keys must stay on the screen: the child the caller wrote
+    is the child IBKR receives.
+
+    `order_confirm.py` has cited this test by name since the inheritance shipped, and it did
+    not exist — a comment asserting a guard nobody wrote (found 2026-09-22). It matters more
+    now that `ticker` is inherited too: `secType` and `ticker` are REAL IBKR body fields, not
+    `_`-prefixed display keys, so a leak would put fields on the wire the caller never sent.
+
+    The real dialog runs here — only `_show_confirm_dialog` is stubbed — because mocking
+    `confirm_bracket_dialog` away is precisely what would hide the leak this guards.
+
+    **This property is over-determined today, and that is worth writing down rather than
+    mistaking for strength.** Two independent mechanisms hold it: the dialog inherits into a
+    LOCAL dict, and `place_bracket_and_confirm` builds its tickets from private copies
+    *before* the dialog runs. Measured 2026-09-22 — making the dialog mutate the caller's
+    child in place does NOT fail this test, because the tickets were already built. So this
+    is a regression guard against a future reordering, and the dialog's own half is held by
+    `test_the_bracket_dialog_does_not_mutate_the_tickets_it_is_given` in
+    `tests/test_order_confirm.py`, which IS mutation-discriminating. Neither alone is enough.
+    """
+    parent, children = _bracket_pair()
+    parent["secType"] = "649180671:FUT"
+    # The shared fixture repeats `ticker` on the child; this package's OWN documented example
+    # does not, and that is the case inheritance exists for. Strip it so there is something
+    # to inherit — otherwise this test passes without the mechanism running at all.
+    children = [{k: v for k, v in kid.items() if k != "ticker"} for kid in children]
+    child_keys_before = [set(kid) for kid in children]
+    assert not any("ticker" in kid or "secType" in kid for kid in children), "fixture must omit them"
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "1"}, {"order_id": "2"}])
+        client.place_bracket_and_confirm("U1234567", parent, children)
+
+    # The screen DID inherit — otherwise this test would pass by the dialog doing nothing.
+    # Before `ticker` joined the inherited set this row read `UNKNOWN (conid 649180671)`.
+    details = mock_show.call_args.kwargs["details"]
+    assert details["Profit taker — Symbol"] == "ES — ESU6 · SEP26", details
+
+    # The wire did NOT.
+    posted = mock_post.call_args.kwargs["json"]["orders"]
+    for kid in posted[1:]:
+        assert "ticker" not in kid, f"an inherited display key reached IBKR: {kid}"
+        assert "secType" not in kid, f"an inherited display key reached IBKR: {kid}"
+    # And the caller's own dicts were not mutated behind its back.
+    assert [set(kid) for kid in children] == child_keys_before
+
+
 def test_place_bracket_runs_touch_id_once_then_the_bracket_dialog_then_posts(client):
     """D4: one Touch ID and ONE Gate 2 for the pair. Two dialogs would permit the parent to
     go with the child declined — the state a bracket exists to prevent."""

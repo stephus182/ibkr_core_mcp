@@ -96,6 +96,92 @@ def _asset_class(sec_type: Any) -> str:
     return re.split(r"[:@]", str(sec_type or "").strip().upper())[-1]
 
 
+# Body keys `_order_rows` already reads into a typed row, in every spelling it accepts. A key
+# here is not "missing" from the screen — it IS the screen, under a human label.
+_CONSUMED_BODY_KEYS = frozenset(
+    {
+        "ticker", "symbol", "companyName", "side", "Side", "Action", "quantity",
+        "orderType", "order_type", "price", "auxPrice", "tif", "timeInForce",
+        "currency", "outsideRTH",
+    }
+)  # fmt: skip
+
+# Identity, routing and compliance keys, deliberately kept OFF the screen (claudia_ui gap
+# #40): the dialog is the most legible surface before an irreversible action, not a body
+# dump. `manualIndicator` is CME Rule 536-B metadata and
+# `test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once` asserts its absence.
+#
+# This list is deliberately SHORT. Everything not named here and not consumed above reaches
+# the screen, because the failure direction matters: an unrecognised execution attribute
+# that is invisible is the defect this mechanism exists to close, and one that is merely
+# ugly is not. Adding a key here is a decision to hide something from the last human screen.
+_SUPPRESSED_BODY_KEYS = frozenset(
+    {"conid", "conidex", "acctId", "accountId", "cOID", "parentId", "secType", "manualIndicator"}
+)
+
+# Human labels for the execution attributes IBKR documents on its order-body field table.
+# A key absent from this map is still SHOWN — under its own raw name — because the point is
+# that nothing execution-affecting is silent, not that this map is complete.
+#
+# `outsideRth` is IBKR's own spelling in the curl example on its place-order page, beside
+# `outsideRTH` in the Python example on the SAME page. Only the capitalised form gets the
+# typed `Outside RTH` row, so before this mechanism a caller copying IBKR's curl example
+# sent a real attribute that no dialog mentioned (2026-09-22).
+# Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+#         https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
+_EXECUTION_ATTR_LABELS = {
+    "allOrNone": "All-or-None",
+    "cashQty": "Cash quantity",
+    "fxQty": "FX quantity",
+    "isCcyConv": "Currency conversion",
+    "isSingleGroup": "OCA group (isSingleGroup)",
+    "listingExchange": "Listing exchange",
+    "outsideRth": "Outside RTH (IBKR's lowercase spelling)",
+    "strategy": "Algo strategy",
+    "strategyParameters": "Algo parameters",
+    "trailingAmt": "Trailing amount",
+    "trailingType": "Trailing type",
+    "useAdaptive": "Adaptive algo",
+}
+
+
+def _execution_attribute_rows(order: dict[str, Any]) -> dict[str, str]:
+    """Every execution-affecting body key that no typed row above already shows.
+
+    The class this closes: a non-`_` key survives the strip in `client.place_order`, is sent
+    to IBKR verbatim, and appears on no dialog row — so the human authorises an order whose
+    execution differs from the one on screen. Measured 2026-09-22: a body carrying
+    `allOrNone`, `trailingAmt` and `trailingType` produced a row set byte-identical to a body
+    carrying none of them.
+
+    **Unknown fails TOWARD the screen.** A key this module has never heard of is shown under
+    its own name rather than hidden, which is the opposite of an allow-list and is the whole
+    point: the attributes that matter are the ones nobody thought to enumerate. Gate 1's
+    scope hash already covers every one of these keys (`client._order_write_scope`), so
+    before this the fingerprint bound values the screen never showed.
+
+    A `None` value is skipped, not rendered: `{"limit_price": None}` is an absent field
+    spelled out, and the same rule the `outsideRTH` row applies — a present None is not a
+    value.
+
+    Args:
+        order: The IBKR-shaped body, plus the display-only `_`-prefixed keys callers add.
+
+    Returns:
+        `{label: value}` for each such key, sorted by key so one order renders one way.
+    """
+    rows: dict[str, str] = {}
+    for key in sorted(order, key=str):
+        name = str(key)
+        if name.startswith("_") or name in _CONSUMED_BODY_KEYS or name in _SUPPRESSED_BODY_KEYS:
+            continue
+        value = order[key]
+        if value is None:  # a present None is not a value — see the docstring
+            continue
+        rows[_EXECUTION_ATTR_LABELS.get(name, name)] = str(_yes_no(value))
+    return rows
+
+
 def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     """The typed rows every Gate 2 dialog shows for an order (place, modify, cancel).
 
@@ -106,9 +192,19 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     order id twice — so the last human-readable surface before an irreversible action was
     the least legible one (claudia_ui gap #40).
     """
-    symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
-    company_name = order.get("_companyName", order.get("companyName", ""))
-    symbol_str = f"{symbol} — {company_name}" if company_name else symbol
+    # `or`, not `.get(key, default)`: the default applies only when the key is ABSENT, so a
+    # body carrying `ticker: None` rendered `Symbol: None` — and with a company name,
+    # `Symbol: None — APPLE INC` (measured 2026-09-22). The same rule the `Outside RTH` row
+    # states: a present None is not a value. The conid is the fallback rather than a bare
+    # `UNKNOWN` because it is a checkable identifier the human can look up, and the dialog
+    # is holding it either way; resolving it to a name would be a network call at the gate,
+    # which SEC-02 forbids.
+    symbol = order.get("ticker") or order.get("symbol")
+    if not symbol:
+        conid = order.get("conid") or order.get("conidex")
+        symbol = f"UNKNOWN (conid {conid})" if conid else "UNKNOWN"
+    company_name = order.get("_companyName") or order.get("companyName") or ""
+    symbol_str = f"{symbol} — {company_name}" if company_name else str(symbol)
     # IBKR-shaped bodies say `side`; a live-order dict from another caller may say
     # `Side`; a pre-built row set says `Action`. All three feed the banner colour.
     side = order.get("side", order.get("Side", order.get("Action", "?")))
@@ -210,6 +306,11 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     # given (2026-09-04).
     if isinstance(order.get("outsideRTH"), bool):  # a present None is not a value
         rows["Outside RTH"] = "Yes" if order["outsideRTH"] else "No"
+    # Everything else the caller is sending that changes how the order executes. Added
+    # 2026-09-22: `outsideRTH` above was the ONLY execution attribute on the screen, and it
+    # is one of many IBKR accepts — so the dialog showed one and passed the rest through in
+    # silence. `Total (est.)` is set after this so a body key can never displace it.
+    rows.update(_execution_attribute_rows(order))
     rows["Total (est.)"] = total_str
     return rows
 
@@ -416,7 +517,18 @@ _CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", 
 # They are merged into a LOCAL copy used only to build display rows. Nothing here is sent:
 # `place_bracket_and_confirm` posts the tickets `_bracket_tickets` built from the caller's
 # own dicts, and `test_the_dialogs_inherited_keys_never_reach_the_wire` holds that.
-_CONTRACT_CLASS_KEYS = ("secType", "manualIndicator")
+#
+# `ticker` joined them 2026-09-22, for the same reason and after the same kind of
+# measurement. THIS PACKAGE'S OWN documented bracket example
+# (`docs/order-management-examples.md`) puts `"ticker": "AAPL"` on the parent and none on
+# either child — the children are the same contract by construction, so a caller has no
+# reason to repeat it. Rendered through the real AppKit Gate 2 dialog, that example printed
+# `Parent — Symbol: AAPL` above `Profit taker — Symbol: UNKNOWN` and `Stop loss — Symbol:
+# UNKNOWN`: the two legs the human has never seen before were the two with no name on them,
+# on the last screen before an irreversible write. A bracket child IS its parent's contract
+# — `_bracket_tickets` and this function both REFUSE a child whose conid differs — so
+# inheriting the label asserts nothing that was not already enforced.
+_CONTRACT_CLASS_KEYS = ("secType", "manualIndicator", "ticker")
 
 _HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
 

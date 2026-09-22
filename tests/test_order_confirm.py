@@ -840,6 +840,11 @@ _TYPED_ROW_KEYS = {
     "Order ID",
     "Changes",
     "Currently at IBKR",
+    # An execution attribute is ADMITTED to the screen on purpose (2026-09-22). It is not a
+    # relaxation of gap #40: identity, routing and compliance keys are still refused below.
+    # The two rules are opposites by design — what changes how the order EXECUTES must be
+    # visible, what merely identifies or routes it must not clutter the last human screen.
+    "All-or-None",
 }
 
 
@@ -863,6 +868,7 @@ def test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once():
         "manualIndicator": True,
         "price": 7895.0,
         "outsideRTH": True,
+        "allOrNone": True,
         "limit_price": None,
         "_companyName": "ESU6 · expires 2026-09-18 · x50",
         "_multiplier": 50.0,
@@ -884,6 +890,9 @@ def test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once():
         assert details["Symbol"] == "ES — ESU6 · expires 2026-09-18 · x50"
         assert details["Price"] == "7,895.00"  # index points, not money (2026-09-11)
         assert details["Outside RTH"] == "Yes"
+        # The other half of the same rule: an execution attribute the caller sent IS on the
+        # screen. Before 2026-09-22 this key reached IBKR and appeared on no row.
+        assert details["All-or-None"] == "Yes"
         assert details["Total (est.)"] == "394,750.00 USD (×50 multiplier)"
     assert "Order ID" not in calls[0]["details"]
     assert calls[1]["details"]["Order ID"] == "975324733"
@@ -892,6 +901,181 @@ def test_every_order_dialog_shows_only_typed_rows_and_the_order_id_once():
     assert calls[2]["details"]["Order ID"] == "975324733"
     assert calls[2]["details"]["Currently at IBKR"] == "Buy 1 ES Sep18'26 Stop 7900.00, GTC"
     assert "Changes" not in calls[2]["details"]
+
+
+def test_an_execution_attribute_the_caller_sends_reaches_the_last_human_screen():
+    """The defect this closes, measured 2026-09-22: a body carrying `allOrNone`,
+    `trailingAmt` and `trailingType` produced a dialog row set BYTE-IDENTICAL to a body
+    carrying none of them, while `client.place_order` sent all three to IBKR verbatim.
+
+    `allOrNone` decides whether the order may fill in parts — IBKR: "execute the order
+    entirely or not execute at all" — so it changes what the human is agreeing to.
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    plain = {"conid": 265598, "orderType": "LMT", "side": "BUY", "quantity": 1,
+             "ticker": "GLD", "price": 300.0, "tif": "DAY"}  # fmt: skip
+    loaded = dict(plain, allOrNone=True, trailingAmt=1.5, trailingType="amt")
+    control, rows = _order_rows(plain, "U1"), _order_rows(loaded, "U1")
+
+    assert set(rows) - set(control) == {"All-or-None", "Trailing amount", "Trailing type"}
+    assert rows["All-or-None"] == "Yes"
+    assert rows["Trailing amount"] == "1.5"
+    # The control is what makes this able to fail: a plain body must NOT grow these rows.
+    assert "All-or-None" not in control
+
+
+def test_an_execution_attribute_this_package_has_never_heard_of_is_shown_not_hidden():
+    """Unknown fails TOWARD the screen, which is the whole point of the mechanism.
+
+    The attributes that matter are the ones nobody thought to enumerate: IBKR adds order
+    fields, and a dialog built as an allow-list goes quiet on each new one while
+    `place_order`'s `_`-strip keeps forwarding it. A key with no human label is rendered
+    under its own name rather than dropped.
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    rows = _order_rows(
+        {
+            "orderType": "LMT",
+            "side": "BUY",
+            "quantity": 1,
+            "ticker": "GLD",
+            "price": 300.0,
+            "someFutureIBKRField": "surprising",
+        },
+        "U1",
+    )
+    assert rows["someFutureIBKRField"] == "surprising"
+
+
+def test_ibkrs_own_lowercase_outside_rth_spelling_is_not_invisible():
+    """IBKR writes `outsideRth` in the curl example and `outsideRTH` in the Python example
+    on the SAME page. Only the capitalised form gets the typed `Outside RTH` row, so a
+    caller copying IBKR's own curl example sent a real execution attribute that no dialog
+    mentioned. It is now shown under its raw spelling rather than silently.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    rows = _order_rows(
+        {"orderType": "LMT", "side": "BUY", "quantity": 1, "ticker": "GLD", "price": 300.0, "outsideRth": True},
+        "U1",
+    )
+    assert rows["Outside RTH (IBKR's lowercase spelling)"] == "Yes"
+
+
+def test_identity_routing_and_compliance_keys_stay_off_the_screen():
+    """The counter-case, and the reason the suppression list exists (claudia_ui gap #40).
+
+    Admitting execution attributes must NOT turn the dialog back into a body dump. `conid`,
+    `acctId`, `cOID`/`parentId`, `secType` and `manualIndicator` (CME Rule 536-B metadata)
+    identify or route the order; none of them changes how it executes, and the dialog is
+    the most legible surface before an irreversible action, not a body dump.
+    """
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    rows = _order_rows(
+        {
+            "conid": 649180671,
+            "conidex": "649180671@CME",
+            "acctId": "U123",
+            "cOID": "C-1",
+            "parentId": "C-1",
+            "secType": "649180671:FUT",
+            "manualIndicator": True,
+            "orderType": "LMT",
+            "side": "BUY",
+            "quantity": 1,
+            "ticker": "ES",
+            "price": 7895.0,
+        },
+        "U1",
+    )
+    for hidden in ("conid", "conidex", "acctId", "cOID", "parentId", "secType", "manualIndicator"):
+        assert hidden not in rows, f"{hidden} reached the screen"
+
+
+def test_a_body_key_present_with_a_none_value_is_not_a_row():
+    """`{"limit_price": None}` is an absent field spelled out, not an attribute. The same
+    rule the `Outside RTH` row already applies — a present None is not a value — and the
+    exact shape claudia_ui gap #40 complained about (`limit_price: None` on a cancel
+    dialog)."""
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    rows = _order_rows(
+        {
+            "orderType": "LMT",
+            "side": "BUY",
+            "quantity": 1,
+            "ticker": "GLD",
+            "price": 300.0,
+            "limit_price": None,
+            "allOrNone": None,
+        },
+        "U1",
+    )
+    assert "limit_price" not in rows
+    assert "All-or-None" not in rows
+    assert "None" not in rows.values()
+
+
+def test_the_bracket_dialog_does_not_mutate_the_tickets_it_is_given():
+    """The dialog fills a child's MISSING contract keys from the parent so both legs are
+    described alike on one screen. That inheritance is for the SCREEN: `confirm_bracket_dialog`
+    is public API, a caller may hold those dicts and send them itself, and order parameters
+    are immutable — a dialog that edits the order it is confirming is confirming a different
+    order from the one it was handed.
+
+    This is the discriminating half of the pair. Its twin in `tests/test_client.py`,
+    `test_the_dialogs_inherited_keys_never_reach_the_wire`, cannot fail on this mutation:
+    `place_bracket_and_confirm` builds its tickets from private copies before the dialog
+    runs, so the wire is safe either way. Measured 2026-09-22 — that is exactly why this one
+    exists, and why the twin's docstring says so.
+    """
+    import copy
+
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {
+        "conid": 649180671,
+        "cOID": "C-1",
+        "ticker": "ES",
+        "secType": "649180671:FUT",
+        "side": "SELL",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 7725.0,
+        "tif": "GTC",
+        "_companyName": "ESU6 · SEP26",
+        "_multiplier": 50,
+        "_currency": "USD",
+    }
+    # No ticker, no secType, no display keys: the case inheritance exists for, and the shape
+    # this package's own documented bracket example produces.
+    children = [
+        {
+            "conid": 649180671,
+            "parentId": "C-1",
+            "side": "BUY",
+            "quantity": 1,
+            "orderType": "LMT",
+            "price": 7700.0,
+            "tif": "GTC",
+        }
+    ]
+    parent_before, children_before = copy.deepcopy(parent), copy.deepcopy(children)
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_bracket_dialog(parent, children, "U1")
+
+    # The screen DID inherit, or this test would pass by the mechanism never running.
+    assert mock_show.call_args.kwargs["details"]["Profit taker — Symbol"] == "ES — ESU6 · SEP26"
+    # ...and not one key of the caller's own dicts moved.
+    assert parent == parent_before
+    assert children == children_before
 
 
 def test_stop_limit_dialog_shows_the_stop_as_its_own_row():
