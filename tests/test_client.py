@@ -3995,10 +3995,14 @@ def test_cancelling_a_bracket_child_warns_that_the_linked_legs_go_too(client):
     rows = _cancel_dialog_rows(client, _LIVE_BRACKET_CHILD_STATUS)
     warning = rows["⚠ Linked orders"]
     assert "ReduceOnFillNonBlock" in warning
-    assert "may cancel" in warning
-    # Dated and hedged: the field is undocumented, so this is an observation, not a promise.
+    assert "WILL LIKELY CANCEL THE OTHER ORDERS" in warning
+    # The measured harm, not a theory: cancelling ONE held child removed the sibling while
+    # the parent stayed working, leaving a position that would open with no protection.
+    assert "SIBLING" in warning
+    assert "parent stayed working" in warning
+    # Dated and hedged: IBKR documents none of these fields, so it is an observation.
     assert "2026-09-22" in warning
-    assert "does not document" in warning
+    assert "documents none of this" in warning
 
 
 def test_cancelling_a_bracket_PARENT_warns_from_its_own_field_not_from_an_absent_one(client):

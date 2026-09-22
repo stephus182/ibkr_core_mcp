@@ -103,6 +103,97 @@ from every surface — so the warning cannot outlive the block.
 ---
 
 <a id="run-2026-09-21-1"></a>
+## Run: 2026-09-22 (second) — the four remaining gaps, at zero cost
+
+| Field | Value |
+|---|---|
+| Purpose | Close every live gap still open before 2.1.0 freezes. Four claims were "reasoned or reported"; this run makes them measured. |
+| Cost | **Zero.** Every order rested far from market (BUY F @ 12.00 against a 13.07 bid; SELL @ 14.00; STP @ 11.00) and was cancelled. Nothing filled, so nothing was charged. |
+| Account | `UXXXX699` · ended flat, with the operator's own pre-existing orders untouched |
+
+**No order ids, account number or balances below — this repository is public.**
+
+| # | Question | Result |
+|---|---|---|
+| G1 | Is `allOrNone` **retained** on a WORKING order? | **YES.** Sent `allOrNone: true`; the resting order read back `all_or_none: True`. This was open after the A5 run, where the parent filled instantly and a terminal order reports `None`. The cancel dialog for it rendered **`All-or-None: Yes`** — the row that did not exist before this release. |
+| G2 | Is IBKR's own lowercase `outsideRth` **honoured**? | **NO — accepted and silently discarded.** Sent `outsideRth: true` (the spelling in IBKR's curl example); the order read back `outside_rth: False`. A caller copying IBKR's documentation gets an RTH-only order believing otherwise. |
+| G3 | Does A4's multi-child disclosure reach a REAL Gate 2 dialog? | **YES.** A two-child bracket (parent 1, children 1 + 1) rendered the `Children together` row live, and `pair_bracket_response` reported `ok=True`. |
+| G4 | Does cancelling ONE **held** child kill its sibling? | **YES, and the parent survives.** Before: parent `Submitted`, both children `PreSubmitted`. After cancelling one child: **cancelled child GONE, SIBLING GONE, PARENT still `Submitted`.** |
+
+### Why G4 is the finding that justifies A6
+
+The dialog shows one order and the human approves one order. Cancelling a single held child
+removed **both** exits while the parent stayed working — so the position opens later with no
+protection at all, and there is no moment at which the operator could notice, because the
+position did not exist when its protection was removed. This had been taken from a report;
+it is now reproduced here.
+
+### Free whatifs in the same run (simulation, no gates)
+
+| Body | Result |
+|---|---|
+| control | ACCEPTED |
+| `ocaType: 2` | ACCEPTED — but a whatif cannot show whether it is APPLIED, and `ocaType` is absent from IBKR's Web API body spec entirely, so acceptance is indistinguishable from discarding an unknown key |
+| `isSingleGroup: true` | **ACCEPTED** on a bracket whatif. Note: this does NOT settle whether a real PLACEMENT is refused — a whatif is not a placement — so nothing in this package claims it is refused. |
+
+### A process note worth keeping
+
+The first attempt at this batch left a resting order behind. `place_order_and_confirm`
+returns a **list**, the script read `.get("order_id")` from it, got `None`, and the cleanup
+therefore had no id to cancel — it reported "NONE (clean)" while an order of ours was live.
+Caught by listing the book afterwards and identifying our own orders, which is the reason
+that step exists. A cleanup that trusts its own bookkeeping is not a cleanup.
+
+---
+
+## Run: 2026-09-22 — the A5 regression: H1 on the modify path, proven against a real fill
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-22 |
+| Purpose | Prove the new `modify_order` refusal FIRES against the behaviour IBKR demonstrably allows, and settle three field questions that no offline test can reach. A guard that never fires is indistinguishable from one that works. |
+| Gateway | container `ibkr_core_gateway`, session kept alive by a 45 s `tickle` loop throughout |
+| Auth method | `BrowserCookieAuth` (`authenticated=True connected=True competing=False`) |
+| Account | `UXXXX699` |
+| Instrument | F (FORD MOTOR CO), **NYSE listing resolved explicitly** — `search_contract("F")` also returns TSE and MEXI listings and a corporate-bond entry, so `contracts[0]` is not the US listing by construction |
+| Cost | one round trip in 1 share at ~13.07/13.08; the account ended **flat** |
+
+**Deliberately no order ids, no account number and no balances below. This repository is
+public, and the neighbouring entries in this log do carry instrument and order identifiers —
+this one departs from that on purpose rather than by omission.**
+
+### What was proven
+
+| # | Question | Result |
+|---|---|---|
+| 1 | Does the refusal FIRE on a released child raised above the parent's fill? | **YES.** `OrderValidationError: A bracket child may never be larger than the position its parent created: requested 2 against a parent filled 1. Nothing was sent to IBKR.` |
+| 2 | Nothing written? | Read-back: the child is still `total_size '1.0'` |
+| 3 | Does a **RELEASED** child still carry `parent_order_id`? | **YES.** This was load-bearing: had it not, the guard could never fire in production and would have been decorative. Only HELD children had been observed before. |
+| 4 | Does it over-refuse? | **NO.** The positive control — a price-only modify on the same released child — applied: `14.00 -> 13.95`, read back from IBKR. |
+| 5 | Is a child OCA-grouped on the parent's own order id? | **YES**, `oca_group_id == the parent's order_id`. Third independent confirmation, and the first on a **stock** — the earlier two were futures. |
+| 6 | Cleanup | Child cancelled, position sold back, **final F position 0** |
+
+### Two findings that correct earlier claims
+
+**A released LMT child reports `Submitted`, not `PreSubmitted`.** The release brief warned
+that a released child still reads `PreSubmitted`, identically to a held one, and that
+held-vs-released must therefore never be inferred from the child's status string. Measured
+here, a released **limit** child moved to `Submitted`. The warning is presumably about a
+**stop** child, which reads `PreSubmitted` until it triggers. Either way the rule stands and
+the guard does not depend on it: `_refuse_child_larger_than_parent_fill` reads the PARENT's
+`cum_fill` and never the child's status.
+
+**`allOrNone` retention is still UNPROVEN.** `allOrNone: true` was sent on the parent and
+reached the wire (verified in the ticket array). The parent filled immediately, and a filled
+order reports `all_or_none: None` — consistent with the brief's claim that a terminal order
+reports `None`, but it means this run could not observe retention on a *working* order. What
+IS established: the attribute is accepted on a stock whatif and refused on a futures whatif
+(`HTTP 500 {"error":"invalid order attribute : All or None"}`, with the paired control
+`allOrNone: false` accepted), and a resting stock order reports `all_or_none` as a real
+boolean. Retention on a working order remains open.
+
+---
+
 ## Run: 2026-09-21 — full suite before the `2.1.0` bracket release; `get_bracket_preview` live-proven for the first time
 
 | Field | Value |

@@ -126,7 +126,10 @@ _SUPPRESSED_BODY_KEYS = frozenset(
 # `outsideRth` is IBKR's own spelling in the curl example on its place-order page, beside
 # `outsideRTH` in the Python example on the SAME page. Only the capitalised form gets the
 # typed `Outside RTH` row, so before this mechanism a caller copying IBKR's curl example
-# sent a real attribute that no dialog mentioned (2026-09-22).
+# sent an attribute that no dialog mentioned — and measured live 2026-09-22, the gateway
+# ACCEPTS that spelling and silently DISCARDS it: an order sent `outsideRth: true` read back
+# `outside_rth: False`. The row therefore names the attribute as ineffective rather than
+# showing it as though it applied, which would trade one wrong impression for another.
 # Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
 #         https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
 _EXECUTION_ATTR_LABELS = {
@@ -136,7 +139,11 @@ _EXECUTION_ATTR_LABELS = {
     "isCcyConv": "Currency conversion",
     "isSingleGroup": "OCA group (isSingleGroup)",
     "listingExchange": "Listing exchange",
-    "outsideRth": "Outside RTH (IBKR's lowercase spelling)",
+    # MEASURED 2026-09-22: the gateway ACCEPTS this key and does NOT apply it. An order sent
+    # `outsideRth: true` read back `outside_rth: False`. So a caller copying IBKR's own curl
+    # example gets an RTH-only order while believing otherwise, and the row has to say that
+    # rather than imply the attribute took effect.
+    "outsideRth": "outsideRth — IGNORED by IBKR (the effective field is outsideRTH)",
     "strategy": "Algo strategy",
     "strategyParameters": "Algo parameters",
     "trailingAmt": "Trailing amount",
@@ -884,10 +891,12 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         group_type = order.get("_oca_group_type")
         if group_type:
             details["⚠ Linked orders"] = (
-                f"This order belongs to an OCA group ({group_type}). Cancelling it may cancel "
-                "the other orders in that group — for a bracket, the other exit leg. Observed "
-                "2026-09-22: a bracket's children are grouped on the parent's own order id. "
-                "IBKR does not document this field, so treat it as a warning, not a promise."
+                f"This order belongs to an OCA group ({group_type}). CANCELLING IT WILL LIKELY "
+                "CANCEL THE OTHER ORDERS IN THAT GROUP — for a bracket, the other exit leg. "
+                "Measured 2026-09-22 on a held bracket: cancelling ONE child removed the "
+                "SIBLING as well, while the parent stayed working — so the position would "
+                "later open with no protection at all. IBKR documents none of this, so treat "
+                "it as a warning rather than a promise."
             )
         # The other end of the same relationship, and deliberately a DIFFERENT field: a
         # bracket parent carries no `oca_group_id`, so nothing is inferred for it from an

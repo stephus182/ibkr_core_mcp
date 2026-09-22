@@ -955,8 +955,10 @@ def test_an_execution_attribute_this_package_has_never_heard_of_is_shown_not_hid
 def test_ibkrs_own_lowercase_outside_rth_spelling_is_not_invisible():
     """IBKR writes `outsideRth` in the curl example and `outsideRTH` in the Python example
     on the SAME page. Only the capitalised form gets the typed `Outside RTH` row, so a
-    caller copying IBKR's own curl example sent a real execution attribute that no dialog
-    mentioned. It is now shown under its raw spelling rather than silently.
+    caller copying IBKR's own curl example sent an execution attribute that no dialog
+    mentioned. Measured live 2026-09-22, the gateway ACCEPTS that spelling and silently
+    DISCARDS it — an order sent `outsideRth: true` read back `outside_rth: False` — so the
+    row names it as ineffective rather than showing it as though it had applied.
 
     Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order.md
     """
@@ -966,7 +968,11 @@ def test_ibkrs_own_lowercase_outside_rth_spelling_is_not_invisible():
         {"orderType": "LMT", "side": "BUY", "quantity": 1, "ticker": "GLD", "price": 300.0, "outsideRth": True},
         "U1",
     )
-    assert rows["Outside RTH (IBKR's lowercase spelling)"] == "Yes"
+    # The row does not merely SHOW the attribute — it says the attribute does nothing.
+    # Measured live 2026-09-22: an order sent `outsideRth: true` read back
+    # `outside_rth: False`, so the gateway accepts the key and silently discards it.
+    # Showing it as a working attribute would trade one wrong impression for another.
+    assert rows["outsideRth — IGNORED by IBKR (the effective field is outsideRTH)"] == "Yes"
 
 
 def test_identity_routing_and_compliance_keys_stay_off_the_screen():
