@@ -134,7 +134,10 @@ children = [
     },
 ]
 
-# Read-only first — ungated, and it prices BOTH legs.
+# Read-only first — ungated. Both legs are sent so the ARRAY is validated as one unit,
+# but IBKR prices the FIRST ticket only: measured live 2026-09-22, a whatif of the parent
+# alone comes back byte-identical to a whatif of the full bracket. A clean preview is no
+# evidence about the child — see the note under this block.
 preview = client.get_bracket_preview(account_id, parent, children)
 
 try:

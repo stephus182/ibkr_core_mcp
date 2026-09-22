@@ -377,7 +377,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   rather than after the human has been fingerprinted, and `get_bracket_preview` inherits the
   check because it validates through the same helper. Refused, never clamped: silently shrinking
   a leg would break order-parameter immutability. A ceiling, not an equality — a *smaller* child
-  is legitimate (scaling out) and an equal one is IBKR's own definition of a profit taker. Only a
+  is legitimate (scaling out) and an equal one is the standard shape: IBKR's own published
+  bracket sizes **both** children at the full parent quantity (50/50/50, no `isSingleGroup`).
+  Enforced **per child**, never as `sum(children) <= parent` — an aggregate rule would refuse
+  that standard bracket, and IBKR was measured on 2026-09-22 to auto-OCA a bracket's children
+  onto the parent's own order id, so the legs are mutually exclusive at the exchange
+  (`docs/ibkr-api-behaviors-reference.md`). Only a
   **stated** violation is refused, as with `conid`: a child carrying no quantity is derived from
   the parent and is normal. A quantity that cannot be compared is refused rather than assumed
   compliant, so the rule cannot be walked through by a malformed value.
@@ -675,6 +680,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `SECURITY.md`'s control inventory, were updated in the same commit. No new *tool*:
   `ClaudeToolkit` exposes nothing that writes, and this adds nothing the model can call.
   Seven tests, including both entry points asserted gate-free.
+
+  **Both legs are sent to validate the ARRAY, not to price it — and the docstring claimed
+  otherwise until 2026-09-22.** It read "because a preview of the parent alone prices something
+  the user is not about to submit"; measured live on 2026-09-22, a whatif of the parent ALONE
+  returns a response byte-identical (sha256) to a whatif of the full bracket, so sending both
+  legs changes the priced figures not at all. What it buys is that `_bracket_tickets` validates
+  the same array the write path would build. The same run re-confirms, by a second route, the
+  2026-09-20 finding that IBKR previews the FIRST ticket and discards the rest — a clean preview
+  is never evidence about the child. Corrected in `client.py`, `docs/api-reference.md`,
+  `docs/consumers.md`, the assertion message in `tests/security/test_preview_is_not_execution.py`
+  and `docs/order-management-examples.md`, where it sat inside a copy-pasteable code block. No
+  refusal changed: `_bracket_tickets` and `confirm_bracket_dialog` never relied on the preview,
+  which is the whole reason they repeat the structural rules themselves.
 
   Groundwork for claudia_ui's attached-profit-taker work (its Known Gaps #36), Phase 0 —
   the measurement that answers what IBKR's docs leave unsaid about brackets. The write half

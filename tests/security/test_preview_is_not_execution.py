@@ -83,6 +83,14 @@ def test_get_bracket_preview_runs_no_gate(client):
 
 
 def test_bracket_preview_sends_both_legs_and_strips_display_keys(client):
+    """Both legs must reach the preview — not for the PRICE, but so the ARRAY is validated.
+
+    IBKR prices the first ticket only: measured live 2026-09-22, a whatif of the parent alone
+    returned a response byte-identical (sha256) to a whatif of the full bracket. What sending
+    the array buys is that `_bracket_tickets` validates the same object the write path builds,
+    so a pair that could not be placed is not priced either — a leg dropped here is a leg no
+    structural rule in this file ever sees.
+    """
     with patch.object(client, "_post", return_value={}) as post:
         client.get_bracket_preview(
             "U1234567",
@@ -90,7 +98,7 @@ def test_bracket_preview_sends_both_legs_and_strips_display_keys(client):
             [{"parentId": "REF", "conid": 1, "side": "SELL", "_multiplier": 50}],
         )
     orders = post.call_args.args[1]["orders"]
-    assert len(orders) == 2, "both legs must reach the preview, or it prices the wrong thing"
+    assert len(orders) == 2, "both legs must reach the preview, or the array validated is not the array sent"
     assert not [k for t in orders for k in t if k.startswith("_")], "display-only keys must be stripped"
 
 

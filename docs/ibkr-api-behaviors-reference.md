@@ -190,3 +190,83 @@ Verified 2026-09-21: the page was re-fetched (5,977 B, with a fabricated control
 same batch returning 440 B `# Page Not Found`) and still documents neither field.
 
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
+
+
+## A bracket's children are auto-OCA'd onto the parent's own order id
+
+`GET /iserver/account/order/status/{orderId}` on a bracket **child** returns **both**
+`parent_order_id` and `oca_group_id`, holding the **same** value — and that value is the
+**parent's own `order_id`**. `oca_group_type` reads `ReduceOnFillNonBlock`. The **parent**
+carries neither field; it carries `children_order_ids` (a string).
+
+**Measured live 2026-09-22** against the account holder's gateway: a read-only probe of
+resting orders, no write of any kind, on **two independent brackets**, both CL futures.
+Order ids, quantities and the account are deliberately not reproduced — this repository is
+public, and an order id is account data.
+
+So IBKR groups the legs for us, under an identifier this package never sends and cannot
+choose. Nothing here asks for an OCA group: `_bracket_tickets` sends `cOID` on the parent and
+`parentId` on each child, exactly as IBKR's bracket page documents, and `isSingleGroup` is
+never set. The grouping is IBKR's own behaviour for a `parentId`-linked bracket.
+
+### Why this entry exists: H1 is per child, not a sum
+
+*A bracket child is never larger than the parent* (H1) is enforced **per child** —
+`client._bracket_tickets` compares each child with the parent and never sums them, and
+`order_confirm.confirm_bracket_dialog` repeats the rule the same way. A parent of 1 with two
+children of 1 therefore passes, aggregate 2 against a parent of 1. **That is deliberate. Do
+not add an aggregate check.** Two independent reasons, of different standing:
+
+- **DOCUMENTED.** IBKR's own published bracket sizes **both** children at the full parent
+  quantity — 50 / 50 / 50, with no `isSingleGroup` — because that is what the shape is for: a
+  full-size profit taker **and** a full-size stop on one position. `sum(children) <= parent`
+  refuses IBKR's standard bracket.
+- **MEASURED**, as above. The legs are mutually exclusive at the exchange, so the aggregate
+  can never be working at once. That is *why* per child is the right granularity, rather than
+  a convenience the code settled for.
+
+### The standing of each field name
+
+A contributor will check these against IBKR's documentation and find nothing, so it is
+written down rather than left to be rediscovered:
+
+| Field | Where it appears |
+|---|---|
+| `parent_order_id`, `oca_group_id`, `oca_group_type`, `all_or_none` | **No IBKR page.** Real but undocumented — the same class as `limit_price` / `stop_price` above |
+| `allOrNone`, `isSingleGroup` | Documented, on the submit-new-order page, as **request body** fields |
+| `ocaType` | Not in IBKR's Web API body spec at all |
+| `minQty` | Does not exist anywhere in it |
+
+`all_or_none` on order status is **UNVERIFIED, not disproved**: it was absent from every
+response in this probe, every resting order was a CL future, and AON is not supported on
+futures — so the stock case is untested. A whatif control the same day showed `allOrNone:
+true` is *accepted* on a stock ticket, and the control without it was accepted too; that
+proves the field is legal in the body and says nothing about whether it is retained or read
+back.
+
+### Fill quantities on order status
+
+`cum_fill` and `total_size` are both present and both arrive as **strings**. `size` is present
+too, and IBKR documents it as the **remaining unfilled** quantity — so `size` must never be
+used for a fill comparison. `cum_fill` against `total_size` is the comparison that means what
+it looks like. All three are in IBKR's own documented example for the endpoint, unlike the
+four fields in the table above.
+
+### What this measurement did NOT establish
+
+Stated so neither is later cited as proven here:
+
+- That a **full** fill of one leg cancels its sibling. The account holder reports this from
+  their own trading; this probe did not reproduce it.
+- What IBKR does to a sibling on a **partial** fill. Untested. `ReduceOnFillNonBlock` is
+  suggestive, but reading a type name is not measuring a behaviour.
+
+`parent_order_id` is already load-bearing in this package: `pair_bracket_response` matches a
+returned child to its parent by it, because IBKR's response array is **not** index-aligned
+with the submission. If that reader is ever added to `DOC_SHAPE_READERS` in
+`tests/test_readers_against_live_shapes.py`, `parent_order_id` will need an entry in that
+file's `_MEASURED_BUT_UNDOCUMENTED` map — this measurement is its evidence.
+
+Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md,
+https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md,
+https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md

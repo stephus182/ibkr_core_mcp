@@ -18,7 +18,7 @@ ticket array, and it has its own entry point rather than a branch of the single-
 | Name | What it is |
 |---|---|
 | `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved |
-| `IBKRClient.get_bracket_preview(account_id, parent, children)` | Whatif for both legs. Read-only, ungated, like `get_order_preview` |
+| `IBKRClient.get_bracket_preview(account_id, parent, children)` | Whatif for a parent plus its children. Read-only, ungated, like `get_order_preview`. Both legs are sent so the array is validated as one unit, but IBKR prices the **first ticket only** — a mismatched bracket previews clean (measured live 2026-09-20, re-confirmed 2026-09-22), so a clean preview is never evidence about the child |
 | `pair_bracket_response(tickets, entries)` → `BracketPairing` | Which returned entry is which leg. A **module-level function**, not a method on `IBKRClient` — `from ibkr_core_mcp import pair_bracket_response` |
 
 **IBKR's bracket response is not index-aligned with the submission.** Two separate live
@@ -50,6 +50,28 @@ warning, and reads the margin and commission keys IBKR actually sends (four of i
 figures were `N/A` on every real call before). A futures order is recognised from IBKR's own
 `secType` spelling (`"265598:FUT"`), so its notional is no longer printed as
 `price × quantity`. A bare futures root resolves to a contract that is still tradeable.
+
+**Gate 2 shows more rows than it did in 2.0.1, because it now shows every execution-affecting
+body key.** Until 2026-09-22 a non-`_` key the dialog had no typed row for was sent to IBKR
+verbatim and appeared on no row — measured that day, a body carrying `allOrNone`,
+`trailingAmt` and `trailingType` rendered a row set byte-identical to a body carrying none of
+them, so the human authorised an order whose execution differed from the one on screen, while
+Gate 1's scope hash had been binding those values all along. Unknown now fails **toward** the
+screen: a key this package has never heard of is rendered under its own name rather than
+hidden, with a short suppression list for identity, routing and compliance keys (`conid`,
+`acctId`, `cOID`/`parentId`, `secType`, `manualIndicator`) and a present `None` skipped. Three
+smaller changes to the same screen: a body carrying `ticker: None` no longer renders
+`Symbol: None`, an unnamed contract prints its conid instead of a bare `UNKNOWN`, and a
+bracket child inherits the parent's `ticker` — this package's own documented bracket example
+printed `Symbol: UNKNOWN` on both children, the two legs the human has never seen before.
+
+**Nothing a consumer imports changed.** `order_confirm.price_text_safe` and
+`order_confirm.change_value_text` — the two symbols claudia_ui imports and pins in its
+`tests/security/test_cross_repo_contract.py` — are untouched by that commit, and no consumer
+imports `_order_rows` or asserts on the dialog's row set (grepped across claudia_ui on
+2026-09-22: one comment names `_order_rows`, with no import and no assertion behind it). A
+consumer rendering its own proposal card from the same body is unaffected. A golden-text test
+over the *dialog* would need updating, and none exists today.
 
 ### 2.0.1 — the package is on PyPI
 

@@ -359,9 +359,16 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 Every call to `place_order`, `modify_order`, `cancel_order`, `reply_order`, or
 `place_bracket_and_confirm` must pass both gates — in order — before **any order-write
-request** reaches IBKR. Those five are the whole set: they are what `GATED_OWNERS` in
-`tests/security/test_order_write_boundary.py` is checked against, and no other function in
-`client.py` may build an order-write URL.
+request** reaches IBKR. Those five are the whole **public** set. `GATED_OWNERS` in
+`tests/security/test_order_write_boundary.py` — which is what the boundary is checked
+against — holds **six** names: those five plus the private `_resolve_one_reply`, which
+answers one chained precaution reply and therefore builds `/iserver/reply/{}` itself. No
+other function in `client.py` may build an order-write URL. This paragraph said the five
+*were* `GATED_OWNERS` until 2026-09-22. That is invisible to a caller — the sixth is private
+and unreachable from outside the class — but it put this file out of step with `SECURITY.md`
+§ Two-Gate System and with `CHANGELOG.md`, both of which already said six, and a count that
+disagrees with itself across documents is the shape the `place_bracket_and_confirm` omission
+below survived in.
 
 `place_bracket_and_confirm` was missing from this sentence and from the table below until
 2026-09-21, while it had been in `GATED_OWNERS` and in `SECURITY.md` since it shipped — so
@@ -414,7 +421,7 @@ modify, cancel or confirm an order. They are *not* all read-only.
 
 | Method | Reason |
 |---|---|
-| `get_order_preview` | IBKR `whatif` — simulates, never executes |
+| `get_order_preview` / `get_bracket_preview` | IBKR `whatif` — simulates, never executes; both post through the single `_whatif` builder |
 | `get_live_orders` / `get_order_status` / `get_orders_raw` | Read-only |
 
 *Ungated non-order `ACCOUNT_STATE` mutations* — real writes to IBKR's servers, ungated
@@ -510,7 +517,7 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is 576 B).
   - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
-    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There is also an MCP server at
+    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**, **re-measured 2026-09-22: 483** — IBKR adds pages, so every figure here is true only as of its date and a count worth acting on is one you take yourself; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There is also an MCP server at
     `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
     is gone: as of 2026-07-30 there are **four web tools, one job each, and no fallback

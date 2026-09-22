@@ -3559,9 +3559,13 @@ def test_bracket_preview_refuses_a_child_larger_than_the_parent_too(client):
 
 
 def test_a_child_EQUAL_to_the_parent_is_accepted(client):
-    """The discriminating half, and the normal case: IBKR's own definition of a profit taker
-    is 'the same order quantity as the parent'. A rule that refused this would refuse every
-    real bracket."""
+    """The discriminating half, and the normal case: IBKR's own published bracket sizes BOTH
+    children at the full parent quantity (50 / 50 / 50, bracket-orders-oca-groups), so a rule
+    that refused an equal child would refuse every real bracket — IBKR's documented one first.
+
+    This docstring quoted IBKR as defining a profit taker as 'the same order quantity as the
+    parent'. Searched 2026-09-22, that sentence is on no IBKR page; de-quoted in favour of the
+    50/50/50 example, which is citable. The property under test is unchanged."""
     parent, children = _bracket_pair()
     tickets = client._bracket_tickets(parent, [dict(children[0], quantity=1)])
     assert [t["quantity"] for t in tickets] == [1, 1]

@@ -647,7 +647,7 @@ are AI-friendly:
 
 - **Append `.md` to any page URL** for clean markdown:
   `https://www.interactivebrokers.com/docs/web-api/<page>.md`
-- **`https://www.interactivebrokers.com/docs/web-api/llms.txt`** is the complete page index (469 unique .md URLs, measured 2026-08-07)
+- **`https://www.interactivebrokers.com/docs/web-api/llms.txt`** is the complete page index (469 unique .md URLs, measured 2026-08-07; **483 re-measured 2026-09-22** — the index grows, so re-count rather than quoting either figure)
 - There is an MCP server at `https://ibkrcampus.com/docs/web-api/_mcp/server`
 
 Use `WebFetch` on those. No Firecrawl credits, no bot-block, no ladder.

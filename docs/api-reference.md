@@ -1059,9 +1059,15 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/brac
 
 ### `get_bracket_preview(account_id, parent, children) -> dict`
 Whatif for a parent plus attached children. Read-only, **no security gates**, like
-`get_order_preview()`. Both legs are sent, because a preview of the parent alone prices
-something the user is not about to submit. Runs the same `_bracket_tickets` validation as the
-write path, so a pair that could not be placed is not priced either.
+`get_order_preview()`. Both legs are sent so the ticket **array** is validated as one unit: it
+runs the same `_bracket_tickets` validation as the write path, so a pair that could not be
+placed is not priced either.
+
+They are **not** sent for the price. This read "because a preview of the parent alone prices
+something the user is not about to submit" until 2026-09-22; that rationale is refuted —
+measured live that day, a whatif of the parent *alone* returns a response byte-identical
+(sha256) to a whatif of the full bracket, so sending both legs changes the priced figures not
+at all.
 
 Note what a preview **cannot** tell you: measured live 2026-09-20, a child on a *different
 instrument* returns a whatif response byte-identical to a valid one, because IBKR previews the

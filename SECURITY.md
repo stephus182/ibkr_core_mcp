@@ -613,7 +613,8 @@ the rest from the 2026-09-13 audit:
 
 Each structural file also feeds its checker a deliberately-violating snippet, so the guard is
 proven able to fire. The properties, as a constitution: **(1)** no order reaches IBKR except
-through the four gated methods, and the model layer never references them; **(2)** preview is
+through the six gated functions — the five public writes plus the private
+`_resolve_one_reply` — and the model layer never references them; **(2)** preview is
 not execution; **(3)** every tool declares its capabilities and none declares `ORDER_EXECUTION`;
 **(4)** strategy code cannot touch the filesystem, processes or network, and its allowlist is
 frozen; **(5)** every externally derived URL is checked before the fetch and on every browser

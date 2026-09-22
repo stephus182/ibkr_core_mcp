@@ -741,6 +741,19 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         # irreversible write. Only a stated violation is refused; a child carrying no quantity
         # is derived from the parent and is normal.
         #
+        # PER CHILD, never `sum(children) <= parent` — do NOT add an aggregate check here or in
+        # `_bracket_tickets`. Two full-size children under a one-lot parent is not a violation;
+        # it is IBKR's own published bracket (50 / 50 / 50, no `isSingleGroup`), so an aggregate
+        # rule would refuse the standard shape. Measured live 2026-09-22 on two independent
+        # brackets: IBKR auto-OCAs the children onto the parent itself — on a child,
+        # `oca_group_id` and `parent_order_id` both held the parent's own `order_id`, with
+        # `oca_group_type` "ReduceOnFillNonBlock" — so the legs are mutually exclusive at the
+        # exchange and per child IS the aggregate. Those three field names are on no IBKR page
+        # (the `limit_price`/`stop_price` class), which is why the date is written down: the
+        # full record is `_bracket_tickets`' docstring and `docs/ibkr-api-behaviors-reference.md`.
+        # Telling the human what that arithmetic does not say is a disclosure, handled above;
+        # it is not this rule's job and must not turn into one.
+        #
         # The parent's quantity is NOT part of that "only a stated violation" allowance. It
         # was until 2026-09-21 — `and parent.get("quantity") is not None` — which meant a
         # parent stating no quantity turned H1 off entirely rather than making the pair

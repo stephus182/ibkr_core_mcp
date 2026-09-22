@@ -468,7 +468,7 @@ Since the 2026-09-13 security architecture audit, the properties above are enfor
 that read the source, not only by convention (`pytest -m security`, ~10 s, part of every unit
 run and of CI):
 
-- the three order-write endpoints are built only inside the four gated methods, each runs a gate before its first network call, and the tool layer never references an order write;
+- the three order-write endpoints are built only inside the six functions of `GATED_OWNERS` — the five public writes plus the private `_resolve_one_reply` that answers one chained precaution reply — each runs a gate before its first network call, and the tool layer never references an order write;
 - the whatif preview is the only ungated order path;
 - every tool declares its `capabilities`, none declares `ORDER_EXECUTION`, and a handler that touches an undeclared sink fails;
 - strategy code cannot read or write a file, spawn a process or reach the network (canary tests), and what it may touch is a frozen allowlist;

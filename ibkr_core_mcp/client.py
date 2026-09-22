@@ -2284,31 +2284,38 @@ class IBKRClient:
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Modify an existing order. Requires Touch ID (Gate 1) + tkinter dialog (Gate 2).
 
-        **H1 is NOT enforced here, and that boundary is deliberate.** `_bracket_tickets`
-        refuses a bracket child larger than its parent at *submission*; nothing stops a later
-        modify from raising a child's quantity above the parent's. Enforcing it here would cost
-        two reads before every modify — the order's own status to learn `parent_order_id`, then
-        the parent's to learn its quantity — on `/iserver/account/order/status`, which is
-        rate-limited (measured HTTP 503, 2026-09-21). A failed read would then either block
-        modifies or skip the check silently, and a control with a silent skip is not a control.
-        **No caller is relied upon for this, and none should be read as covering it.** The
-        invariant this package holds is *a bracket is never created oversized*, not *a bracket
-        is never oversized*: after submission the rule is deliberately unenforced, and a
-        consumer that never checks will not be stopped here. That is a real gap, stated rather
-        than delegated. (claudia_ui happens to hold the parent link already, refusing
-        `propose_modify` unless `get_order_status` ran in the same turn — that is one
-        consumer's design, not a reason this one is safe. An earlier version of this paragraph
-        named it as though it were, which for a published package reads as coverage a
-        different caller does not have.)
+        **H1 IS enforced here, as of 2026-09-22.** `_bracket_tickets` refuses a bracket child
+        larger than its parent at *submission*, and until this release nothing stopped a later
+        modify from raising one — IBKR permits it. Measured with the parent filled at 1: the
+        released child was raised to SELL 2 and IBKR accepted it. Had it filled, 2 sold against
+        1 long is SHORT 1, the exact harm H1 exists to prevent, reached through modify instead
+        of placement. `_refuse_child_larger_than_parent_fill` closes it; see that method for
+        why the comparison is against `cum_fill` and never `size`.
 
-        A `_parent_quantity` display key would cost no reads and is **not** a cheaper version
-        of this control: a key the caller may omit is skipped in silence whenever it is
-        omitted, which is the same disqualification as the failed read above, and it cannot be
+        This paragraph said the opposite until 2026-09-22, and the reasoning it gave is worth
+        keeping because it was answered rather than overruled. It declined the check on two
+        grounds: it would cost a rate-limited read before every modify, and a control that
+        skips silently on a failed read is not a control. Both were already answered by shipped
+        code in this same file. `cancel_order` pays exactly that cost, between Gate 1 and
+        Gate 2, where it was deliberately placed to satisfy SEC-02. `confirm_cancel_dialog`
+        does not skip in silence — it prints that the detail could not be read. This follows
+        both precedents: the read is sited identically, and a read that fails names the gap on
+        Gate 2 rather than blocking an urgent modify.
+
+        The cost is real and is bounded: one status read per modify that changes a QUANTITY
+        (a price-only modify pays nothing), and a second only when the first shows the order is
+        a bracket child.
+
+        A `_parent_quantity` display key was considered as a cheaper version and rejected: a
+        key the caller may omit is skipped in silence whenever it is omitted, and it cannot be
         made mandatory — knowing that an order *is* a bracket child requires the very status
-        read being avoided. Considered and rejected 2026-09-21; it is weaker than the option
-        already declined, not a middle ground.
+        read it was meant to avoid. It is weaker than the option now shipped, not a middle
+        ground.
 
-        Stated here so nobody reads the placement-time rule as covering the whole lifecycle.
+        **No caller is relied upon for this.** claudia_ui happens to hold the parent link
+        already, refusing `propose_modify` unless `get_order_status` ran in the same turn —
+        that is one consumer's design and never made this package safe; the check belongs
+        here, which is now where it lives.
 
         **Modifying a held bracket child does NOT detach it** — measured live 2026-09-21: a
         price-only modify whose body deliberately omitted `parentId` left `parent_order_id`
@@ -2977,6 +2984,35 @@ class IBKRClient:
         only because every caller remembers is not enforced. IBKR does not document what it does
         with an oversized child, so this refuses rather than relies on the broker.
 
+        **H1 is enforced PER CHILD, and must never become `sum(children) <= parent`.** The loop
+        below compares each child with the parent and never sums them, so a parent of 1 with two
+        children of 1 passes — aggregate 2 against a parent of 1. That reads like a hole and is
+        not one: **do not add an aggregate check.** Two independent reasons, of different
+        standing, and the difference is the point:
+
+        - **DOCUMENTED.** IBKR's own published bracket sizes BOTH children at the full parent
+          quantity — 50 / 50 / 50, with no `isSingleGroup` — because that IS the shape: a
+          full-size profit taker AND a full-size stop on one position. An aggregate rule refuses
+          IBKR's standard bracket. It would be a new bug wearing the clothes of a hardening.
+        - **MEASURED live 2026-09-22**, read-only probe of resting orders on the operator's
+          gateway, two independent brackets. IBKR auto-OCAs the children onto the parent itself:
+          on a CHILD, `oca_group_id` and `parent_order_id` came back holding the SAME value, and
+          that value was the parent's own `order_id`, with `oca_group_type`
+          `"ReduceOnFillNonBlock"`. The PARENT carried neither field — only `children_order_ids`.
+          The legs are therefore mutually exclusive at the exchange, which is WHY per child is
+          the right granularity: the aggregate can never be working at once.
+
+        The standing of that measurement, written down so a contributor does not "correct" it
+        against the documentation: `oca_group_id`, `oca_group_type` and `parent_order_id` appear
+        on NO IBKR page — the same real-but-undocumented class this package already records for
+        `limit_price` and `stop_price`. Two things the probe did NOT establish, so neither may be
+        cited as measured here: that a FULL fill cancels the sibling (the account holder reports
+        it from their own trading; it was not reproduced), and what IBKR does to a sibling on a
+        PARTIAL fill (untested — reading the words "ReduceOnFill" in a type name is not measuring
+        the behaviour). The full record, with its sources, is
+        `docs/ibkr-api-behaviors-reference.md` § A bracket's children are auto-OCA'd onto the
+        parent's own order id.
+
         Only a STATED violation is refused, as with `conid`: a child carrying no quantity is
         normal. A quantity that cannot be compared is refused rather than assumed compliant.
 
@@ -3040,9 +3076,14 @@ class IBKRClient:
                 and str(kid["conid"]) != str(parent["conid"])
             ):
                 raise ValueError("Each bracket child must name the same contract as the parent")
-            # H1 — see the docstring. A ceiling, not an equality: scaling out with a smaller
-            # child is legitimate, and equal is IBKR's own definition of a profit taker
-            # ("the same order quantity as the parent").
+            # H1 — see the docstring, which records why this is per child and never a sum.
+            # A ceiling, not an equality: scaling out with a smaller child is legitimate, and an
+            # EQUAL child is the normal case rather than a tolerated edge — IBKR's own published
+            # bracket sizes BOTH children at the full parent quantity (50 / 50 / 50). This
+            # comment credited that to a quoted IBKR definition of a profit taker, "the same
+            # order quantity as the parent"; searched 2026-09-22, that sentence is on no IBKR
+            # page. De-quoted in favour of the 50/50/50 example, which is citable and proves the
+            # same thing.
             if kid.get("quantity") is not None:
                 kid_qty = _as_bracket_quantity(kid["quantity"], "child")
                 parent_qty = _as_bracket_quantity(parent.get("quantity"), "parent")
@@ -3058,8 +3099,23 @@ class IBKRClient:
     ) -> dict[str, Any]:
         """Whatif for a bracket — the endpoint previews "an order ticket or bracket of orders".
 
-        Read-only, no gates, like `get_order_preview`. Both legs are sent, because a preview of
-        the parent alone prices something the user is not about to submit.
+        Read-only, no gates, like `get_order_preview`. Both legs are sent so the ticket ARRAY
+        is validated as one unit: `_bracket_tickets` runs the same structural rules here as on
+        the write path — the parent→child link, one contract, opposite sides, H1 — so a pair
+        that could not be placed is not priced either.
+
+        **They are not sent for the price.** This said "because a preview of the parent alone
+        prices something the user is not about to submit" until 2026-09-22, and that rationale
+        is refuted: measured live that day, a whatif of the parent ALONE returned a response
+        byte-identical (sha256) to a whatif of the full bracket. Sending both legs changes the
+        priced figures not at all.
+
+        **So a clean preview is no evidence about the child.** IBKR previews the FIRST ticket
+        and discards the rest — measured live 2026-09-20 with a child on a different
+        instrument (byte-identical to a valid pair), and again 2026-09-22 with the child
+        omitted entirely. A mismatched bracket previews clean, which is why the contract, side
+        and size refusals live in `_bracket_tickets` and `confirm_bracket_dialog` and can
+        never be replaced by a reading of this response.
 
         Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact.md
         Endpoint: POST /iserver/account/{accountId}/orders/whatif

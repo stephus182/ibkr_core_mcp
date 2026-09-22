@@ -1,9 +1,10 @@
-"""Security constitution §1 — no order reaches IBKR except through the four gated
-`IBKRClient` methods, and no toolkit or MCP handler references them or their endpoints.
+"""Security constitution §1 — no order reaches IBKR except through the six functions in
+`GATED_OWNERS` below, and no toolkit or MCP handler references them or their endpoints.
 
 The gates (Touch ID, then a confirmation dialog) live inside `place_order`,
-`modify_order`, `cancel_order` and `reply_order` (+ `_resolve_one_reply` for the chained
-replies). That is the right place — innermost call site — but until 2026-09-13 it was
+`modify_order`, `cancel_order`, `reply_order` and `place_bracket_and_confirm`
+(+ `_resolve_one_reply` for the chained replies). That is the right place — innermost call
+site — but until 2026-09-13 it was
 enforced by docstrings and grep: `client._post("/iserver/account/…/orders", …)` from a new
 tool handler would have been lint-clean, fully typed and gate-free
 (docs/audits/security-architecture-audit-2026-09-13.md, B1). These tests read the source.
