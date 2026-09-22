@@ -244,6 +244,11 @@ _MAX_POINTS = 1000
 _CHUNK_SAFETY = 0.80  # target 80% of limit per chunk
 _MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
 
+# How many times one window may be doubled after IBKR answers it with `points: 0`. Four
+# doublings take a 1-day chunk to 16 days, far past any weekend or market holiday, and the
+# broken case measured on 2026-09-22 needed exactly one.
+_MAX_WIDENINGS = 4
+
 
 def _parse_period_days(period: str) -> float | None:
     """Return approximate calendar days for a period string, or None if unparseable."""
@@ -995,10 +1000,13 @@ class IBKRClient:
         # only takes more requests.
         cursor: datetime | None = None  # None == "now"
         truncation_warning: str | None = None
+        # How many times the CURRENT window has been doubled after coming back empty. Reset
+        # the moment a chunk delivers bars — see the `if not stamps` branch below.
+        widenings = 0
         for _ in range(_MAX_CHUNKS):
             params: dict[str, Any] = {
                 "conid": conid,
-                "period": f"{chunk_days}d",
+                "period": f"{chunk_days * (2**widenings)}d",
                 "bar": bar,
                 "outsideRth": str(outside_rth).lower(),
             }
@@ -1024,7 +1032,40 @@ class IBKRClient:
 
             stamps = [b["t"] for b in bars if b.get("t") is not None]
             if not stamps:
+                # An empty WINDOW, not the end of the data. IBKR answers a window it has
+                # nothing for with `points: 0` and a single placeholder bar carrying no
+                # `t` — `{"o": 0.0, "c": 0.0}` — so `data` is non-empty and the `if not
+                # bars` guard above does not fire. Breaking here treated "this window is
+                # empty" as "there is no more history".
+                #
+                # Measured live 2026-09-22, AAPL 5d/1min with outside_rth=True: the first
+                # chunk returns today's partial session, the cursor anchors on its oldest
+                # bar at 08:04 UTC — the 04:00 ET pre-market open — and an equity "1
+                # trading day" window ENDING at pre-market open contains nothing. The walk
+                # stopped there and returned 653 bars spanning 10.9 h of a requested 5
+                # days, with no warning of any kind.
+                #
+                # Widening is the measured fix, not a guess. The SAME anchor with a wider
+                # period returned 960 bars of the previous session, and across all four
+                # instrument/session combinations widening left the three already-correct
+                # ones byte-identical (same bars, same request count) while taking the
+                # broken one from 657 bars/10.9 h to 3,537 bars/131 h. Stepping the cursor
+                # back instead was measured and REJECTED: it still lost all 343 bars on
+                # the broken combination and lost one on futures.
+                #
+                # Narrow by nature: only an equity with `outside_rth=True` has a
+                # pre-market boundary to anchor into. A future trades nearly round the
+                # clock, so its cursor lands mid-session and every window is full.
+                #
+                # Bounded so a genuinely empty instrument terminates rather than doubling
+                # forever; `_MAX_CHUNKS` bounds it too, and the truncation warning below
+                # still fires if the target is never reached.
+                # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+                if widenings < _MAX_WIDENINGS:
+                    widenings += 1
+                    continue
                 break
+            widenings = 0
             oldest = datetime.utcfromtimestamp(min(stamps) / 1000)
             if cursor is not None and oldest >= cursor:
                 # No progress: the window did not move back. Stopping beats looping.

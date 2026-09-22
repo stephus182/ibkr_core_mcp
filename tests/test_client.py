@@ -1432,6 +1432,128 @@ def test_paged_chunks_anchor_on_delivered_data_not_on_requested_width(client):
         prev_oldest = datetime.utcfromtimestamp(min(b["t"] for b in resp["data"]) / 1000)
 
 
+def test_paged_keeps_walking_past_a_window_IBKR_has_no_data_for(client):
+    """An empty window is not the end of the data, and treating it as one lost 5 days of
+    bars down to 11 hours — silently.
+
+    Measured live 2026-09-22, AAPL `5d`/`1min` with `outside_rth=True`: the first chunk
+    sends no `startTime` and returns today's partial session, oldest bar 08:04 UTC — the
+    04:00 ET pre-market open. The cursor anchors there, and an equity "1 trading day"
+    window ENDING at pre-market open contains nothing, so IBKR answers `points: 0` with a
+    single placeholder bar `{"o": 0.0, "c": 0.0}` carrying no `t`. `data` is therefore
+    non-empty, `if not bars` does not fire, and the loop broke on `if not stamps` —
+    returning 653 bars spanning 10.9 h of a requested 5 days, with NO truncation warning.
+
+    The data is demonstrably there: the SAME anchor with a wider period returned 960 bars
+    of the previous session. So the fix widens and retries rather than stopping.
+
+    `points: 0` is IBKR's own documented shape — `points` is "the total number of data
+    points in the bar", and their published example response on the page below carries
+    `"points": 0` with `outsideRth: true` and `timePeriod: "1d"`.
+
+    This is narrow and the three controls below pin that: only an EQUITY with
+    `outside_rth=True` has a pre-market boundary to anchor into. A future trades nearly
+    round the clock, so its cursor lands mid-session and every window is full.
+
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    day = 86_400_000
+    # Two sessions of real bars, separated by a gap the narrow window lands inside.
+    recent = [{"t": int((now - timedelta(minutes=m)).timestamp() * 1000)} for m in range(0, 300)]
+    older = [{"t": int((now - timedelta(days=1, minutes=m)).timestamp() * 1000)} for m in range(0, 600)]
+    seen_widths: list[str] = []
+
+    def fake(path, params=None):
+        params = params or {}
+        width = str(params.get("period"))
+        seen_widths.append(width)
+        if "startTime" not in params:
+            return {"data": recent, "points": len(recent)}
+        # The narrow retry of an already-walked anchor is the empty window IBKR returns.
+        if width == "1d":
+            return {"data": [{"o": 0.0, "c": 0.0}], "points": 0}
+        return {"data": older, "points": len(older)}
+
+    with patch.object(client, "_get", side_effect=fake):
+        out = client.get_market_history_paginated(265598, period="5d", bar="1min", outside_rth=True)
+
+    stamps = {b["t"] for b in out.get("data", []) if b.get("t") is not None}
+    assert len(stamps) == len(recent) + len(older), (
+        f"the walk stopped at an empty window: {len(stamps)} bars, expected "
+        f"{len(recent) + len(older)}. An empty window is not the end of the data."
+    )
+    assert any(w != "1d" for w in seen_widths), "the empty window was never retried wider"
+    assert day  # keeps the constant meaningful if the fixture is edited
+
+
+def test_paged_gives_up_on_an_endlessly_empty_window_instead_of_looping(client):
+    """The counter-case. Widening must be BOUNDED: an instrument with genuinely no more
+    history must terminate, not burn the whole chunk guard doubling a window forever.
+
+    The first version of this test was VACUOUS and a mutation proved it — removing the
+    bound entirely left it green. Its seed bar was dated 2023, which already satisfies a
+    5-day target, so the walk exited on the first chunk and never reached an empty window.
+    The seed is now recent, so the loop must actually keep going and meet one.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    calls: list[str] = []
+
+    def always_empty(path, params=None):
+        params = params or {}
+        if "startTime" not in params:
+            # Recent, so the target is NOT yet met and the walk must continue.
+            return {"data": [{"t": int((now - timedelta(minutes=1)).timestamp() * 1000)}], "points": 1}
+        calls.append(str(params.get("period")))
+        return {"data": [{"o": 0.0, "c": 0.0}], "points": 0}
+
+    with patch.object(client, "_get", side_effect=always_empty):
+        out = client.get_market_history_paginated(265598, period="5d", bar="1min", outside_rth=True)
+
+    assert out.get("data"), "a walk that found one real bar must still return it"
+    assert calls, "the empty window was never reached — this test would prove nothing"
+    assert len(calls) <= 6, f"widening ran away: {len(calls)} retries of one empty window"
+
+
+def test_paged_narrows_again_after_a_widened_window_delivers(client):
+    """Widening is per-window, not a latch. Once a widened request delivers bars, the next
+    window starts narrow again — otherwise one empty window permanently inflates every
+    later request, asking for far more than the 1000-point cap can return and making the
+    chunk guard cover less ground.
+
+    Caught by mutation: not resetting the counter left every other test green.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    widths: list[str] = []
+
+    def fake(path, params=None):
+        params = params or {}
+        if "startTime" not in params:
+            return {
+                "data": [{"t": int((now - timedelta(minutes=m)).timestamp() * 1000)} for m in range(60)],
+                "points": 60,
+            }
+        widths.append(str(params.get("period")))
+        if len(widths) == 1:
+            return {"data": [{"o": 0.0, "c": 0.0}], "points": 0}  # empty -> must widen
+        # Every later window delivers, walking steadily back.
+        base = now - timedelta(days=len(widths))
+        return {"data": [{"t": int((base - timedelta(minutes=m)).timestamp() * 1000)} for m in range(60)], "points": 60}
+
+    with patch.object(client, "_get", side_effect=fake):
+        client.get_market_history_paginated(265598, period="5d", bar="1min", outside_rth=True)
+
+    assert widths[0] == "1d", widths
+    assert widths[1] == "2d", f"the empty window was not widened: {widths}"
+    assert widths[2] == "1d", f"width stayed inflated after a window delivered: {widths}"
+
+
 def test_paged_requests_state_the_direction_explicitly(client):
     """`direction` defaults to backwards *by measurement*, not by documentation — the
     spec's own wording implies the opposite, and `direction=1` errors outright. Stating
