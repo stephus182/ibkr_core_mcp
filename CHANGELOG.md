@@ -9,9 +9,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Accumulating on `release/2.2.0` (worktree `../ibkr_core_mcp-2.2.0`, cut from `v2.1.0`);
-`main` stays at the tag until this batch is reviewed and merged as one.
-
 ### Fixed
 - **A bare futures root no longer resolves to an expired NYMEX contract for ~9 days a month
   (claudia_ui gap #71, register F16).** `_last_trade_key` — the one rule behind `get_futures`'
