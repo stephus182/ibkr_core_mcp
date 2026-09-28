@@ -827,9 +827,10 @@ def test_front_month_skips_a_contract_whose_last_trade_date_has_passed(toolkit):
     assert [r["conid"] for r in flagged] == [515416632], "the expired contract must not be the front month"
 
 
-def test_front_month_prefers_ltd_over_expiration_date(toolkit):
-    """They differ: ES Dec-26 reports expirationDate 20261218 and ltd 20261217 (measured
-    2026-09-20). The last trade date is the one that decides whether it can still be traded."""
+def test_a_contract_past_its_ltd_is_not_front_month_while_its_expiration_date_is_ahead(toolkit):
+    """The ES shape: Dec-26 reports expirationDate 20261218 and ltd 20261217 (measured
+    2026-09-20), so `ltd` is the earlier date and the one that decides. (Named "prefers ltd"
+    until F16 showed the CL shape runs the other way — the earlier date decides, whichever.)"""
     live = _dated(60)
     toolkit._client.get_futures.return_value = [
         # Expiry still in the future, but trading has already stopped.
@@ -840,8 +841,9 @@ def test_front_month_prefers_ltd_over_expiration_date(toolkit):
     assert [r["conid"] for r in rows if r["front_month"]] == [222]
 
 
-# One field must decide. `_last_trade_key` reads `ltd` then `expirationDate` and settles
-# tradeability; `_expiration_key` read `expirationDate` ALONE and settled both the ordering
+# One rule must decide. `_last_trade_key` reads the earlier of `ltd` and `expirationDate` —
+# it read `ltd` first until F16 — and settles tradeability; `_expiration_key` read
+# `expirationDate` ALONE and settled both the ordering
 # and which row gets flagged, so the two disagreed about what "has a date" even means:
 #
 #   * a tradeable row reporting only `ltd` was never flagged front month, because
@@ -858,7 +860,8 @@ def test_front_month_prefers_ltd_over_expiration_date(toolkit):
 
 
 def test_front_month_is_flagged_on_a_row_that_reports_only_ltd(toolkit):
-    """`ltd` decides tradeability, so a row carrying only `ltd` is dated for every purpose."""
+    """`ltd` is one of the two dates that decide tradeability, so a row carrying only `ltd`
+    is dated for every purpose."""
     toolkit._client.get_futures.return_value = [
         {"symbol": "ES", "conid": 555, "ltd": _dated(30)},
         {"symbol": "ES", "conid": 666, "ltd": _dated(120)},
@@ -867,12 +870,74 @@ def test_front_month_is_flagged_on_a_row_that_reports_only_ltd(toolkit):
     assert [r["conid"] for r in rows if r["front_month"]] == [555], rows
 
 
-def test_front_month_ORDERING_follows_ltd_not_expiration_date(toolkit):
-    """Both tradeable; `ltd` ranks them one way and `expirationDate` the other. Trading stops
-    at `ltd`, so `ltd` chooses the front month."""
+def test_front_month_ORDERING_follows_the_earlier_date_when_ltd_is_it(toolkit):
+    """Both tradeable; `ltd` ranks them one way and `expirationDate` the other, and `ltd` is
+    the earlier date on each row (the ES shape), so `ltd` chooses the front month."""
     toolkit._client.get_futures.return_value = [
         {"symbol": "XX", "conid": 777, "ltd": _dated(10), "expirationDate": _dated(90)},
         {"symbol": "XX", "conid": 888, "ltd": _dated(40), "expirationDate": _dated(50)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["XX"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [777], rows
+
+
+# Neither field alone is the last trade date for every root (claudia_ui gap #71, register F16,
+# measured live 2026-09-24). For ES, `ltd` is the earlier field (Dec-26: `expirationDate`
+# 20261218, `ltd` 20261217). For NYMEX energy it is the LATER one: CLV6 reported
+# `expirationDate` 20260922 and `ltd` 20261001 — there `ltd` is the first day of the contract
+# month, after trading has stopped — so "`ltd`, falling back to `expirationDate`" kept the
+# expired October CL as the front month for ~9 days a month, and a bare `CL` resolved to a
+# contract whose quote was a prior close with no bid or ask. The earlier of the two is right
+# for both shapes and, by construction, can never keep a contract past either date.
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        pytest.param({"expirationDate": 20261218, "ltd": 20261217}, 20261217, id="ES: ltd earlier"),
+        pytest.param({"expirationDate": 20260922, "ltd": 20261001}, 20260922, id="CL: expirationDate earlier"),
+        pytest.param({"expirationDate": 20261214, "ltd": 20261214}, 20261214, id="equal (DX reports them equal)"),
+        pytest.param({"ltd": 20261217}, 20261217, id="only ltd"),
+        pytest.param({"expirationDate": 20261218}, 20261218, id="only expirationDate"),
+        pytest.param({"expirationDate": "not a date", "ltd": None}, 0, id="nothing usable"),
+        pytest.param({}, 0, id="undated"),
+    ],
+)
+def test_the_last_trade_key_is_the_earlier_of_ltd_and_expiration_date(row, expected):
+    """One definition — the same as claudia_ui's `order_flow._last_trade_key` (gap #71)."""
+    from ibkr_core_mcp.claude_tools import _last_trade_key
+
+    assert _last_trade_key(row) == expected
+
+
+def test_front_month_skips_a_contract_past_its_expiration_date_even_while_ltd_is_ahead(toolkit):
+    """The CL case of 2026-09-24: two days after CLV6 stopped trading (its `expirationDate`),
+    its `ltd` still lay a week ahead, so the rule that trusted `ltd` flagged the dead contract."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "CL", "conid": 304037496, "expirationDate": _dated(-2), "ltd": _dated(7)},
+        {"symbol": "CL", "conid": 304037511, "expirationDate": _dated(28), "ltd": _dated(37)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["CL"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [304037511], rows
+
+
+def test_a_bare_root_never_resolves_to_a_contract_past_its_expiration_date(toolkit):
+    """The same rows through `_resolve_snapshot_conid` — the path `get_market_snapshot` and
+    `preview_order` take, where the dead contract's quote was a prior close, no bid, no ask."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "CL", "conid": 304037496, "expirationDate": _dated(-2), "ltd": _dated(7)},
+        {"symbol": "CL", "conid": 304037511, "expirationDate": _dated(28), "ltd": _dated(37)},
+    ]
+    resolved = toolkit._resolve_snapshot_conid("CL", "FUT", None)
+    assert resolved.conid == 304037511, f"resolved the expired contract: {resolved}"
+
+
+def test_front_month_ORDERING_follows_the_earlier_date_when_expiration_date_is_it(toolkit):
+    """The mirror of the `ltd` ordering test above: both tradeable, and now `expirationDate`
+    is the earlier field on each row. The earlier date orders them, whichever field it is."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "XX", "conid": 777, "expirationDate": _dated(10), "ltd": _dated(90)},
+        {"symbol": "XX", "conid": 888, "expirationDate": _dated(50), "ltd": _dated(40)},
     ]
     rows = json.loads(toolkit.execute("get_futures", {"symbols": ["XX"]})[0])
     assert [r["conid"] for r in rows if r["front_month"]] == [777], rows

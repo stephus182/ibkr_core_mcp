@@ -494,7 +494,11 @@ Futures contracts for one or more root symbols — expiry months, conids, exchan
 (the qualifier is load-bearing: IBKR keeps returning a contract after its last trade date, so the
 earliest row alone flagged an *expired* one for days after each roll — measured 2026-09-20, ESU6
 `ltd` 20260918 still among 22 ES rows two days later; claudia_ui gap #58. Tradeability is decided
-by `ltd`, which differs from `expirationDate` — ES Dec-26 reports 20261218 and 20261217 — and a row
+by the EARLIER of `ltd` and `expirationDate` — neither alone is the last trade date for every root:
+ES Dec-26 reports `expirationDate` 20261218 / `ltd` 20261217, but NYMEX CL reports `ltd` as the
+first day of the contract month, AFTER trading stopped on its `expirationDate` (CLV6: 20260922 /
+20261001), so `ltd` alone kept an expired CL as the front month for ~9 days a month — claudia_ui
+gap #71, register F16, measured 2026-09-24, fixed in 2.2.0 — and a row
 with no usable date is kept, since an unknown date is not a claim that a contract expired. Expired
 rows are still listed; they are merely never flagged.) (2026-09-10 —
 `/trsrv/futures` itself returns the rows in no date order, Dec 2026 first for ES, and a model once

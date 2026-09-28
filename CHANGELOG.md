@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+Accumulating on `release/2.2.0` (worktree `../ibkr_core_mcp-2.2.0`, cut from `v2.1.0`);
+`main` stays at the tag until this batch is reviewed and merged as one.
+
+### Fixed
+- **A bare futures root no longer resolves to an expired NYMEX contract for ~9 days a month
+  (claudia_ui gap #71, register F16).** `_last_trade_key` — the one rule behind `get_futures`'
+  `front_month` flag, its ordering, and the FUT branch of `_resolve_snapshot_conid` that
+  `get_market_snapshot` and `preview_order` take — read `ltd` first, falling back to
+  `expirationDate`, a rule generalised from ES alone (Dec-26: `expirationDate` 20261218, `ltd`
+  20261217). For CL, IBKR's `ltd` is the first day of the contract month, after trading has
+  stopped: CLV6 reported `expirationDate` 20260922 and `ltd` 20261001, so on 2026-09-24 a bare
+  `CL` resolved to the expired October contract, its quote a prior close with no bid or ask
+  (measured live in claudia_ui, whose model caught it before any code did). The key is now the
+  **earlier** of the two dates — right for ES, CL, NG and DX as measured that day, and unable by
+  construction to keep a contract past either date. IBKR's definitions (`ltd` "Last trade date
+  of the future contract", `expirationDate` "Expiration date of the specific future contract")
+  were read 2026-09-28. Tests: the rule table-driven over seven shapes, the CL shape through
+  `get_futures` and through the resolver, and the ordering mirror where `expirationDate` is the
+  earlier field — four red before, `max` for `min` red after. claudia_ui carries the same rule
+  in `order_flow._last_trade_key` until its pin moves here; `docs/tools-reference.md` says so.
+
 ## [2.1.0] — 2026-09-22
 
 ### Fixed

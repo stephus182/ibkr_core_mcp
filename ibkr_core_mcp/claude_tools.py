@@ -1455,19 +1455,43 @@ def _today_date() -> date:
 
 
 def _last_trade_key(row: Mapping[str, Any]) -> int:
-    """`ltd` when IBKR supplies one, else `expirationDate`, else 0 for "unknown".
+    """The EARLIER of `ltd` and `expirationDate`, whichever are present; 0 for "unknown".
 
-    They differ: ES Dec-26 reports `expirationDate` 20261218 and `ltd` 20261217 (measured
-    2026-09-20). Trading stops at `ltd`, so that is the field that decides tradeability.
+    IBKR defines `ltd` as "Last trade date of the future contract" and `expirationDate` as
+    "Expiration date of the specific future contract" (/trsrv/futures reference, read
+    2026-09-28), and **neither alone is the last trade date for every root** (claudia_ui
+    gap #71, register F16):
+
+    - ES Dec-26: `expirationDate` 20261218, `ltd` 20261217 — `ltd` is the earlier field
+      (measured 2026-09-20; gap #58 chose `ltd` from ES alone).
+    - CLV6 (NYMEX): `expirationDate` 20260922, `ltd` 20261001 — there `ltd` is the FIRST DAY
+      OF THE CONTRACT MONTH, after trading stopped on the expiration date (CME CL: trading
+      terminates three business days before the 25th calendar day of the month prior to the
+      contract month = 2026-09-22). Measured live 2026-09-24, two days after: a bare `CL`
+      resolved to the expired October contract, its quote a prior close with no bid or ask,
+      and it would have stayed the front month until `ltd` — ~9 days a month, every month.
+      NG has the same shape; DX reports the two equal.
+
+    The earlier date is right for every root this account trades and, by construction, can
+    never keep a contract past either date. Until 2.2.0 this read `ltd` first; claudia_ui
+    carries the same rule in `order_flow._last_trade_key` until its pin moves to the release
+    that has this one, and says so in that docstring.
+
+    Sources: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
+    (read 2026-09-28) and the CME CL contract specs,
+    https://www.cmegroup.com/markets/energy/crude-oil/light-sweet-crude.contractSpecs.html
+    (scraped 2026-09-24 for claudia_ui #71; the page is script-rendered and answered no plain
+    fetch on 2026-09-28).
     """
+    dates: list[int] = []
     for key in ("ltd", "expirationDate"):
         try:
             value = int(row.get(key) or 0)
         except (TypeError, ValueError):
             value = 0
         if value:
-            return value
-    return 0
+            dates.append(value)
+    return min(dates, default=0)
 
 
 def _still_tradeable(rows: Sequence[Any], today: int) -> list[Any]:
@@ -1493,8 +1517,8 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
     each root flagged `front_month: true` — the rule `_resolve_snapshot_conid` applies,
     stated in the result. Rows without a parseable date sort first and are never flagged.
 
-    **One field decides.** Ordering and the flag use `_last_trade_key` — `ltd`, falling back
-    to `expirationDate` — the same function that decides tradeability. They used
+    **One rule decides.** Ordering and the flag use `_last_trade_key` — the earlier of `ltd`
+    and `expirationDate` — the same function that decides tradeability. They used
     `_expiration_key`, which read `expirationDate` alone, so the two disagreed about what
     "has a date" means: a tradeable row reporting only `ltd` was never flagged, and where
     the two fields rank differently the front month was chosen by the field this docstring
