@@ -327,7 +327,11 @@ necessarily missing imports — use `verify_flex_import` to distinguish.
 
 **Inputs:** none
 
-**Output:** Coverage summary with date range, trade count, and any gap periods.
+**Output:** Coverage summary with date range, trade count, and any gap periods. The first line
+carries `⚠ DATA STALE (statement through <toDate>; the newest that can exist is through <the
+weekday before today, ET>)` when the store lacks that statement — IBKR's own `toDate`, never a
+trade date, so a weekday with no fills is not "behind" — or `⚠ FLEX DATASET EMPTY` when the Flex
+tables hold no settled row.
 
 ---
 

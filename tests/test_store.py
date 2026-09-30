@@ -1,5 +1,4 @@
-from datetime import date
-from unittest.mock import patch
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -467,57 +466,10 @@ def test_market_calendar_bad_exchange_skipped_gracefully():
 
 
 # ---------------------------------------------------------------------------
-# NYSE calendar integration in get_trade_date_coverage()
+# get_trade_date_coverage()'s staleness flag no longer reads the NYSE calendar (F19,
+# 2026-09-29): the four `test_trade_coverage_*` tests that pinned that rule went with it. The
+# statement rule's tests are at the end of this file.
 # ---------------------------------------------------------------------------
-
-_TRADE = {
-    "execution_id": "E1",
-    "symbol": "AAPL",
-    "side": "BUY",
-    "size": 10,
-    "price": 180,
-    "commission": 1,
-    "account": "",
-}
-
-
-def test_trade_coverage_last_trading_day_present(store):
-    store.upsert_trades([{**_TRADE, "time": "2026-06-23T10:00:00"}])
-    cov = store.get_trade_date_coverage()
-    assert "last_trading_day" in cov
-    assert cov["last_trading_day"] is not None
-
-
-def test_trade_coverage_stale_when_behind_last_trading_day(store):
-    """newest < last_trading_day → stale=True."""
-    store.upsert_trades([{**_TRADE, "time": "2020-01-02T10:00:00"}])
-    cov = store.get_trade_date_coverage()
-    assert cov["stale"] is True
-
-
-def test_trade_coverage_not_stale_when_current(store):
-    """newest == last_trading_day → stale=False (Flex T+1 lag — this is fully current)."""
-    import exchange_calendars as ec
-    from pandas import Timestamp
-
-    last_td = ec.get_calendar("XNYS").previous_close(Timestamp.now(tz="UTC")).date()
-    store.upsert_trades([{**_TRADE, "time": f"{last_td}T10:00:00"}])
-    cov = store.get_trade_date_coverage()
-    assert cov["stale"] is False, (
-        f"newest={cov['newest']} == last_trading_day={cov['last_trading_day']} should not be stale"
-    )
-
-
-def test_trade_coverage_fallback_without_exchange_calendars(store):
-    """If exchange_calendars is unavailable, stale falls back to days_since_newest > 1."""
-    import sys
-
-    store.upsert_trades([{**_TRADE, "time": "2020-01-02T10:00:00"}])
-    # Setting a module to None in sys.modules makes `import` raise ImportError
-    with patch.dict(sys.modules, {"exchange_calendars": None}):
-        cov = store.get_trade_date_coverage()
-    assert cov["stale"] is True
-    assert cov["last_trading_day"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -985,3 +937,141 @@ def test_coverage_reports_the_settled_date_separately_from_the_legacy_newest(moc
 
     assert "settled_newest" in cov
     assert "days_since_settled" in cov
+
+
+# ---------------------------------------------------------------------------
+# get_trade_date_coverage() — the staleness flag (claudia_ui #72, register F19; and F1)
+# ---------------------------------------------------------------------------
+#
+# The operator's rule (claudia_ui, 2026-09-28): a store is current when it holds the statement
+# for the weekday before today (ET), read from IBKR's own `toDate`. Until this fix the flag
+# compared the newest settled TRADE date against the NYSE session before the last one, so on
+# day D a store through D-2 read `stale: False` — measured 2026-09-24 at 13:01Z and 16:33Z with
+# the store through 09-22 — and a weekday with no fills read as behind although its statement
+# was held. Statement days are weekdays, not exchange days: the Monday 2026-07-06 pull came
+# back through Friday 07-03, a US holiday (29 statements measured, claudia_ui
+# docs/flex-query-setup.md § When a day's statement becomes available).
+
+
+def _hold(mock_config, *, statements=(), trades=(), drop_nav=False):
+    """Give the store the real Flex archive tables holding `statements` (toDate, YYYYMMDD)
+    and settled trades as (trade date ISO, toDate)."""
+    import sqlite3
+
+    from ibkr_core_mcp.flex_store import create_flex_tables
+
+    conn = sqlite3.connect(mock_config.sqlite_path)
+    try:
+        create_flex_tables(conn)
+        for i, to_date in enumerate(statements):
+            conn.execute("INSERT INTO flex_change_in_nav (row_uid, stmt_to_date) VALUES (?, ?)", (f"nav-{i}", to_date))
+        for i, (day, to_date) in enumerate(trades):
+            conn.execute(
+                "INSERT INTO flex_trade (row_uid, execution_key, source, trade_date_iso, stmt_to_date) "
+                "VALUES (?, ?, 'flex', ?, ?)",
+                (f"row-{i}", f"exec-{i}", day, to_date),
+            )
+        if drop_nav:
+            conn.execute("DROP TABLE flex_change_in_nav")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_THU_0924_1301Z = datetime(2026, 9, 24, 13, 1, 49, tzinfo=UTC)  # 09:01 ET Thursday
+_THU_0924_1633Z = datetime(2026, 9, 24, 16, 33, 35, tzinfo=UTC)  # 12:33 ET Thursday
+_THU_0924_LATE = datetime(2026, 9, 25, 0, 59, 30, tzinfo=UTC)  # 20:59 ET Thursday — the UTC date is already Friday
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (_THU_0924_1301Z, date(2026, 9, 23)),
+        (_THU_0924_1633Z, date(2026, 9, 23)),
+        (_THU_0924_LATE, date(2026, 9, 23)),  # ET day still the 24th — the UTC date (25th) would say the 24th
+        (datetime(2026, 9, 26, 14, 0, tzinfo=UTC), date(2026, 9, 25)),  # Saturday → Friday
+        (datetime(2026, 9, 27, 14, 0, tzinfo=UTC), date(2026, 9, 25)),  # Sunday → Friday
+        (datetime(2026, 9, 28, 14, 0, tzinfo=UTC), date(2026, 9, 25)),  # Monday → Friday
+        (datetime(2026, 9, 29, 2, 30, tzinfo=UTC), date(2026, 9, 25)),  # Monday 22:30 ET → Friday
+        (datetime(2026, 7, 6, 14, 44, tzinfo=UTC), date(2026, 7, 3)),  # measured: weekdays, not exchange days
+    ],
+)
+def test_newest_statement_day_is_the_weekday_before_today_in_et(now, expected):
+    from ibkr_core_mcp.store import newest_statement_day
+
+    assert newest_statement_day(now) == expected
+
+
+def test_newest_statement_day_refuses_a_naive_datetime():
+    from ibkr_core_mcp.store import newest_statement_day
+
+    with pytest.raises(ValueError, match="aware"):
+        newest_statement_day(datetime(2026, 9, 24, 12, 0))
+
+
+def test_a_store_holding_the_previous_weekday_s_statement_is_current(store, mock_config):
+    _hold(mock_config, statements=["20260923"])
+    cov = store.get_trade_date_coverage(now=_THU_0924_1633Z)
+    assert cov["stale"] is False
+    assert cov["statement_through"] == "2026-09-23"
+    assert cov["newest_statement_day"] == "2026-09-23"
+
+
+@pytest.mark.parametrize("now", [_THU_0924_1301Z, _THU_0924_1633Z, _THU_0924_LATE])
+def test_a_store_two_weekdays_behind_is_stale_at_any_hour(store, mock_config, now):
+    """The F19 case: through 09-22 on 09-24 read `stale: False` until the evening."""
+    _hold(mock_config, statements=["20260922"])
+    cov = store.get_trade_date_coverage(now=now)
+    assert cov["stale"] is True
+    assert cov["statement_through"] == "2026-09-22"
+
+
+def test_friday_s_statement_keeps_the_store_current_through_the_weekend_and_monday(store, mock_config):
+    _hold(mock_config, statements=["20260925"])
+    for day in (26, 27, 28):
+        assert store.get_trade_date_coverage(now=datetime(2026, 9, day, 14, 0, tzinfo=UTC))["stale"] is False, day
+    assert store.get_trade_date_coverage(now=datetime(2026, 9, 29, 14, 0, tzinfo=UTC))["stale"] is True
+
+
+def test_the_verdict_reads_the_statement_s_to_date_not_the_newest_trade_date(store, mock_config):
+    """A Monday with no fills still has a statement; holding it is current."""
+    _hold(mock_config, statements=["20260925", "20260928"], trades=[("2026-09-25", "20260925")])
+    cov = store.get_trade_date_coverage(now=datetime(2026, 9, 29, 14, 0, tzinfo=UTC))  # Tuesday
+    assert cov["stale"] is False
+    assert cov["statement_through"] == "2026-09-28"
+    assert cov["settled_newest"] == "2026-09-25", "the newest settled trade is still reported, separately"
+
+
+def test_without_the_nav_table_the_to_date_is_read_from_the_trades_archive(store, mock_config):
+    _hold(mock_config, trades=[("2026-09-23", "20260923")], drop_nav=True)
+    cov = store.get_trade_date_coverage(now=_THU_0924_1633Z)
+    assert cov["statement_through"] == "2026-09-23"
+    assert cov["stale"] is False
+
+
+def test_a_store_with_no_flex_dataset_holds_no_statement_and_is_stale(store):
+    store.upsert_trades([_trade("E1", "2026-09-23")])  # legacy rows only
+    cov = store.get_trade_date_coverage(now=_THU_0924_1633Z)
+    assert cov["statement_through"] is None
+    assert cov["stale"] is True
+
+
+def test_an_empty_store_returns_the_full_key_set(store):
+    """F1: the docstring promised seven keys and the empty path returned four — `stale` absent,
+    not False, which a consumer's `not cov.get("stale")` could not tell from "current"."""
+    cov = store.get_trade_date_coverage(now=_THU_0924_1633Z)
+    full = store.get_trade_date_coverage(now=_THU_0924_1633Z)  # same call, for the key set
+    store.upsert_trades([_trade("E1", "2026-09-23")])
+    populated = store.get_trade_date_coverage(now=_THU_0924_1633Z)
+    assert set(cov) == set(populated) == set(full)
+    assert cov["stale"] is True
+    assert cov["oldest"] is None and cov["newest"] is None
+    assert cov["total_trades"] == 0 and cov["gaps"] == []
+    assert cov["days_since_newest"] is None
+    assert cov["newest_statement_day"] == "2026-09-23"
+
+
+def test_day_counts_use_the_et_date_of_now(store):
+    store.upsert_trades([_trade("E1", "2026-09-23")])
+    cov = store.get_trade_date_coverage(now=_THU_0924_LATE)  # 20:59 ET on the 24th, 00:59Z on the 25th
+    assert cov["days_since_newest"] == 1

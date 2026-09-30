@@ -531,7 +531,7 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 **100+ supported markets** including XNAS (NASDAQ), XPAR (Euronext Paris), XKRX (Korea), XBOM (Bombay), SSE (Shanghai), BVMF (Brazil), and more — [full list](https://github.com/gerrymanoim/exchange_calendars).
 
 **Used for:**
-- **Staleness check** — `get_trade_date_coverage()` uses the NYSE calendar to determine if Flex data is current. `newest == last_trading_day` means fully up to date, regardless of whether today is a weekend or holiday.
+- **Not the Flex staleness check, since 2026-09-29** — `get_trade_date_coverage()` used the NYSE calendar for its `stale` flag and called a two-trading-day-old store current. A Flex statement day is a weekday, holidays included, so the flag now reads IBKR's own `toDate` against the weekday before today (ET) — `ibkr_core_mcp.store.newest_statement_day` — and the exchange calendar has no part in it.
 - **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and full-year holidays for all 20 exchanges at session start. This lets it reason about order timing, settlement windows, cross-regional volume effects, and upcoming closures proactively — without any API calls or gateway dependency.
 
 **Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works offline.

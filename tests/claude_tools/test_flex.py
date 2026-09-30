@@ -54,12 +54,14 @@ def test_format_coverage_stale_flag():
         "newest": "2024-06-01",
         "total_trades": 100,
         "stale": True,
-        "days_since_newest": 15,
+        "statement_through": "2024-05-30",
+        "newest_statement_day": "2024-06-14",
         "gaps": [],
     }
     text = "\n".join(_format_coverage(cov))
     assert "STALE" in text
-    assert "15" in text
+    assert "statement through 2024-05-30" in text
+    assert "the newest that can exist is through 2024-06-14" in text
 
 
 # ---------------------------------------------------------------------------
@@ -427,26 +429,49 @@ def test_sync_flex_trades_warns_that_the_archive_did_not_update(toolkit, monkeyp
     assert fig is None
 
 
-def test_stale_message_reports_the_settled_date_not_the_legacy_one():
-    """'DATA STALE (0d old)' was self-contradictory: the 0d came from a different table."""
+def test_stale_message_names_the_statement_held_and_the_newest_that_can_exist():
+    """'DATA STALE (0d old)' was self-contradictory: the 0d came from a different table. Since
+    F19 the note carries the verdict's own evidence — the statement's `toDate` against the
+    weekday before today — in the words claudia_ui's startup line uses."""
     from ibkr_core_mcp.claude_tools import _format_coverage
 
     lines = _format_coverage(
         {
             "oldest": "2024-01-01",
-            "newest": "2026-08-10",
+            "newest": "2026-09-24",
             "days_since_newest": 0,
-            "settled_newest": "2026-08-05",
-            "days_since_settled": 5,
+            "settled_newest": "2026-09-22",
+            "days_since_settled": 2,
             "flex_dataset_empty": False,
+            "statement_through": "2026-09-22",
+            "newest_statement_day": "2026-09-23",
             "stale": True,
             "total_trades": 10,
             "gaps": [],
         }
     )
 
-    assert "settled through 2026-08-05, 5d" in lines[0]
+    assert "statement through 2026-09-22; the newest that can exist is through 2026-09-23" in lines[0]
     assert "(0d old)" not in lines[0]
+    assert "settled through" not in lines[0]
+
+
+def test_stale_message_says_when_no_statement_is_held_at_all():
+    from ibkr_core_mcp.claude_tools import _format_coverage
+
+    lines = _format_coverage(
+        {
+            "oldest": "2024-01-01",
+            "newest": "2026-09-24",
+            "statement_through": None,
+            "newest_statement_day": "2026-09-23",
+            "stale": True,
+            "total_trades": 10,
+            "gaps": [],
+        }
+    )
+
+    assert "no statement held; the newest that can exist is through 2026-09-23" in lines[0]
 
 
 def test_empty_flex_dataset_is_reported_as_such():

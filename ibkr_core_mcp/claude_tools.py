@@ -134,10 +134,13 @@ def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
 def _format_coverage(cov: dict[str, Any]) -> list[str]:
     """Format trade date coverage into human-readable lines with staleness and gap notes.
 
-    The staleness note reports the **settled** date, because `stale` is derived from
-    `flex_trade` while `newest`/`days_since_newest` come from the legacy `trades` table.
-    Mixing them produced the self-contradictory "⚠ DATA STALE (0d old)" — a warning whose
-    own evidence said nothing was wrong, prescribing the command that had just failed.
+    The staleness note carries the verdict's own evidence — the newest statement held
+    (IBKR's `toDate`) against the weekday before today (ET), the rule
+    `SQLiteStore.get_trade_date_coverage` applies — in the words claudia_ui's startup line
+    uses. `newest`/`days_since_newest` come from the legacy `trades` table and never appear
+    in it: mixing the two once produced the self-contradictory "⚠ DATA STALE (0d old)" — a
+    warning whose own evidence said nothing was wrong, prescribing the command that had just
+    failed.
     """
     stale_note = ""
     if cov.get("flex_dataset_empty"):
@@ -146,9 +149,10 @@ def _format_coverage(cov: dict[str, Any]) -> list[str]:
             "the complete Flex dataset holds no settled rows"
         )
     elif cov.get("stale"):
-        settled = cov.get("settled_newest")
-        days = cov.get("days_since_settled")
-        detail = f"settled through {settled}, {days}d" if settled else f"{cov.get('days_since_newest', 0)}d old"
+        held = cov.get("statement_through")
+        detail = f"statement through {held}" if held else "no statement held"
+        if expected := cov.get("newest_statement_day"):
+            detail = f"{detail}; the newest that can exist is through {expected}"
         stale_note = f" ⚠ DATA STALE ({detail}) — run sync_flex_trades to refresh"
     lines = [
         f"\nTrade history: {cov['oldest']} → {cov['newest']}  ({cov['total_trades']} trades total){stale_note}",

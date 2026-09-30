@@ -93,6 +93,41 @@ Three things in that path are easy to get wrong and have been:
 The Drive branch is the only non-fatal one: trades are in SQLite before the upload is
 attempted, so an archive or manifest failure is logged and the sync still succeeds.
 
+## When a day's statement exists (2026-09-29)
+
+IBKR publishes the **inclusion** cutoffs of a day's statement and no **availability** time:
+"The statement cutoff time for commodities is generally 5:15 PM EST, and the statement cutoff
+time for securities is generally 8:20 PM EST. Any trades executed for those asset classes
+before the cutoff times will be reflected in your statement for the day" — and "IB-JP clients
+have a statement cutoff time of around 6:00 AM ET" (Client Portal statements guide,
+https://www.ibkrguides.com/clientportal/performanceandstatements/statements.htm, scraped
+2026-09-29). Every Flex page, the Campus glossary and the ibkrguides Flex pages were read for
+a retrieval time on 2026-09-25 and none states one.
+
+**Measured instead, on the statements' own `<FlexStatement toDate>`** — 29 pulls by claudia_ui,
+2026-06-26 → 09-28, at hours from 08:17 to 22:09 ET:
+
+| When the pull ran (ET) | `toDate` |
+|---|---|
+| Mornings, the earliest 08:17 | the weekday before the pull's date — every one |
+| Afternoons and evenings, the latest 22:09 | the weekday before — never the pull's own day |
+| Saturday, Sunday, Monday | the Friday — every one |
+| Monday 07-06, after the 07-03 US holiday | 07-03: statement days are **weekdays**, not exchange days |
+
+A repeat request the same day returns IBKR's **cached** statement (the same reference number
+and `whenGenerated`), so an extra pull costs one request and changes nothing; a statement that
+is not finished is answered with an error code (1004 incomplete, 1005–1008 not ready, 1019 in
+progress) and nothing is written.
+
+**The rule that follows needs no clock and no exchange calendar** (operator, claudia_ui
+2026-09-28): the newest statement that can exist at any instant is the one for the weekday
+before today (ET) — `ibkr_core_mcp.store.newest_statement_day(now)` — and a store is current
+when it holds that statement, read from the archive's own `stmt_to_date` (`toDate`), never
+from a trade date, because a weekday with no fills still has a statement.
+`SQLiteStore.get_trade_date_coverage`'s `stale` flag applies exactly this (claudia_ui #72,
+register F19); before 2026-09-29 it compared the newest settled *trade* date with the NYSE
+session before the last one and called a two-trading-day-old store current.
+
 ## Complete capture (2026-08-04)
 
 `fetch_trades` / `import_from_file` write **two** representations of every statement:

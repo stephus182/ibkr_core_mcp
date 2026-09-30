@@ -36,6 +36,35 @@ What changes for a caller:
   form, `api=<session>` from `POST /tickle`; measured 2026-09-24, the gateway authenticated
   the socket with and without it, so this is documentation, not a behaviour change.
 
+### Unreleased — `get_trade_date_coverage`: the `stale` flag follows the statement rule
+
+The flag used to compare the newest settled **trade** date with the NYSE session before the
+last one, so on day D a store through D-2 read `stale: False` all day (claudia_ui gap #72,
+measured 2026-09-24), and a weekday with no fills read as behind although its statement was
+held. It now applies one sentence: **the store is current when it holds the statement for the
+weekday before today (ET)** — "holds" read from IBKR's own `toDate` in the Flex archive, "the
+weekday before today" from `ibkr_core_mcp.store.newest_statement_day(now)`, which is public
+so a consumer can stop carrying its own copy (claudia_ui's `flex_sync.newest_statement_day`
+is that function).
+
+What changes for a caller:
+
+- Two keys added: `statement_through` (IBKR's `toDate` of the newest statement held, ISO or
+  None) and `newest_statement_day` (ISO). One removed: `last_trading_day` — the NYSE date the
+  old rule needed. The market calendar's own `last_trading_day`, in
+  `get_market_calendar_context`, is unchanged.
+- `stale` is `statement_through is None or statement_through < newest_statement_day`. A store
+  with no Flex archive at all is stale; so is one whose archive holds no statement.
+- The empty store returns **every** key (register F1) — `stale: True`, `oldest`, `newest` and
+  `days_since_newest` None, `total_trades` 0 — where it used to return four. A consumer that
+  read a missing `stale` as "current" was wrong before and gets the right answer now.
+- `days_since_newest` and `days_since_settled` count to the ET date of `now`; the latter is
+  None when no settled trade exists (it used to borrow the legacy table's date).
+- `get_trade_date_coverage(now=<aware datetime>)` is new and optional: the verdict is for that
+  instant, the current time by default.
+- `check_flex_coverage`'s stale note carries the verdict's evidence:
+  `⚠ DATA STALE (statement through 2026-09-22; the newest that can exist is through 2026-09-23)`.
+
 ### 2.1.0 — brackets, and three stricter refusals
 
 **New public API.** A bracket — a parent order plus its held children — is one POST of a

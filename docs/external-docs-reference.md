@@ -97,6 +97,7 @@ old-prefix URL fails even for a page that genuinely exists.
 | **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
 | **Flex Queries — landing page** (navigation index only: Run/Create/Edit Flex Query links, delivery settings, 4-year retention note — live-fetched 2026-07-14; kept as a general Flex-Queries pointer, no longer cited as the source for the "all trade origins" claim below; institutional equivalent at `orgportal/performanceandstatements/flex.htm` if this package ever needs to support orgportal accounts) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex.htm |
 | **Activity Statements** (account-level reports, not per-platform logs — backs `flex_query.py`'s "What Flex covers" claim) | https://www.interactivebrokers.com/campus/glossary-terms/activity-statements/ |
+| **Statement cutoff times** (what a day's statement *includes*: commodities 5:15 PM EST, securities 8:20 PM EST, IB-JP ~6:00 AM ET; no retrieval time is published — `store.newest_statement_day` rests on this page plus the measured `toDate`s) | https://www.ibkrguides.com/clientportal/performanceandstatements/statements.htm |
 
 **Citation fix (2026-07-14):** `flex_query.py`'s "## What Flex covers" docstring (and two copies
 of the same claim in `claude_tools.py`) previously cited the orgportal landing page above as

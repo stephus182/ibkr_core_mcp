@@ -57,6 +57,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   ws/unsolicited-messages/authentication-status, ws/connection-guide/send-a-websocket-topic
   (IBKR's example sleeps 3 s before its first topic), ws/introduction. `docs/consumers.md`
   carries what a caller should expect from the changed `connect()`.
+- **`get_trade_date_coverage`'s `stale` flag no longer calls a store two trading days old
+  current, and the empty store returns the full key set (claudia_ui gap #72, register F19;
+  register F1).** The flag compared the newest settled *trade* date with the NYSE session before
+  the last one: on day D a store through D-2 read `stale: False` all day — measured 2026-09-24
+  at 13:01Z and 16:33Z with the store through 09-22 — and the consumer that trusted it pulled
+  nothing for a day; a weekday with no fills read as behind although its statement was held. It
+  now applies the operator's one sentence (claudia_ui, 2026-09-28): **a store is current when it
+  holds the statement for the weekday before today (ET)**. "Holds" is IBKR's own `toDate` from
+  the Flex archive (`flex_change_in_nav`, one row per statement; the settled `flex_trade` rows
+  as fallback) — never a trade date. "The weekday before today" is the new
+  `store.newest_statement_day(now)`, public so a consumer can stop carrying its own copy: no
+  clock time — IBKR publishes the day's inclusion cutoffs ("generally 5:15 PM EST" commodities,
+  "8:20 PM EST" securities, Client Portal statements guide, scraped 2026-09-29) and no retrieval
+  time — and no exchange calendar, because statement days are weekdays, holidays included (29
+  statements' `toDate` measured 2026-06-26 → 09-28; the Monday 07-06 pull came back through
+  Friday 07-03). The dict gains `statement_through` and `newest_statement_day`, loses
+  `last_trading_day` (the NYSE date the old rule needed), counts both day figures on the ET date
+  of `now`, and `get_trade_date_coverage(now=...)` takes the instant, aware. The empty path
+  returns every key with `stale: True` — it used to return four, so a consumer's
+  `cov.get("stale")` could not tell "no verdict" from "current", which is how claudia_ui's
+  first-ever Flex sync was skipped (F1; fixed consumer-side 2026-09-23, at the source now).
+  `check_flex_coverage`'s note reads `⚠ DATA STALE (statement through 2026-09-22; the newest
+  that can exist is through 2026-09-23)` — the verdict's own evidence, in the words claudia_ui's
+  startup line uses. `FlexQueryClient`'s "IBKR does not publish a specific cutoff time" is
+  corrected to what IBKR publishes and what it does not. Tests: the day rule over eight instants
+  (a weekday evening whose UTC date is already tomorrow, the weekend, Monday, the measured
+  holiday), the D-1 and D-2 verdicts at three hours, Friday's statement through the weekend and
+  Monday, the no-fill weekday that only the `toDate` gets right, the fallback without the NAV
+  table, a legacy-only store, the empty store's key set, the ET day count; the four tests that
+  pinned the NYSE rule went with it. Nine mutations red: `<` for `<=`, the weekend step removed,
+  the UTC date, the naive check removed, the trade date read instead of `toDate`, the fallback
+  removed, a missing statement read as current, day counts on the local clock, the formatter
+  dropping the expected day. `docs/flex-query-reference.md` § When a day's statement exists and
+  `docs/ibkr-api-behaviors-reference.md` carry the measurement and the sources.
 
 ## [2.1.0] — 2026-09-22
 
