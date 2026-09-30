@@ -33,9 +33,23 @@ try:
     import tkinter as tk
 except ImportError:  # Python without Tk support (CI, headless, Python 3.14 Homebrew)
     tk = None  # type: ignore[assignment]
-from ibkr_core_mcp.exceptions import HumanAuthError
+from ibkr_core_mcp._order_dialog import CANCELLED, CONFIRMED, TIMED_OUT
+from ibkr_core_mcp.exceptions import ConfirmationTimeoutError, HumanAuthError
 
-_DIALOG_TIMEOUT_S = 60  # auto-cancels if unattended
+_DIALOG_TIMEOUT_S = 60  # the dialog dismisses itself unattended; nothing is sent, the order is as it was
+
+
+def _timed_out_message(detail: str = "") -> str:
+    """What a timeout leaves, never what it did: nothing was sent, the order is as it was.
+
+    Operator rule (claudia_ui 2026-09-24, gap #67): a timeout is described by what it leaves in
+    place. "Order cancelled by user" for a timed-out CANCEL ORDER dialog told the user the order
+    was cancelled when the timeout had kept it (register F21, 2026-09-25).
+    """
+    return (
+        f"Confirmation dialog timed out after {_DIALOG_TIMEOUT_S} s with no decision — "
+        f"nothing was sent to IBKR; the order is as it was{detail}"
+    )
 
 
 def _quantity_text(qty: Any) -> str:
@@ -1100,7 +1114,10 @@ def _show_appkit_dialog(
     cancel and reply dialogs genuinely have no side, and colouring those green would
     assert something no caller established.
 
-    Raises HumanAuthError if user cancels/times out.
+    Raises HumanAuthError when the human abandons the dialog, and ConfirmationTimeoutError
+    (a HumanAuthError) when the dialog dismisses itself with no decision — two outcomes,
+    because the second leaves the order exactly as it was and must not be reported as a
+    cancellation (register F21). The tokens are `_order_dialog`'s own constants.
     Raises RuntimeError if the subprocess itself fails (caller falls back to osascript).
     """
     payload = _json.dumps(
@@ -1125,14 +1142,20 @@ def _show_appkit_dialog(
             timeout=_DIALOG_TIMEOUT_S + 10,
         )
     except subprocess.TimeoutExpired as exc:
-        raise HumanAuthError("Confirmation dialog timed out") from exc
+        raise ConfirmationTimeoutError(_timed_out_message(" (the dialog process did not return)")) from exc
 
     if proc.returncode != 0:
         raise RuntimeError(f"AppKit dialog failed: {proc.stderr.strip() or 'unknown error'}")
 
     output = proc.stdout.strip()
-    if output != "CONFIRMED":
+    if output == CONFIRMED:
+        return
+    if output == TIMED_OUT:
+        raise ConfirmationTimeoutError(_timed_out_message())
+    if output == CANCELLED:  # the abandon button, or the panel dismissed some other way
         raise HumanAuthError("Order cancelled by user")
+    # Not one of the script's three words: nothing was sent, and the reader says what it saw.
+    raise HumanAuthError(f"Unexpected dialog response: {output!r}")
 
 
 def _show_osascript_dialog(
@@ -1172,7 +1195,9 @@ def _show_osascript_dialog(
         raise HumanAuthError(f"Confirmation dialog failed: {exc}") from exc
 
     output = proc.stdout.strip()
-    if proc.returncode != 0 or output in ("", "timeout", abandon_label):
+    if output == "timeout":  # `gave up of dlg` — the dialog dismissed itself, no decision
+        raise ConfirmationTimeoutError(_timed_out_message())
+    if proc.returncode != 0 or output in ("", abandon_label):
         raise HumanAuthError("Order cancelled by user")
     if output != confirm_label:
         raise HumanAuthError(f"Unexpected dialog response: {output!r}")
@@ -1189,7 +1214,9 @@ def _show_tkinter_dialog(
 ) -> None:
     """Fallback tkinter dialog for non-macOS environments.
 
-    Must be called from the main thread. Auto-cancels after _DIALOG_TIMEOUT_S seconds.
+    Must be called from the main thread. Dismisses itself after _DIALOG_TIMEOUT_S seconds,
+    raising ConfirmationTimeoutError — nothing sent, the order as it was — never the abandon
+    button's error (register F21).
 
     Security note: on_confirm runs inside the same process as all pip dependencies.
     A compromised dependency with access to tk._default_root could call root.after(0, on_confirm)
@@ -1197,6 +1224,7 @@ def _show_tkinter_dialog(
     this dialog, providing defense-in-depth.
     """
     confirmed: dict[str, Any] = {"value": False}
+    timed_out: dict[str, Any] = {"value": False}
 
     root = tk.Tk()
     root.withdraw()
@@ -1275,15 +1303,16 @@ def _show_tkinter_dialog(
         font=("Helvetica", 11, "bold"),
     ).pack(side="left", padx=10)
 
-    countdown_var = tk.StringVar(value=f"Auto-cancels in {remaining['secs']}s")
+    countdown_var = tk.StringVar(value=f"Dismisses itself in {remaining['secs']}s — nothing is sent")
     tk.Label(dialog, textvariable=countdown_var, fg="#888888", font=("Helvetica", 9)).pack(pady=(0, 6))
 
     def _tick() -> None:
         remaining["secs"] -= 1
         if remaining["secs"] <= 0:
+            timed_out["value"] = True
             on_cancel()
         else:
-            countdown_var.set(f"Auto-cancels in {remaining['secs']}s")
+            countdown_var.set(f"Dismisses itself in {remaining['secs']}s — nothing is sent")
             _after_id["id"] = dialog.after(1000, _tick)
 
     _after_id["id"] = dialog.after(1000, _tick)
@@ -1295,5 +1324,7 @@ def _show_tkinter_dialog(
     dialog.geometry(f"+{x}+{y}")
     root.mainloop()
 
+    if timed_out["value"]:
+        raise ConfirmationTimeoutError(_timed_out_message())
     if not confirmed["value"]:
         raise HumanAuthError("Order cancelled by user")

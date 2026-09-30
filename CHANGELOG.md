@@ -91,6 +91,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   removed, a missing statement read as current, day counts on the local clock, the formatter
   dropping the expected day. `docs/flex-query-reference.md` § When a day's statement exists and
   `docs/ibkr-api-behaviors-reference.md` carry the measurement and the sources.
+- **A Gate 2 timeout is its own outcome — `ConfirmationTimeoutError` — and is worded by what it
+  leaves, never as a cancellation (claudia_ui gap #67, register F21).** The dialog's auto-dismiss
+  raised the abandon button's `HumanAuthError("Order cancelled by user")` on all three renderers,
+  so a consumer could not tell a declined dialog from one nobody answered — and on 2026-09-25 told
+  its user "Order was cancelled at the confirmation dialog" for a CANCEL ORDER dialog the timeout
+  had **kept** (the order was still there to cancel a minute later). Now `_order_dialog.py`
+  prints a third word, `TIMED_OUT`, beside `CONFIRMED` and `CANCELLED` — `order_confirm` imports
+  the three from the script, so the reader cannot drift from the writer — and every renderer (the
+  AppKit subprocess, its process overrun, the osascript `gave up`, the tkinter countdown) raises
+  `ConfirmationTimeoutError`, a subclass of `HumanAuthError` exported from the package, whose
+  message is "Confirmation dialog timed out after 60 s with no decision — nothing was sent to
+  IBKR; the order is as it was" (operator rule, claudia_ui 2026-09-24: a timeout is described by
+  what it leaves). Existing `except HumanAuthError` handlers keep catching it; the dispatch still
+  never retries a timeout through the osascript fallback. The abandon button's own message is
+  unchanged — its rewording per dialog and the button colours are register F6, decided with the
+  operator. **The live re-read caught a defect eight green tests and eight red mutations could
+  not:** the first build keyed the timeout on `runModal()` returning −1000, the value a comment in
+  the script had asserted for `NSModalResponseAbort`, and the real dialog printed CANCELLED after
+  its timer. A probe printing the raw response measured **−1001** (−1000 is
+  `NSModalResponseStop`); Apple documents the constant by name only ("Modal session was broken
+  with abortModal()", scraped via Firecrawl). The script now records that its own timer fired and
+  decides `TIMED_OUT` from that fact first, with the measured value as the second signal; three
+  more mutations red (flag and code both removed, flag ignored, −1000 restored); the real dialog
+  then printed TIMED_OUT. README, SECURITY.md and `docs/security-architecture.md` no longer call
+  the timeout an "auto-cancel"; `docs/consumers.md` says what a caller should catch.
 
 ## [2.1.0] — 2026-09-22
 

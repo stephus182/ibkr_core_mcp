@@ -2263,3 +2263,145 @@ def test_bracket_dialog_accepts_an_equal_and_a_smaller_child():
         with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
             confirm_bracket_dialog(parent, [child], "U1234567")
         mock_show.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# F21 — the dialog's auto-dismiss is its own outcome, not the abandon button's
+# ---------------------------------------------------------------------------
+#
+# Found live 2026-09-25 (claudia_ui #67): the operator let a CANCEL ORDER dialog time out and
+# the consumer printed "Order was cancelled at the confirmation dialog" for an order the timeout
+# had KEPT — `_order_dialog.py` printed CANCELLED for anything but the first button, so the
+# abandon click and the timeout were one message. A timeout is described by what it leaves:
+# nothing was sent to IBKR, the order is as it was (operator rule, claudia_ui 2026-09-24).
+
+
+def test_dialog_outcome_token_is_one_per_way_the_modal_can_end():
+    from ibkr_core_mcp import _order_dialog as script
+
+    first, second = script._NS_ALERT_FIRST_BUTTON_RETURN, script._NS_ALERT_FIRST_BUTTON_RETURN + 1
+    assert script.outcome_token(first) == script.CONFIRMED
+    assert script.outcome_token(second) == script.CANCELLED  # the abandon button
+    # The timer's own record decides first: measured live 2026-09-29, the first build keyed on a
+    # response code copied from a comment (−1000) and the real dialog printed CANCELLED.
+    assert script.outcome_token(second, timed_out=True) == script.TIMED_OUT
+    assert script.outcome_token(first, timed_out=True) == script.TIMED_OUT, "a timer that fired is never a decision"
+    # The measured abort response is the second signal, for a modal broken without the flag.
+    assert script._NS_MODAL_RESPONSE_ABORT == -1001
+    assert script.outcome_token(script._NS_MODAL_RESPONSE_ABORT) == script.TIMED_OUT
+    assert len({script.CONFIRMED, script.CANCELLED, script.TIMED_OUT}) == 3
+
+
+def test_order_confirm_reads_the_tokens_the_dialog_script_defines():
+    """One definition for the writer and the reader: a literal in order_confirm could drift."""
+    import inspect
+
+    import ibkr_core_mcp.order_confirm as oc
+    from ibkr_core_mcp import _order_dialog as script
+
+    source = inspect.getsource(oc._show_appkit_dialog)
+    for token in (script.CONFIRMED, script.CANCELLED, script.TIMED_OUT):
+        assert f'"{token}"' not in source, f"{token!r} is spelled as a literal in _show_appkit_dialog"
+    assert "TIMED_OUT" in source and "CONFIRMED" in source
+
+
+def test_appkit_dialog_timed_out_raises_the_timeout_error_and_names_what_it_leaves():
+    import ibkr_core_mcp.order_confirm as oc
+    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
+
+    with (
+        patch.object(subprocess, "run", return_value=_appkit_proc("TIMED_OUT\n")),
+        pytest.raises(ConfirmationTimeoutError) as excinfo,
+    ):
+        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
+    message = str(excinfo.value)
+    assert "timed out" in message and "nothing was sent to IBKR" in message and "as it was" in message
+    assert "cancel" not in message.lower(), "a timeout must not be worded as a cancellation"
+    assert isinstance(excinfo.value, HumanAuthError), "existing `except HumanAuthError` handlers must still catch it"
+
+
+def test_appkit_dialog_abandon_button_is_not_a_timeout():
+    import ibkr_core_mcp.order_confirm as oc
+    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
+
+    with (
+        patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")),
+        pytest.raises(HumanAuthError) as excinfo,
+    ):
+        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
+    assert not isinstance(excinfo.value, ConfirmationTimeoutError)
+    assert "timed out" not in str(excinfo.value)
+
+
+def test_appkit_dialog_process_overrun_is_a_timeout_too():
+    import ibkr_core_mcp.order_confirm as oc
+    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
+
+    with (
+        patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="dialog", timeout=70)),
+        pytest.raises(ConfirmationTimeoutError, match="nothing was sent to IBKR"),
+    ):
+        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
+
+
+def test_osascript_gave_up_is_a_timeout_and_the_abandon_button_is_not():
+    import ibkr_core_mcp.order_confirm as oc
+    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
+
+    with (
+        patch.object(subprocess, "run", return_value=_appkit_proc("timeout\n")),
+        pytest.raises(ConfirmationTimeoutError, match="nothing was sent to IBKR"),
+    ):
+        oc._show_osascript_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "DO NOT SEND")
+    with (
+        patch.object(subprocess, "run", return_value=_appkit_proc("DO NOT SEND\n")),
+        pytest.raises(HumanAuthError) as excinfo,
+    ):
+        oc._show_osascript_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "DO NOT SEND")
+    assert not isinstance(excinfo.value, ConfirmationTimeoutError)
+
+
+def _make_tk_mock_that_times_out():
+    """A tkinter double whose mainloop runs the countdown ticks until the dialog is destroyed."""
+    pending: list[Callable[[], None]] = []
+    alive = {"value": True}
+    mock_root = MagicMock()
+    mock_dialog = MagicMock()
+
+    def fake_after(_ms, callback):
+        pending.append(callback)
+        return len(pending)
+
+    def fake_destroy():
+        alive["value"] = False
+
+    def fake_mainloop():
+        while pending and alive["value"]:
+            pending.pop(0)()
+
+    mock_dialog.after.side_effect = fake_after
+    mock_dialog.destroy.side_effect = fake_destroy
+    mock_root.mainloop.side_effect = fake_mainloop
+    mock_tk = MagicMock()
+    mock_tk.Tk.return_value = mock_root
+    mock_tk.Toplevel.return_value = mock_dialog
+    return mock_tk
+
+
+def test_tkinter_countdown_reaching_zero_is_a_timeout_not_a_cancellation():
+    import ibkr_core_mcp.order_confirm as oc
+    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
+
+    with (
+        patch.object(sys, "platform", "linux"),
+        patch("ibkr_core_mcp.order_confirm.tk", _make_tk_mock_that_times_out()),
+        pytest.raises(ConfirmationTimeoutError, match="nothing was sent to IBKR"),
+    ):
+        oc._show_confirm_dialog(**_dialog_args())
+
+
+def test_the_timeout_error_is_exported_beside_human_auth_error():
+    import ibkr_core_mcp
+
+    assert "ConfirmationTimeoutError" in ibkr_core_mcp.__all__
+    assert issubclass(ibkr_core_mcp.ConfirmationTimeoutError, ibkr_core_mcp.HumanAuthError)

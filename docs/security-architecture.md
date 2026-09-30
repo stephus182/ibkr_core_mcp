@@ -225,7 +225,8 @@ unit run, of the pre-push hook, and of CI.
 each run **Gate 1**
 (`human_auth.require_touch_id`, `LAPolicyDeviceOwnerAuthentication`, 60 s) and then **Gate 2**
 (`order_confirm.*`, a modal with the full order and an explicit button; Enter does not
-confirm; 60 s auto-cancel) *before* the first network call. The gates are inside the client
+confirm; after 60 s the modal dismisses itself and nothing is sent — `ConfirmationTimeoutError`,
+its own outcome since 2026-09-29) *before* the first network call. The gates are inside the client
 methods, not in a wrapper, so there is no way to call the method and skip them.
 
 `place_bracket_and_confirm` is the fifth, added for the 2.1.0 bracket seam: a parent plus its

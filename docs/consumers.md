@@ -65,6 +65,27 @@ What changes for a caller:
 - `check_flex_coverage`'s stale note carries the verdict's evidence:
   `⚠ DATA STALE (statement through 2026-09-22; the newest that can exist is through 2026-09-23)`.
 
+### Unreleased — a Gate 2 timeout is its own outcome
+
+The dialog's auto-dismiss used to raise the abandon button's `HumanAuthError("Order cancelled by
+user")`, so a consumer could not tell a declined dialog from one nobody answered — and told its
+user an order was cancelled when the timeout had kept it (claudia_ui gap #67, register F21, seen
+live 2026-09-25). Now:
+
+- `ConfirmationTimeoutError`, a subclass of `HumanAuthError` exported from `ibkr_core_mcp`, is
+  raised when the dialog dismisses itself with no decision, on all three renderers (the AppKit
+  subprocess, the osascript fallback, tkinter). Its message names what the timeout leaves:
+  "Confirmation dialog timed out after 60 s with no decision — nothing was sent to IBKR; the
+  order is as it was". Catch it before `HumanAuthError` to record a timeout as a timeout; a bare
+  `except HumanAuthError` keeps working.
+- The dialog script prints `TIMED_OUT` beside `CONFIRMED` and `CANCELLED`; `order_confirm`
+  imports the three tokens from `_order_dialog`, so the reader cannot drift from the writer.
+- A consumer that classified the abandon message by its text ("cancelled by user") no longer
+  sees a timeout under it; one that already matched "timed out" gets the right stage for free.
+- The abandon button's own message is unchanged ("Order cancelled by user"). Its rewording per
+  dialog (not sent / kept / left unchanged) and the button colours are register F6, to be
+  decided with the operator.
+
 ### 2.1.0 — brackets, and three stricter refusals
 
 **New public API.** A bracket — a parent order plus its held children — is one POST of a

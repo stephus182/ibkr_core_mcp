@@ -10,9 +10,13 @@ Protocol
 --------
 stdin  : JSON payload — side, details (dict), disclaimer, confirm_label, title,
          timeout_s (see _run_alert's docstring for defaults)
-stdout : "CONFIRMED" or "CANCELLED"
+stdout : one of CONFIRMED (the confirm button), CANCELLED (the abandon button or the window
+         closed) or TIMED_OUT (the modal dismissed itself after timeout_s with no decision) —
+         the three module constants below, which order_confirm imports so the reader and the
+         writer cannot drift. Until 2026-09-29 the timeout printed CANCELLED, and a consumer
+         reported an order the timeout had KEPT as cancelled (claudia_ui #67, register F21).
 stderr : "ERROR: <msg>" on fatal failure
-exit   : 0 on user decision, 1 on fatal error
+exit   : 0 on any of the three outcomes, 1 on fatal error
 """
 
 from __future__ import annotations
@@ -28,6 +32,39 @@ _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 _NS_BOX_CUSTOM = 4
 _NS_NO_TITLE = 0
 _NS_ALERT_FIRST_BUTTON_RETURN = 1000
+#: What `runModal()` returns after `NSApp.abortModal()` — MEASURED −1001 on this machine on
+#: 2026-09-29 (a probe printing the raw response after the 3 s timer). Apple documents the
+#: constant by name only ("Modal session was broken with abortModal()",
+#: https://developer.apple.com/documentation/appkit/nsapplication/modalresponse/abort); an
+#: earlier comment here said −1000, which is NSModalResponseStop, and the first build of the
+#: TIMED_OUT outcome keyed on it printed CANCELLED on the real dialog. The script therefore
+#: decides from its own timer flag first and reads this value only as the second signal.
+_NS_MODAL_RESPONSE_ABORT = -1001
+
+CONFIRMED = "CONFIRMED"
+CANCELLED = "CANCELLED"
+TIMED_OUT = "TIMED_OUT"
+
+
+def outcome_token(response: int, *, timed_out: bool = False) -> str:
+    """The word for how the modal ended: the timer, the confirm button, or anything else.
+
+    `timed_out` is the script's own record that its auto-dismiss timer fired and called
+    `NSApp.abortModal()`; it decides first, because a fact the script established beats a
+    return code it has to interpret. `NSModalResponseAbort` (measured −1001) is the second
+    signal, for a modal broken by `abortModal()` without the flag. `NSAlertFirstButtonReturn`
+    (1000) is the first button — always the confirm button here. Anything else is a human
+    declining: the second (abandon) button, 1001, or any other way the panel was dismissed.
+    Sources: https://developer.apple.com/documentation/appkit/nsapplication/abortmodal() ("return
+    NSModalResponseAbort"), .../modalresponse/alertfirstbuttonreturn; the value measured 2026-09-29.
+    """
+    if timed_out or response == _NS_MODAL_RESPONSE_ABORT:
+        return TIMED_OUT
+    if response == _NS_ALERT_FIRST_BUTTON_RETURN:
+        return CONFIRMED
+    return CANCELLED
+
+
 _NS_STRING_DRAWING_USES_LINE_FRAGMENT_ORIGIN = 1  # NSStringDrawingOptions
 _DIALOG_WIDTH = 420
 _BANNER_H = 48
@@ -112,10 +149,11 @@ def _run_alert(data: dict[str, Any]) -> None:
       disclaimer    - free text appended after the details.
       confirm_label - text for the right-hand (confirm) button. Default "CONFIRM".
       title         - alert message text. Default "LIVE ORDER CONFIRMATION".
-      timeout_s     - seconds before auto-dismiss (counts as cancel). Default 60.
+      timeout_s     - seconds before the modal dismisses itself. Reported as TIMED_OUT —
+                       its own outcome, never a decision. Default 60.
 
-    Prints "CONFIRMED" or "CANCELLED" to stdout; never raises for user input,
-    only for a genuinely broken AppKit call (caught by main()'s caller).
+    Prints CONFIRMED, CANCELLED or TIMED_OUT to stdout (`outcome_token`); never raises for
+    user input, only for a genuinely broken AppKit call (caught by main()'s caller).
 
     Layout (2026-09-11, claudia_ui gap #42): NSAlert's informative text cannot be styled,
     so the order detail and the disclaimer both live in the accessory view — the detail
@@ -243,8 +281,11 @@ def _run_alert(data: dict[str, Any]) -> None:
     # (Apple Cocoa Thread Safety Summary), and NSAlert.runModal() pumps NSModalPanelRunLoopMode,
     # so the timer is scheduled directly into that mode on the current (main) run loop rather
     # than fired from a background thread.
+    fired = {"timeout": False}
+
     def _abort(_timer: Any) -> None:
-        """Timer callback: abort the running modal session (counts as cancel)."""
+        """Timer callback: record that the timer fired, then abort the modal — reported as TIMED_OUT."""
+        fired["timeout"] = True
         try:
             from AppKit import NSApp
 
@@ -259,7 +300,7 @@ def _run_alert(data: dict[str, Any]) -> None:
     response = alert.runModal()
     abort_timer.invalidate()
 
-    print("CONFIRMED" if response == _NS_ALERT_FIRST_BUTTON_RETURN else "CANCELLED")
+    print(outcome_token(response, timed_out=fired["timeout"]))
 
 
 if __name__ == "__main__":

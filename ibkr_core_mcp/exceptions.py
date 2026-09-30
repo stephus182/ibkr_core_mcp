@@ -101,6 +101,17 @@ class HumanAuthError(IBKRCoreError):
     """Raised when Touch ID is denied, times out, unavailable, or the user cancels the confirmation dialog."""
 
 
+class ConfirmationTimeoutError(HumanAuthError):
+    """The Gate 2 dialog dismissed itself with no decision: nothing was sent, the order is as it was.
+
+    A subclass, so every `except HumanAuthError` keeps catching it; its own type, so a consumer
+    can record a timeout as a timeout. Until 2026-09-29 the dialog's auto-dismiss raised the
+    abandon button's "Order cancelled by user", and a consumer told its user an order had been
+    cancelled when the timeout had kept it (claudia_ui gap #67, register F21). The message names
+    what the timeout leaves — nothing sent to IBKR, the order as it was — never an action.
+    """
+
+
 class OrderValidationError(IBKRCoreError, ValueError):
     """Raised when this package refuses an order write because it would break a safety rule.
 
