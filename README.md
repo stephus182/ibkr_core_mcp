@@ -508,6 +508,7 @@ cal = SQLiteStore.get_market_calendar_context()
 #   "last_trading_day": "2026-06-23",
 #   "next_trading_day": "2026-06-25",
 #   "primary_exchange": "XNYS",
+#   "sessions_today": {"XNYS": True, "CME": True, "XLON": True, ..., "XSAU": False},  # per exchange, from its own calendar
 #   "holidays_by_exchange": {
 #     "XNYS":  ["2026-01-01", "2026-01-19", "2026-02-16", ...],   # NYSE
 #     "CME":   ["2026-01-01", "2026-07-04", ...],                  # CME Futures

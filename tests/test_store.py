@@ -845,6 +845,85 @@ def test_parent_directory_is_owner_only(store, mock_config):
     assert mode == 0o700, f"store directory is {oct(mode)}, expected 0o700"
 
 
+# ── sessions_today: per-exchange session status (claudia_ui #78, register F24) ──────────
+#
+# The context said "trading day" for NYSE only, so a consumer asking "who is open today?" on a
+# Saturday read every exchange as open — claudia_ui's briefing printed "All tracked exchanges
+# open today" on 2026-09-26. The calendars were already loaded; the answer was not in the dict.
+# Operator rule the same morning: the regular weekly schedule decides first, holidays only
+# subtract, no exchange opens on its weekend. Dates below are computed from today's date and
+# from the calendars themselves, never pinned.
+
+
+def _next(weekday: int) -> date:
+    """The next calendar date with this weekday (Monday = 0), today excluded."""
+    from datetime import timedelta
+
+    day = date.today() + timedelta(days=1)
+    while day.weekday() != weekday:
+        day += timedelta(days=1)
+    return day
+
+
+def test_sessions_today_has_one_verdict_per_exchange_keyed_like_the_holidays(mkt):
+    assert set(mkt["sessions_today"]) == set(mkt["holidays_by_exchange"])
+    assert all(isinstance(v, bool) for v in mkt["sessions_today"].values())
+
+
+def test_sessions_today_for_the_primary_exchange_is_the_is_trading_day_flag(mkt):
+    assert mkt["sessions_today"][mkt["primary_exchange"]] is mkt["is_trading_day"]
+
+
+def test_no_exchange_holds_a_session_on_a_saturday():
+    from ibkr_core_mcp.store import SQLiteStore
+
+    saturday = _next(5)
+    ctx = SQLiteStore.get_market_calendar_context(today=saturday)
+    assert ctx["today"] == saturday.isoformat(), "the verdict is for the day asked about, not the cached one"
+    assert ctx["sessions_today"], "no exchange loaded"
+    assert not any(ctx["sessions_today"].values()), {k for k, v in ctx["sessions_today"].items() if v}
+    assert ctx["is_trading_day"] is False
+
+
+def test_a_friday_is_a_session_everywhere_but_tadawul_unless_it_is_a_holiday():
+    from ibkr_core_mcp.store import SQLiteStore
+
+    friday = _next(4)
+    ctx = SQLiteStore.get_market_calendar_context(today=friday)
+    assert ctx["sessions_today"]["XSAU"] is False, "Tadawul trades Sunday to Thursday"
+    for code in ("XNYS", "CME", "XLON"):
+        expected = friday.isoformat() not in ctx["holidays_by_exchange"][code]
+        assert ctx["sessions_today"][code] is expected, (code, friday)
+
+
+def test_a_nyse_holiday_is_decided_per_exchange_not_copied_from_the_primary(mkt):
+    """The point of the key: NYSE closed says nothing about CME or London that day."""
+    from ibkr_core_mcp.store import SQLiteStore
+
+    upcoming = [d for d in mkt["holidays_by_exchange"]["XNYS"] if d >= date.today().isoformat()]
+    assert upcoming, "the calendar lists no NYSE holiday ahead of today — extend the range before trusting this test"
+    holiday = date.fromisoformat(upcoming[0])
+    ctx = SQLiteStore.get_market_calendar_context(today=holiday)
+    assert ctx["sessions_today"]["XNYS"] is False
+    assert ctx["is_trading_day"] is False
+    for code in ("CME", "XLON", "XTKS"):
+        assert ctx["sessions_today"][code] is (holiday.isoformat() not in ctx["holidays_by_exchange"][code]), code
+
+
+def test_the_failure_marker_says_the_sessions_are_unknown_not_closed(monkeypatch):
+    import ibkr_core_mcp.store as store_mod
+    from ibkr_core_mcp.store import SQLiteStore
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("exchange_calendars unavailable")
+
+    monkeypatch.setattr("exchange_calendars.get_calendar", _boom)
+    monkeypatch.setattr(store_mod, "_market_calendar_cache", {})
+    result = SQLiteStore.get_market_calendar_context()
+    assert "sessions_today" in result
+    assert result["sessions_today"] is None, "explicitly unknown, not an empty map that reads as nobody open"
+
+
 def test_market_calendar_context_reports_a_failure_instead_of_an_empty_dict(monkeypatch):
     """`except Exception: return {}` made a failed lookup read as "market closed".
 

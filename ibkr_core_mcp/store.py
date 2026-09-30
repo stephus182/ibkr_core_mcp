@@ -712,11 +712,31 @@ class SQLiteStore:
     @staticmethod
     def get_market_calendar_context(
         exchanges: list[str] | None = None,
+        *,
+        today: date | None = None,
     ) -> dict[str, Any]:
         """Return trading calendar context for one or more exchanges.
 
         Covers the full current year (past + future) plus the next calendar year,
         giving complete holiday visibility with minimal data (~10-15 holidays/exchange/year).
+
+        **Who holds a session today is answered per exchange** (`sessions_today`, claudia_ui
+        #78, register F24, 2026-09-29): `is_trading_day` is the *primary* exchange's flag and
+        `holidays_by_exchange` is built from weekdays, so a consumer asking "who is open?" on a
+        Saturday found nobody in any holiday list and read every exchange as open. Each
+        exchange's own calendar answers `is_session(today)`: a Saturday is False everywhere, a
+        Friday is False for Tadawul (Sun–Thu), a NYSE holiday says nothing about CME or London.
+        Operator rule (claudia_ui 2026-09-26): the regular weekly schedule decides first,
+        holidays only subtract, no exchange opens on its weekend — which is exactly what a
+        calendar's session set encodes. On the failure marker the key is None: unknown, never
+        an empty map that reads as "nobody open".
+
+        Args:
+            exchanges: MIC codes; None for the 20-exchange default below. A list REPLACES
+                the default rather than extending it.
+            today: The day the verdicts are for; the current local date by default. With a
+                date given, `last_trading_day` / `next_trading_day` are relative to that
+                day's midnight UTC, and the process cache keys on it.
 
         Default: 20 exchanges covering full G20 + Eurex (XNYS, CME, XLON, XETR, XEUR,
         XPAR, XMIL, XTKS, XHKG, XSHG, XBOM, XKRX, XASX, XTSE, BVMF, XMEX, XJSE,
@@ -769,19 +789,16 @@ class SQLiteStore:
                 "XIST",
             ]
         try:
-            from datetime import date as _date
-
-            _cache_key = (_date.today().isoformat(), tuple(exchanges))
+            asked = today
+            today = asked if asked is not None else date.today()
+            _cache_key = (today.isoformat(), tuple(exchanges))
             if _cache_key in _market_calendar_cache:
                 return _market_calendar_cache[_cache_key]
-
-            from datetime import date, timedelta
 
             import exchange_calendars as ec
             from pandas import Timestamp
 
-            now = Timestamp.now(tz="UTC")
-            today = date.today()
+            now = Timestamp.now(tz="UTC") if asked is None else Timestamp(asked, tz="UTC")
             year_start = date(today.year, 1, 1)
             year_end = date(today.year + 1, 12, 31)
 
@@ -800,6 +817,7 @@ class SQLiteStore:
             import contextlib
 
             holidays_by_exchange: dict[str, list[str]] = {}
+            sessions_today: dict[str, bool] = {}
             for xcode in exchanges:
                 with contextlib.suppress(Exception):
                     cal = ec.get_calendar(xcode)
@@ -808,7 +826,12 @@ class SQLiteStore:
                     cal_start = max(year_start, cal.first_session.date())
                     sessions = set(cal.sessions_in_range(Timestamp(cal_start), Timestamp(cal_end)).date)
                     weekdays_in_range = {d for d in all_weekdays if cal_start <= d <= cal_end}
-                    holidays_by_exchange[xcode] = sorted(d.isoformat() for d in (weekdays_in_range - sessions))
+                    # Both verdicts from this exchange's own calendar, assigned together so a
+                    # failure on either leaves the exchange out of both maps, never in one.
+                    holidays = sorted(d.isoformat() for d in (weekdays_in_range - sessions))
+                    open_today = bool(cal.is_session(Timestamp(today)))
+                    holidays_by_exchange[xcode] = holidays
+                    sessions_today[xcode] = open_today
 
             # Days CME trades when NYSE is closed — futures keep going on equity holidays
             cme_extra: list[str] = []
@@ -828,6 +851,7 @@ class SQLiteStore:
                 "last_trading_day": last_td.isoformat(),
                 "next_trading_day": next_td.isoformat(),
                 "primary_exchange": exchanges[0],
+                "sessions_today": sessions_today,
                 "holidays_by_exchange": holidays_by_exchange,
                 "futures": _FUTURES_SCHEDULE | {"cme_open_nyse_closed": cme_extra},
             }
@@ -841,7 +865,7 @@ class SQLiteStore:
             # wrong in a way someone notices, rather than wrong in the safe-looking
             # direction. Public API, consumed by claudia_ui.
             log.warning("get_market_calendar_context failed: %s: %s", type(exc).__name__, exc)
-            return {"error": f"{type(exc).__name__}: {exc}", "is_trading_day": None}
+            return {"error": f"{type(exc).__name__}: {exc}", "is_trading_day": None, "sessions_today": None}
 
     _ALLOWED_TIME_COLS = frozenset({"time", "snapshot_at", "logged_at"})
 

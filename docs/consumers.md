@@ -86,6 +86,25 @@ live 2026-09-25). Now:
   dialog (not sent / kept / left unchanged) and the button colours are register F6, to be
   decided with the operator.
 
+### Unreleased — `get_market_calendar_context` says who holds a session today, per exchange
+
+`is_trading_day` was, and is, the **primary** exchange's flag (NYSE by default), and
+`holidays_by_exchange` is built from weekdays, so a consumer asking "who is open today?" on a
+Saturday found nobody in any holiday list and read every exchange as open — claudia_ui's
+startup briefing printed "All tracked exchanges open today" on Saturday 2026-09-26 (gap #78,
+register F24). The calendars were loaded; the answer was not in the dict.
+
+- New key `sessions_today: dict[str, bool]`, keyed like `holidays_by_exchange`, one verdict per
+  exchange from its own calendar (`is_session(today)`): a Saturday is `False` everywhere, a
+  Friday is `False` for Tadawul, a NYSE holiday says nothing about CME or London.
+- On the failure marker (`{"error": ..., "is_trading_day": None}`) it is `None` — unknown, not
+  an empty map that would read as "nobody open".
+- New optional `today=` (a `date`): the verdicts for that day rather than the current one; the
+  process cache keys on it. `last_trading_day` / `next_trading_day` are then relative to that
+  day's midnight UTC.
+- The weekday rule a consumer had to carry itself (claudia_ui's briefing decides a weekend
+  before reading any list) can be deleted once it reads `sessions_today`.
+
 ### 2.1.0 — brackets, and three stricter refusals
 
 **New public API.** A bracket — a parent order plus its held children — is one POST of a

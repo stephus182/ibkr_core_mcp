@@ -116,6 +116,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   more mutations red (flag and code both removed, flag ignored, −1000 restored); the real dialog
   then printed TIMED_OUT. README, SECURITY.md and `docs/security-architecture.md` no longer call
   the timeout an "auto-cancel"; `docs/consumers.md` says what a caller should catch.
+- **`get_market_calendar_context` says who holds a session today, per exchange —
+  `sessions_today` (claudia_ui gap #78, register F24).** `is_trading_day` is the primary
+  exchange's flag (NYSE by default) and `holidays_by_exchange` is built from weekdays, so a
+  consumer asking "who is open today?" on a Saturday found nobody in any holiday list and read
+  every exchange as open — claudia_ui's startup briefing printed "All tracked exchanges open
+  today" on Saturday 2026-09-26 and had to carry a weekday rule of its own to stop it. The
+  calendars were already loaded; the answer was not in the dict. Now every exchange's own
+  calendar answers `is_session(today)` in the loop that builds its holiday list, the two
+  assigned together so a failure on either leaves the exchange out of both maps: a Saturday is
+  `False` everywhere, a Friday is `False` for Tadawul (Sun–Thu), a NYSE holiday says nothing
+  about CME or London. On the failure marker the key is `None` — unknown, never an empty map
+  that reads as "nobody open". New optional `today=` (a `date`): the verdicts for that day; the
+  process cache keys on it; `last_trading_day` / `next_trading_day` are then relative to that
+  day's midnight UTC. Operator rule (claudia_ui 2026-09-26): the regular weekly schedule decides
+  first, holidays only subtract, no exchange opens on its weekend — which is what a calendar's
+  session set encodes. Tests compute their dates — the next Saturday, the next Friday, the next
+  NYSE holiday read from the calendar itself — rather than pin one: one verdict per exchange
+  keyed like the holidays, the primary's equal to `is_trading_day`, nobody open on a Saturday,
+  Tadawul closed on a Friday while the others follow their holiday lists, a NYSE holiday decided
+  per exchange, the failure marker's `None`. Seven mutations red (a weekday rule for the
+  calendar, everyone open, the primary's verdict copied to all, the key missing or an empty map
+  on failure, the cache or the seam ignoring the day asked about). README and
+  `docs/api-usage-examples.md` print the key; `docs/consumers.md` says what a consumer can now
+  delete.
 
 ## [2.1.0] — 2026-09-22
 

@@ -132,8 +132,11 @@ Available metrics: `total_return`, `cagr`, `sharpe`, `sortino`, `calmar`, `max_d
 ctx = SQLiteStore.get_market_calendar_context()            # default: 20 exchanges (G20 + Eurex)
 ctx = SQLiteStore.get_market_calendar_context(["XLON"])     # REPLACES the default — returns XLON only, not default+XLON
 
-# Returns: { "today": "...", "is_trading_day": bool, "last_trading_day": "...",
+ctx = SQLiteStore.get_market_calendar_context(today=some_date)  # the verdicts for another day (aware of nothing but the date)
+
+# Returns: { "today": "...", "is_trading_day": bool (the PRIMARY exchange only), "last_trading_day": "...",
 #            "next_trading_day": "...", "primary_exchange": "XNYS",
+#            "sessions_today": { "XNYS": True, "CME": True, ..., "XSAU": False },  # one verdict per exchange; None on failure
 #            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... },
 #            "futures": { "cme_open_nyse_closed": [...], ... } }  # CME/NYSE futures-session overrides
 # See README.md's "Market Calendar" section for the full 20-exchange default list and a worked example.
