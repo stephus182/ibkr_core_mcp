@@ -116,6 +116,10 @@ note in `client.py`), not re-presented as independently sourced from the glossar
 | **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction |
 | **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/docs/web-api/v1/ws/order-position-operations/request-trades-data |
 | **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/docs/web-api/v1/ws/order-position-operations/request-profit-loss |
+| **Authentication status** (`sts`, unsolicited — "when initially connecting" and on every change; `connect()` returns only after it reports `authenticated: true`) | https://www.interactivebrokers.com/docs/web-api/v1/ws/unsolicited-messages/authentication-status |
+| **System connection messages** (`system`: the username on connect, then a heartbeat every 10 s) | https://www.interactivebrokers.com/docs/web-api/v1/ws/unsolicited-messages/system-connection-messages |
+| **Send a topic** (IBKR's own example sleeps 3 s after the open before its first topic) | https://www.interactivebrokers.com/docs/web-api/v1/ws/connection-guide/send-a-websocket-topic |
+| **Which topics need a brokerage session** (`str`, `smd`, `act`, `sts` do; `spl`, `system` do not) | https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction |
 
 **Google Drive API v3** (`cache.py`)
 

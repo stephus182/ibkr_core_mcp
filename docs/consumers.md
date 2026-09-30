@@ -10,6 +10,32 @@
 
 ## Changes consumers should know about
 
+### Unreleased — `IBKRWebSocket.connect()` completes IBKR's handshake
+
+`connect()` used to return the moment the socket opened. IBKR drops any topic sent before its
+`sts` frame ("Authentication Status", sent on every new connection) and says nothing, so a
+consumer that subscribed straight after `connect()` — every consumer did — could hold a socket
+that stayed open, heartbeated, and never delivered (claudia_ui gap #68: its automatic fill
+report had never fired in production). `connect()` now returns once `sts` has reported
+`authenticated: true`; frames read on the way reach `listen()` first, in order.
+
+What changes for a caller:
+
+- `await ws.connect()` can now take a moment (IBKR's own example waits three seconds before
+  its first topic) and raises `StreamingError` after `auth_timeout` seconds without an `sts`
+  (default 10), or when `sts` reports the brokerage session as not authenticated. The socket is
+  closed before the error is raised. A retry loop that already catches exceptions from
+  `connect()` needs nothing new; one that treated `connect()` as infallible now has an error to
+  handle — the error is the truth it was missing.
+- Subscribing right after `connect()` is now correct. Remove any sleep added to work around
+  the drop.
+- `listen()` still yields `LiveQuote | TradeExecution | PnLUpdate` only. `sts` and the other
+  unsolicited topics are logged (DEBUG, by topic; WARNING for an `sts` reporting the session
+  unauthenticated mid-stream), never yielded.
+- The constructor's `session_cookie` is unchanged. Its docstring now names IBKR's documented
+  form, `api=<session>` from `POST /tickle`; measured 2026-09-24, the gateway authenticated
+  the socket with and without it, so this is documentation, not a behaviour change.
+
 ### 2.1.0 — brackets, and three stricter refusals
 
 **New public API.** A bracket — a parent order plus its held children — is one POST of a

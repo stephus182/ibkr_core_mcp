@@ -18,10 +18,12 @@ https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
 import ssl
+from collections import deque
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -217,11 +219,46 @@ def _parse_stream_execution(execution: TradeExecution) -> dict[str, Any]:
     }
 
 
+#: How long `connect()` waits for IBKR's `sts` frame before giving the socket up. IBKR's own
+#: example sleeps three seconds after the open before it sends a first topic, and the `system`
+#: heartbeat arrives every ten seconds — so a socket that has said nothing about its
+#: authentication after ten is not going to. The deadline bounds the whole wait, not each frame.
+_AUTH_TIMEOUT_S = 10.0
+
+
+def _decode_frame(raw: str) -> dict[str, Any] | None:
+    """One WebSocket frame as the JSON object IBKR sent, or None when it is not one."""
+    try:
+        msg = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return msg if isinstance(msg, dict) else None
+
+
+def _sts_authenticated(msg: dict[str, Any]) -> bool | None:
+    """IBKR's verdict from an `sts` frame; None when `msg` is some other topic.
+
+    `sts` ("Authentication Status") is the unsolicited frame IBKR sends "when initially
+    connecting to the websocket endpoint" and again on every change, "for example those
+    resulting from competing sessions". Its one documented field is `args.authenticated`
+    (bool), so that field alone decides; an `sts` that does not say `true` reads as not
+    authenticated — fail closed.
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/unsolicited-messages/authentication-status
+    """
+    if msg.get("topic") != "sts":
+        return None
+    args = msg.get("args")
+    return isinstance(args, dict) and args.get("authenticated") is True
+
+
 class IBKRWebSocket:
     """Async WebSocket client for IBKR real-time market data.
 
     Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
     Endpoint: wss://localhost:{port}/v1/api/ws
+
+    `connect()` returns only once IBKR has reported the socket authenticated (its `sts`
+    frame), because a topic sent before that is dropped without a word — see its docstring.
 
     Usage::
         ws = IBKRWebSocket("https://localhost:5055", session_cookie)
@@ -240,8 +277,13 @@ class IBKRWebSocket:
                 before the WebSocket path is appended, because callers usually
                 pass `config.gateway_url`, which already carries that prefix —
                 without this the path would be doubled.
-            session_cookie: Authenticated session cookie. Held in memory only and
-                never logged.
+            session_cookie: The `Cookie` header value for the upgrade request. IBKR's
+                documented form is `api=<session>`, the `session` value `POST /tickle`
+                returns (connection guide, "Establishing the Websocket with Client Portal
+                Gateway"). Measured 2026-09-24: the gateway reported the socket authenticated
+                (`sts authenticated: true`) with that cookie and with none at all, so today
+                the cookie decides nothing about delivery — the handshake in `connect()`
+                does. Held in memory only and never logged.
         """
         base = gateway_url.rstrip("/")
         if base.endswith("/v1/api"):
@@ -251,16 +293,44 @@ class IBKRWebSocket:
         self._ws_url = base.replace("https://", "wss://").replace("http://", "ws://") + "/v1/api/ws"
         self._cookie = session_cookie  # not logged anywhere
         self._ws: Any = None
+        #: Frames `connect()` read while waiting for `sts`, handed to `listen()` first.
+        self._pending: deque[str] = deque()
 
-    async def connect(self) -> None:
-        """Open the WebSocket and authenticate it with the session cookie.
+    async def connect(self, *, auth_timeout: float = _AUTH_TIMEOUT_S) -> None:
+        """Open the WebSocket and return once IBKR has reported it authenticated.
+
+        Opening the socket is not enough to use it. IBKR completes a handshake of its own
+        over the open socket — `system` (the username), `act` (the account properties) and
+        `sts` (the brokerage-session authentication status, sent "when initially
+        connecting") — and a topic sent before that handshake is done is **dropped without a
+        word**: the socket stays open, heartbeats flow, and no frame ever answers. Measured
+        live 2026-09-24 (claudia_ui gap #68, register F5): a `str` subscription sent the
+        instant the socket opened produced zero frames, twice; the same subscription sent
+        after the `sts` frame reporting `authenticated: true` produced 37 executions. IBKR's
+        own example sleeps three seconds before sending its first topic. So this method reads
+        frames until that `sts` arrives and only then returns — a consumer cannot subscribe
+        early, because the call that would let it has not returned. Frames read on the way
+        are queued for `listen()`, so nothing IBKR said during the handshake is lost.
+
+        Args:
+            auth_timeout: Seconds to wait for the `sts` frame, over the whole wait — a
+                heartbeat does not reset it.
 
         Raises:
             ModuleNotFoundError: If `websockets` is not installed.
-            StreamingError: If the configured URL is not loopback. This is the
-                security-relevant failure and went undocumented until 2026-08-07:
-                the gateway must run on the same machine, so a non-localhost host
-                means the session cookie would be sent somewhere it does not belong.
+            StreamingError: If the configured URL is not loopback — the security-relevant
+                failure, undocumented until 2026-08-07: the gateway must run on the same
+                machine, so a non-localhost host means the session cookie would be sent
+                somewhere it does not belong. Also if no `sts` frame arrives within
+                `auth_timeout`, or if it reports the brokerage session as not authenticated:
+                `str`, `smd` and `act` all need one (IBKR, ws/introduction), so such a socket
+                would deliver none of them; log in at the gateway and connect again. On
+                either of those two the socket is closed before the error is raised.
+
+        Sources:
+            https://www.interactivebrokers.com/docs/web-api/v1/ws/unsolicited-messages/authentication-status
+            https://www.interactivebrokers.com/docs/web-api/v1/ws/connection-guide/send-a-websocket-topic
+            https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction
         """
         try:
             import websockets  # base dependency — imported lazily to keep import-time cost out of the hot path
@@ -287,6 +357,39 @@ class IBKRWebSocket:
             ping_interval=20,
             ping_timeout=10,
         )
+        self._pending.clear()
+        try:
+            await self._await_authentication(auth_timeout)
+        except BaseException:
+            await self.disconnect()
+            raise
+
+    async def _await_authentication(self, timeout: float) -> None:
+        """Read frames until `sts` says `authenticated: true`; queue the rest for `listen()`."""
+        from ibkr_core_mcp.exceptions import StreamingError
+
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    raw = await self._ws.recv()
+                    msg = _decode_frame(raw)
+                    authenticated = None if msg is None else _sts_authenticated(msg)
+                    if authenticated is None:
+                        self._pending.append(raw)
+                        continue
+                    if authenticated:
+                        return
+                    raise StreamingError(
+                        "IBKR reports the brokerage session as not authenticated on this WebSocket "
+                        "(sts authenticated=false): str, smd and act need one and would not "
+                        "deliver. Log in at the gateway, then connect again."
+                    )
+        except TimeoutError as exc:
+            raise StreamingError(
+                f"IBKR sent no authentication status (sts) within {timeout:g}s of the WebSocket "
+                "opening; the gateway drops every topic sent before that frame, so the socket is "
+                "not usable"
+            ) from exc
 
     async def subscribe(self, conid: int, fields: list[str] | None = None) -> None:
         """Subscribe to real-time market data for a contract.
@@ -342,14 +445,15 @@ class IBKRWebSocket:
 
         Unparseable frames are skipped rather than raised, so one malformed
         message cannot kill a long-lived stream. Frames carrying several records
-        are flattened, so consumers always receive one object at a time.
+        are flattened, so consumers always receive one object at a time. The frames
+        `connect()` read during IBKR's handshake come first, then the live socket.
 
         Raises:
             RuntimeError: If called before `connect()`.
         """
         if self._ws is None:
             raise RuntimeError("Call connect() first")
-        async for raw in self._ws:
+        async for raw in self._frames():
             parsed = self._parse_message(raw)
             if parsed is None:
                 continue
@@ -359,18 +463,23 @@ class IBKRWebSocket:
             else:
                 yield parsed
 
+    async def _frames(self) -> AsyncGenerator[str, None]:
+        """Every raw frame: the ones read during the handshake first, then the live socket."""
+        while self._pending:
+            yield self._pending.popleft()
+        async for raw in self._ws:
+            yield raw
+
     async def disconnect(self) -> None:
         """Close the socket if open. Safe to call more than once."""
+        self._pending.clear()
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
 
     def _parse_message(self, raw: str) -> LiveQuote | list[TradeExecution] | PnLUpdate | None:
-        try:
-            msg = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return None
-        if not isinstance(msg, dict):
+        msg = _decode_frame(raw)
+        if msg is None:
             return None
         topic = msg.get("topic", "")
         if topic.startswith("smd+"):
@@ -379,6 +488,20 @@ class IBKRWebSocket:
             return self._parse_trade_executions(msg)
         if topic == "spl":
             return self._parse_pnl(msg)
+        if topic == "sts":
+            # IBKR relays every status change here, "for example those resulting from
+            # competing sessions" — the moment this socket stops being able to deliver `str`.
+            if _sts_authenticated(msg):
+                log.debug("sts: IBKR reports the brokerage session authenticated")
+            else:
+                log.warning(
+                    "sts: IBKR reports the brokerage session as not authenticated on this "
+                    "WebSocket (a competing session?) — str, smd and act stop delivering"
+                )
+            return None
+        # By topic only: `system` carries the username and `act` the session id. A silently
+        # dropped `sts` is how the handshake defect stayed invisible for three weeks (F5).
+        log.debug("dropping WebSocket frame with topic %r: no parser for it", topic)
         return None
 
     def _parse_market_data(self, topic: str, msg: dict[str, Any]) -> LiveQuote | None:

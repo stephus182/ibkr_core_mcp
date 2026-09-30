@@ -1,4 +1,10 @@
+from __future__ import annotations
+
+import asyncio
 import json
+import logging
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -550,7 +556,7 @@ async def test_listen_flattens_execution_list():
             }
         )
 
-    ws = object.__new__(IBKRWebSocket)
+    ws = IBKRWebSocket("https://localhost:5055/v1/api", "")
     ws._ws = fake_ws()
     items = [item async for item in ws.listen()]
     assert len(items) == 2
@@ -708,3 +714,193 @@ def test_alert_still_fires_on_an_ordinary_live_price():
     mgr = AlertManager(store)
 
     assert len(mgr.check_quote(LiveQuote(conid=265598, last=213.50))) == 1
+
+
+# ── connect() completes IBKR's handshake before it returns (claudia_ui #68, register F5) ──
+#
+# Measured live 2026-09-24 against the gateway: a `str` subscription sent the instant the socket
+# opened produced ZERO frames, twice; the same subscription sent after the `sts` frame reporting
+# `authenticated: true` produced 37 executions with the exact execution ids the REST trades
+# endpoint returned. The gateway drops a topic sent before its handshake completes and says
+# nothing — the socket stays open, heartbeats flow, no error. IBKR documents `sts` as the frame
+# that "will relay back the current authentication status" "when initially connecting", and its
+# own example sleeps three seconds before sending a first topic. So `connect()` returns only
+# once that frame has said `authenticated: true`; a consumer cannot subscribe early because the
+# call that would let it has not returned.
+#
+# The double below is as strict as the gateway on the one rule that matters: a send before it
+# has delivered `sts` is recorded as DROPPED, never as accepted. A double that delivered
+# regardless of ordering is how the consumer's listener tests stayed green for three weeks over
+# a subscription that had never once delivered.
+
+_SYSTEM = {"topic": "system", "success": "the-username"}  # IBKR: "a confirmation with the corresponding username"
+_HEARTBEAT = {"topic": "system", "hb": 1790000000000}  # every 10 s, unix time in ms
+_ACT = {"topic": "act", "args": {"accounts": [], "selectedAccount": "U1", "sessionId": "abc"}}
+_STS_AUTHENTICATED = {"topic": "sts", "args": {"authenticated": True}}
+_STS_NOT_AUTHENTICATED = {"topic": "sts", "args": {"authenticated": False}}
+
+
+class _GatewaySocket:
+    """A socket double with the gateway's measured rule: a topic sent before `sts` is dropped.
+
+    `frames` are delivered in order by `recv()`. Once they run out, `recv()` either repeats
+    `keep_sending` every 10 ms (a gateway that heartbeats forever) or waits forever (a gateway
+    with nothing to say) — so a caller without a deadline hangs, which is the property the
+    timeout tests need. `accepted` and `dropped` record every send on the side of the `sts`
+    frame it fell on.
+    """
+
+    def __init__(self, frames: list[dict[str, Any]], *, keep_sending: dict[str, Any] | None = None) -> None:
+        self._frames = [json.dumps(frame) for frame in frames]
+        self._keep_sending = None if keep_sending is None else json.dumps(keep_sending)
+        self.sts_delivered = False
+        self.accepted: list[str] = []
+        self.dropped: list[str] = []
+        self.closed = False
+
+    async def recv(self) -> str:
+        if self._frames:
+            raw = self._frames.pop(0)
+            if json.loads(raw).get("topic") == "sts":
+                self.sts_delivered = True
+            return raw
+        if self._keep_sending is not None:
+            await asyncio.sleep(0.01)
+            return self._keep_sending
+        await asyncio.Event().wait()  # never set: the gateway is silent
+        raise AssertionError("unreachable")
+
+    async def send(self, message: str) -> None:
+        (self.accepted if self.sts_delivered else self.dropped).append(message)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def __aiter__(self) -> _GatewaySocket:
+        return self
+
+    async def __anext__(self) -> str:
+        if not self._frames:
+            raise StopAsyncIteration
+        return await self.recv()
+
+
+def _websockets_returning(socket: _GatewaySocket) -> Any:
+    """Patch the lazily imported `websockets` module so `connect()` opens `socket`."""
+    fake = MagicMock()
+    fake.connect = AsyncMock(return_value=socket)
+    return patch.dict("sys.modules", {"websockets": fake})
+
+
+def _client() -> Any:
+    from ibkr_core_mcp.streaming import IBKRWebSocket
+
+    return IBKRWebSocket("https://localhost:5055/v1/api", "")
+
+
+async def test_connect_returns_only_after_ibkr_reports_the_socket_authenticated() -> None:
+    """The defect: subscribe_executions() the instant connect() returned was dropped by the gateway."""
+    socket = _GatewaySocket([_SYSTEM, _ACT, _STS_AUTHENTICATED])
+    ws = _client()
+    with _websockets_returning(socket):
+        await ws.connect()
+    await ws.subscribe_executions(realtime_updates_only=True)
+    assert socket.dropped == []
+    assert socket.accepted == ['str+{"realtimeUpdatesOnly": true, "days": 1}']
+
+
+async def test_frames_read_during_the_handshake_reach_listen_before_the_live_stream() -> None:
+    """Nothing read while waiting for `sts` is lost: listen() yields it first, then the socket.
+
+    In practice nothing solicited precedes `sts` (nothing is subscribed yet), so the frame
+    used here is a P&L tick only because it is one the parser yields; the property is that the
+    buffer is drained, in order, ahead of the live socket.
+    """
+    from ibkr_core_mcp.streaming import PnLUpdate, TradeExecution
+
+    pnl = {"topic": "spl", "args": {"DU1.Core": {"dpl": 1.5}}}
+    execution = {"topic": "str", "args": [{"execution_id": "E1"}]}
+    socket = _GatewaySocket([pnl, _STS_AUTHENTICATED, execution])
+    ws = _client()
+    with _websockets_returning(socket):
+        await ws.connect()
+    items = [item async for item in ws.listen()]
+    assert [type(item) for item in items] == [PnLUpdate, TradeExecution]
+
+
+async def test_connect_times_out_when_the_gateway_never_sends_sts() -> None:
+    from ibkr_core_mcp.exceptions import StreamingError
+
+    socket = _GatewaySocket([_SYSTEM])  # then silence
+    ws = _client()
+    with _websockets_returning(socket), pytest.raises(StreamingError, match="sts"):
+        await asyncio.wait_for(ws.connect(auth_timeout=0.05), timeout=2.0)
+    assert socket.closed
+    assert ws._ws is None
+
+
+async def test_the_deadline_bounds_the_whole_handshake_even_while_heartbeats_keep_arriving() -> None:
+    """A gateway that heartbeats forever and never says `sts` must not hold connect() open.
+
+    The deadline is on the whole wait, not on each frame: a per-frame timeout is reset by
+    every heartbeat, and IBKR sends one every ten seconds for as long as the socket is up.
+    """
+    from ibkr_core_mcp.exceptions import StreamingError
+
+    socket = _GatewaySocket([_SYSTEM], keep_sending=_HEARTBEAT)
+    ws = _client()
+    with _websockets_returning(socket), pytest.raises(StreamingError, match="sts"):
+        await asyncio.wait_for(ws.connect(auth_timeout=0.05), timeout=2.0)
+    assert socket.closed
+
+
+async def test_connect_refuses_a_socket_whose_brokerage_session_is_not_authenticated() -> None:
+    """`str`, `smd` and `act` need a brokerage session (IBKR, ws/introduction): fail closed."""
+    from ibkr_core_mcp.exceptions import StreamingError
+
+    socket = _GatewaySocket([_SYSTEM, _STS_NOT_AUTHENTICATED])
+    ws = _client()
+    with _websockets_returning(socket), pytest.raises(StreamingError, match="not authenticated"):
+        await ws.connect()
+    assert socket.closed
+    assert ws._ws is None
+
+
+async def test_a_reconnect_does_not_replay_the_previous_socket_s_handshake_frames() -> None:
+    first = _GatewaySocket([_SYSTEM, {"topic": "spl", "args": {"DU1.Core": {"dpl": 1.0}}}, _STS_AUTHENTICATED])
+    second = _GatewaySocket([_STS_AUTHENTICATED])
+    ws = _client()
+    with _websockets_returning(first):
+        await ws.connect()
+    await ws.disconnect()  # the buffered P&L tick was never read
+    with _websockets_returning(second):
+        await ws.connect()
+    assert [item async for item in ws.listen()] == []
+
+
+def test_an_sts_frame_reporting_unauthenticated_mid_stream_is_logged_at_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """IBKR relays status changes "for example those resulting from competing sessions" on `sts`."""
+    ws = _client()
+    with caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.streaming"):
+        assert ws._parse_message(json.dumps(_STS_NOT_AUTHENTICATED)) is None
+        assert ws._parse_message(json.dumps(_STS_AUTHENTICATED)) is None
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "sts" in warnings[0].getMessage() and "not authenticated" in warnings[0].getMessage()
+
+
+def test_a_frame_with_no_parser_is_logged_by_topic_and_never_by_payload(caplog: pytest.LogCaptureFixture) -> None:
+    """A dropped `sts` is exactly how the defect stayed invisible — but `system` carries the
+    username and `act` the session id, so the log names the topic and nothing else."""
+    ws = _client()
+    with caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.streaming"):
+        assert ws._parse_message(json.dumps(_SYSTEM)) is None
+        assert ws._parse_message(json.dumps(_ACT)) is None
+    logged = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("system" in line for line in logged)
+    assert any("act" in line for line in logged)
+    everything = "\n".join(r.getMessage() for r in caplog.records)
+    assert "the-username" not in everything
+    assert "abc" not in everything

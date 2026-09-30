@@ -1868,8 +1868,10 @@ class IBKRClient:
 
         ⚠ **The docs advise calling this endpoint once per session**, and the CP rate
         limit table allows 1 request per 5 seconds. Callers on a timer must not poll it
-        unconditionally — `claudia/dashboard_poller.py` refetches only when the ledger's
-        `realizedpnl` moves, which happens if and only if a position closed.
+        unconditionally — refetch on evidence of a fill in data already held (claudia_ui keys
+        on the ledger's realised figure, the positions' quantities and the local date; an
+        opening fill moves no realised figure, which is why the quantity is in the key),
+        never on the clock alone.
 
         ## Origin coverage — verified live 2026-07-06
         The official reference documents only "trades for the currently selected

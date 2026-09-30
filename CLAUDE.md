@@ -194,7 +194,9 @@ anywhere). Per version:
    PEP 740 attestations. TestPyPI is not in this path — `4a70f8b` made that job
    `workflow_dispatch`-only (step 5).
 7. Verify: `pip install "ibkr-core-mcp==X.Y.Z"` in a fresh venv, `pip check`, the project page renders.
-8. `docs/consumers.md` and claudia_ui's pin.
+8. `docs/consumers.md` — rename its `### Unreleased` section to the version being released (it
+   mirrors the CHANGELOG's `[Unreleased]`, and a heading left behind ships as stale text) — and
+   claudia_ui's pin.
 
 **The wheel is checked as an artifact before it can upload** (2026-09-19). `publish.yml`'s build
 job runs `scripts/verify_wheel.py` after `twine check`: a fresh venv under `$RUNNER_TEMP`,

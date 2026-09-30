@@ -302,6 +302,12 @@ async def main():
 asyncio.run(main())
 ```
 
+`connect()` returns only once IBKR's `sts` frame has reported the socket authenticated: the
+gateway silently drops a topic sent before that frame (measured 2026-09-24 — zero frames before
+it, 37 after), so subscribing straight after `connect()` is correct and needs no sleep. It raises
+`StreamingError` after 10 s without an `sts`, or when `sts` reports the brokerage session as not
+authenticated; the socket is closed before the error is raised.
+
 **Price alerts: the local engine works; creating IBKR's native alerts does not, and it is not this
 package's defect.** `SQLiteStore.add_alert` + `AlertManager` (and the MCP server's `add_price_alert`
 under `--stream`) evaluate thresholds against live quotes on this machine. IBKR's own server-side

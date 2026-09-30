@@ -26,6 +26,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `get_futures` and through the resolver, and the ordering mirror where `expirationDate` is the
   earlier field — four red before, `max` for `min` red after. claudia_ui carries the same rule
   in `order_flow._last_trade_key` until its pin moves here; `docs/tools-reference.md` says so.
+- **`IBKRWebSocket.connect()` completes IBKR's handshake before it returns, so a topic
+  subscribed the moment it returns is delivered (claudia_ui gap #68, register F5).** IBKR drops
+  a topic sent before its `sts` frame — the unsolicited "Authentication Status" it sends "when
+  initially connecting" — and says nothing: the socket stays open, heartbeats flow, no frame
+  ever answers. Measured live 2026-09-24 from claudia_ui: `str+{"realtimeUpdatesOnly": false,
+  "days": 1}` sent the instant `connect()` returned produced **zero** frames, twice (with and
+  without a cookie); the same subscription sent after `sts authenticated: true` produced 37
+  executions carrying the exact ids the REST trades endpoint returned. Every consumer of this
+  class subscribed the instant `connect()` returned — the MCP server's `--stream` loop, the
+  README example, claudia_ui's execution listener — so claudia_ui's automatic fill report had
+  never delivered once in production, invisible because `_parse_message` dropped `sts` and
+  every other unlisted topic in silence. `connect()` now reads frames until `sts` reports
+  `authenticated: true` — frames read on the way are queued for `listen()`, so nothing is lost
+  — and raises `StreamingError`, the socket closed first, after `auth_timeout` seconds without
+  one (10 by default; one deadline over the whole wait, a heartbeat does not reset it) or on an
+  `sts` reporting the brokerage session as not authenticated, since `str`, `smd` and `act` all
+  need one (IBKR, ws/introduction). Folded into `connect()` rather than added as a method a
+  caller must remember to call: the early subscribe is now impossible, not merely avoidable. A
+  frame with no parser is logged at DEBUG by topic only (`system` carries the username, `act`
+  the session id) and an `sts` reporting unauthenticated mid-stream — "for example those
+  resulting from competing sessions" — at WARNING. Tests drive `connect()` against a socket
+  double that drops any send before it has delivered `sts`, the gateway's own rule; a double
+  that delivered regardless of ordering is how the consumer's listener tests stayed green for
+  three weeks. Eight mutations red (the wait removed, the buffer dropped or never cleared, a
+  per-frame timeout, the warning demoted, the payload logged, the socket left open, the flag
+  read as key presence). The constructor's docstring now names IBKR's documented cookie form,
+  `api=<session>` from `POST /tickle`; the gateway authenticated the socket with and without
+  it that day, so no code changed there. Sources: IBKR
+  ws/unsolicited-messages/authentication-status, ws/connection-guide/send-a-websocket-topic
+  (IBKR's example sleeps 3 s before its first topic), ws/introduction. `docs/consumers.md`
+  carries what a caller should expect from the changed `connect()`.
 
 ## [2.1.0] — 2026-09-22
 
