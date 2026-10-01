@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
+import stat
 import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -35,6 +37,22 @@ _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_TTL = 60.0
 
+log = logging.getLogger(__name__)
+
+# The snapshot `upload_account_sqlite` writes beside the database it backs up. One definition
+# for writing it and for sweeping the ones a dead process left (`_sweep_stranded_snapshots`).
+_SNAPSHOT_PREFIX = "tmp"
+_SNAPSHOT_SUFFIX = ".upload.tmp"
+# Such a snapshot, or a sidecar SQLite left beside one: the prefix, `tempfile`'s random part
+# (lower-case letters, digits, `_` — `tempfile._RandomNameSequence`), the suffix, then at most
+# one of SQLite's own.
+_SNAPSHOT_NAME = re.compile(
+    rf"{re.escape(_SNAPSHOT_PREFIX)}[a-z0-9_]+{re.escape(_SNAPSHOT_SUFFIX)}(?:-journal|-wal|-shm)?"
+)
+# When this module was imported. Every snapshot this process writes is newer; every one an
+# earlier process left is older.
+_STARTED = time.time()
+
 _SAFE_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,20}$")
 _SAFE_PERIOD_RE = re.compile(r"^[A-Z0-9]{1,10}$")
 _SAFE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -51,6 +69,58 @@ def _validate_cache_inputs(symbol: str, timeframe: str, period: str, end: str) -
         raise CacheError(f"Invalid cache period {period!r}.")
     if not _SAFE_DATE_RE.match(end):
         raise CacheError(f"Invalid cache end date {end!r}. Expected YYYY-MM-DD.")
+
+
+def _sweep_stranded_snapshots(directory: Path) -> None:
+    """Remove the database snapshots an earlier process left in `directory`.
+
+    **Never raises** — housekeeping before a backup, never a reason to fail one.
+
+    `upload_account_sqlite` writes a full snapshot of the database beside it and removes it in
+    a `finally`. A process that dies mid-upload — a kill, a crash, a closed laptop — cannot
+    run that `finally`, so the snapshot stays: a private copy of the whole trade store
+    (~57 MB in 2026) that nothing reads and nothing removed. claudia_ui found six of its own
+    twin's on 2026-09-30, seven weeks' worth (its gap #90; register F31). Since 2.2.0 the
+    upload runs inside every pull that changes the dataset, whoever started it, so the
+    exposure is every such pull. SQLite opens the snapshot, so a death can strand a
+    `-journal`, `-wal` or `-shm` beside one as well.
+
+    **Only a snapshot older than this process is removed.** A host's startup pull and a
+    model-initiated one can run at once, so a snapshot written since this process started may
+    be another thread's upload in flight; an earlier process's predates this one. Ownership by
+    process id would need a liveness check, and `os.kill(pid, 0)` terminates the process on
+    Windows. Not covered: a second process on the same data directory — its upload in flight
+    could predate this process — which is not a supported setup.
+
+    Regular files only, matched by the whole name (`_SNAPSHOT_NAME`): the database's own
+    `-wal` holds committed rows and is never a candidate.
+    """
+    try:
+        candidates = [p for p in directory.iterdir() if _SNAPSHOT_NAME.fullmatch(p.name)]
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        log.warning("Could not list %s for leftover database snapshots: %s", directory, exc)
+        return
+    removed: list[str] = []
+    for path in candidates:
+        try:
+            st = path.lstat()
+            if not stat.S_ISREG(st.st_mode) or st.st_mtime >= _STARTED:
+                continue
+            path.unlink()
+        except OSError as exc:
+            log.warning("Could not remove %s, a leftover database snapshot: %s", path.name, exc)
+            continue
+        removed.append(path.name)
+    if removed:
+        log.warning(
+            "Removed %d leftover snapshot file(s) of database uploads from %s — an earlier "
+            "process stopped mid-upload: %s",
+            len(removed),
+            directory,
+            ", ".join(sorted(removed)),
+        )
 
 
 class GDriveCache:
@@ -472,20 +542,28 @@ class GDriveCache:
         ``claudia_ui``'s GDriveSync.upload_db already does for claudia.db; store.db was
         being uploaded raw, which was survivable at 176 KB and is not at 50 MB.
 
+        The snapshot is written beside the database and removed in the `finally` below, which
+        a process that dies mid-upload cannot run. So the snapshots an earlier process left
+        are swept first, even when there is nothing to upload (`_sweep_stranded_snapshots`,
+        register F31).
+
+        Raises whatever the Drive upload raises — the caller decides what a failed backup
+        means (`FlexQueryClient._backup_if_changed` reports it and never fails the pull).
+
         Source: https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup
         """
-        import logging
         import sqlite3
         import tempfile
         from pathlib import Path as _Path
 
         source = _Path(local_path)
+        _sweep_stranded_snapshots(source.parent)
         if not source.exists():
-            logging.getLogger(__name__).warning("upload_account_sqlite: %s not found — nothing to upload", source)
+            log.warning("upload_account_sqlite: %s not found — nothing to upload", source)
             return
 
         handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
-            dir=source.parent, suffix=".upload.tmp", delete=False
+            dir=source.parent, prefix=_SNAPSHOT_PREFIX, suffix=_SNAPSHOT_SUFFIX, delete=False
         )
         handle.close()
         snapshot = _Path(handle.name)

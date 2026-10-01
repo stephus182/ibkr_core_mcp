@@ -93,6 +93,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **The store's Drive backup no longer leaves a copy of the trade store behind when the process
+  dies mid-upload (register F31; claudia_ui gap #90 found six of its own twin's).**
+  `GDriveCache.upload_account_sqlite` writes a full snapshot of the database beside it and
+  removes it in a `finally`, which a killed or crashed process cannot run — and since this
+  release the upload runs inside every pull that changes the dataset. Each upload now first
+  removes the snapshots an earlier process left: its own names only (and a SQLite `-journal`,
+  `-wal` or `-shm` beside one), regular files only, and only those older than the running
+  process, since a newer one may be another thread's upload in flight. It never raises — a file
+  that cannot be removed is logged and the backup is still made — and one WARNING names what
+  went. Tests: twelve, the first to run the method at all (every caller's test replaced it):
+  four pin what it already did — the snapshot holds rows still in the WAL, and is removed on
+  success and on failure — and the sweep's were red first; sixteen mutations red after.
 - **`scripts/rebuild_flex_dataset.py` and `scripts/audit_flex_dataset.py` opened the store with a
   hand-formatted `file:{path}?mode=ro`.** SQLite reads a URI's query after the first `?`, its
   fragment after `#`, and decodes `%HH` escapes (https://www.sqlite.org/uri.html § 3.1–3.2),
