@@ -510,7 +510,9 @@ earliest row alone flagged an *expired* one for days after each roll — measure
 by the EARLIER of `ltd` and `expirationDate` — neither alone is the last trade date for every root:
 ES Dec-26 reports `expirationDate` 20261218 / `ltd` 20261217, but NYMEX CL reports `ltd` as the
 first day of the contract month, AFTER trading stopped on its `expirationDate` (CLV6: 20260922 /
-20261001), so `ltd` alone kept an expired CL as the front month for ~9 days a month — claudia_ui
+20261001), so `ltd` alone kept an expired CL as the front month after each monthly roll, for as
+long as IBKR still listed it (CLV6: listed two days after expiry, gone by day seven; `ltd` itself
+was nine days after) — claudia_ui
 gap #71, register F16, measured 2026-09-24, fixed in 2.2.0 — and a row
 with no usable date is kept, since an unknown date is not a claim that a contract expired. Expired
 rows are still listed; they are merely never flagged.) (2026-09-10 —

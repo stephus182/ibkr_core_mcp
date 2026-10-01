@@ -1512,7 +1512,8 @@ def _last_trade_key(row: Mapping[str, Any]) -> int:
       terminates three business days before the 25th calendar day of the month prior to the
       contract month = 2026-09-22). Measured live 2026-09-24, two days after: a bare `CL`
       resolved to the expired October contract, its quote a prior close with no bid or ask,
-      and it would have stayed the front month until `ltd` — ~9 days a month, every month.
+      and it stayed the front month for as long as IBKR still listed it — gone by day seven
+      (2026-09-29) — where `ltd` alone would have allowed nine days. Every monthly roll.
       NG has the same shape; DX reports the two equal.
 
     The earlier date is right for every root this account trades and, by construction, can

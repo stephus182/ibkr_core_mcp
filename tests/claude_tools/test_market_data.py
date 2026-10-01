@@ -886,7 +886,8 @@ def test_front_month_ORDERING_follows_the_earlier_date_when_ltd_is_it(toolkit):
 # 20261218, `ltd` 20261217). For NYMEX energy it is the LATER one: CLV6 reported
 # `expirationDate` 20260922 and `ltd` 20261001 — there `ltd` is the first day of the contract
 # month, after trading has stopped — so "`ltd`, falling back to `expirationDate`" kept the
-# expired October CL as the front month for ~9 days a month, and a bare `CL` resolved to a
+# expired October CL as the front month after the roll, for as long as IBKR still listed it (two
+# days after expiry it did, by day seven it no longer did), and a bare `CL` resolved to a
 # contract whose quote was a prior close with no bid or ask. The earlier of the two is right
 # for both shapes and, by construction, can never keep a contract past either date.
 

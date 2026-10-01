@@ -88,7 +88,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   the real tables (measured 2026-09-30). Both now open through `flex_dataset.open_read_only`,
   and a structural test forbids a hand-built `mode=` URI anywhere else in the package or its
   scripts.
-- **A bare futures root no longer resolves to an expired NYMEX contract for ~9 days a month
+- **A bare futures root no longer resolves to an expired NYMEX contract after each monthly roll
   (claudia_ui gap #71, register F16).** `_last_trade_key` — the one rule behind `get_futures`'
   `front_month` flag, its ordering, and the FUT branch of `_resolve_snapshot_conid` that
   `get_market_snapshot` and `preview_order` take — read `ltd` first, falling back to
@@ -96,7 +96,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   20261217). For CL, IBKR's `ltd` is the first day of the contract month, after trading has
   stopped: CLV6 reported `expirationDate` 20260922 and `ltd` 20261001, so on 2026-09-24 a bare
   `CL` resolved to the expired October contract, its quote a prior close with no bid or ask
-  (measured live in claudia_ui, whose model caught it before any code did). The key is now the
+  (measured live in claudia_ui, whose model caught it before any code did) — and it stayed the
+  front month for as long as IBKR still listed it: two days after expiry it did, by day seven
+  (2026-09-29) it no longer did; `ltd` alone would have allowed nine. The key is now the
   **earlier** of the two dates — right for ES, CL, NG and DX as measured that day, and unable by
   construction to keep a contract past either date. IBKR's definitions (`ltd` "Last trade date
   of the future contract", `expirationDate` "Expiration date of the specific future contract")
