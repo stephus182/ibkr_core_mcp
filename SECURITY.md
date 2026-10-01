@@ -604,6 +604,7 @@ the rest from the 2026-09-13 audit:
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
 | `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
+| `test_no_real_data_io.py` | No unit test can reach the operator's data directory (`~/.ibkr_core`, where the trade store, the Drive token, the Drive credentials and the browser profiles default once the scrub has removed the `IBKR_`/`GDRIVE_`/`CRAWL4AI_` variables): an audit hook armed before collection refuses every SQLite open of a database there — by every route to SQLite and every spelling of the path, a `file:` URI read as SQLite reads it, the directory recognised by identity as well as by name — and every file opened, created, changed or removed there, before the operation, with a refusal `except Exception` cannot swallow and a run that fails at session end if one was swallowed anyway. Integration tests are exempt from their setup to their teardown |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
 | `test_documented_controls.py` | The regexes this document presents as the mitigation are character-for-character what `client.py` compiles, in both directions; the documented `order_id` pattern actually rejects Unicode digits; every file running under `-m security` appears in the table above |
 | `test_path_identifier_validation.py` | Every value interpolated into a URL path in `client.py` is itself passed to a validator, or listed with a reason; the checker fires on an unguarded snippet, ignores prose that merely begins with a path, and holds no exemption for an interpolation that no longer exists |
@@ -619,7 +620,8 @@ not execution; **(3)** every tool declares its capabilities and none declares `O
 **(4)** strategy code cannot touch the filesystem, processes or network, and its allowlist is
 frozen; **(5)** every externally derived URL is checked before the fetch and on every browser
 request; **(6)** error text reaching the model or a log passes one redaction function; **(7)**
-unit tests cannot open sockets, resolve names or see credentials; **(8)** processes are spawned
+unit tests cannot open sockets, resolve names, see credentials or reach the operator's data
+directory; **(8)** processes are spawned
 only from three named modules, never through a shell; **(9)** every value
 interpolated into a URL path is validated, or carries a written exemption; **(10)** the HTTP transport validates `Host`
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP

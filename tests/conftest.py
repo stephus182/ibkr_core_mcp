@@ -1,6 +1,190 @@
 import os
+import re
+import sys
+from pathlib import Path
 
 import pytest
+
+# ── No unit test reaches the operator's data ────────────────────────────────────
+#
+# `Config.from_env()` defaults `sqlite_path` to `~/.ibkr_core/store.db` — an ABSOLUTE path, so
+# no working directory and no `tmp_path` convention protects it — and `_no_real_secrets` below
+# removes `IBKR_SQLITE_PATH` with every other `IBKR_` variable, so inside a unit test the
+# default IS the operator's trade store: years of statements, parts of which cannot be pulled
+# again. The same `Config` points the Drive token, the Drive credentials and the browser
+# profiles under that directory. Until 2026-09-30 what kept the suite off it was every test
+# remembering to pass `mock_config`. The Flex read API (`flex_dataset`, `flex_sync`) opens
+# the store from a path, so the rule is made structural before those tests are written.
+#
+# An audit hook (https://docs.python.org/3.11/library/sys.html#sys.addaudithook), armed in
+# `pytest_configure` before anything is collected, refuses any SQLite open of a database there
+# and any file opened, created, changed or removed there, however the path names it — read-only
+# opens included, since a `mode=ro` open of a WAL database can still create `-shm` and `-wal`
+# beside it (https://www.sqlite.org/wal.html § 5, "Read-Only Databases"). SQLite's own event
+# fires inside the connection, so every route is covered: `sqlite3.connect`, a reference taken
+# earlier, `sqlite3.Connection`, `sqlite3.dbapi2`. The refusal is `pytest.fail`, a
+# `BaseException`, raised before the operation happens. Integration tests are exempt from
+# their setup to their teardown (`pytest_runtest_setup` / `_teardown` below): they run against
+# the operator's live gateway and configured store, which is their subject.
+#
+# It replaced (claudia_ui's Flex boundary plan, § 13 item 15) a `sqlite3.connect` swapped by an
+# autouse fixture, whose holes a review of claudia_ui's copy measured: not armed at import or
+# in a module-scoped fixture; `Connection()` and `sqlite3.dbapi2.connect` went around it; it
+# read URIs with `urllib`, so a `%00` tail or a raw newline reached the store; another letter
+# case (APFS ignores case) and the `/System/Volumes/Data` firmlink passed its comparison by
+# name; nothing covered files; and `SQLiteStore` changed the directory's mode before the
+# refusal. `tests/security/test_no_real_data_io.py` is what fails when this stops working.
+#
+# What it cannot see, stated rather than implied: SQL-level `ATTACH` and `VACUUM INTO` (SQLite
+# opens those files itself, with no Python event), a path relative to a `dir_fd`, and anything
+# that disables it on purpose — audit hooks are "not suitable for implementing a sandbox"
+# (Python's own documentation). It is there to catch accidents.
+_OPERATOR_DATA_DIR = (Path.home() / ".ibkr_core").resolve()
+_REAL_OPERATOR_DATA_DIR = _OPERATOR_DATA_DIR
+_OPERATOR_GUARD = {"armed": False}  # a hook cannot be removed, only disarmed
+_operator_refusals: list[str] = []  # of the real directory; read by `pytest_sessionfinish`
+
+# Each audited file event, with the positions of its arguments that name a place opened,
+# created, changed or removed. Argument order: https://docs.python.org/3.11/library/audit_events.html
+# (checked 2026-09-30). `open` is `open()`, `io.open`, `os.open` and `io.open_code` alike. A
+# symlink's own target is not a touch — opening through it is, and is judged where it lands.
+_FILE_EVENTS: dict[str, tuple[int, ...]] = {
+    "open": (0,),
+    "os.chmod": (0,),
+    "os.chown": (0,),
+    "os.link": (0, 1),
+    "os.mkdir": (0,),
+    "os.remove": (0,),
+    "os.rename": (0, 1),
+    "os.rmdir": (0,),
+    "os.symlink": (1,),
+    "os.truncate": (0,),
+    "os.utime": (0,),
+    "shutil.copyfile": (0, 1),
+    "shutil.copytree": (0, 1),
+    "shutil.move": (0, 1),
+    "shutil.rmtree": (0,),
+    "tempfile.mkdtemp": (0,),
+    "tempfile.mkstemp": (0,),
+}
+_HEX_OCTET = re.compile(rb"[0-9A-Fa-f]{2}")
+
+
+def _sqlite_uri_path(uri: str) -> str | None:
+    """The file SQLite opens for a `file:` URI — its own parse, not `urllib`'s — or None.
+
+    `sqlite3ParseUri` in SQLite's `src/main.c`, as built here (no `SQLITE_ALLOW_URI_AUTHORITY`):
+    an authority after `//` runs to the next `/` and must be empty or `localhost` — anything
+    else is an error and nothing opens (None); the path ends at the first `?` or `#`; `%HH` is
+    decoded; and at a `%00` the rest of the path is ignored. `urllib` differs exactly there: it
+    decodes `%00` into the path, deletes raw tabs and newlines, and raises on a `[` in the
+    authority — three ways the store was reached, or the guard itself raised, before this.
+    """
+    rest = uri[len("file:") :]
+    if rest.startswith("//"):
+        authority, slash, path = rest[2:].partition("/")
+        if authority not in ("", "localhost"):
+            return None
+        rest = slash + path
+    for end in ("?", "#"):
+        rest = rest.partition(end)[0]
+    raw = rest.encode("utf-8", "surrogateescape")
+    decoded = bytearray()
+    at = 0
+    while at < len(raw):
+        escape = raw[at + 1 : at + 3]
+        if raw[at] == ord("%") and _HEX_OCTET.fullmatch(escape):
+            if escape == b"00":
+                break
+            decoded.append(int(escape, 16))
+            at += 3
+        else:
+            decoded.append(raw[at])
+            at += 1
+    return os.fsdecode(bytes(decoded))
+
+
+def _inside_operator_directory(path: Path) -> bool:
+    """True when `path` is the operator's directory or lies under it — by name, or by identity.
+
+    By name after `resolve()`, which follows symlinks. By identity for the spellings
+    `resolve()` leaves apart — another letter case on a case-insensitive volume, a firmlink
+    such as `/System/Volumes/Data/Users/...`: `os.path.samestat` of the directory against
+    `path` and each of its existing ancestors. Where the directory does not exist (CI) there
+    is nothing to reach, and the comparison by name alone stands.
+    """
+    if path.is_relative_to(_OPERATOR_DATA_DIR):
+        return True
+    try:
+        operator = _OPERATOR_DATA_DIR.stat()
+    except OSError:
+        return False
+    for place in (path, *path.parents):
+        try:
+            if os.path.samestat(place.stat(), operator):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _operator_path(value: object, *, database: bool) -> Path | None:
+    """The place under the operator's data directory that `value` names, or None.
+
+    `value` is what the audited call was given: `str`, `bytes` or a path object — and, for a
+    database, the `file:` URI form, read the way SQLite reads it. `~` is expanded, which SQLite
+    would not do: a test that spells the store that way meant the operator's, and is refused
+    as if it had reached it. Anything that names no place there — `:memory:`, an empty name, a
+    file descriptor, a path elsewhere — is None, and so is a name no file system can hold (a
+    NUL): the call refuses that one itself, in its own words.
+    """
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if not isinstance(value, str | os.PathLike):
+        return None
+    text = os.fspath(value)
+    if isinstance(text, bytes):
+        text = os.fsdecode(text)
+    if database and text.startswith("file:"):
+        uri_path = _sqlite_uri_path(text)
+        if uri_path is None:
+            return None
+        text = uri_path
+    if not text or (database and text == ":memory:"):
+        return None
+    try:
+        resolved = Path(text).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):  # a NUL, an unencodable name, an unknown ~user
+        return None
+    return resolved if _inside_operator_directory(resolved) else None
+
+
+def _operator_data_hook(event: str, args: tuple[object, ...]) -> None:
+    """The audit hook: refuse a SQLite open or a file operation under the operator's directory."""
+    if not _OPERATOR_GUARD["armed"]:
+        return
+    if event == "sqlite3.connect":
+        targets = [_operator_path(args[0], database=True)]
+    elif (positions := _FILE_EVENTS.get(event)) is not None:
+        targets = [_operator_path(args[p], database=False) for p in positions if p < len(args)]
+    else:
+        return
+    for target in targets:
+        if target is None:
+            continue
+        if _OPERATOR_DATA_DIR == _REAL_OPERATOR_DATA_DIR:
+            _operator_refusals.append(f"{event} {target}")
+        pytest.fail(
+            f"a unit test tried to reach the operator's data ({event}: {target.name} under "
+            "~/.ibkr_core) — build it under tmp_path (the `mock_config` fixture does)",
+            pytrace=True,
+        )
+
+
+def _refusal_violations(refusals: list[str]) -> list[str]:
+    """One violation per recorded refusal of the real directory — the decision behind
+    `pytest_sessionfinish`, as a pure function."""
+    return [f"a test reached for the operator's data directory: {refusal}" for refusal in refusals]
 
 
 @pytest.fixture
@@ -81,12 +265,55 @@ def pytest_configure(config):
     from pytest_socket import disable_socket
 
     disable_socket(allow_unix_socket=True)
+    # The operator-data hook is armed here for the same reason: from here on, test modules are
+    # imported and fixtures of every scope run, and a function-scoped fixture would arm it only
+    # for the test body.
+    sys.addaudithook(_operator_data_hook)
+    _OPERATOR_GUARD["armed"] = True
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail the run if a refusal of the operator's directory was swallowed.
+
+    A refusal raised in a thread fails no test, and `except BaseException` would hide one
+    anywhere, so every refusal of the real directory is recorded and reported here. A hook
+    rather than a test because no test can run last by construction; `session.exitstatus` is
+    what `pytest.main` returns after this hook, so setting it is what turns the run red.
+    """
+    violations = _refusal_violations(_operator_refusals)
+    if not violations:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    lines = ["", "REAL DATA REACHED FOR BY THE TEST SUITE (tests/conftest.py, constitution §7):", *violations]
+    for line in lines:
+        if reporter is not None:
+            reporter.write_line(line, red=True, bold=True)
+        else:  # pragma: no cover - no terminal plugin
+            print(line)
+    session.exitstatus = 1
 
 
 def pytest_unconfigure(config):
     from pytest_socket import enable_socket
 
+    _OPERATOR_GUARD["armed"] = False
     enable_socket()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """Disarm the operator-data hook for an integration test, before its fixtures are filled —
+    `tryfirst`, so a module-scoped `live_client` is set up inside the exemption."""
+    if item.get_closest_marker("integration"):
+        _OPERATOR_GUARD["armed"] = False
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Arm it again after an integration test's fixtures are torn down — `trylast`, for the
+    same module-scoped reason."""
+    if item.get_closest_marker("integration"):
+        _OPERATOR_GUARD["armed"] = True
 
 
 def pytest_collection_modifyitems(config, items):
