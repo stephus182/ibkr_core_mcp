@@ -7,7 +7,7 @@ from unittest.mock import patch as _patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError
+from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError, OrderValidationError
 from tests.security.structural import annotation_names_a_model, response_model_names
 
 # The `client` fixture lives in tests/conftest.py (shared with tests/security/).
@@ -4526,3 +4526,113 @@ def test_every_public_name_in_client_py_is_exported_from_the_package():
     )
     for name in public:
         assert hasattr(ibkr_core_mcp, name), f"__all__ names {name!r} but it does not resolve"
+
+
+# ── cancel_order's manualIndicator — CME Rule 536-B on the cancel (claudia_ui gap #7) ──
+#
+# IBKR's Cancel Order page lists `manualIndicator` as a query parameter "required when trading
+# Futures and Futures Options contracts to remain in compliance with CME Group Rule 536-B", and
+# says "Regardless of original submission, the cancellation must also include the
+# manualIndicator tag". The caller states it, as it does on place and modify; the core sends
+# exactly what it was told, and nothing when it was told nothing.
+
+
+@contextmanager
+def _cancel_through_open_gates(client):
+    """Both gates pass and the DELETE answers; yields the DELETE mock."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog"),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        yield mock_del
+
+
+def _query(mock_del):
+    """The query parameters of the one DELETE that was sent; None when it carried none."""
+    mock_del.assert_called_once()
+    return mock_del.call_args.kwargs.get("params")
+
+
+def test_a_cancel_told_nothing_stays_the_bare_DELETE(client):
+    """The default is the request five live futures cancels were accepted with: no query."""
+    with _cancel_through_open_gates(client) as mock_del:
+        client.cancel_order("U1234567", "9876543210", order_details={"ticker": "AAPL"})
+    assert _query(mock_del) is None
+    assert mock_del.call_args.args == ("https://localhost:5055/v1/api/iserver/account/U1234567/order/9876543210",)
+
+
+@pytest.mark.parametrize(("stated", "sent"), [(True, "true"), (False, "false")], ids=["manual", "automated"])
+def test_a_cancel_carries_the_manual_indicator_the_caller_states(client, stated, sent):
+    """IBKR's own spelling — `?manualIndicator=true` — never Python's `True`."""
+    with _cancel_through_open_gates(client) as mock_del:
+        client.cancel_order("U1234567", "9876543210", order_details={"ticker": "ESZ6"}, manual_indicator=stated)
+    assert _query(mock_del) == {"manualIndicator": sent}
+
+
+def test_a_cancel_never_sends_extOperator(client):
+    """IBKR rejects it on place as field 8089; the cancel sends the one tag, like place and modify."""
+    with _cancel_through_open_gates(client) as mock_del:
+        client.cancel_order("U1234567", "9876543210", order_details={"ticker": "ESZ6"}, manual_indicator=True)
+    assert set(_query(mock_del)) == {"manualIndicator"}
+    assert "extOperator" not in str(mock_del.call_args)
+
+
+@pytest.mark.parametrize("not_a_bool", ["false", "true", 1, 0, "yes"], ids=repr)
+def test_a_manual_indicator_that_is_not_a_bool_is_refused_before_any_gate(client, not_a_bool):
+    """A compliance tag is stated, never coerced: the string "false" is truthy, and would have
+    been sent as `true`. Refused before Touch ID, so nothing is asked of the human and nothing
+    reaches IBKR."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog") as dialog,
+        _patch.object(client._session, "delete") as mock_del,
+        pytest.raises(OrderValidationError, match="manual_indicator"),
+    ):
+        client.cancel_order("U1234567", "9876543210", manual_indicator=not_a_bool)
+    touch_id.assert_not_called()
+    dialog.assert_not_called()
+    mock_del.assert_not_called()
+
+
+def test_manual_indicator_is_keyword_only(client):
+    """Positionally it would sit where a second detail dict might be passed by mistake."""
+    with _cancel_through_open_gates(client) as mock_del, pytest.raises(TypeError):
+        client.cancel_order("U1234567", "9876543210", None, True)
+    mock_del.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("stated", "logged"),
+    [(True, "manualIndicator=true"), (False, "manualIndicator=false"), (None, "manualIndicator not sent")],
+    ids=["manual", "automated", "unstated"],
+)
+def test_the_log_witnesses_what_the_cancel_carried(client, caplog, stated, logged):
+    """What was sent for Rule 536-B is on the record, per cancel — including "nothing"."""
+    with _cancel_through_open_gates(client), caplog.at_level("INFO", logger="ibkr_core_mcp.client"):
+        client.cancel_order("U1234567", "9876543210", order_details={"ticker": "ESZ6"}, manual_indicator=stated)
+    assert f"cancel:9876543210 {logged}" in caplog.text
+
+
+def test_the_gates_still_come_before_a_cancel_that_carries_the_tag(client):
+    """The tag changes the request, not the order of things: a refused Touch ID sends nothing,
+    reads nothing and shows nothing.
+
+    The dialog and the status read are replaced, not left real. The first form of this test
+    patched Touch ID alone, so a mutant that skipped Gate 1 for a tagged cancel walked on to
+    the REAL Gate 2 dialog — on the operator's screen, 2026-10-01 — and whether the mutant was
+    "caught" then depended on which button a human clicked. A test of the gates must never be
+    able to open one.
+    """
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=HumanAuthError("denied")),
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog") as dialog,
+        _patch.object(client, "get_order_status") as status_read,
+        _patch.object(client._session, "delete") as mock_del,
+        pytest.raises(HumanAuthError, match="denied"),
+    ):
+        client.cancel_order("U1234567", "9876543210", manual_indicator=True)
+    dialog.assert_not_called()
+    status_read.assert_not_called()
+    mock_del.assert_not_called()

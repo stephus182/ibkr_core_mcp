@@ -105,6 +105,27 @@ register F24). The calendars were loaded; the answer was not in the dict.
 - The weekday rule a consumer had to carry itself (claudia_ui's briefing decides a weekend
   before reading any list) can be deleted once it reads `sessions_today`.
 
+### Unreleased — `cancel_order` can carry the CME Rule 536-B tag
+
+IBKR documents `manualIndicator` as required on a futures or futures-option **cancel**, as it is
+on a place and a modify: "Regardless of original submission, the cancellation must also include
+the manualIndicator tag". `cancel_order` sent a bare `DELETE`, which IBKR accepts (seventeen futures
+cancels measured, 2026-07-28 to 09-24) — accepted, not shown compliant.
+
+- **New, keyword-only:** `cancel_order(account_id, order_id, order_details=None, *,
+  manual_indicator=None)`. `True` → `?manualIndicator=true`, `False` → `?manualIndicator=false`,
+  `None` → the bare `DELETE`, exactly as before. Nothing changes for a caller that passes nothing.
+- **What a consumer should do:** pass `manual_indicator=True` when a person cancels a FUT or FOP
+  order (`False` if your own automation does). Leave it out for other classes. The package does
+  not derive it: only the caller knows the contract class and who decided.
+- **Strict on purpose:** anything that is not a bool or `None` raises `OrderValidationError`
+  before Touch ID — the string `"false"` is truthy and would otherwise be sent as `true`.
+- **Measured 2026-10-01:** a tagged cancel of a resting ES limit order was accepted and read back
+  `Cancelled`; the gateway's request log shows the query string. IBKR answers a tagged and a bare
+  cancel with the same body, so check the log line `cancel:<id> manualIndicator=…`, not the
+  response, to know which was sent. `extOperator` is not sent (rejected on a place as field 8089).
+- claudia_ui passes it for futures cancels once its pin moves to this release (its gap #7).
+
 ### Unreleased — the Flex dataset has a typed read API, and every reader in this package uses it
 
 The package owns the Flex dataset and what it means (claudia_ui's Flex boundary, decided

@@ -92,6 +92,13 @@ try:
     client.cancel_order(account_id, order_id)
 except HumanAuthError as e:
     print(f"Cancellation not sent: {e}")
+
+# A futures or futures-option cancel made by a person: state the CME Rule 536-B tag,
+# as the place and modify bodies do with "manualIndicator": True.
+try:
+    client.cancel_order(account_id, futures_order_id, manual_indicator=True)
+except HumanAuthError as e:
+    print(f"Cancellation not sent: {e}")
 ```
 
 **Bracket — a parent plus its held children in ONE request, behind one Touch ID and one dialog:**

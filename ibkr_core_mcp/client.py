@@ -2416,7 +2416,12 @@ class IBKRClient:
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", api_order)
 
     def cancel_order(
-        self, account_id: str, order_id: str, order_details: dict[str, Any] | None = None
+        self,
+        account_id: str,
+        order_id: str,
+        order_details: dict[str, Any] | None = None,
+        *,
+        manual_indicator: bool | None = None,
     ) -> dict[str, Any]:
         """Cancel an order. Requires Touch ID (Gate 1) + tkinter confirmation dialog (Gate 2).
 
@@ -2425,12 +2430,63 @@ class IBKRClient:
         mirrors modify_order()'s dialog, which already receives the full order dict. Found
         missing live 2026-07-10 — user-flagged hard requirement.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/cancel-order.md
+        **`manual_indicator` is the CME Rule 536-B tag on the cancel** (2.2.0, claudia_ui gap
+        #7). IBKR lists `manualIndicator` as a query parameter "required when trading Futures
+        and Futures Options contracts to remain in compliance with CME Group Rule 536-B", and
+        adds: "Regardless of original submission, the cancellation must also include the
+        manualIndicator tag". `True` — cancelled by a person through an interface — sends
+        `?manualIndicator=true`; `False` — by an automated system — `?manualIndicator=false`;
+        `None`, the default, sends the bare `DELETE` this method always sent. **The caller
+        states it, as it does on place and modify** (`place_order`): only the caller knows the
+        contract class and who made the decision, so nothing here derives it from the display
+        dict or guesses it. For a FUT or FOP cancel a caller should pass it; on other classes
+        leave it out — the tag is rejected on an equity *place*, and an equity cancel carrying
+        it has not been probed.
+
+        What was measured, and what was not:
+
+        - A bare cancel is **accepted**: seventeen futures orders (ES on CME, CL on NYMEX),
+          2026-07-28 to 2026-09-24, each read back `Cancelled`, none rejected — counted from
+          claudia_ui's decision log. Acceptance is not compliance — that is why the parameter
+          exists.
+        - A cancel carrying `?manualIndicator=true` is **accepted**: 2026-10-01, a resting ES
+          limit order, through both gates. The gateway's own request log recorded the
+          `DELETE` with the query string and `200`; the order read back `Cancelled`. The body
+          is the bare cancel's own — `{"msg": "Request was submitted", "order_id": …,
+          "conid": -1, "account": null}` — so **the response cannot tell a caller whether the
+          tag was sent**; the log line this method writes can.
+        - `extOperator` is **not sent**, on cancel as on place and modify: IBKR documents it
+          beside `manualIndicator` and rejects it on a place as field 8089 (`place_order`).
+          On a cancel it has not been probed.
+        - What IBKR does with the tag after accepting it is not observable from here.
+
+        Args:
+            account_id: The account holding the order.
+            order_id: IBKR's order id.
+            order_details: Display-only detail for Gate 2; fetched after Gate 1 when omitted.
+            manual_indicator: Keyword-only. The Rule 536-B tag, or None to send none.
+
+        Raises:
+            OrderValidationError: `manual_indicator` is neither a bool nor None — refused
+                before any gate, since the string "false" is truthy and a compliance tag is
+                never coerced.
+            HumanAuthError: A gate declined or timed out. Nothing was sent.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/cancel-order.md
+                (read 2026-10-01, byte-identical to the 2026-09-08 capture)
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
-        Endpoint: DELETE /iserver/account/{accountId}/order/{orderId}
+        Endpoint: DELETE /iserver/account/{accountId}/order/{orderId}[?manualIndicator=true|false]
         """
         _validate_account_id(account_id)
         _validate_order_id(order_id)
+        # A compliance tag is stated, never coerced: the string "false" is truthy. Refused
+        # here, before the gates, so nothing is asked of the human for a request that will
+        # not be sent.
+        if manual_indicator is not None and not isinstance(manual_indicator, bool):
+            raise OrderValidationError(
+                f"manual_indicator must be True, False or None, not {manual_indicator!r} — "
+                "it is sent to IBKR as the CME Rule 536-B tag and is never guessed from another value"
+            )
         self._ensure_accounts_initialized()
         require_touch_id(f"cancel IBKR order {order_id}")
         # Cancel is a single write with no reply chain, so no authorization value — but
@@ -2447,7 +2503,15 @@ class IBKRClient:
         confirm_cancel_dialog(order_id, account_id, order_details)
         path = f"/iserver/account/{account_id}/order/{order_id}"
         url = f"{self._base}{path}"
-        resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
+        # IBKR's own spelling (`?manualIndicator=true`), never Python's `True`. `extOperator`
+        # is not sent, on cancel as on place and modify (see `place_order`).
+        params = None if manual_indicator is None else {"manualIndicator": "true" if manual_indicator else "false"}
+        log.info(
+            "cancel:%s %s",
+            order_id,
+            "manualIndicator not sent" if params is None else f"manualIndicator={params['manualIndicator']}",
+        )
+        resp = with_retry(lambda: self._session.delete(url, params=params, timeout=30), path=path)
         return _decode(resp, path)
 
     def _refuse_child_larger_than_parent_fill(self, order_id: str, order: dict[str, Any]) -> str | None:

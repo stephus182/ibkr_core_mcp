@@ -949,12 +949,21 @@ Modify an existing order after both security gates pass.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
-### `cancel_order(account_id, order_id, order_details) -> dict`
+### `cancel_order(account_id, order_id, order_details, *, manual_indicator=None) -> dict`
 Cancel an order after both security gates pass. `order_details` is optional display-only info
 (symbol/side/qty/price/TIF/etc.) shown in the Gate 2 dialog so the human can verify the correct
 order before cancelling — mirrors `modify_order()`'s dialog, which already receives the full
 order dict.
-**Endpoint:** `DELETE /iserver/account/{accountId}/order/{orderId}`
+
+`manual_indicator` (keyword-only, 2.2.0) is the CME Rule 536-B tag IBKR documents as required
+on a futures or futures-option cancel: `True` sends `?manualIndicator=true` (cancelled by a
+person), `False` sends `?manualIndicator=false` (by an automated system), `None` — the default —
+sends the bare `DELETE`. The caller states it, as on place and modify; a value that is not a
+bool is refused before any gate. `extOperator` is never sent. IBKR accepts both forms (bare:
+seventeen futures cancels, 2026-07-28 to 09-24; tagged: 2026-10-01, the query string witnessed in
+the gateway's request log) and answers both with the same body, so only the method's log line
+— `cancel:<id> manualIndicator=true` — records which was sent.
+**Endpoint:** `DELETE /iserver/account/{accountId}/order/{orderId}[?manualIndicator=true|false]`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/cancel-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 

@@ -10,6 +10,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`IBKRClient.cancel_order(..., *, manual_indicator=None)` — the CME Rule 536-B tag on a
+  futures cancel (claudia_ui gap #7).** IBKR's Cancel Order page lists `manualIndicator` as a
+  query parameter "required when trading Futures and Futures Options contracts to remain in
+  compliance with CME Group Rule 536-B" and says "the cancellation must also include the
+  manualIndicator tag"; the place and modify bodies already carried it, the cancel was a bare
+  `DELETE`. `True` sends `?manualIndicator=true`, `False` `?manualIndicator=false`, `None` — the
+  default — the bare request as before, so no existing caller changes. The caller states it, as
+  on place and modify; a value that is not a bool is refused with `OrderValidationError` before
+  any gate (the string `"false"` is truthy); `extOperator` is never sent; an INFO line records
+  what each cancel carried. Measured 2026-10-01 through both gates on a resting ES limit order:
+  accepted, read back `Cancelled`, the query string in the gateway's own request log — and the
+  response body identical to a bare cancel's, which is why the log line exists. Tests: fourteen,
+  twelve red first; thirteen mutations red after. See `docs/consumers.md`.
 - **`ibkr_core_mcp.flex_dataset` — a typed, read-only API over the Flex dataset (claudia_ui's
   Flex boundary, decided 2026-09-29: this package answers questions about the account; a host
   decides when to ask and how to show the answer).** `FlexDataset.open(path)` answers realised
