@@ -39,7 +39,9 @@ from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
+from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError, StoreError
+from ibkr_core_mcp.flex_dataset import FlexDataset
+from ibkr_core_mcp.flex_sync import statement_through, validate_dataset
 from ibkr_core_mcp.models import Account, IBKRResponse, Trade, json_default
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.order_confirm import reply_message_text
@@ -129,6 +131,16 @@ def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
         return ""
     suffix = " (within-file duplicate tradeIDs)" if verbose else ""
     return f" ⚠ raw={raw_count} unique={unique_count}{suffix}"
+
+
+#: What `sync_flex_trades` says about the `store.db` Drive backup, by `FlexBackupResult.status`.
+#: `not-configured` says nothing: a user who never set up Drive is not told, every pull,
+#: about a backup they did not ask for.
+_BACKUP_LINES = {
+    "uploaded": "store.db backed up to Drive account_data/.",
+    "unchanged": "store.db unchanged by this pull — Drive backup left as is.",
+    "failed": "⚠ store.db Drive backup failed:",
+}
 
 
 def _format_coverage(cov: dict[str, Any]) -> list[str]:
@@ -285,20 +297,34 @@ TOOL_DEFINITIONS = [
         "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Get trade history. source='live' queries IBKR directly (last 7 days max — current day "
-            "plus 6 previous). source='store' queries the local SQLite store — unlimited history, "
-            "includes all data synced via sync_flex_trades. Use source='store' for any analysis beyond 7 days."
+            "plus 6 previous). source='store' reads the Flex statements in the local store — unlimited "
+            "history, one line per execution with IBKR's trade date and realised P&L, and their total; "
+            "statements are T+1, so today's fills are never in it. Use source='store' for any analysis "
+            "beyond 7 days and for any realised P&L figure."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Filter by symbol (optional)"},
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Filter by symbol (optional). For source='store' this is the statement's symbol, matched "
+                        "exactly: a future is listed under its contract symbol (ESU6), not its root (ES)"
+                    ),
+                },
                 "source": {
                     "type": "string",
-                    "description": "'live' (IBKR API, last 7 days max) or 'store' (SQLite, unlimited history including Flex syncs)",
+                    "description": "'live' (IBKR API, last 7 days max) or 'store' (Flex statements, unlimited history, T+1)",
                     "default": "store",
                 },
-                "start": {"type": "string", "description": "Start date YYYY-MM-DD (store source only, optional)"},
-                "end": {"type": "string", "description": "End date YYYY-MM-DD (store source only, optional)"},
+                "start": {
+                    "type": "string",
+                    "description": "First trade date YYYY-MM-DD, inclusive (store source only, optional)",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "Last trade date YYYY-MM-DD, inclusive (store source only, optional)",
+                },
             },
             "required": [],
         },
@@ -348,11 +374,11 @@ TOOL_DEFINITIONS = [
         "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Verify Flex import completeness by comparing source XML archives in Google Drive "
-            "account_data/ against the local SQLite trades table. For each XML file, extracts "
-            "all tradeIDs and checks whether they are present in SQLite. Reports per-file "
-            "counts (XML records vs SQLite matches) and an aggregate summary. "
-            "A missing tradeID means that execution was not imported. "
-            "Does not touch the trades table. It does write to the import manifest (flex_import_log): a first-encounter entry, and verified_at on each successful check."
+            "account_data/ against the Flex dataset in the local store — the statements every other "
+            "tool reads. For each XML file, extracts all tradeIDs and checks whether the dataset "
+            "holds them. Reports per-file counts (XML records vs dataset matches) and an aggregate "
+            "summary. A missing tradeID means that execution was not imported. "
+            "Does not touch the trade data. It does write to the import manifest (flex_import_log): a first-encounter entry, and verified_at on each successful check."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -363,7 +389,9 @@ TOOL_DEFINITIONS = [
             "Fetch the full historical trade history from IBKR Flex Web Service and store it in "
             "the local SQLite database and Google Drive cache. Requires IBKR_FLEX_TOKEN and "
             "IBKR_FLEX_QUERY_ID to be configured. Run this once or daily to keep historical "
-            "trade data current beyond the 6-day API limit."
+            "trade data current beyond the 6-day API limit. After the pull it re-checks the "
+            "dataset, and backs store.db up to Google Drive when the pull changed it and Drive is "
+            "configured; the result says both."
         ),
         "input_schema": {
             "type": "object",
@@ -1296,6 +1324,17 @@ def _safe_error(tool: str, exc: Exception) -> str:
     return f"Tool '{tool}' encountered an unexpected error."
 
 
+def _iso_day(value: Any) -> date | None:
+    """A `YYYY-MM-DD` tool argument as a date; None when the argument is absent or blank.
+
+    Raises:
+        ValueError: If the text is not an ISO date — the caller answers with the expected form.
+    """
+    if value is None or str(value).strip() == "":
+        return None
+    return date.fromisoformat(str(value).strip())
+
+
 def _validate_account_id(account_id: str) -> str:
     """Raise ValueError if account_id is not a valid IBKR account ID format."""
     if not _ACCOUNT_ID_RE.match(account_id):
@@ -2093,7 +2132,14 @@ class ClaudeToolkit:
         """Query trade history from two complementary sources — choose based on recency and origin needs.
 
         ## source='store' — Flex (full history, all origins)
-        Reads local SQLite populated by sync_flex_trades. Flex Activity Statements are
+        Reads the Flex dataset through `flex_dataset.FlexDataset` — the statement executions
+        (`flex_trade`, `source='flex'`), one line each, dated by IBKR's trade date, and their
+        realised total (`fifoPnlRealized`, no open/close filter). Until 2.2.0 this branch read
+        the legacy `trades` table, whose total left out every row imported before 2026-05-26
+        (822 of them carry no figure) and which holds 133 executions twice (register F20);
+        the dashboard in claudia_ui read `flex_trade`, so the model and the screen disagreed
+        on lifetime realised P&L. `start`/`end` are trade dates, both inclusive — the legacy
+        comparison was against a timestamp and silently dropped the end day. Flex Activity Statements are
         account-level reports, not per-platform logs, so they cover trades regardless of
         which client placed them (CP API, mobile app, TWS, web portal) — the specific
         enumeration of origins is empirically confirmed for live CP-API trades by
@@ -2101,9 +2147,9 @@ class ClaudeToolkit:
         by a single official page enumerating all four origins for Flex specifically. No
         date limit on queries — full account history from the first Flex sync.
         Availability: T+1 (today's trades are never present; yesterday's trades become
-        available after IBKR's overnight processing). Also includes any executions captured
-        live via the WebSocket `str` topic (`mcp_server.py --stream`), which land in the
-        same `trades` table in real time.
+        available after IBKR's overnight processing). A fill captured live before its
+        statement (source='live', or `mcp_server.py --stream`) is not listed here: it has no
+        trade date and no realised figure until the statement delivers both.
         Source: https://www.interactivebrokers.com/campus/glossary-terms/activity-statements/
 
         ## source='live' — CP API /iserver/account/trades (last 7 days max)
@@ -2120,31 +2166,60 @@ class ClaudeToolkit:
         source = inputs.get("source", "store")
         symbol = inputs.get("symbol")
         if source == "store":
-            trades = self._store.get_trades(
-                symbol=symbol,
-                start=inputs.get("start"),
-                end=inputs.get("end"),
-            )
-            if not trades:
+            try:
+                start, end = _iso_day(inputs.get("start")), _iso_day(inputs.get("end"))
+            except ValueError:
+                return "start and end must be dates in YYYY-MM-DD form.", None
+            try:
+                with FlexDataset.open(self._config.sqlite_path) as flex:
+                    executions = flex.executions(symbol=symbol, start=start, end=end)
+            except StoreError:
+                return (
+                    "No Flex dataset in the local store yet. "
+                    "Run sync_flex_trades to pull the statements from IBKR (T+1 — yesterday's trades available today)."
+                ), None
+            if not executions:
                 return (
                     "No trades found in Flex store for the requested period. "
                     "Run sync_flex_trades to pull the latest data from IBKR (T+1 — yesterday's trades available today)."
                 ), None
-            total_pnl = sum(t.get("realized_pnl") or 0.0 for t in trades)
-            has_pnl = any(t.get("realized_pnl") is not None for t in trades)
+            # One read path for realised P&L (register F20): the sum of IBKR's own
+            # fifoPnlRealized over the statement executions in the filter, no open/close
+            # filter — the rule the dashboard windows apply (`FlexDataset.realised_window`).
+            total = sum(e.realised for e in executions)
+            by_class: dict[str, float] = {}
+            for e in executions:
+                by_class[e.asset_class or "?"] = by_class.get(e.asset_class or "?", 0.0) + e.realised
+            currencies = sorted({e.currency for e in executions if e.currency})
+            if len(currencies) == 1:
+                unit = f" {currencies[0]}"
+            elif currencies:
+                unit = f" (mixed currencies: {', '.join(currencies)} — a sum across them, not one currency)"
+            else:
+                unit = ""
             lines = [
-                f"- {t['time'][:10]} {t['symbol']} [{t.get('asset_class') or '?'}] "
-                f"{t['side']} {t['size']} @ {t['price']} "
-                f"comm={t.get('commission', 0):.2f}"
-                + (f" pnl={t['realized_pnl']:+.2f}" if t.get("realized_pnl") is not None else "")
-                for t in trades[:50]
+                f"- {e.trade_date or '?'} {e.symbol} [{e.asset_class or '?'}] "
+                f"{'BUY' if e.quantity > 0 else 'SELL'} {abs(e.quantity)} @ {e.price} "
+                f"comm={e.commission:.2f} pnl={e.realised:+.2f}"
+                for e in executions[:50]
             ]
-            suffix = f"  (showing first 50 of {len(trades)})" if len(trades) > 50 else ""
-            pnl_line = f"\nTotal realized P&L: {total_pnl:+.2f}" if has_pnl else ""
+            suffix = f"  (showing first 50 of {len(executions)})" if len(executions) > 50 else ""
+            split = (
+                "\nBy asset class: "
+                + ", ".join(f"{k} {v:+.2f}" for k, v in sorted(by_class.items(), key=lambda kv: -abs(kv[1])))
+                if len(by_class) > 1
+                else ""
+            )
+            # The statements' own `toDate` — what the store holds — not the newest trade date:
+            # a weekday with no fills still has a statement (claudia_ui #79).
+            held = statement_through(self._config.sqlite_path)
             return (
-                f"Trade history — Flex store ({len(trades)} total, all origins incl. mobile/TWS){suffix}:\n"
+                f"Trade history — Flex statements through {held or 'an unreadable date'} "
+                f"({len(executions)} executions, all origins incl. mobile/TWS){suffix}:\n"
                 + "\n".join(lines)
-                + pnl_line
+                + f"\nTotal realized P&L: {total:+.2f}{unit}"
+                + split
+                + "\nFills since the last statement are not in this list or its total — use source='live'."
             ), None
         # source == 'live'
         # Note: CP API /iserver/account/trades is session-scoped — mobile/TWS-placed
@@ -2205,8 +2280,14 @@ class ClaudeToolkit:
         ## Availability timing (T+1)
         Flex data is generated by IBKR's overnight batch processing. Today's trades are NEVER
         present in Flex on the same calendar day they execute. The Flex file for a given
-        trade date becomes available the following calendar day. This T+1 behavior is observed;
-        IBKR does not publish a specific daily cutoff time.
+        trade date becomes available the following calendar day. IBKR publishes what a day's
+        statement *includes* — "The statement cutoff time for commodities is generally 5:15 PM
+        EST, and the statement cutoff time for securities is generally 8:20 PM EST" (Client
+        Portal statements guide,
+        https://www.ibkrguides.com/clientportal/performanceandstatements/statements.htm) — and
+        no retrieval time; `store.newest_statement_day` is the rule. (This docstring said IBKR
+        publishes no cutoff until 2.2.0: register F19 corrected `flex_query.py` and left this
+        copy.)
 
         ## For today's trades
         Use get_pa_transactions (Portfolio Analyst back-office data — all origins, faster
@@ -2230,6 +2311,10 @@ class ClaudeToolkit:
         trades = flex.fetch_trades(account_id)
         cov = self._store.get_trade_date_coverage()
         archive = flex.last_archive_result
+        backup = flex.last_backup_result
+        # A pull is the one thing that can change whether the dataset is sound, so it is
+        # re-checked here, for every caller — the model, the MCP server, a host's startup.
+        validity = validate_dataset(self._config.sqlite_path)
         self._store.log_entry(
             "flex_sync",
             account=account_id,
@@ -2238,6 +2323,8 @@ class ClaudeToolkit:
             total=cov.get("total_trades"),
             archive_ok=archive.ok if archive else None,
             archive_reason=archive.reason if archive and not archive.ok else None,
+            backup=backup.status if backup else None,
+            valid=validity.ok,
         )
 
         lines = []
@@ -2254,6 +2341,13 @@ class ClaudeToolkit:
             )
         lines.append(f"Flex sync complete: {len(trades)} trades fetched for account {account_id}.")
         lines.extend(_format_coverage(cov))
+        if backup is not None and (line := _BACKUP_LINES.get(backup.status)):
+            lines.append(line + (f" {backup.reason}" if backup.reason else ""))
+        if not validity.ok:
+            lines.append(
+                f"⚠ Trade dataset failed validation after the sync — {validity.summary}. "
+                "Realised P&L computed from these rows is unverified until this is resolved."
+            )
         return "\n".join(lines), None
 
     def _sync_flex_archive(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -2359,7 +2453,13 @@ class ClaudeToolkit:
                 None,
             )
 
-        db_ids = self._store.get_all_execution_ids()
+        # The Flex dataset's tradeIDs — what every reader reports — not the legacy table's
+        # (register F20). An unreadable dataset holds none, so every XML tradeID is missing.
+        try:
+            with FlexDataset.open(self._config.sqlite_path) as flex:
+                db_ids: frozenset[str] = flex.trade_ids()
+        except StoreError:
+            db_ids = frozenset()
         now = datetime.now(UTC).isoformat()
         all_xml_ids: set[str] = set()
         file_lines: list[str] = []
@@ -2438,7 +2538,7 @@ class ClaudeToolkit:
         lines = [
             "Flex Import Integrity Check",
             f"  {len(xml_files)} XML file(s) in Drive account_data/",
-            f"  {len(db_ids)} execution_ids in SQLite trades table",
+            f"  {len(db_ids)} tradeIDs in the Flex dataset",
             "",
             *file_lines,
             "",

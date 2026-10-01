@@ -98,14 +98,31 @@ _FLEX_XML_B = b"""<?xml version="1.0"?>
 </FlexQueryResponse>"""
 
 
+def _archived_statement(*trade_ids: int) -> bytes:
+    """An archived XML statement holding `trade_ids`, built by the real fixture builders."""
+    from tests.flex_fixtures import statement, trade
+
+    rows = "".join(
+        trade(tradeID=str(t), transactionID=str(t + 100), ibExecID=f"0000cccc.{t:08d}.01.01") for t in trade_ids
+    )
+    return statement(rows).encode()
+
+
+def _seed_dataset(toolkit, *trade_ids: int) -> None:
+    """Store a statement holding `trade_ids` in the toolkit's own (temporary) Flex dataset."""
+    from tests.flex_fixtures import seed_flex_dataset
+
+    seed_flex_dataset(toolkit._config, _archived_statement(*trade_ids).decode())
+
+
 def test_verify_flex_import_all_present(toolkit):
-    """All tradeIDs in auto-synced XML present in SQLite, hash matches manifest → hash verified."""
+    """All tradeIDs in auto-synced XML are in the Flex dataset, hash matches manifest → hash verified."""
     import hashlib
 
-    content_a = _FLEX_XML_A
+    content_a = _archived_statement(9000001, 9000002)
     sha256_a = hashlib.sha256(content_a).hexdigest()
+    _seed_dataset(toolkit, 9000001, 9000002)
     toolkit._cache.download_account_files.return_value = [("flex_U123_2024-01-01_REF.xml", content_a)]
-    toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002"}
     toolkit._store.get_flex_import_entry.return_value = {
         "sha256": sha256_a,
         "imported_at": "2024-01-01T00:00:00",
@@ -118,21 +135,39 @@ def test_verify_flex_import_all_present(toolkit):
 
 
 def test_verify_flex_import_missing_records(toolkit):
-    """tradeID in XML but absent from SQLite → flagged as missing."""
-    toolkit._cache.download_account_files.return_value = [("flex_U123_2024-01-01_REF.xml", _FLEX_XML_A)]
-    toolkit._store.get_all_execution_ids.return_value = {"EX001"}  # EX002 missing
+    """tradeID in XML but absent from the Flex dataset → flagged as missing."""
+    _seed_dataset(toolkit, 9000001)  # 9000002 missing
+    toolkit._cache.download_account_files.return_value = [
+        ("flex_U123_2024-01-01_REF.xml", _archived_statement(9000001, 9000002))
+    ]
     toolkit._store.get_flex_import_entry.return_value = None  # first encounter
 
     result, _ = toolkit.execute("verify_flex_import", {})
     assert "1 missing" in result
-    assert "EX002" in result
+    assert "9000002" in result
     assert "re-import" in result
+
+
+def test_verify_flex_import_checks_the_flex_dataset_not_the_legacy_table(toolkit):
+    """Register F20: a statement the complete-capture write refused (schema drift) still
+    reached the legacy `trades` table, so a check against that table verified an import the
+    dataset every reader uses does not hold. The legacy answer is never asked for now."""
+    toolkit._store.get_all_execution_ids.return_value = {"9000001", "9000002"}  # the legacy table's word
+    toolkit._cache.download_account_files.return_value = [
+        ("flex_U123_2024-01-01_REF.xml", _archived_statement(9000001, 9000002))
+    ]
+    toolkit._store.get_flex_import_entry.return_value = None
+
+    result, _ = toolkit.execute("verify_flex_import", {})
+
+    assert "2 missing" in result, "the dataset holds neither statement row"
+    toolkit._store.get_all_execution_ids.assert_not_called()
+    assert "0 tradeIDs in the Flex dataset" in result
 
 
 def test_verify_flex_import_manual_pre_validated(toolkit):
     """Manual archive (ClaudIA_Full_Activity_*.xml) reported as pre-validated, not cross-checked."""
     toolkit._cache.download_account_files.return_value = [("ClaudIA_Full_Activity_123120.xml", _FLEX_XML_A)]
-    toolkit._store.get_all_execution_ids.return_value = {"EX001", "EX002"}
     toolkit._store.get_flex_import_entry.return_value = None  # first encounter
 
     result, _ = toolkit.execute("verify_flex_import", {})
@@ -395,6 +430,7 @@ def test_sync_flex_trades_warns_that_the_archive_did_not_update(toolkit, monkeyp
                 kind="schema-drift",
                 reason="<Trade> has attribute(s) the schema does not know: ['brandNewIBKRField']",
             )
+            self.last_backup_result = None
 
         def fetch_trades(self, account_id):
             return [{"time": "2026-08-10T09:30:00"}]
@@ -492,3 +528,78 @@ def test_empty_flex_dataset_is_reported_as_such():
     )
 
     assert "FLEX DATASET EMPTY" in lines[0]
+
+
+# ── what a pull reports about the Drive backup and the dataset's soundness (2.2.0) ──
+
+
+def _sync_with(toolkit, monkeypatch, backup):
+    """Run `_sync_flex_trades` against a fake Flex client whose pull left `backup` behind."""
+    from ibkr_core_mcp import claude_tools as ct
+
+    class FakeFlex:
+        def __init__(self, *a, **k):
+            self.last_archive_result = None
+            self.last_backup_result = backup
+
+        def fetch_trades(self, account_id):
+            return [{"time": "2026-08-10T09:30:00"}]
+
+    monkeypatch.setattr(ct, "FlexQueryClient", FakeFlex, raising=False)
+    monkeypatch.setattr("ibkr_core_mcp.flex_query.FlexQueryClient", FakeFlex)
+    toolkit._config.flex_token = "tok"
+    toolkit._config.flex_query_id = "123"
+    monkeypatch.setattr(
+        toolkit._store,
+        "get_trade_date_coverage",
+        lambda **kw: {"oldest": "2024-01-01", "newest": "2026-08-10", "stale": False, "total_trades": 1, "gaps": []},
+    )
+    text, _ = toolkit._sync_flex_trades({"account_id": "U0000000"})
+    return text
+
+
+def test_sync_flex_trades_says_nothing_about_a_backup_nobody_configured(toolkit, monkeypatch):
+    from ibkr_core_mcp.flex_query import FlexBackupResult
+
+    text = _sync_with(toolkit, monkeypatch, FlexBackupResult("not-configured"))
+
+    assert "store.db" not in text
+    assert toolkit._store.log_entry.call_args.kwargs["backup"] == "not-configured"
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "expected"),
+    [
+        ("uploaded", None, "store.db backed up to Drive account_data/."),
+        ("unchanged", None, "store.db unchanged by this pull — Drive backup left as is."),
+        ("failed", "RuntimeError: drive is down", "⚠ store.db Drive backup failed: RuntimeError: drive is down"),
+    ],
+)
+def test_sync_flex_trades_says_what_became_of_the_drive_backup(toolkit, monkeypatch, status, reason, expected):
+    from ibkr_core_mcp.flex_query import FlexBackupResult
+
+    text = _sync_with(toolkit, monkeypatch, FlexBackupResult(status, reason))
+
+    assert expected in text.splitlines()
+    assert toolkit._store.log_entry.call_args.kwargs["backup"] == status
+
+
+def test_sync_flex_trades_reports_a_dataset_that_fails_validation(toolkit, monkeypatch):
+    """The toolkit fixture's store file does not exist, which is an unreadable dataset —
+    a failure, said in the tool's own result so every caller of the pull hears it."""
+    text = _sync_with(toolkit, monkeypatch, None)
+
+    assert "⚠ Trade dataset failed validation after the sync — dataset unreadable:" in text
+    assert "unverified until this is resolved" in text
+    assert toolkit._store.log_entry.call_args.kwargs["valid"] is False
+
+
+def test_sync_flex_trades_says_nothing_about_a_sound_dataset(toolkit, monkeypatch):
+    from tests.flex_fixtures import annual_statement, seed_flex_dataset
+
+    seed_flex_dataset(toolkit._config, annual_statement(2025, trade_ids=(1, 2), pnl_per_trade=-5.0))
+
+    text = _sync_with(toolkit, monkeypatch, None)
+
+    assert "failed validation" not in text
+    assert toolkit._store.log_entry.call_args.kwargs["valid"] is True
