@@ -156,6 +156,17 @@ What changes for a caller:
   `validate_dataset_daily`, `dataset_fingerprint`, `last_import`, `statement_through`,
   `pull_due`. These never raise. claudia_ui carried them as `claudia/flex_sync.py`; same names,
   same signatures, same answers.
+- **What the last pull did is `flex_sync.last_pull(path)`** — new in this release, never raising.
+  It returns a `PullOutcome` read from the `session_log` row `sync_flex_trades` writes after
+  every pull: `at`, `trades_fetched`, `archive_ok` / `archive_reason`, `backup`
+  (`uploaded` / `unchanged` / `failed` / `not-configured`) and `valid`, with `problems` naming
+  what is known to have gone wrong (`archive`, `backup`, `validation`, in that order). **Take a
+  display level from `problems`, never from the tool's text** — a consumer that showed the text
+  under a tick showed "✅ … ⚠ store.db Drive backup failed". A field is `None` when the pull did
+  not record it (rows written before this release): unknown, not a problem and not a success.
+  Compare `at` with when you asked — a pull that raised before recording leaves an older row
+  as the newest. `None` for no row, an unopenable store, or a malformed row; the account the
+  row names is never carried.
 - **A pull backs the store up to Drive by itself.** `FlexQueryClient.fetch_trades` uploads
   `store.db` to `account_data/` when the pull changed the dataset and records the outcome in
   `last_backup_result`. A consumer that made this backup after its own pull should stop: a

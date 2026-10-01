@@ -533,13 +533,14 @@ def test_empty_flex_dataset_is_reported_as_such():
 # ── what a pull reports about the Drive backup and the dataset's soundness (2.2.0) ──
 
 
-def _sync_with(toolkit, monkeypatch, backup):
-    """Run `_sync_flex_trades` against a fake Flex client whose pull left `backup` behind."""
+def _sync_with(toolkit, monkeypatch, backup, archive=None):
+    """Run `_sync_flex_trades` against a fake Flex client whose pull left `backup` behind,
+    and `archive` as what became of the statement in the `flex_*` tables."""
     from ibkr_core_mcp import claude_tools as ct
 
     class FakeFlex:
         def __init__(self, *a, **k):
-            self.last_archive_result = None
+            self.last_archive_result = archive
             self.last_backup_result = backup
 
         def fetch_trades(self, account_id):
@@ -603,3 +604,32 @@ def test_sync_flex_trades_says_nothing_about_a_sound_dataset(toolkit, monkeypatc
 
     assert "failed validation" not in text
     assert toolkit._store.log_entry.call_args.kwargs["valid"] is True
+
+
+def test_what_the_pull_tool_records_is_what_last_pull_reads_back(toolkit, monkeypatch):
+    """The writer and the reader, joined: the row `sync_flex_trades` writes with the real
+    store is the outcome `flex_sync.last_pull` returns — every field, so a renamed key on
+    either side is a red test, not a consumer silently reading "unknown"."""
+    from ibkr_core_mcp.flex_query import FlexArchiveResult, FlexBackupResult
+    from ibkr_core_mcp.flex_sync import last_pull
+    from ibkr_core_mcp.store import SQLiteStore
+    from tests.flex_fixtures import annual_statement, seed_flex_dataset
+
+    seed_flex_dataset(toolkit._config, annual_statement(2025, trade_ids=(1, 2), pnl_per_trade=-5.0))
+    toolkit._store = SQLiteStore(toolkit._config)
+
+    _sync_with(
+        toolkit,
+        monkeypatch,
+        FlexBackupResult("failed", "RuntimeError: drive is down"),
+        archive=FlexArchiveResult(
+            ok=False, src_file="flex.xml", kind="schema-drift", reason="unknown attribute fooBar"
+        ),
+    )
+    outcome = last_pull(toolkit._config.sqlite_path)
+
+    assert outcome is not None
+    assert outcome.trades_fetched == 1
+    assert (outcome.archive_ok, outcome.archive_reason) == (False, "unknown attribute fooBar")
+    assert (outcome.backup, outcome.valid) == ("failed", True)
+    assert outcome.problems == ("archive", "backup")

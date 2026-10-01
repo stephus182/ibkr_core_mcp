@@ -10,6 +10,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`flex_sync.last_pull(path)` and `PullOutcome` — what the last Flex pull did, typed (register
+  F30; claudia_ui gap #86).** `sync_flex_trades` already writes one `session_log` row per pull:
+  what was fetched, whether the archive took the statement, what became of the Drive backup,
+  whether the dataset validates. A consumer could learn that the archive had refused a
+  statement — or, since this release, that the backup had failed — only by finding "⚠" in the
+  tool's text, and showed that text under a tick. `last_pull` reads the row back: `at`,
+  `trades_fetched`, `archive_ok`, `archive_reason`, `backup`, `valid`, and `problems` — the names
+  of what is known to have gone wrong, in a fixed order. A field the pull did not record is
+  `None`: unknown, not a problem and not a success. A value of the wrong type is never coerced
+  (the string "false" is truthy), so a malformed row is `None` with a warning. Never raises;
+  opens the store read-only; the account the row names is not carried. Tests: thirty, one of
+  them joining the writer and the reader through the real store, so a renamed key on either
+  side is red; twenty-three mutations red after — the first run found that nothing pinned the
+  archive key's name. See `docs/consumers.md`.
 - **`IBKRClient.cancel_order(..., *, manual_indicator=None)` — the CME Rule 536-B tag on a
   futures cancel (claudia_ui gap #7).** IBKR's Cancel Order page lists `manualIndicator` as a
   query parameter "required when trading Futures and Futures Options contracts to remain in

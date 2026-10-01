@@ -59,6 +59,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 from ibkr_core_mcp.flex_dataset import UNOPENABLE, open_read_only
 from ibkr_core_mcp.store import SQLiteStore, newest_statement_day
@@ -67,9 +68,11 @@ __all__ = [
     "DatasetCheck",
     "DatasetValidity",
     "LastImport",
+    "PullOutcome",
     "ValidationOutcome",
     "dataset_fingerprint",
     "last_import",
+    "last_pull",
     "newest_statement_day",
     "pull_due",
     "statement_through",
@@ -306,6 +309,111 @@ def last_import(sqlite_path: str | Path) -> LastImport | None:
         log.warning("last_import: unparseable trade_id_count %r", row[2])
         return None
     return LastImport(at=at, filename=str(row[0]), trade_count=count)
+
+
+@dataclass(frozen=True)
+class PullOutcome:
+    """What the last recorded Flex pull did — typed, so no caller reads it out of text.
+
+    A field is None when the pull did not record it: releases before 2.2.0 wrote no `backup`
+    and no `valid`, and early ones no archive outcome. **None is unknown — not a problem,
+    and not a success either.** The account the row names is deliberately not carried.
+    """
+
+    at: datetime
+    """When the pull finished and wrote its record. Compare it with when you asked: a pull
+    that raised before recording leaves an older pull's row as the newest."""
+    trades_fetched: int | None
+    archive_ok: bool | None
+    """Whether the statement reached the `flex_*` tables. False means the archive refused it
+    (a Flex field it does not know) while the legacy table still updated."""
+    archive_reason: str | None
+    backup: str | None
+    """`FlexBackupResult.status`: `uploaded`, `unchanged`, `failed` or `not-configured`. With
+    Drive configured it also says whether the pull changed the dataset."""
+    valid: bool | None
+    """`validate_dataset`'s verdict on the dataset as the pull left it."""
+
+    @property
+    def problems(self) -> tuple[str, ...]:
+        """What is KNOWN to have gone wrong, in a fixed order: `archive`, `backup`, `validation`.
+
+        Empty for a clean pull and for a row that recorded nothing. A caller that shows a
+        pull under a tick takes its level from this, never from the tool's text.
+        """
+        found = []
+        if self.archive_ok is False:
+            found.append("archive")
+        if self.backup == "failed":
+            found.append("backup")
+        if self.valid is False:
+            found.append("validation")
+        return tuple(found)
+
+
+def _typed(data: dict[str, object], key: str, kind: type) -> object:
+    """`data[key]` when it is absent, None or exactly a `kind`; raises `TypeError` otherwise.
+
+    Exactly: `bool` is an `int` to Python, and a count of `True` is not a count.
+    """
+    value = data.get(key)
+    if value is None or type(value) is kind:
+        return value
+    raise TypeError(f"{key} is {value!r}, not a {kind.__name__}")
+
+
+def last_pull(sqlite_path: str | Path) -> PullOutcome | None:
+    """The outcome of the most recent Flex pull on record (`session_log`, event `flex_sync`), or None.
+
+    `sync_flex_trades` writes one such row after every pull it completes, whoever started
+    it: what was fetched, whether the archive took the statement, what became of the Drive
+    backup, and whether the dataset validates. Until 2.2.0 a consumer could learn that the
+    archive had refused a statement only by finding "⚠" in the tool's text — and showed that
+    text under a tick (claudia_ui gap #86, register F30); the backup's outcome joined the same
+    text in 2.2.0. This reads the row back typed.
+
+    None when the store cannot be opened, holds no such row, or the row is malformed: a
+    value of the wrong type is never coerced — the string "false" is truthy — so the whole
+    row is refused, with a warning. A pull made by calling `FlexQueryClient.fetch_trades`
+    directly writes no row and is not seen here. Never raises.
+    """
+    try:
+        conn = open_read_only(sqlite_path)
+    except UNOPENABLE:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT ts, data FROM session_log WHERE event = 'flex_sync' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return None  # no session_log on a store that has never been initialised
+    finally:
+        conn.close()
+
+    if not row:
+        return None
+    try:
+        at = datetime.fromisoformat(str(row[0]))
+    except ValueError:
+        log.warning("last_pull: unparseable time %r", row[0])
+        return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    try:
+        data = {} if row[1] is None else json.loads(row[1])
+        if not isinstance(data, dict):
+            raise TypeError(f"the record is a {type(data).__name__}, not an object")
+        return PullOutcome(
+            at=at,
+            trades_fetched=cast("int | None", _typed(data, "trades_fetched", int)),
+            archive_ok=cast("bool | None", _typed(data, "archive_ok", bool)),
+            archive_reason=cast("str | None", _typed(data, "archive_reason", str)),
+            backup=cast("str | None", _typed(data, "backup", str)),
+            valid=cast("bool | None", _typed(data, "valid", bool)),
+        )
+    except (ValueError, TypeError) as exc:
+        log.warning("last_pull: the record of %s is malformed — %s", at.isoformat(), exc)
+        return None
 
 
 def validate_dataset_daily(sqlite_path: str | Path, now: datetime | None = None) -> ValidationOutcome:

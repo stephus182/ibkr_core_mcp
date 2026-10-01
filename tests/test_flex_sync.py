@@ -866,3 +866,231 @@ def test_last_import_is_none_rather_than_a_guess_when_the_count_is_not_an_intege
 
     assert last_import(good_db) is None
     assert "trade_id_count" in caplog.text
+
+
+# ── last_pull — what the last recorded Flex pull did (register F30) ──────────────
+#
+# A consumer showed the pull tool's text under a tick and could learn that the archive had
+# refused a statement, or that the Drive backup had failed, only by reading "⚠" out of that
+# text. The pull already writes its outcome to `session_log`; `last_pull` reads it back
+# typed. Rows are written here with the real store, as the tool writes them.
+
+import json  # noqa: E402
+import logging  # noqa: E402
+
+from ibkr_core_mcp.flex_sync import PullOutcome, last_pull  # noqa: E402
+
+_CLEAN = {
+    "account": "U0000000",
+    "trades_fetched": 120,
+    "newest": "2026-09-30",
+    "total": 1285,
+    "archive_ok": True,
+    "archive_reason": None,
+    "backup": "uploaded",
+    "valid": True,
+}
+
+
+def _store_with_pulls(mock_config, *rows):
+    """A real store whose `session_log` holds one `flex_sync` event per row, in order."""
+    from ibkr_core_mcp.store import SQLiteStore
+
+    store = SQLiteStore(mock_config)
+    for row in rows:
+        store.log_entry("flex_sync", **row)
+    return mock_config.sqlite_path
+
+
+def _rewrite_last_event(path, *, ts=None, data=None):
+    """Put raw text into the newest `session_log` row — the shapes the writer never produces."""
+    conn = sqlite3.connect(str(path))
+    if ts is not None:
+        conn.execute("UPDATE session_log SET ts = ? WHERE id = (SELECT MAX(id) FROM session_log)", (ts,))
+    if data is not None:
+        conn.execute("UPDATE session_log SET data = ? WHERE id = (SELECT MAX(id) FROM session_log)", (data,))
+    conn.commit()
+    conn.close()
+
+
+def test_last_pull_reads_back_what_the_pull_recorded(mock_config):
+    """Every field the tool writes, typed; a clean pull names no problem."""
+    before = datetime.now(UTC)
+    outcome = last_pull(_store_with_pulls(mock_config, _CLEAN))
+
+    assert isinstance(outcome, PullOutcome)
+    assert before - timedelta(seconds=5) <= outcome.at <= datetime.now(UTC) + timedelta(seconds=5)
+    assert outcome.at.tzinfo is not None
+    assert (outcome.trades_fetched, outcome.archive_ok, outcome.archive_reason) == (120, True, None)
+    assert (outcome.backup, outcome.valid) == ("uploaded", True)
+    assert outcome.problems == ()
+
+
+@pytest.mark.parametrize(
+    ("changes", "problems"),
+    [
+        ({"archive_ok": False, "archive_reason": "unknown column fooBar"}, ("archive",)),
+        ({"backup": "failed"}, ("backup",)),
+        ({"valid": False}, ("validation",)),
+        (
+            {"archive_ok": False, "archive_reason": "x", "backup": "failed", "valid": False},
+            ("archive", "backup", "validation"),
+        ),
+        ({"backup": "unchanged"}, ()),
+        ({"backup": "not-configured"}, ()),
+    ],
+    ids=["archive-refused", "backup-failed", "dataset-invalid", "all-three-in-order", "backup-unchanged", "no-drive"],
+)
+def test_last_pull_names_what_is_known_to_have_gone_wrong(mock_config, changes, problems):
+    """The names a consumer chooses its level from — never the tool's text."""
+    outcome = last_pull(_store_with_pulls(mock_config, {**_CLEAN, **changes}))
+
+    assert outcome is not None and outcome.problems == problems
+    if "archive_reason" in changes:
+        assert outcome.archive_reason == changes["archive_reason"]
+
+
+def test_last_pull_is_the_newest_pull_not_the_first(mock_config):
+    """Two pulls on record: the later one answers."""
+    path = _store_with_pulls(mock_config, {**_CLEAN, "backup": "failed"}, {**_CLEAN, "trades_fetched": 7})
+
+    outcome = last_pull(path)
+
+    assert outcome is not None and (outcome.trades_fetched, outcome.problems) == (7, ())
+
+
+def test_last_pull_ignores_other_events(mock_config):
+    """`session_log` holds every kind of event; only a pull is a pull."""
+    from ibkr_core_mcp.store import SQLiteStore
+
+    path = _store_with_pulls(mock_config, {**_CLEAN, "trades_fetched": 3})
+    SQLiteStore(mock_config).log_entry("startup", valid=False, backup="failed")
+
+    outcome = last_pull(path)
+
+    assert outcome is not None and (outcome.trades_fetched, outcome.problems) == (3, ())
+
+
+def test_a_row_from_before_the_outcome_was_recorded_claims_nothing(mock_config):
+    """2.1.0 wrote no `backup` and no `valid`, and early rows no archive outcome: unknown is
+    not a problem, and it is not a success either — the fields say None."""
+    outcome = last_pull(
+        _store_with_pulls(
+            mock_config, {"account": "U0000000", "trades_fetched": 90, "newest": "2026-09-28", "total": 1388}
+        )
+    )
+
+    assert outcome is not None
+    assert (outcome.archive_ok, outcome.archive_reason, outcome.backup, outcome.valid) == (None, None, None, None)
+    assert outcome.problems == ()
+
+
+def test_last_pull_never_carries_the_account(mock_config):
+    """The row holds the account id; the outcome does not, in any field or in its repr."""
+    outcome = last_pull(_store_with_pulls(mock_config, _CLEAN))
+
+    assert outcome is not None
+    assert "U0000000" not in repr(outcome)
+    assert not hasattr(outcome, "account")
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "not json",
+        "[1, 2]",
+        '"a string"',
+        json.dumps({**_CLEAN, "archive_ok": "yes"}),
+        json.dumps({**_CLEAN, "valid": 1}),
+        json.dumps({**_CLEAN, "valid": "false"}),
+        json.dumps({**_CLEAN, "backup": 5}),
+        json.dumps({**_CLEAN, "trades_fetched": "120"}),
+        json.dumps({**_CLEAN, "trades_fetched": True}),
+        json.dumps({**_CLEAN, "trades_fetched": 12.5}),
+        json.dumps({**_CLEAN, "archive_reason": 7}),
+    ],
+    ids=[
+        "not-json",
+        "a-list",
+        "a-string",
+        "archive-a-word",
+        "valid-an-int",
+        "valid-a-word",
+        "backup-a-number",
+        "count-a-string",
+        "count-a-bool",
+        "count-a-float",
+        "reason-a-number",
+    ],
+)
+def test_a_malformed_row_is_no_outcome_rather_than_a_guess(mock_config, caplog, data):
+    """A value of the wrong type is never coerced: "false" is truthy, and a tick chosen from
+    it would be a lie. None, with a warning that names the row."""
+    path = _store_with_pulls(mock_config, _CLEAN)
+    _rewrite_last_event(path, data=data)
+
+    with caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.flex_sync"):
+        assert last_pull(path) is None
+    assert "last_pull" in caplog.text
+
+
+def test_an_event_with_no_data_at_all_is_a_pull_that_recorded_nothing(mock_config):
+    """`log_entry` stores NULL when given no fields: a pull happened, nothing is known of it."""
+    path = _store_with_pulls(mock_config, _CLEAN)
+    conn = sqlite3.connect(str(path))
+    conn.execute("UPDATE session_log SET data = NULL")
+    conn.commit()
+    conn.close()
+
+    outcome = last_pull(path)
+
+    assert outcome is not None
+    assert (outcome.trades_fetched, outcome.archive_ok, outcome.backup, outcome.valid) == (None, None, None, None)
+
+
+@pytest.mark.parametrize("ts", ["yesterday", "", "2026-13-45T00:00:00"], ids=["a-word", "empty", "impossible-date"])
+def test_an_unreadable_time_is_no_outcome(mock_config, caplog, ts):
+    """No time on record is better than a wrong one — a consumer compares it with when it asked."""
+    path = _store_with_pulls(mock_config, _CLEAN)
+    _rewrite_last_event(path, ts=ts)
+
+    with caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.flex_sync"):
+        assert last_pull(path) is None
+
+
+def test_a_time_without_a_zone_is_read_as_utc(mock_config):
+    """The writer stamps UTC with an offset; a bare stamp from an older row is the same clock."""
+    path = _store_with_pulls(mock_config, _CLEAN)
+    _rewrite_last_event(path, ts="2026-09-30T20:44:46")
+
+    outcome = last_pull(path)
+
+    assert outcome is not None and outcome.at == datetime(2026, 9, 30, 20, 44, 46, tzinfo=UTC)
+
+
+def test_last_pull_never_raises_and_never_invents(tmp_path, mock_config):
+    """No store, a directory, a path SQLite cannot open, a store with no log, a store with no
+    pull: None each time."""
+    from ibkr_core_mcp.store import SQLiteStore
+
+    assert last_pull(tmp_path / "absent.db") is None
+    assert last_pull(tmp_path) is None
+    assert last_pull(str(tmp_path / "nul\x00.db")) is None
+    not_a_db = tmp_path / "garbage.db"
+    not_a_db.write_bytes(b"this is not a database")
+    assert last_pull(not_a_db) is None
+    bare = tmp_path / "bare.db"
+    sqlite3.connect(str(bare)).close()
+    assert last_pull(bare) is None  # no session_log table
+    SQLiteStore(mock_config).initialize()
+    assert last_pull(mock_config.sqlite_path) is None  # the table, and no pull in it
+
+
+def test_last_pull_opens_the_store_read_only(mock_config):
+    """Like every reader here: through `open_read_only`, so it can change nothing."""
+    path = _store_with_pulls(mock_config, _CLEAN)
+    from ibkr_core_mcp.flex_dataset import open_read_only
+
+    with patch("ibkr_core_mcp.flex_sync.open_read_only", wraps=open_read_only) as opener:
+        assert last_pull(path) is not None
+    opener.assert_called_once_with(path)
