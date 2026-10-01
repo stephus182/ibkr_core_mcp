@@ -10,6 +10,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`ClaudeToolkit.store` and `ClaudeToolkit.config` — public, read-only, beside `client`
+  (register F29; claudia_ui gap #87).** A host read the private `_store` and `_config` because
+  there was nothing else to read; a private name carries no compatibility promise, and a host
+  whose tests use `MagicMock` toolkits would have learned of a rename at startup. Each returns
+  the collaborator the toolkit was built with. **The Drive cache is deliberately not exposed**
+  (the operator's decision): an accessor would hand a consumer the whole Drive client — uploads,
+  the store's backup, deletes — where the one consumer that touches it reads cached bars. The
+  public surface is now exactly `client`, `store`, `config`, `tools`, `execute`, and a test
+  holds it to that set. Tests: eleven; seven mutations red. See `docs/consumers.md`.
 - **`flex_sync.last_pull(path)` and `PullOutcome` — what the last Flex pull did, typed (register
   F30; claudia_ui gap #86).** `sync_flex_trades` already writes one `session_log` row per pull:
   what was fetched, whether the archive took the statement, what became of the Drive backup,

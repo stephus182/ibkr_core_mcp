@@ -1866,6 +1866,25 @@ class ClaudeToolkit:
         return self._client
 
     @property
+    def store(self) -> SQLiteStore:
+        """The SQLite store the toolkit was built with — trades, the Flex dataset, the session log.
+
+        Public since 2.2.0 so a host does not read the private attribute (register F29). The
+        Drive cache is deliberately not exposed: an accessor would hand a consumer the whole
+        Drive client, uploads and deletes included.
+        """
+        return self._store
+
+    @property
+    def config(self) -> Config:
+        """The configuration the toolkit was built with — paths, the gateway URL, feature keys.
+
+        Public since 2.2.0, for the same reason as `store`. It holds secrets (the Flex token,
+        API keys, hidden from its repr): read the field you need, never log the object.
+        """
+        return self._config
+
+    @property
     def tools(self) -> list[dict[str, Any]]:
         """The tool schemas to hand to Claude, in `TOOL_DEFINITIONS` order, without the
         package-internal `capabilities` field."""

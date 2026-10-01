@@ -105,6 +105,24 @@ register F24). The calendars were loaded; the answer was not in the dict.
 - The weekday rule a consumer had to carry itself (claudia_ui's briefing decides a weekend
   before reading any list) can be deleted once it reads `sessions_today`.
 
+### Unreleased — `ClaudeToolkit.store` and `.config` are public; the Drive cache is not
+
+A host that needed the store or the configuration the toolkit was built with read the private
+`_store` and `_config`, because `client` was the only public accessor. A private name carries
+no compatibility promise.
+
+- **New, read-only:** `toolkit.store` (the `SQLiteStore`) and `toolkit.config` (the `Config`),
+  each the object passed to the constructor. Switch `toolkit._store` → `toolkit.store` and
+  `toolkit._config` → `toolkit.config`.
+- **`config` holds secrets** (the Flex token, API keys — hidden from its repr). Read the field
+  you need; never log the object.
+- **The Drive cache has no public accessor, on purpose.** `toolkit.cache` would hand a consumer
+  the whole Drive client — uploads, the `store.db` backup, deletes — where reading cached bars
+  is two calls. A consumer that reads `_cache` today (claudia_ui's chart pane does: `check` and
+  `load`) is reading a private name and should pin it in its own contract test; if that need is
+  ever served publicly, it will be with a narrow read, not with the object.
+- The public surface of a toolkit is exactly `client`, `store`, `config`, `tools`, `execute`.
+
 ### Unreleased — `cancel_order` can carry the CME Rule 536-B tag
 
 IBKR documents `manualIndicator` as required on a futures or futures-option **cancel**, as it is

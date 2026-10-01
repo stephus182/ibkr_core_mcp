@@ -38,6 +38,7 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 44 tools. See
 | `test_web_scraping.py` | firecrawl_search, search_site, crawl_site, fetch_page, `_validate_public_url` | `web_scraping` |
 | `test_typed_returns.py` | every handler that consumes a typed `IBKRClient` return, driven with models built from the live capture rather than hand-written dicts; the `json.dumps`/`isinstance(…, dict)` guards | (none) |
 | `test_assert_helpers.py` | `conftest.assert_tool_succeeded` / `assert_tool_failed` — the assertion helpers themselves, so a helper that cannot fail is caught | (none) |
+| `test_public_surface.py` | what a consumer may read off a `ClaudeToolkit`: `client`, `store`, `config` (by identity, read-only, documented), no accessor for the Drive cache, and the whole public surface as one exact set | (none) |
 | `../test_web_tools_live.py` | **LIVE** acceptance for firecrawl_search / search_site / crawl_site / fetch_page. Mandatory before any scraper change is called done — see `docs/web-scraper-reference.md` §10 | `integration` |
 | `test_errors.py` | `_safe_error` (parametrized) | `errors` |
 
