@@ -26,6 +26,7 @@ from pydantic import AnyUrl
 
 from ibkr_core_mcp import __version__
 from ibkr_core_mcp.claude_tools import READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
+from ibkr_core_mcp.flex_dataset import FlexDataset, FlexExecution
 from ibkr_core_mcp.models import json_default
 from ibkr_core_mcp.redaction import collapse_home, redact_error
 
@@ -87,6 +88,33 @@ def tool_annotations(capabilities: frozenset[str]) -> ToolAnnotations:
     )
 
 
+def _legacy_trade_row(e: FlexExecution) -> dict[str, Any]:
+    """One statement execution in the key set `ibkr://trades/recent` has always served.
+
+    Until 2.2.0 the resource listed rows of the legacy `trades` table. Its keys and their
+    conventions for a statement row are kept, so a client reading the resource sees no
+    change of shape: `execution_id` is IBKR's `tradeID` (what the legacy table keyed a
+    statement row by), `size` is signed as the statement signs it, `time` is the statement's
+    ISO `dateTime`, `commission` is a positive cost, `realized_pnl` is `fifoPnlRealized`.
+    What changes is the content: each execution appears once (the live-captured duplicates
+    are gone), and `asset_class` and `realized_pnl` are always filled — the legacy table held
+    neither for its rows imported before 2026-05-26. `trade_date` (IBKR's trade date) is new.
+    """
+    return {
+        "execution_id": str(e.trade_id) if e.trade_id is not None else e.execution_id,
+        "symbol": e.symbol,
+        "side": "BUY" if e.quantity > 0 else "SELL",
+        "size": e.quantity,
+        "price": e.price,
+        "time": e.time,
+        "commission": e.commission,
+        "account": e.account,
+        "asset_class": e.asset_class,
+        "realized_pnl": e.realised,
+        "trade_date": e.trade_date.isoformat() if e.trade_date else None,
+    }
+
+
 def _dispatch(name: str, args: dict[str, Any], toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
     """Route a tool call to the right handler. Never raises — always returns str."""
     try:
@@ -146,7 +174,11 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
         return [
             Resource(uri=AnyUrl("ibkr://accounts"), name="IBKR Accounts", mimeType="application/json"),
             Resource(uri=AnyUrl("ibkr://positions/current"), name="Current Positions", mimeType="application/json"),
-            Resource(uri=AnyUrl("ibkr://trades/recent"), name="Recent Trades (SQLite)", mimeType="application/json"),
+            Resource(
+                uri=AnyUrl("ibkr://trades/recent"),
+                name="Recent Trades (Flex statements, T+1)",
+                mimeType="application/json",
+            ),
             Resource(
                 uri=AnyUrl("ibkr://pnl/live"), name="Live P&L (WebSocket, --stream only)", mimeType="application/json"
             ),
@@ -192,7 +224,13 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                         default=json_default,
                     )
             elif path == "ibkr://trades/recent":
-                text = json.dumps(store.get_trades()[:100], indent=2, default=json_default)
+                # The statement executions, newest first — the executions every other reader
+                # reports (register F20). It listed the legacy `trades` table until 2.2.0,
+                # where a fill captured live and later delivered by Flex appears twice. The
+                # key set and its conventions are unchanged (`_legacy_trade_row`).
+                with FlexDataset.open(toolkit._config.sqlite_path) as flex:
+                    recent = [_legacy_trade_row(e) for e in flex.executions()[:100]]
+                text = json.dumps(recent, indent=2, default=json_default)
             elif path == "ibkr://pnl/live":
                 # Only populated if the server was started with --stream; otherwise
                 # pnl_snapshots stays empty and this always returns {}.
@@ -510,7 +548,14 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
                         item.last or 0,
                     )
             elif isinstance(item, TradeExecution):
-                store.upsert_trades([_parse_stream_execution(item)])
+                execution = _parse_stream_execution(item)
+                store.upsert_trades([execution])
+                # And into the Flex dataset as a placeholder, keyed by IBKR's exec id, so the
+                # activity report sees the fill and the T+1 statement lands on this row —
+                # what `get_trades(source='live')` has done since 2026-08-04. The stream's
+                # conid and security type ride along: the legacy row shape has no place for
+                # them, and a placeholder keyed by contract is what a later reader can use.
+                store.upsert_flex_trades_from_live([{**execution, "conid": item.conid, "secType": item.sec_type}])
             elif isinstance(item, PnLUpdate):
                 store.record_pnl_snapshot(
                     account=item.account,
