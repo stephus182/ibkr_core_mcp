@@ -99,8 +99,18 @@ Reviewed with the operator on the rendered dialogs, one at a time (register F6, 
 - **The message says what the click leaves in place**, per dialog, and none says "cancelled":
   place and bracket "Not sent — nothing reached IBKR."; modify "Left unchanged — the order is as
   it was."; cancel "Kept — the order is still working."; reply "Not confirmed — the order was
-  not placed." (`place_order_and_confirm` still wraps a declined reply as "User declined IBKR
-  order reply".)
+  not placed." — that last one on the standalone `reply_order()` only; inside a chain the reply
+  has its own type, next item.
+- **A reply that was not confirmed is `ReplyNotConfirmedError`** (register F34), raised by the
+  chains of `place_order_and_confirm`, `modify_order_and_confirm` and the bracket after IBKR
+  has been answered no. A `HumanAuthError`, exported, and **neither Gate 2 type**: the write had
+  already been posted when IBKR asked, so a row that says "nothing was sent" must not claim it.
+  The message says what happened and why, and quotes IBKR's question on one line — "IBKR asked
+  for a confirmation before accepting the request, and it was declined at the dialog — IBKR was
+  answered no. IBKR's question: "…"" — with "nobody answered the dialog in time" or "the dialog
+  could not be completed (…)" as the other two reasons; `__cause__` is the dialog's own error.
+  It was `HumanAuthError("User declined IBKR order reply")` for all three, a timeout included.
+  **A consumer that matched "declined IBKR order reply" must match the type.**
 - **One colour rule on every dialog: the button that validates is blue, the button that
   discards is red.** The banner says what the action is; the colour says go ahead or back out.
 - **The cancel dialog's buttons are now `VALIDATE` and `DISCARD`** (were `CANCEL ORDER` and

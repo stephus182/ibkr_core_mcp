@@ -29,6 +29,7 @@ from ibkr_core_mcp.exceptions import (
     IBKRCoreError,
     IBKRRateLimitError,
     OrderValidationError,
+    ReplyNotConfirmedError,
     StoreError,
     StreamingError,
 )
@@ -155,6 +156,7 @@ __all__ = [
     "HumanAuthError",
     "ConfirmationDeclinedError",
     "ConfirmationTimeoutError",
+    "ReplyNotConfirmedError",
     "OrderValidationError",
     "FlexQueryError",
     "StreamingError",

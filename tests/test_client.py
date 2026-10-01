@@ -7,7 +7,15 @@ from unittest.mock import patch as _patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError, OrderValidationError
+from ibkr_core_mcp.exceptions import (
+    ConfigError,
+    ConfirmationDeclinedError,
+    ConfirmationTimeoutError,
+    HumanAuthError,
+    IBKRAPIError,
+    OrderValidationError,
+    ReplyNotConfirmedError,
+)
 from tests.security.structural import annotation_names_a_model, response_model_names
 
 # The `client` fixture lives in tests/conftest.py (shared with tests/security/).
@@ -1785,13 +1793,123 @@ def test_place_order_and_confirm_logs_a_declined_reply_as_not_confirmed(client):
             _make_ok_response([{"id": "22222222-2222-4222-8222-222222222222", "message": ["second"]}]),
             _make_ok_response({"confirmed": False}),
         ]
-        with pytest.raises(HumanAuthError):
+        with pytest.raises(ReplyNotConfirmedError):
             client.place_order_and_confirm("U1234567", order, reply_log=reply_log)
     assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [
         ("11111111-1111-4111-8111-111111111111", True),
         ("22222222-2222-4222-8222-222222222222", False),
     ]
     assert mock_post.call_args_list[2].kwargs.get("json") == {"confirmed": False}
+
+
+# ---------------------------------------------------------------------------
+# Register F34 (2026-10-01): a reply that was not confirmed says what happened and why
+# ---------------------------------------------------------------------------
+
+_REPLY_ID = "11111111-1111-4111-8111-111111111111"
+_REPLY_ENTRY: dict[str, Any] = {
+    "id": _REPLY_ID,
+    "message": ["You are about to submit a stop order.<br/>Please be aware of the&nbsp;risks.", "Are you sure?"],
+}
+_ASKED_AND = "IBKR asked for a confirmation before accepting the request, and "
+_ANSWERED_NO = " — IBKR was answered no."
+_THE_QUESTION = ' IBKR\'s question: "You are about to submit a stop order. Please be aware of the risks. Are you sure?"'
+
+
+def _resolve_a_reply_the_dialog_refuses(
+    client: Any, refusal: HumanAuthError, entry: dict[str, Any] | None = None
+) -> tuple[ReplyNotConfirmedError, MagicMock]:
+    """Run one reply whose dialog ends in `refusal`; hand back the error raised and the POSTs."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=refusal),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response({"confirmed": False})
+        with pytest.raises(ReplyNotConfirmedError) as caught:
+            client._resolve_one_reply(dict(_REPLY_ENTRY if entry is None else entry))
+    return caught.value, mock_post
+
+
+def test_a_declined_reply_says_what_ibkr_asked_and_that_it_was_declined(client):
+    """What happened, why, and the question itself on one line — tags, entities and line
+    breaks cleaned as the dialog showed it — so the sentence can be shown as it is."""
+    declined = ConfirmationDeclinedError("Not confirmed — the order was not placed.")
+
+    error, posts = _resolve_a_reply_the_dialog_refuses(client, declined)
+
+    assert str(error) == _ASKED_AND + "it was declined at the dialog" + _ANSWERED_NO + _THE_QUESTION
+    assert error.__cause__ is declined
+    posts.assert_called_once()
+    assert posts.call_args.kwargs.get("json") == {"confirmed": False}
+
+
+def test_a_reply_nobody_answered_is_not_reported_as_declined(client):
+    """The defect: a dialog left to dismiss itself read "User declined IBKR order reply". And
+    the Gate 2 timeout's own words do not fit either — a no WAS sent to IBKR."""
+    timed_out = ConfirmationTimeoutError(
+        "Confirmation dialog timed out after 60 s with no decision — nothing was sent to IBKR; the order is as it was"
+    )
+
+    error, posts = _resolve_a_reply_the_dialog_refuses(client, timed_out)
+
+    assert str(error) == _ASKED_AND + "nobody answered the dialog in time" + _ANSWERED_NO + _THE_QUESTION
+    assert "declined" not in str(error)
+    assert "nothing was sent" not in str(error)
+    assert error.__cause__ is timed_out
+    assert posts.call_args.kwargs.get("json") == {"confirmed": False}
+
+
+def test_a_reply_dialog_that_could_not_be_completed_says_why(client):
+    """Neither a decline nor a timeout: the dialog layer's own reason is carried, not replaced."""
+    broken = HumanAuthError("No GUI dialog available: not on macOS and tkinter is not installed.")
+
+    error, posts = _resolve_a_reply_the_dialog_refuses(client, broken)
+
+    assert str(error) == (
+        _ASKED_AND
+        + "the dialog could not be completed (No GUI dialog available: not on macOS and tkinter is not installed.)"
+        + _ANSWERED_NO
+        + _THE_QUESTION
+    )
+    assert posts.call_args.kwargs.get("json") == {"confirmed": False}
+
+
+def test_a_reply_with_no_question_text_quotes_nothing(client):
+    declined = ConfirmationDeclinedError("Not confirmed — the order was not placed.")
+
+    error, _posts = _resolve_a_reply_the_dialog_refuses(client, declined, {"id": _REPLY_ID})
+
+    assert str(error) == _ASKED_AND + "it was declined at the dialog" + _ANSWERED_NO
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        ConfirmationDeclinedError("Not confirmed — the order was not placed."),
+        ConfirmationTimeoutError("Confirmation dialog timed out after 60 s with no decision"),
+        HumanAuthError("Unexpected dialog response: ''"),
+    ],
+    ids=["declined", "not-answered", "dialog-failed"],
+)
+def test_no_unconfirmed_reply_says_cancelled_or_timed_out(client, refusal):
+    """Two phrases a consumer may still match by words: "cancel" is an order verb on this path
+    (claudia_ui gap #67), and "timed out" is the Gate 2 timeout, where nothing was sent."""
+    error, _posts = _resolve_a_reply_the_dialog_refuses(client, refusal, {"id": _REPLY_ID, "message": ["Sure?"]})
+
+    assert "cancel" not in str(error).lower()
+    assert "timed out" not in str(error).lower()
+
+
+def test_reply_not_confirmed_is_its_own_public_type():
+    """A `HumanAuthError`, so every existing handler still catches it; neither Gate 2 type, so
+    a consumer's rows for a declined or timed-out DIALOG cannot claim it."""
+    import ibkr_core_mcp
+
+    assert issubclass(ReplyNotConfirmedError, HumanAuthError)
+    assert not issubclass(ReplyNotConfirmedError, (ConfirmationDeclinedError, ConfirmationTimeoutError))
+    assert ibkr_core_mcp.ReplyNotConfirmedError is ReplyNotConfirmedError
+    assert "ReplyNotConfirmedError" in ibkr_core_mcp.__all__
 
 
 def test_place_order_and_confirm_without_a_log_is_unchanged(client):

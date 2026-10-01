@@ -76,7 +76,15 @@ import urllib3
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError, OrderValidationError
+from ibkr_core_mcp.exceptions import (
+    ConfigError,
+    ConfirmationDeclinedError,
+    ConfirmationTimeoutError,
+    HumanAuthError,
+    IBKRAPIError,
+    OrderValidationError,
+    ReplyNotConfirmedError,
+)
 from ibkr_core_mcp.human_auth import (
     ORDER_WRITE_AUTHORIZATION_TTL_S,
     OrderWriteAuthorization,
@@ -446,6 +454,26 @@ def _validate_delivery_option(option: str) -> None:
     """
     if option not in _DELIVERY_OPTIONS:
         raise ConfigError(f"Invalid delivery option {option!r}: must be one of {sorted(_DELIVERY_OPTIONS)}.")
+
+
+def _reply_not_confirmed_message(question: str, refusal: HumanAuthError) -> str:
+    """What happened and why, for a reply IBKR was answered no to (register F34).
+
+    One sentence a consumer can show as it is: IBKR asked, why it was not confirmed — declined
+    at the dialog, nobody answered in time, or the dialog's own reason — and the question,
+    cleaned as the dialog showed it and folded onto one line. Never "nothing was sent" (the
+    write had been posted when IBKR asked), never "cancelled", and not the words "timed out",
+    which a consumer may still read as the Gate 2 timeout.
+    """
+    if isinstance(refusal, ConfirmationDeclinedError):
+        why = "it was declined at the dialog"
+    elif isinstance(refusal, ConfirmationTimeoutError):
+        why = "nobody answered the dialog in time"
+    else:
+        why = f"the dialog could not be completed ({refusal})"
+    sentence = f"IBKR asked for a confirmation before accepting the request, and {why} — IBKR was answered no."
+    asked = " ".join(reply_message_text(question).split())
+    return f'{sentence} IBKR\'s question: "{asked}"' if asked else sentence
 
 
 def _as_reply_list(data: Any) -> list[dict[str, Any]]:
@@ -2759,8 +2787,10 @@ class IBKRClient:
         from the confirmation POST (caller normalizes list vs. dict per its own
         return-type contract via _as_reply_list()/_as_reply_dict()).
 
-        On decline (HumanAuthError from confirm_reply_dialog), POSTs
-        {"confirmed": False} to IBKR *before* re-raising — unlike the standalone
+        When the reply is not confirmed (any HumanAuthError from confirm_reply_dialog: declined,
+        not answered in time, or the dialog failed), POSTs {"confirmed": False} to IBKR *before*
+        raising `ReplyNotConfirmedError`, whose message says which and quotes IBKR's question
+        (register F34; it was "User declined IBKR order reply" for all three) — unlike the standalone
         reply_order(), which raises without ever contacting IBKR and leaves the
         order ambiguous on IBKR's side. This is a deliberate behavior change, not
         a bug: see docs/plans/archive/security-orders/2026-07-06-order-reply-confirmation-design.md.
@@ -2808,9 +2838,9 @@ class IBKRClient:
             # The unauthorised path keeps its call exactly as before — no label to show.
             reply_kwargs = {"order_label": authorization.label} if authorization is not None else {}
             confirm_reply_dialog(reply_id, message, options, **reply_kwargs)
-        except HumanAuthError:
+        except HumanAuthError as refusal:
             self._post(f"/iserver/reply/{reply_id}", {"confirmed": False})
-            raise HumanAuthError("User declined IBKR order reply") from None
+            raise ReplyNotConfirmedError(_reply_not_confirmed_message(message, refusal)) from refusal
         record["confirmed"] = True
         return self._post(f"/iserver/reply/{reply_id}", {"confirmed": True})
 
@@ -2839,9 +2869,10 @@ class IBKRClient:
 
         Runs the loop body back-to-back with no unrelated requests interleaved — IBKR's
         docs warn that a reply left pending while other requests are made will 503 on
-        the next reply attempt. If the human declines any reply in the chain,
-        HumanAuthError is raised (see _resolve_one_reply() for the decline-then-POST
-        semantics, a deliberate change from reply_order()'s behavior).
+        the next reply attempt. If any reply in the chain is not confirmed — declined, or
+        not answered — IBKR is answered no and ReplyNotConfirmedError (a HumanAuthError) is
+        raised, saying which (see _resolve_one_reply() for the decline-then-POST semantics,
+        a deliberate change from reply_order()'s behavior).
 
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
                 https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md

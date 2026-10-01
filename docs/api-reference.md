@@ -983,7 +983,9 @@ at every step (not just a bare `reply_id`). Calls `place_order()` for the initia
 Gate 1 + Gate 2 already run correctly there.
 
 Runs the loop back-to-back with no unrelated requests interleaved, per IBKR's reply-immediacy
-warning (see above). If the human declines any reply in the chain, `HumanAuthError` is raised
+warning (see above). If any reply in the chain is not confirmed — declined at the dialog, or not
+answered before it dismissed itself — `ReplyNotConfirmedError` (a `HumanAuthError`) is raised,
+its message saying which and quoting IBKR's question
 — but the decline is POSTed to IBKR (`{"confirmed": False}`) first, unlike the standalone
 `reply_order()`, which raises without ever contacting IBKR and leaves the order ambiguous on
 IBKR's side. This is a deliberate behavior difference, not a bug.

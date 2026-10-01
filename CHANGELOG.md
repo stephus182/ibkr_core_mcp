@@ -13,6 +13,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **`ConfirmationDeclinedError` — a declined Gate 2 dialog has its own type (register F6).** A
   subclass of `HumanAuthError`, exported, raised by all three renderers when the abandon button
   is pressed, with the dialog's own sentence for what the click leaves in place. See *Changed*.
+- **`ReplyNotConfirmedError` — a reply IBKR was answered no to says what happened and why
+  (register F34).** A subclass of `HumanAuthError`, exported, raised by the reply chain of
+  `place_order_and_confirm`, `modify_order_and_confirm` and the bracket. See *Changed*.
 - **`set_dialog_icon(path)` — a host's own mark on the Gate 2 dialogs.** Exported from the
   package; `None` clears it. The package ships no icon and no broker's logo: without one the
   dialog shows the system's default. The dialog reads the file when it opens; one that cannot
@@ -112,6 +115,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     (0.90, 0.72, 0.00), the amber before it "not a good color" on screen.
   - Each dialog must state its two button roles and its abandon sentence: the shared renderer
     has no defaults for them, and refuses a role outside its vocabulary before anything is shown.
+- **A reply that was not confirmed says what happened and why (register F34).** The reply chain
+  raised `HumanAuthError("User declined IBKR order reply")` whenever the reply dialog did not
+  end in a confirmation — a decline, a dialog nobody answered, and a dialog that failed alike.
+  It now raises `ReplyNotConfirmedError`, still after answering IBKR no: "IBKR asked for a
+  confirmation before accepting the request, and it was declined at the dialog — IBKR was
+  answered no. IBKR's question: "…"", or "…and nobody answered the dialog in time…", or "…and
+  the dialog could not be completed (…)…". The question is IBKR's text as the dialog showed it,
+  on one line; `__cause__` is the dialog's own error. Deliberately not either Gate 2 type and
+  never "nothing was sent": the write had been posted when IBKR asked. **A consumer that matched
+  the words "declined IBKR order reply" must match the type.**
 - **`get_trades(source='store')` reads the Flex dataset (register F20, claudia_ui gap #74).** It
   summed `realized_pnl` from the legacy `trades` table, which holds a fill captured live and
   its statement row under two ids and no realised figure for rows imported before 2026-05-26,

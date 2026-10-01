@@ -124,6 +124,20 @@ class ConfirmationDeclinedError(HumanAuthError):
     """
 
 
+class ReplyNotConfirmedError(HumanAuthError):
+    """A question IBKR asked before accepting an order write was not confirmed, and IBKR was
+    answered no.
+
+    Raised by the reply chain of `place_order_and_confirm`, `modify_order_and_confirm` and the
+    bracket, after the `{"confirmed": false}` POST. Its own type because it is neither Gate 2
+    outcome: the write had already been sent when IBKR asked, so "nothing was sent" is not true
+    of it. The message says what happened and why — declined at the dialog, nobody answered in
+    time, or the dialog could not be completed — and quotes IBKR's question; `__cause__` is the
+    dialog's own error for a consumer that wants the reason as a type. Until 2.2.0 all three
+    arrived as `HumanAuthError("User declined IBKR order reply")` (register F34).
+    """
+
+
 class OrderValidationError(IBKRCoreError, ValueError):
     """Raised when this package refuses an order write because it would break a safety rule.
 

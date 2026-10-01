@@ -46,9 +46,11 @@ try:
     # terminal response. One fingerprint, one dialog per reply.
     # Verified live 2026-07-06: a single order needed 3 sequential replies
     # (price-band %, no-market-data, mandatory-cap-price) before Submitted.
-    # Declining any reply mid-chain POSTs {"confirmed": False} to IBKR before
-    # raising HumanAuthError — unlike bare reply_order() below, which raises
-    # without ever telling IBKR, leaving the order ambiguous on IBKR's side.
+    # A reply that is not confirmed — declined, or nobody answered the dialog —
+    # POSTs {"confirmed": False} to IBKR before raising ReplyNotConfirmedError
+    # (a HumanAuthError; its message says which, and quotes IBKR's question) —
+    # unlike bare reply_order() below, which raises without ever telling IBKR,
+    # leaving the order ambiguous on IBKR's side.
     result = client.place_order_and_confirm(account_id, order)
 except HumanAuthError as e:
     print(f"Order not sent: {e}")
