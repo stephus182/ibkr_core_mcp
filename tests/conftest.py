@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -187,6 +188,171 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
     return [f"a test reached for the operator's data directory: {refusal}" for refusal in refusals]
 
 
+# ── No unit test reaches a human ────────────────────────────────────────────────
+#
+# The two order gates end at a person: Gate 1 is Apple's LocalAuthentication prompt
+# (`human_auth.require_touch_id`), Gate 2 a dialog (`order_confirm`). Until 2026-10-01 what
+# kept a unit test from opening either was every test remembering to replace both. On that
+# day a mutation run skipped Gate 1 in `cancel_order`; the test had replaced Touch ID alone,
+# so the code walked on to the REAL Gate 2 dialog, on the operator's screen, during a live
+# session. Nothing reached IBKR — the DELETE was a mock and sockets are blocked — but whether
+# the mutant was "caught" was decided by which button a person pressed, and five older tests
+# had the same shape (register F32). So the rule is structural, like the two above it.
+#
+# A gate reaches a person through four doors, each shut in `pytest_configure`:
+#
+# 1. `LocalAuthentication` — Gate 1 runs in-process through PyObjC, with no audit event, so
+#    the framework itself is replaced in `sys.modules`. `require_touch_id` imports it inside
+#    the call, so the stand-in is what it gets.
+# 2. `AppKit` — the same, for `_order_dialog` run inside the test process.
+# 3. `tkinter.Tk` — the non-macOS dialog; replaced where tkinter can be imported at all.
+# 4. A child process running `_order_dialog.py` or `osascript` — how `order_confirm` shows the
+#    dialog on macOS. Python audits process creation, so the audit hook refuses those two by
+#    the name of what would run, whichever function asked.
+#
+# The refusal is `pytest.fail`, a `BaseException`: it passes `require_touch_id`'s
+# `except ImportError` and `_show_confirm_dialog`'s `except Exception` fallback alike. Nothing
+# is exempt, integration tests included — none of them drives a gate. A test OF a gate places
+# its own double for its own duration (`monkeypatch.setitem(sys.modules, …)`,
+# `patch("…order_confirm.subprocess.run")`), as those tests always did.
+# `tests/security/test_no_human_reached.py` is what fails when a door is open, and every test
+# there is safe on a broken guard.
+#
+# What it cannot see, stated rather than implied: a prompt raised by code that already holds a
+# reference to the real framework taken before configure time, a dialog shown by a child of a
+# child under another name, and anything that disables it on purpose. It catches accidents.
+_HUMAN_GUARD = {"armed": False}
+_human_refusals: list[str] = []  # read by `pytest_sessionfinish`
+_DIALOG_LAUNCHERS = ("_order_dialog.py", "osascript")
+# Process creation, with the positions of the arguments that say what would run. Argument
+# order: https://docs.python.org/3.11/library/audit_events.html (checked 2026-10-01).
+_PROCESS_EVENTS: dict[str, tuple[int, ...]] = {
+    "subprocess.Popen": (0, 1),  # executable, args
+    "os.system": (0,),  # command
+    "os.posix_spawn": (0, 1),  # path, argv
+    "os.exec": (0, 1),  # path, args
+    "os.spawn": (1, 2),  # mode, path, args
+}
+
+
+def _refuse_human(door: str) -> None:
+    """Record the attempt and fail the test: a unit test was about to reach a person."""
+    _human_refusals.append(door)
+    pytest.fail(
+        f"a unit test tried to reach a human ({door}) — replace the gate in the test: Touch ID "
+        "with a LocalAuthentication double, the dialog with a patch of the confirm function or "
+        "of order_confirm.subprocess.run",
+        pytrace=True,
+    )
+
+
+class _NoHumanFramework(types.ModuleType):
+    """A stand-in for a GUI framework: importing it works, using it is refused.
+
+    Dunder lookups answer `AttributeError` like any module without the attribute — pytest,
+    coverage and `inspect` read those off everything in `sys.modules`, and that is not a test
+    reaching a person.
+    """
+
+    def __getattr__(self, name: str) -> object:
+        """Refuse any real use; stay an ordinary module for introspection."""
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        if _HUMAN_GUARD["armed"]:
+            _refuse_human(f"{self.__name__}.{name}")
+        raise AttributeError(name)
+
+
+_GATE_1_FRAMEWORK = _NoHumanFramework("LocalAuthentication")
+_DIALOG_FRAMEWORK = _NoHumanFramework("AppKit")
+_displaced: dict[str, object] = {}  # what configure replaced, put back by unconfigure
+
+
+def _no_tk_window(*args: object, **kwargs: object) -> None:
+    """What `tkinter.Tk` is during the run."""
+    _refuse_human("tkinter.Tk")
+
+
+def _names_a_dialog_launcher(value: object) -> str | None:
+    """The dialog launcher `value` would run, if any: a path, a command line, or a list of them."""
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if isinstance(value, os.PathLike):
+        value = os.fspath(value)
+    if isinstance(value, str):
+        # One string is a path (`executable`) or a whole shell command (`os.system`): look at
+        # each word's last component, so `…/tests/_order_dialog_helper.py` is not a launcher.
+        for word in value.split():
+            name = word.strip("'\"").rsplit("/", 1)[-1]
+            if name in _DIALOG_LAUNCHERS:
+                return name
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if (found := _names_a_dialog_launcher(item)) is not None:
+                return found
+    return None
+
+
+def _human_hook(event: str, args: tuple[object, ...]) -> None:
+    """The audit hook: refuse a child process that would show a Gate 2 dialog."""
+    if not _HUMAN_GUARD["armed"]:
+        return
+    positions = _PROCESS_EVENTS.get(event)
+    if positions is None:
+        return
+    for position in positions:
+        if position < len(args) and (launcher := _names_a_dialog_launcher(args[position])) is not None:
+            _refuse_human(f"{event} {launcher}")
+
+
+def _shut_the_tk_door(tkinter_module: types.ModuleType) -> None:
+    """Replace `Tk` on a tkinter module, keeping the original for `_open_the_doors_again`.
+
+    Its own function so the replacement is tested on a machine without tkinter too — a Python
+    built without Tcl/Tk has no door to shut, and the branch below would never run there.
+    """
+    _displaced["tkinter.Tk"] = tkinter_module.Tk
+    tkinter_module.Tk = _no_tk_window  # type: ignore[attr-defined]
+
+
+def _shut_the_doors_to_a_human() -> None:
+    """Replace the two frameworks and `tkinter.Tk`, and arm the process hook. Called once,
+    from `pytest_configure`."""
+    for stand_in in (_GATE_1_FRAMEWORK, _DIALOG_FRAMEWORK):
+        _displaced[stand_in.__name__] = sys.modules.get(stand_in.__name__, _displaced)
+        sys.modules[stand_in.__name__] = stand_in
+    try:
+        import tkinter
+    except ImportError:  # no tkinter, no door: `order_confirm.tk` is None there too
+        pass
+    else:
+        _shut_the_tk_door(tkinter)
+    sys.addaudithook(_human_hook)
+    _HUMAN_GUARD["armed"] = True
+
+
+def _open_the_doors_again() -> None:
+    """Undo `_shut_the_doors_to_a_human` (an audit hook cannot be removed, only disarmed)."""
+    _HUMAN_GUARD["armed"] = False
+    for name in (_GATE_1_FRAMEWORK.__name__, _DIALOG_FRAMEWORK.__name__):
+        was = _displaced.pop(name, _displaced)
+        if was is _displaced:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = was  # type: ignore[assignment]
+    if "tkinter.Tk" in _displaced:
+        import tkinter
+
+        tkinter.Tk = _displaced.pop("tkinter.Tk")  # type: ignore[assignment,misc]
+
+
+def _human_violations(refusals: list[str]) -> list[str]:
+    """One violation per recorded attempt — the decision behind `pytest_sessionfinish`, as a
+    pure function."""
+    return [f"a test tried to reach a human: {refusal}" for refusal in refusals]
+
+
 @pytest.fixture
 def tmp_db(tmp_path):
     """Temporary SQLite database path."""
@@ -270,10 +436,13 @@ def pytest_configure(config):
     # for the test body.
     sys.addaudithook(_operator_data_hook)
     _OPERATOR_GUARD["armed"] = True
+    # And the two gates, for the same reason again: a module-scoped fixture or an import can
+    # reach Touch ID or a dialog as easily as a test body can.
+    _shut_the_doors_to_a_human()
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fail the run if a refusal of the operator's directory was swallowed.
+    """Fail the run if a refusal of the operator's directory, or of a human gate, was swallowed.
 
     A refusal raised in a thread fails no test, and `except BaseException` would hide one
     anywhere, so every refusal of the real directory is recorded and reported here. A hook
@@ -281,10 +450,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     what `pytest.main` returns after this hook, so setting it is what turns the run red.
     """
     violations = _refusal_violations(_operator_refusals)
-    if not violations:
+    reached = _human_violations(_human_refusals)
+    if not violations and not reached:
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-    lines = ["", "REAL DATA REACHED FOR BY THE TEST SUITE (tests/conftest.py, constitution §7):", *violations]
+    lines: list[str] = []
+    if violations:
+        lines += ["", "REAL DATA REACHED FOR BY THE TEST SUITE (tests/conftest.py, constitution §7):", *violations]
+    if reached:
+        lines += ["", "A HUMAN GATE REACHED FOR BY THE TEST SUITE (tests/conftest.py, register F32):", *reached]
     for line in lines:
         if reporter is not None:
             reporter.write_line(line, red=True, bold=True)
@@ -297,6 +471,7 @@ def pytest_unconfigure(config):
     from pytest_socket import enable_socket
 
     _OPERATOR_GUARD["armed"] = False
+    _open_the_doors_again()
     enable_socket()
 
 

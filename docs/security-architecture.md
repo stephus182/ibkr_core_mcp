@@ -474,6 +474,23 @@ blocked and skipped silently — review 2026-09-13.) `_no_real_secrets` makes `l
 no-op at every import site and removes every variable carrying a package prefix, so `Config()`
 in a test cannot pull the repository's `.env` into the process.
 
+Two more things a unit test cannot reach, both from `pytest_configure` on, both by structure
+rather than by every test remembering:
+
+- **The operator's data** (2026-09-30). An audit hook refuses every SQLite open under
+  `~/.ibkr_core` and every file opened, created, changed or removed there
+  (`test_no_real_data_io.py`); integration tests alone are exempt.
+- **A person** (2026-10-01). The two gates end at a human — a Touch ID prompt, a Gate 2 dialog —
+  and a test that replaced one gate and not the other could open the real one: a mutation run
+  that skipped Gate 1 did, on the operator's screen. The four doors are shut: Apple's
+  `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that
+  refuse any use, `tkinter.Tk` is replaced where tkinter exists, and an audit hook refuses a
+  child process that would run `_order_dialog.py` or `osascript`. The refusal is a
+  `BaseException`, so `require_touch_id`'s `except ImportError` and the dialog's
+  `except Exception` fallback cannot absorb it; it is recorded, and the run fails at its end if
+  one was swallowed. Nothing is exempt — a test of a gate places its own double for its own
+  duration (`test_no_human_reached.py`, every test of which is safe on a broken guard).
+
 ### 6.8 The capability registry
 
 Every entry of `TOOL_DEFINITIONS` and both server-local definitions carry `capabilities`. The
@@ -578,6 +595,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-14 | No per-invocation audit log | The client transcript is the operator's trail; a parameter log would carry model-supplied URLs and paths into a channel `redact_error` does not cover | A host without a transcript consumes the server |
 | 2026-09-14 | GitHub Actions stay tag-pinned, not SHA-pinned | `gh secret list` is empty and every job is `contents: read` on a public repository; a moved tag gains nothing | CI holds a write-capable secret (a publish token) |
 | 2026-09-14 | The read-then-fetch exfiltration chain under prompt injection is accepted, not blocked | Any public URL can carry data, so a filter is theatre; what the chain cannot reach — credentials, order execution — is held by test; fetch tools carry `openWorldHint` for clients that confirm outbound calls | A host consumes the server without per-call confirmation, or the tools gain a credential-bearing read |
+| 2026-10-01 | No unit test can reach a person: the gates' four doors (`LocalAuthentication`, `AppKit`, `tkinter.Tk`, a child process running `_order_dialog.py` or `osascript`) are shut from `pytest_configure`, with no exemption | What kept a test from opening a real prompt or dialog was each test replacing both gates. A mutation run skipped Gate 1 in `cancel_order`, the test had replaced Touch ID alone, and the real Gate 2 dialog opened on the operator's screen in a live session (nothing reached IBKR: the DELETE was a mock, sockets blocked) — the mutant's verdict was then a person's click. Five older tests had the same shape (register F32). Stand-ins in `sys.modules` rather than patches of our own functions, because the framework is the one door every route shares | An integration test needs a real gate — then an opt-in by name with a staleness test, as for DNS |
 
 ---
 
