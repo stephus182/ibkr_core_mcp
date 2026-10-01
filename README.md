@@ -230,7 +230,7 @@ See [docs/tools-reference.md](https://github.com/stephus182/ibkr_core_mcp/blob/m
 | `sync_flex_archive` | Re-sync full Flex archive from GDrive parquet |
 | `check_flex_coverage` | Activity distribution report — trade-date coverage across stored history (not an integrity check) |
 | `import_flex_file` | Import a locally downloaded Flex XML file into SQLite |
-| `verify_flex_import` | Import integrity check — cross-checks XML tradeIDs on Drive against SQLite; uses manifest to skip re-verifying unchanged files |
+| `verify_flex_import` | Import integrity check — cross-checks XML tradeIDs on Drive against the Flex dataset; uses manifest to skip re-verifying unchanged files |
 | `get_live_orders` | Working orders (Submitted, PreSubmitted, Inactive, …) |
 | `get_order_status` | Status of a specific order by ID |
 | `diagnose_orders` | Diagnose order issues — checks session, permissions, account |
@@ -551,7 +551,7 @@ The cache key is `(date_str, tuple(exchange_codes))` — stored in a module-leve
 
 ## Flex Import Integrity
 
-`verify_flex_import` is a manifest-based integrity check that proves every tradeID in the source XML archives is present in SQLite. It does **not** analyse activity patterns — use `check_flex_coverage` for that.
+`verify_flex_import` is a manifest-based integrity check that proves every tradeID in the source XML archives is present in the Flex dataset (`FlexDataset.trade_ids`). It does **not** analyse activity patterns — use `check_flex_coverage` for that.
 
 ### How it works
 

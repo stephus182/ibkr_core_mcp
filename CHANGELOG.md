@@ -9,7 +9,85 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **`ibkr_core_mcp.flex_dataset` — a typed, read-only API over the Flex dataset (claudia_ui's
+  Flex boundary, decided 2026-09-29: this package answers questions about the account; a host
+  decides when to ask and how to show the answer).** `FlexDataset.open(path)` answers realised
+  P&L over a window (`realised_window`), the daily curve (`realised_series`), closed-lot
+  win/loss counts (`round_trip_stats`), per-asset-class performance (`realised_by_type`), how
+  far the statements reach (`coverage`), which executions a statement already holds
+  (`settled_execution_ids`), every statement execution of given contracts
+  (`contract_executions`) or filtered by symbol and trade date (`executions`), and the
+  statements' tradeIDs (`trade_ids`). Answers are frozen dataclasses (`RealisedWindow`,
+  `RealisedPoint`, `RoundTripStats`, `TypeBreakdown`, `FlexCoverage`, `FlexExecution`), never
+  rows. Every connection is opened read-only through `open_read_only`, which builds the SQLite
+  URI with `Path.as_uri()`, refuses a path holding a NUL (`as_uri()` writes it `%00`, where
+  SQLite ends the path and opens the prefix), and opens the path as `SQLiteStore` does —
+  `~` is not expanded; `Config.from_env` already did. Its errors are `UNOPENABLE`, and
+  `FlexDataset.open` turns each into `StoreError`, because a figure that cannot be read is not
+  a zero. The queries are the ones claudia_ui's dashboard ran on these
+  tables, moved here and proven equal on a real account's store — every day, week, month and
+  year of its history, to the cent — with IBKR's annual statements agreeing 6/6 years.
+  `FlexDataset` is exported from the package root.
+- **`ibkr_core_mcp.flex_sync` — the dataset's state, relocated from claudia_ui:**
+  `validate_dataset` (file integrity, `execution_key` unique and present, the realised identity
+  `Trade == Lot + WashSale`), `validate_dataset_daily` (at most once a day per dataset, its
+  verdict in a 0600 sidecar), `dataset_fingerprint`, `last_import`, `statement_through`,
+  `pull_due`, and `newest_statement_day` re-exported. None of them raises: an unreadable store
+  — a missing file, a value that is no path, a NUL — is a failed validity, an unknown
+  fingerprint, an unknown statement date; a `flex_import_log` count that is not an integer is
+  an unknown last import, not an `int()` error (claudia_ui gap #89).
+- **`FlexQueryClient.last_backup_result` (`FlexBackupResult`: `uploaded`, `unchanged`, `failed`,
+  `not-configured`).** `fetch_trades` backs `store.db` up to Drive `account_data/` after any
+  pull that changed the dataset — the fingerprint is taken before the pull writes — so a pull
+  started by the model, the MCP server or a script no longer leaves Drive's copy a version
+  behind (claudia_ui made the backup after its own startup pull only; found 2026-08-05). With
+  no Drive folder configured nothing is attempted: asking Drive anyway would start the OAuth
+  flow on every pull.
+
+### Changed
+- **`get_trades(source='store')` reads the Flex dataset (register F20, claudia_ui gap #74).** It
+  summed `realized_pnl` from the legacy `trades` table, which holds a fill captured live and
+  its statement row under two ids and no realised figure for rows imported before 2026-05-26,
+  so its total disagreed with the rule reconciled against IBKR's annual statements. It now
+  lists `FlexDataset.executions` — the statement executions, each once — and its total is
+  `realised_window`'s for the same dates, to the cent. The header names the statement's own
+  `toDate`; the end date is inclusive (the legacy reader compared a date with a timestamp and
+  dropped the end day); the symbol is IBKR's statement symbol, matched without regard to the
+  case of its ASCII letters (a future's is its contract symbol, `ESU6`); fills since the last
+  statement are named as absent — `source='live'` has them.
+- **`verify_flex_import` compares the XML's tradeIDs with the Flex dataset's
+  (`FlexDataset.trade_ids`)**, not the legacy table's. On a real store the two sets were equal;
+  the legacy table's other ids were live-captured duplicates.
+- **`ibkr://trades/recent` lists the 100 newest statement executions (T+1)** in the key set it
+  has always served (`execution_id` is the tradeID, `size` signed, `commission` a positive
+  cost), plus `trade_date`; each execution appears once.
+- **`get_trade_date_coverage` counts the Flex dataset** — statement rows by IBKR's trade date,
+  live placeholders by their fill date — instead of the legacy table. `total_trades` is now a
+  count of executions, not rows (1,255 against 1,388 on a real store), and a gap that began
+  with an FX fill on a Friday evening now begins on that fill's trade date, the Monday.
+- **`sync_flex_trades` reports the Drive backup and re-validates the dataset after every pull,
+  whoever started it:** "store.db backed up to Drive account_data/.", "store.db unchanged by
+  this pull — Drive backup left as is.", or "⚠ store.db Drive backup failed: <reason>", and a
+  warning line when the dataset fails validation.
+- **The MCP server's `--stream` loop records each execution in the Flex dataset as a
+  placeholder**, as `get_trades(source='live')` has since 2026-08-04, so the activity report
+  sees the fill and its statement lands on the same row.
+
+### Deprecated
+- **`SQLiteStore.get_trades` and `SQLiteStore.get_all_execution_ids`.** They read the legacy
+  `trades` table, which no reader in this package uses any more; use `FlexDataset.executions`
+  and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
+
 ### Fixed
+- **`scripts/rebuild_flex_dataset.py` and `scripts/audit_flex_dataset.py` opened the store with a
+  hand-formatted `file:{path}?mode=ro`.** SQLite reads a URI's query after the first `?`, its
+  fragment after `#`, and decodes `%HH` escapes (https://www.sqlite.org/uri.html § 3.1–3.2),
+  so over a path holding any of the three the check that stops a rebuild destroying live fills
+  opened — and created — a different, empty file, counted no live row, and let the rebuild drop
+  the real tables (measured 2026-09-30). Both now open through `flex_dataset.open_read_only`,
+  and a structural test forbids a hand-built `mode=` URI anywhere else in the package or its
+  scripts.
 - **A bare futures root no longer resolves to an expired NYMEX contract for ~9 days a month
   (claudia_ui gap #71, register F16).** `_last_trade_key` — the one rule behind `get_futures`'
   `front_month` flag, its ordering, and the FUT branch of `_resolve_snapshot_conid` that

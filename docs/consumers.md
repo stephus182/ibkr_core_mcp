@@ -105,6 +105,49 @@ register F24). The calendars were loaded; the answer was not in the dict.
 - The weekday rule a consumer had to carry itself (claudia_ui's briefing decides a weekend
   before reading any list) can be deleted once it reads `sessions_today`.
 
+### Unreleased — the Flex dataset has a typed read API, and every reader in this package uses it
+
+The package owns the Flex dataset and what it means (claudia_ui's Flex boundary, decided
+2026-09-29). Until now a consumer that wanted realised P&L by window, closed-lot statistics or
+"is this fill on a statement yet" wrote SQL against `flex_trade` and `flex_lot` — claudia_ui
+held twenty-two such statements — while this package's own `get_trades(source='store')` summed
+a different table and reported a different lifetime figure (register F20).
+
+What changes for a caller:
+
+- **Ask `ibkr_core_mcp.flex_dataset.FlexDataset`, not the tables.** Open, ask, close, on one
+  thread:
+
+  ```python
+  from ibkr_core_mcp.flex_dataset import FlexDataset
+
+  with FlexDataset.open(config.sqlite_path) as flex:
+      week = flex.realised_window(monday, today)   # RealisedWindow: total, by_asset, currencies
+      settled = flex.settled_execution_ids(ids)    # frozenset of the ids a statement holds
+  ```
+
+  Every method raises `StoreError` when the dataset cannot be read — a missing file, table or
+  column, a damaged database, an unparseable stored date — so an unreadable store is never
+  shown as zero. The connection is `mode=ro`; nothing the reader does can write. The path is
+  opened as `SQLiteStore` opens it — no `~` expansion, a relative path against the working
+  directory — and a path holding a NUL is refused rather than cut at it.
+- **The dataset's state is `ibkr_core_mcp.flex_sync`:** `validate_dataset`,
+  `validate_dataset_daily`, `dataset_fingerprint`, `last_import`, `statement_through`,
+  `pull_due`. These never raise. claudia_ui carried them as `claudia/flex_sync.py`; same names,
+  same signatures, same answers.
+- **A pull backs the store up to Drive by itself.** `FlexQueryClient.fetch_trades` uploads
+  `store.db` to `account_data/` when the pull changed the dataset and records the outcome in
+  `last_backup_result`. A consumer that made this backup after its own pull should stop: a
+  second upload re-sends the file the pull has just sent.
+- **`get_trades(source='store')`, `verify_flex_import`, `ibkr://trades/recent` and
+  `get_trade_date_coverage` read the Flex dataset.** Their totals and counts change where the
+  legacy table was wrong: each execution appears once, `total_trades` counts executions, the
+  realised total matches `realised_window`. The resource keeps its keys. The tools' text
+  changes as the CHANGELOG lists; a host that renders it verbatim (claudia_ui's System log
+  does) shows the new backup and validation lines of `sync_flex_trades`.
+- **`SQLiteStore.get_trades` and `get_all_execution_ids` are deprecated** (legacy table; removed
+  in 3.0). Their replacements are `FlexDataset.executions` and `FlexDataset.trade_ids`.
+
 ### 2.1.0 — brackets, and three stricter refusals
 
 **New public API.** A bracket — a parent order plus its held children — is one POST of a

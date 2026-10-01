@@ -268,6 +268,14 @@ Trade history from IBKR or local SQLite store.
 **Output:** Text list of trade executions — one line per trade with time, symbol, asset class,
 side, size, price (plus commission and realized P&L for `source="store"`).
 
+**Note (store, since 2.2.0):** reads the Flex dataset through `FlexDataset.executions` — the
+statement executions, each once, newest first — and its realised total is
+`FlexDataset.realised_window`'s for the same dates, to the cent (register F20: it summed the
+legacy `trades` table until then). The header names the statement's own `toDate`; `end` is
+inclusive; `symbol` is IBKR's statement symbol, matched without regard to the case of its ASCII
+letters (a future's is its contract symbol, `ESU6`, not `ES`). Fills not yet on a statement are
+not listed — `source="live"` has them.
+
 **Note (live):** Returns all trades on the account regardless of order origin (mobile, TWS, API).
 Calls IBKR with `?days=7`, the documented maximum for this endpoint.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
@@ -337,7 +345,8 @@ tables hold no settled row.
 
 ### `verify_flex_import`
 Integrity check — compares source XML archives in Google Drive `account_data/`
-against the local SQLite trades table.
+against the tradeIDs of the local Flex dataset (`FlexDataset.trade_ids`; the legacy `trades`
+table until 2.2.0).
 
 > **Not read-only, though it never touches trade data.** This entry and the tool's own
 > description both said "read-only" until 2026-09-16. The handler writes to the import
