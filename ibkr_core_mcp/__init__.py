@@ -31,6 +31,7 @@ from ibkr_core_mcp.exceptions import (
     StoreError,
     StreamingError,
 )
+from ibkr_core_mcp.flex_dataset import FlexDataset
 from ibkr_core_mcp.flex_query import FlexQueryClient
 from ibkr_core_mcp.gateway import GatewayManager
 from ibkr_core_mcp.human_auth import require_touch_id
@@ -86,6 +87,7 @@ __all__ = [
     "SQLiteStore",
     "ClaudeToolkit",
     "FlexQueryClient",
+    "FlexDataset",
     # Brackets — module-level, unlike the two bracket methods on IBKRClient. `client` is
     # not exported as a namespace, so these are reachable only from here.
     "pair_bracket_response",
