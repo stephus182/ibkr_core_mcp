@@ -87,19 +87,6 @@ def _restrict(path: Path, mode: int) -> None:
         log.warning("Could not restrict %s to %o: %s", collapse_home(str(path)), mode, exc)
 
 
-# SQL that reads a trade date out of `trades.time` regardless of which writer produced it.
-# Flex writes ISO (2026-08-04T14:21:42); the live CP API and streaming paths write IBKR's
-# compact 20260804-14:21:42. Kept as one constant so the date range, the gap scan and any
-# future reader cannot drift into understanding different subsets of the same table.
-_TRADE_DATE_SQL = """
-    CASE
-        WHEN time LIKE '____-__-__%' THEN substr(time, 1, 10)
-        WHEN time LIKE '________-%'  THEN
-            substr(time, 1, 4) || '-' || substr(time, 5, 2) || '-' || substr(time, 7, 2)
-    END
-"""
-
-
 def _iso_trade_time(value: Any) -> Any:
     """IBKR's compact `YYYYMMDD-HH:MM:SS` as ISO `YYYY-MM-DDTHH:MM:SS`.
 
@@ -180,7 +167,10 @@ class SQLiteStore:
     WAL journal mode is enabled on every connection for safe concurrent reads.
 
     Tables:
-      trades             — all Flex-synced and live-API trade executions
+      trades             — LEGACY: statement and live executions, ten fields each; still
+                           written, read by nothing in the package since 2.2.0 (register
+                           F20 — see `get_trades`). The trade record is the generated
+                           `flex_*` dataset (`flex_store`), read through `flex_dataset`
       flex_import_log    — SHA-256 integrity manifest for imported Flex XML files
       position_snapshots — timestamped position snapshots
       backtest_results   — vectorised backtest run history
@@ -535,10 +525,14 @@ class SQLiteStore:
             )
 
     def get_all_execution_ids(self) -> set[str]:
-        """Return the set of all execution_ids currently stored in the trades table.
+        """Return the set of all execution_ids stored in the LEGACY `trades` table.
 
-        Used by verify_flex_import to cross-check against source XML files.
-        Does not modify data.
+        **Deprecated since 2.2.0, with the table (register F20).** `verify_flex_import` no
+        longer calls it: it compares an archive's tradeIDs with the Flex dataset's
+        (`flex_dataset.FlexDataset.trade_ids`), because that is the dataset every reader
+        reports from. The set this returns mixes two id spaces — IBKR's `tradeID` for a row
+        a statement wrote, IBKR's exec id for a row captured live — which is why it is not
+        redefined in place. Does not modify data.
         """
         self.initialize()
         with self._connect() as conn:
@@ -600,7 +594,7 @@ class SQLiteStore:
         return None
 
     def get_trade_date_coverage(self, gap_threshold_days: int = 45, *, now: datetime | None = None) -> dict[str, Any]:
-        """Return trade activity distribution from the trades table, and whether the Flex dataset is current.
+        """Return trade activity distribution from the Flex dataset, and whether it is current.
 
         Reports the date range and periods with no recorded executions.
         This is an ACTIVITY REPORT, not an import integrity check:
@@ -612,15 +606,24 @@ class SQLiteStore:
         **The report and the staleness flag answer two different questions and read two
         different things.**
 
-        The *report* (oldest / newest / total / gaps) covers **every** row of the legacy
-        `trades` table, whichever writer produced it. It used to match on the ISO shape alone, which silently
-        excluded rows written by the live CP API and streaming paths in IBKR's compact
-        format — 38 of 1,206 on the live store, so the newest date it could report was
-        2026-08-04 while the table already held 2026-08-05. The sharp consequence was not
-        the missing day: a window containing *only* live-captured trades would appear as a
-        45+ day hole and be reported as inactivity, and ClaudIA's system prompt tells it
-        that date gaps are verified inactivity. A fabricated gap would have been passed to
-        the user as fact.
+        The *report* (oldest / newest / total / gaps) covers **every execution in
+        `flex_trade`, once** — the operator's 2026-08-05 rule, "the activity report must see
+        every row", applied to the table every other reader uses. A statement row is dated by
+        IBKR's trade date. A placeholder — a fill captured from the Client Portal before its
+        statement — is dated by its own fill time, the only date it has, so a stretch of
+        live-only activity is never reported as a gap (ClaudIA's system prompt tells the model
+        that date gaps are verified inactivity; a fabricated one would be passed on as fact).
+        When the statement arrives it lands on the placeholder's row, so the execution is
+        still counted once.
+
+        Until 2.2.0 the report read the legacy `trades` table (register F20), where a fill
+        captured live and later delivered by Flex sits under two ids: measured 2026-09-30 on
+        the operator's store, 1,388 rows for 1,255 executions, and 413 "trade dates" — the
+        calendar date of each fill's clock time — for 393 IBKR trade dates; one of the five
+        45-day gaps moved by three calendar days, because its edge was a Friday-evening FX fill
+        after the IdealPro day roll, which IBKR books to the Monday. Nothing in this package
+        reads the legacy table any more except the two public methods kept for outside
+        callers until it is retired (`get_trades`, `get_all_execution_ids`).
 
         The *staleness* flag is one sentence (operator rule, claudia_ui 2026-09-28): **the
         store is current when it holds the statement for the weekday before today (ET)**.
@@ -655,14 +658,15 @@ class SQLiteStore:
         """
         self.initialize()
         with self._connect() as conn:
-            # S608: the only interpolation is `_TRADE_DATE_SQL`, a module-level constant
-            # of literal SQL — no caller input reaches this string. Kept as a constant
-            # rather than inlined so the date range, the gap scan and any future reader
-            # cannot drift into understanding different subsets of the same table.
-            rows = conn.execute(
-                f"SELECT DISTINCT {_TRADE_DATE_SQL} AS d FROM trades WHERE d IS NOT NULL ORDER BY d"  # noqa: S608
-            ).fetchall()
-            total = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT CASE WHEN source = 'flex' THEN trade_date_iso"
+                    " ELSE substr(date_time_iso, 1, 10) END AS d"
+                    " FROM flex_trade WHERE d IS NOT NULL ORDER BY d"
+                ).fetchall()
+                total = conn.execute("SELECT COUNT(*) FROM flex_trade").fetchone()[0]
+            except sqlite3.DatabaseError:
+                rows, total = [], 0  # no Flex dataset in this store — nothing to report
             settled_newest = self._settled_newest_date(conn)
             held = self._statement_through(conn)
 
@@ -695,10 +699,9 @@ class SQLiteStore:
             "oldest": dates[0].isoformat() if dates else None,
             "newest": newest.isoformat() if newest else None,
             "days_since_newest": (today - newest).days if newest else None,
-            # The settled figures are reported separately from the legacy ones so a caller
-            # never has to mix them. `_format_coverage` used to print days_since_newest
-            # (legacy) beside stale (Flex-derived), yielding the uninterpretable
-            # "DATA STALE (0d old)".
+            # `newest` counts a placeholder's fill date; `settled_newest` is the newest
+            # statement trade date. They differ exactly when a fill is waiting for its
+            # statement, and a caller never has to mix them.
             "settled_newest": settled.isoformat() if settled else None,
             "days_since_settled": (today - settled).days if settled else None,
             "flex_dataset_empty": settled_newest is False,
@@ -897,7 +900,18 @@ class SQLiteStore:
         start: str | None = None,
         end: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return trades, optionally filtered by symbol and date range."""
+        """Return rows of the LEGACY `trades` table, optionally filtered by symbol and time.
+
+        **Deprecated since 2.2.0 (register F20): nothing in this package reads this table any
+        more, and a consumer should not either.** It carries no realised P&L for the 822 rows imported
+        before 2026-05-26, and holds a fill captured live and later delivered by Flex under
+        two ids. Trade history and realised P&L are `flex_dataset.FlexDataset.executions`
+        and `realised_window`. The method stays because it is public API and the table is
+        still written; both go together in a later release.
+
+        `start`/`end` are compared with the row's ISO timestamp as text, so a date-only
+        `end` excludes that day's fills.
+        """
         self.initialize()
         query, params = self._apply_filters("SELECT * FROM trades WHERE 1=1", [], symbol, start, end, "time")
         query += " ORDER BY time DESC"

@@ -237,6 +237,23 @@ def _trade(eid: str, day: str) -> dict[str, object]:
     }
 
 
+def _settle(store, *days: str) -> None:
+    """One statement execution per entry of `days` (ISO trade dates), in the real table.
+
+    The coverage report reads the Flex dataset since 2.2.0 (register F20); until then these
+    tests seeded the legacy `trades` table through `_trade`, which is kept for the tests that
+    are about that table.
+    """
+    store.initialize_flex_tables()
+    with store._connect() as conn:
+        first = conn.execute("SELECT COUNT(*) FROM flex_trade").fetchone()[0]
+        for i, day in enumerate(days, start=first):
+            conn.execute(
+                "INSERT INTO flex_trade (row_uid, execution_key, source, trade_date_iso) VALUES (?, ?, 'flex', ?)",
+                (f"row-{i}", f"exec-{i}", day),
+            )
+
+
 def test_coverage_empty_store(store):
     cov = store.get_trade_date_coverage()
     assert cov["oldest"] is None
@@ -246,7 +263,7 @@ def test_coverage_empty_store(store):
 
 
 def test_coverage_single_trade_no_gap(store):
-    store.upsert_trades([_trade("E1", "2026-01-15")])
+    _settle(store, "2026-01-15")
     cov = store.get_trade_date_coverage()
     assert cov["oldest"] == cov["newest"] == "2026-01-15"
     assert cov["gaps"] == []
@@ -254,24 +271,14 @@ def test_coverage_single_trade_no_gap(store):
 
 def test_coverage_no_gap_within_threshold(store):
     """Two trade dates 45 days apart — at threshold, not over it — no gap flagged."""
-    store.upsert_trades(
-        [
-            _trade("E1", "2026-01-01"),
-            _trade("E2", "2026-02-15"),  # 45 days later
-        ]
-    )
+    _settle(store, "2026-01-01", "2026-02-15")  # 45 days later
     cov = store.get_trade_date_coverage()
     assert cov["gaps"] == [], f"45-day gap should not be flagged, got: {cov['gaps']}"
 
 
 def test_coverage_gap_just_over_threshold(store):
     """46 days apart — one day over the threshold — must be flagged."""
-    store.upsert_trades(
-        [
-            _trade("E1", "2026-01-01"),
-            _trade("E2", "2026-02-16"),  # 46 days later
-        ]
-    )
+    _settle(store, "2026-01-01", "2026-02-16")  # 46 days later
     cov = store.get_trade_date_coverage()
     assert len(cov["gaps"]) == 1
     gap = cov["gaps"][0]
@@ -283,12 +290,7 @@ def test_coverage_gap_just_over_threshold(store):
 def test_coverage_gap_request_range_excludes_trade_dates(store):
     """request_from/to must be the day AFTER last trade and day BEFORE next trade —
     not the trade dates themselves, to avoid re-importing existing records."""
-    store.upsert_trades(
-        [
-            _trade("E1", "2026-01-01"),
-            _trade("E2", "2026-04-01"),  # 89 days later
-        ]
-    )
+    _settle(store, "2026-01-01", "2026-04-01")  # 89 days later
     cov = store.get_trade_date_coverage()
     assert len(cov["gaps"]) == 1
     gap = cov["gaps"][0]
@@ -298,14 +300,8 @@ def test_coverage_gap_request_range_excludes_trade_dates(store):
 
 def test_coverage_multiple_gaps(store):
     """Dataset with two separate large gaps — both must be reported."""
-    store.upsert_trades(
-        [
-            _trade("E1", "2024-01-01"),
-            _trade("E2", "2024-06-01"),  # 152 days — gap 1
-            _trade("E3", "2024-06-15"),  # 14 days — normal
-            _trade("E4", "2025-03-01"),  # 259 days — gap 2
-        ]
-    )
+    # 152 days (gap 1), then 14 (normal), then 259 (gap 2)
+    _settle(store, "2024-01-01", "2024-06-01", "2024-06-15", "2025-03-01")
     cov = store.get_trade_date_coverage()
     assert len(cov["gaps"]) == 2
     assert cov["gaps"][0]["gap_start"] == "2024-01-01"
@@ -314,12 +310,7 @@ def test_coverage_multiple_gaps(store):
 
 def test_coverage_custom_gap_threshold(store):
     """A lower threshold flags shorter gaps; a higher threshold ignores them."""
-    store.upsert_trades(
-        [
-            _trade("E1", "2026-01-01"),
-            _trade("E2", "2026-02-01"),  # 31 days
-        ]
-    )
+    _settle(store, "2026-01-01", "2026-02-01")  # 31 days
     assert store.get_trade_date_coverage(gap_threshold_days=30)["gaps"] != []
     assert store.get_trade_date_coverage(gap_threshold_days=90)["gaps"] == []
 
@@ -327,26 +318,14 @@ def test_coverage_custom_gap_threshold(store):
 def test_coverage_same_day_trades_count_as_one_date(store):
     """Multiple trades on the same day are deduplicated for gap detection.
     total_trades counts raw rows; gap logic uses distinct dates."""
-    store.upsert_trades(
-        [
-            _trade("E1", "2026-01-01"),
-            _trade("E2", "2026-01-01"),  # same day, different execution
-            _trade("E3", "2026-04-01"),
-        ]
-    )
+    _settle(store, "2026-01-01", "2026-01-01", "2026-04-01")  # two executions on the first day
     cov = store.get_trade_date_coverage()
     assert cov["total_trades"] == 3  # raw row count
     assert len(cov["gaps"]) == 1  # only one gap interval
 
 
 def test_coverage_oldest_newest_correct(store):
-    store.upsert_trades(
-        [
-            _trade("E3", "2026-06-01"),
-            _trade("E1", "2026-01-15"),
-            _trade("E2", "2026-03-20"),
-        ]
-    )
+    _settle(store, "2026-06-01", "2026-01-15", "2026-03-20")
     cov = store.get_trade_date_coverage()
     assert cov["oldest"] == "2026-01-15"
     assert cov["newest"] == "2026-06-01"
@@ -623,7 +602,9 @@ def test_parse_stream_execution_output_matches_upsert_trades_shape(store):
 #
 # Two separate questions, split deliberately (user's call, 2026-08-05):
 #   * the ACTIVITY REPORT (dates, gaps, totals) must see every row, or a window holding
-#     only live-captured trades reads as "no trading" — a fabricated gap;
+#     only live-captured trades reads as "no trading" — a fabricated gap. Since 2.2.0 "every
+#     row" is every execution in `flex_trade` — statement rows and the placeholders of fills
+#     waiting for their statement — so each is counted once (register F20);
 #   * STALENESS must keep tracking settled Flex data only, because it decides whether to
 #     pull a statement. Letting a live fill mark the store "current" would suppress the
 #     very pull that brings the settled figures.
@@ -643,31 +624,99 @@ def _live_trade(eid: str, compact: str) -> dict[str, object]:
     }
 
 
-def test_coverage_sees_compact_timestamps_too(store):
-    """The regression: 3% of the live store was invisible to its own activity report."""
-    store.upsert_trades([_trade("E1", "2026-01-05")])
-    store.upsert_trades([_live_trade("E2", "20260210-14:21:42")])
+def test_a_fill_waiting_for_its_statement_is_in_the_report_on_its_fill_date(store):
+    """The 2026-08-05 rule — the activity report sees every row — on the Flex dataset: a
+    placeholder has no trade date yet, so it is dated by its own fill time."""
+    _settle(store, "2026-01-05")
+    store.upsert_flex_trades_from_live([_live_trade("E2", "20260210-14:21:42")])
 
     cov = store.get_trade_date_coverage()
     assert cov["total_trades"] == 2
     assert cov["oldest"] == "2026-01-05"
-    assert cov["newest"] == "2026-02-10", "the compact-stamped row must count"
+    assert cov["newest"] == "2026-02-10", "the fill waiting for its statement must count"
+    assert cov["settled_newest"] == "2026-01-05", "and it settles nothing"
 
 
 def test_a_window_of_only_live_trades_is_not_reported_as_a_gap(store):
     """The sharp consequence. ClaudIA is told date gaps are verified inactivity, so a gap
-    manufactured by a timestamp format would be reported to the user as 'no trading'."""
-    store.upsert_trades([_trade("E1", "2026-01-01")])
-    store.upsert_trades(
+    manufactured by leaving live-captured fills out would be reported to the user as
+    'no trading'."""
+    _settle(store, "2026-01-01")
+    store.upsert_flex_trades_from_live(
         [
             _live_trade("E2", "20260210-10:00:00"),  # mid-window, live-captured only
             _live_trade("E3", "20260320-10:00:00"),
         ]
     )
-    store.upsert_trades([_trade("E4", "2026-05-01")])
+    _settle(store, "2026-05-01")
 
     cov = store.get_trade_date_coverage()
     assert cov["gaps"] == [], f"live-only activity fabricated a gap: {cov['gaps']}"
+
+
+def test_an_execution_captured_live_and_then_settled_is_counted_once(store, mock_config):
+    """Register F20, second defect. The legacy table keeps such a fill twice — once under
+    IBKR's exec id (the live capture), once under the statement's tradeID — so the report
+    counted 1,388 rows for 1,255 executions on the operator's store (measured 2026-09-30).
+    In `flex_trade` the statement lands on the placeholder's row."""
+    from ibkr_core_mcp.flex_import import parse_statement
+    from tests.flex_fixtures import statement, trade
+
+    live = {**_live_trade("0000aaaa.60000001.01.01", "20260601-13:30:01"), "symbol": "TEST"}
+    store.upsert_trades([live])  # what get_trades(source='live') writes: the legacy row …
+    store.upsert_flex_trades_from_live([live])  # … and the placeholder
+    assert store.get_trade_date_coverage()["total_trades"] == 1
+
+    store.upsert_trades([_trade("700000001", "2026-06-01")])  # what a pull writes: the legacy row …
+    store.upsert_flex_statement(parse_statement(statement(trade()), "s.xml"))  # … and the statement
+
+    with store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 2, "the legacy table holds it twice"
+    cov = store.get_trade_date_coverage()
+    assert cov["total_trades"] == 1
+    assert cov["oldest"] == cov["newest"] == cov["settled_newest"] == "2026-06-01"
+
+
+def test_a_statement_row_is_dated_by_its_trade_date_not_by_its_clock(store):
+    """An FX fill on a Friday evening, after the IdealPro day roll, is Monday's activity:
+    IBKR books it to Monday's trade date. The legacy report dated every row by its clock,
+    which moved the edge of one of the operator's five 45-day gaps by three calendar days
+    (measured 2026-09-30). Fabricated dates, the same shape."""
+    from ibkr_core_mcp.flex_import import parse_statement
+    from tests.flex_fixtures import statement, trade
+
+    store.upsert_flex_statement(
+        parse_statement(
+            statement(trade(assetCategory="CASH", dateTime="20260109;221500", tradeDate="20260112")), "s.xml"
+        )
+    )
+
+    cov = store.get_trade_date_coverage()
+    assert cov["oldest"] == cov["newest"] == "2026-01-12"
+
+
+def test_the_report_counts_what_the_reader_lists(store, mock_config):
+    """One number for "how many executions", whichever door it is asked at: with no fill
+    waiting for its statement, the report's total is the reader's listing and its settled
+    date is the reader's coverage."""
+    from ibkr_core_mcp.flex_dataset import FlexDataset
+
+    _settle(store, "2026-01-01", "2026-01-01", "2026-04-01")
+    with FlexDataset.open(mock_config.sqlite_path) as flex:
+        listed, through = flex.executions(), flex.coverage().through
+    cov = store.get_trade_date_coverage()
+    assert cov["total_trades"] == len(listed) == 3
+    assert through is not None and cov["settled_newest"] == through.isoformat() == cov["newest"]
+
+
+def test_the_legacy_table_is_not_part_of_the_report(store):
+    """Rows in `trades` alone — an older store, or a legacy write with no Flex dataset behind
+    it — are not trade history any reader reports, so they are not coverage either."""
+    store.upsert_trades([_trade("E1", "2026-01-15"), _live_trade("E2", "20260210-14:21:42")])
+
+    cov = store.get_trade_date_coverage()
+    assert (cov["oldest"], cov["newest"], cov["total_trades"], cov["gaps"]) == (None, None, 0, [])
+    assert cov["stale"] is True
 
 
 def test_upsert_normalises_the_compact_stamp_on_write(store):
@@ -685,43 +734,31 @@ def test_staleness_still_tracks_settled_flex_data_not_live_fills(store):
     Staleness decides whether to pull a Flex statement. Flex is T+1, so today's live fill
     is precisely the trade whose settled record has not arrived — treating it as "up to
     date" would suppress tomorrow's pull and strand the statement figures.
-
-    Written against the production shape: a store WITH the Flex dataset, which is the only
-    configuration that can tell settled rows from live ones. `trades` carries no provenance
-    column, and since the compact stamp is now normalised on write, the timestamp format no
-    longer distinguishes them either.
     """
     from datetime import UTC, datetime, timedelta
 
     today = datetime.now(UTC).date()
     settled_day = today - timedelta(days=30)
 
-    store.initialize_flex_tables()
-    with store._connect() as conn:
-        conn.execute(
-            "INSERT INTO flex_trade (row_uid, execution_key, source, trade_date_iso) VALUES (?, ?, 'flex', ?)",
-            ("U1", "K1", settled_day.isoformat()),
-        )
-    store.upsert_trades([_trade("OLD", settled_day.isoformat())])
-    store.upsert_trades([_live_trade("LIVE", today.strftime("%Y%m%d-10:00:00"))])
+    _settle(store, settled_day.isoformat())
+    store.upsert_flex_trades_from_live([_live_trade("LIVE", today.strftime("%Y%m%d-10:00:00"))])
 
     cov = store.get_trade_date_coverage()
     assert cov["newest"] == today.isoformat(), "the report still shows the live fill"
+    assert cov["settled_newest"] == settled_day.isoformat()
     assert cov["stale"] is True, "a live fill must not suppress the Flex pull"
 
 
-def test_without_a_flex_dataset_staleness_keeps_the_old_whole_table_behaviour(store):
-    """No `flex_trade` table means no way to tell settled from live — `trades` has no
-    provenance column. Rather than guess, the pre-2026-08-05 semantics are kept and the
-    docstring says so; stores in that state predate live capture anyway.
-    """
+def test_a_store_with_only_the_legacy_table_is_stale(store):
+    """No Flex dataset means no statement held, whatever the legacy table says."""
     from datetime import UTC, datetime, timedelta
 
     today = datetime.now(UTC).date()
     store.upsert_trades([_trade("OLD", (today - timedelta(days=30)).isoformat())])
 
     cov = store.get_trade_date_coverage()
-    assert cov["stale"] is True  # 30 days behind, by either reading
+    assert cov["stale"] is True
+    assert cov["flex_dataset_empty"] is False, "absent is not the same as present and empty"
 
 
 # ── Security: the store and its WAL sidecars must not be world-readable ──────────────────
@@ -1140,7 +1177,7 @@ def test_an_empty_store_returns_the_full_key_set(store):
     not False, which a consumer's `not cov.get("stale")` could not tell from "current"."""
     cov = store.get_trade_date_coverage(now=_THU_0924_1633Z)
     full = store.get_trade_date_coverage(now=_THU_0924_1633Z)  # same call, for the key set
-    store.upsert_trades([_trade("E1", "2026-09-23")])
+    _settle(store, "2026-09-23")
     populated = store.get_trade_date_coverage(now=_THU_0924_1633Z)
     assert set(cov) == set(populated) == set(full)
     assert cov["stale"] is True
@@ -1151,6 +1188,88 @@ def test_an_empty_store_returns_the_full_key_set(store):
 
 
 def test_day_counts_use_the_et_date_of_now(store):
-    store.upsert_trades([_trade("E1", "2026-09-23")])
+    _settle(store, "2026-09-23")
     cov = store.get_trade_date_coverage(now=_THU_0924_LATE)  # 20:59 ET on the 24th, 00:59Z on the 25th
     assert cov["days_since_newest"] == 1
+
+
+# ── the legacy `trades` table has no reader left (register F20) ────────────────
+#
+# The class, not the instance: F20 was one reader (`get_trades(source='store')`) of a table
+# that under-reports realised P&L and holds live-captured fills twice. The control is that
+# NO query in the package or its scripts reads that table, except the two public methods kept
+# (deprecated) for outside callers — so the next reader is a decision someone makes here.
+
+_LEGACY_READER_ALLOWED = {("store.py", "get_trades"), ("store.py", "get_all_execution_ids")}
+
+
+def _legacy_table_reads(filename: str, source: str) -> set[tuple[str, str]]:
+    """(file, enclosing function) for every SQL string in `source` that reads `trades`.
+
+    Docstrings are skipped — prose may name the table — and a string outside any function
+    is reported under `<module>`.
+    """
+    import ast
+    import re
+
+    reads = re.compile(r"\b(?:FROM|JOIN)\s+trades\b", re.IGNORECASE)
+    tree = ast.parse(source)
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+    }
+    found: set[tuple[str, str]] = set()
+
+    def visit(node: ast.AST, function: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            text = child.value if isinstance(child, ast.Constant) and isinstance(child.value, str) else None
+            if text is not None and id(child) not in docstrings and reads.search(text):
+                found.add((filename, function))
+            visit(child, child.name if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) else function)
+
+    visit(tree, "<module>")
+    return found
+
+
+def test_nothing_reads_the_legacy_trades_table_but_the_two_deprecated_methods():
+    from pathlib import Path
+
+    import ibkr_core_mcp
+
+    root = Path(ibkr_core_mcp.__file__).resolve().parent
+    found: set[tuple[str, str]] = set()
+    scanned = 0
+    for directory in (root, root.parent / "scripts"):
+        for path in sorted(directory.rglob("*.py")):
+            scanned += 1
+            found |= _legacy_table_reads(path.name, path.read_text())
+
+    assert scanned > 25, "the scan found too few files to mean anything"
+    assert found == _LEGACY_READER_ALLOWED, (
+        f"the legacy `trades` table is read by {sorted(found - _LEGACY_READER_ALLOWED)} (or an allowed reader "
+        f"is gone: {sorted(_LEGACY_READER_ALLOWED - found)}) — trade history and realised P&L come from the Flex "
+        "dataset (flex_dataset.FlexDataset); see register F20"
+    )
+
+
+def test_the_legacy_read_probe_sees_a_reader_and_ignores_prose_and_writers():
+    snippet = '''
+TOP = "SELECT 1 FROM trades"
+
+def writer(conn):
+    """Prose: rows come FROM trades in the old design."""
+    conn.execute("INSERT INTO trades (execution_id) VALUES (?)", ("x",))
+    conn.execute("SELECT * FROM flex_trade")
+
+def reader(conn):
+    return conn.execute("select count(*) from  trades where 1=1").fetchone()
+
+class K:
+    def joined(self, conn):
+        return conn.execute("SELECT 1 FROM flex_trade f JOIN trades t ON 1=1")
+'''
+    assert _legacy_table_reads("x.py", snippet) == {("x.py", "<module>"), ("x.py", "reader"), ("x.py", "joined")}
