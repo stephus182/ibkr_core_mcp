@@ -33,8 +33,16 @@ try:
     import tkinter as tk
 except ImportError:  # Python without Tk support (CI, headless, Python 3.14 Homebrew)
     tk = None  # type: ignore[assignment]
-from ibkr_core_mcp._order_dialog import CANCELLED, CONFIRMED, TIMED_OUT
-from ibkr_core_mcp.exceptions import ConfirmationTimeoutError, HumanAuthError
+from ibkr_core_mcp._order_dialog import (
+    CANCELLED,
+    CONFIRMED,
+    ROLE_DISCARD,
+    ROLE_NEUTRAL,
+    ROLE_VALIDATE,
+    ROLES,
+    TIMED_OUT,
+)
+from ibkr_core_mcp.exceptions import ConfirmationDeclinedError, ConfirmationTimeoutError, HumanAuthError
 
 _DIALOG_TIMEOUT_S = 60  # the dialog dismisses itself unattended; nothing is sent, the order is as it was
 
@@ -503,6 +511,9 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
         ),
         confirm_label="SEND TO IBKR",
         abandon_label="DO NOT SEND",
+        confirm_role=ROLE_VALIDATE,
+        abandon_role=ROLE_DISCARD,
+        abandon_message=_NOT_SENT,
     )
 
 
@@ -837,6 +848,9 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         ),
         confirm_label="SEND TO IBKR",
         abandon_label="DO NOT SEND",
+        confirm_role=ROLE_VALIDATE,
+        abandon_role=ROLE_DISCARD,
+        abandon_message=_NOT_SENT,
     )
 
 
@@ -876,6 +890,9 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
         confirm_label="MODIFY ORDER",
         abandon_label="LEAVE UNCHANGED",
         action="MODIFY",
+        confirm_role=ROLE_VALIDATE,
+        abandon_role=ROLE_DISCARD,
+        abandon_message="Left unchanged — the order is as it was.",
     )
 
 
@@ -934,9 +951,14 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         title="⚠  CANCEL ORDER CONFIRMATION",
         details=details,
         disclaimer="This will CANCEL a live order at Interactive Brokers.",
-        confirm_label="CANCEL ORDER",
-        abandon_label="KEEP ORDER",
+        # The banner says CANCEL ORDER; the buttons say what the click does to that request
+        # (operator, 2026-10-01: a blue `CANCEL ORDER` over a red `KEEP ORDER` was "ambiguous").
+        confirm_label="VALIDATE",
+        abandon_label="DISCARD",
         action="CANCEL",
+        confirm_role=ROLE_VALIDATE,
+        abandon_role=ROLE_DISCARD,
+        abandon_message="Kept — the order is still working.",
     )
 
 
@@ -981,6 +1003,9 @@ def confirm_reply_dialog(
         disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
         confirm_label="CONFIRM REPLY",
         abandon_label="DO NOT REPLY",
+        confirm_role=ROLE_VALIDATE,
+        abandon_role=ROLE_DISCARD,
+        abandon_message="Not confirmed — the order was not placed.",
     )
 
 
@@ -1055,6 +1080,31 @@ def _extract_side(details: dict[str, Any]) -> str | None:
     return None
 
 
+# What an abandon leaves, where two dialogs share the sentence, and the fallback a renderer
+# called on its own uses. None says "cancelled": on the cancel dialog the abandon button KEEPS
+# the order, and "Order cancelled by user" — every dialog's message until 2.2.0 — said the
+# opposite (register F6; the operator agreed the four sentences 2026-10-01).
+_NOT_SENT = "Not sent — nothing reached IBKR."
+_DECLINED = "Declined at the confirmation dialog — nothing was sent to IBKR."
+
+# The icon a host application gives the Gate 2 dialogs, or None for the system's default.
+_dialog_icon: str | None = None
+
+
+def set_dialog_icon(path: str | Path | None) -> None:
+    """Set the image the Gate 2 dialogs show as their icon, or clear it with None.
+
+    A host's own mark, set once at startup. This package ships none — and no broker's logo:
+    it is not a broker's product — so without one the dialog shows the system's default (the
+    Python launcher's rocket on macOS). The file is read by the dialog when it opens; one that
+    cannot be read leaves the default in place and never fails a confirmation. The icon keeps
+    the system's size and position. AppKit dialogs only: the osascript and tkinter fallbacks
+    draw none.
+    """
+    global _dialog_icon  # one process-wide setting, like the dialogs themselves
+    _dialog_icon = None if path is None else str(path)
+
+
 def _show_confirm_dialog(
     title: str,
     details: dict[str, Any],
@@ -1062,8 +1112,18 @@ def _show_confirm_dialog(
     confirm_label: str,
     abandon_label: str,
     action: str | None = None,
+    *,
+    confirm_role: str,
+    abandon_role: str,
+    abandon_message: str,
 ) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
+
+    `confirm_role`, `abandon_role` and `abandon_message` are required, for the reason
+    `abandon_label` is (below): this renderer is shared by every Gate 2 dialog, and a default
+    would hand one dialog's meaning to the next that forgets to state its own. The roles
+    (`_order_dialog.ROLES`) colour the two buttons; the message is what `ConfirmationDeclinedError`
+    says when the abandon button is pressed — what that click leaves in place.
 
     macOS primary path: AppKit colored dialog (green BUY, red SELL, amber when the side
     is unknown) via subprocess.
@@ -1079,18 +1139,35 @@ def _show_confirm_dialog(
     dialog from silently inheriting a word that contradicts its own confirm button;
     `test_no_gate2_dialog_offers_two_buttons_sharing_a_first_word` enforces it over the class.
     """
+    for stated in (confirm_role, abandon_role):
+        if stated not in ROLES:
+            # Before anything is shown: a mistyped role would draw a neutral button in silence.
+            raise ValueError(f"unknown button role {stated!r} — one of {ROLES}")
     if sys.platform == "darwin":
         side = _extract_side(details)
         try:
-            _show_appkit_dialog(title, details, disclaimer, confirm_label, side, abandon_label, action)
+            _show_appkit_dialog(
+                title,
+                details,
+                disclaimer,
+                confirm_label,
+                side,
+                abandon_label,
+                action,
+                confirm_role=confirm_role,
+                abandon_role=abandon_role,
+                abandon_message=abandon_message,
+            )
             return
         except HumanAuthError:
             raise  # user decision — do not fall back
         except Exception:  # noqa: S110 - AppKit subprocess failed; fall back to plain osascript
             pass
-        _show_osascript_dialog(title, details, disclaimer, confirm_label, abandon_label)
+        _show_osascript_dialog(
+            title, details, disclaimer, confirm_label, abandon_label, abandon_message=abandon_message
+        )
     elif tk is not None:
-        _show_tkinter_dialog(title, details, disclaimer, confirm_label, abandon_label)
+        _show_tkinter_dialog(title, details, disclaimer, confirm_label, abandon_label, abandon_message=abandon_message)
     else:
         raise HumanAuthError("No GUI dialog available: not on macOS and tkinter is not installed.")
 
@@ -1103,6 +1180,10 @@ def _show_appkit_dialog(
     side: str | None,
     abandon_label: str,
     action: str | None = None,
+    *,
+    confirm_role: str = ROLE_NEUTRAL,
+    abandon_role: str = ROLE_NEUTRAL,
+    abandon_message: str = _DECLINED,
 ) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
@@ -1114,7 +1195,8 @@ def _show_appkit_dialog(
     cancel and reply dialogs genuinely have no side, and colouring those green would
     assert something no caller established.
 
-    Raises HumanAuthError when the human abandons the dialog, and ConfirmationTimeoutError
+    Raises ConfirmationDeclinedError (a HumanAuthError) with `abandon_message` when the human
+    abandons the dialog — what that click leaves in place, never "cancelled" — and ConfirmationTimeoutError
     (a HumanAuthError) when the dialog dismisses itself with no decision — two outcomes,
     because the second leaves the order exactly as it was and must not be reported as a
     cancellation (register F21). The tokens are `_order_dialog`'s own constants.
@@ -1129,6 +1211,9 @@ def _show_appkit_dialog(
             "abandon_label": abandon_label,
             "side": side,
             "action": action,
+            "confirm_role": confirm_role,
+            "abandon_role": abandon_role,
+            "icon_path": _dialog_icon,
             "timeout_s": _DIALOG_TIMEOUT_S,
         }
     )
@@ -1153,13 +1238,19 @@ def _show_appkit_dialog(
     if output == TIMED_OUT:
         raise ConfirmationTimeoutError(_timed_out_message())
     if output == CANCELLED:  # the abandon button, or the panel dismissed some other way
-        raise HumanAuthError("Order cancelled by user")
+        raise ConfirmationDeclinedError(abandon_message)
     # Not one of the script's three words: nothing was sent, and the reader says what it saw.
     raise HumanAuthError(f"Unexpected dialog response: {output!r}")
 
 
 def _show_osascript_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+    title: str,
+    details: dict[str, Any],
+    disclaimer: str,
+    confirm_label: str,
+    abandon_label: str,
+    *,
+    abandon_message: str = _DECLINED,
 ) -> None:
     """Native macOS confirmation dialog via osascript.
 
@@ -1198,7 +1289,7 @@ def _show_osascript_dialog(
     if output == "timeout":  # `gave up of dlg` — the dialog dismissed itself, no decision
         raise ConfirmationTimeoutError(_timed_out_message())
     if proc.returncode != 0 or output in ("", abandon_label):
-        raise HumanAuthError("Order cancelled by user")
+        raise ConfirmationDeclinedError(abandon_message)
     if output != confirm_label:
         raise HumanAuthError(f"Unexpected dialog response: {output!r}")
 
@@ -1210,7 +1301,13 @@ def _as_str(text: str) -> str:
 
 
 def _show_tkinter_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+    title: str,
+    details: dict[str, Any],
+    disclaimer: str,
+    confirm_label: str,
+    abandon_label: str,
+    *,
+    abandon_message: str = _DECLINED,
 ) -> None:
     """Fallback tkinter dialog for non-macOS environments.
 
@@ -1327,4 +1424,4 @@ def _show_tkinter_dialog(
     if timed_out["value"]:
         raise ConfirmationTimeoutError(_timed_out_message())
     if not confirmed["value"]:
-        raise HumanAuthError("Order cancelled by user")
+        raise ConfirmationDeclinedError(abandon_message)

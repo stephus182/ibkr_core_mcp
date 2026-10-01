@@ -112,6 +112,18 @@ class ConfirmationTimeoutError(HumanAuthError):
     """
 
 
+class ConfirmationDeclinedError(HumanAuthError):
+    """The human pressed a Gate 2 dialog's abandon button: nothing was sent.
+
+    A subclass, so every `except HumanAuthError` keeps catching it; its own type, so a consumer
+    matches the TYPE and not the wording. Until 2.2.0 the abandon button raised a bare
+    `HumanAuthError("Order cancelled by user")` on every dialog — including the cancel dialog's
+    `KEEP ORDER`, where the click had kept the order — and claudia_ui recognised a decline by
+    finding those words in the message (register F6). The message is each dialog's own sentence
+    for what the click leaves in place: not sent, left unchanged, kept, not confirmed.
+    """
+
+
 class OrderValidationError(IBKRCoreError, ValueError):
     """Raised when this package refuses an order write because it would break a safety rule.
 

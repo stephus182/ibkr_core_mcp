@@ -10,6 +10,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`ConfirmationDeclinedError` — a declined Gate 2 dialog has its own type (register F6).** A
+  subclass of `HumanAuthError`, exported, raised by all three renderers when the abandon button
+  is pressed, with the dialog's own sentence for what the click leaves in place. See *Changed*.
+- **`set_dialog_icon(path)` — a host's own mark on the Gate 2 dialogs.** Exported from the
+  package; `None` clears it. The package ships no icon and no broker's logo: without one the
+  dialog shows the system's default. The dialog reads the file when it opens; one that cannot
+  be read leaves the default and never fails a confirmation. AppKit only; the icon keeps the
+  system's size and position.
 - **`ClaudeToolkit.store` and `ClaudeToolkit.config` — public, read-only, beside `client`
   (register F29; claudia_ui gap #87).** A host read the private `_store` and `_config` because
   there was nothing else to read; a private name carries no compatibility promise, and a host
@@ -82,6 +90,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   flow on every pull.
 
 ### Changed
+- **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time
+  (register F6; claudia_ui gap #67).**
+  - *One colour rule:* on every dialog the button that validates is solid blue and the button
+    that discards is solid red, each with a white title; the banner says what the action is. All
+    buttons were neutral grey. The fill is the button's own layer, not `bezelColor`: AppKit
+    draws a tinted bezel only while the window is active, and a dialog that opened while the
+    operator was typing elsewhere showed white titles on grey. The red is the banner's, by one
+    constant; `hasDestructiveAction` (pale pink, red text) was shown and rejected.
+  - *The cancel dialog's buttons are `VALIDATE` and `DISCARD`* (were `CANCEL ORDER` and
+    `KEEP ORDER`), and the validating button comes first whichever way the system lays the row
+    out — side by side it used to come second. Moved, not re-added: the button that reports
+    CONFIRMED is unchanged. **A consumer naming the Gate 2 cancel button must update.**
+  - *An abandon says what it leaves:* "Not sent — nothing reached IBKR." (place, bracket), "Left
+    unchanged — the order is as it was." (modify), "Kept — the order is still working."
+    (cancel), "Not confirmed — the order was not placed." (reply), raised as
+    `ConfirmationDeclinedError`. It was `HumanAuthError("Order cancelled by user")` on every
+    dialog, the cancel dialog's `KEEP ORDER` included. **A consumer that matched those words
+    must match the type.**
+  - The banner text is centred; the banner for an unstated side is a caution yellow
+    (0.90, 0.72, 0.00), the amber before it "not a good color" on screen.
+  - Each dialog must state its two button roles and its abandon sentence: the shared renderer
+    has no defaults for them, and refuses a role outside its vocabulary before anything is shown.
 - **`get_trades(source='store')` reads the Flex dataset (register F20, claudia_ui gap #74).** It
   summed `realized_pnl` from the legacy `trades` table, which holds a fill captured live and
   its statement row under two ids and no realised figure for rows imported before 2026-05-26,

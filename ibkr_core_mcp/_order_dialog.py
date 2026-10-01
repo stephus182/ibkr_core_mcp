@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+import warnings
 from typing import Any
 
 # Cocoa constants (kept as local int literals rather than imported from AppKit —
@@ -67,6 +68,21 @@ def outcome_token(response: int, *, timed_out: bool = False) -> str:
 
 _NS_STRING_DRAWING_USES_LINE_FRAGMENT_ORIGIN = 1  # NSStringDrawingOptions
 _DIALOG_WIDTH = 420
+
+# The one red of this dialog: the SELL and CANCEL banners and a discarding button. The operator
+# asked for the button's red to match the banner's (2026-10-01), and preferred this one to
+# IBKR's own #D91222 and to the system red after seeing each on the rendered dialog.
+_RED = (0.72, 0.10, 0.10)
+
+# What a button's colour says (register F6, settled by the operator on these dialogs,
+# 2026-10-01): on every dialog the button that VALIDATES the action is blue and the button that
+# DISCARDS it is red — go ahead, or back out — and the banner says what the action is. A first
+# version coloured by consequence (a red `CANCEL ORDER` beside a grey `KEEP ORDER`) and read as
+# "ambiguous". Platform-neutral names: another renderer maps them to its own colours.
+ROLE_VALIDATE = "validate"  # go ahead with what the dialog proposes — solid blue
+ROLE_DISCARD = "discard"  # back out: nothing is sent, the order stays as it was — solid red
+ROLE_NEUTRAL = "neutral"  # no colour: as the system draws it (no dialog uses it today)
+ROLES = (ROLE_VALIDATE, ROLE_DISCARD, ROLE_NEUTRAL)
 _BANNER_H = 48
 _GAP = 8
 
@@ -113,7 +129,7 @@ def _banner(side: str | None, action: str | None) -> tuple[tuple[float, float, f
     """
     act = str(action or "").strip().upper()
     if act == "CANCEL":
-        return (0.72, 0.10, 0.10), "CANCEL ORDER"  # dark red — destructive, whatever the side
+        return _RED, "CANCEL ORDER"  # destructive, whatever the side
     if act == "MODIFY":
         # The text states the action; the colour follows the order's side, as IB does
         # (user decision 2026-09-10 23:20 — the amber shipped that evening was wrong by
@@ -133,10 +149,12 @@ def _side_colour(side: str | None) -> tuple[tuple[float, float, float], str]:
     """
     text = str(side).upper() if side is not None else ""
     if any(k in text for k in ("SELL", "SHORT")):
-        return (0.72, 0.10, 0.10), "SELL ORDER"
+        return _RED, "SELL ORDER"
     if "BUY" in text:
         return (0.10, 0.50, 0.20), "BUY ORDER"
-    return (0.55, 0.42, 0.05), "REVIEW ORDER"  # neither confirmed nor denied
+    # A caution yellow (operator, 2026-10-01): the first amber, (0.55, 0.42, 0.05), was "not a
+    # good color" on the rendered dialog; this one, a shade darker than the first yellow tried.
+    return (0.90, 0.72, 0.00), "REVIEW ORDER"  # neither confirmed nor denied
 
 
 def _run_alert(data: dict[str, Any]) -> None:
@@ -149,6 +167,12 @@ def _run_alert(data: dict[str, Any]) -> None:
       disclaimer    - free text appended after the details.
       confirm_label - text for the right-hand (confirm) button. Default "CONFIRM".
       title         - alert message text. Default "LIVE ORDER CONFIRMATION".
+      confirm_role  - what the confirm button's colour says (`ROLES`): "validate" is solid blue,
+                       "discard" solid red (the banner's red), each with a white title;
+                       "neutral", absent or unknown leaves the button as the system draws it.
+      abandon_role  - the same, for the left-hand button.
+      icon_path     - an image file the host application supplies as the alert's icon. With
+                       none, or one AppKit cannot read, the alert keeps its default icon.
       timeout_s     - seconds before the modal dismisses itself. Reported as TIMED_OUT —
                        its own outcome, never a decision. Default 60.
 
@@ -172,11 +196,13 @@ def _run_alert(data: dict[str, Any]) -> None:
         NSFont,
         NSFontAttributeName,
         NSForegroundColorAttributeName,
+        NSImage,
         NSMakeRect,
         NSMakeSize,
         NSModalPanelRunLoopMode,
         NSMutableAttributedString,
         NSRunLoop,
+        NSTextAlignmentCenter,
         NSTextField,
         NSTimer,
         NSView,
@@ -202,6 +228,14 @@ def _run_alert(data: dict[str, Any]) -> None:
     alert = NSAlert.alloc().init()
     alert.setMessageText_(title)
     alert.setInformativeText_("")
+    # The host's own mark, where it set one (`order_confirm.set_dialog_icon`). This package
+    # ships none. An unreadable file answers None and the default icon stays: an icon is never
+    # a reason to fail a confirmation. Size and position stay the system's.
+    icon_path = data.get("icon_path")
+    if icon_path:
+        icon = NSImage.alloc().initWithContentsOfFile_(str(icon_path))
+        if icon is not None:
+            alert.setIcon_(icon)
 
     # Buttons: first added = rightmost = NSAlertFirstButtonReturn (1000)
     alert.addButtonWithTitle_(confirm_label)  # right
@@ -262,7 +296,9 @@ def _run_alert(data: dict[str, Any]) -> None:
     box.setTitlePosition_(_NS_NO_TITLE)
     container.addSubview_(box)
 
-    lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(14, 12, 392, 24))
+    # Centred across the dialog, over the buttons below it (operator, 2026-10-01).
+    lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 12, _DIALOG_WIDTH, 24))
+    lbl.setAlignment_(NSTextAlignmentCenter)
     lbl.setStringValue_(label_text)
     lbl.setFont_(NSFont.boldSystemFontOfSize_(16))
     lbl.setTextColor_(NSColor.whiteColor())
@@ -275,6 +311,58 @@ def _run_alert(data: dict[str, Any]) -> None:
     container.addSubview_(_field(disclaimer_value, _BANNER_H + _GAP, disclaimer_h))
     container.addSubview_(_field(detail_value, _BANNER_H + _GAP + disclaimer_h + _GAP, detail_h))
     alert.setAccessoryView_(container)
+
+    # A button's colour says its role (`ROLES`): a solid fill with a white title. Applied AFTER
+    # `layout()` — measured off-screen on macOS 27, a title set before it did not survive.
+    #
+    # The fill is the button's own LAYER, not `bezelColor`. AppKit draws a tinted bezel only
+    # while the window is active: a dialog that opened while the operator was typing in
+    # another window showed white titles on grey, both buttons alike (their screenshot,
+    # 2026-10-01; reproduced off-screen). A layer's background does not depend on that. Blue
+    # is the system's own; red is the banner's `_RED` — `hasDestructiveAction` draws pale pink
+    # with red text, which the operator rejected. Return stays disabled on the confirm button
+    # on purpose. A neutral, unstated or unknown role paints nothing.
+    alert.layout()
+
+    # The validating button comes FIRST in its row, whichever way the system lays the row out
+    # (operator, 2026-10-01). Measured on macOS 27: stacked, the row is already arranged
+    # confirm-first (on top); side by side it is arranged abandon-first, so `VALIDATE` /
+    # `DISCARD` came out as DISCARD, VALIDATE. Moved within the row the alert built, never
+    # re-added, so the button that reports CONFIRMED is unchanged. A row built some other way
+    # (another macOS) is left as it is: the order is a nicety, and nothing here may fail a
+    # confirmation.
+    try:
+        confirm_button = alert.buttons().objectAtIndex_(0)
+        row = confirm_button.superview()
+        if next(iter(row.arrangedSubviews())) is not confirm_button:
+            row.insertArrangedSubview_atIndex_(confirm_button, 0)
+    except Exception:  # noqa: S110 - best-effort ordering; the dialog runs either way
+        pass
+
+    for index, label, role in (
+        (0, confirm_label, data.get("confirm_role")),
+        (1, abandon_label, data.get("abandon_role")),
+    ):
+        if role == ROLE_VALIDATE:
+            tint = NSColor.systemBlueColor()
+        elif role == ROLE_DISCARD:
+            tint = NSColor.colorWithRed_green_blue_alpha_(*_RED, 1.0)
+        else:
+            continue
+        button = alert.buttons().objectAtIndex_(index)
+        button.setWantsLayer_(True)
+        with warnings.catch_warnings():
+            # PyObjC notes that a CGColor crosses as an untyped pointer unless the Quartz
+            # bindings are installed; it is handed straight back to AppKit, which is its use.
+            warnings.simplefilter("ignore")
+            button.layer().setBackgroundColor_(tint.CGColor())
+        button.layer().setCornerRadius_(button.frame().size.height / 2)  # the pill the system draws
+        button.setAttributedTitle_(
+            NSAttributedString.alloc().initWithString_attributes_(
+                label,
+                {NSFontAttributeName: button.font(), NSForegroundColorAttributeName: NSColor.whiteColor()},
+            )
+        )
 
     # Auto-dismiss after timeout — NSApp.abortModal() returns NSModalResponseAbort (-1000).
     # Must run on the main thread: AppKit's threading rules require UI/run-loop calls there

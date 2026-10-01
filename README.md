@@ -457,7 +457,7 @@ If `pyobjc-framework-LocalAuthentication` is not installed, or if the Mac hardwa
 
 Implemented in `order_confirm.py`.
 
-- Full order details displayed in a modal: on macOS an AppKit dialog run in a subprocess (banner colour-coded by side — green BUY, red SELL, dark red CANCEL, amber when the side is unknown), with an `osascript` fallback; `tkinter` on other platforms
+- Full order details displayed in a modal: on macOS an AppKit dialog run in a subprocess (banner colour-coded by side — green BUY, red SELL, red CANCEL, yellow when the side is unknown; on every dialog the button that validates is blue and the button that discards is red), with an `osascript` fallback; `tkinter` on other platforms
 - 60-second timeout — the dialog dismisses itself unattended and raises `ConfirmationTimeoutError` (a `HumanAuthError`): nothing was sent to IBKR, the order is as it was. Its own outcome since 2026-09-29, not the abandon button's — a consumer had reported an order the timeout kept as cancelled
 - **Enter key disabled** — confirmation requires a deliberate mouse click on the button named for the action (SEND TO IBKR, MODIFY ORDER, CANCEL ORDER, CONFIRM REPLY). Return confirms on none of the three renderers, but each refuses it by a different mechanism, and `SECURITY.md` § Gate 2 names them. This bullet ended "the default button is the abandon one" until 2026-09-17, which was the `osascript` fallback's mechanism alone (audit finding SEC-09)
 - The body the dialog shows is the body sent: the order dict is copied before the gates

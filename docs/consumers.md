@@ -82,9 +82,37 @@ live 2026-09-25). Now:
   imports the three tokens from `_order_dialog`, so the reader cannot drift from the writer.
 - A consumer that classified the abandon message by its text ("cancelled by user") no longer
   sees a timeout under it; one that already matched "timed out" gets the right stage for free.
-- The abandon button's own message is unchanged ("Order cancelled by user"). Its rewording per
-  dialog (not sent / kept / left unchanged) and the button colours are register F6, to be
-  decided with the operator.
+- The abandon button has its own type and its own sentence per dialog since the same release —
+  the next section.
+
+### Unreleased — the Gate 2 dialogs: a declined dialog has its own type; buttons say validate or discard
+
+Reviewed with the operator on the rendered dialogs, one at a time (register F6, 2026-10-01).
+
+- **Match the type, not the words.** Pressing a dialog's abandon button raises
+  `ConfirmationDeclinedError`, a subclass of `HumanAuthError` exported from `ibkr_core_mcp` —
+  beside `ConfirmationTimeoutError`, and never the same outcome. Until this release it was a
+  bare `HumanAuthError("Order cancelled by user")` on every dialog. **A consumer that recognised
+  a decline by finding "cancelled by user" in the message must switch to `isinstance`**: the
+  sentence is gone, and an unmatched `HumanAuthError` is easily reported as a Touch ID failure
+  (claudia_ui's table would have done exactly that).
+- **The message says what the click leaves in place**, per dialog, and none says "cancelled":
+  place and bracket "Not sent — nothing reached IBKR."; modify "Left unchanged — the order is as
+  it was."; cancel "Kept — the order is still working."; reply "Not confirmed — the order was
+  not placed." (`place_order_and_confirm` still wraps a declined reply as "User declined IBKR
+  order reply".)
+- **One colour rule on every dialog: the button that validates is blue, the button that
+  discards is red.** The banner says what the action is; the colour says go ahead or back out.
+- **The cancel dialog's buttons are now `VALIDATE` and `DISCARD`** (were `CANCEL ORDER` and
+  `KEEP ORDER`): under a banner that already reads CANCEL ORDER, a blue `CANCEL ORDER` over a
+  red `KEEP ORDER` read as ambiguous. **A consumer that names the Gate 2 button in its own text
+  must update the cancel path.** The other dialogs keep `SEND TO IBKR` / `DO NOT SEND`,
+  `MODIFY ORDER` / `LEAVE UNCHANGED`, `CONFIRM REPLY` / `DO NOT REPLY`.
+- The banner text is centred; the banner for an unstated side is yellow, not amber.
+- **Your own mark on the dialog:** `ibkr_core_mcp.set_dialog_icon(path)` at startup replaces the
+  default icon (the Python launcher's rocket on macOS) with an image of yours; `None` clears it.
+  The package ships no icon and no broker's logo. An unreadable file leaves the default; the
+  icon keeps the system's size and position. AppKit dialogs only.
 
 ### Unreleased — `get_market_calendar_context` says who holds a session today, per exchange
 

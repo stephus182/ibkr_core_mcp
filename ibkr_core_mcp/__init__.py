@@ -19,6 +19,7 @@ from ibkr_core_mcp.exceptions import (
     CacheMissError,
     CacheWriteError,
     ConfigError,
+    ConfirmationDeclinedError,
     ConfirmationTimeoutError,
     FlexQueryError,
     GatewayError,
@@ -63,6 +64,7 @@ from ibkr_core_mcp.models import (
     bars_to_dataframe,
     json_default,
 )
+from ibkr_core_mcp.order_confirm import set_dialog_icon
 from ibkr_core_mcp.store import SQLiteStore
 from ibkr_core_mcp.streaming import (
     AlertManager,
@@ -151,11 +153,13 @@ __all__ = [
     "BacktestRuntimeError",
     "ConfigError",
     "HumanAuthError",
+    "ConfirmationDeclinedError",
     "ConfirmationTimeoutError",
     "OrderValidationError",
     "FlexQueryError",
     "StreamingError",
     "require_touch_id",
+    "set_dialog_icon",
     # Gateway
     "GatewayManager",
     # Exceptions (continued)
