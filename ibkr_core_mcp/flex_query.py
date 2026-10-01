@@ -30,6 +30,8 @@ import requests
 
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import FlexQueryError
+from ibkr_core_mcp.flex_sync import dataset_fingerprint
+from ibkr_core_mcp.redaction import redact_error
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +63,25 @@ class FlexArchiveResult:
         if self.kind == "parser-drift":
             return "regenerate the schema and re-run; the parser and schema disagree"
         return "check the ibkr_core_mcp logs for the full traceback"
+
+
+@dataclass(frozen=True)
+class FlexBackupResult:
+    """What became of the `store.db` Drive backup after one pull.
+
+    ``status`` is one of:
+
+    * ``uploaded`` — the dataset moved, or could not be fingerprinted, and the snapshot
+      reached Drive;
+    * ``unchanged`` — the pull brought nothing new, so the backup was left as it is;
+    * ``failed`` — the upload raised; ``reason`` says why, redacted. It never fails the pull:
+      the statement is already in the store;
+    * ``not-configured`` — no Drive folder is configured, so there is no backup to make and
+      Drive was not asked (see `FlexQueryClient._drive_configured`).
+    """
+
+    status: str
+    reason: str | None = None
 
 
 if TYPE_CHECKING:
@@ -238,6 +259,9 @@ class FlexQueryClient:
         #: `fetch_trades` and `import_from_file` both return the *legacy* trade list, so
         #: this is how a caller learns that the complete-capture write behind it refused.
         self.last_archive_result: FlexArchiveResult | None = None
+        #: Outcome of the `store.db` Drive backup after the most recent `fetch_trades`, or
+        #: None if no pull has run on this client.
+        self.last_backup_result: FlexBackupResult | None = None
 
     def import_from_file(self, xml_path: str) -> list[dict[str, Any]]:
         """Parse a locally downloaded Flex XML file → upsert SQLite → return trades.
@@ -256,9 +280,12 @@ class FlexQueryClient:
     def _store_full_statement(self, xml_text: str, src_file: str) -> FlexArchiveResult:
         """Store every element of the statement into the generated flex_* tables.
 
-        Runs alongside the legacy `trades` upsert rather than replacing it: the legacy
-        table is still what `get_trades`, `check_flex_coverage` and ClaudIA's opening
-        status read, and swapping those over is a separate change with its own tests.
+        Runs alongside the legacy `trades` upsert rather than replacing it. Since 2.2.0 no
+        reader in this package uses the legacy table (register F20): `get_trades`, the
+        coverage report behind `check_flex_coverage` and ClaudIA's opening line,
+        `verify_flex_import` and the `ibkr://trades/recent` resource all read the Flex
+        dataset. The legacy table is still written so the public `SQLiteStore.get_trades`
+        keeps its rows until the table is retired.
 
         Deliberately non-fatal. The legacy upsert has already committed by the time this
         runs, and a schema-drift failure here (IBKR adding an attribute) must not turn a
@@ -343,7 +370,18 @@ class FlexQueryClient:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Full workflow: fetch → parse → upsert SQLite → archive XML to Drive + log manifest.
+        """Full workflow: fetch → parse → upsert SQLite → archive XML to Drive + log manifest
+        → back up `store.db` to Drive if the pull changed the dataset.
+
+        **The backup belongs to the pull, whoever started it** (2.2.0). It used to be made by
+        the host application after its own startup sync, so a pull started any other way —
+        the model calling `sync_flex_trades` mid-session, the MCP server, a script — updated
+        the store and left Drive's `account_data/store.db` a version behind, silently (found
+        live in claudia_ui, 2026-08-05). It is conditional on the dataset having moved
+        (`flex_sync.dataset_fingerprint` before and after): Flex is T+1, a repeat pull returns
+        the same statement, and re-sending ~55 MB that did not change cost 21 measured
+        seconds for nothing. A fingerprint that cannot be taken uploads — unknown is not
+        "unchanged". The outcome is kept on `last_backup_result`.
 
         After a successful upsert, _archive_and_log uploads the raw XML to Drive
         account_data/ and writes a row to flex_import_log with SHA-256, trade_id_count,
@@ -360,6 +398,7 @@ class FlexQueryClient:
             _validate_flex_date(start_date, "start_date (fd)")
         if end_date is not None:
             _validate_flex_date(end_date, "end_date (td)")
+        before = dataset_fingerprint(self._config.sqlite_path)
         ref_code, url = self._send_request(start_date=start_date, end_date=end_date)
         xml_text = self._get_statement(url, ref_code)
         trades = self._parse_trades(xml_text)
@@ -371,7 +410,45 @@ class FlexQueryClient:
             # Drive archive and manifest log are supplementary — trades already in SQLite.
             # A Drive auth failure must not abort a successful sync.
             log.warning("flex_query: archive/manifest step failed: %s", exc, exc_info=True)
+        self.last_backup_result = self._backup_if_changed(before)
         return trades
+
+    def _backup_if_changed(self, before: tuple[int, int, str | None] | None) -> FlexBackupResult:
+        """Back `store.db` up to Drive unless the pull provably changed nothing. Never raises.
+
+        `upload_account_sqlite`, not a raw byte upload: the store runs in WAL mode, so a raw
+        read would miss commits still in `store.db-wal` and could tear mid-checkpoint.
+
+        Args:
+            before: `dataset_fingerprint` taken before the pull; None when it could not be.
+        """
+        if not self._drive_configured():
+            return FlexBackupResult("not-configured")
+        after = dataset_fingerprint(self._config.sqlite_path)
+        if before is not None and after is not None and before == after:
+            log.info("store.db unchanged by this pull — Drive backup left as is")
+            return FlexBackupResult("unchanged")
+        try:
+            self._cache.upload_account_sqlite(self._config.sqlite_path, "store.db")
+        except Exception as exc:  # a Drive failure must not abort a successful pull
+            reason = redact_error(exc)
+            log.warning("store.db Drive backup failed: %s", reason)
+            return FlexBackupResult("failed", reason)
+        log.info("store.db backed up to Drive account_data/")
+        return FlexBackupResult("uploaded")
+
+    def _drive_configured(self) -> bool:
+        """Whether a Drive folder for account data is configured at all.
+
+        Without one there is no backup to make, and asking Drive anyway is worse than
+        useless: without a token `GDriveCache._get_service` runs the interactive OAuth flow
+        (`InstalledAppFlow.run_local_server`) before it checks that a folder is set, then
+        raises — a browser window, then a warning, on every pull, about a feature nobody set
+        up. The two settings that name the account folder are the ones
+        `GDriveCache._resolve_account_folder` reads.
+        """
+        cfg = self._config
+        return self._cache is not None and bool(cfg.gdrive_account_folder_id or cfg.gdrive_folder_id)
 
     def _archive_and_log(self, xml_text: str, account_id: str, ref_code: str) -> None:
         """Archive raw Flex XML to Drive account_data/ and record it in the import manifest.
