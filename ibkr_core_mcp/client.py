@@ -2838,9 +2838,18 @@ class IBKRClient:
         else:
             log.info("Gate 1: reply %s covered by authorization %s", reply_id, scope)
         try:
-            # The unauthorised path keeps its call exactly as before — no label to show.
-            reply_kwargs = {"order_label": authorization.label} if authorization is not None else {}
-            confirm_reply_dialog(reply_id, message, options, **reply_kwargs)
+            if authorization is None:
+                # The unauthorised path keeps its call exactly as before — no label to show,
+                # and no write to name.
+                confirm_reply_dialog(reply_id, message, options)
+            else:
+                confirm_reply_dialog(
+                    reply_id,
+                    message,
+                    options,
+                    order_label=authorization.label,
+                    modifies=authorization.kind == "modify",
+                )
         except HumanAuthError as refusal:
             self._post(f"/iserver/reply/{reply_id}", {"confirmed": False})
             raise ReplyNotConfirmedError(_reply_not_confirmed_message(message, refusal)) from refusal

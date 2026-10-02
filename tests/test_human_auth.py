@@ -171,6 +171,17 @@ def test_authorization_covers_its_own_scope_until_it_expires(monkeypatch):
     assert auth.expired and not auth.covers("place:abc")
 
 
+def test_an_authorization_names_the_kind_of_write_it_was_granted_for():
+    """The scope's first segment (`client._order_write_scope`): the reply dialog reads it to say
+    what CANCEL leaves — an order not placed, or a live order as it was."""
+    from ibkr_core_mcp import human_auth
+    from ibkr_core_mcp.client import _order_write_scope
+
+    for kind, order_id in (("place", None), ("modify", "8001"), ("place_bracket", None)):
+        scope = _order_write_scope(kind, "U0000000", {"conid": 1}, order_id=order_id)
+        assert human_auth.OrderWriteAuthorization(scope, "BUY 1 ES", 0.0, 300.0).kind == kind
+
+
 def test_authorization_is_a_frozen_value_and_never_module_state():
     """A token, not a cache: immutable, and nothing of its type lives at module level."""
     from ibkr_core_mcp import human_auth

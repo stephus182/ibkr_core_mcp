@@ -434,6 +434,7 @@ def test_place_order_and_confirm_one_reply(client):
         "Order price is outside of the Price Band.",
         None,
         order_label="BUY 10 AAPL",
+        modifies=False,
     )
     confirm_call = mock_post.call_args_list[1]
     assert confirm_call[0][0] == f"{client._base}/iserver/reply/11111111-1111-4111-8111-111111111111"
@@ -478,15 +479,21 @@ def test_place_order_and_confirm_three_chained_replies(client):
             "Price is outside of the Price Band.",
             None,
             order_label="BUY 10 AAPL",
+            modifies=False,
         ),
         call(
-            "22222222-2222-4222-8222-222222222222", "No market data for this contract.", None, order_label="BUY 10 AAPL"
+            "22222222-2222-4222-8222-222222222222",
+            "No market data for this contract.",
+            None,
+            order_label="BUY 10 AAPL",
+            modifies=False,
         ),
         call(
             "33333333-3333-4333-8333-333333333333",
             "This order requires a mandatory cap price.",
             None,
             order_label="BUY 10 AAPL",
+            modifies=False,
         ),
     ]
     urls = [c[0][0] for c in mock_post.call_args_list]
@@ -519,7 +526,7 @@ def test_place_order_and_confirm_passes_message_options(client):
         ]
         client.place_order_and_confirm("U1234567", order)
     mock_reply_dlg.assert_called_once_with(
-        "11111111-1111-4111-8111-111111111111", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL"
+        "11111111-1111-4111-8111-111111111111", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL", modifies=False
     )
 
 
@@ -585,12 +592,14 @@ def test_modify_order_and_confirm_chained_replies(client):
             "Price band warning.",
             None,
             order_label="? ? UNKNOWN (order 1234567890)",
+            modifies=True,
         ),
         call(
             "22222222-2222-4222-8222-222222222222",
             "No market data.",
             None,
             order_label="? ? UNKNOWN (order 1234567890)",
+            modifies=True,
         ),
     ]
 

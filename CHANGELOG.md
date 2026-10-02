@@ -124,6 +124,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     `ConfirmationDeclinedError`. It was `HumanAuthError("Order cancelled by user")` on every
     dialog, the cancel dialog's `KEEP ORDER` included. **A consumer that matched those words
     must match the type.**
+  - *The reply dialog reads `CONFIRM` / `CANCEL`* (were `CONFIRM REPLY` / `DO NOT REPLY`;
+    register F35, reviewed on the rendered dialog for a new order and for a modify), and its
+    sentence says what each button does for the write the question belongs to: "CONFIRM sends
+    the order. CANCEL: the order is not placed.", or, on a modify, "CONFIRM applies the change.
+    CANCEL: the order stays as it was." — with "Not confirmed — the order is as it was." as
+    that case's abandon sentence. `confirm_reply_dialog` takes `modifies=`; the reply chain
+    passes it from the write's authorization (`OrderWriteAuthorization.kind`).
   - The banner text is centred; the banner for an unstated side is a caution yellow
     (0.90, 0.72, 0.00), the amber before it "not a good color" on screen.
   - Each dialog must state its abandon sentence: the shared renderer has no default for it.

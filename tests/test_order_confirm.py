@@ -342,7 +342,7 @@ def test_confirm_reply_dialog_accepts_options_without_error():
 
         confirm_reply_dialog("RPL789", "msg", ["Yes", "No"])
     kwargs = mock_show.call_args.kwargs
-    assert kwargs["confirm_label"] == "CONFIRM REPLY"
+    assert kwargs["confirm_label"] == "CONFIRM"
 
 
 # ============================================================================
@@ -2321,7 +2321,7 @@ _GATE2_DIALOGS = {
     "confirm_bracket_dialog": ("SEND TO IBKR", "DO NOT SEND", "Not sent — nothing reached IBKR."),
     "confirm_modify_dialog": ("MODIFY ORDER", "LEAVE UNCHANGED", "Left unchanged — the order is as it was."),
     "confirm_cancel_dialog": ("VALIDATE", "DISCARD", "Kept — the order is still working."),
-    "confirm_reply_dialog": ("CONFIRM REPLY", "DO NOT REPLY", "Not confirmed — the order was not placed."),
+    "confirm_reply_dialog": ("CONFIRM", "CANCEL", "Not confirmed — the order was not placed."),
 }
 
 
@@ -2333,6 +2333,44 @@ def test_every_gate2_dialog_states_its_buttons_and_what_an_abandon_leaves():
         for name, kw in _invoke_every_gate2_dialog()
     }
     assert stated == _GATE2_DIALOGS
+
+
+@pytest.mark.parametrize(
+    ("modifies", "sentence", "left"),
+    [
+        (
+            False,
+            "CONFIRM sends the order. CANCEL: the order is not placed.",
+            "Not confirmed — the order was not placed.",
+        ),
+        (
+            True,
+            "CONFIRM applies the change. CANCEL: the order stays as it was.",
+            "Not confirmed — the order is as it was.",
+        ),
+        (
+            None,
+            "This will CONFIRM a pending order at Interactive Brokers.",
+            "Not confirmed — the order was not placed.",
+        ),
+    ],
+    ids=["a-new-order", "a-modify", "kind-unknown"],
+)
+def test_the_reply_dialog_says_what_each_button_does_for_the_write_it_belongs_to(modifies, sentence, left):
+    """Register F35, settled with the operator on the rendered dialogs 2026-10-02: the buttons
+    read CONFIRM / CANCEL, and the sentence says what each does — on a modify, CANCEL leaves a
+    live order working, and "cancel" must not be read as cancelling it."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as shown:
+        if modifies is None:
+            oc.confirm_reply_dialog("r-1", "Confirm?")
+        else:
+            oc.confirm_reply_dialog("r-1", "Confirm?", order_label="BUY 1 ES", modifies=modifies)
+    kwargs = shown.call_args.kwargs
+    assert (kwargs["confirm_label"], kwargs["abandon_label"]) == ("CONFIRM", "CANCEL")
+    assert kwargs["disclaimer"] == sentence
+    assert kwargs["abandon_message"] == left
 
 
 @pytest.mark.parametrize("render", ["appkit", "osascript", "tkinter"])

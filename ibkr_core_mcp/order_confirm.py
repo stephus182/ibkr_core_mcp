@@ -956,8 +956,18 @@ def confirm_reply_dialog(
     options: list[str] | None = None,
     *,
     order_label: str | None = None,
+    modifies: bool | None = None,
 ) -> None:
     """Gate 2 for reply_order. Shows the ACTUAL IBKR warning text, not just the reply_id.
+
+    **The buttons read `CONFIRM` / `CANCEL`, and the sentence under IBKR's message says what
+    each does for the write the question belongs to** (register F35, settled with the
+    operator on the rendered dialogs, 2026-10-02; they read `CONFIRM REPLY` / `DO NOT REPLY`).
+    `modifies` False — a new order: "CONFIRM sends the order. CANCEL: the order is not
+    placed." `modifies` True — a change to a live order: "CONFIRM applies the change. CANCEL:
+    the order stays as it was.", because on that dialog CANCEL leaves a live order working
+    and must not read as cancelling it. None — the standalone `reply_order()` path, which
+    knows neither: the sentence and the abandon message stay as they were.
 
     `message` defaults to "" so the standalone reply_order() call site (which only ever
     had a bare reply_id to work with) keeps showing a blank message exactly as before —
@@ -985,13 +995,19 @@ def confirm_reply_dialog(
     if message:
         details["Message"] = reply_message_text(message)
     title = "⚠  CONFIRM ORDER REPLY" + (f" — {order_label}" if order_label else "")
+    if modifies is None:
+        sentence, left = "This will CONFIRM a pending order at Interactive Brokers.", _NOT_PLACED
+    elif modifies:
+        sentence, left = "CONFIRM applies the change. CANCEL: the order stays as it was.", _NOT_CHANGED
+    else:
+        sentence, left = "CONFIRM sends the order. CANCEL: the order is not placed.", _NOT_PLACED
     _show_confirm_dialog(
         title=title,
         details=details,
-        disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
-        confirm_label="CONFIRM REPLY",
-        abandon_label="DO NOT REPLY",
-        abandon_message="Not confirmed — the order was not placed.",
+        disclaimer=sentence,
+        confirm_label="CONFIRM",
+        abandon_label="CANCEL",
+        abandon_message=left,
     )
 
 
@@ -1071,6 +1087,9 @@ def _extract_side(details: dict[str, Any]) -> str | None:
 # the order, and "Order cancelled by user" — every dialog's message until 2.2.0 — said the
 # opposite (register F6; the operator agreed the four sentences 2026-10-01).
 _NOT_SENT = "Not sent — nothing reached IBKR."
+# What a CANCEL on the reply dialog leaves, by the write the question belonged to (F35).
+_NOT_PLACED = "Not confirmed — the order was not placed."
+_NOT_CHANGED = "Not confirmed — the order is as it was."
 _DECLINED = "Declined at the confirmation dialog — nothing was sent to IBKR."
 
 # The icon a host application gives the Gate 2 dialogs, or None for the system's default.

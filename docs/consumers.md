@@ -117,7 +117,12 @@ Reviewed with the operator on the rendered dialogs, one at a time (register F6, 
   `KEEP ORDER`): under a banner that already reads CANCEL ORDER, a blue `CANCEL ORDER` over a
   red `KEEP ORDER` read as ambiguous. **A consumer that names the Gate 2 button in its own text
   must update the cancel path.** The other dialogs keep `SEND TO IBKR` / `DO NOT SEND`,
-  `MODIFY ORDER` / `LEAVE UNCHANGED`, `CONFIRM REPLY` / `DO NOT REPLY`.
+  `MODIFY ORDER` / `LEAVE UNCHANGED`.
+- **The reply dialog's buttons are `CONFIRM` and `CANCEL`** (were `CONFIRM REPLY` and `DO NOT
+  REPLY`; register F35, settled on the rendered dialogs 2026-10-02), and the sentence under
+  IBKR's message says what each does for the write the question belongs to: "CONFIRM sends the
+  order. CANCEL: the order is not placed." for a new order, "CONFIRM applies the change. CANCEL:
+  the order stays as it was." for a modify — there CANCEL leaves a live order working.
 - The banner text is centred; the banner for an unstated side is yellow, not amber.
 - **Your own mark on the dialog:** `ibkr_core_mcp.set_dialog_icon(path)` at startup replaces the
   default icon (the Python launcher's rocket on macOS) with an image of yours; `None` clears it.

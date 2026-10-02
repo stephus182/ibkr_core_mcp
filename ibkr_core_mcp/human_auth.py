@@ -86,6 +86,15 @@ class OrderWriteAuthorization:
     ttl_s: float
 
     @property
+    def kind(self) -> str:
+        """The kind of write this was granted for — `place`, `modify`, `place_bracket`.
+
+        The scope's first segment (`client._order_write_scope` returns `<kind>:<account>:…`).
+        The reply dialog reads it to say what its CANCEL button leaves (register F35).
+        """
+        return self.scope.partition(":")[0]
+
+    @property
     def expired(self) -> bool:
         """True once the window has passed — the holder must prompt again."""
         return (time.monotonic() - self.granted_at) >= self.ttl_s
