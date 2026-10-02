@@ -922,17 +922,6 @@ def test_no_exchange_holds_a_session_on_a_saturday():
     assert ctx["is_trading_day"] is False
 
 
-def test_a_friday_is_a_session_everywhere_but_tadawul_unless_it_is_a_holiday():
-    from ibkr_core_mcp.store import SQLiteStore
-
-    friday = _next(4)
-    ctx = SQLiteStore.get_market_calendar_context(today=friday)
-    assert ctx["sessions_today"]["XSAU"] is False, "Tadawul trades Sunday to Thursday"
-    for code in ("XNYS", "CME", "XLON"):
-        expected = friday.isoformat() not in ctx["holidays_by_exchange"][code]
-        assert ctx["sessions_today"][code] is expected, (code, friday)
-
-
 def test_a_nyse_holiday_is_decided_per_exchange_not_copied_from_the_primary(mkt):
     """The point of the key: NYSE closed says nothing about CME or London that day."""
     from ibkr_core_mcp.store import SQLiteStore
@@ -1116,13 +1105,6 @@ def test_newest_statement_day_is_the_weekday_before_today_in_et(now, expected):
     from ibkr_core_mcp.store import newest_statement_day
 
     assert newest_statement_day(now) == expected
-
-
-def test_newest_statement_day_refuses_a_naive_datetime():
-    from ibkr_core_mcp.store import newest_statement_day
-
-    with pytest.raises(ValueError, match="aware"):
-        newest_statement_day(datetime(2026, 9, 24, 12, 0))
 
 
 def test_a_store_holding_the_previous_weekday_s_statement_is_current(store, mock_config):

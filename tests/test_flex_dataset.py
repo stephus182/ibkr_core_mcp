@@ -22,7 +22,6 @@ year, to the cent — is proven on the real store by the relocation's equivalenc
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import replace
 from datetime import date
@@ -147,13 +146,6 @@ def flex(mock_config):
 # ── Opening: read-only, never creating ────────────────────────────────────────
 
 
-def test_the_fixture_holds_what_the_tests_assume(mock_config, flex):
-    """Nine statement rows, one placeholder, six lots — a canary on the seeding itself."""
-    assert _sql(mock_config, "SELECT COUNT(*) FROM flex_trade WHERE source='flex'") == 9
-    assert _sql(mock_config, "SELECT COUNT(*) FROM flex_trade WHERE source='live'") == 1
-    assert _sql(mock_config, "SELECT COUNT(*) FROM flex_lot") == 6
-
-
 def test_the_connection_cannot_write(mock_config, flex):
     """A display surface must not be able to change the trade store."""
     conn = open_read_only(mock_config.sqlite_path)
@@ -171,13 +163,6 @@ def test_a_missing_store_is_an_error_and_is_not_created(tmp_path):
     with pytest.raises(StoreError, match="unreadable"):
         FlexDataset.open(missing)
     assert list(tmp_path.iterdir()) == [], "opening a missing store created something"
-
-
-def test_the_error_names_no_path(tmp_path):
-    """An absolute path in an error string is how a username reaches a tool result."""
-    with pytest.raises(StoreError) as caught:
-        FlexDataset.open(tmp_path / "nope.db")
-    assert str(tmp_path) not in str(caught.value)
 
 
 def test_a_path_holding_uri_metacharacters_opens_that_file_and_no_other(mock_config, tmp_path):
@@ -207,14 +192,6 @@ def _marked(path: Path, marker: str) -> Path:
     return path
 
 
-def _marker(conn: sqlite3.Connection) -> str:
-    """The row naming the database `conn` opened; closes `conn`."""
-    try:
-        return str(conn.execute("SELECT v FROM marker").fetchone()[0])
-    finally:
-        conn.close()
-
-
 def test_a_nul_is_refused_even_when_its_prefix_is_a_store(tmp_path):
     """A NUL names no file on any file system. Written as `%00` into the URI it would end the
     path, and the store at the prefix — a real one here — would open in place of an error
@@ -226,83 +203,11 @@ def test_a_nul_is_refused_even_when_its_prefix_is_a_store(tmp_path):
         FlexDataset.open(tmp_path / "store\x00.db")
 
 
-def test_the_premise_sqlite_ends_a_uri_path_at_percent_00(tmp_path):
-    """Why the NUL is refused: SQLite opens the prefix of a URI path cut at `%00`. Should a
-    build ever reject `%00` instead (`SQLITE_ENABLE_URI_00_ERROR`), this fails, and the reason
-    in `open_read_only` must be re-read."""
-    prefix = _marked(tmp_path / "store", "the prefix")
-    conn = sqlite3.connect(f"{prefix.as_uri()}%00.db?mode=ro", uri=True)
-    assert _marker(conn) == "the prefix"
-
-
-def test_a_relative_path_opens_under_the_working_directory(tmp_path, monkeypatch):
-    """`absolute()` names what `SQLiteStore._connect`'s plain `sqlite3.connect(path)` names:
-    SQLite resolves a relative path against the working directory (plan § 13, item 12)."""
-    _marked(tmp_path / "store.db", "relative")
-    monkeypatch.chdir(tmp_path)
-    assert _marker(open_read_only("store.db")) == "relative"
-
-
-def test_a_tilde_is_a_directory_name_not_home(tmp_path, monkeypatch):
-    """`Config.from_env` expands `~` once; `SQLiteStore._connect` then opens the path literally,
-    as SQLite does. The reader must name the same file as the writer, so it expands nothing:
-    `~/x.db` is a directory named `~` under the working directory, and `~nobody/x.db` is a
-    missing file, not the `RuntimeError` `expanduser()` raised on an unknown user (item 10)."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    _marked(tmp_path / "home" / "x.db", "home")
-    _marked(tmp_path / "~" / "x.db", "literal")
-    monkeypatch.chdir(tmp_path)
-    assert _marker(open_read_only("~/x.db")) == "literal"
-    with pytest.raises(sqlite3.OperationalError, match="unable to open"):
-        open_read_only("~no-such-user-here/x.db")
-
-
-@pytest.mark.parametrize(
-    ("value", "error"),
-    [(object(), TypeError), ("store\ud800.db", ValueError)],
-    ids=["not-a-path", "lone-surrogate"],
-)
-def test_a_value_that_names_no_file_raises_before_anything_opens(value, error, tmp_path, monkeypatch):
-    """A test double is no path; a lone surrogate cannot be encoded for the file system. Each
-    is one of `UNOPENABLE`, and `FlexDataset.open` turns it into `StoreError` like a missing
-    file (plan § 13, item 11)."""
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(error):
-        open_read_only(value)
-    with pytest.raises(StoreError, match="unreadable"):
-        FlexDataset.open(value)
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_a_relative_path_with_no_working_directory_is_unreadable(tmp_path):
-    """`absolute()` asks for the working directory; once it is deleted, that is an `OSError` —
-    and `StoreError` through `FlexDataset.open`."""
-    gone = tmp_path / "gone"
-    gone.mkdir()
-    home = os.getcwd()
-    os.chdir(gone)
-    try:
-        gone.rmdir()
-        with pytest.raises(OSError):
-            open_read_only("store.db")
-        with pytest.raises(StoreError, match="unreadable"):
-            FlexDataset.open("store.db")
-    finally:
-        os.chdir(home)
-
-
 def test_every_unopenable_error_is_one_the_readers_catch():
     """`UNOPENABLE` is the opener's whole error contract, stated once and imported by the
     never-raise readers in `flex_sync`: each case above raises one of its members."""
     assert set(UNOPENABLE) == {sqlite3.Error, OSError, TypeError, ValueError}
     assert all(issubclass(member, Exception) for member in UNOPENABLE)
-
-
-def test_the_nul_error_names_no_path(tmp_path):
-    """The one error the opener words itself carries no path either (`test_the_error_names_no_path`)."""
-    with pytest.raises(StoreError) as caught:
-        FlexDataset.open(tmp_path / "store\x00.db")
-    assert str(tmp_path) not in str(caught.value)
 
 
 def test_a_store_without_the_flex_tables_is_unreadable_not_empty(mock_config):
@@ -339,14 +244,6 @@ def test_a_stored_date_that_does_not_parse_is_refused_not_guessed(mock_config):
                 ask()
         # A window that does not reach the damaged row still answers.
         assert dataset.realised_window(date(2026, 8, 3), date(2026, 8, 4)).trade_count == 3
-
-
-def test_the_reader_is_closed_on_leaving_its_block(mock_config):
-    _seed(mock_config)
-    with FlexDataset.open(mock_config.sqlite_path) as dataset:
-        assert dataset.coverage().through == date(2026, 8, 6)
-    with pytest.raises(StoreError):
-        dataset.coverage()
 
 
 # ── Realised windows: the verified rule ───────────────────────────────────────

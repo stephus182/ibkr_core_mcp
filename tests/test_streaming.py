@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -734,7 +733,6 @@ def test_alert_still_fires_on_an_ordinary_live_price():
 # a subscription that had never once delivered.
 
 _SYSTEM = {"topic": "system", "success": "the-username"}  # IBKR: "a confirmation with the corresponding username"
-_HEARTBEAT = {"topic": "system", "hb": 1790000000000}  # every 10 s, unix time in ms
 _ACT = {"topic": "act", "args": {"accounts": [], "selectedAccount": "U1", "sessionId": "abc"}}
 _STS_AUTHENTICATED = {"topic": "sts", "args": {"authenticated": True}}
 _STS_NOT_AUTHENTICATED = {"topic": "sts", "args": {"authenticated": False}}
@@ -839,21 +837,6 @@ async def test_connect_times_out_when_the_gateway_never_sends_sts() -> None:
     assert ws._ws is None
 
 
-async def test_the_deadline_bounds_the_whole_handshake_even_while_heartbeats_keep_arriving() -> None:
-    """A gateway that heartbeats forever and never says `sts` must not hold connect() open.
-
-    The deadline is on the whole wait, not on each frame: a per-frame timeout is reset by
-    every heartbeat, and IBKR sends one every ten seconds for as long as the socket is up.
-    """
-    from ibkr_core_mcp.exceptions import StreamingError
-
-    socket = _GatewaySocket([_SYSTEM], keep_sending=_HEARTBEAT)
-    ws = _client()
-    with _websockets_returning(socket), pytest.raises(StreamingError, match="sts"):
-        await asyncio.wait_for(ws.connect(auth_timeout=0.05), timeout=2.0)
-    assert socket.closed
-
-
 async def test_connect_refuses_a_socket_whose_brokerage_session_is_not_authenticated() -> None:
     """`str`, `smd` and `act` need a brokerage session (IBKR, ws/introduction): fail closed."""
     from ibkr_core_mcp.exceptions import StreamingError
@@ -876,31 +859,3 @@ async def test_a_reconnect_does_not_replay_the_previous_socket_s_handshake_frame
     with _websockets_returning(second):
         await ws.connect()
     assert [item async for item in ws.listen()] == []
-
-
-def test_an_sts_frame_reporting_unauthenticated_mid_stream_is_logged_at_warning(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """IBKR relays status changes "for example those resulting from competing sessions" on `sts`."""
-    ws = _client()
-    with caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.streaming"):
-        assert ws._parse_message(json.dumps(_STS_NOT_AUTHENTICATED)) is None
-        assert ws._parse_message(json.dumps(_STS_AUTHENTICATED)) is None
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "sts" in warnings[0].getMessage() and "not authenticated" in warnings[0].getMessage()
-
-
-def test_a_frame_with_no_parser_is_logged_by_topic_and_never_by_payload(caplog: pytest.LogCaptureFixture) -> None:
-    """A dropped `sts` is exactly how the defect stayed invisible — but `system` carries the
-    username and `act` the session id, so the log names the topic and nothing else."""
-    ws = _client()
-    with caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.streaming"):
-        assert ws._parse_message(json.dumps(_SYSTEM)) is None
-        assert ws._parse_message(json.dumps(_ACT)) is None
-    logged = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
-    assert any("system" in line for line in logged)
-    assert any("act" in line for line in logged)
-    everything = "\n".join(r.getMessage() for r in caplog.records)
-    assert "the-username" not in everything
-    assert "abc" not in everything

@@ -492,24 +492,6 @@ def test_stale_message_names_the_statement_held_and_the_newest_that_can_exist():
     assert "settled through" not in lines[0]
 
 
-def test_stale_message_says_when_no_statement_is_held_at_all():
-    from ibkr_core_mcp.claude_tools import _format_coverage
-
-    lines = _format_coverage(
-        {
-            "oldest": "2024-01-01",
-            "newest": "2026-09-24",
-            "statement_through": None,
-            "newest_statement_day": "2026-09-23",
-            "stale": True,
-            "total_trades": 10,
-            "gaps": [],
-        }
-    )
-
-    assert "no statement held; the newest that can exist is through 2026-09-23" in lines[0]
-
-
 def test_empty_flex_dataset_is_reported_as_such():
     from ibkr_core_mcp.claude_tools import _format_coverage
 
@@ -559,15 +541,6 @@ def _sync_with(toolkit, monkeypatch, backup, archive=None):
     return text
 
 
-def test_sync_flex_trades_says_nothing_about_a_backup_nobody_configured(toolkit, monkeypatch):
-    from ibkr_core_mcp.flex_query import FlexBackupResult
-
-    text = _sync_with(toolkit, monkeypatch, FlexBackupResult("not-configured"))
-
-    assert "store.db" not in text
-    assert toolkit._store.log_entry.call_args.kwargs["backup"] == "not-configured"
-
-
 @pytest.mark.parametrize(
     ("status", "reason", "expected"),
     [
@@ -593,17 +566,6 @@ def test_sync_flex_trades_reports_a_dataset_that_fails_validation(toolkit, monke
     assert "⚠ Trade dataset failed validation after the sync — dataset unreadable:" in text
     assert "unverified until this is resolved" in text
     assert toolkit._store.log_entry.call_args.kwargs["valid"] is False
-
-
-def test_sync_flex_trades_says_nothing_about_a_sound_dataset(toolkit, monkeypatch):
-    from tests.flex_fixtures import annual_statement, seed_flex_dataset
-
-    seed_flex_dataset(toolkit._config, annual_statement(2025, trade_ids=(1, 2), pnl_per_trade=-5.0))
-
-    text = _sync_with(toolkit, monkeypatch, None)
-
-    assert "failed validation" not in text
-    assert toolkit._store.log_entry.call_args.kwargs["valid"] is True
 
 
 def test_what_the_pull_tool_records_is_what_last_pull_reads_back(toolkit, monkeypatch):

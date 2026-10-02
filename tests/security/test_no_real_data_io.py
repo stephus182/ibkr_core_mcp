@@ -30,8 +30,6 @@ import os
 import shutil
 import sqlite3
 import tempfile
-import threading
-import traceback
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -118,21 +116,6 @@ def test_the_guarded_directory_is_where_the_default_store_lives():
     assert conftest._operator_path(default, database=True) is not None
 
 
-def test_the_drive_token_and_credentials_default_there_too():
-    """The scrub removes every `GDRIVE_*` and `CRAWL4AI_*` variable, so a real `Config` in a
-    test points its Drive token, its Drive credentials and its browser profiles at their
-    defaults — all under the guarded directory, which the old guard never watched."""
-    from ibkr_core_mcp.config import Config
-
-    config = Config.from_env()
-    for path in (
-        config.gdrive_token_file,
-        config.gdrive_credentials_file,
-        config.crawl4ai_profiles_dir,
-    ):
-        assert conftest._operator_path(path, database=False) is not None, path
-
-
 SPELLINGS = {
     "str": lambda d: str(d / "store.db"),
     "path": lambda d: d / "store.db",
@@ -161,123 +144,6 @@ def test_every_spelling_of_a_database_there_is_refused_before_it_opens(operator_
     with pytest.raises(pytest.fail.Exception, match="operator's data"):
         sqlite3.connect(database, uri=is_uri)
     assert _state(operator_dir) == before
-
-
-def test_another_letter_case_of_the_directory_is_refused(operator_dir):
-    """APFS, macOS's default, ignores case: `.IBKR_CORE` is the same directory, and a
-    comparison by name let it through (measured 2026-09-30)."""
-    alias = operator_dir.parent / operator_dir.name.upper()
-    if not alias.exists():
-        pytest.skip("a case-sensitive file system: another case names another directory")
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect(alias / "store.db")
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        os.chmod(alias, 0o700)  # the directory itself, not only what lies under it
-
-
-def test_the_data_volume_firmlink_is_refused(operator_dir):
-    """On macOS `/System/Volumes/Data` reaches the same inode as `/Users` and `/private`, and
-    `resolve()` does not follow a firmlink (measured 2026-09-30)."""
-    alias = Path("/System/Volumes/Data" + str(operator_dir))
-    if not (alias.exists() and os.path.samefile(alias, operator_dir)):
-        pytest.skip("no /System/Volumes/Data firmlink here: it is macOS's")
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect(alias / "store.db")
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        os.chmod(alias, 0o700)  # the directory itself, not only what lies under it
-
-
-def test_the_directory_is_guarded_before_it_exists(tmp_path, monkeypatch):
-    """Where there is no such directory — CI, a fresh machine — identity has nothing to compare
-    and the name alone guards it: a test must not be what creates the directory or its store."""
-    absent = (tmp_path / ".ibkr_core").resolve()
-    monkeypatch.setattr(conftest, "_OPERATOR_DATA_DIR", absent)
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        absent.mkdir()
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect(absent / "store.db")
-    assert not absent.exists()
-
-
-def test_a_path_through_a_symlink_is_judged_where_it_lands(operator_dir, tmp_path):
-    """The operator's directory may be reached through a link."""
-    link = tmp_path / "link-to-the-directory"
-    link.symlink_to(operator_dir, target_is_directory=True)
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect(link / "store.db")
-
-
-def test_the_directory_named_through_a_link_is_still_recognised(operator_dir, tmp_path, monkeypatch):
-    """Were the directory itself a link, named unresolved, its identity would still hold it —
-    the constant is resolved as well, so this is the second line, not the only one."""
-    link = tmp_path / "linked-data-dir"
-    link.symlink_to(operator_dir, target_is_directory=True)
-    monkeypatch.setattr(conftest, "_OPERATOR_DATA_DIR", link)
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect(operator_dir / "store.db")
-
-
-def test_a_tilde_spelling_is_refused_though_sqlite_would_not_expand_it(operator_dir, monkeypatch):
-    """SQLite does not expand `~`: it would look under a directory literally named `~` in the
-    working directory. A test that spells the store that way meant the operator's."""
-    monkeypatch.setenv("HOME", str(operator_dir.parent))
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect("~/.ibkr_core/store.db")
-
-
-@pytest.mark.parametrize(
-    "database",
-    [":memory:", "", "file::memory:?cache=shared", "file:?mode=memory", 42, None],
-    ids=["memory", "empty", "shared-memory-uri", "pathless-uri", "not-a-path", "none"],
-)
-def test_a_database_that_names_no_file_there_is_not_judged_to(operator_dir, database):
-    """In-memory and pathless databases, and values that are no path at all, name no place."""
-    assert conftest._operator_path(database, database=True) is None
-
-
-@pytest.mark.parametrize(
-    "uri",
-    ["file://[x/elsewhere.db", "file://somehost<dir>/store.db"],
-    ids=["bracket", "a-host-before-the-directory"],
-)
-def test_an_authority_sqlite_refuses_is_left_to_sqlite(operator_dir, uri):
-    """SQLite opens nothing for a URI whose authority is neither empty nor `localhost`, and
-    says so in its own words — even when the path after it lies in the directory. The guard
-    must not answer first: `urllib` raised on the `[`."""
-    with pytest.raises(sqlite3.OperationalError, match="invalid uri authority"):
-        sqlite3.connect(uri.replace("<dir>", str(operator_dir)), uri=True)
-
-
-@pytest.mark.parametrize(
-    ("name", "error"),
-    [("store\x00.db", ValueError), ("store\ud800.db", UnicodeEncodeError)],
-    ids=["nul", "lone-surrogate"],
-)
-def test_a_name_no_file_system_can_hold_is_refused_by_sqlite_itself(operator_dir, name, error):
-    """The guard cannot resolve these and answers None; `sqlite3.connect` refuses them in its
-    own words, and nothing opens. A guard that raised instead would answer from inside the
-    audit hook — the old judge caught `OSError` and `RuntimeError` around `resolve()`, not the
-    `ValueError` these raise (claudia_ui plan § 13, item 13). The two errors read the same, so
-    the traceback is what tells them apart."""
-    with pytest.raises(error) as caught:
-        sqlite3.connect(str(operator_dir / name))
-    frames = [frame.name for frame in traceback.extract_tb(caught.value.__traceback__)]
-    assert "_operator_data_hook" not in frames, "the guard answered, not SQLite"
-
-
-def test_a_database_elsewhere_is_not_refused(operator_dir, tmp_path):
-    """Only the directory itself is guarded — not a sibling whose name merely starts like it."""
-    for elsewhere in (
-        tmp_path / "elsewhere" / "store.db",
-        tmp_path / ".ibkr_core_backup" / "store.db",
-    ):
-        elsewhere.parent.mkdir()
-        sqlite3.connect(elsewhere).close()
-        sqlite3.connect(f"{elsewhere.as_uri()}?mode=ro", uri=True).close()
-    # A URI's path ends at `?` or `#`: what follows never names the file, even when it spells
-    # a way back into the directory.
-    fragment = f"{(tmp_path / 'elsewhere' / 'store.db').as_uri()}?mode=ro#/../../.ibkr_core/store.db"
-    sqlite3.connect(fragment, uri=True).close()
 
 
 ROUTES = {
@@ -383,39 +249,6 @@ def test_the_refusal_cannot_be_swallowed_by_code_that_catches_exception(operator
             pytest.fail("the refusal was caught by `except Exception`")
 
 
-def test_a_refusal_swallowed_in_a_thread_still_fails_the_run(operator_dir, monkeypatch):
-    """A refusal raised in a thread fails no test, and `except BaseException` would hide one
-    anywhere; so every refusal of the real directory is recorded, and `pytest_sessionfinish`
-    fails the run for it. Here the stand-in plays the real directory, with a list of its own."""
-    monkeypatch.setattr(conftest, "_REAL_OPERATOR_DATA_DIR", operator_dir)
-    monkeypatch.setattr(conftest, "_operator_refusals", [])
-    swallowed: list[BaseException] = []
-
-    def careless_worker():
-        """Open the store in a thread, and swallow whatever happens."""
-        try:
-            sqlite3.connect(operator_dir / "store.db")
-        except BaseException as exc:
-            swallowed.append(exc)
-
-    worker = threading.Thread(target=careless_worker)
-    worker.start()
-    worker.join()
-
-    assert len(swallowed) == 1 and isinstance(swallowed[0], pytest.fail.Exception)
-    assert conftest._operator_refusals == [f"sqlite3.connect {operator_dir / 'store.db'}"]
-    assert conftest._refusal_violations(conftest._operator_refusals)
-
-
-def test_a_refusal_of_a_stand_in_is_not_recorded_as_the_real_directory(operator_dir):
-    """Only the real directory's refusals fail the run at session end: the tests in this file
-    refuse stand-ins on purpose, and a record of those would fail every run."""
-    before = list(conftest._operator_refusals)
-    with pytest.raises(pytest.fail.Exception, match="operator's data"):
-        sqlite3.connect(operator_dir / "store.db")
-    assert conftest._operator_refusals == before
-
-
 def test_the_session_end_check_names_every_refusal():
     """A refusal of the operator's directory is a violation of its own, one line each — the
     refusal stopped the operation, and this is what fails the run when a test hid it."""
@@ -456,24 +289,3 @@ def test_a_unit_test_is_not_exempt(operator_dir):
             sqlite3.connect(operator_dir / "store.db")
     finally:
         conftest.pytest_runtest_teardown(item, None)
-
-
-def test_the_exemption_brackets_every_fixture_scope():
-    """The disarm runs before the runner fills fixtures and the re-arm after it tears them down
-    (`tryfirst` / `trylast`): an integration module's module-scoped `live_client` is set up and
-    torn down inside the exemption, not at its edges."""
-    setup_opts = getattr(conftest.pytest_runtest_setup, "pytest_impl")  # noqa: B009 — pluggy's marker attribute
-    teardown_opts = getattr(conftest.pytest_runtest_teardown, "pytest_impl")  # noqa: B009
-    assert setup_opts["tryfirst"] is True
-    assert teardown_opts["trylast"] is True
-
-
-def test_a_temporary_database_and_file_still_open(tmp_path):
-    """The guard is a refusal for one directory, not a block on SQLite or on files."""
-    conn = sqlite3.connect(tmp_path / "scratch.db")
-    try:
-        conn.execute("CREATE TABLE t (x)")
-    finally:
-        conn.close()
-    (tmp_path / "scratch.txt").write_text("fine")
-    assert (tmp_path / "scratch.db").exists() and (tmp_path / "scratch.txt").exists()

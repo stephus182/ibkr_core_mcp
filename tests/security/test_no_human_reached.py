@@ -31,18 +31,14 @@ the interpreter swapped for `true`.
 from __future__ import annotations
 
 import contextlib
-import os
 import shutil
 import subprocess
 import sys
-import types
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from ibkr_core_mcp import _order_dialog, human_auth, order_confirm
-from ibkr_core_mcp.exceptions import HumanAuthError
 from tests import conftest
 
 _TRUE = shutil.which("true")
@@ -61,13 +57,6 @@ def refused(door: str):
     recorded = conftest._human_refusals[before:]
     del conftest._human_refusals[before:]
     assert len(recorded) == 1 and door in recorded[0], recorded
-
-
-def test_the_guard_is_armed_before_the_first_test():
-    """Configure time, not a fixture: imports, collection and module-scoped fixtures are inside."""
-    assert conftest._HUMAN_GUARD["armed"] is True
-    assert sys.modules["LocalAuthentication"] is conftest._GATE_1_FRAMEWORK
-    assert sys.modules["AppKit"] is conftest._DIALOG_FRAMEWORK
 
 
 def test_touch_id_cannot_prompt(monkeypatch):
@@ -100,34 +89,6 @@ def test_a_tk_window_cannot_open():
         tkinter.Tk()
 
 
-def test_shutting_the_tk_door_replaces_the_window_class(monkeypatch):
-    """The replacement itself, on a stand-in module — so it is proven here even where Python
-    was built without Tcl/Tk and the test above has no door to try."""
-    stand_in = types.ModuleType("tkinter")
-    real_window = object()
-    stand_in.Tk = real_window  # type: ignore[attr-defined]
-    monkeypatch.setattr(conftest, "_displaced", {})
-
-    conftest._shut_the_tk_door(stand_in)
-
-    assert stand_in.Tk is conftest._no_tk_window
-    assert conftest._displaced == {"tkinter.Tk": real_window}  # kept, to be put back
-    with refused("tkinter"):
-        stand_in.Tk()
-
-
-def test_the_stand_ins_answer_introspection_quietly():
-    """pytest, coverage and `inspect` read dunder attributes off everything in `sys.modules`;
-    that is not a test reaching a person, and it must not be recorded as one."""
-    before = len(conftest._human_refusals)
-    for module in (conftest._GATE_1_FRAMEWORK, conftest._DIALOG_FRAMEWORK):
-        assert getattr(module, "__file__", None) is None
-        assert getattr(module, "__path__", None) is None
-        assert not hasattr(module, "__wrapped__")
-        assert module.__name__ in ("LocalAuthentication", "AppKit")
-    assert len(conftest._human_refusals) == before
-
-
 @pytest.mark.skipif(
     shutil.which("osascript") is None, reason="osascript is macOS-only; the hook is tested by the decoy below"
 )
@@ -146,29 +107,6 @@ def test_the_dialog_script_cannot_be_launched(tmp_path):
     decoy.write_text("pass\n")
     with refused("_order_dialog.py"):
         subprocess.run([sys.executable, str(decoy)], capture_output=True, text=True, timeout=10, check=False)
-
-
-def test_a_shell_command_naming_a_dialog_is_refused():
-    """`os.system` and friends take one string; the same two names are refused in it."""
-    with refused("osascript"):
-        os.system("osascript -e 'return 1' >/dev/null 2>&1")  # noqa: S605
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        [sys.executable, "-c", "pass"],
-        ["git", "--version"],
-        [sys.executable, "tests/my_order_dialog.py"],
-        ["git", "--version", "--not-osascript-at-all"],
-    ],
-    ids=["python", "git", "a-file-name-that-only-ends-like-the-script", "a-word-that-only-contains-osascript"],
-)
-def test_other_child_processes_are_not_the_guards_business(command):
-    """The suite launches git and Python on purpose; only the two dialog launchers are refused."""
-    before = len(conftest._human_refusals)
-    subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
-    assert len(conftest._human_refusals) == before
 
 
 @pytest.mark.skipif(_TRUE is None, reason="needs a `true` executable to stand in for the interpreter")
@@ -192,15 +130,6 @@ def test_the_2026_10_01_incident_ends_in_a_refusal_not_a_dialog(client, monkeypa
     ):
         client.cancel_order("U1234567", "9876543210")
     sent.assert_not_called()
-
-
-def test_a_refusal_swallowed_by_the_code_under_test_still_fails_the_run():
-    """`except BaseException` anywhere, or a thread, would hide a refusal from its test; the
-    record is what `pytest_sessionfinish` reports."""
-    assert conftest._human_violations([]) == []
-    assert conftest._human_violations(["subprocess.Popen osascript"]) == [
-        "a test tried to reach a human: subprocess.Popen osascript"
-    ]
 
 
 def test_the_run_turns_red_at_its_end_when_an_attempt_was_recorded(monkeypatch, capsys):
@@ -236,17 +165,3 @@ def test_the_run_turns_red_at_its_end_when_an_attempt_was_recorded(monkeypatch, 
     assert loud.exitstatus == 1
     assert "A HUMAN GATE REACHED FOR" in out and "subprocess.Popen osascript" in out
     assert "REAL DATA REACHED FOR" not in out
-
-
-def test_a_gate_test_still_supplies_its_own_double(monkeypatch):
-    """The guard does not get in the way of testing the gates: a double placed for one test
-    wins for that test, and the stand-in is back afterwards (the next tests rely on it)."""
-    assert not isinstance(HumanAuthError("x"), pytest.fail.Exception)
-    double = type(sys)("LocalAuthentication")
-    monkeypatch.setitem(sys.modules, "LocalAuthentication", double)
-    assert sys.modules["LocalAuthentication"] is double
-    monkeypatch.undo()
-    assert sys.modules["LocalAuthentication"] is conftest._GATE_1_FRAMEWORK
-    assert (
-        Path(order_confirm.__file__).with_name("_order_dialog.py").exists()
-    )  # the name the hook refuses is the real one

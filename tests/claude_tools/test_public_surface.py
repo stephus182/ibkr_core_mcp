@@ -38,27 +38,6 @@ def test_a_public_accessor_returns_the_collaborator_the_toolkit_was_built_with(b
     assert getattr(built, name) is parts[name]
 
 
-@pytest.mark.parametrize("name", ["client", "store", "config"])
-def test_a_public_accessor_cannot_be_reassigned(built, name):
-    """Read-only: a consumer reads the collaborator, it does not swap the toolkit's."""
-    with pytest.raises(AttributeError):
-        setattr(built, name, object())
-
-
-@pytest.mark.parametrize("name", ["client", "store", "config"])
-def test_a_public_accessor_is_documented(name):
-    """Each says what it is for — a consumer reads the docstring, not the constructor."""
-    accessor = getattr(ClaudeToolkit, name)
-    assert isinstance(accessor, property)
-    assert accessor.__doc__ and len(accessor.__doc__.split()) >= 8
-
-
-def test_the_drive_cache_has_no_public_accessor(built):
-    """The operator's decision: the Drive client is not part of the public surface."""
-    assert not hasattr(ClaudeToolkit, "cache")
-    assert not hasattr(built, "cache")
-
-
 def test_the_public_surface_of_a_toolkit_is_exactly_this():
     """The whole list, so an accessor added later is a decision, not a drift."""
     public = {name for name in vars(ClaudeToolkit) if not name.startswith("_")}

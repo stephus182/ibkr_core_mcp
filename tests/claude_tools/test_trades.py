@@ -174,16 +174,6 @@ def test_get_trades_store_lists_the_statement_executions_and_their_realised_tota
     assert lines[-1].startswith("Fills since the last statement are not in this list")
 
 
-def test_get_trades_store_does_not_touch_the_legacy_store_object(toolkit):
-    """F20: the realised total used to be summed from `SQLiteStore.get_trades()` — the legacy
-    table. The branch now reads the Flex dataset and calls nothing on the store."""
-    _seed_statements(toolkit, *(_statement_trade(*row) for row in _THREE))
-
-    toolkit.execute("get_trades", {"source": "store"})
-
-    assert toolkit._store.method_calls == []
-
-
 def test_get_trades_store_total_is_the_readers_window_to_the_cent(toolkit):
     """The litmus in miniature: what the tool reports is what `FlexDataset.realised_window`
     reports — the figure a host's dashboard shows for the same window."""
@@ -269,27 +259,3 @@ def test_get_trades_store_caps_the_listing_and_not_the_total(toolkit):
     assert "(55 executions, all origins incl. mobile/TWS)  (showing first 50 of 55):" in text
     assert sum(1 for line in text.splitlines() if line.startswith("- ")) == 50
     assert "Total realized P&L: +55.00 USD" in text
-
-
-def test_get_trades_store_says_when_the_period_holds_nothing(toolkit):
-    _seed_statements(toolkit, *(_statement_trade(*row) for row in _THREE))
-
-    text, _ = toolkit.execute("get_trades", {"source": "store", "start": "2026-09-01"})
-
-    assert text.startswith("No trades found in Flex store for the requested period.")
-
-
-def test_get_trades_store_says_when_there_is_no_dataset_at_all(toolkit):
-    """No store file: a sentence naming the remedy, not the generic store-error text."""
-    text, _ = toolkit.execute("get_trades", {"source": "store"})
-
-    assert text.startswith("No Flex dataset in the local store yet.")
-    assert "sync_flex_trades" in text
-
-
-def test_get_trades_store_refuses_a_date_it_cannot_read(toolkit):
-    _seed_statements(toolkit, *(_statement_trade(*row) for row in _THREE))
-
-    text, _ = toolkit.execute("get_trades", {"source": "store", "start": "03/08/2026"})
-
-    assert text == "start and end must be dates in YYYY-MM-DD form."

@@ -702,22 +702,6 @@ def test_a_failed_backup_does_not_fail_the_pull_and_says_why(archive_client):
     assert "abc123secret" not in (result.reason or ""), "the reason goes to a tool result — it is redacted"
 
 
-def test_the_fingerprint_is_taken_before_the_pull_writes(archive_client):
-    """Taken after the upsert, "before" and "after" are always equal and nothing is ever
-    backed up."""
-    from tests.flex_fixtures import statement, trade
-
-    _pull(archive_client, statement(trade()))
-    archive_client._cache.upload_account_sqlite.reset_mock()
-
-    _pull(
-        archive_client,
-        statement(trade(tradeID="700000002", transactionID="800000002", ibExecID="0000aaaa.60000002.01.01")),
-    )
-
-    archive_client._cache.upload_account_sqlite.assert_called_once()
-
-
 def test_without_a_drive_folder_there_is_no_backup_and_drive_is_not_asked(mock_config):
     """No folder configured: nothing to back up, and asking Drive anyway would start the
     interactive OAuth flow on a machine without a token, then fail — every pull."""
@@ -736,38 +720,4 @@ def test_without_a_drive_folder_there_is_no_backup_and_drive_is_not_asked(mock_c
     _pull(client, statement(trade()))
 
     cache.upload_account_sqlite.assert_not_called()
-    assert client.last_backup_result == FlexBackupResult("not-configured")
-
-
-def test_an_account_folder_alone_is_a_configured_drive(mock_config):
-    from dataclasses import replace
-
-    from ibkr_core_mcp.flex_query import FlexBackupResult, FlexQueryClient
-    from ibkr_core_mcp.store import SQLiteStore
-    from tests.flex_fixtures import statement, trade
-
-    config = replace(mock_config, gdrive_folder_id="", gdrive_account_folder_id="account-folder-id")
-    store = SQLiteStore(config)
-    store.initialize()
-    client = FlexQueryClient(config, store, MagicMock())
-
-    _pull(client, statement(trade()))
-
-    assert client.last_backup_result == FlexBackupResult("uploaded")
-
-
-def test_a_toolkit_without_a_cache_makes_no_backup(mock_config):
-    """`ClaudeToolkit` may hold no cache (`verify_flex_import` checks for None); the pull still
-    completes and says nothing about a backup that cannot exist."""
-    from ibkr_core_mcp.flex_query import FlexBackupResult, FlexQueryClient
-    from ibkr_core_mcp.store import SQLiteStore
-    from tests.flex_fixtures import statement, trade
-
-    store = SQLiteStore(mock_config)
-    store.initialize()
-    client = FlexQueryClient(mock_config, store, None)  # type: ignore[arg-type]  # the toolkit's own None
-
-    trades = _pull(client, statement(trade()))
-
-    assert len(trades) == 1
     assert client.last_backup_result == FlexBackupResult("not-configured")

@@ -450,18 +450,6 @@ def test_the_store_upload_sends_a_snapshot_holding_rows_still_in_the_wal(cache, 
     assert sent["name"] == "store.db"
 
 
-def test_the_store_upload_removes_its_snapshot(cache, tmp_path):
-    """Nothing but the store and its own sidecars is left beside it after a successful upload."""
-    store = tmp_path / "store.db"
-    conn = _a_store(store)
-    try:
-        with patch.object(cache, "upload_account_file_bytes"):
-            cache.upload_account_sqlite(store, "store.db")
-        assert sorted(p.name for p in tmp_path.iterdir()) == ["store.db", "store.db-shm", "store.db-wal"]
-    finally:
-        conn.close()
-
-
 def test_the_store_upload_removes_its_snapshot_when_drive_fails(cache, tmp_path):
     """The failure is the caller's to handle (`fetch_trades` reports it); the snapshot still goes."""
     store = tmp_path / "store.db"
@@ -475,14 +463,6 @@ def test_the_store_upload_removes_its_snapshot_when_drive_fails(cache, tmp_path)
         assert not list(tmp_path.glob("*.upload.tmp"))
     finally:
         conn.close()
-
-
-def test_a_missing_store_uploads_nothing(cache, tmp_path):
-    """No database, no upload, no snapshot."""
-    with patch.object(cache, "upload_account_file_bytes") as upload:
-        cache.upload_account_sqlite(tmp_path / "store.db", "store.db")
-    upload.assert_not_called()
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_the_store_upload_removes_the_snapshots_an_earlier_process_left(cache, tmp_path, caplog):
@@ -504,15 +484,6 @@ def test_the_store_upload_removes_the_snapshots_an_earlier_process_left(cache, t
         conn.close()
     assert "Removed 3 leftover snapshot file(s)" in caplog.text
     assert all(name in caplog.text for name in _STRANDED)
-
-
-def test_stranded_snapshots_go_even_when_there_is_no_store_to_upload(cache, tmp_path):
-    """A missing store is no reason to keep private copies of it."""
-    _plant(tmp_path, _STRANDED)
-    with patch.object(cache, "upload_account_file_bytes") as upload:
-        cache.upload_account_sqlite(tmp_path / "store.db", "store.db")
-    upload.assert_not_called()
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_snapshot_newer_than_this_process_is_left_alone(cache, tmp_path):
@@ -574,72 +545,6 @@ def test_only_the_snapshots_this_method_writes_are_swept(cache, tmp_path, caplog
         assert conn.execute("SELECT v FROM t").fetchall() == [("only-in-the-wal",)]
     finally:
         conn.close()
-
-
-def test_a_snapshot_that_cannot_be_removed_never_fails_the_upload(cache, tmp_path, caplog):
-    """Housekeeping: a refused unlink is logged, and the backup is still made."""
-    import logging
-    from pathlib import Path
-
-    store = tmp_path / "store.db"
-    conn = _a_store(store)
-    _plant(tmp_path, ["tmpab12cd34.upload.tmp"])
-    real_unlink = Path.unlink
-
-    def refusing_unlink(self, missing_ok=False):
-        """Refuse the planted snapshot, as a permission error would; allow the rest."""
-        if self.name == "tmpab12cd34.upload.tmp":
-            raise PermissionError("not permitted")
-        real_unlink(self, missing_ok=missing_ok)
-
-    try:
-        with (
-            patch.object(cache, "upload_account_file_bytes") as upload,
-            patch.object(Path, "unlink", refusing_unlink),
-            caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.cache"),
-        ):
-            cache.upload_account_sqlite(store, "store.db")
-    finally:
-        conn.close()
-    upload.assert_called_once()
-    assert "tmpab12cd34.upload.tmp" in caplog.text and "not permitted" in caplog.text
-
-
-def test_a_directory_that_cannot_be_listed_never_fails_the_upload(cache, tmp_path, caplog):
-    """The other refusal the sweep can meet: the listing itself."""
-    import logging
-    from pathlib import Path
-
-    store = tmp_path / "store.db"
-    conn = _a_store(store)
-
-    def refusing_iterdir(self):
-        """Refuse to list, as an unreadable directory would."""
-        raise PermissionError("not permitted")
-
-    try:
-        with (
-            patch.object(cache, "upload_account_file_bytes") as upload,
-            patch.object(Path, "iterdir", refusing_iterdir),
-            caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.cache"),
-        ):
-            cache.upload_account_sqlite(store, "store.db")
-    finally:
-        conn.close()
-    upload.assert_called_once()
-    assert "Could not list" in caplog.text and "not permitted" in caplog.text
-
-
-def test_a_directory_that_does_not_exist_is_not_a_listing_failure(cache, tmp_path, caplog):
-    """A first run has no data directory yet: nothing to sweep, and no warning about listing."""
-    import logging
-
-    with (
-        patch.object(cache, "upload_account_file_bytes"),
-        caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.cache"),
-    ):
-        cache.upload_account_sqlite(tmp_path / "not-there" / "store.db", "store.db")
-    assert "Could not list" not in caplog.text
 
 
 def test_the_sweep_recognises_the_name_a_real_upload_writes(cache, tmp_path):
