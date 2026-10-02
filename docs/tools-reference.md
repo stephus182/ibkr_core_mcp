@@ -255,8 +255,12 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 (`Order Preview: BUY 1 ES (STP, GTC)`), then `Time in force` (with "none was given, so this
 preview is for a DAY order" when it was omitted), `Commission est.`, `Equity with loan`,
 `Initial margin`, `Maintenance margin`, `Buying power effect` (equity change). Until 2.2.0
-every preview was sent as DAY and said nothing about it (register F7). Not yet measured live:
-whether IBKR's figures differ between a DAY and a GTC what-if.
+every preview was sent as DAY and said nothing about it (register F7). Measured live
+2026-10-02 (BUY 1 ES STP, five what-ifs seconds apart — DAY, DAY, GTC, GTC, DAY): IBKR accepted
+the GTC what-if; order value, commission, position and the four warnings were identical between
+DAY and GTC. The three live account figures (initial margin, maintenance margin, equity with
+loan) moved between two identical DAY previews as well, so they drift with the market and no
+effect of the time in force is established.
 
 **IBKR endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 
