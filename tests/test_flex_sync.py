@@ -795,6 +795,20 @@ def test_last_pull_ignores_other_events(mock_config):
     assert outcome is not None and (outcome.trades_fetched, outcome.problems) == (3, ())
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [{"data": '{"archive_ok": "false", "valid": true}'}, {"data": "[1, 2]"}, {"ts": "yesterday"}],
+    ids=["a-field-of-the-wrong-type", "a-record-that-is-not-an-object", "an-unreadable-time"],
+)
+def test_a_record_that_cannot_be_trusted_is_unknown_never_believed(mock_config, raw):
+    """`problems` asks `archive_ok is False`, and the text "false" is not False: read without
+    its type check, a refused archive would show as a clean pull. None each time — unknown."""
+    path = _store_with_pulls(mock_config, _CLEAN)
+    _rewrite_last_event(path, **raw)
+
+    assert last_pull(path) is None
+
+
 def test_a_time_without_a_zone_is_read_as_utc(mock_config):
     """The writer stamps UTC with an offset; a bare stamp from an older row is the same clock."""
     path = _store_with_pulls(mock_config, _CLEAN)

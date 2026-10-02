@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**2,150 unit tests · 102 integration tests (2,252 total) · 90% line coverage (non-integration)** — counted 2026-10-02 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
+**2,153 unit tests · 102 integration tests (2,255 total) · 91% line coverage (non-integration)** — counted 2026-10-02 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -79,7 +79,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `human_auth.py` | 98% | 101 | macOS `LocalAuthentication` import — requires Touch ID hardware; not unit-testable |
 | `store.py` | 95% | 449, 506–509, 513–516, 520–522, 537–540, 885 | Market-calendar exchange-loader edge branches and a catastrophic-exception fallback in `get_market_calendar_context` — exercised paths cover all known failure modes; the coverage report's `flex_trade` branch (A7) is covered in full |
 | `flex_dataset.py` | 99% | 161–162, 581 | `_num`'s fallback for a value `float()` refuses (the writer stores numbers or NULL, never text) and `realised_series` skipping a NULL day, which `BETWEEN` never matches — both kept for the type, not for data the writer produces |
-| `flex_sync.py` | 92% | 128, 130, 227–229, 284, 341, 376–378, 384, 393–395 | `DatasetValidity.summary` on an empty and on a passing dataset (no caller in this package reads either sentence), a `DatabaseError` after the fingerprint's open succeeded (a damaged file read as a table), a naive `imported_at`, and `last_pull`'s refusals of a malformed record (an unparseable time, a record that is not an object, a field of the wrong type) — each a defensive branch of a never-raise reader |
+| `flex_sync.py` | 97% | 131, 133, 230–232, 287 | `DatasetValidity.summary` on an empty and on a passing dataset (no caller in this package reads either sentence), a `DatabaseError` after the fingerprint's open succeeded (a damaged file read as a table), and a naive `imported_at` — each a defensive branch of a never-raise reader |
 | `redaction.py` | 91% | 99–100, 137 | Listed for the first time (2026-09-30): `collapse_home`'s fallback when no home directory resolves, and `redact_error`'s truncation of a message over the limit |
 | `rate_limiter.py` | 98% | 368–369 | Non-429/503 HTTP error body-preview formatting inside `with_retry` — requires a live gateway response with a non-retryable status |
 | `__init__.py` | 92% | 64–65 | Optional-dependency import guard (module absent from environment) |
