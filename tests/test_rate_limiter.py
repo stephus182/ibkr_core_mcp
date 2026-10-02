@@ -117,6 +117,21 @@ def test_a_503_that_carries_ibkrs_own_message_says_it(caplog):
     assert "rate limit" not in str(info.value).lower() and "unavailable" not in str(info.value)
 
 
+def test_a_503_that_carries_ibkrs_own_message_is_not_retried():
+    """Measured live 2026-10-02: the status read of an order IBKR does not hold took 28 s to
+    fail — three paced retries of an answer that cannot change. A sentence in the body is
+    IBKR's answer, not an outage, so it is raised on the first attempt; the message names no
+    attempt count (operator decision, register F36). A bodyless 503 keeps its retries."""
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
+
+    fn = MagicMock(return_value=_make_response(503, {"error": "Order 1234567890 is not found"}))
+    with patch("time.sleep") as sleep, pytest.raises(IBKRRateLimitError) as info:
+        with_retry(fn, max_retries=3)
+    assert fn.call_count == 1 and not sleep.called
+    assert "not retried" in str(info.value) and "attempts" not in str(info.value)
+
+
 @pytest.mark.parametrize(
     "body", [None, {"error": 503}, {"error": ""}, ["Order not found"]], ids=["raises", "not-text", "empty", "a-list"]
 )

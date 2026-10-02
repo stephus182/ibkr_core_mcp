@@ -295,14 +295,24 @@ def _rate_limit_message(status: int, max_retries: int, detail: str = "") -> str:
     prior to the active session and there is no cached information saved, querying the order
     status endpoint would be expected to result in a '503' error"
     (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status).
-    So the message says what was observed — 503 on every attempt — and gives IBKR's own
-    sentence when the body carried one; without one, the gateway may simply be unavailable.
+    So the message says what was observed and gives IBKR's own sentence when the body carried
+    one; without one, the gateway may simply be unavailable and 503 was answered on every attempt.
+
+    **A 503 with IBKR's sentence is not retried** (operator decision 2026-10-02). Measured live
+    the same day: that status read took 28 s to fail — three paced retries of an answer that
+    cannot change, blocking whoever asked. The sentence is IBKR's answer, so `with_retry` raises
+    on the first attempt and the message names no attempt count. A bodyless 503 keeps its
+    retries: it may be the gateway down for a moment. What is established: one 503 body with a
+    sentence has been read (the order-status one). The watchlist and alert 503s of 2026-09-21
+    were recorded by status only, their bodies unread.
     """
+    if status == 503 and detail:
+        return f'IBKR answered HTTP 503 — not a pacing violation, not retried. IBKR\'s message: "{detail}".'
     if status == 503:
-        told = (
-            f' IBKR\'s message: "{detail}".' if detail else " No message came with it: the gateway may be unavailable."
+        return (
+            f"IBKR answered HTTP 503 on all {max_retries + 1} attempts — not a pacing violation."
+            " No message came with it: the gateway may be unavailable."
         )
-        return f"IBKR answered HTTP 503 on all {max_retries + 1} attempts — not a pacing violation.{told}"
     message = f"Rate limit exceeded after {max_retries} retries (HTTP {status})."
     if status == 429:
         message += (
@@ -319,7 +329,7 @@ def with_retry(
     max_retries: int = _DEFAULT_MAX_RETRIES,
     path: str | None = None,
 ) -> requests.Response:
-    """Pace every attempt for its endpoint and call fn(), retrying on 429/503.
+    """Pace every attempt for its endpoint and call fn(), retrying on 429 and on a bodyless 503.
 
     Args:
         fn: Thunk performing the HTTP call.
@@ -367,7 +377,8 @@ def with_retry(
 
     Raises:
         IBKRAuthError: on 401 (no retry — session must be re-established)
-        IBKRRateLimitError: on 429 or 503 after retries exhausted; `.status_code` says which
+        IBKRRateLimitError: on 429 or a bodyless 503 after retries exhausted, or at once on a
+            503 that carries IBKR's own `error` sentence; `.status_code` says which
         IBKRAPIError: on other 4xx/5xx
     """
     attempt = 0
@@ -385,8 +396,10 @@ def with_retry(
         if status == 401:
             raise IBKRAuthError("IBKR session not authenticated (401)")
         if status in (429, 503):
-            if attempt >= max_retries:
-                detail = _ibkr_error_text(resp) if status == 503 else ""
+            # A 503 carrying IBKR's own sentence is IBKR's answer, not an outage: raised at
+            # once (28 s of retries measured live on an order IBKR did not hold, 2026-10-02).
+            detail = _ibkr_error_text(resp) if status == 503 else ""
+            if detail or attempt >= max_retries:
                 raise IBKRRateLimitError(
                     _rate_limit_message(status, max_retries, detail), status_code=status, detail=detail
                 )

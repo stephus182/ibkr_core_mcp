@@ -205,7 +205,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   followed by IBKR's sentence when the body carried one, or by "the gateway may be unavailable"
   when it did not; `IBKRRateLimitError.detail` holds that sentence ("" when none), and the tool
   error the model reads quotes it instead of telling it to check the gateway container. The
-  type and the three retries are unchanged.
+  type is unchanged. **A 503 carrying IBKR's sentence is not retried** (measured live the same
+  day: the read of an order IBKR did not hold took 28 s to fail — three paced retries of an
+  answer that cannot change): it is raised on the first attempt and its message reads "IBKR
+  answered HTTP 503 — not a pacing violation, not retried." A bodyless 503 keeps the three
+  retries, since it may be the gateway down for a moment.
 - **Every Drive request has its own connection (register F17).** `GDriveCache` and the web
   scraper's Drive client each built one shared connection; httplib2 is not thread-safe, and a
   host calling them from worker threads could crash the process (claudia_ui's own client did,

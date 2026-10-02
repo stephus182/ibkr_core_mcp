@@ -60,6 +60,8 @@ def test_a_503_with_ibkrs_message_tells_the_model_what_ibkr_said():
     msg = _safe_error("get_order_status", exc)
     assert 'IBKR\'s message: "Order 1234567890 is not found"' in msg
     assert "penalty" not in msg.lower() and "container" not in msg
+    # A 503 with IBKR's sentence is raised on the first attempt since 2026-10-02 — it was not repeated.
+    assert "repeatedly" not in msg
 
 
 def test_rate_limit_text_on_a_503_does_not_claim_a_penalty_box():

@@ -1306,7 +1306,7 @@ def _safe_error(tool: str, exc: Exception) -> str:
             )
         if exc.status_code == 503 and exc.detail:
             return (
-                f"Tool '{tool}' failed: IBKR answered HTTP 503 repeatedly — not a pacing violation."
+                f"Tool '{tool}' failed: IBKR answered HTTP 503 — not a pacing violation, not retried."
                 f' IBKR\'s message: "{exc.detail}".'
             )
         if exc.status_code == 503:
