@@ -509,6 +509,7 @@ cal = SQLiteStore.get_market_calendar_context()
 #   "next_trading_day": "2026-06-25",
 #   "primary_exchange": "XNYS",
 #   "sessions_today": {"XNYS": True, "CME": True, "XLON": True, ..., "XSAU": False},  # per exchange, from its own calendar
+#   "early_closes_today": {},   # on a half day: {"XNYS": {"close": "13:00", "tz": "America/New_York"}} — never CME
 #   "holidays_by_exchange": {
 #     "XNYS":  ["2026-01-01", "2026-01-19", "2026-02-16", ...],   # NYSE
 #     "CME":   ["2026-01-01", "2026-07-04", ...],                  # CME Futures
@@ -524,6 +525,8 @@ cal = SQLiteStore.get_market_calendar_context()
 # Custom exchange list
 cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"])
 ```
+
+**Half days.** `early_closes_today` names each exchange whose session ends early today, with the closing time in the exchange's own zone. The figures are the calendar library's; each exchange's own page is the witness — `python scripts/calendar_half_days.py` lists the library's half days beside the page to read them against (last compared 2026-10-02, eight exchanges: the date agreed on 17 of 17 checks). **CME is flagged, never timed:** `cal["futures"]["holiday_schedule_today"]` says Globex runs a holiday schedule today; its hours differ by product group and are on [CME's holiday calendar](https://www.cmegroup.com/tools-information/holiday-calendar.html), not here.
 
 **Coverage:** full current year + next year (past and future holidays) — ~10–28 per exchange, negligible payload.
 
