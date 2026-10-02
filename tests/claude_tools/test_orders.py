@@ -586,6 +586,25 @@ def test_execute_get_live_orders_reports_outside_rth_in_three_states(toolkit):
     assert "outsideRTH=not-reported" in lines[3]
 
 
+def test_live_orders_show_ibkrs_description_not_the_rows_time_in_force(toolkit):
+    """Register F8 / F14: the order row reports a DAY order as `timeInForce: "CLOSE"` — a value
+    in no IBKR enum — for a stock (2026-09-24) and for a future (ES stop, 2026-10-02), and the
+    tool printed it as `TIF=CLOSE`, which reads as an at-the-close order. IBKR's own sentence
+    for the order (`orderDesc`) carries the real one, so that is what the model is given; the
+    raw field is shown under its own name only when there is no description."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 1, "ticker": "ES", "side": "BUY", "totalSize": 1, "price": "", "status": "PreSubmitted",
+         "timeInForce": "CLOSE", "orderDesc": "Buy 1 ES Dec18'26 Stop 8200.00, Day"},
+        {"orderId": 2, "ticker": "AAPL", "side": "BUY", "totalSize": 1, "price": 150.0, "status": "Submitted",
+         "timeInForce": "GTC"},
+    ]  # fmt: skip
+    text, _ = toolkit.execute("get_live_orders", {})
+    first, second = (ln for ln in text.splitlines() if "orderId=" in ln)
+    assert 'IBKR: "Buy 1 ES Dec18\'26 Stop 8200.00, Day"' in first
+    assert "CLOSE" not in first and "TIF=" not in text
+    assert "timeInForce=GTC" in second
+
+
 def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
     """A FUT whatif must carry `manualIndicator` and must NOT carry `extOperator`.
 

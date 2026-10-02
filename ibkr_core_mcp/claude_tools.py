@@ -414,7 +414,9 @@ TOOL_DEFINITIONS = [
             "IMPORTANT: orders placed via mobile or TWS CANNOT be modified or cancelled by the API. "
             "When reporting such orders, explicitly state: 'I can see this order but cannot modify "
             "or cancel it — use IBKR mobile or TWS to manage it.' Never skip or silently omit "
-            "externally-placed orders. Always flag their origin when it differs from ClaudIA staging."
+            "externally-placed orders. Always flag their origin when it differs from ClaudIA staging. "
+            "Each line quotes IBKR's own description of the order, which states its time in force "
+            "in words (', Day', ', GTC'); for the typed value use get_order_status."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -2610,7 +2612,13 @@ class ClaudeToolkit:
             qty = o.get("totalSize", "?")
             price = o.get("price", "MKT")
             status = o.get("status", "?")
-            tif = o.get("timeInForce") or o.get("tif") or ""
+            # The row's `timeInForce` is NOT shown as the order's TIF: it reads `CLOSE` for a
+            # DAY order — in no IBKR enum — measured on a stock (2026-09-24) and on a future
+            # (ES stop, 2026-10-02), and "TIF=CLOSE" reads as an at-the-close order. IBKR's
+            # own sentence for the order (`orderDesc`, e.g. "Buy 1 F Limit 5.10, Day") says it
+            # in words; the raw field is printed under its own name only without one (F8).
+            description = " ".join(str(o.get("orderDesc") or "").split())
+            raw_tif = o.get("timeInForce") or o.get("tif") or ""
             order_ref = (
                 o.get("order_ref")  # IBKR's real Live Orders field (snake_case) — verified
                 # against docs/audits/audit-evidence/scrapes/cpapi-v1.md
@@ -2633,9 +2641,10 @@ class ClaudeToolkit:
             # ES futures limit — so three states, and None must read as not reported.
             rth = o.get("outsideRTH")
             rth_str = "not-reported" if not isinstance(rth, bool) else ("yes" if rth else "no")
+            said = f'IBKR: "{description}"' if description else f"timeInForce={raw_tif}"
             line = (
                 f"- orderId={o.get('orderId', '?')} {ticker} {side} {qty} @ {price} "
-                f"[{status}] TIF={tif} outsideRTH={rth_str} origin={origin}"
+                f"[{status}] {said} outsideRTH={rth_str} origin={origin}"
             )
             if order_ref and not order_ref.startswith("CLAUDIA-"):
                 line += f" ref={order_ref}"

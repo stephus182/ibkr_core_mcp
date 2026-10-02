@@ -1152,6 +1152,16 @@ def test_modify_dialog_changes_row_covers_every_field_kind():
     )
 
 
+def test_a_time_in_force_that_was_not_sent_is_shown_as_not_sent_never_as_day():
+    """Register F10: the last screen before a write showed "DAY" for a body that carried no
+    time in force — an unknown shown as a value. Like an absent order type, it is said."""
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    rows = _order_rows({"ticker": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 1.0}, "U1")
+    assert rows["TIF"] == "— (not sent)"
+    assert _order_rows({"ticker": "AAPL", "side": "BUY", "quantity": 1, "tif": "GTC"}, "U1")["TIF"] == "GTC"
+
+
 def test_reply_dialog_title_names_the_order_when_told():
     """With Gate 1 once per write (2026-09-11) this dialog is the only gate on a reply,
     so its title says which order it is about; the standalone reply path stays as it was."""

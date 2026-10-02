@@ -179,6 +179,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **`get_live_orders` no longer tells the model a DAY order is `TIF=CLOSE` (register F8).** The
+  order row's `timeInForce` reads `CLOSE` for a DAY order — a value in no IBKR enum, measured on
+  stocks (2026-09-24) and on a future (2026-10-02) — and the tool printed it as the TIF, which
+  reads as an at-the-close order. Each line now quotes IBKR's own description of the order
+  (`orderDesc`, "Buy 1 ES Dec18'26 Stop 8200.00, Day"); the raw field appears under its own name
+  only when the row has no description. Nothing is translated.
+- **Gate 2 no longer shows `DAY` for a time in force that was not sent (register F10).** A body
+  without `tif` rendered `TIF: DAY` on the last screen before the write; it reads
+  `— (not sent)`, as an absent order type already did.
 - **A 503 is no longer reported as "Rate limit exceeded", and IBKR's own message is kept
   (register F36).** `with_retry` raised `IBKRRateLimitError("Rate limit exceeded after 3 retries
   (HTTP 503)")` for every 503. Found live: the status read of an order IBKR listed as `Inactive`

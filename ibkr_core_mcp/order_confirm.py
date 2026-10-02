@@ -242,7 +242,9 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     order_type_str = str(order_type) if order_type is not None else "— (not sent)"
     price = order.get("price")
     aux_price = order.get("auxPrice")
-    tif = order.get("tif", order.get("timeInForce", "DAY"))
+    # An absent time in force is shown as absent, like an absent order type: until 2.2.0 it
+    # rendered "DAY", an unknown shown as a value on the last screen before a write (F10).
+    tif = order.get("tif", order.get("timeInForce")) or "— (not sent)"
     multiplier = order.get("_multiplier")
     # Currency is displayed only when the caller established one, and always as an ISO
     # code. Until 2026-08-13 this rendered f"${price}" and a hardcoded "USD": "$" is

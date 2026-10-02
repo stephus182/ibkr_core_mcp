@@ -195,8 +195,12 @@ Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify
 **Inputs:** none
 
 **Output:** Text list of working orders — one line per order with `orderId`, `ticker`, `side`,
-quantity, price, `status`, time-in-force, and origin (`ClaudIA-staged`, `API (clientId=...)`,
-or `EXTERNAL`).
+quantity, price, `status`, IBKR's own description of the order (`orderDesc`, which states the
+time in force in words — "…, Day"), `outsideRTH`, and origin (`ClaudIA-staged`,
+`API (clientId=...)`, or `EXTERNAL`). The row's `timeInForce` is not printed as the TIF: it
+reads `CLOSE` for a DAY order, stock or future (measured 2026-09-24 and 2026-10-02), a value in
+no IBKR enum; without a description it is printed under its own name. `get_order_status`
+returns the typed `tif`.
 
 **Rate limit:** 1 req/5 secs (official).
 
