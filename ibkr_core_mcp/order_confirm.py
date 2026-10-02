@@ -36,10 +36,6 @@ except ImportError:  # Python without Tk support (CI, headless, Python 3.14 Home
 from ibkr_core_mcp._order_dialog import (
     CANCELLED,
     CONFIRMED,
-    ROLE_DISCARD,
-    ROLE_NEUTRAL,
-    ROLE_VALIDATE,
-    ROLES,
     TIMED_OUT,
 )
 from ibkr_core_mcp.exceptions import ConfirmationDeclinedError, ConfirmationTimeoutError, HumanAuthError
@@ -511,8 +507,6 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
         ),
         confirm_label="SEND TO IBKR",
         abandon_label="DO NOT SEND",
-        confirm_role=ROLE_VALIDATE,
-        abandon_role=ROLE_DISCARD,
         abandon_message=_NOT_SENT,
     )
 
@@ -848,8 +842,6 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         ),
         confirm_label="SEND TO IBKR",
         abandon_label="DO NOT SEND",
-        confirm_role=ROLE_VALIDATE,
-        abandon_role=ROLE_DISCARD,
         abandon_message=_NOT_SENT,
     )
 
@@ -890,8 +882,6 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
         confirm_label="MODIFY ORDER",
         abandon_label="LEAVE UNCHANGED",
         action="MODIFY",
-        confirm_role=ROLE_VALIDATE,
-        abandon_role=ROLE_DISCARD,
         abandon_message="Left unchanged — the order is as it was.",
     )
 
@@ -956,8 +946,6 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         confirm_label="VALIDATE",
         abandon_label="DISCARD",
         action="CANCEL",
-        confirm_role=ROLE_VALIDATE,
-        abandon_role=ROLE_DISCARD,
         abandon_message="Kept — the order is still working.",
     )
 
@@ -1003,8 +991,6 @@ def confirm_reply_dialog(
         disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
         confirm_label="CONFIRM REPLY",
         abandon_label="DO NOT REPLY",
-        confirm_role=ROLE_VALIDATE,
-        abandon_role=ROLE_DISCARD,
         abandon_message="Not confirmed — the order was not placed.",
     )
 
@@ -1113,17 +1099,14 @@ def _show_confirm_dialog(
     abandon_label: str,
     action: str | None = None,
     *,
-    confirm_role: str,
-    abandon_role: str,
     abandon_message: str,
 ) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
 
-    `confirm_role`, `abandon_role` and `abandon_message` are required, for the reason
-    `abandon_label` is (below): this renderer is shared by every Gate 2 dialog, and a default
-    would hand one dialog's meaning to the next that forgets to state its own. The roles
-    (`_order_dialog.ROLES`) colour the two buttons; the message is what `ConfirmationDeclinedError`
-    says when the abandon button is pressed — what that click leaves in place.
+    `abandon_message` is required, for the reason `abandon_label` is (below): this renderer is
+    shared by every Gate 2 dialog, and a default would hand one dialog's meaning to the next
+    that forgets to state its own. It is what `ConfirmationDeclinedError` says when the abandon
+    button is pressed — what that click leaves in place.
 
     macOS primary path: AppKit colored dialog (green BUY, red SELL, amber when the side
     is unknown) via subprocess.
@@ -1139,10 +1122,6 @@ def _show_confirm_dialog(
     dialog from silently inheriting a word that contradicts its own confirm button;
     `test_no_gate2_dialog_offers_two_buttons_sharing_a_first_word` enforces it over the class.
     """
-    for stated in (confirm_role, abandon_role):
-        if stated not in ROLES:
-            # Before anything is shown: a mistyped role would draw a neutral button in silence.
-            raise ValueError(f"unknown button role {stated!r} — one of {ROLES}")
     if sys.platform == "darwin":
         side = _extract_side(details)
         try:
@@ -1154,8 +1133,6 @@ def _show_confirm_dialog(
                 side,
                 abandon_label,
                 action,
-                confirm_role=confirm_role,
-                abandon_role=abandon_role,
                 abandon_message=abandon_message,
             )
             return
@@ -1181,8 +1158,6 @@ def _show_appkit_dialog(
     abandon_label: str,
     action: str | None = None,
     *,
-    confirm_role: str = ROLE_NEUTRAL,
-    abandon_role: str = ROLE_NEUTRAL,
     abandon_message: str = _DECLINED,
 ) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
@@ -1211,8 +1186,6 @@ def _show_appkit_dialog(
             "abandon_label": abandon_label,
             "side": side,
             "action": action,
-            "confirm_role": confirm_role,
-            "abandon_role": abandon_role,
             "icon_path": _dialog_icon,
             "timeout_s": _DIALOG_TIMEOUT_S,
         }

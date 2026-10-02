@@ -71,8 +71,6 @@ def _dialog_args():
         "disclaimer": "Live order warning",
         "confirm_label": "SEND TO IBKR",
         "abandon_label": "DO NOT SEND",
-        "confirm_role": "validate",
-        "abandon_role": "discard",
         "abandon_message": "Not sent — nothing reached IBKR.",
     }
 
@@ -1207,8 +1205,8 @@ def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
     alert = ak.NSAlert.alloc.return_value.init.return_value
     alert.setInformativeText_.assert_called_once_with("")
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
-    disc_text, disc_attrs = made.call_args_list[-1].args
-    assert disc_text == "This is a LIVE order."
+    # Found by its text: the two button titles are made after it.
+    disc_attrs = next(c.args[1] for c in made.call_args_list if c.args[0] == "This is a LIVE order.")
     assert disc_attrs[ak.NSFontAttributeName] == ak.NSFont.systemFontOfSize_.return_value
     # container = banner 48 + gap 8 + disclaimer (34 + 2) + gap 8 + detail (90 + 2); the
     # container is the first rect made, the banner box the second; then the disclaimer field
@@ -1444,7 +1442,7 @@ def test_dialog_bolds_the_values_not_the_labels():
     bold = ak.NSFont.boldSystemFontOfSize_.return_value
     regular = ak.NSFont.systemFontOfSize_.return_value
     runs = [(c.args[0], c.args[1][ak.NSFontAttributeName]) for c in made.call_args_list]
-    assert runs == [
+    assert runs[:6] == [  # the two button titles follow
         ("Action: ", regular),
         ("BUY", bold),
         ("\n", regular),
@@ -2319,37 +2317,19 @@ def test_an_answer_the_dialog_never_prints_is_never_a_confirmation():
 
 
 _GATE2_DIALOGS = {
-    "confirm_order_dialog": ("SEND TO IBKR", "validate", "DO NOT SEND", "discard", "Not sent — nothing reached IBKR."),
-    "confirm_bracket_dialog": (
-        "SEND TO IBKR",
-        "validate",
-        "DO NOT SEND",
-        "discard",
-        "Not sent — nothing reached IBKR.",
-    ),
-    "confirm_modify_dialog": (
-        "MODIFY ORDER",
-        "validate",
-        "LEAVE UNCHANGED",
-        "discard",
-        "Left unchanged — the order is as it was.",
-    ),
-    "confirm_cancel_dialog": ("VALIDATE", "validate", "DISCARD", "discard", "Kept — the order is still working."),
-    "confirm_reply_dialog": (
-        "CONFIRM REPLY",
-        "validate",
-        "DO NOT REPLY",
-        "discard",
-        "Not confirmed — the order was not placed.",
-    ),
+    "confirm_order_dialog": ("SEND TO IBKR", "DO NOT SEND", "Not sent — nothing reached IBKR."),
+    "confirm_bracket_dialog": ("SEND TO IBKR", "DO NOT SEND", "Not sent — nothing reached IBKR."),
+    "confirm_modify_dialog": ("MODIFY ORDER", "LEAVE UNCHANGED", "Left unchanged — the order is as it was."),
+    "confirm_cancel_dialog": ("VALIDATE", "DISCARD", "Kept — the order is still working."),
+    "confirm_reply_dialog": ("CONFIRM REPLY", "DO NOT REPLY", "Not confirmed — the order was not placed."),
 }
 
 
-def test_every_gate2_dialog_states_its_buttons_roles_and_what_an_abandon_leaves():
-    """The whole table, per dialog — label, colour role, abandon sentence — as a consumer prints
+def test_every_gate2_dialog_states_its_buttons_and_what_an_abandon_leaves():
+    """The whole table, per dialog — the two labels and the abandon sentence — as a consumer prints
     and matches them. A new dialog, or a changed word, is a changed row here, by a decision."""
     stated = {
-        name: (kw["confirm_label"], kw["confirm_role"], kw["abandon_label"], kw["abandon_role"], kw["abandon_message"])
+        name: (kw["confirm_label"], kw["abandon_label"], kw["abandon_message"])
         for name, kw in _invoke_every_gate2_dialog()
     }
     assert stated == _GATE2_DIALOGS

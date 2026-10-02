@@ -78,11 +78,7 @@ _RED = (0.72, 0.10, 0.10)
 # 2026-10-01): on every dialog the button that VALIDATES the action is blue and the button that
 # DISCARDS it is red — go ahead, or back out — and the banner says what the action is. A first
 # version coloured by consequence (a red `CANCEL ORDER` beside a grey `KEEP ORDER`) and read as
-# "ambiguous". Platform-neutral names: another renderer maps them to its own colours.
-ROLE_VALIDATE = "validate"  # go ahead with what the dialog proposes — solid blue
-ROLE_DISCARD = "discard"  # back out: nothing is sent, the order stays as it was — solid red
-ROLE_NEUTRAL = "neutral"  # no colour: as the system draws it (no dialog uses it today)
-ROLES = (ROLE_VALIDATE, ROLE_DISCARD, ROLE_NEUTRAL)
+# "ambiguous". It is one rule for every dialog, so it is not a setting.
 _BANNER_H = 48
 _GAP = 8
 
@@ -167,10 +163,6 @@ def _run_alert(data: dict[str, Any]) -> None:
       disclaimer    - free text appended after the details.
       confirm_label - text for the right-hand (confirm) button. Default "CONFIRM".
       title         - alert message text. Default "LIVE ORDER CONFIRMATION".
-      confirm_role  - what the confirm button's colour says (`ROLES`): "validate" is solid blue,
-                       "discard" solid red (the banner's red), each with a white title;
-                       "neutral", absent or unknown leaves the button as the system draws it.
-      abandon_role  - the same, for the left-hand button.
       icon_path     - an image file the host application supplies as the alert's icon. With
                        none, or one AppKit cannot read, the alert keeps its default icon.
       timeout_s     - seconds before the modal dismisses itself. Reported as TIMED_OUT —
@@ -312,7 +304,7 @@ def _run_alert(data: dict[str, Any]) -> None:
     container.addSubview_(_field(detail_value, _BANNER_H + _GAP + disclaimer_h + _GAP, detail_h))
     alert.setAccessoryView_(container)
 
-    # A button's colour says its role (`ROLES`): a solid fill with a white title. Applied AFTER
+    # The confirm button is solid blue, the abandon button solid red, white titles. Applied AFTER
     # `layout()` — measured off-screen on macOS 27, a title set before it did not survive.
     #
     # The fill is the button's own LAYER, not `bezelColor`. AppKit draws a tinted bezel only
@@ -321,7 +313,7 @@ def _run_alert(data: dict[str, Any]) -> None:
     # 2026-10-01; reproduced off-screen). A layer's background does not depend on that. Blue
     # is the system's own; red is the banner's `_RED` — `hasDestructiveAction` draws pale pink
     # with red text, which the operator rejected. Return stays disabled on the confirm button
-    # on purpose. A neutral, unstated or unknown role paints nothing.
+    # on purpose.
     alert.layout()
 
     # The validating button comes FIRST in its row, whichever way the system lays the row out
@@ -339,16 +331,10 @@ def _run_alert(data: dict[str, Any]) -> None:
     except Exception:  # noqa: S110 - best-effort ordering; the dialog runs either way
         pass
 
-    for index, label, role in (
-        (0, confirm_label, data.get("confirm_role")),
-        (1, abandon_label, data.get("abandon_role")),
+    for index, label, tint in (
+        (0, confirm_label, NSColor.systemBlueColor()),
+        (1, abandon_label, NSColor.colorWithRed_green_blue_alpha_(*_RED, 1.0)),
     ):
-        if role == ROLE_VALIDATE:
-            tint = NSColor.systemBlueColor()
-        elif role == ROLE_DISCARD:
-            tint = NSColor.colorWithRed_green_blue_alpha_(*_RED, 1.0)
-        else:
-            continue
         button = alert.buttons().objectAtIndex_(index)
         button.setWantsLayer_(True)
         with warnings.catch_warnings():

@@ -113,8 +113,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     must match the type.**
   - The banner text is centred; the banner for an unstated side is a caution yellow
     (0.90, 0.72, 0.00), the amber before it "not a good color" on screen.
-  - Each dialog must state its two button roles and its abandon sentence: the shared renderer
-    has no defaults for them, and refuses a role outside its vocabulary before anything is shown.
+  - Each dialog must state its abandon sentence: the shared renderer has no default for it.
+    The colours are one rule for every dialog, not a setting.
 - **A reply that was not confirmed says what happened and why (register F34).** The reply chain
   raised `HumanAuthError("User declined IBKR order reply")` whenever the reply dialog did not
   end in a confirmation — a decline, a dialog nobody answered, and a dialog that failed alike.

@@ -26,6 +26,12 @@ def _base_payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
+def _banner_colour(fake: MagicMock) -> tuple[float, ...]:
+    """The first custom colour the dialog makes is its banner's; the abandon button's red follows."""
+    made: tuple[float, ...] = fake.NSColor.colorWithRed_green_blue_alpha_.call_args_list[0].args
+    return made
+
+
 def test_buy_order_uses_green_banner(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     fake = _install_fake_appkit(monkeypatch)
     fake.NSAlert.alloc.return_value.init.return_value.runModal.return_value = 1000
@@ -34,7 +40,7 @@ def test_buy_order_uses_green_banner(monkeypatch: pytest.MonkeyPatch, capsys: py
 
     _order_dialog._run_alert(_base_payload(side="BUY"))
 
-    fake.NSColor.colorWithRed_green_blue_alpha_.assert_called_once_with(0.10, 0.50, 0.20, 1.0)
+    assert _banner_colour(fake) == (0.10, 0.50, 0.20, 1.0)
     label_calls = [
         c.args[0]
         for c in fake.NSTextField.alloc.return_value.initWithFrame_.return_value.setStringValue_.call_args_list
@@ -51,7 +57,7 @@ def test_sell_order_uses_red_banner(monkeypatch: pytest.MonkeyPatch, capsys: pyt
 
     _order_dialog._run_alert(_base_payload(side="SELL"))
 
-    fake.NSColor.colorWithRed_green_blue_alpha_.assert_called_once_with(0.72, 0.10, 0.10, 1.0)
+    assert _banner_colour(fake) == (0.72, 0.10, 0.10, 1.0)
     label_calls = [
         c.args[0]
         for c in fake.NSTextField.alloc.return_value.initWithFrame_.return_value.setStringValue_.call_args_list
@@ -68,7 +74,7 @@ def test_short_side_counts_as_sell(monkeypatch: pytest.MonkeyPatch, capsys: pyte
 
     _order_dialog._run_alert(_base_payload(side="SSHORT"))
 
-    fake.NSColor.colorWithRed_green_blue_alpha_.assert_called_once_with(0.72, 0.10, 0.10, 1.0)
+    assert _banner_colour(fake) == (0.72, 0.10, 0.10, 1.0)
 
 
 def test_confirm_button_return_key_disabled_and_cancel_uses_escape(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,7 +153,7 @@ def test_unknown_side_uses_a_neutral_banner_not_a_confident_buy(
     assert "REVIEW ORDER" in label_calls
     # A caution yellow since 2026-10-01 (register F6): the operator found the first amber,
     # (0.55, 0.42, 0.05), "not a good color" on the rendered dialog.
-    fake.NSColor.colorWithRed_green_blue_alpha_.assert_called_once_with(0.90, 0.72, 0.00, 1.0)
+    assert _banner_colour(fake) == (0.90, 0.72, 0.00, 1.0)
     assert capsys.readouterr().out.strip() == "CONFIRMED"
 
 
@@ -226,7 +232,7 @@ def test_the_abandon_button_cannot_report_confirmed(
         assert capsys.readouterr().out.strip() == "CANCELLED", f"response {response} was not treated as an abandon"
 
 
-# ── Button roles and order (register F6, settled with the operator on screen 2026-10-01) ──
+# ── Button colours and order (register F6, settled with the operator on screen 2026-10-01) ──
 
 
 def _fake_with_two_buttons(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
@@ -249,14 +255,12 @@ def _painted(button: MagicMock) -> Any:
     return fill.call_args.args[0] if fill.called else None
 
 
-def test_each_button_is_painted_by_its_role_validate_blue_discard_red(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_confirm_button_is_painted_blue_and_the_abandon_button_red(monkeypatch: pytest.MonkeyPatch) -> None:
     """The colour is read before the label: swapped, the button that sends would be the red one."""
     fake, _alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
     from ibkr_core_mcp import _order_dialog
 
-    _order_dialog._run_alert(
-        _base_payload(confirm_role="validate", abandon_label="DO NOT SEND", abandon_role="discard")
-    )
+    _order_dialog._run_alert(_base_payload(abandon_label="DO NOT SEND"))
 
     assert _painted(confirm) is fake.NSColor.systemBlueColor.return_value.CGColor.return_value
     assert _painted(abandon) is fake.NSColor.colorWithRed_green_blue_alpha_.return_value.CGColor.return_value
