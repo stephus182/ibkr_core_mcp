@@ -389,7 +389,7 @@ Automatically paginates requests exceeding the 1000 data-point limit using `star
 | `symbol` | string | ✅ | Ticker, e.g. `"AAPL"` |
 | `period` | string | ✅ | e.g. `"1Y"`, `"6M"`, `"3M"`, `"1M"`, `"1W"`, `"1D"`. Full range: `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
 | `bar` | string | — | `"1d"` (default), `"1h"`, `"30min"`, `"5min"`, `"1min"` |
-| `end` | string | — | End date `YYYY-MM-DD` (defaults to today; the result states which was used — `end 2026-10-02 (today, by default)` or `(as given)`) |
+| `end` | string | — | End date `YYYY-MM-DD` (defaults to today; the result states which was used — `ending 2026-10-02 (today, by default)` or `ending 2026-09-30 (as given)`) |
 
 **Output:** Summary naming **the listing the bars came from** — IBKR's name, exchange, currency
 and conid, from the same `/trsrv/stocks` + `/iserver/secdef/info` reads that resolved it — the

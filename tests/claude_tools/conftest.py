@@ -99,7 +99,9 @@ def toolkit(mock_config):
     # Currency is read once per resolved conid; keep it a real string so output
     # assertions see "USD" rather than a MagicMock repr.
     client.get_secdef_info.return_value = [{"conid": 265598, "currency": "USD"}]
-    cache = MagicMock()
+    from ibkr_core_mcp.cache import GDriveCache
+
+    cache = MagicMock(spec=GDriveCache)
     store = MagicMock()
     return ClaudeToolkit(client, cache, store, mock_config)
 

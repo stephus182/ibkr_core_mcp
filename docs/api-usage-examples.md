@@ -30,17 +30,33 @@ symbol, timeframe, period, end = "AAPL", "1D", "1Y", "2026-05-22"
 
 if cache.check(symbol, timeframe, period, end):
     df = cache.load(symbol, timeframe, period, end)
+    row = cache.entry(symbol, timeframe, period, end)      # the manifest row: rows, cached_at,
+    print(row.get("listing") or "listing not recorded")    # and, from 2.2.0, the listing saved below
 else:
-    contracts = client.search_contract(symbol)
-    conid = contracts[0]["conid"]
+    # A ticker is not a listing. /trsrv/stocks carries `isUS` per contract; /iserver/secdef/search
+    # does not, and its result order is undocumented — its first match for IGV is the Mexican
+    # listing, in MXN. The toolkit's resolver takes the one US listing and ASKS when it is not
+    # unique (`_resolve_stock_conid`); this example stops instead of guessing.
+    records = client.get_stocks([symbol])
+    us = [(r["name"], c) for r in records for c in r["contracts"] if c.get("isUS")]
+    if len(us) != 1:
+        raise SystemExit(f"{symbol}: {len(us)} US listings — name the exchange rather than pick one")
+    name, contract = us[0]
+    conid = int(contract["conid"])
+    info  = client.get_secdef_info(conid)                   # a LIST live (2026-07-28); the currency is on its row
+    currency = (info[0] if isinstance(info, list) else info).get("currency")
     bars  = client.get_market_history(conid, period=period, bar="1d")
     df    = bars_to_dataframe(bars)
-    cache.save(df, symbol, timeframe, period, end)
+    # Keep the listing beside the bars, so a later cache hit can say what it serves (2.2.0).
+    cache.save(df, symbol, timeframe, period, end,
+               listing={"conid": conid, "name": name, "exchange": contract["exchange"], "currency": currency})
 ```
 
 **Constraints:**
 - Snapshot data may be 15-min delayed depending on market data subscription level
-- Most endpoints require `conid` (contract ID) — use `client.search_contract(symbol)` to resolve
+- Most endpoints require `conid` (contract ID). For a stock, resolve through `client.get_stocks`
+  and its `isUS` flag as above; `client.search_contract(symbol)` returns neither `isUS` nor a
+  currency, and taking its first match is how a US ETF was once priced in pesos
 
 ## Technical Indicators
 

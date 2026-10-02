@@ -2059,7 +2059,7 @@ class ClaudeToolkit:
         # The end date is a cache-key part the indicator and backtest tools require, so a
         # default is stated, never silent (market-data step 1, 2026-10-02).
         end = inputs.get("end") or _TODAY()
-        end_note = f"end {end} (as given)" if inputs.get("end") else f"end {end} (today, by default)"
+        end_note = f"ending {end} (as given)" if inputs.get("end") else f"ending {end} (today, by default)"
         timeframe = bar.upper()
 
         if self._cache.check(symbol, timeframe, period, end):
@@ -2069,7 +2069,7 @@ class ClaudeToolkit:
             listing = (self._cache.entry(symbol, timeframe, period, end) or {}).get("listing")
             served = _describe_listing(listing) if listing else "listing not recorded for this entry"
             return (
-                f"Cache HIT — loaded {symbol} {timeframe} ({period}, {end_note}) from Drive — {served}. "
+                f"Cache HIT — loaded {symbol} {timeframe} ({period}) {end_note} from Drive — {served}. "
                 f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}.",
                 None,
             )
@@ -2105,7 +2105,7 @@ class ClaudeToolkit:
 
         df = _bars_to_dataframe(raw)
         span = f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
-        fetched = f"Fetched {symbol} {timeframe} ({period}, {end_note}) from IBKR — {resolved.describe()}: {span}."
+        fetched = f"Fetched {symbol} {timeframe} ({period}) {end_note} from IBKR — {resolved.describe()}: {span}."
 
         incomplete = raw.get("ibkr_core_warning")
         if incomplete:

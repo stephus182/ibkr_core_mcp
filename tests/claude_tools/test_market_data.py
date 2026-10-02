@@ -474,7 +474,7 @@ def test_the_fetch_result_names_the_listing_and_the_end_date_it_was_given(toolki
     text, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
 
     assert "ISHARES EXPANDED TECH-SOFTWA" in text and "BATS" in text and "USD" in text and "conid 12658199" in text
-    assert "end 2026-09-30 (as given)" in text, text
+    assert "(6m) ending 2026-09-30 (as given) from IBKR" in text, text
     assert toolkit._cache.save.call_args.kwargs["listing"] == _IGV_BATS
 
 
@@ -486,7 +486,7 @@ def test_a_fetch_without_an_end_date_says_it_used_today(toolkit):
 
     text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m"})
 
-    assert f"end {_TODAY()} (today, by default)" in text, text
+    assert f"(6m) ending {_TODAY()} (today, by default) from IBKR" in text, text
 
 
 def test_a_cache_hit_names_the_listing_the_entry_records_or_says_none_is_recorded(toolkit):
