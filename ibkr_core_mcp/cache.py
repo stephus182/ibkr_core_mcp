@@ -26,12 +26,11 @@ from typing import Any
 
 import pandas as pd
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import CacheMissError, CacheWriteError
-from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
+from ibkr_core_mcp.gdrive_auth import build_drive_service, load_or_refresh_credentials, persist_credentials
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _MANIFEST_NAME = "manifest.json"
@@ -139,7 +138,7 @@ class GDriveCache:
     at access time; reloaded from Drive on expiry.
 
     Source: https://developers.google.com/drive/api/reference/rest/v3
-    SDK: google-api-python-client (googleapiclient.discovery.build("drive", "v3", ...))
+    SDK: google-api-python-client, built by `gdrive_auth.build_drive_service`
     Auth: google-auth-oauthlib.flow.InstalledAppFlow for initial authorization,
           google.oauth2.credentials.Credentials for token refresh.
     """
@@ -189,7 +188,7 @@ class GDriveCache:
                 "GOOGLE_DRIVE_FOLDER_ID (or GDRIVE_CACHE_FOLDER_ID) is required for "
                 "Drive cache but is not set. Set it in .env or pass it to Config."
             )
-        self._service = build("drive", "v3", credentials=creds)
+        self._service = build_drive_service(creds)
         return self._service
 
     def _resolve_cache_folder(self, *, _retry: bool = True) -> str:

@@ -40,11 +40,10 @@ from typing import Any, ClassVar
 
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
+from ibkr_core_mcp.gdrive_auth import build_drive_service, load_or_refresh_credentials, persist_credentials
 
 log = logging.getLogger(__name__)
 
@@ -398,7 +397,7 @@ class WebDocsStore:
             flow = InstalledAppFlow.from_client_secrets_file(str(self._cfg.gdrive_credentials_file), self._SCOPES)
             creds = flow.run_local_server(port=0)
             persist_credentials(self._cfg.gdrive_token_file, creds)
-        self._svc = build("drive", "v3", credentials=creds)
+        self._svc = build_drive_service(creds)
         return self._svc
 
     def _find_or_create_folder(self, name: str, parent_id: str) -> str:

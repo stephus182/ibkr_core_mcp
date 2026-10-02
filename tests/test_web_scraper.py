@@ -386,7 +386,7 @@ def _make_cfg_with_drive(tmp_path):
 
 
 @patch("ibkr_core_mcp.gdrive_auth.Credentials")
-@patch("ibkr_core_mcp.web_scraper.build")
+@patch("ibkr_core_mcp.web_scraper.build_drive_service")
 def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
 
@@ -400,11 +400,11 @@ def test_get_service_returns_drive_service(mock_build, mock_creds_cls, tmp_path)
     store = WebDocsStore(cfg)
     svc = store._get_service()
     assert svc is mock_svc
-    mock_build.assert_called_once_with("drive", "v3", credentials=mock_creds)
+    mock_build.assert_called_once_with(mock_creds)
 
 
 @patch("ibkr_core_mcp.gdrive_auth.Credentials")
-@patch("ibkr_core_mcp.web_scraper.build")
+@patch("ibkr_core_mcp.web_scraper.build_drive_service")
 def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
 
@@ -422,7 +422,7 @@ def test_get_service_cached(mock_build, mock_creds_cls, tmp_path):
 
 
 @patch("ibkr_core_mcp.gdrive_auth.Credentials")
-@patch("ibkr_core_mcp.web_scraper.build")
+@patch("ibkr_core_mcp.web_scraper.build_drive_service")
 def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
 
@@ -442,7 +442,7 @@ def test_find_or_create_folder_finds_existing(mock_build, mock_creds_cls, tmp_pa
 
 
 @patch("ibkr_core_mcp.gdrive_auth.Credentials")
-@patch("ibkr_core_mcp.web_scraper.build")
+@patch("ibkr_core_mcp.web_scraper.build_drive_service")
 def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.web_scraper import WebDocsStore
 
@@ -463,7 +463,7 @@ def test_find_or_create_folder_creates_when_missing(mock_build, mock_creds_cls, 
 
 
 @patch("ibkr_core_mcp.gdrive_auth.Credentials")
-@patch("ibkr_core_mcp.web_scraper.build")
+@patch("ibkr_core_mcp.web_scraper.build_drive_service")
 def test_get_web_docs_folder_uses_config_override(mock_build, mock_creds_cls, tmp_path):
     from ibkr_core_mcp.config import Config
     from ibkr_core_mcp.web_scraper import WebDocsStore
@@ -819,7 +819,7 @@ def test_save_search_markdown_content_includes_results(tmp_path):
 # ── WEB-03: the RefreshError fix that reached two of three call sites ──────────
 
 
-@patch("ibkr_core_mcp.web_scraper.build")
+@patch("ibkr_core_mcp.web_scraper.build_drive_service")
 def test_get_service_reauthenticates_when_the_refresh_token_is_revoked(mock_build, tmp_path):
     """A revoked Google refresh token must send the operator back through the interactive
     flow, not raise.
@@ -866,7 +866,7 @@ def test_get_service_reauthenticates_when_the_refresh_token_is_revoked(mock_buil
 
     assert svc is mock_svc
     flow_cls.from_client_secrets_file.assert_called_once(), "did not fall back to the interactive flow"
-    mock_build.assert_called_once_with("drive", "v3", credentials=fresh)
+    mock_build.assert_called_once_with(fresh)
 
 
 def test_the_drive_token_file_is_written_0600_by_the_shared_helper(tmp_path):

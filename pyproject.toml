@@ -167,6 +167,8 @@ module = [
     "RestrictedPython.*",
     "googleapiclient",
     "googleapiclient.*",
+    "httplib2",
+    "google_auth_httplib2",
     "google.auth",
     "google.auth.*",
     "google.oauth2",

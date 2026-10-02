@@ -159,6 +159,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **Every Drive request has its own connection (register F17).** `GDriveCache` and the web
+  scraper's Drive client each built one shared connection; httplib2 is not thread-safe, and a
+  host calling them from worker threads could crash the process (claudia_ui's own client did,
+  2026-09-23). Both now build through `gdrive_auth.build_drive_service`, Google's documented
+  one-`Http`-per-request pattern.
 - **The store's Drive backup no longer leaves a copy of the trade store behind when the process
   dies mid-upload (register F31; claudia_ui gap #90 found six of its own twin's).**
   `GDriveCache.upload_account_sqlite` writes a full snapshot of the database beside it and

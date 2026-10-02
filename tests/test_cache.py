@@ -117,7 +117,7 @@ def test_token_file_created_with_restricted_permissions(tmp_path):
     with (
         patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds),
         patch("ibkr_core_mcp.gdrive_auth.Request"),
-        patch("ibkr_core_mcp.cache.build") as mock_build,
+        patch("ibkr_core_mcp.cache.build_drive_service") as mock_build,
     ):
         mock_build.return_value = MagicMock()
         cache._get_service()
@@ -179,7 +179,7 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
 
     with (
         patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds),
-        patch("ibkr_core_mcp.cache.build") as mock_build,
+        patch("ibkr_core_mcp.cache.build_drive_service") as mock_build,
     ):
         mock_build.return_value = MagicMock()
         with pytest.raises(CacheError, match="GOOGLE_DRIVE_FOLDER_ID"):
