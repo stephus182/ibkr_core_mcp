@@ -137,8 +137,9 @@ ctx = SQLiteStore.get_market_calendar_context(today=some_date)  # the verdicts f
 # Returns: { "today": "...", "is_trading_day": bool (the PRIMARY exchange only), "last_trading_day": "...",
 #            "next_trading_day": "...", "primary_exchange": "XNYS",
 #            "sessions_today": { "XNYS": True, "CME": True, ..., "XSAU": False },  # one verdict per exchange; None on failure
+#            "early_closes_today": { "XNYS": {"close": "13:00", "tz": "America/New_York"} },  # half days only; never CME; None on failure
 #            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... },
-#            "futures": { "cme_open_nyse_closed": [...], ... } }  # CME/NYSE futures-session overrides
+#            "futures": { "cme_open_nyse_closed": [...], "holiday_schedule_today": bool, ... } }  # hours on a holiday: CME's own page
 # See README.md's "Market Calendar" section for the full 20-exchange default list and a worked example.
 ```
 

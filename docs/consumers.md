@@ -142,6 +142,16 @@ register F24). The calendars were loaded; the answer was not in the dict.
   day's midnight UTC.
 - The weekday rule a consumer had to carry itself (claudia_ui's briefing decides a weekend
   before reading any list) can be deleted once it reads `sessions_today`.
+- New key `early_closes_today: dict[str, dict[str, str]]` (register F18): for each exchange whose
+  session today ends early, `{"close": "13:00", "tz": "America/New_York"}` — the exchange's own
+  time and its IANA zone. Empty on an ordinary day; `None` on the failure marker. The figures
+  are the calendar library's; `scripts/calendar_half_days.py` lists them beside each exchange's
+  own page, and its docstring records the last comparison (2026-10-02: the date agreed on 17 of
+  17 checks, the time on four exchanges of five read).
+- **CME never appears in `early_closes_today`.** Its holiday hours differ by product group and
+  the library holds one closing time. `futures["holiday_schedule_today"]` (`True` / `False`,
+  `None` when unknown) says that today Globex runs a holiday schedule; the hours are on CME's
+  own calendar, which `futures["note"]` names.
 
 ### Unreleased — `ClaudeToolkit.store` and `.config` are public; the Drive cache is not
 

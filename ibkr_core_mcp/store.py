@@ -109,6 +109,10 @@ _FUTURES_SCHEDULE: dict[str, Any] = {
         "Futures are not securities. Most CME Globex products trade ~23h/day "
         "Sunday 5:00 PM CT → Friday 4:00 PM CT, with a daily 4:00–5:00 PM CT maintenance break. "
         "CME stays open on several NYSE holidays (see cme_open_nyse_closed). "
+        "On those days and on the days around them Globex runs a HOLIDAY SCHEDULE whose hours "
+        "differ by product group, and Good Friday differs by year (holiday_schedule_today says "
+        "when today is one): the hours are CME's own, not stated here — "
+        "https://www.cmegroup.com/tools-information/holiday-calendar.html. "
         "IBKR routes all CME products electronically via Globex — no pit sessions."
     ),
     "maintenance_break_ct": "4:00 PM – 5:00 PM CT daily (Mon–Thu)",
@@ -734,6 +738,17 @@ class SQLiteStore:
         calendar's session set encodes. On the failure marker the key is None: unknown, never
         an empty map that reads as "nobody open".
 
+        **A half day is said, with its time** (`early_closes_today`, register F18, 2026-10-02):
+        `{code: {"close": "HH:MM", "tz": IANA zone}}` for each exchange whose session today ends
+        early, in that exchange's own time; empty on an ordinary day, None on the failure marker.
+        The data is the calendar library's; the exchanges' own pages are the witness
+        (`scripts/calendar_half_days.py` lists what to compare). Checked 2026-10-02 against
+        eight exchanges: open / closed / half day agreed on 17 of 17 dates; the time agreed for
+        NYSE, London, Sydney and Toronto and differed by thirty minutes for Istanbul.
+        **CME is never given a time**: its holiday hours differ by product group and the library
+        holds one closing time for all of them, so `futures["holiday_schedule_today"]` says only
+        that today is such a day (None when unknown) and the note points at CME's own calendar.
+
         Args:
             exchanges: MIC codes; None for the 20-exchange default below. A list REPLACES
                 the default rather than extending it.
@@ -821,6 +836,7 @@ class SQLiteStore:
 
             holidays_by_exchange: dict[str, list[str]] = {}
             sessions_today: dict[str, bool] = {}
+            early_closes_today: dict[str, dict[str, str]] = {}
             for xcode in exchanges:
                 with contextlib.suppress(Exception):
                     cal = ec.get_calendar(xcode)
@@ -833,13 +849,26 @@ class SQLiteStore:
                     # failure on either leaves the exchange out of both maps, never in one.
                     holidays = sorted(d.isoformat() for d in (weekdays_in_range - sessions))
                     open_today = bool(cal.is_session(Timestamp(today)))
+                    # A half day, in the exchange's own time and zone. Never for CME: the
+                    # library holds one closing time and CME's differ by product (below).
+                    closes_early = xcode != "CME" and open_today and Timestamp(today) in cal.early_closes
+                    close = (
+                        cal.session_close(Timestamp(today)).tz_convert(cal.tz).strftime("%H:%M") if closes_early else ""
+                    )
                     holidays_by_exchange[xcode] = holidays
                     sessions_today[xcode] = open_today
+                    if closes_early:
+                        early_closes_today[xcode] = {"close": close, "tz": str(cal.tz)}
 
             # Days CME trades when NYSE is closed — futures keep going on equity holidays
             cme_extra: list[str] = []
+            # Whether Globex runs a holiday schedule today: the library's CME early-close days
+            # are the days CME's own calendar lists as holiday schedules (checked 2026-10-02).
+            # None when the calendar could not be read — unknown, not "a regular day".
+            holiday_schedule_today: bool | None = None
             with contextlib.suppress(Exception):
                 cme_cal = ec.get_calendar("CME")
+                holiday_schedule_today = bool(Timestamp(today) in cme_cal.early_closes)
                 nyse_cal = ec.get_calendar("XNYS")
                 cme_cap = min(year_end, cme_cal.last_session.date())
                 nyse_cap = min(year_end, nyse_cal.last_session.date())
@@ -855,8 +884,10 @@ class SQLiteStore:
                 "next_trading_day": next_td.isoformat(),
                 "primary_exchange": exchanges[0],
                 "sessions_today": sessions_today,
+                "early_closes_today": early_closes_today,
                 "holidays_by_exchange": holidays_by_exchange,
-                "futures": _FUTURES_SCHEDULE | {"cme_open_nyse_closed": cme_extra},
+                "futures": _FUTURES_SCHEDULE
+                | {"cme_open_nyse_closed": cme_extra, "holiday_schedule_today": holiday_schedule_today},
             }
             _market_calendar_cache[_cache_key] = result
             return result
@@ -868,7 +899,12 @@ class SQLiteStore:
             # wrong in a way someone notices, rather than wrong in the safe-looking
             # direction. Public API, consumed by claudia_ui.
             log.warning("get_market_calendar_context failed: %s: %s", type(exc).__name__, exc)
-            return {"error": f"{type(exc).__name__}: {exc}", "is_trading_day": None, "sessions_today": None}
+            return {
+                "error": f"{type(exc).__name__}: {exc}",
+                "is_trading_day": None,
+                "sessions_today": None,
+                "early_closes_today": None,
+            }
 
     _ALLOWED_TIME_COLS = frozenset({"time", "snapshot_at", "logged_at"})
 

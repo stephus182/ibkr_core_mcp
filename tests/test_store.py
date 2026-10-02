@@ -950,6 +950,82 @@ def test_the_failure_marker_says_the_sessions_are_unknown_not_closed(monkeypatch
     assert result["sessions_today"] is None, "explicitly unknown, not an empty map that reads as nobody open"
 
 
+# ── early_closes_today: a half day is said, with its time and zone (register F18, 2026-10-02) ──
+#
+# The calendar library already held every stock exchange's half days; the context did not carry
+# them, so a consumer said nothing on the day after Thanksgiving. Checked against eight
+# exchanges' own pages on 2026-10-02: the dates agreed on all seventeen checks. CME is flagged
+# without a time — its holiday hours differ by product, and the library holds one.
+
+
+def _next_early_close(code: str) -> date:
+    """The next half day the library lists for `code`, from today."""
+    import exchange_calendars as ec
+    from pandas import Timestamp
+
+    ahead: list[date] = [d.date() for d in ec.get_calendar(code).early_closes if d >= Timestamp(date.today())]
+    assert ahead, f"the calendar lists no early close ahead for {code} — extend the range before trusting this test"
+    return ahead[0]
+
+
+def test_a_half_day_names_the_exchange_its_closing_time_and_its_zone():
+    import exchange_calendars as ec
+    from pandas import Timestamp
+
+    from ibkr_core_mcp.store import SQLiteStore
+
+    half_day = _next_early_close("XNYS")
+    cal = ec.get_calendar("XNYS")
+    local_close = cal.session_close(Timestamp(half_day)).tz_convert(cal.tz).strftime("%H:%M")
+
+    ctx = SQLiteStore.get_market_calendar_context(today=half_day)
+
+    assert ctx["early_closes_today"]["XNYS"] == {"close": local_close, "tz": str(cal.tz)}
+    assert local_close < "16:00", "an early close before the regular one, in the exchange's own time"
+    assert ctx["sessions_today"]["XNYS"] is True, "a half day is a session"
+
+
+def test_a_full_session_and_a_closed_day_carry_no_early_close(mkt):
+    from datetime import timedelta
+
+    from ibkr_core_mcp.store import SQLiteStore
+
+    holiday = date.fromisoformat(next(d for d in mkt["holidays_by_exchange"]["XNYS"] if d >= date.today().isoformat()))
+    assert "XNYS" not in SQLiteStore.get_market_calendar_context(today=holiday)["early_closes_today"]
+
+    day = _next_early_close("XNYS") - timedelta(days=7)  # a week before the half day: an ordinary session
+    ctx = SQLiteStore.get_market_calendar_context(today=day)
+    if ctx["sessions_today"]["XNYS"]:
+        assert "XNYS" not in ctx["early_closes_today"]
+
+
+def test_a_cme_holiday_schedule_is_flagged_and_never_given_a_time():
+    """CME's hours on a holiday differ by product group; the library's one calendar holds a
+    single time. The day is flagged, the time is left to CME's own page."""
+    from ibkr_core_mcp.store import SQLiteStore
+
+    holiday_schedule = _next_early_close("CME")
+    ctx = SQLiteStore.get_market_calendar_context(today=holiday_schedule)
+    assert ctx["futures"]["holiday_schedule_today"] is True
+    assert "CME" not in ctx["early_closes_today"]
+    assert "cmegroup.com" in ctx["futures"]["note"]
+
+    saturday = _next(5)
+    assert SQLiteStore.get_market_calendar_context(today=saturday)["futures"]["holiday_schedule_today"] is False
+
+
+def test_the_failure_marker_says_the_early_closes_are_unknown(monkeypatch):
+    import ibkr_core_mcp.store as store_mod
+    from ibkr_core_mcp.store import SQLiteStore
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("exchange_calendars unavailable")
+
+    monkeypatch.setattr("exchange_calendars.get_calendar", _boom)
+    monkeypatch.setattr(store_mod, "_market_calendar_cache", {})
+    assert SQLiteStore.get_market_calendar_context()["early_closes_today"] is None
+
+
 def test_market_calendar_context_reports_a_failure_instead_of_an_empty_dict(monkeypatch):
     """`except Exception: return {}` made a failed lookup read as "market closed".
 

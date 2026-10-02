@@ -94,6 +94,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   no Drive folder configured nothing is attempted: asking Drive anyway would start the OAuth
   flow on every pull.
 
+- **`get_market_calendar_context` says when an exchange closes early today —
+  `early_closes_today` (register F18).** `{code: {"close": "HH:MM", "tz": zone}}` for each
+  exchange whose session today is a half day, in its own time; empty on an ordinary day, `None`
+  on the failure marker. The calendar library already held the half days; the context did not
+  carry them. Checked against eight exchanges' own pages on 2026-10-02 (the date agreed on 17
+  of 17 checks; `scripts/calendar_half_days.py` lists what to compare, and records the result).
+  CME is flagged, never timed: `futures["holiday_schedule_today"]`, with the note pointing at
+  CME's holiday calendar — its hours differ by product group. `pandas_market_calendars` was
+  measured for this and not adopted: its product calendars disagreed with CME's own page on
+  Good Friday 2027 and on four of six closing times for 2026-11-27.
+
 ### Changed
 - **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time
   (register F6; claudia_ui gap #67).**
