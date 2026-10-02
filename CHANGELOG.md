@@ -78,12 +78,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `FlexDataset` is exported from the package root.
 - **`ibkr_core_mcp.flex_sync` — the dataset's state, relocated from claudia_ui:**
   `validate_dataset` (file integrity, `execution_key` unique and present, the realised identity
-  `Trade == Lot + WashSale`), `validate_dataset_daily` (at most once a day per dataset, its
-  verdict in a 0600 sidecar), `dataset_fingerprint`, `last_import`, `statement_through`,
+  `Trade == Lot + WashSale`), `dataset_fingerprint`, `last_import`, `statement_through`,
   `pull_due`, and `newest_statement_day` re-exported. None of them raises: an unreadable store
   — a missing file, a value that is no path, a NUL — is a failed validity, an unknown
   fingerprint, an unknown statement date; a `flex_import_log` count that is not an integer is
-  an unknown last import, not an `int()` error (claudia_ui gap #89).
+  an unknown last import, not an `int()` error (claudia_ui gap #89). claudia_ui's
+  `validate_dataset_daily` (a verdict kept for the day in a `.validation.json` file beside the
+  store) is **not** carried over: the checks take a quarter of a second on a real store, so a
+  host runs `validate_dataset` at each start (operator, 2026-10-02).
 - **`FlexQueryClient.last_backup_result` (`FlexBackupResult`: `uploaded`, `unchanged`, `failed`,
   `not-configured`).** `fetch_trades` backs `store.db` up to Drive `account_data/` after any
   pull that changed the dataset — the fingerprint is taken before the pull writes — so a pull

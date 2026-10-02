@@ -228,22 +228,11 @@ def test_fingerprint_of_a_missing_file_is_not_an_error(tmp_path):
     assert dataset_fingerprint(str(tmp_path / "nope.db")) is None
 
 
-# ── "already updated today — do not check again" (user rule, 2026-08-05) ──────
-#
-# Flex is T+1 and the store is pulled once a day. Re-running the checks on a byte-identical
-# dataset every time a session starts is work that cannot produce a new answer, and it puts
-# an unqualified "integrity validated" on screen with no indication of *when* anything was
-# actually established. So the verdict is cached with the fingerprint it was computed
-# against, and reused for the rest of the day — the UI then states the time it was proven
-# rather than implying it happened just now.
+# ── last_import — when the store was actually updated ─────────────────────────
 
 from datetime import UTC, datetime, timedelta  # noqa: E402
-from pathlib import Path  # noqa: E402
-from unittest.mock import patch  # noqa: E402
 
-from ibkr_core_mcp.flex_sync import last_import, validate_dataset_daily  # noqa: E402
-
-_NOW = datetime(2026, 8, 5, 14, 30, tzinfo=UTC)
+from ibkr_core_mcp.flex_sync import last_import  # noqa: E402
 
 
 def _import_log(path, when: datetime, filename: str = "flex_U1234567_2026-08-05.xml") -> None:
@@ -261,78 +250,6 @@ def _import_log(path, when: datetime, filename: str = "flex_U1234567_2026-08-05.
     )
     conn.commit()
     conn.close()
-
-
-def test_the_first_run_of_the_day_actually_validates(good_db):
-    """The day's first run really validates and reports when it proved it."""
-    outcome = validate_dataset_daily(good_db, now=_NOW)
-    assert outcome.reused is False
-    assert outcome.validity.ok is True
-    assert outcome.validated_at == _NOW
-
-
-def test_the_second_run_reuses_the_verdict_without_rechecking(good_db):
-    """The second run does no work, and reports when the verdict was proven, not when asked."""
-    validate_dataset_daily(good_db, now=_NOW)
-    with patch("ibkr_core_mcp.flex_sync.validate_dataset") as never:
-        outcome = validate_dataset_daily(good_db, now=_NOW + timedelta(hours=2))
-    never.assert_not_called()  # the whole point: no work, not merely a fast path
-    assert outcome.reused is True
-    assert outcome.validity.ok is True
-    assert outcome.validated_at == _NOW  # reports when it was PROVEN, not when it was asked
-
-
-def test_a_changed_dataset_is_revalidated_the_same_day(good_db):
-    """A pull that changed the data invalidates the cached verdict, same day or not."""
-    validate_dataset_daily(good_db, now=_NOW)
-    conn = sqlite3.connect(good_db)
-    conn.execute("INSERT INTO flex_trade VALUES ('key-new', 'flex', -1.0, '2026-08-05')")
-    conn.commit()
-    conn.close()
-
-    outcome = validate_dataset_daily(good_db, now=_NOW + timedelta(minutes=1))
-    assert outcome.reused is False  # a pull landed; the old verdict no longer describes it
-
-
-def test_yesterdays_verdict_is_not_reused_today(good_db):
-    """A verdict does not survive the day boundary."""
-    validate_dataset_daily(good_db, now=_NOW - timedelta(days=1))
-    outcome = validate_dataset_daily(good_db, now=_NOW)
-    assert outcome.reused is False
-
-
-def test_a_failed_verdict_is_never_reused(good_db):
-    """A failure is re-measured every time, never cached forward."""
-    conn = sqlite3.connect(good_db)
-    conn.execute("INSERT INTO flex_trade VALUES ('key-0', 'flex', -100.0, '2026-08-04')")
-    conn.commit()
-    conn.close()
-
-    first = validate_dataset_daily(good_db, now=_NOW)
-    assert first.validity.ok is False
-    second = validate_dataset_daily(good_db, now=_NOW + timedelta(minutes=1))
-    assert second.reused is False  # a failure must be re-measured, never cached forward
-
-
-def test_an_unwritable_location_still_validates(good_db):
-    """Caching is an optimisation. Losing it must cost speed, never the check."""
-    with patch("ibkr_core_mcp.flex_sync.Path.write_text", side_effect=OSError("read-only fs")):
-        outcome = validate_dataset_daily(good_db, now=_NOW)
-    assert outcome.validity.ok is True
-    assert outcome.reused is False
-
-
-def test_a_corrupt_cache_file_is_ignored_rather_than_trusted(good_db):
-    """An unreadable cache file causes a fresh validation rather than a trusted stale verdict."""
-    validate_dataset_daily(good_db, now=_NOW)
-    Path(f"{good_db}.validation.json").write_text("{not json")
-
-    outcome = validate_dataset_daily(good_db, now=_NOW + timedelta(minutes=1))
-    assert outcome.reused is False
-    assert outcome.validity.ok is True
-
-
-# ── last_import — when the store was actually updated ─────────────────────────
 
 
 def test_last_import_reports_the_most_recent_pull(good_db):
@@ -380,34 +297,6 @@ def test_last_import_survives_an_unparseable_timestamp(good_db):
     conn.close()
 
     assert last_import(good_db) is None  # no time is better than a wrong time on screen
-
-
-def test_an_unreadable_path_writes_no_sidecar_at_all(tmp_path, monkeypatch):
-    """Regression, 2026-08-05: it used to write one anyway.
-
-    `_write_record` fired even when the dataset could not be fingerprinted, so any caller
-    with an unusable path left a file behind — and a unit test passing a `MagicMock`
-    config wrote `<MagicMock name='mock._config.sqlite_path' id=…>.validation.json` into
-    the repository root. Fourteen reached a commit. Such a record can never be reused
-    (reuse requires a fingerprint match), so writing it was cost with no benefit.
-    """
-    monkeypatch.chdir(tmp_path)
-    outcome = validate_dataset_daily(str(tmp_path / "does-not-exist.db"), now=_NOW)
-
-    assert outcome.validity.ok is False  # still reports honestly
-    assert outcome.reused is False
-    assert list(tmp_path.glob("*.validation.json")) == []
-    assert list(tmp_path.iterdir()) == []  # nothing dropped anywhere
-
-
-def test_a_mock_shaped_path_leaves_the_working_directory_clean(tmp_path, monkeypatch):
-    """The exact shape that littered the repo: a path that is not a path."""
-    from unittest.mock import MagicMock
-
-    monkeypatch.chdir(tmp_path)
-    validate_dataset_daily(MagicMock(), now=_NOW)
-
-    assert list(tmp_path.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -547,30 +436,6 @@ def test_the_identity_is_over_statement_rows_only(good_db):
     conn.close()
 
     assert validate_dataset(good_db).ok is True
-
-
-def test_the_verdict_sidecar_is_private(good_db):
-    """It summarises the account's trade dataset; 0600, like the store beside it."""
-    import stat
-
-    validate_dataset_daily(good_db, now=_NOW)
-    record = Path(f"{good_db}.validation.json")
-    assert stat.S_IMODE(record.stat().st_mode) == 0o600
-
-
-def test_a_verdict_sidecar_left_world_readable_is_corrected_on_the_next_write(good_db):
-    """The chmod is unconditional: `write_text` leaves an existing file's mode alone, so a
-    record created before the rule was corrected by the next verdict or never. claudia_ui's
-    2026-08-05 security audit (L-2) found the real store's record at 0644."""
-    import stat
-
-    record = Path(f"{good_db}.validation.json")
-    record.write_text("{}")
-    record.chmod(0o644)
-
-    validate_dataset_daily(good_db, now=_NOW)
-
-    assert stat.S_IMODE(record.stat().st_mode) == 0o600
 
 
 # ── against a dataset the real writer built ───────────────────────────────────

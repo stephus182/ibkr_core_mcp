@@ -209,9 +209,11 @@ What changes for a caller:
   opened as `SQLiteStore` opens it — no `~` expansion, a relative path against the working
   directory — and a path holding a NUL is refused rather than cut at it.
 - **The dataset's state is `ibkr_core_mcp.flex_sync`:** `validate_dataset`,
-  `validate_dataset_daily`, `dataset_fingerprint`, `last_import`, `statement_through`,
-  `pull_due`. These never raise. claudia_ui carried them as `claudia/flex_sync.py`; same names,
-  same signatures, same answers.
+  `dataset_fingerprint`, `last_import`, `statement_through`, `pull_due`. These never raise.
+  claudia_ui carried them as `claudia/flex_sync.py`; same names, same signatures, same answers.
+  Its `validate_dataset_daily` — a verdict kept for the day in a file beside the store — is not
+  carried over: the checks take a quarter of a second, so a host runs `validate_dataset` at
+  each start and the answer always describes a check that just ran.
 - **What the last pull did is `flex_sync.last_pull(path)`** — new in this release, never raising.
   It returns a `PullOutcome` read from the `session_log` row `sync_flex_trades` writes after
   every pull: `at`, `trades_fetched`, `archive_ok` / `archive_reason`, `backup`

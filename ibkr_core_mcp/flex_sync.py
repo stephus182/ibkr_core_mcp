@@ -3,8 +3,8 @@
 Pure SQLite, read-only, no network. `flex_query` performs a pull; this module answers the
 questions asked around one:
 
-* **Is the dataset sound?** — `validate_dataset`, and `validate_dataset_daily`, which proves
-  it at most once a day per dataset and says when.
+* **Is the dataset sound?** — `validate_dataset`, run whenever it is asked: a quarter of a
+  second on the real store, so no verdict is kept between runs.
 * **Did a pull change anything?** — `dataset_fingerprint`, the gate on the Drive backup
   `FlexQueryClient.fetch_trades` makes after every pull.
 * **When was Flex last asked, and what does the store hold?** — `last_import`,
@@ -69,7 +69,6 @@ __all__ = [
     "DatasetValidity",
     "LastImport",
     "PullOutcome",
-    "ValidationOutcome",
     "dataset_fingerprint",
     "last_import",
     "last_pull",
@@ -77,7 +76,6 @@ __all__ = [
     "pull_due",
     "statement_through",
     "validate_dataset",
-    "validate_dataset_daily",
 ]
 
 log = logging.getLogger(__name__)
@@ -233,7 +231,7 @@ def dataset_fingerprint(sqlite_path: str | Path) -> tuple[int, int, str | None] 
         conn.close()
 
 
-# ── "already updated today — do not check again" (operator rule, 2026-08-05) ──
+# ── When Flex was last asked ──
 
 
 @dataclass(frozen=True)
@@ -243,25 +241,6 @@ class LastImport:
     at: datetime
     filename: str
     trade_count: int
-
-
-@dataclass(frozen=True)
-class ValidationOutcome:
-    """A verdict plus **when it was established** — which is not always now.
-
-    `reused` True means nothing was re-checked: a verdict from earlier today still
-    describes this exact dataset. `validated_at` is the moment the checks actually ran,
-    never the moment they were asked for, so a surface can state a time that is true.
-    """
-
-    validity: DatasetValidity
-    validated_at: datetime
-    reused: bool
-
-
-def _record_path(sqlite_path: str | Path) -> Path:
-    """Sidecar holding the last verdict. Named after the database it describes."""
-    return Path(f"{sqlite_path}.validation.json")
 
 
 def last_import(sqlite_path: str | Path) -> LastImport | None:
@@ -414,126 +393,6 @@ def last_pull(sqlite_path: str | Path) -> PullOutcome | None:
     except (ValueError, TypeError) as exc:
         log.warning("last_pull: the record of %s is malformed — %s", at.isoformat(), exc)
         return None
-
-
-def validate_dataset_daily(sqlite_path: str | Path, now: datetime | None = None) -> ValidationOutcome:
-    """Validate at most once per calendar day per dataset, and say when it was proven.
-
-    The operator's rule, 2026-08-05: *"If flex sync was performed and db already updated on
-    T, do not check again. Just explicitly mention it was already updated: state the date
-    and time."* Flex is T+1 and the store is pulled once a day, so re-running the checks
-    on a byte-identical dataset cannot produce a new answer.
-
-    Reuse requires **both** conditions, and the fingerprint is the load-bearing one:
-
-    * the stored verdict was reached **today**, and
-    * `dataset_fingerprint` still matches what it was computed against.
-
-    So a pull that lands mid-session re-validates immediately rather than coasting on a
-    verdict about data that no longer exists. Two things are deliberately never reused: a
-    **failure** (it must be re-measured, not cached forward into a day of silence) and a
-    verdict from any earlier day.
-
-    The cache is an optimisation and is treated as one — an unwritable location, a
-    corrupt sidecar or a malformed record costs the reuse, never the check.
-    """
-    now = now or datetime.now(UTC)
-    fingerprint = dataset_fingerprint(sqlite_path)
-
-    reusable = _reusable_verdict(_read_record(_record_path(sqlite_path)), fingerprint, now)
-    if reusable is not None:
-        return reusable
-
-    validity = validate_dataset(sqlite_path)
-    _write_record(_record_path(sqlite_path), validity, fingerprint, now)
-    return ValidationOutcome(validity=validity, validated_at=now, reused=False)
-
-
-def _reusable_verdict(
-    stored: object, fingerprint: tuple[int, int, str | None] | None, now: datetime
-) -> ValidationOutcome | None:
-    """A stored verdict that still describes this dataset today, or None.
-
-    Every field is checked before it is believed. The sidecar is an ordinary JSON file on
-    disk that a person can edit, truncate or copy between machines, so it is parsed as
-    untrusted input: anything unexpected returns None and costs one re-validation, which
-    is the cheap failure. The expensive failure would be trusting a record that says
-    "valid" about a dataset it was not computed against.
-    """
-    if not isinstance(stored, dict) or stored.get("ok") is not True:
-        return None
-    if fingerprint is None or stored.get("fingerprint") != list(fingerprint):
-        return None
-
-    raw_at = stored.get("validated_at")
-    if not isinstance(raw_at, str):
-        return None
-    try:
-        validated_at = datetime.fromisoformat(raw_at)
-    except ValueError:
-        return None
-    if validated_at.tzinfo is None:
-        validated_at = validated_at.replace(tzinfo=UTC)
-    # Local calendar day, not UTC: "already checked today" has to mean the reader's today.
-    if validated_at.astimezone().date() != now.astimezone().date():
-        return None
-
-    raw_checks = stored.get("checks")
-    checks = tuple(
-        DatasetCheck(name=str(c["name"]), passed=True, detail=str(c.get("detail", "")))
-        for c in (raw_checks if isinstance(raw_checks, list) else [])
-        if isinstance(c, dict) and isinstance(c.get("name"), str)
-    )
-    return ValidationOutcome(
-        validity=DatasetValidity(checks, empty=bool(stored.get("empty"))),
-        validated_at=validated_at,
-        reused=True,
-    )
-
-
-def _read_record(path: Path) -> dict[str, object] | None:
-    """The stored verdict, or None if there is not a usable one. Never raises."""
-    try:
-        record = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
-    return record if isinstance(record, dict) else None
-
-
-def _write_record(
-    path: Path,
-    validity: DatasetValidity,
-    fingerprint: tuple[int, int, str | None] | None,
-    now: datetime,
-) -> None:
-    """Store the verdict beside the database. Never raises — see `validate_dataset_daily`.
-
-    **Nothing is written without a fingerprint.** Such a record could never be reused —
-    reuse requires a fingerprint match — so writing one is pure cost, and the cost turned
-    out to be real: an unreadable path still produced a file, and a test passing a
-    `MagicMock` config wrote `<MagicMock name='mock._config.sqlite_path' id=…>.validation.json`
-    into a repository root. Fourteen of them reached a commit before a pre-push file
-    listing caught it. A path we could not read is not a path we should write beside.
-    """
-    if fingerprint is None:
-        return
-    record = {
-        "validated_at": now.isoformat(),
-        "ok": validity.ok,
-        "empty": validity.empty,
-        "fingerprint": list(fingerprint),
-        "checks": [{"name": c.name, "detail": c.detail} for c in validity.checks if c.passed],
-        "summary": validity.summary,
-    }
-    try:
-        path.write_text(json.dumps(record, indent=2))
-        # 0600 for the same reason the store itself is: the record summarises the account's
-        # trade dataset — row counts, the newest trade date, the realised-P&L total the
-        # checks were satisfied by. `write_text` honours the umask and does not touch an
-        # existing file's mode, so this is unconditional and after every write.
-        path.chmod(0o600)
-    except OSError as exc:
-        log.warning("Could not cache the dataset verdict (%s) — it will be re-checked", exc)
 
 
 # ── The pull rule (operator 2026-09-28): pull unless the store already holds the ──
