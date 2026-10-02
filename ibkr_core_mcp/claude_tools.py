@@ -1295,6 +1295,11 @@ def _safe_error(tool: str, exc: Exception) -> str:
                 " pacing is per process, the limit per IP — or this process sending a call the pacer warned was"
                 " over the limit. Wait before retrying."
             )
+        if exc.status_code == 503 and exc.detail:
+            return (
+                f"Tool '{tool}' failed: IBKR answered HTTP 503 repeatedly — not a pacing violation."
+                f' IBKR\'s message: "{exc.detail}".'
+            )
         if exc.status_code == 503:
             return (
                 f"Tool '{tool}' failed: IBKR gateway answered HTTP 503 repeatedly — unavailable, not a pacing"

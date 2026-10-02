@@ -264,16 +264,45 @@ def pace(path: str) -> float:
     return _pacer.acquire(path)
 
 
-def _rate_limit_message(status: int, max_retries: int) -> str:
+def _ibkr_error_text(resp: requests.Response) -> str:
+    """IBKR's own `error` sentence from a response body, or "". Never raises.
+
+    The gateway answers an application-level refusal with `{"error": "...", "statusCode": n}`.
+    Anything else — no JSON, a list, an `error` that is not text — is no message at all, and
+    none is made up from it.
+    """
+    try:
+        body = resp.json()
+    except Exception:
+        return ""
+    text = body.get("error") if isinstance(body, dict) else None
+    return " ".join(text.split())[:300] if isinstance(text, str) else ""
+
+
+def _rate_limit_message(status: int, max_retries: int, detail: str = "") -> str:
     """The text a user sees at the moment a limit bites — the one place it is certain to be read.
 
     A 429 is IBKR's pacing verdict, and both its consequence and its usual cause need saying:
     the IP is in the fifteen-minute penalty box for every endpoint, and `EndpointPacer`'s budget
     is per process while the limit is per IP, so another process on this machine is the first
-    thing to look for. A 503 is the gateway being unavailable and says none of that. Until
-    2026-09-19 the message was "Rate limit exceeded after 3 retries (HTTP 429)" and nothing
-    else, and the README did not mention rate limits at all.
+    thing to look for. Until 2026-09-19 the message was "Rate limit exceeded after 3 retries
+    (HTTP 429)" and nothing else, and the README did not mention rate limits at all.
+
+    **A 503 says none of that, and is never called a rate limit** (register F36, 2026-10-02).
+    Found live: the status read of an order IBKR listed as `Inactive` answered 503
+    `{"error": "Order … is not found"}` and was reported as "Rate limit exceeded after 3
+    retries (HTTP 503)". IBKR documents that answer: "If an order has been cancelled or filled
+    prior to the active session and there is no cached information saved, querying the order
+    status endpoint would be expected to result in a '503' error"
+    (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status).
+    So the message says what was observed — 503 on every attempt — and gives IBKR's own
+    sentence when the body carried one; without one, the gateway may simply be unavailable.
     """
+    if status == 503:
+        told = (
+            f' IBKR\'s message: "{detail}".' if detail else " No message came with it: the gateway may be unavailable."
+        )
+        return f"IBKR answered HTTP 503 on all {max_retries + 1} attempts — not a pacing violation.{told}"
     message = f"Rate limit exceeded after {max_retries} retries (HTTP {status})."
     if status == 429:
         message += (
@@ -357,7 +386,10 @@ def with_retry(
             raise IBKRAuthError("IBKR session not authenticated (401)")
         if status in (429, 503):
             if attempt >= max_retries:
-                raise IBKRRateLimitError(_rate_limit_message(status, max_retries), status_code=status)
+                detail = _ibkr_error_text(resp) if status == 503 else ""
+                raise IBKRRateLimitError(
+                    _rate_limit_message(status, max_retries, detail), status_code=status, detail=detail
+                )
             backoff = _BASE_BACKOFF * (2**attempt)
             time.sleep(backoff)
             attempt += 1

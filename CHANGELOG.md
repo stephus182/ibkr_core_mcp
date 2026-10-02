@@ -172,6 +172,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **A 503 is no longer reported as "Rate limit exceeded", and IBKR's own message is kept
+  (register F36).** `with_retry` raised `IBKRRateLimitError("Rate limit exceeded after 3 retries
+  (HTTP 503)")` for every 503. Found live: the status read of an order IBKR listed as `Inactive`
+  answered 503 `{"error": "Order … is not found"}` — the answer IBKR documents for an order it
+  holds no cached information about — and a host logged a rate limit once a minute per order.
+  The message now reads "IBKR answered HTTP 503 on all N attempts — not a pacing violation",
+  followed by IBKR's sentence when the body carried one, or by "the gateway may be unavailable"
+  when it did not; `IBKRRateLimitError.detail` holds that sentence ("" when none), and the tool
+  error the model reads quotes it instead of telling it to check the gateway container. The
+  type and the three retries are unchanged.
 - **Every Drive request has its own connection (register F17).** `GDriveCache` and the web
   scraper's Drive client each built one shared connection; httplib2 is not thread-safe, and a
   host calling them from worker threads could crash the process (claudia_ui's own client did,

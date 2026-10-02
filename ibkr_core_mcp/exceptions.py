@@ -35,19 +35,25 @@ class IBKRRateLimitError(IBKRCoreError):
     counts per IP, so the first suspect is another process on this machine — a script, a test
     run, the MCP server — talking to the same gateway; the second is this process having been
     warned that a call was over the limit and sent anyway (the pacer never holds a call longer
-    than 65 s). A 503 is the gateway being unavailable and means neither.
+    than 65 s). **A 503 is not a pacing verdict and means neither**: it is the gateway being
+    unavailable, or IBKR's own answer to a request it cannot serve — the order-status endpoint
+    documents a 503 for an order it holds no cached information about. `.detail` carries
+    IBKR's sentence when the 503 came with one (register F36).
     """
 
-    def __init__(self, message: str, status_code: int = 0) -> None:
+    def __init__(self, message: str, status_code: int = 0, detail: str = "") -> None:
         """Record the message and the HTTP status that exhausted the retries.
 
         Args:
             message: Human-readable description of the failure.
             status_code: 429 or 503 from the gateway; 0 when unknown, so callers can branch
                 on it without it ever being None — the same contract as `IBKRAPIError`.
+            detail: IBKR's own `error` text from the last response's body; "" when the body
+                carried none.
         """
         super().__init__(message)
         self.status_code = status_code
+        self.detail = detail
 
 
 class IBKRAPIError(IBKRCoreError):

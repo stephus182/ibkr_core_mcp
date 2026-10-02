@@ -86,16 +86,53 @@ def test_the_429_error_names_the_penalty_box_and_the_per_process_budget():
     assert "warn" in message.lower()
 
 
-def test_the_503_error_does_not_claim_a_penalty_box():
-    """A 503 is the gateway being unavailable, not a pacing violation — the two must not be conflated."""
+def test_the_503_error_does_not_claim_a_penalty_box_or_a_rate_limit():
+    """A 503 is not a pacing verdict. With no message in the body, all that is known is that
+    IBKR answered 503 every time — the gateway may be unavailable."""
     from ibkr_core_mcp.exceptions import IBKRRateLimitError
     from ibkr_core_mcp.rate_limiter import with_retry
 
     with patch("time.sleep"), pytest.raises(IBKRRateLimitError) as info:
         with_retry(MagicMock(return_value=_make_response(503)), max_retries=1)
-    assert info.value.status_code == 503
-    assert "HTTP 503" in str(info.value)
-    assert "penalty box" not in str(info.value)
+    message = str(info.value)
+    assert info.value.status_code == 503 and info.value.detail == ""
+    assert "HTTP 503" in message and "2 attempts" in message
+    assert "penalty box" not in message and "rate limit" not in message.lower()
+    assert "may be unavailable" in message
+
+
+def test_a_503_that_carries_ibkrs_own_message_says_it(caplog):
+    """Register F36, found live 2026-10-02: the status read of an order IBKR lists as Inactive
+    answered 503 `{"error": "Order … is not found"}` and was reported as "Rate limit exceeded
+    after 3 retries". IBKR documents that 503 as the expected answer for an order it holds no
+    information about — its sentence is the answer, and it is kept on the exception."""
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
+
+    body = {"error": "Order 1234567890 is not found", "statusCode": 503}
+    with patch("time.sleep"), pytest.raises(IBKRRateLimitError) as info:
+        with_retry(MagicMock(return_value=_make_response(503, body)), max_retries=1)
+    assert info.value.detail == "Order 1234567890 is not found"
+    assert 'IBKR\'s message: "Order 1234567890 is not found"' in str(info.value)
+    assert "rate limit" not in str(info.value).lower() and "unavailable" not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "body", [None, {"error": 503}, {"error": ""}, ["Order not found"]], ids=["raises", "not-text", "empty", "a-list"]
+)
+def test_a_503_body_that_is_not_ibkrs_error_object_gives_no_detail(body):
+    """Never raises while reading the body, and never invents a message from something else."""
+    from ibkr_core_mcp.exceptions import IBKRRateLimitError
+    from ibkr_core_mcp.rate_limiter import with_retry
+
+    response = _make_response(503)
+    if body is None:
+        response.json.side_effect = ValueError("not JSON")
+    else:
+        response.json.return_value = body
+    with patch("time.sleep"), pytest.raises(IBKRRateLimitError) as info:
+        with_retry(MagicMock(return_value=response), max_retries=0)
+    assert info.value.detail == ""
 
 
 def test_503_retries_then_raises():

@@ -53,6 +53,15 @@ def test_rate_limit_text_on_a_429_names_the_penalty_box_and_the_per_process_scop
     assert "few seconds" not in msg
 
 
+def test_a_503_with_ibkrs_message_tells_the_model_what_ibkr_said():
+    """The model was told to check the gateway container for an order IBKR simply did not hold
+    (register F36). With IBKR's own sentence on the error, the model is given that sentence."""
+    exc = IBKRRateLimitError("503", status_code=503, detail="Order 1234567890 is not found")
+    msg = _safe_error("get_order_status", exc)
+    assert 'IBKR\'s message: "Order 1234567890 is not found"' in msg
+    assert "penalty" not in msg.lower() and "container" not in msg
+
+
 def test_rate_limit_text_on_a_503_does_not_claim_a_penalty_box():
     """`with_retry` raises the same class on 503 — the gateway being unavailable, not a pacing
     verdict. Telling the model the IP is in a penalty box would send the user hunting for a second

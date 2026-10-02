@@ -2568,8 +2568,10 @@ class IBKRClient:
         filled — so held-vs-released is decided by the PARENT's fill state and never by the
         child's status string.
 
-        Failure is not refusal. `/iserver/account/order/status` is rate-limited (measured
-        HTTP 503 after a dense run), and a read that fails must not block an urgent modify;
+        Failure is not refusal. `/iserver/account/order/status` can answer HTTP 503 (measured
+        2026-09-21 after a dense run and read then as a rate limit; IBKR documents a 503 there
+        as its answer for an order it holds no cached information about, so which it was is not
+        established — register F36), and a read that fails must not block an urgent modify;
         the gap is named on Gate 2 instead, the same pattern `confirm_cancel_dialog` uses
         when it cannot read an order at all. A control with a SILENT skip is not a control —
         this one says so on the screen.
@@ -2641,9 +2643,10 @@ class IBKRClient:
         An order id is not something a human can verify against the order they mean.
 
         Read-only and failure-tolerant on purpose: a cancel must not become impossible
-        because a *display* read failed, and `/iserver/account/order/status` is rate-limited
-        (measured 2026-09-21: HTTP 503 after a dense run of calls). Returning None lets the
-        dialog state the gap instead of pretending it does not exist.
+        because a *display* read failed, and `/iserver/account/order/status` can answer HTTP
+        503 (measured 2026-09-21 after a dense run of calls; whether that was pacing or IBKR's
+        documented "no cached information" answer is not established — register F36).
+        Returning None lets the dialog state the gap instead of pretending it does not exist.
 
         `_multiplier_unknown` is set for FUT/FOP because an order-status read never carries
         the contract multiplier, and price x quantity on a future is not an estimate — it is
