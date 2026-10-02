@@ -43,9 +43,12 @@ contain the net realized amount, including loss disallowed" —
 https://www.ibkrguides.com/reportingreference/reportguide/trades_realizedsummary.htm),
 verified exact against 20 of 20 archived statements, and deliberately the same check as
 `scripts/audit_flex_dataset.py`'s #17, so the cheap session gate and the full audit cannot
-disagree about what "valid" means. The two key checks are unreachable on a store built by
-today's writer — `execution_key` is the table's NOT NULL primary key — and are kept for a
-store whose table predates that schema, which is the store the 75 duplicates lived in.
+disagree about what "valid" means. `execution_key` is the table's primary key, so today's
+schema refuses a duplicate and that check matters only for a store whose table predates the
+key — the store the 75 duplicates lived in. The schema does NOT refuse a missing key: the
+column is not declared NOT NULL, and SQLite then accepts NULL in a non-integer primary key,
+any number of times (measured 2026-10-02 on the real store's own DDL). That check is the only
+thing that would see such a row.
 
 What this does NOT do: reconcile against the source XML. That is `verify_flex_import`'s job
 and it needs the statement archive.
