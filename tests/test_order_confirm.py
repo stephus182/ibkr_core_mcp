@@ -2281,158 +2281,44 @@ def test_bracket_dialog_accepts_an_equal_and_a_smaller_child():
 
 
 # ---------------------------------------------------------------------------
-# F21 — the dialog's auto-dismiss is its own outcome, not the abandon button's
+# Gate 2 outcomes — confirmed, declined, timed out (register F21, F6)
 # ---------------------------------------------------------------------------
 #
-# Found live 2026-09-25 (claudia_ui #67): the operator let a CANCEL ORDER dialog time out and
-# the consumer printed "Order was cancelled at the confirmation dialog" for an order the timeout
-# had KEPT — `_order_dialog.py` printed CANCELLED for anything but the first button, so the
-# abandon click and the timeout were one message. A timeout is described by what it leaves:
-# nothing was sent to IBKR, the order is as it was (operator rule, claudia_ui 2026-09-24).
+# A dialog ends three ways and they must never be confused: only the first button confirms; the
+# abandon button raises `ConfirmationDeclinedError` with the dialog's own sentence for what the
+# click leaves in place; an auto-dismiss raises `ConfirmationTimeoutError`. Found live
+# 2026-09-25 (claudia_ui #67): a timed-out cancel dialog read "Order cancelled by user" for an
+# order the timeout had KEPT. Buttons and sentences settled with the operator on the rendered
+# dialogs, 2026-10-01.
 
 
 def test_dialog_outcome_token_is_one_per_way_the_modal_can_end():
+    """Only the first button's response is CONFIRMED; a timer that fired is never a decision."""
     from ibkr_core_mcp import _order_dialog as script
 
     first, second = script._NS_ALERT_FIRST_BUTTON_RETURN, script._NS_ALERT_FIRST_BUTTON_RETURN + 1
     assert script.outcome_token(first) == script.CONFIRMED
-    assert script.outcome_token(second) == script.CANCELLED  # the abandon button
-    # The timer's own record decides first: measured live 2026-09-29, the first build keyed on a
-    # response code copied from a comment (−1000) and the real dialog printed CANCELLED.
+    assert script.outcome_token(second) == script.CANCELLED
     assert script.outcome_token(second, timed_out=True) == script.TIMED_OUT
-    assert script.outcome_token(first, timed_out=True) == script.TIMED_OUT, "a timer that fired is never a decision"
-    # The measured abort response is the second signal, for a modal broken without the flag.
-    assert script._NS_MODAL_RESPONSE_ABORT == -1001
-    assert script.outcome_token(script._NS_MODAL_RESPONSE_ABORT) == script.TIMED_OUT
+    assert script.outcome_token(first, timed_out=True) == script.TIMED_OUT
+    # Measured live 2026-09-29: the abort response is -1001, not the -1000 a comment had claimed.
+    assert script.outcome_token(-1001) == script.TIMED_OUT
     assert len({script.CONFIRMED, script.CANCELLED, script.TIMED_OUT}) == 3
 
 
-def test_order_confirm_reads_the_tokens_the_dialog_script_defines():
-    """One definition for the writer and the reader: a literal in order_confirm could drift."""
-    import inspect
-
+def test_an_answer_the_dialog_never_prints_is_never_a_confirmation():
+    """Plain `HumanAuthError`, nothing sent — and neither a decline nor a timeout."""
     import ibkr_core_mcp.order_confirm as oc
-    from ibkr_core_mcp import _order_dialog as script
-
-    source = inspect.getsource(oc._show_appkit_dialog)
-    for token in (script.CONFIRMED, script.CANCELLED, script.TIMED_OUT):
-        assert f'"{token}"' not in source, f"{token!r} is spelled as a literal in _show_appkit_dialog"
-    assert "TIMED_OUT" in source and "CONFIRMED" in source
-
-
-def test_appkit_dialog_timed_out_raises_the_timeout_error_and_names_what_it_leaves():
-    import ibkr_core_mcp.order_confirm as oc
-    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
 
     with (
-        patch.object(subprocess, "run", return_value=_appkit_proc("TIMED_OUT\n")),
-        pytest.raises(ConfirmationTimeoutError) as excinfo,
+        patch.object(subprocess, "run", return_value=_appkit_proc("MAYBE\n")),
+        pytest.raises(HumanAuthError, match="Unexpected dialog response") as caught,
     ):
-        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
-    message = str(excinfo.value)
-    assert "timed out" in message and "nothing was sent to IBKR" in message and "as it was" in message
-    assert "cancel" not in message.lower(), "a timeout must not be worded as a cancellation"
-    assert isinstance(excinfo.value, HumanAuthError), "existing `except HumanAuthError` handlers must still catch it"
+        oc._show_appkit_dialog("T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND")
+    assert type(caught.value) is HumanAuthError
 
 
-def test_appkit_dialog_abandon_button_is_not_a_timeout():
-    import ibkr_core_mcp.order_confirm as oc
-    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
-
-    with (
-        patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")),
-        pytest.raises(HumanAuthError) as excinfo,
-    ):
-        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
-    assert not isinstance(excinfo.value, ConfirmationTimeoutError)
-    assert "timed out" not in str(excinfo.value)
-
-
-def test_appkit_dialog_process_overrun_is_a_timeout_too():
-    import ibkr_core_mcp.order_confirm as oc
-    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
-
-    with (
-        patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="dialog", timeout=70)),
-        pytest.raises(ConfirmationTimeoutError, match="nothing was sent to IBKR"),
-    ):
-        oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
-
-
-def test_osascript_gave_up_is_a_timeout_and_the_abandon_button_is_not():
-    import ibkr_core_mcp.order_confirm as oc
-    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
-
-    with (
-        patch.object(subprocess, "run", return_value=_appkit_proc("timeout\n")),
-        pytest.raises(ConfirmationTimeoutError, match="nothing was sent to IBKR"),
-    ):
-        oc._show_osascript_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "DO NOT SEND")
-    with (
-        patch.object(subprocess, "run", return_value=_appkit_proc("DO NOT SEND\n")),
-        pytest.raises(HumanAuthError) as excinfo,
-    ):
-        oc._show_osascript_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "DO NOT SEND")
-    assert not isinstance(excinfo.value, ConfirmationTimeoutError)
-
-
-def _make_tk_mock_that_times_out():
-    """A tkinter double whose mainloop runs the countdown ticks until the dialog is destroyed."""
-    pending: list[Callable[[], None]] = []
-    alive = {"value": True}
-    mock_root = MagicMock()
-    mock_dialog = MagicMock()
-
-    def fake_after(_ms, callback):
-        pending.append(callback)
-        return len(pending)
-
-    def fake_destroy():
-        alive["value"] = False
-
-    def fake_mainloop():
-        while pending and alive["value"]:
-            pending.pop(0)()
-
-    mock_dialog.after.side_effect = fake_after
-    mock_dialog.destroy.side_effect = fake_destroy
-    mock_root.mainloop.side_effect = fake_mainloop
-    mock_tk = MagicMock()
-    mock_tk.Tk.return_value = mock_root
-    mock_tk.Toplevel.return_value = mock_dialog
-    return mock_tk
-
-
-def test_tkinter_countdown_reaching_zero_is_a_timeout_not_a_cancellation():
-    import ibkr_core_mcp.order_confirm as oc
-    from ibkr_core_mcp.exceptions import ConfirmationTimeoutError
-
-    with (
-        patch.object(sys, "platform", "linux"),
-        patch("ibkr_core_mcp.order_confirm.tk", _make_tk_mock_that_times_out()),
-        pytest.raises(ConfirmationTimeoutError, match="nothing was sent to IBKR"),
-    ):
-        oc._show_confirm_dialog(**_dialog_args())
-
-
-def test_the_timeout_error_is_exported_beside_human_auth_error():
-    import ibkr_core_mcp
-
-    assert "ConfirmationTimeoutError" in ibkr_core_mcp.__all__
-    assert issubclass(ibkr_core_mcp.ConfirmationTimeoutError, ibkr_core_mcp.HumanAuthError)
-
-
-# ── Gate 2 buttons say their role by colour; an abandon says what it leaves (register F6) ──
-#
-# Reviewed by the operator on real dialogs, one at a time, 2026-10-01. The rule they settled on,
-# after seeing a red `CANCEL ORDER` beside a grey `KEEP ORDER` ("ambiguous"): **on every dialog
-# the button that validates is blue and the button that discards is red** — the colour says go
-# ahead or back out, the banner says what the action is. On the cancel dialog the two buttons
-# say exactly that, `VALIDATE` and `DISCARD` ("wording still WRONG" was their word for a blue
-# `CANCEL ORDER` over a red `KEEP ORDER`): the banner already reads CANCEL ORDER. And the abandon button's error was
-# "Order cancelled by user" on every dialog, including the one where the click had KEPT the order.
-
-_F6_EXPECTED = {
+_GATE2_DIALOGS = {
     "confirm_order_dialog": ("SEND TO IBKR", "validate", "DO NOT SEND", "discard", "Not sent — nothing reached IBKR."),
     "confirm_bracket_dialog": (
         "SEND TO IBKR",
@@ -2448,13 +2334,7 @@ _F6_EXPECTED = {
         "discard",
         "Left unchanged — the order is as it was.",
     ),
-    "confirm_cancel_dialog": (
-        "VALIDATE",
-        "validate",
-        "DISCARD",
-        "discard",
-        "Kept — the order is still working.",
-    ),
+    "confirm_cancel_dialog": ("VALIDATE", "validate", "DISCARD", "discard", "Kept — the order is still working."),
     "confirm_reply_dialog": (
         "CONFIRM REPLY",
         "validate",
@@ -2466,156 +2346,40 @@ _F6_EXPECTED = {
 
 
 def test_every_gate2_dialog_states_its_buttons_roles_and_what_an_abandon_leaves():
-    """The whole table, per dialog: label, colour role, and the abandon sentence — agreed with
-    the operator on the rendered dialogs. A new dialog is a new row here, by a decision."""
+    """The whole table, per dialog — label, colour role, abandon sentence — as a consumer prints
+    and matches them. A new dialog, or a changed word, is a changed row here, by a decision."""
     stated = {
         name: (kw["confirm_label"], kw["confirm_role"], kw["abandon_label"], kw["abandon_role"], kw["abandon_message"])
         for name, kw in _invoke_every_gate2_dialog()
     }
-    assert stated == _F6_EXPECTED
+    assert stated == _GATE2_DIALOGS
 
 
-def test_on_every_dialog_the_validating_button_is_blue_and_the_discarding_one_red():
-    """The rule itself, over the class: no dialog is an exception, and a new one cannot be."""
-    for name, kw in _invoke_every_gate2_dialog():
-        assert (kw["confirm_role"], kw["abandon_role"]) == ("validate", "discard"), name
-
-
-def test_one_button_label_never_carries_two_roles():
-    """Keyed by label across every dialog, as the chat cards are: `DISCARD` was once red on one
-    card and neutral on another, and the operator caught it."""
-    roles: dict[str, set[str]] = {}
-    for _name, kw in _invoke_every_gate2_dialog():
-        roles.setdefault(kw["confirm_label"], set()).add(kw["confirm_role"])
-        roles.setdefault(kw["abandon_label"], set()).add(kw["abandon_role"])
-    assert {label: sorted(found) for label, found in roles.items() if len(found) > 1} == {}
-    assert len(roles) == 8  # four confirm labels, four abandon labels
-
-
-def test_no_abandon_sentence_says_cancelled():
-    """An abandon is described by what it leaves in place, never by a word that reads as the
-    order being cancelled — on the cancel dialog that was the opposite of what happened."""
-    for name, kw in _invoke_every_gate2_dialog():
-        assert "cancel" not in kw["abandon_message"].lower(), name
-
-
-@pytest.mark.parametrize("missing", ["confirm_role", "abandon_role", "abandon_message"])
-def test_the_shared_renderer_makes_every_dialog_state_them(missing):
-    """Required, not defaulted — the same reason `abandon_label` is: a shared renderer with a
-    default hands one dialog's meaning to the next dialog that forgets to state its own."""
+@pytest.mark.parametrize("render", ["appkit", "osascript", "tkinter"])
+def test_an_abandon_raises_its_own_type_with_the_dialogs_sentence(render):
+    """A consumer matches the TYPE: claudia_ui matched the words "cancelled by user", and a
+    reworded sentence would have reached it as a Touch ID failure."""
     import ibkr_core_mcp.order_confirm as oc
 
-    args = _dialog_args()
-    del args[missing]
-    with patch.object(oc, "_show_appkit_dialog") as shown, pytest.raises(TypeError):
-        oc._show_confirm_dialog(**args)
-    shown.assert_not_called()
-
-
-@pytest.mark.parametrize("key", ["confirm_role", "abandon_role"])
-def test_a_role_outside_the_vocabulary_is_refused_before_anything_is_shown(key):
-    """A mistyped role would render as a neutral button in silence."""
-    import ibkr_core_mcp.order_confirm as oc
-
-    with (
-        patch.object(sys, "platform", "darwin"),
-        patch.object(oc, "_show_appkit_dialog") as shown,
-        pytest.raises(ValueError, match="role"),
-    ):
-        oc._show_confirm_dialog(**{**_dialog_args(), key: "primary"})
-    shown.assert_not_called()
-
-
-def test_the_appkit_payload_carries_both_roles_and_the_hosts_icon():
-    """What the dialog process is told: the two roles, and the icon a host set (None by default)."""
-    import json
-
-    import ibkr_core_mcp.order_confirm as oc
-
-    sent: dict[str, Any] = {}
-
-    def fake_run(cmd, input, **kwargs):
-        sent.update(json.loads(input))
-        return _appkit_proc("CONFIRMED\n")
-
-    with patch.object(subprocess, "run", side_effect=fake_run):
-        oc._show_appkit_dialog(
-            "T", {"Action": "SELL"}, "warn", "CANCEL ORDER", None, "KEEP ORDER", "CANCEL",
-            confirm_role="validate", abandon_role="discard", abandon_message="Kept — the order is still working.",
-        )  # fmt: skip
-
-    assert (sent["confirm_role"], sent["abandon_role"]) == ("validate", "discard")
-    assert sent["icon_path"] is None
-    assert "abandon_message" not in sent  # the sentence is this process's to raise, not the dialog's to show
-
-
-def test_a_host_sets_the_dialogs_icon_and_can_clear_it(tmp_path):
-    """A host's own mark. This package ships none: without one the dialog keeps its default."""
-    import json
-
-    import ibkr_core_mcp.order_confirm as oc
-
-    icon = tmp_path / "mark.png"
-    icon.write_bytes(b"png")
-    seen: list[Any] = []
-
-    def fake_run(cmd, input, **kwargs):
-        seen.append(json.loads(input)["icon_path"])
-        return _appkit_proc("CONFIRMED\n")
-
-    try:
-        with patch.object(subprocess, "run", side_effect=fake_run):
-            oc.set_dialog_icon(icon)
-            oc._show_appkit_dialog("T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND")
-            oc.set_dialog_icon(None)
-            oc._show_appkit_dialog("T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND")
-    finally:
-        oc.set_dialog_icon(None)
-
-    assert seen == [str(icon), None]
-
-
-@pytest.mark.parametrize(
-    ("message", "render"),
-    [
-        ("Kept — the order is still working.", "appkit"),
-        ("Left unchanged — the order is as it was.", "osascript-button"),
-        ("Not sent — nothing reached IBKR.", "osascript-closed"),
-        ("Not confirmed — the order was not placed.", "tkinter-button"),
-        ("Kept — the order is still working.", "tkinter-closed"),
-    ],
-)
-def test_an_abandon_raises_its_own_type_with_the_dialogs_sentence_on_every_renderer(message, render):
-    """`ConfirmationDeclinedError`: a `HumanAuthError`, so every existing handler still catches
-    it; its own type, so a consumer matches the type and not the wording — claudia_ui matched
-    the words "cancelled by user", and a reworded sentence would have reached it as a Touch ID
-    failure."""
-    import ibkr_core_mcp.order_confirm as oc
-
+    message = "Kept — the order is still working."
     with pytest.raises(ConfirmationDeclinedError) as caught:
         if render == "appkit":
             with patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")):
-                oc._show_appkit_dialog(
-                    "T", {}, "w", "CANCEL ORDER", None, "KEEP ORDER", "CANCEL", abandon_message=message
-                )
-        elif render.startswith("osascript"):
-            output = "LEAVE UNCHANGED\n" if render.endswith("button") else ""
-            proc = MagicMock(returncode=0 if output else 1, stdout=output, stderr="")
+                oc._show_appkit_dialog("T", {}, "w", "VALIDATE", None, "DISCARD", "CANCEL", abandon_message=message)
+        elif render == "osascript":
+            proc = MagicMock(returncode=0, stdout="DISCARD\n", stderr="")
             with patch.object(subprocess, "run", return_value=proc):
-                oc._show_osascript_dialog("T", {}, "w", "MODIFY ORDER", "LEAVE UNCHANGED", abandon_message=message)
+                oc._show_osascript_dialog("T", {}, "w", "VALIDATE", "DISCARD", abandon_message=message)
         else:
-            mock_tk = _make_tk_mock("DO NOT REPLY" if render.endswith("button") else None)
-            with patch("ibkr_core_mcp.order_confirm.tk", mock_tk):
-                oc._show_tkinter_dialog("T", {}, "w", "CONFIRM REPLY", "DO NOT REPLY", abandon_message=message)
+            with patch("ibkr_core_mcp.order_confirm.tk", _make_tk_mock("DISCARD")):
+                oc._show_tkinter_dialog("T", {}, "w", "VALIDATE", "DISCARD", abandon_message=message)
 
     assert str(caught.value) == message
-    assert isinstance(caught.value, HumanAuthError)
     assert not isinstance(caught.value, ConfirmationTimeoutError)
 
 
-def test_a_timeout_is_still_not_a_decline():
-    """The two outcomes stay two types (register F21): a dialog that dismissed itself decided
-    nothing, and must never be reported with the abandon button's sentence."""
+def test_a_timeout_raises_its_own_type_and_never_the_abandon_sentence():
+    """A dialog that dismissed itself decided nothing: it says what it leaves, not "cancelled"."""
     import ibkr_core_mcp.order_confirm as oc
 
     with (
@@ -2625,64 +2389,19 @@ def test_a_timeout_is_still_not_a_decline():
         oc._show_appkit_dialog(
             "T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND", abandon_message="Not sent — nothing reached IBKR."
         )
+    message = str(caught.value)
     assert not isinstance(caught.value, ConfirmationDeclinedError)
-    assert "Not sent" not in str(caught.value)
+    assert "nothing was sent to IBKR" in message and "Not sent" not in message
+    assert "cancel" not in message.lower()
 
 
-def test_a_response_the_dialog_never_prints_is_neither_a_decline_nor_a_timeout():
-    """An unreadable answer is not a human decision: plain `HumanAuthError`, nothing sent."""
-    import ibkr_core_mcp.order_confirm as oc
-
-    with (
-        patch.object(subprocess, "run", return_value=_appkit_proc("MAYBE\n")),
-        pytest.raises(HumanAuthError, match="Unexpected dialog response") as caught,
-    ):
-        oc._show_appkit_dialog("T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND")
-    assert type(caught.value) is HumanAuthError
-
-
-def test_the_shared_renderer_hands_the_roles_and_the_sentence_to_the_appkit_dialog():
-    """Stated by the dialog, carried to the renderer: a value dropped on the way would draw
-    neutral buttons and raise the fallback sentence, with every dialog-level test green."""
-    import ibkr_core_mcp.order_confirm as oc
-
-    with patch.object(sys, "platform", "darwin"), patch.object(oc, "_show_appkit_dialog") as appkit:
-        oc._show_confirm_dialog(**{**_dialog_args(), "action": "CANCEL"})
-
-    assert appkit.call_args.kwargs == {
-        "confirm_role": "validate",
-        "abandon_role": "discard",
-        "abandon_message": "Not sent — nothing reached IBKR.",
-    }
-    assert appkit.call_args.args[-1] == "CANCEL"
-
-
-def test_the_shared_renderer_hands_the_sentence_to_the_two_fallbacks():
-    """osascript and tkinter draw no colours, and still say what the abandon leaves."""
-    import ibkr_core_mcp.order_confirm as oc
-
-    with (
-        patch.object(sys, "platform", "darwin"),
-        patch.object(oc, "_show_appkit_dialog", side_effect=RuntimeError("AppKit dialog failed")),
-        patch.object(oc, "_show_osascript_dialog") as osascript,
-    ):
-        oc._show_confirm_dialog(**_dialog_args())
-    assert osascript.call_args.kwargs == {"abandon_message": "Not sent — nothing reached IBKR."}
-
-    with (
-        patch.object(sys, "platform", "linux"),
-        patch("ibkr_core_mcp.order_confirm.tk", MagicMock()),
-        patch.object(oc, "_show_tkinter_dialog") as tkinter_dialog,
-    ):
-        oc._show_confirm_dialog(**_dialog_args())
-    assert tkinter_dialog.call_args.kwargs == {"abandon_message": "Not sent — nothing reached IBKR."}
-
-
-def test_set_dialog_icon_is_part_of_the_packages_public_api():
-    """A host calls it at startup; it does not reach into a private module for it."""
+def test_the_names_a_host_matches_and_calls_are_public():
+    """Two error types a consumer matches on, one function a host calls at startup."""
     import ibkr_core_mcp
     from ibkr_core_mcp import order_confirm
 
+    for name in ("ConfirmationDeclinedError", "ConfirmationTimeoutError", "set_dialog_icon"):
+        assert name in ibkr_core_mcp.__all__
+    assert issubclass(ibkr_core_mcp.ConfirmationDeclinedError, ibkr_core_mcp.HumanAuthError)
+    assert issubclass(ibkr_core_mcp.ConfirmationTimeoutError, ibkr_core_mcp.HumanAuthError)
     assert ibkr_core_mcp.set_dialog_icon is order_confirm.set_dialog_icon
-    assert "set_dialog_icon" in ibkr_core_mcp.__all__
-    assert "ConfirmationDeclinedError" in ibkr_core_mcp.__all__

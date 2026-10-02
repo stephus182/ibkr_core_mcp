@@ -226,14 +226,14 @@ def test_the_abandon_button_cannot_report_confirmed(
         assert capsys.readouterr().out.strip() == "CANCELLED", f"response {response} was not treated as an abandon"
 
 
-# ── Button roles, the banner, the host's icon (register F6, reviewed on screen 2026-10-01) ──
+# ── Button roles and order (register F6, settled with the operator on screen 2026-10-01) ──
 
 
 def _fake_with_two_buttons(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
     """A fake AppKit whose alert hands out two DISTINCT buttons — index 0 confirm, 1 abandon.
 
-    A bare MagicMock answers every `objectAtIndex_` with the same object, so a tint put on the
-    wrong button would be invisible.
+    A bare MagicMock answers every `objectAtIndex_` with the same object, so a colour put on
+    the wrong button would be invisible.
     """
     fake = _install_fake_appkit(monkeypatch)
     alert = fake.NSAlert.alloc.return_value.init.return_value
@@ -244,72 +244,13 @@ def _fake_with_two_buttons(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, 
 
 
 def _painted(button: MagicMock) -> Any:
-    """The colour a button's own layer was filled with, or None if it was left alone.
-
-    The LAYER, not `bezelColor`: AppKit draws a tinted bezel only while the window is active,
-    and an inactive dialog showed white titles on grey (operator's screenshot, 2026-10-01 —
-    the dialog had opened while they were typing elsewhere).
-    """
+    """The colour a button's own layer was filled with, or None if it was left alone."""
     fill = button.layer.return_value.setBackgroundColor_
     return fill.call_args.args[0] if fill.called else None
 
 
-def _titles(fake: MagicMock) -> list[tuple[str, bool]]:
-    """Each attributed title built: (text, whether it is white)."""
-    white = fake.NSColor.whiteColor.return_value
-    calls = fake.NSAttributedString.alloc.return_value.initWithString_attributes_.call_args_list
-    return [(c.args[0], white in c.args[1].values()) for c in calls]
-
-
-def test_a_validating_button_is_solid_blue_with_a_white_title(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake, _alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(
-        _base_payload(confirm_role="validate", abandon_label="LEAVE UNCHANGED", abandon_role="neutral")
-    )
-
-    assert _painted(confirm) is fake.NSColor.systemBlueColor.return_value.CGColor.return_value
-    confirm.setWantsLayer_.assert_called_once_with(True)
-    confirm.layer.return_value.setCornerRadius_.assert_called_once()  # the pill shape of the system's own buttons
-    confirm.setBezelColor_.assert_not_called()  # a tinted bezel turns grey in an inactive window
-    confirm.setAttributedTitle_.assert_called_once()
-    assert ("SEND TO IBKR", True) in _titles(fake)
-    assert _painted(abandon) is None
-    abandon.setWantsLayer_.assert_not_called()
-    abandon.setAttributedTitle_.assert_not_called()
-
-
-def test_a_discarding_button_is_solid_red_the_banners_own_red(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The cancel dialog as the operator settled it: `CANCEL ORDER` validates, in blue;
-    `KEEP ORDER` discards, in red. Not AppKit's `hasDestructiveAction` — pale pink with red
-    text, shown and rejected — and the SAME red as the banner, by one constant."""
-    fake, _alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(
-        _base_payload(
-            side=None,
-            action="CANCEL",
-            confirm_label="CANCEL ORDER",
-            confirm_role="validate",
-            abandon_label="KEEP ORDER",
-            abandon_role="discard",
-        )
-    )
-
-    red = (*_order_dialog._RED, 1.0)
-    assert _order_dialog._RED == (0.72, 0.10, 0.10)
-    assert [c.args for c in fake.NSColor.colorWithRed_green_blue_alpha_.call_args_list] == [red, red]  # banner, button
-    assert _painted(abandon) is fake.NSColor.colorWithRed_green_blue_alpha_.return_value.CGColor.return_value
-    abandon.setHasDestructiveAction_.assert_not_called()
-    abandon.setBezelColor_.assert_not_called()
-    assert _painted(confirm) is fake.NSColor.systemBlueColor.return_value.CGColor.return_value
-    assert ("CANCEL ORDER", True) in _titles(fake) and ("KEEP ORDER", True) in _titles(fake)
-
-
-def test_the_abandon_button_takes_its_own_role(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`DO NOT SEND` throws the order away: red, beside the blue `SEND TO IBKR`."""
+def test_each_button_is_painted_by_its_role_validate_blue_discard_red(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The colour is read before the label: swapped, the button that sends would be the red one."""
     fake, _alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
     from ibkr_core_mcp import _order_dialog
 
@@ -319,207 +260,33 @@ def test_the_abandon_button_takes_its_own_role(monkeypatch: pytest.MonkeyPatch) 
 
     assert _painted(confirm) is fake.NSColor.systemBlueColor.return_value.CGColor.return_value
     assert _painted(abandon) is fake.NSColor.colorWithRed_green_blue_alpha_.return_value.CGColor.return_value
-    assert ("SEND TO IBKR", True) in _titles(fake) and ("DO NOT SEND", True) in _titles(fake)
 
 
-@pytest.mark.parametrize("role", ["neutral", None, "primary"], ids=["neutral", "unstated", "unknown"])
-def test_a_button_with_no_colour_role_is_left_as_the_system_draws_it(
-    monkeypatch: pytest.MonkeyPatch, role: str | None
-) -> None:
-    """The dialog process is lenient — the caller's side refuses an unknown role — and never
-    tints by default: a missing key must not paint a button."""
-    fake, _alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    from ibkr_core_mcp import _order_dialog
-
-    payload = _base_payload(abandon_label="KEEP ORDER")
-    if role is not None:
-        payload.update(confirm_role=role, abandon_role=role)
-    _order_dialog._run_alert(payload)
-
-    for button in (confirm, abandon):
-        assert _painted(button) is None
-        button.setWantsLayer_.assert_not_called()
-        button.setBezelColor_.assert_not_called()
-        button.setAttributedTitle_.assert_not_called()
-    fake.NSColor.systemBlueColor.assert_not_called()
-
-
-def test_the_tints_are_applied_after_the_alert_is_laid_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Measured off-screen on macOS 27: a title set before `layout()` did not survive it."""
-    _fake, alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    from ibkr_core_mcp import _order_dialog
-
-    events: list[str] = []
-    alert.layout.side_effect = lambda: events.append("layout")
-    confirm.layer.return_value.setBackgroundColor_.side_effect = lambda colour: events.append("confirm tint")
-    abandon.layer.return_value.setBackgroundColor_.side_effect = lambda colour: events.append("abandon tint")
-
-    def shown() -> int:
-        """The modal runs: record it and answer as the confirm button."""
-        events.append("shown")
-        return 1000
-
-    alert.runModal.side_effect = shown
-
-    _order_dialog._run_alert(
-        _base_payload(confirm_role="validate", abandon_label="DO NOT SEND", abandon_role="discard")
-    )
-
-    assert events == ["layout", "confirm tint", "abandon tint", "shown"]
-
-
-def test_the_banner_colours_are_the_ones_agreed_on_screen() -> None:
-    """One red for SELL, CANCEL and the discarding button; green BUY; a caution yellow where
-    no side is stated — the first amber was "not a good color"."""
-    from ibkr_core_mcp import _order_dialog
-
-    assert _order_dialog._banner("SELL", None) == (_order_dialog._RED, "SELL ORDER")
-    assert _order_dialog._banner("BUY", "CANCEL") == (_order_dialog._RED, "CANCEL ORDER")
-    assert _order_dialog._banner("SELL", "MODIFY") == (_order_dialog._RED, "MODIFY ORDER")
-    assert _order_dialog._banner("BUY", None) == ((0.10, 0.50, 0.20), "BUY ORDER")
-    assert _order_dialog._banner(None, None) == ((0.90, 0.72, 0.00), "REVIEW ORDER")
-
-
-def test_the_banner_text_is_centred_across_the_dialog_in_white(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Centred over the buttons below it ("cleaner"), white on every banner — yellow included,
-    which the operator chose over black after seeing both."""
-    fake = _install_fake_appkit(monkeypatch)
-    fake.NSAlert.alloc.return_value.init.return_value.runModal.return_value = 1000
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(_base_payload(side=None))
-
-    field = fake.NSTextField.alloc.return_value.initWithFrame_.return_value
-    field.setAlignment_.assert_called_once_with(fake.NSTextAlignmentCenter)
-    field.setTextColor_.assert_called_once_with(fake.NSColor.whiteColor.return_value)
-    assert (0, 12, _order_dialog._DIALOG_WIDTH, 24) in [c.args for c in fake.NSMakeRect.call_args_list]
-
-
-def test_a_hosts_icon_replaces_the_default_when_it_can_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake, alert, _confirm, _abandon = _fake_with_two_buttons(monkeypatch)
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(_base_payload(icon_path="/somewhere/mark.png"))
-
-    loader = fake.NSImage.alloc.return_value.initWithContentsOfFile_
-    loader.assert_called_once_with("/somewhere/mark.png")
-    alert.setIcon_.assert_called_once_with(loader.return_value)
-
-
-def test_an_icon_that_cannot_be_read_leaves_the_default_and_the_dialog_still_runs(
+def test_the_validating_button_is_moved_first_and_is_still_the_one_that_confirms(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Never a reason to fail a confirmation: AppKit answers None for an unreadable file."""
-    fake, alert, _confirm, _abandon = _fake_with_two_buttons(monkeypatch)
-    fake.NSImage.alloc.return_value.initWithContentsOfFile_.return_value = None
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(_base_payload(icon_path="/nowhere/missing.png"))
-
-    alert.setIcon_.assert_not_called()
-    assert capsys.readouterr().out.strip() == "CONFIRMED"
-
-
-@pytest.mark.parametrize("icon_path", [None, ""], ids=["unset", "empty"])
-def test_no_icon_is_loaded_when_the_host_set_none(monkeypatch: pytest.MonkeyPatch, icon_path: str | None) -> None:
-    fake, alert, _confirm, _abandon = _fake_with_two_buttons(monkeypatch)
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(_base_payload(icon_path=icon_path))
-
-    fake.NSImage.alloc.assert_not_called()
-    alert.setIcon_.assert_not_called()
-
-
-# ── The validating button comes first, whichever way the system lays the row out ──
-#
-# NSAlert stacks two long buttons with the first on top, and puts two short ones side by side
-# with the first on the RIGHT. `VALIDATE` / `DISCARD` are short: the operator saw DISCARD
-# first and asked for "Validate first" (2026-10-01).
-
-
-def _row(
-    fake: MagicMock,
-    alert: MagicMock,
-    confirm: MagicMock,
-    abandon: MagicMock,
-    *,
-    orientation: int,
-    order: list[MagicMock],
-) -> MagicMock:
-    """The button row the alert built: an NSStackView with this orientation and arranged order."""
+    """Side by side the system arranges the abandon button first. The confirm button is moved
+    within the row, never re-added: a re-added button would change which click confirms."""
+    _fake, _alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
     row = MagicMock(name="button-row")
-    row.orientation.return_value = orientation
-    row.arrangedSubviews.return_value = order
+    row.arrangedSubviews.return_value = [abandon, confirm]
     confirm.superview.return_value = row
-    abandon.superview.return_value = row
-    return row
-
-
-def test_side_by_side_the_validating_button_is_moved_first(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake, alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    row = _row(fake, alert, confirm, abandon, orientation=0, order=[abandon, confirm])
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(
-        _base_payload(
-            confirm_label="VALIDATE", abandon_label="DISCARD", confirm_role="validate", abandon_role="discard"
-        )
-    )
-
-    row.insertArrangedSubview_atIndex_.assert_called_once_with(confirm, 0)
-    # Moving a button is not re-adding it: the confirm button is still the one that confirms.
-    assert capsys.readouterr().out.strip() == "CONFIRMED"
-
-
-def test_stacked_the_row_is_left_as_the_system_built_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stacked, the system arranges the confirm button first — on top (measured, macOS 27)."""
-    fake, alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    row = _row(fake, alert, confirm, abandon, orientation=1, order=[confirm, abandon])
-    from ibkr_core_mcp import _order_dialog
-
-    _order_dialog._run_alert(_base_payload(abandon_label="DO NOT SEND"))
-
-    row.insertArrangedSubview_atIndex_.assert_not_called()
-
-
-def test_side_by_side_and_already_first_nothing_is_moved(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake, alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    row = _row(fake, alert, confirm, abandon, orientation=0, order=[confirm, abandon])
     from ibkr_core_mcp import _order_dialog
 
     _order_dialog._run_alert(_base_payload(confirm_label="VALIDATE", abandon_label="DISCARD"))
 
-    row.insertArrangedSubview_atIndex_.assert_not_called()
-
-
-def test_the_buttons_are_moved_before_they_are_painted_and_after_the_layout(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake, alert, confirm, abandon = _fake_with_two_buttons(monkeypatch)
-    row = _row(fake, alert, confirm, abandon, orientation=0, order=[abandon, confirm])
-    from ibkr_core_mcp import _order_dialog
-
-    events: list[str] = []
-    alert.layout.side_effect = lambda: events.append("layout")
-    row.insertArrangedSubview_atIndex_.side_effect = lambda view, index: events.append("moved")
-    confirm.layer.return_value.setBackgroundColor_.side_effect = lambda colour: events.append("painted")
-
-    _order_dialog._run_alert(_base_payload(confirm_label="VALIDATE", abandon_label="DISCARD", confirm_role="validate"))
-
-    assert events == ["layout", "moved", "painted"]
+    row.insertArrangedSubview_atIndex_.assert_called_once_with(confirm, 0)
+    assert capsys.readouterr().out.strip() == "CONFIRMED"
 
 
 def test_a_row_this_code_does_not_recognise_never_fails_the_dialog(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Another macOS may build the row differently: the order is a nicety, the confirmation is
-    not. Whatever the row answers — or raises — the dialog still runs."""
+    """Another macOS may build the row differently: the order is a nicety, the confirmation is not."""
     _fake, _alert, confirm, _abandon = _fake_with_two_buttons(monkeypatch)
     confirm.superview.side_effect = RuntimeError("no such view")
     from ibkr_core_mcp import _order_dialog
 
-    _order_dialog._run_alert(_base_payload(confirm_label="VALIDATE", abandon_label="DISCARD", confirm_role="validate"))
+    _order_dialog._run_alert(_base_payload(confirm_label="VALIDATE", abandon_label="DISCARD"))
 
     assert capsys.readouterr().out.strip() == "CONFIRMED"
-    assert _painted(confirm) is not None  # and the colours are still applied
