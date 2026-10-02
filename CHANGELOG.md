@@ -104,6 +104,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   CME's holiday calendar — its hours differ by product group. `pandas_market_calendars` was
   measured for this and not adopted: its product calendars disagreed with CME's own page on
   Good Friday 2027 and on four of six closing times for 2026-11-27.
+- **`fetch_market_data` says what it fetched, and the cache remembers it (market-data step 1,
+  2026-10-02).** The cache key is the ticker, and a ticker is not a listing: IGV's Mexican bars
+  in MXN were once served as IGV, with nothing on the result to show it, and served again from
+  the cache until someone flushed it. The result now names the listing the resolver chose —
+  IBKR's name, exchange, currency and conid, fields `/trsrv/stocks` and `/iserver/secdef/info`
+  already returned to it, so no new read — and states the end date it used, `(as given)` or
+  `(today, by default)`, since the indicator and backtest tools require that exact value.
+  `GDriveCache.save(..., listing=)` keeps the listing on the manifest row and the new
+  `GDriveCache.entry()` reads it back, so a cache hit names its listing too; a row saved before
+  reads "listing not recorded for this entry". `list_cache` prints it after each entry that has
+  one. The tool's description now says STK only — a futures root such as `ES` resolves to the
+  stock with that ticker. **The cache miss on `add_indicators`, `run_backtest` and
+  `get_analytics` lists the symbol's cached windows** and, with none, names the fetch's end
+  default; "fetch it first" alone had sent the model back to repeat a fetch it had just made
+  under another end date. `_Resolved` gains `name` and `exchange` (None = not read, never a
+  default) and `listing()` / `describe()`.
 
 ### Changed
 - **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time

@@ -325,6 +325,25 @@ def test_save_updates_manifest_entry(drive_cache):
     assert entry["end"] == "2026-05-22"
 
 
+def test_save_records_which_listing_the_bars_came_from_and_entry_reads_it_back(drive_cache):
+    """The key is the ticker, and a ticker is not a listing: IGV's Mexican bars in MXN were
+    served under the same key as the US ETF's. From 2.2.0 `save` keeps the listing the bars
+    were fetched from beside the entry, and `entry()` is the one read of it, so a hit can
+    name what it serves. An entry saved before carries none, and `entry()` says so with
+    the plain row rather than inventing one."""
+    svc = drive_cache._service
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "new-id"}
+    listing = {"conid": 12658199, "name": "ISHARES EXPANDED TECH-SOFTWA", "exchange": "BATS", "currency": "USD"}
+    drive_cache._manifest["IGV_1D_6M_2026-05-21"] = {"symbol": "IGV", "rows": 126, "end": "2026-05-21"}
+
+    drive_cache.save(pd.DataFrame({"close": [1.0]}), "IGV", "1D", "6m", "2026-05-22", listing=listing)
+
+    assert drive_cache.entry("igv", "1d", "6M", "2026-05-22")["listing"] == listing
+    assert "listing" not in drive_cache.entry("IGV", "1D", "6m", "2026-05-21")
+    assert drive_cache.entry("IGV", "1D", "6m", "2026-05-20") is None
+
+
 # ── Drive API call paths: delete() ───────────────────────────────────────────
 
 

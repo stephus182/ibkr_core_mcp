@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ibkr_core_mcp.claude_tools import _today_date
+from ibkr_core_mcp.claude_tools import _TODAY, _today_date
 
 from .conftest import assert_tool_failed, assert_tool_succeeded
 
@@ -52,7 +52,12 @@ def test_list_cache_empty(toolkit):
 def test_list_cache_happy_path(toolkit):
     """Returns one line per cached dataset with key, row count, and date."""
     toolkit._cache.list_cached.return_value = [
-        {"key": "AAPL_1D_1Y_2026-06-30", "rows": 252, "cached_at": "2026-06-30T12:00:00"},
+        {
+            "key": "AAPL_1D_1Y_2026-06-30",
+            "rows": 252,
+            "cached_at": "2026-06-30T12:00:00",
+            "listing": {"conid": 265598, "name": "APPLE INC", "exchange": "NASDAQ", "currency": "USD"},
+        },
         {"key": "MSFT_1D_6M_2026-06-30", "rows": 126, "cached_at": "2026-06-29T08:00:00"},
     ]
     text, fig = toolkit.execute("list_cache", {})
@@ -61,6 +66,11 @@ def test_list_cache_happy_path(toolkit):
     assert "AAPL_1D_1Y_2026-06-30" in text
     assert "252 bars" in text
     assert "2026-06-30" in text
+    # An entry that records its listing names it; one that does not (MSFT) adds nothing.
+    assert (
+        "APPLE INC, NASDAQ, USD, conid 265598" in text
+        and "MSFT_1D_6M_2026-06-30: 126 bars, cached 2026-06-29\n" in text + "\n"
+    )
 
 
 def test_execute_add_indicators(toolkit):
@@ -439,6 +449,81 @@ def test_fetch_market_data_empty_data(toolkit):
     with patch("time.sleep"):
         text, _fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "no data" in text.lower()
+
+
+# ── Market-data batch step 1 (2026-10-02): the result says what was fetched ────────────────
+
+_IGV_BATS = {"conid": 12658199, "name": "ISHARES EXPANDED TECH-SOFTWA", "exchange": "BATS", "currency": "USD"}
+
+
+def _two_daily_bars():
+    return {
+        "data": [{"t": 1_758_000_000_000 + i * 86_400_000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1} for i in range(2)]
+    }
+
+
+def test_the_fetch_result_names_the_listing_and_the_end_date_it_was_given(toolkit):
+    """IGV's Mexican listing in pesos was served as IGV: the result never said which listing,
+    in which currency, the bars came from. It now names the listing the resolver chose — the
+    fields it already had in hand — and hands the same to the cache beside the bars."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_stocks.return_value = _igv_stocks()
+    toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
+
+    assert "ISHARES EXPANDED TECH-SOFTWA" in text and "BATS" in text and "USD" in text and "conid 12658199" in text
+    assert "end 2026-09-30 (as given)" in text, text
+    assert toolkit._cache.save.call_args.kwargs["listing"] == _IGV_BATS
+
+
+def test_a_fetch_without_an_end_date_says_it_used_today(toolkit):
+    """The fetch filled `end` in silently while the indicator and backtest tools require it,
+    so a model that fetched without one could not know which value to pass them next."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m"})
+
+    assert f"end {_TODAY()} (today, by default)" in text, text
+
+
+def test_a_cache_hit_names_the_listing_the_entry_records_or_says_none_is_recorded(toolkit):
+    """A hit is where a wrong listing hid longest — served as a normal hit until flushed."""
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2026-09-01", periods=2))
+
+    toolkit._cache.entry.return_value = {"symbol": "IGV", "listing": _IGV_BATS}
+    named, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
+    toolkit._cache.entry.return_value = {"symbol": "IGV"}
+    unnamed, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
+
+    assert "ISHARES EXPANDED TECH-SOFTWA" in named and "BATS" in named and "USD" in named, named
+    assert "listing not recorded" in unnamed and "ISHARES" not in unnamed, unnamed
+
+
+@pytest.mark.parametrize("tool", ["add_indicators", "run_backtest", "get_analytics"])
+def test_a_cache_miss_lists_what_is_cached_for_the_symbol(toolkit, tool):
+    """ "No cached data … fetch it first" sent the model back to repeat the fetch it had just
+    made under another end date. The miss now lists the symbol's cached windows so the model
+    can match one, and when there is none, says what end the fetch defaults to."""
+    toolkit._cache.check.return_value = False
+    inputs = {"symbol": "IGV", "timeframe": "1D", "period": "6m", "end": "2026-09-30", "code": "df['signal'] = 1"}
+
+    toolkit._cache.list_cached.return_value = [
+        {"key": "IGV_1D_6M_2026-10-02", "symbol": "IGV", "timeframe": "1D", "period": "6m", "end": "2026-10-02"},
+        {"key": "AAPL_1D_6M_2026-10-02", "symbol": "AAPL", "timeframe": "1D", "period": "6m", "end": "2026-10-02"},
+    ]
+    listed, _ = toolkit.execute(tool, inputs)
+    toolkit._cache.list_cached.return_value = []
+    empty, _ = toolkit.execute(tool, inputs)
+
+    assert "No cached data for IGV 1D 6m ending 2026-09-30" in listed, listed
+    assert "IGV 1D 6m ending 2026-10-02" in listed and "AAPL" not in listed, listed
+    assert "Nothing is cached for IGV" in empty and "defaults to today" in empty, empty
 
 
 # ============================================================================

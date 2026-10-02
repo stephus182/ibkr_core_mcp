@@ -75,6 +75,28 @@ class _Resolved(NamedTuple):
     # to reach the user verbatim, while a failure is a diagnostic that can be summarised
     # alongside other symbols'.
     ambiguous: bool = False
+    # IBKR's name for the issuer and the exchange code of the listing, when the resolver
+    # had them in hand (`/trsrv/stocks` returns both beside the conid). None is "not read",
+    # never a default: a result that names its listing is how a wrong one becomes visible
+    # (market-data step 1, 2026-10-02).
+    name: str | None = None
+    exchange: str | None = None
+
+    def listing(self) -> dict[str, Any]:
+        """The resolved listing as the market-data cache records it beside the bars."""
+        return {"conid": self.conid, "name": self.name, "exchange": self.exchange, "currency": self.currency}
+
+    def describe(self) -> str:
+        """`<name>, <exchange>, <currency>, conid <n>` — an unread field says so, never blank."""
+        return _describe_listing(self.listing())
+
+
+def _describe_listing(listing: Mapping[str, Any]) -> str:
+    """One line naming a listing: name, exchange, currency, conid; "unknown" where unread."""
+    name = listing.get("name") or "name unknown"
+    exchange = listing.get("exchange") or "exchange unknown"
+    currency = listing.get("currency") or "currency unknown"
+    return f"{name}, {exchange}, {currency}, conid {listing.get('conid')}"
 
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
@@ -229,9 +251,12 @@ TOOL_DEFINITIONS = [
         "name": "fetch_market_data",
         "capabilities": frozenset({"GOOGLE_DRIVE"}),
         "description": (
-            "Fetch OHLCV historical data for a symbol from IBKR. "
+            "Fetch OHLCV historical data for a STOCK or ETF symbol from IBKR (STK only: a futures "
+            "root such as ES resolves to the stock with that ticker, not the future). "
             "Checks Google Drive cache first; only calls IBKR on a cache miss. "
-            "Returns a summary of the data retrieved."
+            "Returns a summary naming the listing the bars came from (name, exchange, currency, "
+            "conid) and the end date used — pass that same end to add_indicators, run_backtest "
+            "and get_analytics, which require it."
         ),
         "input_schema": {
             "type": "object",
@@ -239,7 +264,10 @@ TOOL_DEFINITIONS = [
                 "symbol": {"type": "string", "description": "Ticker, e.g. AAPL"},
                 "period": {"type": "string", "description": "History period, lowercase units, e.g. '6m', '1y', '30d'"},
                 "bar": {"type": "string", "description": "Bar size, e.g. '1d', '1h'", "default": "1d"},
-                "end": {"type": "string", "description": "End date YYYY-MM-DD, defaults to today"},
+                "end": {
+                    "type": "string",
+                    "description": "End date YYYY-MM-DD; defaults to today, and the result states which was used",
+                },
             },
             "required": ["symbol", "period"],
         },
@@ -2018,17 +2046,30 @@ class ClaudeToolkit:
         /iserver/marketdata/history may return 404/500/empty on the first request
         while IBKR initializes the subscription. Saves the result to the Drive
         cache. Returns a human-readable summary, not the raw bars.
+
+        The summary names what was fetched — the listing (name, exchange, currency, conid)
+        and the end date, stated as given or as today's default — because the cache key is
+        the ticker and a ticker is not a listing: IGV's Mexican bars in MXN were served as
+        IGV with nothing on the result to show it. The listing is saved beside the bars so a
+        later hit names it too (market-data step 1, 2026-10-02).
         """
         symbol = inputs["symbol"].upper()
         period = inputs["period"]
         bar = inputs.get("bar", "1d")
-        end = inputs.get("end", _TODAY())
+        # The end date is a cache-key part the indicator and backtest tools require, so a
+        # default is stated, never silent (market-data step 1, 2026-10-02).
+        end = inputs.get("end") or _TODAY()
+        end_note = f"end {end} (as given)" if inputs.get("end") else f"end {end} (today, by default)"
         timeframe = bar.upper()
 
         if self._cache.check(symbol, timeframe, period, end):
             df = self._cache.load(symbol, timeframe, period, end)
+            # The key is the ticker, not the listing: say which listing the bars came from,
+            # or that this entry was saved before that was recorded — never nothing.
+            listing = (self._cache.entry(symbol, timeframe, period, end) or {}).get("listing")
+            served = _describe_listing(listing) if listing else "listing not recorded for this entry"
             return (
-                f"Cache HIT — loaded {symbol} {timeframe} ({period}) from Drive. "
+                f"Cache HIT — loaded {symbol} {timeframe} ({period}, {end_note}) from Drive — {served}. "
                 f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}.",
                 None,
             )
@@ -2064,6 +2105,7 @@ class ClaudeToolkit:
 
         df = _bars_to_dataframe(raw)
         span = f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
+        fetched = f"Fetched {symbol} {timeframe} ({period}, {end_note}) from IBKR — {resolved.describe()}: {span}."
 
         incomplete = raw.get("ibkr_core_warning")
         if incomplete:
@@ -2078,18 +2120,36 @@ class ClaudeToolkit:
             # (audit finding API-02, 2026-09-16).
             return (
                 f"{incomplete}\n\n"
-                f"Fetched {symbol} {timeframe} ({period}) from IBKR: {span}. "
+                f"{fetched} "
                 f"NOT saved to the Drive cache — storing this under '{period}' would label a "
                 f"partial window as a complete one for every later request. Re-run with a "
                 f"shorter period or a larger bar size to get a cacheable, complete result.",
                 None,
             )
 
-        self._cache.save(df, symbol, timeframe, period, end)
-        return (
-            f"Fetched {symbol} {timeframe} ({period}) from IBKR: {span}. Saved to Drive cache.",
-            None,
-        )
+        self._cache.save(df, symbol, timeframe, period, end, listing=resolved.listing())
+        return f"{fetched} Saved to Drive cache.", None
+
+    def _cache_miss_text(self, symbol: str, timeframe: str, period: str, end: str) -> str:
+        """What a tool that reads the cache says when the key is not there.
+
+        "No cached data … fetch it first" sent the model back to repeat a fetch it had just
+        made under another end date — the fetch defaults `end` to today, these tools require
+        it. So the miss lists the symbol's cached windows to match, and names the default
+        when there are none (market-data step 1, 2026-10-02).
+        """
+        asked = f"{symbol} {timeframe} {period} ending {end}"
+        have = [
+            f"{e.get('symbol')} {e.get('timeframe')} {e.get('period')} ending {e.get('end')}"
+            for e in self._cache.list_cached()
+            if str(e.get("symbol", "")).upper() == symbol.upper()
+        ]
+        if not have:
+            return (
+                f"Nothing is cached for {symbol}. Fetch it first with fetch_market_data, then call this "
+                f"with the same end date it reports (its end defaults to today when none is given)."
+            )
+        return f"No cached data for {asked}. Cached for {symbol}: {'; '.join(have)}. Call again with one of those."
 
     def _check_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return HIT/MISS for a specific symbol/timeframe/period/end combination."""
@@ -2101,12 +2161,17 @@ class ClaudeToolkit:
         """List every dataset in the Drive market-data cache with row count and cache date.
 
         Returns "Drive cache is empty." when nothing is cached. Each line is
-        "<key>: <rows> bars, cached <YYYY-MM-DD>", tolerating missing rows/cached_at.
+        "<key>: <rows> bars, cached <YYYY-MM-DD>", tolerating missing rows/cached_at, followed
+        by the listing the bars came from when the entry records one (saved from 2.2.0 on).
         """
         entries = self._cache.list_cached()
         if not entries:
             return "Drive cache is empty.", None
-        lines = [f"- {e['key']}: {e.get('rows', '?')} bars, cached {e.get('cached_at', '?')[:10]}" for e in entries]
+        lines = [
+            f"- {e['key']}: {e.get('rows', '?')} bars, cached {e.get('cached_at', '?')[:10]}"
+            + (f" — {_describe_listing(e['listing'])}" if e.get("listing") else "")
+            for e in entries
+        ]
         return f"Cached datasets ({len(entries)}):\n" + "\n".join(lines), None
 
     def _get_account_summary(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -2962,7 +3027,7 @@ class ClaudeToolkit:
         period = inputs["period"]
         end = inputs["end"]
         if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached data for {symbol} {timeframe} {period}. Fetch it first with fetch_market_data.", None
+            return self._cache_miss_text(symbol, timeframe, period, end), None
         df = self._cache.load(symbol, timeframe, period, end)
         df = _indicators.add_all(df)
         last = df.iloc[-1]
@@ -2988,7 +3053,7 @@ class ClaudeToolkit:
         code = inputs["code"]
         strategy_name = inputs.get("strategy_name", "")
         if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
+            return self._cache_miss_text(symbol, timeframe, period, end), None
         df = self._cache.load(symbol, timeframe, period, end)
         # Annualise with the bar size actually backtested, the same way _get_analytics
         # does. Hardcoding 252 here made run_backtest and get_analytics disagree by
@@ -3294,7 +3359,7 @@ class ClaudeToolkit:
         period = inputs["period"]
         end = inputs["end"]
         if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
+            return self._cache_miss_text(symbol, timeframe, period, end), None
         df = self._cache.load(symbol, timeframe, period, end)
         returns = df["close"].pct_change().dropna()
         periods = _analytics.periods_for_timeframe(timeframe)
@@ -3669,7 +3734,13 @@ class ClaudeToolkit:
                 conid_int = 0
             if conid_int <= 0:
                 return _Resolved(0, None, f"Contract found for {sym} but conid missing.")
-            return _Resolved(conid_int, self._listing_currency(conid_int), None)
+            return _Resolved(
+                conid_int,
+                self._listing_currency(conid_int),
+                None,
+                name=rows[0]["name"] if rows[0]["name"] != "?" else None,
+                exchange=rows[0]["exchange"] if rows[0]["exchange"] != "?" else None,
+            )
 
         def _describe(rows: list[dict[str, Any]]) -> str:
             return "; ".join(

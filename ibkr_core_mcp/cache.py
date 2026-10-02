@@ -389,8 +389,32 @@ class GDriveCache:
         buf.seek(0)
         return pd.read_parquet(buf)
 
-    def save(self, df: pd.DataFrame, symbol: str, timeframe: str, period: str, end: str) -> None:
+    def entry(self, symbol: str, timeframe: str, period: str, end: str) -> dict[str, Any] | None:
+        """The manifest row for one key, or None: what `save` recorded about those bars.
+
+        The key is the ticker, and a ticker is not a listing — IGV's Mexican bars in MXN
+        sat under the same key as the US ETF's. Since 2.2.0 a row carries `listing`
+        (`{conid, name, exchange, currency}`) when the bars were fetched through the
+        toolkit; a row saved before has none, and a reader says so rather than guessing.
+        """
+        _validate_cache_inputs(symbol, timeframe, period, end)
+        row = self._load_manifest().get(self._cache_key(symbol, timeframe, period, end))
+        return dict(row) if row else None
+
+    def save(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        timeframe: str,
+        period: str,
+        end: str,
+        *,
+        listing: dict[str, Any] | None = None,
+    ) -> None:
         """Upload DataFrame as parquet to Drive and update manifest.
+
+        `listing` names the contract the bars came from (`conid`, `name`, `exchange`,
+        `currency`) and is kept on the manifest row for `entry()`; None records nothing.
 
         Raises:
             CacheWriteError: if the Drive upload fails.
@@ -432,6 +456,8 @@ class GDriveCache:
             "rows": len(df),
             "cached_at": datetime.now(tz=UTC).isoformat(),
         }
+        if listing is not None:
+            self._manifest[key]["listing"] = dict(listing)
         self._save_manifest()
 
     def download_account_files(self, extension: str = ".xml") -> list[tuple[str, bytes]]:

@@ -379,7 +379,9 @@ and an aggregate summary. A missing tradeID means that execution was not importe
 ## Market Data
 
 ### `fetch_market_data`
-Fetch OHLCV historical bars. Checks Google Drive Parquet cache first; calls IBKR only on a miss.
+Fetch OHLCV historical bars for a **stock or ETF** (STK only — the tool has no `sec_type`, so a
+futures root such as `ES` resolves to the stock with that ticker; its description says so since
+2.2.0). Checks Google Drive Parquet cache first; calls IBKR only on a miss.
 Automatically paginates requests exceeding the 1000 data-point limit using `startTime` chunks.
 
 | Parameter | Type | Required | Description |
@@ -387,9 +389,22 @@ Automatically paginates requests exceeding the 1000 data-point limit using `star
 | `symbol` | string | ✅ | Ticker, e.g. `"AAPL"` |
 | `period` | string | ✅ | e.g. `"1Y"`, `"6M"`, `"3M"`, `"1M"`, `"1W"`, `"1D"`. Full range: `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
 | `bar` | string | — | `"1d"` (default), `"1h"`, `"30min"`, `"5min"`, `"1min"` |
-| `end` | string | — | End date `YYYY-MM-DD` (defaults to today) |
+| `end` | string | — | End date `YYYY-MM-DD` (defaults to today; the result states which was used — `end 2026-10-02 (today, by default)` or `(as given)`) |
 
-**Output:** Summary with row count, date range, and last close.
+**Output:** Summary naming **the listing the bars came from** — IBKR's name, exchange, currency
+and conid, from the same `/trsrv/stocks` + `/iserver/secdef/info` reads that resolved it — the
+end date used, the row count and the date range. The listing is saved on the cache manifest row
+beside the bars (`GDriveCache.save(..., listing=)`, read back by `GDriveCache.entry()`), so a
+cache hit names it too; an entry saved before 2.2.0 reads `listing not recorded for this entry`.
+Since 2026-10-02 (market-data step 1): the cache key is the ticker, and a ticker is not a listing —
+IGV's Mexican bars in MXN were served as IGV with nothing on the result to show it. `list_cache`
+prints the recorded listing after each entry that has one.
+
+**A cache miss on `add_indicators`, `run_backtest` or `get_analytics`** lists the symbol's cached
+windows (`No cached data for IGV 1D 6m ending 2026-09-30. Cached for IGV: IGV 1D 6m ending
+2026-10-02 …`) so the caller matches a key instead of re-fetching; with none cached it names the
+fetch's end default. Until 2.2.0 it said only "fetch it first", which sent the model back to repeat
+a fetch it had just made under today's date.
 
 **Note:** Max 1000 data points per request — handled automatically by pagination.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
