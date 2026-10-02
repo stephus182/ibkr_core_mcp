@@ -217,6 +217,43 @@ def test_preview_order_lmt_includes_price(toolkit):
     assert "Order Preview" in text
 
 
+def _preview_with(toolkit, **extra):
+    """Run a stock limit preview with `extra` inputs; return (text, the order body sent or None)."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
+    inputs = {"symbol": "AAPL", "action": "BUY", "quantity": 1, "order_type": "LMT", "limit_price": 150.0}
+    text, _ = toolkit.execute("preview_order", {**inputs, **extra})
+    sent = toolkit._client.get_order_preview.call_args
+    return text, (sent[0][1] if sent else None)
+
+
+def test_a_preview_is_for_the_time_in_force_it_was_asked_for_and_says_so(toolkit):
+    """Register F7: every preview was sent as DAY and said nothing about it, so a GTC order was
+    previewed as a different order. Operator, 2026-10-02: it "needs to be specified and
+    understood by user — day or gtc"."""
+    text, sent = _preview_with(toolkit, tif="GTC")
+    assert sent["tif"] == "GTC"
+    assert "(LMT, GTC)" in text.splitlines()[0]
+    assert "Time in force:" in text and "GTC" in text and "DAY" not in text
+
+
+def test_a_preview_with_no_time_in_force_says_it_is_for_a_day_order(toolkit):
+    """The default is stated, never silent: the reader must not take a DAY preview for the
+    order they have in mind."""
+    text, sent = _preview_with(toolkit)
+    assert sent["tif"] == "DAY"
+    assert "(LMT, DAY)" in text.splitlines()[0]
+    assert "none was given" in text and "DAY order" in text
+
+
+def test_a_preview_refuses_a_time_in_force_ibkr_does_not_list_before_the_network(toolkit):
+    """IBKR's place-order enum is DAY, GTC, IOC, OPG; anything else is refused here, by name."""
+    text, sent = _preview_with(toolkit, tif="CLOSE")
+    assert sent is None
+    assert "Invalid tif 'CLOSE'" in text and "DAY, GTC, IOC, OPG" in text
+
+
 def test_preview_order_mkt_no_price(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]

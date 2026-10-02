@@ -179,12 +179,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **`preview_order` previews the time in force it is asked for, and states it (register F7).**
+  Every what-if was sent with `tif: "DAY"` and the output said nothing, so a GTC order was
+  previewed as a different order than the one proposed. The tool takes `tif` (`DAY`, `GTC`,
+  `IOC`, `OPG` — IBKR's place-order enum; anything else is refused before the request), sends
+  it, names it in the headline (`Order Preview: BUY 1 ES (STP, GTC)`) and on a `Time in force`
+  line. With none given the preview is for a DAY order and says "none was given, so this
+  preview is for a DAY order".
 - **`get_live_orders` no longer tells the model a DAY order is `TIF=CLOSE` (register F8).** The
   order row's `timeInForce` reads `CLOSE` for a DAY order — a value in no IBKR enum, measured on
   stocks (2026-09-24) and on a future (2026-10-02) — and the tool printed it as the TIF, which
   reads as an at-the-close order. Each line now quotes IBKR's own description of the order
   (`orderDesc`, "Buy 1 ES Dec18'26 Stop 8200.00, Day"); the raw field appears under its own name
-  only when the row has no description. Nothing is translated.
+  only when the row has no description. Nothing is translated. (`CLOSE` there never meant an
+  order for the closing auction: the measured orders were plain DAY orders.)
 - **Gate 2 no longer shows `DAY` for a time in force that was not sent (register F10).** A body
   without `tif` rendered `TIF: DAY` on the last screen before the write; it reads
   `— (not sent)`, as an absent order type already did.

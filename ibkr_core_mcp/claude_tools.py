@@ -701,7 +701,9 @@ TOOL_DEFINITIONS = [
         "description": (
             "Preview an order using IBKR's whatif endpoint — returns estimated cost, "
             "commission, margin impact, and buying power effect WITHOUT placing the order. "
-            "Use this before proposing a trade to verify feasibility and cost."
+            "Use this before proposing a trade to verify feasibility and cost. Pass the time in "
+            "force of the order you will propose (tif): the preview is for that order and states "
+            "it; with none it is for a DAY order and says so."
         ),
         "input_schema": {
             "type": "object",
@@ -726,6 +728,11 @@ TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Security type of the symbol: STK (default), IND, BOND, FUT (resolves front month), or CASH (FX pair like 'EUR.USD')",
                     "default": "STK",
+                },
+                "tif": {
+                    "type": "string",
+                    "enum": ["DAY", "GTC", "IOC", "OPG"],
+                    "description": "Time in force of the order being previewed — the one you will propose. Omitted: the preview is for a DAY order and says so.",
                 },
             },
             "required": ["symbol", "action", "quantity"],
@@ -1674,7 +1681,7 @@ def _preview_warning_lines(result: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
+def _format_order_preview(result: Mapping[str, Any], headline: str, time_in_force: str = "") -> str:
     """Render a whatif response for the model, refusal first.
 
     **The refusal is the point.** `error` and `warns` were not read at all until
@@ -1693,6 +1700,8 @@ def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
     Warnings come from `warn` AND `warns` — see `_preview_warning_lines`.
     """
     lines = [headline]
+    if time_in_force:
+        lines.append(f"  {'Time in force:':<22}{time_in_force}")
     error = result.get("error")
     if error:
         lines.append("  ⚠ IBKR REFUSED THIS ORDER — it would NOT be accepted as submitted:")
@@ -3088,6 +3097,12 @@ class ClaudeToolkit:
         # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
         _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
+        # IBKR's place-order enum for `tif` (same source). A preview is for ONE time in force
+        # and says which (register F7): every preview used to be sent as DAY, silently, so a
+        # GTC order was previewed as a different order than the one proposed.
+        _VALID_TIFS = ("DAY", "GTC", "IOC", "OPG")
+        given_tif = inputs.get("tif")
+        tif = str(given_tif).upper() if given_tif else "DAY"
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
         quantity = int(inputs["quantity"])
@@ -3102,6 +3117,8 @@ class ClaudeToolkit:
             return f"Invalid order_type {order_type!r}. Must be one of: {', '.join(sorted(_VALID_ORDER_TYPES))}.", None
         if quantity <= 0:
             return f"Invalid quantity {quantity}. Must be a positive integer.", None
+        if tif not in _VALID_TIFS:
+            return f"Invalid tif {tif!r}. Must be one of: {', '.join(_VALID_TIFS)}.", None
         if order_type == "LMT" and limit_price is None:
             return "order_type='LMT' requires limit_price.", None
         if order_type == "STP" and stop_price is None:
@@ -3126,7 +3143,7 @@ class ClaudeToolkit:
             "orderType": order_type,
             "side": action,
             "quantity": int(quantity),  # int matches place_order convention
-            "tif": "DAY",
+            "tif": tif,
         }
         if sec_type in ("FUT", "FOP"):
             # Required for US Futures and Futures Options — CME Group Rule 536-B
@@ -3153,8 +3170,9 @@ class ClaudeToolkit:
             order["auxPrice"] = float(stop_price)
 
         result = self._client.get_order_preview(account_id, order)
-        headline = f"Order Preview: {action} {quantity} {symbol} ({order_type})"
-        return _format_order_preview(result, headline), None
+        headline = f"Order Preview: {action} {quantity} {symbol} ({order_type}, {tif})"
+        stated = tif if given_tif else "DAY — none was given, so this preview is for a DAY order"
+        return _format_order_preview(result, headline, time_in_force=stated), None
 
     def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return real-time account/model-partition P&L (daily + unrealized), not per-position.

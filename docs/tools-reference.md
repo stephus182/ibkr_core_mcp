@@ -249,9 +249,14 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 | `limit_price` | number | — | Required for `order_type="LMT"`/`"STOP_LIMIT"`; optional price cap for `"MIDPRICE"` |
 | `stop_price` | number | — | Required for `order_type="STP"`/`"STOP_LIMIT"` |
 | `sec_type` | string | — | `"STK"` (default), `"IND"`, `"BOND"`, `"FUT"` (resolves front month), or `"CASH"` (FX pair, e.g. `"EUR.USD"`) |
+| `tif` | string | — | Time in force of the order being previewed: `"DAY"`, `"GTC"`, `"IOC"` or `"OPG"` (IBKR's place-order enum). Omitted: the preview is for a DAY order and says so. |
 
-**Output:** Text summary — `Commission est.`, `Equity with loan`, `Initial margin`,
-`Maintenance margin`, `Buying power effect` (equity change).
+**Output:** Text summary — the headline names the order type and the time in force
+(`Order Preview: BUY 1 ES (STP, GTC)`), then `Time in force` (with "none was given, so this
+preview is for a DAY order" when it was omitted), `Commission est.`, `Equity with loan`,
+`Initial margin`, `Maintenance margin`, `Buying power effect` (equity change). Until 2.2.0
+every preview was sent as DAY and said nothing about it (register F7). Not yet measured live:
+whether IBKR's figures differ between a DAY and a GTC what-if.
 
 **IBKR endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 
