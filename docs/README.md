@@ -34,6 +34,7 @@ Every living document, grouped by what you'd be doing when you need it.
 | [`api-usage-examples.md`](api-usage-examples.md) | Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting, Portfolio Analytics, Claude AI Tool Layer, PineScript Generation) |
 | [`symbology-reference.md`](symbology-reference.md) | How a ticker becomes a contract — why `/trsrv/stocks` + `isUS`, why a ticker is not a unique key, and the ask-don't-guess rule (the IGV/MXN defect) |
 | [`ibkr-api-behaviors-reference.md`](ibkr-api-behaviors-reference.md) | Known IBKR API behaviors, **verified not assumed** — read before diagnosing anything surprising |
+| [`market-data-conventions.md`](market-data-conventions.md) | What a bar is, by asset class (STK, FUT) and source (IBKR, the exchange / the SIPs, TradingView) — stamps, hours, volume, keys — every convention with its dated proof and every official page linked (2026-10-03) |
 
 ### Placing orders (two human gates, no bypass)
 

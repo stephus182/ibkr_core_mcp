@@ -325,7 +325,9 @@ TOOL_DEFINITIONS = [
             "The result names the listing or contract (name, exchange, currency, conid), the end "
             "date and the hours used, and the exact symbol and outside_rth to pass to "
             "add_indicators, run_backtest and get_analytics (a future is cached under its own "
-            "symbol, e.g. ESZ6)."
+            "symbol, e.g. ESZ6). Volume is IBKR's FILTERED historical volume — block trades, "
+            "combos and derivative-priced trades excluded — so it is lower than an exchange's "
+            "reported total where those are large (crude futures), and that gap is not an error."
         ),
         "input_schema": {
             "type": "object",

@@ -143,7 +143,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `_Resolved` gains `root` and `local_symbol`; `_futures_identity` keeps the exchange. Live
   2026-10-03 through the real cache and gateway: ES → ESZ6, CL → CLX6 (NYMEX, both stamp rules
   the same), ESU6 by conid "expired 2026-09-18", the bare `ES` named Eversource, the readers'
-  hours and misses.
+  hours and misses. Witnessed on TradingView's ETH charts by the operator: the Friday bars of
+  ES and CL equal IBKR's Thursday-18:00-stamped bars, four prices each; CL's volume differs
+  (−26%) because IBKR's historical volume is filtered (no blocks, combos or derivative-priced
+  trades) while CME's reported volume includes ClearPort, blocks and EFRP legs — stated in the
+  tool description and documented under Volume in the tools reference. **New
+  `docs/market-data-conventions.md`:** what a bar is, by asset class (STK, FUT) and source
+  (IBKR, the exchange / the SIPs, TradingView) — stamps, hours, volume, keys, expiry — every
+  convention with its dated proof and every official page linked.
 
 ### Changed
 - **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time

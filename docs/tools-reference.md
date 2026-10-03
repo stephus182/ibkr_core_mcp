@@ -432,6 +432,31 @@ library dates the holiday bar wrong (it lists Labor Day as a CME session), and t
 source's fact. Stock and regular-hours series print dates as before (both stamps fall on the
 session's own date). Session dates are market-data vocabulary; they are not Flex trade dates.
 
+**Volume — what a bar's `v` is (operator, 2026-10-03; research of 2026-09-23 indexed in
+`claudia_ui/.firecrawl/market-data/SOURCES.md`; the full convention table by asset class and
+source, with every official page, is `docs/market-data-conventions.md`).** IBKR's historical volume is **filtered**: its
+own page says combo legs, block trades and derivative-priced trades are excluded, so it "will
+be lower than an unfiltered historical data feed"
+(https://www.interactivebrokers.com/docs/tws-api/doc/market-data-historical/historical-data-limitations/historical-data-filtering,
+https://interactivebrokers.github.io/tws-api/historical_bars.html). **Futures have no
+consolidated tape; the exchange is the source**, and CME's daily volume is Globex + Open Outcry +
+ClearPort/PNT (https://www.cmegroup.com/market-data/browse-data/exchange-volume.html), with
+block trades "identified in the daily volume reports published by the Exchange" (Rule 526 §A0,
+https://www.cmegroup.com/rulebook/files/cme-group-Rule-526.pdf) and the futures leg of every
+EFRP reported to and cleared by it
+(https://www.cmegroup.com/education/articles-and-reports/understanding-efrp-transactions). So a
+bar's volume here is the screen volume, and an exchange-sourced chart shows more where
+off-screen trade is large. **Witnessed 2026-10-03 on TradingView's ETH charts:** CLX6's Friday
+bar — four prices identical, volume 242,152 here against 327.9K there (−26%; crude carries
+blocks, EFRPs and TAS); ESZ6's — four prices identical and volume 1,762,000 against 1.76M (ES has
+almost no off-screen share). **US stocks and ETFs** have a consolidated tape — the SIPs, CTA
+(Tapes A/B) and UTP (Tape C) — and IBKR's history draws on all exchanges through the SIP-network
+subscriptions, filtered the same way, so it is not the consolidated figure either; a single
+exchange's site is never a consolidated source. Not established: TradingView's own statement
+of what its NYMEX volume includes (not scraped). **Units:** a future's volume is in contracts
+(ES witnessed 1:1); a stock's is IBKR's `%v`, which its page calls "actual volume/100", and the
+core does not convert it — not yet witnessed against the SIP.
+
 **Output:** Summary naming **the listing or contract the bars came from** — IBKR's name,
 exchange, currency and conid (a future as `E-mini S&P 500 · ESZ6 · DEC26 · expires 2026-12-18,
 CME, USD, conid 515416632`), the security type, the end date and the hours used, the row count
