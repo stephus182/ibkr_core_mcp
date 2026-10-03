@@ -379,32 +379,73 @@ and an aggregate summary. A missing tradeID means that execution was not importe
 ## Market Data
 
 ### `fetch_market_data`
-Fetch OHLCV historical bars for a **stock or ETF** (STK only — the tool has no `sec_type`, so a
-futures root such as `ES` resolves to the stock with that ticker; its description says so since
-2.2.0). Checks Google Drive Parquet cache first; calls IBKR only on a miss.
-Automatically paginates requests exceeding the 1000 data-point limit using `startTime` chunks.
+Fetch OHLCV historical bars for **one listing or one futures contract**. Checks the Google Drive
+Parquet cache first; calls IBKR only on a miss. Automatically paginates requests exceeding the
+1000 data-point limit using `startTime` chunks. Market-data batch steps 1 and 2 (2026-10-02/03;
+operator decisions recorded in claudia_ui's status file; probe evidence in
+`claudia_ui/docs/plans/2026-10-03-outside-rth-probe/`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker, e.g. `"AAPL"` |
-| `period` | string | ✅ | e.g. `"1Y"`, `"6M"`, `"3M"`, `"1M"`, `"1W"`, `"1D"`. Full range: `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
+| `symbol` | string | ✅ | Ticker (`"AAPL"`) or futures root (`"ES"`, `"CL"`) |
+| `sec_type` | string | — | **IB's own code**, the enum listing only what this tool serves: `"STK"` (default — stocks and ETFs; a bare `ES` is the stock with that ticker, stated as `STK (by default)`) or `"FUT"`. `IND`/`CASH` resolve already but have no key rule yet; `OPT`/`FOP` are by conid through `get_option_chain`; the handler refuses any other value itself, naming the offer |
+| `conid` | integer | — | `FUT` only: the exact contract to fetch (from `get_futures`, a position or a trade), skipping the front-month rule. An **expired** contract's history is what it is for — the result says `expired <date>`; IBKR served ESU5 12 months after expiry and refused ESM5 at 15 (2026-09-25), the boundary not established. With `STK` it is refused (a stock resolves to its US listing from the ticker) |
+| `period` | string | ✅ | e.g. `"1y"`, `"6m"`, `"3m"`, `"30d"`. Full range: `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
 | `bar` | string | — | `"1d"` (default), `"1h"`, `"30min"`, `"5min"`, `"1min"` |
 | `end` | string | — | End date `YYYY-MM-DD` (defaults to today; the result states which was used — `ending 2026-10-02 (today, by default)` or `ending 2026-09-30 (as given)`) |
+| `outside_rth` | boolean | — | `false` = regular trading hours as IBKR defines them for the contract; `true` = all hours IBKR has. **Default by type: `STK` false, `FUT` true** (the whole electronic session); the result states which — `regular trading hours (by default for STK)`, `all trading hours (as given)` |
 
-**Output:** Summary naming **the listing the bars came from** — IBKR's name, exchange, currency
-and conid, from the same `/trsrv/stocks` + `/iserver/secdef/info` reads that resolved it — the
-end date used, the row count and the date range. The listing is saved on the cache manifest row
-beside the bars (`GDriveCache.save(..., listing=)`, read back by `GDriveCache.entry()`), so a
-cache hit names it too; an entry saved before 2.2.0 reads `listing not recorded for this entry`.
-Since 2026-10-02 (market-data step 1): the cache key is the ticker, and a ticker is not a listing —
-IGV's Mexican bars in MXN were served as IGV with nothing on the result to show it. `list_cache`
-prints the recorded listing after each entry that has one.
+**What a future means here (operator, 2026-10-03):** a root resolves to the **front-month
+contract** by the rule every tool uses (the earliest contract still tradeable, gaps #58/#71),
+and the bars are **that contract's own** — before it became the front month they are its prints
+as a back month, thinner (ESZ6: 4,719 contracts on 2026-09-02, 1.4 million a month later, after
+the September roll). There is **no continuous series**: IBKR's own page says Continuous Futures
+"can not be used … In the Web API", and TradingView draws one already.
+
+**One contract, one key.** A future is cached under **its own symbol** (`ESZ6_1D_6M_<end>_ALL`),
+never the root, so ESU6 and ESZ6 never share an entry and a roll produces a new key by itself;
+the result tells the model the exact symbol and hours to pass on: *"Saved to Drive cache under
+ESZ6 (all hours) — use symbol ESZ6 and outside_rth=true with add_indicators / run_backtest /
+get_analytics."* A contract IBKR cannot describe (no local symbol from
+`/iserver/contract/{conid}/info`) is not fetched and not cached — the result says so. A futures
+cache **hit** still resolves the root first (one `/trsrv/futures` read plus the contract info,
+cached per conid), so it needs the gateway; a stock hit does not.
+
+**The hours are part of the key** (`…_RTH` / `…_ALL`, written both ways, never implied): IBKR's
+**daily stock bar changed on 20 of 20 days** with `outsideRth` (AAPL 2026-10-02: `333.26 /
+334.54 / 330.61 / 333.69` regular, `331.05 / 334.54 / 330.16 / 333.60` all hours), so the two
+series are different data and a regular-session daily bar cannot be cut from an all-hours one.
+The operator flushed the pre-2.2.0 cache on 2026-10-03; a row without the hours field is listed
+as `legacy (pre-2.2.0 key, unreachable from 2.2.0)` by `list_cache`.
+
+**Stamps are IBKR's and are kept; the reading rule is stated beside them.** An all-hours
+futures bar is stamped **at its session open** — 18:00 ET the evening before for ES and CL: the
+bar stamped Thursday 18:00 is Friday's session, Sunday's stamp is Monday's session, and a CME
+holiday session is **one bar** (Sunday 2026-09-06's stamp covers through Tuesday 09-08's close;
+no Monday bar in either series). The regular-hours futures bar is stamped 09:30 ET on the
+session's own date, and its close is the same print as the all-hours close (ES 19/19, CL 3/3).
+So an all-hours futures series prints its extent as *"126 bars stamped at their open (ET)
+2026-04-05 18:00 → 2026-10-01 18:00 (a bar is stamped at its session open: the one opening
+Thursday 18:00 is Friday's session)"*, `add_indicators` says *"last bar stamped 2026-10-01 18:00
+ET (its session open)"*, and **nothing computes a session date** from a stamp — a calendar
+library dates the holiday bar wrong (it lists Labor Day as a CME session), and the stamp is the
+source's fact. Stock and regular-hours series print dates as before (both stamps fall on the
+session's own date). Session dates are market-data vocabulary; they are not Flex trade dates.
+
+**Output:** Summary naming **the listing or contract the bars came from** — IBKR's name,
+exchange, currency and conid (a future as `E-mini S&P 500 · ESZ6 · DEC26 · expires 2026-12-18,
+CME, USD, conid 515416632`), the security type, the end date and the hours used, the row count
+and the extent. The listing is saved on the cache manifest row beside the bars
+(`GDriveCache.save(..., outside_rth=, listing=)`, read back by `GDriveCache.entry()`; a future's
+row also carries `root`), so a cache hit names it too. `list_cache` prints the hours and the
+recorded listing after each entry.
 
 **A cache miss on `add_indicators`, `run_backtest` or `get_analytics`** lists the symbol's cached
-windows (`No cached data for IGV 1D 6m ending 2026-09-30. Cached for IGV: IGV 1D 6m ending
-2026-10-02 …`) so the caller matches a key instead of re-fetching; with none cached it names the
-fetch's end default. Until 2.2.0 it said only "fetch it first", which sent the model back to repeat
-a fetch it had just made under today's date.
+windows, each with its hours and name (`No cached data for ESZ6 1D 6m ending 2026-10-03 (regular
+hours). Cached for ESZ6: ESZ6 1D 6m ending 2026-10-03 (all hours — E-mini S&P 500 · ESZ6 …)`),
+says when the symbol is also the root of cached contracts, points a bare root at the contracts
+cached for it, and with nothing cached names the fetch's defaults. Until 2.2.0 it said only
+"fetch it first", which sent the model back to repeat a fetch it had just made.
 
 **Note:** Max 1000 data points per request — handled automatically by pagination.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
@@ -605,10 +646,11 @@ Check whether a specific dataset is cached in Google Drive.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** `"HIT"` or `"MISS"`.
 
@@ -629,10 +671,11 @@ Delete a specific dataset from the Google Drive cache. Use when stale data needs
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** Confirmation message.
 
@@ -645,10 +688,11 @@ Load cached market data and compute all technical indicators.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** Current values for: RSI(14), MACD, MACD signal, Bollinger Bands (upper/mid/lower),
 ATR(14), VWAP, Stochastic %K/%D, Williams %R, Volume Ratio.
@@ -670,10 +714,11 @@ Execute a Python strategy in a sandboxed `RestrictedPython` environment.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `code` | string | ✅ | Python code. Must set `df['signal'] = 1` (long), `0` (flat), or `-1` (short) |
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 | `strategy_name` | string | — | Human-readable label |
 
 **Output:** Sharpe ratio, Sortino ratio, total return, max drawdown, trade count, win rate.
@@ -691,10 +736,11 @@ Full analytics report on a cached dataset.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** Total return, CAGR, Sharpe, Sortino, Calmar, max drawdown, max drawdown duration
 (bars), bars analyzed.

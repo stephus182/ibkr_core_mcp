@@ -280,8 +280,17 @@ class GDriveCache:
         """
         self._resolved_cache_folder = ""
 
-    def _cache_key(self, symbol: str, timeframe: str, period: str, end: str) -> str:
-        return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}"
+    def _cache_key(self, symbol: str, timeframe: str, period: str, end: str, outside_rth: bool = False) -> str:
+        """`SYMBOL_BAR_PERIOD_END_RTH|ALL` — the hours are part of the key (2.2.0).
+
+        A regular-hours and an all-hours series of one contract are different data: IBKR's
+        daily stock bar changed on 20 of 20 days with the flag (measured 2026-10-03), so the
+        two must never share an entry. Written both ways, never implied: a key without the
+        suffix was written before 2.2.0 and this format cannot reach it (the operator flushed
+        the cache the same day). For a future the symbol is the contract's own — ESZ6 — so a
+        roll produces a new key by itself.
+        """
+        return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}_{'ALL' if outside_rth else 'RTH'}"
 
     def _filename(self, key: str) -> str:
         return f"{key}.parquet"
@@ -289,7 +298,8 @@ class GDriveCache:
     def _load_manifest(self) -> dict[str, Any]:
         """Load manifest.json from Drive, with a 60-second in-memory TTL.
 
-        The manifest maps cache_key → {symbol, timeframe, period, end, rows, cached_at}.
+        The manifest maps cache_key → {symbol, timeframe, period, end, outside_rth, rows,
+        cached_at, listing?}; a row without `outside_rth` was written before 2.2.0.
         On cache miss (no manifest.json in market_data/ folder), returns {}.
         Uses files.list then files.get_media for download.
         Source: https://developers.google.com/drive/api/reference/rest/v3/files/list
@@ -341,11 +351,11 @@ class GDriveCache:
             metadata = {"name": _MANIFEST_NAME, "parents": [folder_id]}
             svc.files().create(body=metadata, media_body=media, fields="id").execute()
 
-    def check(self, symbol: str, timeframe: str, period: str, end: str) -> bool:
+    def check(self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False) -> bool:
         """Return True if a fresh cached file exists for this key."""
         _validate_cache_inputs(symbol, timeframe, period, end)
         manifest = self._load_manifest()
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         entry = manifest.get(key)
         if not entry:
             return False
@@ -353,7 +363,7 @@ class GDriveCache:
         today = date.today()
         return cached_end >= today - timedelta(days=1) if end == str(today) else True
 
-    def load(self, symbol: str, timeframe: str, period: str, end: str) -> pd.DataFrame:
+    def load(self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False) -> pd.DataFrame:
         """Download and return cached parquet as DataFrame.
 
         Raises:
@@ -361,7 +371,7 @@ class GDriveCache:
             CacheError: on invalid input values (via _validate_cache_inputs).
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         fname = self._filename(key)
         svc = self._get_service()
         try:
@@ -389,7 +399,9 @@ class GDriveCache:
         buf.seek(0)
         return pd.read_parquet(buf)
 
-    def entry(self, symbol: str, timeframe: str, period: str, end: str) -> dict[str, Any] | None:
+    def entry(
+        self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False
+    ) -> dict[str, Any] | None:
         """The manifest row for one key, or None: what `save` recorded about those bars.
 
         The key is the ticker, and a ticker is not a listing — IGV's Mexican bars in MXN
@@ -398,7 +410,7 @@ class GDriveCache:
         toolkit; a row saved before has none, and a reader says so rather than guessing.
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        row = self._load_manifest().get(self._cache_key(symbol, timeframe, period, end))
+        row = self._load_manifest().get(self._cache_key(symbol, timeframe, period, end, outside_rth))
         return dict(row) if row else None
 
     def save(
@@ -409,19 +421,22 @@ class GDriveCache:
         period: str,
         end: str,
         *,
+        outside_rth: bool = False,
         listing: dict[str, Any] | None = None,
     ) -> None:
         """Upload DataFrame as parquet to Drive and update manifest.
 
+        `outside_rth` is part of the key and recorded on the row (see `_cache_key`).
         `listing` names the contract the bars came from (`conid`, `name`, `exchange`,
-        `currency`) and is kept on the manifest row for `entry()`; None records nothing.
+        `currency`, and `root` for a future) and is kept on the manifest row for `entry()`;
+        None records nothing.
 
         Raises:
             CacheWriteError: if the Drive upload fails.
             CacheError: on invalid input values (via _validate_cache_inputs).
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         fname = self._filename(key)
         svc = self._get_service()
         folder_id = self._resolve_cache_folder()
@@ -453,6 +468,7 @@ class GDriveCache:
             "timeframe": timeframe.upper(),
             "period": period,
             "end": end,
+            "outside_rth": outside_rth,
             "rows": len(df),
             "cached_at": datetime.now(tz=UTC).isoformat(),
         }
@@ -681,14 +697,14 @@ class GDriveCache:
         manifest = self._load_manifest()
         return [{"key": k, **v} for k, v in manifest.items()]
 
-    def delete(self, symbol: str, timeframe: str, period: str, end: str) -> None:
+    def delete(self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False) -> None:
         """Remove a cached file and its manifest entry.
 
         Raises:
             CacheError: on invalid input values (via _validate_cache_inputs).
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         fname = self._filename(key)
         svc = self._get_service()
         folder_id = self._resolve_cache_folder()

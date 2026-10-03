@@ -53,24 +53,25 @@ def test_list_cache_happy_path(toolkit):
     """Returns one line per cached dataset with key, row count, and date."""
     toolkit._cache.list_cached.return_value = [
         {
-            "key": "AAPL_1D_1Y_2026-06-30",
+            "key": "AAPL_1D_1Y_2026-06-30_RTH",
             "rows": 252,
             "cached_at": "2026-06-30T12:00:00",
+            "outside_rth": False,
             "listing": {"conid": 265598, "name": "APPLE INC", "exchange": "NASDAQ", "currency": "USD"},
         },
+        {"key": "ESZ6_1D_6M_2026-10-03_ALL", "rows": 126, "cached_at": "2026-10-03T14:00:00", "outside_rth": True},
         {"key": "MSFT_1D_6M_2026-06-30", "rows": 126, "cached_at": "2026-06-29T08:00:00"},
     ]
     text, fig = toolkit.execute("list_cache", {})
     assert fig is None
-    assert "Cached datasets (2)" in text
-    assert "AAPL_1D_1Y_2026-06-30" in text
-    assert "252 bars" in text
-    assert "2026-06-30" in text
-    # An entry that records its listing names it; one that does not (MSFT) adds nothing.
+    assert "Cached datasets (3)" in text
     assert (
-        "APPLE INC, NASDAQ, USD, conid 265598" in text
-        and "MSFT_1D_6M_2026-06-30: 126 bars, cached 2026-06-29\n" in text + "\n"
+        "AAPL_1D_1Y_2026-06-30_RTH: 252 bars, regular hours, cached 2026-06-30 — APPLE INC, NASDAQ, USD, conid 265598"
+        in text
     )
+    assert "ESZ6_1D_6M_2026-10-03_ALL: 126 bars, all hours, cached 2026-10-03" in text
+    # A row written before 2.2.0 has no hours field and no reachable key; it is named as such.
+    assert "MSFT_1D_6M_2026-06-30: 126 bars, legacy (pre-2.2.0 key, unreachable from 2.2.0), cached 2026-06-29" in text
 
 
 def test_execute_add_indicators(toolkit):
@@ -474,7 +475,7 @@ def test_the_fetch_result_names_the_listing_and_the_end_date_it_was_given(toolki
     text, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
 
     assert "ISHARES EXPANDED TECH-SOFTWA" in text and "BATS" in text and "USD" in text and "conid 12658199" in text
-    assert "(6m) ending 2026-09-30 (as given) from IBKR" in text, text
+    assert "(6m) ending 2026-09-30 (as given), regular trading hours (by default for STK), from IBKR" in text, text
     assert toolkit._cache.save.call_args.kwargs["listing"] == _IGV_BATS
 
 
@@ -486,7 +487,9 @@ def test_a_fetch_without_an_end_date_says_it_used_today(toolkit):
 
     text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m"})
 
-    assert f"(6m) ending {_TODAY()} (today, by default) from IBKR" in text, text
+    assert (
+        f"(6m) ending {_TODAY()} (today, by default), regular trading hours (by default for STK), from IBKR" in text
+    ), text
 
 
 def test_a_cache_hit_names_the_listing_the_entry_records_or_says_none_is_recorded(toolkit):
@@ -524,6 +527,160 @@ def test_a_cache_miss_lists_what_is_cached_for_the_symbol(toolkit, tool):
     assert "No cached data for IGV 1D 6m ending 2026-09-30" in listed, listed
     assert "IGV 1D 6m ending 2026-10-02" in listed and "AAPL" not in listed, listed
     assert "Nothing is cached for IGV" in empty and "defaults to today" in empty, empty
+
+
+# ── Market-data batch step 2 (2026-10-03): security type, one contract per key, the hours ────
+#
+# Probe evidence (claudia_ui/docs/plans/2026-10-03-outside-rth-probe/): IBKR's daily stock bar
+# changes with outsideRth on 20 of 20 days; a futures all-hours daily bar is stamped at its
+# session OPEN (18:00 ET the evening before; Sunday's stamp is Monday's session); the day
+# session is stamped 09:30 ET on the session's own date.
+
+
+def _es_contract_info(local_symbol="ESZ6", month="202612", maturity=None, exchange="CME"):
+    return {
+        "local_symbol": local_symbol,
+        "contract_month": month,
+        "maturity_date": maturity if maturity is not None else _dated(76),
+        "company_name": "E-mini S&P 500",
+        "multiplier": "50",
+        "exchange": exchange,
+        "currency": "USD",
+    }
+
+
+def _front_month_es(toolkit):
+    """Two ES rows: one past its last trade date, one live — the resolver must take the live one."""
+    expired, live = _dated(-15), _dated(76)
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 649180671, "expirationDate": expired, "ltd": expired},
+        {"symbol": "ES", "conid": 515416632, "expirationDate": live, "ltd": live},
+    ]
+    toolkit._client.get_contract_info.return_value = _es_contract_info()
+    toolkit._client.get_secdef_info.return_value = [{"conid": 515416632, "currency": "USD"}]
+
+
+def test_a_futures_root_fetches_the_front_month_and_caches_it_under_the_contracts_own_symbol(toolkit):
+    """Point 1 and 2 of step 2: `ES` means the front-month contract's own bars, named in IB's
+    strings, cached under its local symbol so ESU6 and ESZ6 never share an entry and a roll
+    produces a new key by itself; all hours by default for a future, stated."""
+    _front_month_es(toolkit)
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT"})
+
+    toolkit._cache.check.assert_called_once_with("ESZ6", "1D", "6m", _TODAY(), outside_rth=True)
+    toolkit._client.get_market_history_paginated.assert_called_once_with(
+        515416632, period="6m", bar="1d", outside_rth=True
+    )
+    saved = toolkit._cache.save.call_args
+    assert saved.args[1] == "ESZ6" and saved.kwargs["outside_rth"] is True
+    assert saved.kwargs["listing"] == {
+        "conid": 515416632,
+        "name": f"E-mini S&P 500 · ESZ6 · DEC26 · expires {_iso(_dated(76))}",
+        "exchange": "CME",
+        "currency": "USD",
+        "root": "ES",
+    }
+    assert "Fetched ESZ6 FUT 1D (6m)" in text and "all trading hours (by default for FUT)" in text, text
+    assert "E-mini S&P 500 · ESZ6 · DEC26" in text and "CME, USD, conid 515416632" in text, text
+    assert "under ESZ6" in text and "outside_rth=true" in text and "ESU6" not in text, text
+
+
+def _iso(yyyymmdd: int) -> str:
+    t = str(yyyymmdd)
+    return f"{t[:4]}-{t[4:6]}-{t[6:]}"
+
+
+def test_a_pinned_conid_fetches_that_contract_and_an_expired_one_says_so(toolkit):
+    """Point 1's addition: `conid` pins one contract, skipping the front-month rule — an expired
+    contract's history is exactly what it is for, and the result says "expired". IBKR serves
+    it for about a year (ESU5 at 12 months, ESM5 refused at 15 — 2026-09-25)."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_contract_info.return_value = _es_contract_info("ESU6", "202609", _dated(-15))
+    toolkit._client.get_secdef_info.return_value = [{"conid": 649180671, "currency": "USD"}]
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute(
+        "fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT", "conid": 649180671}
+    )
+
+    toolkit._client.get_futures.assert_not_called()
+    toolkit._client.get_contract_info.assert_called_with(649180671)
+    assert toolkit._cache.save.call_args.args[1] == "ESU6"
+    assert f"ESU6 · SEP26 · expired {_iso(_dated(-15))}" in text, text
+
+
+def test_a_contract_ibkr_cannot_describe_fetches_nothing(toolkit):
+    """Fail closed: no local symbol from /iserver/contract/{conid}/info means no key to cache
+    under and no name to show — nothing is fetched, nothing is written."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_contract_info.return_value = {"company_name": "E-mini S&P 500"}
+
+    text, _ = toolkit.execute(
+        "fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT", "conid": 649180671}
+    )
+
+    toolkit._client.get_market_history_paginated.assert_not_called()
+    toolkit._cache.save.assert_not_called()
+    assert "could not" in text.lower() and "649180671" in text and "nothing" in text.lower(), text
+
+
+def test_the_hours_are_stated_by_default_and_as_given_and_reach_the_key(toolkit):
+    """Point 4: STK defaults to regular hours, every result says which hours and why."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    default, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m"})
+    toolkit._client.get_market_history_paginated.assert_called_with(265598, period="6m", bar="1d", outside_rth=False)
+    assert "AAPL STK (by default)" in default and "regular trading hours (by default for STK)" in default, default
+    assert toolkit._cache.save.call_args.kwargs["outside_rth"] is False
+
+    given, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m", "outside_rth": True})
+    toolkit._client.get_market_history_paginated.assert_called_with(265598, period="6m", bar="1d", outside_rth=True)
+    assert "all trading hours (as given)" in given and "under AAPL (all hours)" in given, given
+    assert toolkit._cache.save.call_args.kwargs["outside_rth"] is True
+
+
+@pytest.mark.parametrize(
+    "inputs, expect",
+    [
+        ({"symbol": "SPX", "period": "6m", "sec_type": "IND"}, "STK, FUT"),
+        ({"symbol": "IGV", "period": "6m", "conid": 325209548}, "futures contract"),
+    ],
+    ids=["type-not-offered", "conid-on-a-stock"],
+)
+def test_a_type_outside_the_offer_and_a_conid_on_a_stock_are_refused_before_any_read(toolkit, inputs, expect):
+    """Point 3: the enum is IB's codes and lists only what this tool serves; the handler
+    refuses the rest itself, since the schema is not enforced server-side."""
+    text, _ = toolkit.execute("fetch_market_data", inputs)
+    assert expect in text, text
+    toolkit._client.get_stocks.assert_not_called()
+    toolkit._client.get_futures.assert_not_called()
+    toolkit._cache.check.assert_not_called()
+
+
+def test_all_hours_futures_bars_are_printed_as_opens_in_et_with_the_reading_rule(toolkit):
+    """Point 4, the trap: an all-hours futures daily bar is stamped at its session open, 18:00 ET
+    the evening before. The stamp is IBKR's and is kept; the result prints it as an open, in
+    ET, with the rule for reading it — never a bare date one day early."""
+    _front_month_es(toolkit)
+    toolkit._cache.check.return_value = False
+    # Thursday 2026-10-01 22:00 UTC = 18:00 ET: the open of Friday's session.
+    thursday_open_ms = 1_790_892_000_000
+    toolkit._client.get_market_history_paginated.return_value = {
+        "data": [
+            {"t": thursday_open_ms - 86_400_000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1},
+            {"t": thursday_open_ms, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1},
+        ]
+    }
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT"})
+
+    assert "stamped at their open (ET)" in text and "2026-10-01 18:00" in text, text
+    assert "Thursday 18:00 is Friday's session" in text, text
+    assert "2026-10-02" not in text, text
 
 
 # ============================================================================
@@ -857,7 +1014,7 @@ def test_delete_cache_happy_path(toolkit):
     assert fig is None
     assert "Deleted" in text
     assert "AAPL" in text
-    toolkit._cache.delete.assert_called_once_with("AAPL", "1D", "1Y", "2026-05-22")
+    toolkit._cache.delete.assert_called_once_with("AAPL", "1D", "1Y", "2026-05-22", outside_rth=False)
 
 
 def test_delete_cache_miss(toolkit):
@@ -1116,6 +1273,7 @@ def test_get_futures_names_the_front_month_in_ibkr_terms(toolkit):
         "maturity_date": "20260918",
         "company_name": "E-mini S&P 500",
         "multiplier": "50",
+        "exchange": "CME",
     }
     text, _fig = toolkit.execute("get_futures", {"symbols": ["ES"]})
     front, back = json.loads(text)
@@ -1124,6 +1282,7 @@ def test_get_futures_names_the_front_month_in_ibkr_terms(toolkit):
         "month": "SEP26",
         "expires": "2026-09-18",
         "name": "E-mini S&P 500",
+        "exchange": "CME",  # kept since 2.2.0 — the market-data result names the contract's exchange
         "multiplier": 50.0,
     }
     assert "_contract" not in back
@@ -1355,3 +1514,105 @@ def test_get_trading_schedule_description_does_not_promise_a_next_trading_date(t
     assert "next trading date" not in tool["description"].lower()
     assert "default: SMART" not in tool["description"]
     assert "SMART" in tool["description"], "the SMART trap should be named, not silently dropped"
+
+
+@pytest.mark.parametrize("tool", ["add_indicators", "run_backtest", "get_analytics"])
+def test_the_readers_take_the_hours_and_state_them(toolkit, tool):
+    """Step 2: the hours are a key part, so each cache reader takes `outside_rth` (default
+    false — it has no security type to default from) and says which hours it read."""
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.entry.return_value = {"outside_rth": True}
+    toolkit._cache.load.return_value = pd.DataFrame(
+        {"open": 1.0, "high": 1.0, "low": 1.0, "close": [1.0 + i / 100 for i in range(60)], "volume": 1.0},
+        index=pd.date_range("2026-07-01", periods=60, freq="B"),
+    )
+    base = {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03", "code": "df['signal'] = 1"}
+
+    given, _ = toolkit.execute(tool, {**base, "outside_rth": True})
+    toolkit._cache.check.assert_called_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+    toolkit._cache.load.assert_called_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+    assert "all trading hours (as given)" in given, given
+
+    default, _ = toolkit.execute(tool, base)
+    toolkit._cache.check.assert_called_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=False)
+    assert "regular trading hours (by default)" in default, default
+
+
+def test_add_indicators_prints_an_all_hours_futures_last_bar_as_its_open_in_et(toolkit):
+    """The stamp is IBKR's session open; "last bar: 2026-10-01" would read as Thursday's bar
+    when it is Friday's session. The row knows the series is an all-hours future."""
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.entry.return_value = {"outside_rth": True, "listing": {"root": "ES", "conid": 515416632}}
+    idx = pd.to_datetime(
+        [1_790_892_000_000 - 86_400_000 * i for i in range(59, -1, -1)], unit="ms"
+    )  # last = Thu 18:00 ET
+    toolkit._cache.load.return_value = pd.DataFrame(
+        {"open": 1.0, "high": 1.0, "low": 1.0, "close": [1.0 + i / 100 for i in range(60)], "volume": 1.0}, index=idx
+    )
+    text, _ = toolkit.execute(
+        "add_indicators",
+        {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03", "outside_rth": True},
+    )
+    assert "last bar stamped 2026-10-01 18:00 ET (its session open)" in text, text
+    assert "last bar: 2026-10-01" not in text
+
+
+def test_a_cache_miss_names_the_hours_and_points_a_root_at_its_cached_contracts(toolkit):
+    """A miss under the wrong hours lists what IS cached with its hours; a root (`ES`) is not a
+    cache symbol, and the miss points at the contracts cached for it rather than saying nothing."""
+    toolkit._cache.check.return_value = False
+    toolkit._cache.list_cached.return_value = [
+        {
+            "key": "ESZ6_1D_6M_2026-10-03_ALL",
+            "symbol": "ESZ6",
+            "timeframe": "1D",
+            "period": "6m",
+            "end": "2026-10-03",
+            "outside_rth": True,
+            "listing": {"root": "ES", "conid": 515416632},
+        },
+    ]
+    wrong_hours, _ = toolkit.execute(
+        "add_indicators", {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03"}
+    )
+    assert "No cached data for ESZ6 1D 6m ending 2026-10-03 (regular hours)" in wrong_hours, wrong_hours
+    assert "ESZ6 1D 6m ending 2026-10-03 (all hours)" in wrong_hours, wrong_hours
+
+    root, _ = toolkit.execute(
+        "add_indicators", {"symbol": "ES", "timeframe": "1D", "period": "6m", "end": "2026-10-03"}
+    )
+    assert "Nothing is cached under ES" in root and "root" in root, root
+    assert "ESZ6 1D 6m ending 2026-10-03 (all hours" in root, root
+
+    # Live 2026-10-03: `ES` the stock was cached too, and the miss listed it without its name
+    # and without a word about the contracts cached for the root. Every window is named, and
+    # a symbol that is also a root of cached contracts says so.
+    toolkit._cache.list_cached.return_value.append(
+        {
+            "key": "ES_1D_3M_2026-10-03_RTH",
+            "symbol": "ES",
+            "timeframe": "1D",
+            "period": "3m",
+            "end": "2026-10-03",
+            "outside_rth": False,
+            "listing": {"name": "EVERSOURCE ENERGY", "conid": 182880167},
+        },
+    )
+    both, _ = toolkit.execute(
+        "add_indicators", {"symbol": "ES", "timeframe": "1D", "period": "6m", "end": "2026-10-03"}
+    )
+    assert "ES 1D 3m ending 2026-10-03 (regular hours — EVERSOURCE ENERGY)" in both, both
+    assert "ES is also the root of cached contracts: ESZ6 1D 6m ending 2026-10-03 (all hours" in both, both
+
+
+def test_check_cache_takes_the_hours(toolkit):
+    toolkit._cache.check.return_value = True
+    text, _ = toolkit.execute(
+        "check_cache", {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03", "outside_rth": True}
+    )
+    toolkit._cache.check.assert_called_once_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+    assert "HIT" in text and "all hours" in text, text

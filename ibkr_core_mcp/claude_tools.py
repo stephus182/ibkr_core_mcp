@@ -81,14 +81,74 @@ class _Resolved(NamedTuple):
     # (market-data step 1, 2026-10-02).
     name: str | None = None
     exchange: str | None = None
+    # A future only: the root the contract was asked by (`ES`) and IB's own symbol for the
+    # contract (`ESZ6`), which is the market-data cache key — one contract, one key.
+    root: str | None = None
+    local_symbol: str | None = None
 
     def listing(self) -> dict[str, Any]:
         """The resolved listing as the market-data cache records it beside the bars."""
-        return {"conid": self.conid, "name": self.name, "exchange": self.exchange, "currency": self.currency}
+        listing = {"conid": self.conid, "name": self.name, "exchange": self.exchange, "currency": self.currency}
+        if self.root:
+            listing["root"] = self.root
+        return listing
 
     def describe(self) -> str:
         """`<name>, <exchange>, <currency>, conid <n>` — an unread field says so, never blank."""
         return _describe_listing(self.listing())
+
+
+# The security types fetch_market_data serves, in IB's codes — grown per type, each with its key
+# rule and a live read (operator, 2026-10-03). IND/CASH resolve already but have no key rule.
+_FETCH_SEC_TYPES = ("STK", "FUT")
+
+
+def _hours(inputs: Mapping[str, Any], *, default: bool, why: str) -> tuple[bool, str, str]:
+    """`outside_rth` as asked or defaulted, with the words every result uses for it.
+
+    Returns (outside_rth, "all trading hours (as given)" / "regular trading hours (<why>)",
+    "all hours" / "regular hours"). A default is stated, never silent (operator 2026-10-02):
+    the fetch defaults by security type, the cache readers to regular hours.
+    """
+    given = inputs.get("outside_rth")
+    outside = default if given is None else bool(given)
+    long = ("all" if outside else "regular") + " trading hours" + (f" ({why})" if given is None else " (as given)")
+    return outside, long, "all hours" if outside else "regular hours"
+
+
+def _is_all_hours_future(row: Mapping[str, Any] | None) -> bool:
+    """A manifest row for an all-hours futures series: its stamps are session opens."""
+    if not row:
+        return False
+    return bool(row.get("outside_rth")) and bool((row.get("listing") or {}).get("root"))
+
+
+def _last_bar_text(df: pd.DataFrame, row: Mapping[str, Any] | None) -> str:
+    """`last bar: 2026-10-02` — or, for an all-hours futures series, the stamp as the session
+    open it is, in ET, so Friday's session is not read as a Thursday bar."""
+    if not _is_all_hours_future(row):
+        return f"last bar: {df.index[-1].date()}"
+    stamp = df.index[-1]
+    stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+    return f"last bar stamped {stamp.tz_convert(_ET):%Y-%m-%d %H:%M} ET (its session open)"
+
+
+def _bar_unit(bar: str) -> str:
+    """`1d` → `d`, `5min` → `min`, `1m` → `m` (a month, in IBKR's bar grammar)."""
+    return bar.lower().lstrip("0123456789")
+
+
+def _span_text(df: pd.DataFrame, bar: str, futures_all_hours: bool) -> str:
+    """How a series' extent is printed: dates, or — for an all-hours futures series — IBKR's
+    stamps as session opens in ET with the reading rule, so the bar opening Thursday 18:00 is
+    never read as a Thursday bar. The stamps are not modified (operator, 2026-10-03)."""
+    if not futures_all_hours:
+        return f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
+    opens = df.index.tz_localize("UTC").tz_convert(_ET) if df.index.tz is None else df.index.tz_convert(_ET)
+    text = f"{len(df)} bars stamped at their open (ET) {opens[0]:%Y-%m-%d %H:%M} → {opens[-1]:%Y-%m-%d %H:%M}"
+    if _bar_unit(bar) in ("d", "w", "m"):
+        text += " (a bar is stamped at its session open: the one opening Thursday 18:00 is Friday's session)"
+    return text
 
 
 def _describe_listing(listing: Mapping[str, Any]) -> str:
@@ -251,22 +311,44 @@ TOOL_DEFINITIONS = [
         "name": "fetch_market_data",
         "capabilities": frozenset({"GOOGLE_DRIVE"}),
         "description": (
-            "Fetch OHLCV historical data for a STOCK or ETF symbol from IBKR (STK only: a futures "
-            "root such as ES resolves to the stock with that ticker, not the future). "
-            "Checks Google Drive cache first; only calls IBKR on a cache miss. "
-            "Returns a summary naming the listing the bars came from (name, exchange, currency, "
-            "conid) and the end date used — pass that same end to add_indicators, run_backtest "
-            "and get_analytics, which require it."
+            "Fetch OHLCV historical bars from IBKR for one listing or one futures contract. "
+            "sec_type is IB's own code: STK (stocks and ETFs; the default — a bare 'ES' is the "
+            "stock with that ticker) or FUT (a futures root such as ES or CL resolves to the "
+            "front-month contract, the earliest still tradeable; pass conid to pin one contract, "
+            "an expired one included — IBKR serves its history for about a year after expiry). "
+            "A future's bars are that contract's own: before it became the front month they are "
+            "its prints as a back month, thinner; there is no continuous series. "
+            "outside_rth: regular hours only (false) or all hours IBKR has for the contract (true); "
+            "default by type — STK false, FUT true (the whole electronic session). An all-hours "
+            "futures bar is stamped at its session OPEN: the daily bar opening Thursday 18:00 ET "
+            "is Friday's session. Checks the Google Drive cache first; calls IBKR on a miss. "
+            "The result names the listing or contract (name, exchange, currency, conid), the end "
+            "date and the hours used, and the exact symbol and outside_rth to pass to "
+            "add_indicators, run_backtest and get_analytics (a future is cached under its own "
+            "symbol, e.g. ESZ6)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker, e.g. AAPL"},
+                "symbol": {"type": "string", "description": "Ticker (AAPL) or futures root (ES)"},
+                "sec_type": {
+                    "type": "string",
+                    "enum": ["STK", "FUT"],
+                    "description": "IB security type: STK (default, stocks and ETFs) or FUT (futures)",
+                },
+                "conid": {
+                    "type": "integer",
+                    "description": "FUT only: the exact contract to fetch (from get_futures, a position or a trade); skips the front-month rule",
+                },
                 "period": {"type": "string", "description": "History period, lowercase units, e.g. '6m', '1y', '30d'"},
                 "bar": {"type": "string", "description": "Bar size, e.g. '1d', '1h'", "default": "1d"},
                 "end": {
                     "type": "string",
                     "description": "End date YYYY-MM-DD; defaults to today, and the result states which was used",
+                },
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "true = all hours IBKR has for the contract; false = regular trading hours only. Default by sec_type: STK false, FUT true; the result states which was used",
                 },
             },
             "required": ["symbol", "period"],
@@ -283,10 +365,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -630,10 +719,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -651,10 +747,17 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "code": {"type": "string", "description": "Python strategy code string"},
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
                 "strategy_name": {"type": "string", "description": "Human-readable name", "default": ""},
             },
             "required": ["code", "symbol", "timeframe", "period", "end"],
@@ -715,10 +818,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -1121,10 +1231,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The cached symbol — a ticker (AAPL) or a futures contract's own symbol (ESZ6)",
+                },
                 "timeframe": {"type": "string", "description": "Bar size, e.g. 1D, 1H"},
                 "period": {"type": "string", "description": "Lookback period, e.g. 1Y, 6M"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours of the entry to delete: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -2038,45 +2155,82 @@ class ClaudeToolkit:
         return [a.get("accountId", a.get("id", "")) for a in accounts], None
 
     def _fetch_market_data(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Fetch OHLCV bars for a symbol, Drive-cache first, IBKR on miss.
+        """Fetch OHLCV bars for one listing or one futures contract, Drive-cache first, IBKR on miss.
 
-        On a cache hit, loads and summarizes the parquet. On a miss, resolves the
-        conid (STK only — no sec_type parameter on this tool), then calls
-        get_market_history_paginated with up to 3 warmup retries (2s apart) because
-        /iserver/marketdata/history may return 404/500/empty on the first request
-        while IBKR initializes the subscription. Saves the result to the Drive
-        cache. Returns a human-readable summary, not the raw bars.
+        Market-data batch (2026-10-02/03, operator decisions in claudia_ui's status file):
 
-        The summary names what was fetched — the listing (name, exchange, currency, conid)
-        and the end date, stated as given or as today's default — because the cache key is
-        the ticker and a ticker is not a listing: IGV's Mexican bars in MXN were served as
-        IGV with nothing on the result to show it. The listing is saved beside the bars so a
-        later hit names it too (market-data step 1, 2026-10-02).
+        - `sec_type` is IB's code, STK (default, stated) or FUT; the handler refuses anything
+          else itself, since the schema enum is not enforced server-side.
+        - FUT: a root resolves to the front month by the rule every tool uses (earliest contract
+          still tradeable, gap #58/#71), or `conid` pins one contract, expired ones included —
+          their history is what the handle is for. The bars are that contract's own (thin before
+          it was the front month); there is no continuous series (IBKR: TWS API only).
+        - One contract, one key: a future is cached under its local symbol (ESZ6), so ESU6 and
+          ESZ6 never share an entry and a roll produces a new key by itself. The contract must be
+          nameable (local symbol from /iserver/contract/{conid}/info) or nothing is fetched.
+        - `outside_rth` defaults by type — STK false, FUT true — and is part of the key: IBKR's
+          daily stock bar changed on 20 of 20 days with the flag (probe 2026-10-03).
+        - Stamps are IBKR's and are kept. An all-hours futures bar is stamped at its session
+          OPEN (18:00 ET the evening before for ES; Sunday's stamp is Monday's session; a CME
+          holiday session is one bar), so such a series prints its stamps as opens, in ET, with
+          the reading rule — never a bare date one day early. Nothing computes a session date.
+
+        On a miss the history is read with up to 3 warmup retries (2s apart) because
+        /iserver/marketdata/history may return 404/500/empty on the first request while IBKR
+        initializes the subscription. Returns a human-readable summary, not the raw bars.
         """
         symbol = inputs["symbol"].upper()
+        sec_type = str(inputs.get("sec_type") or "STK").upper()
+        if sec_type not in _FETCH_SEC_TYPES:
+            return (
+                f"sec_type {sec_type!r} is not offered by fetch_market_data; offered (IB codes): "
+                f"{', '.join(_FETCH_SEC_TYPES)}. Nothing was read.",
+                None,
+            )
+        pinned = inputs.get("conid")
+        if pinned is not None and sec_type != "FUT":
+            return (
+                "conid pins a futures contract (sec_type FUT); a stock resolves to its US listing from "
+                "the ticker alone. Nothing was read.",
+                None,
+            )
         period = inputs["period"]
         bar = inputs.get("bar", "1d")
-        # The end date is a cache-key part the indicator and backtest tools require, so a
-        # default is stated, never silent (market-data step 1, 2026-10-02).
+        # The end date and the hours are key parts the indicator and backtest tools require, so
+        # a default is stated, never silent.
         end = inputs.get("end") or _TODAY()
         end_note = f"ending {end} (as given)" if inputs.get("end") else f"ending {end} (today, by default)"
+        outside, hours_note, hours_word = _hours(inputs, default=sec_type == "FUT", why=f"by default for {sec_type}")
         timeframe = bar.upper()
 
-        if self._cache.check(symbol, timeframe, period, end):
-            df = self._cache.load(symbol, timeframe, period, end)
-            # The key is the ticker, not the listing: say which listing the bars came from,
-            # or that this entry was saved before that was recorded — never nothing.
-            listing = (self._cache.entry(symbol, timeframe, period, end) or {}).get("listing")
-            served = _describe_listing(listing) if listing else "listing not recorded for this entry"
+        resolved: _Resolved | None = None
+        if sec_type == "FUT":
+            resolved = self._futures_listing(symbol, pinned)
+            if resolved.error:
+                return resolved.error, None
+            cache_symbol = str(resolved.local_symbol)
+            label = f"{cache_symbol} FUT"
+        else:
+            cache_symbol = symbol
+            label = f"{symbol} STK" + (" (by default)" if not inputs.get("sec_type") else "")
+        futures_all_hours = sec_type == "FUT" and outside
+
+        if self._cache.check(cache_symbol, timeframe, period, end, outside_rth=outside):
+            df = self._cache.load(cache_symbol, timeframe, period, end, outside_rth=outside)
+            # The key is the symbol, not the listing: say which listing the bars came from, or
+            # that this entry was saved before that was recorded — never nothing.
+            row = self._cache.entry(cache_symbol, timeframe, period, end, outside_rth=outside) or {}
+            served = _describe_listing(row["listing"]) if row.get("listing") else "listing not recorded for this entry"
             return (
-                f"Cache HIT — loaded {symbol} {timeframe} ({period}) {end_note} from Drive — {served}. "
-                f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}.",
+                f"Cache HIT — loaded {label} {timeframe} ({period}) {end_note}, {hours_note}, from Drive — {served}. "
+                f"{_span_text(df, bar, futures_all_hours)}.",
                 None,
             )
 
-        resolved = self._resolve_snapshot_conid(symbol, "STK", None)
-        if resolved.error:
-            return f"{resolved.error} Is IBKR connected?", None
+        if resolved is None:
+            resolved = self._resolve_snapshot_conid(symbol, "STK", None)
+            if resolved.error:
+                return f"{resolved.error} Is IBKR connected?", None
         conid = resolved.conid
 
         # iserver/marketdata/history first-call behavior: IBKR may return 404 or 500
@@ -2089,7 +2243,7 @@ class ClaudeToolkit:
         raw = None
         for attempt in range(3):
             try:
-                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar)
+                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar, outside_rth=outside)
                 if raw and raw.get("data"):
                     break
             except IBKRAPIError:
@@ -2098,20 +2252,20 @@ class ClaudeToolkit:
                 time.sleep(2)
         if not raw or not raw.get("data"):
             return (
-                f"IBKR returned no data for {symbol} (period={period}, bar={bar}) "
+                f"IBKR returned no data for {label} (period={period}, bar={bar}, {hours_note}) "
                 f"after 3 attempts. Check that the IBKR gateway is authenticated and "
                 f"that the period/bar combination is valid for this instrument."
             ), None
 
         df = _bars_to_dataframe(raw)
-        span = f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
-        fetched = f"Fetched {symbol} {timeframe} ({period}) {end_note} from IBKR — {resolved.describe()}: {span}."
+        span = _span_text(df, bar, futures_all_hours)
+        fetched = f"Fetched {label} {timeframe} ({period}) {end_note}, {hours_note}, from IBKR — {resolved.describe()}: {span}."
 
         incomplete = raw.get("ibkr_core_warning")
         if incomplete:
             # Deliberately NOT cached. The Drive cache is shared across machines and its
-            # key is (symbol, timeframe, period, end), so a partial window stored under the
-            # requested period answers every later request for that period, on every
+            # key is (symbol, timeframe, period, end, hours), so a partial window stored under
+            # the requested period answers every later request for that period, on every
             # machine, as though it were complete. This repo has already paid for that
             # once — the 2026-08-05 `startTime` incident needed a cache purge because "a
             # code fix is not sufficient: `_fetch_market_data` returns 'Cache HIT' and
@@ -2127,48 +2281,126 @@ class ClaudeToolkit:
                 None,
             )
 
-        self._cache.save(df, symbol, timeframe, period, end, listing=resolved.listing())
-        return f"{fetched} Saved to Drive cache.", None
+        self._cache.save(df, cache_symbol, timeframe, period, end, outside_rth=outside, listing=resolved.listing())
+        return (
+            f"{fetched} Saved to Drive cache under {cache_symbol} ({hours_word}) — use symbol {cache_symbol} and "
+            f"outside_rth={'true' if outside else 'false'} with add_indicators / run_backtest / get_analytics.",
+            None,
+        )
 
-    def _cache_miss_text(self, symbol: str, timeframe: str, period: str, end: str) -> str:
+    def _futures_listing(self, root: str, pinned: Any) -> _Resolved:
+        """One futures contract, named in IB's strings: the pinned conid, or the root's front month.
+
+        Fails closed: a contract IBKR cannot describe (no local symbol from
+        /iserver/contract/{conid}/info) has no key to be cached under and no name to be shown,
+        so the error says nothing was fetched. "expires" becomes "expired" past the maturity
+        date — an expired contract's history is exactly what `conid` is for (IBKR served ESU5
+        12 months after expiry and refused ESM5 at 15; the boundary is not established).
+        """
+        if pinned is not None:
+            try:
+                conid = int(pinned)
+            except (TypeError, ValueError):
+                return _Resolved(0, None, f"conid {pinned!r} is not an integer. Nothing was read.")
+        else:
+            front = self._resolve_snapshot_conid(root, "FUT", None)
+            if front.error:
+                return front
+            conid = front.conid
+        identity = self._futures_identity(conid)
+        if not identity:
+            return _Resolved(
+                0,
+                None,
+                f"IBKR could not describe contract {conid} (no local symbol from /iserver/contract/{conid}/info): "
+                f"nothing fetched, nothing cached.",
+            )
+        expires = identity.get("expires")
+        when = ""
+        if expires:
+            when = f" · {'expired' if date.fromisoformat(expires) < _today_date() else 'expires'} {expires}"
+        name = " · ".join(
+            part for part in (identity.get("name"), identity["local_symbol"], identity.get("month")) if part
+        )
+        return _Resolved(
+            conid,
+            self._listing_currency(conid),
+            None,
+            name=f"{name}{when}",
+            exchange=identity.get("exchange"),
+            root=root,
+            local_symbol=identity["local_symbol"],
+        )
+
+    def _cache_miss_text(self, symbol: str, timeframe: str, period: str, end: str, outside_rth: bool) -> str:
         """What a tool that reads the cache says when the key is not there.
 
         "No cached data … fetch it first" sent the model back to repeat a fetch it had just
         made under another end date — the fetch defaults `end` to today, these tools require
-        it. So the miss lists the symbol's cached windows to match, and names the default
-        when there are none (market-data step 1, 2026-10-02).
+        it. So the miss lists the symbol's cached windows to match, each with its hours (a key
+        part since step 2), names the default when there are none, and — a futures root (`ES`)
+        being no cache symbol — points a root at the contracts cached for it (step 1 and 2,
+        2026-10-02/03).
         """
-        asked = f"{symbol} {timeframe} {period} ending {end}"
-        have = [
-            f"{e.get('symbol')} {e.get('timeframe')} {e.get('period')} ending {e.get('end')}"
-            for e in self._cache.list_cached()
-            if str(e.get("symbol", "")).upper() == symbol.upper()
+        asked = f"{symbol} {timeframe} {period} ending {end} ({'all hours' if outside_rth else 'regular hours'})"
+        rows = self._cache.list_cached()
+
+        def _window(e: Mapping[str, Any]) -> str:
+            hours = "all hours" if e.get("outside_rth") else "regular hours"
+            name = (e.get("listing") or {}).get("name")
+            named = f"{hours} — {name}" if name else hours
+            return f"{e.get('symbol')} {e.get('timeframe')} {e.get('period')} ending {e.get('end')} ({named})"
+
+        have = [_window(e) for e in rows if str(e.get("symbol", "")).upper() == symbol.upper()]
+        contracts = [
+            _window(e) for e in rows if str((e.get("listing") or {}).get("root", "")).upper() == symbol.upper()
         ]
-        if not have:
+        if have:
+            # Live 2026-10-03: `ES` the stock was cached beside ESZ6; the miss named neither.
+            also = f" {symbol} is also the root of cached contracts: {'; '.join(contracts)}." if contracts else ""
+            return f"No cached data for {asked}. Cached for {symbol}: {'; '.join(have)}.{also} Call again with one of those."
+        if contracts:
             return (
-                f"Nothing is cached for {symbol}. Fetch it first with fetch_market_data, then call this "
-                f"with the same end date it reports (its end defaults to today when none is given)."
+                f"Nothing is cached under {symbol}: it is a futures root, and a future is cached under its own "
+                f"contract symbol. Cached for root {symbol}: {'; '.join(contracts)}. Call again with that symbol."
             )
-        return f"No cached data for {asked}. Cached for {symbol}: {'; '.join(have)}. Call again with one of those."
+        return (
+            f"Nothing is cached for {symbol}. Fetch it first with fetch_market_data, then call this "
+            f"with the symbol, end date and outside_rth it reports (its end defaults to today when none is given)."
+        )
 
     def _check_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return HIT/MISS for a specific symbol/timeframe/period/end combination."""
-        hit = self._cache.check(inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"])
+        outside, _, hours_word = _hours(inputs, default=False, why="by default")
+        hit = self._cache.check(
+            inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"], outside_rth=outside
+        )
         label = "HIT" if hit else "MISS"
-        return f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']}", None
+        return (
+            f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']} ({hours_word})",
+            None,
+        )
 
     def _list_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """List every dataset in the Drive market-data cache with row count and cache date.
 
         Returns "Drive cache is empty." when nothing is cached. Each line is
-        "<key>: <rows> bars, cached <YYYY-MM-DD>", tolerating missing rows/cached_at, followed
-        by the listing the bars came from when the entry records one (saved from 2.2.0 on).
+        "<key>: <rows> bars, <hours>, cached <YYYY-MM-DD>", tolerating missing rows/cached_at,
+        followed by the listing the bars came from when the entry records one (saved from 2.2.0
+        on). A row without the hours field was written before 2.2.0 and no 2.2.0 key reaches it;
+        it is named legacy rather than mistaken for current.
         """
         entries = self._cache.list_cached()
         if not entries:
             return "Drive cache is empty.", None
+
+        def _hours_of(e: Mapping[str, Any]) -> str:
+            if "outside_rth" not in e:
+                return "legacy (pre-2.2.0 key, unreachable from 2.2.0)"
+            return "all hours" if e["outside_rth"] else "regular hours"
+
         lines = [
-            f"- {e['key']}: {e.get('rows', '?')} bars, cached {e.get('cached_at', '?')[:10]}"
+            f"- {e['key']}: {e.get('rows', '?')} bars, {_hours_of(e)}, cached {e.get('cached_at', '?')[:10]}"
             + (f" — {_describe_listing(e['listing'])}" if e.get("listing") else "")
             for e in entries
         ]
@@ -3026,13 +3258,15 @@ class ClaudeToolkit:
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
-        if not self._cache.check(symbol, timeframe, period, end):
-            return self._cache_miss_text(symbol, timeframe, period, end), None
-        df = self._cache.load(symbol, timeframe, period, end)
+        outside, hours_note, _ = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return self._cache_miss_text(symbol, timeframe, period, end, outside), None
+        df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
+        row = self._cache.entry(symbol, timeframe, period, end, outside_rth=outside)
         df = _indicators.add_all(df)
         last = df.iloc[-1]
         lines = [
-            f"Indicators for {symbol} (last bar: {df.index[-1].date()}):",
+            f"Indicators for {symbol} {timeframe}, {hours_note} ({_last_bar_text(df, row)}):",
             f"  RSI(14):          {last.get('rsi', float('nan')):.1f}",
             f"  MACD:             {last.get('macd', float('nan')):.4f}  Signal: {last.get('macd_signal', float('nan')):.4f}",
             f"  BB Upper/Mid/Low: {last.get('bb_upper', float('nan')):.2f} / {last.get('bb_mid', float('nan')):.2f} / {last.get('bb_lower', float('nan')):.2f}",
@@ -3052,9 +3286,10 @@ class ClaudeToolkit:
         end = inputs["end"]
         code = inputs["code"]
         strategy_name = inputs.get("strategy_name", "")
-        if not self._cache.check(symbol, timeframe, period, end):
-            return self._cache_miss_text(symbol, timeframe, period, end), None
-        df = self._cache.load(symbol, timeframe, period, end)
+        outside, hours_note, _ = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return self._cache_miss_text(symbol, timeframe, period, end, outside), None
+        df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
         # Annualise with the bar size actually backtested, the same way _get_analytics
         # does. Hardcoding 252 here made run_backtest and get_analytics disagree by
         # sqrt(periods/252) on identical bars — 8.8x for 5-minute data — and the wrong
@@ -3088,7 +3323,7 @@ class ClaudeToolkit:
         except Exception as exc:
             log.warning("_run_backtest: failed to persist result to store: %s", redact_error(exc))
         lines = [
-            f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period})",
+            f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period}, {hours_note})",
             f"  Total Return:  {result.total_return:.1%}",
             f"  Sharpe Ratio:  {result.sharpe:.2f}",
             f"  Sortino Ratio: {result.sortino:.2f}",
@@ -3358,9 +3593,10 @@ class ClaudeToolkit:
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
-        if not self._cache.check(symbol, timeframe, period, end):
-            return self._cache_miss_text(symbol, timeframe, period, end), None
-        df = self._cache.load(symbol, timeframe, period, end)
+        outside, hours_note, _ = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return self._cache_miss_text(symbol, timeframe, period, end, outside), None
+        df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
         returns = df["close"].pct_change().dropna()
         periods = _analytics.periods_for_timeframe(timeframe)
         caveat = None
@@ -3372,7 +3608,7 @@ class ClaudeToolkit:
             )
         report = _analytics.full_report(returns, periods=periods)
         lines = [
-            f"Analytics for {symbol} {timeframe} ({period}–{end}, {periods} periods/yr):",
+            f"Analytics for {symbol} {timeframe} ({period}–{end}, {hours_note}, {periods} periods/yr):",
             f"  Total Return:       {report['total_return']:.1%}",
             f"  CAGR:               {report['cagr']:.1%}",
             f"  Sharpe Ratio:       {report['sharpe']:.2f}",
@@ -3534,6 +3770,7 @@ class ClaudeToolkit:
             "month": _month_token(info.get("contract_month")),
             "expires": _iso_date(info.get("maturity_date")),
             "name": str(info.get("company_name") or "").strip() or None,
+            "exchange": str(info.get("exchange") or "").strip() or None,
         }
         try:
             identity["multiplier"] = float(info["multiplier"])
@@ -4244,9 +4481,10 @@ class ClaudeToolkit:
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
-        if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached entry for {symbol} {timeframe} ({period}, end={end}).", None
-        self._cache.delete(symbol, timeframe, period, end)
+        outside, _, hours_word = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return f"No cached entry for {symbol} {timeframe} ({period}, end={end}, {hours_word}).", None
+        self._cache.delete(symbol, timeframe, period, end, outside_rth=outside)
         return f"Deleted cache entry for {symbol} {timeframe} ({period}, end={end}).", None
 
     def _validate_public_url(self, url: str) -> str | None:

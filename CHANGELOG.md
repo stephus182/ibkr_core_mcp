@@ -120,6 +120,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   default; "fetch it first" alone had sent the model back to repeat a fetch it had just made
   under another end date. `_Resolved` gains `name` and `exchange` (None = not read, never a
   default) and `listing()` / `describe()`.
+- **`fetch_market_data` serves futures, pins one contract, and the hours are explicit and
+  keyed (market-data step 2, operator decisions 2026-10-03).** `sec_type` in IB's own codes —
+  `STK` (default, stated) or `FUT`, the enum listing only what the tool serves; `conid` pins
+  one futures contract, expired ones included (the result says `expired <date>`). A root
+  resolves to the front-month contract by the rule every tool uses (#58/#71) and the bars are
+  that contract's own, thin before it was the front month; **no continuous series** (IBKR: TWS
+  API only). **One contract, one key:** a future is cached under its own symbol (`ESZ6`), so
+  ESU6 and ESZ6 never share an entry and a roll produces a new key by itself; a contract IBKR
+  cannot describe is not fetched. **`outside_rth`** (`true`/`false`) on the fetch, the three
+  cache readers, `check_cache` and `delete_cache`, default by type on the fetch — `STK` false,
+  `FUT` true — and false on the readers, stated on every result; **it is part of the cache key**
+  (`…_RTH` / `…_ALL`, both written): IBKR's daily stock bar changed on 20 of 20 days with the
+  flag, so the two series are different data (probe 2026-10-03,
+  `claudia_ui/docs/plans/2026-10-03-outside-rth-probe/`). The operator flushed the pre-2.2.0
+  cache the same day; a row without the hours field is listed as legacy. **Stamps are IBKR's
+  and are kept:** an all-hours futures bar is stamped at its session open (18:00 ET the evening
+  before — Thursday 18:00 is Friday's session; a CME holiday session is one bar), so such a
+  series prints its stamps as opens in ET with that rule, `add_indicators` says "last bar
+  stamped … (its session open)", and nothing computes a session date (a calendar library dates
+  the holiday bar wrong). `GDriveCache.check/load/save/entry/delete` take `outside_rth=`;
+  `_Resolved` gains `root` and `local_symbol`; `_futures_identity` keeps the exchange. Live
+  2026-10-03 through the real cache and gateway: ES → ESZ6, CL → CLX6 (NYMEX, both stamp rules
+  the same), ESU6 by conid "expired 2026-09-18", the bare `ES` named Eversource, the readers'
+  hours and misses.
 
 ### Changed
 - **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time

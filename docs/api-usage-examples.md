@@ -27,11 +27,15 @@ client = IBKRClient(cfg)
 cache  = GDriveCache(cfg)
 
 symbol, timeframe, period, end = "AAPL", "1D", "1Y", "2026-05-22"
+# The hours are a key part (2.2.0): regular trading hours (False) or all hours IBKR has (True) —
+# IBKR's daily stock bar differs between the two on every day measured. A future's all-hours bar
+# is stamped at its session open (18:00 ET the evening before); keep the stamp, read it by that rule.
+hours = {"outside_rth": False}
 
-if cache.check(symbol, timeframe, period, end):
-    df = cache.load(symbol, timeframe, period, end)
-    row = cache.entry(symbol, timeframe, period, end)      # the manifest row: rows, cached_at,
-    print(row.get("listing") or "listing not recorded")    # and, from 2.2.0, the listing saved below
+if cache.check(symbol, timeframe, period, end, **hours):
+    df = cache.load(symbol, timeframe, period, end, **hours)
+    row = cache.entry(symbol, timeframe, period, end, **hours)  # the manifest row: rows, cached_at,
+    print(row.get("listing") or "listing not recorded")         # outside_rth, and the listing saved below
 else:
     # A ticker is not a listing. /trsrv/stocks carries `isUS` per contract; /iserver/secdef/search
     # does not, and its result order is undocumented — its first match for IGV is the Mexican
@@ -45,10 +49,10 @@ else:
     conid = int(contract["conid"])
     info  = client.get_secdef_info(conid)                   # a LIST live (2026-07-28); the currency is on its row
     currency = (info[0] if isinstance(info, list) else info).get("currency")
-    bars  = client.get_market_history(conid, period=period, bar="1d")
+    bars  = client.get_market_history(conid, period=period, bar="1d", outside_rth=hours["outside_rth"])
     df    = bars_to_dataframe(bars)
     # Keep the listing beside the bars, so a later cache hit can say what it serves (2.2.0).
-    cache.save(df, symbol, timeframe, period, end,
+    cache.save(df, symbol, timeframe, period, end, **hours,
                listing={"conid": conid, "name": name, "exchange": contract["exchange"], "currency": currency})
 ```
 

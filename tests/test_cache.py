@@ -40,8 +40,12 @@ def drive_cache(cache):
 
 
 def test_cache_key_format(cache):
-    key = cache._cache_key("aapl", "1d", "1Y", "2026-05-22")
-    assert key == "AAPL_1D_1Y_2026-05-22"
+    """The key names the hours the bars cover, both ways (step 2, 2026-10-03): a regular-hours
+    and an all-hours series of the same contract are different data — IBKR's daily stock bar
+    changed on 20 of 20 days with the flag — and must never share an entry. No suffix means a
+    key written before 2.2.0, which this format cannot reach."""
+    assert cache._cache_key("aapl", "1d", "1Y", "2026-05-22") == "AAPL_1D_1Y_2026-05-22_RTH"
+    assert cache._cache_key("esz6", "1d", "6m", "2026-10-03", outside_rth=True) == "ESZ6_1D_6M_2026-10-03_ALL"
 
 
 def test_check_returns_false_on_miss(cache):
@@ -52,7 +56,7 @@ def test_check_returns_false_on_miss(cache):
 
 def test_check_returns_true_on_hit(cache):
     cache._manifest = {
-        "AAPL_1D_1Y_2026-05-22": {
+        "AAPL_1D_1Y_2026-05-22_RTH": {
             "end": "2026-05-22",
             "rows": 252,
         }
@@ -64,7 +68,7 @@ def test_check_returns_true_on_hit(cache):
 def test_check_stale_today_end(cache):
     two_days_ago = str(date.today() - timedelta(days=2))
     cache._manifest = {
-        f"AAPL_1D_1Y_{date.today()}": {
+        f"AAPL_1D_1Y_{date.today()}_RTH": {
             "end": two_days_ago,
             "rows": 252,
         }
@@ -76,8 +80,8 @@ def test_check_stale_today_end(cache):
 
 def test_list_cached_returns_keys(cache):
     cache._manifest = {
-        "AAPL_1D_1Y_2026-05-22": {"symbol": "AAPL", "rows": 252},
-        "TSLA_1D_6M_2026-05-22": {"symbol": "TSLA", "rows": 126},
+        "AAPL_1D_1Y_2026-05-22_RTH": {"symbol": "AAPL", "rows": 252},
+        "TSLA_1D_6M_2026-05-22_RTH": {"symbol": "TSLA", "rows": 126},
     }
     cache._manifest_loaded_at = float("inf")
     entries = cache.list_cached()
@@ -318,7 +322,7 @@ def test_save_updates_manifest_entry(drive_cache):
     df = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
     drive_cache.save(df, "AAPL", "1D", "1Y", "2026-05-22")
 
-    entry = drive_cache._manifest.get("AAPL_1D_1Y_2026-05-22")
+    entry = drive_cache._manifest.get("AAPL_1D_1Y_2026-05-22_RTH")
     assert entry is not None
     assert entry["symbol"] == "AAPL"
     assert entry["rows"] == 3
@@ -335,13 +339,28 @@ def test_save_records_which_listing_the_bars_came_from_and_entry_reads_it_back(d
     svc.files().list().execute.return_value = {"files": []}
     svc.files().create().execute.return_value = {"id": "new-id"}
     listing = {"conid": 12658199, "name": "ISHARES EXPANDED TECH-SOFTWA", "exchange": "BATS", "currency": "USD"}
-    drive_cache._manifest["IGV_1D_6M_2026-05-21"] = {"symbol": "IGV", "rows": 126, "end": "2026-05-21"}
+    drive_cache._manifest["IGV_1D_6M_2026-05-21_RTH"] = {"symbol": "IGV", "rows": 126, "end": "2026-05-21"}
 
     drive_cache.save(pd.DataFrame({"close": [1.0]}), "IGV", "1D", "6m", "2026-05-22", listing=listing)
 
     assert drive_cache.entry("igv", "1d", "6M", "2026-05-22")["listing"] == listing
     assert "listing" not in drive_cache.entry("IGV", "1D", "6m", "2026-05-21")
     assert drive_cache.entry("IGV", "1D", "6m", "2026-05-20") is None
+
+
+def test_the_hours_are_recorded_on_the_row_and_tell_two_series_of_one_contract_apart(drive_cache):
+    """Step 2 (2026-10-03): `outside_rth` is a key part and a manifest field. Saving ESZ6's
+    all-hours series writes nothing under its regular-hours key, and the row says which it is."""
+    svc = drive_cache._service
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "new-id"}
+
+    drive_cache.save(pd.DataFrame({"close": [1.0]}), "ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+
+    assert drive_cache.entry("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)["outside_rth"] is True
+    assert drive_cache.entry("ESZ6", "1D", "6m", "2026-10-03") is None
+    assert drive_cache.check("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True) is True
+    assert drive_cache.check("ESZ6", "1D", "6m", "2026-10-03") is False
 
 
 # ── Drive API call paths: delete() ───────────────────────────────────────────
@@ -384,7 +403,7 @@ def test_delete_no_drive_call_when_file_not_found(drive_cache):
 def test_delete_removes_manifest_entry(drive_cache):
     """delete() removes the key from the in-memory manifest."""
     svc = drive_cache._service
-    drive_cache._manifest["AAPL_1D_1Y_2026-05-22"] = {"symbol": "AAPL", "rows": 252, "end": "2026-05-22"}
+    drive_cache._manifest["AAPL_1D_1Y_2026-05-22_RTH"] = {"symbol": "AAPL", "rows": 252, "end": "2026-05-22"}
     svc.files().list().execute.side_effect = [
         {"files": [{"id": "parquet-id"}]},
         {"files": []},
@@ -393,7 +412,7 @@ def test_delete_removes_manifest_entry(drive_cache):
 
     drive_cache.delete("AAPL", "1D", "1Y", "2026-05-22")
 
-    assert "AAPL_1D_1Y_2026-05-22" not in drive_cache._manifest
+    assert "AAPL_1D_1Y_2026-05-22_RTH" not in drive_cache._manifest
 
 
 def test_delete_no_error_when_file_not_found(drive_cache):
