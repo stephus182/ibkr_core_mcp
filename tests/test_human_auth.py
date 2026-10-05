@@ -29,6 +29,15 @@ def test_human_auth_error_exported_from_package():
 # ---------------------------------------------------------------------------
 
 
+# Apple's two device-owner policies, at the values the framework itself reports
+# (`LocalAuthentication.LAPolicy…`, read from the installed pyobjc framework 2026-10-05). The
+# double carries BOTH: left to a bare MagicMock it invents whichever constant the code asks
+# for, so a switch to the biometrics-only policy — no password fallback — kept every test here
+# green (register F2). It also used to give the biometrics-only constant the other one's value.
+_POLICY_BIOMETRICS_OR_PASSWORD = 2  # LAPolicyDeviceOwnerAuthentication
+_POLICY_BIOMETRICS_ONLY = 1  # LAPolicyDeviceOwnerAuthenticationWithBiometrics
+
+
 def _make_la_mock(can_eval=True, eval_err=None, reply_success=True, reply_error=None):
     """Build a LocalAuthentication sys.modules mock."""
     mock_ctx = MagicMock()
@@ -40,7 +49,8 @@ def _make_la_mock(can_eval=True, eval_err=None, reply_success=True, reply_error=
     mock_ctx.evaluatePolicy_localizedReason_reply_.side_effect = fake_evaluate
     mock_la = MagicMock()
     mock_la.LAContext.new.return_value = mock_ctx
-    mock_la.LAPolicyDeviceOwnerAuthenticationWithBiometrics = 2
+    mock_la.LAPolicyDeviceOwnerAuthentication = _POLICY_BIOMETRICS_OR_PASSWORD
+    mock_la.LAPolicyDeviceOwnerAuthenticationWithBiometrics = _POLICY_BIOMETRICS_ONLY
     return mock_la
 
 
@@ -50,6 +60,23 @@ def test_require_touch_id_success(monkeypatch):
     from ibkr_core_mcp.human_auth import require_touch_id
 
     require_touch_id("Test order")  # must not raise
+
+
+def test_gate_1_evaluates_the_policy_that_falls_back_to_the_password(monkeypatch):
+    """Gate 1 asks for `LAPolicyDeviceOwnerAuthentication` — Touch ID first, the system
+    password if the scan fails — at both calls: the availability check and the evaluation.
+    The biometrics-only policy "was rejected immediately on a failed scan with no recovery
+    path" (`human_auth.require_touch_id`), which on a trading surface is a locked-out operator
+    with an order to cancel. Nothing in this repository said which of the two was evaluated."""
+    mock_la = _make_la_mock()
+    monkeypatch.setitem(sys.modules, "LocalAuthentication", mock_la)
+    from ibkr_core_mcp.human_auth import require_touch_id
+
+    require_touch_id("place the order")
+
+    ctx = mock_la.LAContext.new.return_value
+    assert ctx.canEvaluatePolicy_error_.call_args.args[0] == _POLICY_BIOMETRICS_OR_PASSWORD
+    assert ctx.evaluatePolicy_localizedReason_reply_.call_args.args[0] == _POLICY_BIOMETRICS_OR_PASSWORD
 
 
 def test_require_touch_id_reason_forwarded(monkeypatch):
@@ -94,7 +121,8 @@ def test_require_touch_id_timeout(monkeypatch):
     mock_ctx.evaluatePolicy_localizedReason_reply_.side_effect = lambda p, r, cb: None
     mock_la = MagicMock()
     mock_la.LAContext.new.return_value = mock_ctx
-    mock_la.LAPolicyDeviceOwnerAuthenticationWithBiometrics = 2
+    mock_la.LAPolicyDeviceOwnerAuthentication = _POLICY_BIOMETRICS_OR_PASSWORD
+    mock_la.LAPolicyDeviceOwnerAuthenticationWithBiometrics = _POLICY_BIOMETRICS_ONLY
     monkeypatch.setitem(sys.modules, "LocalAuthentication", mock_la)
 
     from ibkr_core_mcp.human_auth import require_touch_id
