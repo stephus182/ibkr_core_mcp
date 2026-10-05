@@ -196,6 +196,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   were "IBKR's place-order enum" citing a page that carries no TIF list, and that `MOC` / `LOC`
   "are not in the documented type list" — IBKR's enum has five values, on another page, and
   `MOC` / `LOC` are documented for the Web API on IBKR's order-type pages. No behaviour changed.
+- **The indicator study `generate_pinescript` writes lets the chart choose each price
+  source.** Every call had `close` written into it, so a study on (high + low)/2 meant editing
+  the script. Each indicator that takes a source — RSI, MACD, the bands, EMA, SMA — declares
+  it as a TradingView input, `input.source(close, "… Source")`: the default is unchanged, and
+  any source is one choice in the script's settings, per indicator (operator, 2026-10-05:
+  keep the default, as long as hl2 is easy to specify). The tool still takes no lengths or
+  sources; the strategy script generated from a backtest is unchanged. Not compiled in
+  TradingView by this change — the syntax is the one in TradingView's v5 manual.
 - **`add_indicators`' output with no settings given is not what it was.** The Bollinger bands
   are computed on `hl2` (they were on `close`), and are labelled `BB 20 SMA hl2 2: basis /
   upper / lower` where the line read `BB Upper/Mid/Low`; RSI and MACD name their source

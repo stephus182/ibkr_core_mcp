@@ -313,6 +313,7 @@ wma_50 = indicators.moving_average(df, 50, "WMA", "hlc3")            # Series "w
 | "Timeframe" (compute on another timeframe than the chart's) and "Wait for timeframe closes" | Not offered — an indicator is computed on the cached bars' own size |
 | Lengths of RSI, MACD, ATR, Stochastic, Williams %R, Volume Ratio | Fixed at the standard settings in §6–§7 |
 | Any indicator not listed in this page | Not computed |
+| These settings in the script `generate_pinescript` writes | Not passed through: the generated study opens every indicator at its own default length on `close`. Each length and each price source is a **TradingView input** in that script (`input.int`, `input.source(close, "… Source")`), so hl2 is chosen in the script's settings on the chart, per indicator. A strategy script generated from a backtest reads `close` |
 | Exponential Bollinger bands in Bollinger's sense (rule 13: exponential deviation too) | Not offered; `ma_type="EMA"` is TradingView's Basis MA Type (§4) |
 
 ---

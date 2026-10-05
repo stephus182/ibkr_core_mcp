@@ -1035,7 +1035,11 @@ TOOL_DEFINITIONS = [
             "emits an indicator study from a list of indicators; source='backtest' emits a "
             "strategy() script from the most recent stored run_backtest result for the symbol "
             "(real metrics in the header — always use this after run_backtest instead of "
-            "writing PineScript by hand). Output pastes directly into the Pine Editor."
+            "writing PineScript by hand). Output pastes directly into the Pine Editor. "
+            "In an indicator study every length and every price source is a TradingView input: "
+            "the script opens on its defaults (source close) and the user changes them in the "
+            "script's settings — e.g. Source to (H + L)/2 — so say that rather than rewriting "
+            "the script."
         ),
         "input_schema": {
             "type": "object",

@@ -823,7 +823,7 @@ Generate a PineScript v5 script for TradingView. Two modes, selected by `source`
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker (used in comments/title) |
 | `source` | string | — | `"indicators"` (default) or `"backtest"` |
-| `indicators` | array[string] | — | For `source="indicators"`: one or more of `"rsi"`, `"macd"`, `"bollinger_bands"`, `"ema"`, `"sma"`, `"atr"` |
+| `indicators` | array[string] | — | For `source="indicators"`: one or more of `"rsi"`, `"macd"`, `"bollinger_bands"`, `"ema"`, `"sma"`, `"atr"`. **Lengths and price sources are TradingView inputs in the generated study, not parameters here**: each indicator opens at its default length (RSI 14, MACD 12/26/9, bands 20 / 2, EMA 20, SMA 20, ATR 14) on `close`, and each one that takes a source declares `input.source(close, "… Source")`, so (H + L)/2 or any other source is one choice in the script's settings on the chart — per indicator, as with TradingView's own |
 | `strategy_name` | string | — | Script title; for `source="backtest"` also filters which stored run to use (default: most recent for the symbol) |
 | `timeframe` | string | — | For `source="backtest"`: cache timeframe of the backtested bars, for chart-timeframe inference (optional) |
 | `period` | string | — | For `source="backtest"`: cache period key (optional) |

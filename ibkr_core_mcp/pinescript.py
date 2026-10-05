@@ -20,18 +20,27 @@ def _sanitize(value: str, max_len: int = 128) -> str:
     return cleaned[:max_len]
 
 
+# Each indicator that takes a price source declares it as a TradingView input —
+# `input.source(close, "…")`, the widget TradingView's own indicators use ("srcInput =
+# input.source(high, "Source")", https://www.tradingview.com/pine-script-docs/v5/concepts/inputs/).
+# The default stays `close`; (H + L)/2 and the other sources are one choice in the script's
+# settings. Until 2026-10-05 every call had `close` written into it, so a study on hl2 meant
+# editing the script. One input per indicator, as on a chart: an RSI on close beside averages
+# on hl2 is the ordinary arrangement (docs/indicators-reference.md § 6).
 _INDICATOR_SNIPPETS: dict[str, str] = {
     "rsi": """\
 // RSI
 rsiLength = input.int({rsi_period}, "RSI Length")
-rsiValue = ta.rsi(close, rsiLength)
+rsiSource = input.source(close, "RSI Source")
+rsiValue = ta.rsi(rsiSource, rsiLength)
 plot(rsiValue, "RSI", color.new(color.purple, 0))
 hline(70, "Overbought", color.red)
 hline(30, "Oversold", color.green)
 """,
     "macd": """\
 // MACD
-[macdLine, signalLine, hist] = ta.macd(close, {macd_fast}, {macd_slow}, {macd_signal})
+macdSource = input.source(close, "MACD Source")
+[macdLine, signalLine, hist] = ta.macd(macdSource, {macd_fast}, {macd_slow}, {macd_signal})
 plot(macdLine, "MACD", color.blue)
 plot(signalLine, "Signal", color.orange)
 plot(hist, "Histogram", color.gray, style=plot.style_histogram)
@@ -39,8 +48,9 @@ plot(hist, "Histogram", color.gray, style=plot.style_histogram)
     "bollinger_bands": """\
 // Bollinger Bands
 bbLength = input.int({bb_period}, "BB Length")
+bbSource = input.source(close, "BB Source")
 bbMult = input.float({bb_std}, "BB Std Dev")
-[bbUpper, bbMid, bbLower] = ta.bb(close, bbLength, bbMult)
+[bbUpper, bbMid, bbLower] = ta.bb(bbSource, bbLength, bbMult)
 plot(bbUpper, "BB Upper", color.red)
 plot(bbMid, "BB Mid", color.gray)
 plot(bbLower, "BB Lower", color.green)
@@ -48,13 +58,15 @@ plot(bbLower, "BB Lower", color.green)
     "ema": """\
 // EMA
 emaLength = input.int({ema_period}, "EMA Length")
-emaValue = ta.ema(close, emaLength)
+emaSource = input.source(close, "EMA Source")
+emaValue = ta.ema(emaSource, emaLength)
 plot(emaValue, "EMA", color.orange)
 """,
     "sma": """\
 // SMA
 smaLength = input.int({sma_period}, "SMA Length")
-smaValue = ta.sma(close, smaLength)
+smaSource = input.source(close, "SMA Source")
+smaValue = ta.sma(smaSource, smaLength)
 plot(smaValue, "SMA", color.blue)
 """,
     "atr": """\
