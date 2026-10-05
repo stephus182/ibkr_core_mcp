@@ -235,7 +235,7 @@ contract in hand: `client.get_contract_rules(conid, is_buy)["tifTypes"]`.
 | `place_order`, `modify_order` and their `_and_confirm` forms | Send the body's `tif` **exactly as given**. No list is applied and no default is added: a value IBKR does not accept is answered by IBKR. |
 | Gate 2 dialog | Shows the `tif` being sent; a body with none shows `— (not sent)`, never `DAY`. |
 | `get_contract_rules` | Returns the contract's `tifTypes` (typed as `tif_types`), entries as IBKR sends them. **No `ClaudeToolkit` tool exposes it.** |
-| `preview_order` (tool) | Offers `DAY`, `GTC`, `IOC`, `OPG` — four of the enum's five. `PAX`, `GTD`, `OVT` and `OND` cannot be previewed through it, although a contract's rules may accept the last three. Left out, the preview is for `DAY` and says so. It does not read the contract's rules: `OPG` on a contract that does not list it is answered by IBKR's preview, not refused here. |
+| `preview_order` (tool) | Offers `DAY`, `GTC`, `IOC`, `OPG` — four of the enum's five, and exactly the four IBKR's own reference defines (the `PAX` table below). `PAX`, `GTD`, `OVT` and `OND` cannot be previewed through it, although a contract's rules may accept the last three. Left out, the preview is for `DAY` and says so. It does not read the contract's rules: `OPG` on a contract that does not list it is answered by IBKR's preview, not refused here. |
 | `get_live_orders` (tool) | Quotes `orderDesc`; never prints the row's `timeInForce` as the TIF. |
 | `get_order_status` (tool) | Returns the status endpoint's `tif`. |
 | Price alerts | A different vocabulary: `GTC` or `GTD` only — IBKR documents no `DAY` for an alert (`docs/tools-reference.md`, `create_price_alert`). |
@@ -273,8 +273,9 @@ stated here as more than that. What is established is narrower and enough to act
 stock and the future measured do not accept it. **This package** sends a body's `tif` as
 given, so a caller can send `PAX`; `preview_order` does not offer it — a tool that offered it
 would be naming a time in force nobody here can describe, for contracts whose rules do not
-list it. One read-only call would settle where it applies: the contract rules of a contract
-that lists `PAX` in `tifTypes`.
+list it. **Decided 2026-10-05 (operator): not added** — the four values offered are the four IBKR
+defines, and `PAX` is looked at again only if cryptocurrency ever comes into scope. One read-only
+call would settle where it applies: the contract rules of a contract that lists `PAX` in `tifTypes`.
 
 **Not established** — stated rather than guessed:
 

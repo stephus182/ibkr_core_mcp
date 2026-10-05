@@ -237,8 +237,8 @@ every equity named `ES` (Eversource on NYSE and MEXI, …), so the type does **n
 list. **An exchange local symbol is not a search input**: `symbol=ESU6` and `symbol=ES SEP26`
 both return `{"error": "No symbol found"}`. The month-qualified path is search → `secdef/info`
 (below), never search alone. Sources (scraped 2026-09-10, archive `claudia_ui/.firecrawl/ibkr/`):
-https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-symbols.md,
-https://ibkrcampus.com/docs/web-api/trading/instrument-discovery/finding-derivative-products.md,
+https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-symbols,
+https://www.interactivebrokers.com/docs/web-api/trading/instrument-discovery/finding-derivative-products,
 https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
 
 ---
@@ -273,7 +273,7 @@ and `companyName` come back `null` on a future. `month` takes `MMMYY` (`SEP26`) 
 `secType` are both accepted; **`exchange` is required** (omitting it → the same HTTP 500). This
 method wraps only the `conid` form; a month-qualified wrapper is the futures-identity design of
 2026-09-10 (claudia_ui Known Gaps #37). Sources:
-https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-info.md,
+https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-info,
 https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-query-contract-details-for-derivatives-in-the-web-api/,
 https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
 
@@ -860,28 +860,28 @@ finding API-R4).
 ### `get_forecast_categories() -> Any`
 **Endpoint:** `GET /forecast/category/tree` — no parameters.
 Category ids, parent ids and markets; the starting point for contract discovery.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories
 
 ### `get_forecast_contract(conid) -> Any`
 **Endpoint:** `GET /forecast/contract/details` — `conid` required.
 Instrument details including the Yes and No side identifiers, question, strike and expiration.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract
 
 ### `get_forecast_market(underlying_conid, exchange=None) -> Any`
 **Endpoint:** `GET /forecast/contract/market` — `underlyingConid` required, `exchange` optional.
 Every contract affiliated with one underlying market. `exchange` is omitted from the query
 when not given, rather than sent empty — IBKR determines one internally.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets
 
 ### `get_forecast_rules(conid) -> Any`
 **Endpoint:** `GET /forecast/contract/rules` — `conid` required.
 Payout, price increment, source agency, release and payout times, exchange timezone.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules
 
 ### `get_forecast_schedules(conid) -> Any`
 **Endpoint:** `GET /forecast/contract/schedules` — `conid` required.
 Liquid and extended trading hours for the coming and prior trading days.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule
 
 ---
 
@@ -953,8 +953,8 @@ carrying `parentId` equal to it, held by IBKR until the parent fills. That shape
 reachable through this method** (nor through `get_order_preview()`, which wraps one dict the
 same way); a bracket needs its own method that shows both legs on Gate 2. Documented
 2026-09-06, tracked in claudia_ui as Known Gaps #36.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
-        https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
+        https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
 
 ### `modify_order(account_id, order_id, order) -> dict`
 Modify an existing order after both security gates pass.

@@ -2241,7 +2241,7 @@ def test_bracket_dialog_refuses_a_parent_carrying_NO_cOID():
 def test_bracket_dialog_refuses_a_child_carrying_its_OWN_cOID():
     """IBKR: a cOID "should not be set for the child of a bracket order". `_bracket_tickets`
     refuses one; the dialog did not, so the rule held on one of two reachable paths.
-    Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
     """
     from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
 

@@ -186,8 +186,8 @@ class Contract(IBKRResponse):
     security types as a `sections` list, and picking one of them here would be a guess.
     Read `contract["sections"]` when you need them.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-definition.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-the-security-definition-by-contract-id
     """
 
     conid: int = Field(validation_alias=AliasChoices("conid", "con_id"))
@@ -221,7 +221,7 @@ class Position(IBKRResponse):
     increment rules. The six named here are the ones every caller wants; the rest stay
     reachable through the mapping protocol (`position["avgCost"]`, `dict(position)`).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/positions
     """
 
     conid: int = 0
@@ -244,7 +244,7 @@ class Trade(IBKRResponse):
     The endpoint spells the execution timestamp `trade_time`; `time` is this model's name
     for it, and reads `trade_time` when that is what arrived.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/trades.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/trades
     """
 
     execution_id: str = ""
@@ -266,7 +266,7 @@ class Order(IBKRResponse):
 
     `price` is likewise a string on the wire ("150.00") and a float here.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
     """
 
     order_id: str = Field(default="", alias="orderId", description="IBKR order ID as text (IBKR field: orderId, int)")
@@ -306,7 +306,7 @@ class AccountSummary(IBKRResponse):
     P&L come from /iserver/account/pnl/partitioned — `IBKRClient.get_pnl()`, whose
     `upnl.{account}` object carries `upl` and `dpl`.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary
     """
 
     net_liquidation: float | None = None
@@ -374,7 +374,7 @@ class Account(IBKRResponse):
     IBKR's `type` is exposed as `account_type`, because a field named `type` shadows the
     builtin at every call site that touches it.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts
     """
 
     account_id: str = Field(default="", alias="accountId", description="Account identifier (IBKR field: accountId)")
@@ -405,7 +405,7 @@ class AuthStatus(IBKRResponse):
     `authenticated` off the raw response and is deliberately left untyped — it is a
     liveness probe that answers False rather than raising.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/auth-status.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
     """
 
     authenticated: bool = Field(default=False, description="Brokerage session is authenticated")
@@ -430,7 +430,7 @@ class Alert(IBKRResponse):
     arrives as an int but goes back out inside a URL path, so it is normalised to text the
     way `Order.order_id` is. The int stays readable as `alert["order_id"]`.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-alerts.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts
     """
 
     order_id: str = Field(default="", description="Alert identifier, as text (IBKR sends an int)")
@@ -458,7 +458,7 @@ class Watchlist(IBKRResponse):
     `/iserver/watchlist?id=`, which is the same class of defect as a digits-only order-id
     pattern admitting Unicode digits (DOCA-01).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-all-watchlists
     """
 
     id: str = Field(default="", description="Watchlist identifier, text — may contain a dot")
@@ -475,7 +475,7 @@ class CurrencyPair(IBKRResponse):
     `ccyPair` is the quote currency alone (`SGD`) and `symbol` is the full pair
     (`USD.SGD`) — not interchangeable, which is why both are named.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fx/currency-pairs.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
     """
 
     symbol: str = Field(default="", description="Full pair, e.g. USD.SGD")
@@ -495,7 +495,7 @@ class SecDefInfo(IBKRResponse):
     model drops nulls so the declared defaults apply, and `info["maturityDate"]` still
     reads `None`.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/secdef-info.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid
     """
 
     conid: int = Field(default=0, description="IBKR contract identifier")
@@ -530,7 +530,7 @@ class ContractDetails(IBKRResponse):
     `test_one_contract_details_model_serves_info_and_info_and_rules` fails if that stops
     being true. `rules` is empty when the plain endpoint answered.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-information.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id
     """
 
     conid: int = Field(default=0, alias="con_id", description="IBKR contract identifier (IBKR field: con_id)")
@@ -568,7 +568,7 @@ class ContractRules(IBKRResponse):
     `error`, `priceMagnifier`, `displaySize` and `orderOrigination` all arrive `null` on a
     contract with nothing to report; the base model drops nulls so the defaults apply.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-rules.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules
     """
 
     order_types: list[str] = Field(
@@ -629,7 +629,7 @@ class FutureContract(IBKRResponse):
     `get_futures()` flattens IBKR's `{"ES": [...], "CL": [...]}` envelope, so the symbol
     key is gone by the time these rows are built — read `symbol` on the row.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol
     """
 
     conid: int = Field(default=0, description="IBKR contract identifier")
@@ -657,7 +657,7 @@ class StockSearchResult(IBKRResponse):
     did they mean". `contracts` stays a list of plain dicts: its rows are three keys wide
     and naming a model for them would buy nothing.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol
     """
 
     name: str = Field(default="", description="Issuer name")
@@ -677,7 +677,7 @@ class Algo(IBKRResponse):
     `name` is what a human picks from, so a caller that confuses them sends a valid order
     with the wrong strategy.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/ib-algo-params.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id
     """
 
     id: str = Field(default="", description="Algorithm identifier, as sent in an order body")
@@ -697,7 +697,7 @@ class TradingSchedule(IBKRResponse):
     This endpoint answers `[]` for `SMART` — pass a real venue. Recorded in
     `docs/ibkr-api-behaviors-reference.md`.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/trading-schedule.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/trading-schedule-by-symbol
     """
 
     id: str = Field(default="", description="Schedule identifier, text — may start with a letter")
@@ -813,7 +813,7 @@ class BrokerageSession(IBKRResponse):
     `/portfolio/{id}/ledger`, `/portfolio/{id}/allocation`, `/iserver/account/pnl/partitioned`
     and `/pa/performance` without models at all.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/brokerage-accounts.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts
     """
 
     accounts: list[str] = Field(default_factory=list, description="Account ids in this session")
@@ -848,7 +848,7 @@ class WatchlistDetail(IBKRResponse):
     The id is text and looks numeric — `"1111.11"` in the capture — and goes straight back
     into the query string, so declaring it numeric would corrupt it (see `Watchlist.id`).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information
     """
 
     id: str = Field(default="", description="Watchlist identifier, text — may contain a dot")
@@ -881,7 +881,7 @@ class MTAAlert(IBKRResponse):
     text the way `Alert.order_id` and `Order.order_id` are. The int stays readable as
     `alert["order_id"]`.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-mta-alert.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-mta-alert
     """
 
     order_id: str = Field(default="", description="Alert identifier, as text (IBKR sends an int)")
@@ -926,7 +926,7 @@ def bars_to_dataframe(raw: Mapping[str, Any] | IBKRResponse) -> pd.DataFrame:
       open, high, low, close, volume (sorted ascending by date).
     Returns an empty DataFrame with those columns if "data" is missing or empty.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
     """
     bars = raw.get("data", [])
     if not bars:

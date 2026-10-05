@@ -498,7 +498,7 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     Futures notional uses the _multiplier display field: price × qty × multiplier. When the
     caller sets _multiplier_unknown instead, no number is printed at all (2026-09-04).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
     """
     _show_confirm_dialog(
         title="⚠  LIVE ORDER CONFIRMATION",
@@ -685,8 +685,8 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
             rule missing from one of the two is enforced on neither path when the other is
             taken. Three of them had an escape clause here and not there until 2026-09-21.
 
-    Sources: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md,
-        https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value.md
+    Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups,
+        https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value
     """
     if not children:
         raise HumanAuthError("Bracket confirmation refused: no child order in the bracket")
@@ -740,7 +740,7 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
             raise HumanAuthError("Bracket confirmation refused: a child's parentId does not name this parent")
         # IBKR: a cOID "should not be set for the child of a bracket order". `_bracket_tickets`
         # refuses one; this did not, so the rule held on one of two reachable paths.
-        # Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
         if child.get("cOID"):
             raise HumanAuthError(
                 "Bracket confirmation refused: a child carries its own cOID, which IBKR forbids on a bracket child"
@@ -860,7 +860,7 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
     (claudia_ui gap #40). The side is read as `side`, so the banner colour is right for
     SELL modifies (before 2026-09 every SELL modify rendered green).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
     """
     details = _order_rows(order, account_id)
     details["Order ID"] = order_id

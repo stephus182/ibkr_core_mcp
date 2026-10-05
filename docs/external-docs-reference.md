@@ -34,7 +34,17 @@
 > |---|---|
 > | Clean markdown of any page | append `.md` to the page URL |
 > | Full documentation index (469 pages, measured 2026-08-07) | https://www.interactivebrokers.com/docs/web-api/llms.txt |
-> | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server |
+> | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server — **not available on 2026-10-05**: that host answered HTTP 403 with a Cloudflare error 1000 on every page, and the same path on `www.interactivebrokers.com` answers `{"error":"MCP is disabled for this docs site"}`. Use `.md` and `llms.txt` on `www.interactivebrokers.com` |
+>
+> **Which host to cite (2026-10-05).** The site is served on two hosts, `www.interactivebrokers.com/docs/…` and
+> `ibkrcampus.com/docs/…`, with the same paths; IBKR's own `llms.txt` lists its pages on the second. On 2026-10-05
+> `ibkrcampus.com/docs/…` answered HTTP 403 with a Cloudflare error 1000 ("DNS points to prohibited IP") for every page
+> tried, while `www.interactivebrokers.com/docs/…` served them. **Cite `www.interactivebrokers.com/docs/…`.** The 189
+> links in this repository that used the other host were repointed that day, by path — each target checked by its `.md`
+> variant, against `llms.txt`, and beside a fabricated control — and ten of them turned out to carry page names that
+> never existed (`contract/contract-rules` for `contract/search-contract-rules`, and nine more in `models.py`); they
+> were corrected from the index and each replacement confirmed to name its endpoint. Whether the first host returns is
+> not known. Released sections of the CHANGELOG and `docs/audits/` keep the URLs they were written with.
 >
 > `FirecrawlClient.crawl()` used to return 0 pages on `interactivebrokers.com` — that method was
 > removed on 2026-07-30 with the rest of the crawl ladder, and `crawl_site` (the local browser)

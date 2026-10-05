@@ -605,7 +605,7 @@ def test_parse_stream_execution_side_normalization(raw_side, expected):
 
 # ============================================================================
 # IBKR's documented field-31 prefixes and field-87 suffixes
-# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-fields.md
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-fields
 #   31 "May contain one of the following prefixes: C - Previous day's closing
 #      price. H - Trading has halted."
 #   87 "Volume for the day, formatted with 'K' for thousands or 'M' for millions."

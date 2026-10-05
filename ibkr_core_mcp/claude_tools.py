@@ -351,7 +351,7 @@ def _describe_listing(listing: Mapping[str, Any]) -> str:
 
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
-# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-availability
 def _named_quote_fields(item: dict[str, Any]) -> dict[str, Any]:
     """The price fields of one raw snapshot item, by name, and nothing else.
 
@@ -1960,7 +1960,7 @@ def _last_trade_key(row: Mapping[str, Any]) -> int:
     carries the same rule in `order_flow._last_trade_key` until its pin moves to the release
     that has this one, and says so in that docstring.
 
-    Sources: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
+    Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol
     (read 2026-09-28) and the CME CL contract specs,
     https://www.cmegroup.com/markets/energy/crude-oil/light-sweet-crude.contractSpecs.html
     (scraped 2026-09-24 for claudia_ui #71; the page is script-rendered and answered no plain
@@ -3675,7 +3675,7 @@ class ClaudeToolkit:
         # API, and a stock's contract rules list them. Whether the gateway accepts them is
         # unmeasured, so they are not previewed here (docs/order-management-examples.md
         # § Time in force, part 5).
-        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
         _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
         # Four of the five values in IBKR's `tif` enum — "Allowed values: DAY, IOC, GTC, OPG,
@@ -3734,7 +3734,7 @@ class ClaudeToolkit:
         }
         if sec_type in ("FUT", "FOP"):
             # Required for US Futures and Futures Options — CME Group Rule 536-B
-            # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+            # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
             #
             # `extOperator` is documented beside `manualIndicator`, but IBKR rejects any
             # non-empty value on this account class as undocumented field 8089 — the
@@ -3770,7 +3770,7 @@ class ClaudeToolkit:
         per-position/conid breakdown in this endpoint at all, despite an earlier
         version of this docstring claiming one; for per-position detail use
         get_positions instead. Verified against
-        https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md
+        https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss
         (scraped 2026-07-02, re-verified 2026-07-07).
 
         Cold-gateway quirk (live-verified 2026-07-17, see
@@ -4014,7 +4014,7 @@ class ClaudeToolkit:
         rather than omit it. Silence is the one outcome that is not allowed: it reads as
         "the usual currency", which is exactly the assumption this exists to remove.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid
                 (GET /iserver/secdef/info; returns a LIST, live-verified 2026-07-28 —
                 the wrapper's return annotation says dict, so both shapes are handled)
         """
@@ -4037,7 +4037,7 @@ class ClaudeToolkit:
         `local_symbol "ESU6"`, `contract_month "202609"`, `maturity_date "20260918"`,
         `company_name "E-mini S&P 500"`, `multiplier "50"`. Cached per conid. None when the
         read fails or carries no local symbol: the block is then omitted, never guessed.
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-instrument-info.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-instrument-info
         """
         cached = self._contract_identity.get(conid)
         if cached is not None:
@@ -4096,9 +4096,9 @@ class ClaudeToolkit:
 
         Returns a `_Resolved`: the conid and the currency it trades in, or an error.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md (trsrv/futures)
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol (trsrv/futures)
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
         """
         if sec_type == "FUT":
             futures = self._client.get_futures([sym])
@@ -4353,8 +4353,8 @@ class ClaudeToolkit:
         meant. Reporting the other symbols while staying quiet about that one would be
         the same defect as picking a listing at random.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-availability
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
@@ -4392,7 +4392,7 @@ class ClaudeToolkit:
 
         # First call initializes the iServer subscription but returns no price fields.
         # Retry once after 1s — same two-call warmup pattern as /iserver/account/orders.
-        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot
         def _has_prices(s: list[dict[str, Any]]) -> bool:
             return any(item.get("31") or item.get("84") or item.get("86") for item in s)
 
@@ -4462,7 +4462,7 @@ class ClaudeToolkit:
                 "even within a US equities bundle. "
                 "Check: Account Management → Settings → Market Data Subscriptions. "
                 "If the ticker is incorrect, please provide the right one. "
-                "Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md"
+                "Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-availability"
             )
         if notes:
             result = "\n".join(notes) + "\n\n" + result

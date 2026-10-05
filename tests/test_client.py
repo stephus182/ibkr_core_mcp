@@ -958,7 +958,7 @@ def test_get_futures_handles_dict_response(client):
 def test_get_currency_pairs_handles_dict_response(client):
     """IBKR /iserver/currency/pairs returns {"USD": [{symbol, conid, ccyPair}]}.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
     """
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -1246,7 +1246,7 @@ def test_get_market_history_normalizes_period_and_bar_case(client):
 
 # ---------------------------------------------------------------------------
 # get_option_strikes / get_option_chain — documented secdef flow
-# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id.md
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id
 # ---------------------------------------------------------------------------
 
 
@@ -1628,7 +1628,7 @@ def test_paged_single_chunk_requests_are_not_paginated(client):
 # get_live_orders: an unrecognisable response is not "you have no orders"
 # ============================================================================
 # The documented response is {"orders": [...], "snapshot": bool}:
-# https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
 # Anything else used to `return []`, answering a safety-relevant question -- "do I
 # have working orders?" -- with a confident no. get_orders_raw exists precisely
 # because this shape can surprise, which is the tell that it was known to.
@@ -2205,7 +2205,7 @@ def test_cancel_order_logs_its_gate1_grant(client, caplog):
 # ============================================================================
 #
 # The endpoint returns at most 1000 data points per request (officially documented:
-# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
 # "This endpoint provides a maximum of 1000 data points"). It does NOT error when a
 # window would exceed that — it silently returns the newest 1000 and drops the rest.
 #
@@ -2325,7 +2325,7 @@ def test_chunk_width_never_exceeds_ibkrs_permitted_period_for_that_bar():
     size is not guaranteed to be the one asked for.
 
     Source, scraped 2026-09-15:
-    https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
     """
     from ibkr_core_mcp.client import _MAX_PERIOD_DAYS_FOR_BAR, _chunk_days_for_bar
 
@@ -2665,7 +2665,7 @@ def test_place_order_surfaces_ibkrs_rejection_object_instead_of_an_empty_list(cl
     is applied by `place_order_and_confirm` one layer OUTSIDE `place_order`, so the dict
     was destroyed before the defence ever saw it.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
     """
     rejection = {
         "error": "We cannot accept an order at the limit price you selected. "

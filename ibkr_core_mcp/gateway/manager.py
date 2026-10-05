@@ -251,7 +251,7 @@ class GatewayManager:
         Treating it as "down" told a user "start it first" about a gateway that was
         running perfectly (measured 2026-08-05).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server
         Endpoint: GET /tickle
         """
         try:
@@ -271,7 +271,7 @@ class GatewayManager:
     def is_authenticated(self) -> bool:
         """True if the gateway holds an active authenticated IBKR session.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
         Endpoint: GET /iserver/auth/status
         """
         try:

@@ -13,7 +13,7 @@ is the worst half to get wrong: a caller believing it would run no keepalive and
 sessions time out with nothing to explain why.
 
 It was removed because it could not be silenced. IBKR renews a session on **any** request
-(https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md), so a login
+(https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server), so a login
 or a deliberate session-clear requires every actor to go quiet — and a loop inside the
 container cannot see the host-side flag that coordinates that. Renewal is now the host's
 job; claudia_ui does it with `scripts/ibkr-keepalive.sh` under launchd.

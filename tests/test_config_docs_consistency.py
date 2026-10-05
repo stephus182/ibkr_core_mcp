@@ -206,7 +206,7 @@ def test_every_tracked_file_stating_the_live_suite_size_agrees_with_it():
 # Frozen here on purpose, not imported from the code under test. IBKR's own page says it
 # twice — "The endpoint supports paging, each page will return up to 100 positions" and
 # "One page contains a maximum of 100 positions"
-# (https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions). A guard that read
+# (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/positions). A guard that read
 # the number out of `client.py` would follow the source anywhere it drifted, which is how a
 # mutant survived in `tests/security/test_published_identifiers.py`.
 _IBKR_POSITIONS_PAGE_SIZE = 100

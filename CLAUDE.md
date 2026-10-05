@@ -521,8 +521,13 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is 576 B).
   - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
-    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**, **re-measured 2026-09-22: 483** — IBKR adds pages, so every figure here is true only as of its date and a count worth acting on is one you take yourself; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There is also an MCP server at
-    `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
+    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**, **re-measured 2026-09-22: 483** — IBKR adds pages, so every figure here is true only as of its date and a count worth acting on is one you take yourself; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There was also an MCP server at
+    `https://ibkrcampus.com/docs/web-api/_mcp/server` — unavailable on 2026-10-05, when `ibkrcampus.com/docs` answered
+    HTTP 403 with a Cloudflare error 1000 on every page and the same path on `www.interactivebrokers.com` answered
+    "MCP is disabled for this docs site". **Cite `www.interactivebrokers.com/docs/…`**: the 189 links here that used
+    the other host were repointed that day by path, each verified by `.md`, `llms.txt` and a fabricated control, and
+    ten page names that had never existed were corrected (`docs/external-docs-reference.md`). Prefer `.md` and
+    `llms.txt` over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
     is gone: as of 2026-07-30 there are **four web tools, one job each, and no fallback
     between them**. Anything with a URL goes to the free local browser — `fetch_page` (one

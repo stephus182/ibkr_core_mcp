@@ -50,7 +50,7 @@ SNAPSHOT_FIELD_NAMES: dict[str, str] = {
 
 The one definition in the package: `_FIELD_MAP` below (the streaming `Quote` attributes)
 and `claude_tools._get_market_snapshot` (the tool result) both draw from it. Source:
-https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-fields.md
+https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-fields
 (`87_raw` is the client's own numeric companion to the formatted volume).
 
 Why the tool names them (2026-09-11): with the raw codes in its result the model swapped
@@ -65,7 +65,7 @@ _DEFAULT_FIELDS = ["31", "55", "84", "86", "87"]
 
 #: Field 31's documented prefixes. "C" = previous day's closing price, "H" = trading
 #: has halted. Source:
-#: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-fields.md
+#: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-fields
 _PRICE_QUALIFIERS = ("C", "H")
 
 #: Field 87's documented multipliers — "Volume for the day, formatted with 'K' for
@@ -149,7 +149,7 @@ class LiveQuote:
 @dataclass
 class TradeExecution:
     """A single parsed IBKR WebSocket trade execution (str topic).
-    Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/subscribing-to-websocket-topics
     """
 
     execution_id: str
@@ -180,7 +180,7 @@ class TradeExecution:
 @dataclass
 class PnLUpdate:
     """A single parsed IBKR WebSocket account P&L tick (spl topic).
-    Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/subscribing-to-websocket-topics
     NOTE: IBKR's docs page mislabels this response section "Order Updates Response"
     (duplicate of the real order-updates heading earlier on the page) — the field
     content here is unambiguously P&L. Confirmed via a fresh targeted re-scrape, 2026-07-06.
@@ -254,7 +254,7 @@ def _sts_authenticated(msg: dict[str, Any]) -> bool | None:
 class IBKRWebSocket:
     """Async WebSocket client for IBKR real-time market data.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway
     Endpoint: wss://localhost:{port}/v1/api/ws
 
     `connect()` returns only once IBKR has reported the socket authenticated (its `sts`
@@ -394,7 +394,7 @@ class IBKRWebSocket:
     async def subscribe(self, conid: int, fields: list[str] | None = None) -> None:
         """Subscribe to real-time market data for a contract.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway
         Message format: smd+{conid}+{"fields": [...]}
         """
         if self._ws is None:
@@ -404,7 +404,7 @@ class IBKRWebSocket:
     async def unsubscribe(self, conid: int) -> None:
         """Unsubscribe from real-time market data for a contract.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/connection-guide/establishing-the-websocket-with-client-portal-gateway
         Message format: umd+{conid}+{}
         """
         if self._ws is not None:
@@ -413,7 +413,7 @@ class IBKRWebSocket:
     async def subscribe_executions(self, realtime_updates_only: bool = False, days: int = 1) -> None:
         """Subscribe to live trade executions.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/subscribing-to-websocket-topics
         Message format: str+{"realtimeUpdatesOnly": bool, "days": int}
         """
         if self._ws is None:
@@ -428,7 +428,7 @@ class IBKRWebSocket:
     async def subscribe_pnl(self) -> None:
         """Subscribe to live account P&L ticks.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/ws/subscribing-to-websocket-topics.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/ws/subscribing-to-websocket-topics
         Message format: spl+{}
         """
         if self._ws is None:

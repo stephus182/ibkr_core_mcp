@@ -37,10 +37,10 @@ records the gap so the skips are not mistaken for coverage, and
 `tests/claude_tools/test_alerts.py::test_the_alert_write_block_is_stated_everywhere_it_matters_until_it_lifts`
 fails the day a passing round trip is logged while this note still stands.
 
-Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/initialize-brokerage-session.md
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/initialize-brokerage-session
 See docs/audits/live-test-log.md#run-2026-07-01-1 for the confirmed finding.
 
-Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def live_toolkit(live_config):
     GDriveCache and SQLiteStore are mocked — alert operations do not touch them.
     Skips the entire module if the gateway is unreachable or unauthenticated.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server
     """
     from ibkr_core_mcp.auth import BrowserCookieAuth
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
@@ -88,7 +88,7 @@ def live_toolkit(live_config):
         pytest.skip("IBKR gateway not reachable or not authenticated")
     # Warm up the brokerage session — some write endpoints (alerts, orders) return
     # HTTP 403 without this initialisation call.
-    # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts.md
+    # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts
     with contextlib.suppress(Exception):
         client.get_accounts()
     return ClaudeToolkit(client, MagicMock(), MagicMock(), live_config)
@@ -148,7 +148,7 @@ def _delete_safe(toolkit, alert_id: str) -> None:
 def test_toolkit_get_alerts(live_toolkit):
     """get_alerts returns a JSON list or the empty-state message — never an exception.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts
     """
     text, fig = live_toolkit.execute("get_alerts", {})
     assert fig is None
@@ -231,7 +231,7 @@ def test_toolkit_alert_repeat(live_toolkit):
 def test_toolkit_alert_deactivate_and_reactivate(live_toolkit):
     """Toggle an alert off then back on — both activate_alert calls must succeed.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/activate-or-deactivate-an-alert.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/activate-or-deactivate-an-alert
     """
     _, alert_id = _create_alert(live_toolkit)
     assert alert_id
@@ -306,7 +306,7 @@ def test_toolkit_alert_full_roundtrip(live_toolkit):
     This is the canonical alert lifecycle test. All other tests in this file
     verify individual operations; this one verifies they chain correctly.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts
     """
     create_text, alert_id = _create_alert(live_toolkit, name="_ci_roundtrip", price=99999.0)
     assert alert_id, f"No alert ID from create: {create_text!r}"

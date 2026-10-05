@@ -646,7 +646,7 @@ carries `clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]` (`openingTim
 > `v1/endpoints/contract/trading-schedule-by-symbol.md` and so **omitted `exchange` and
 > `description`**, which the live gateway does return. IBKR publishes three "trading
 > schedule" pages that disagree; the authoritative one for this endpoint is
-> [`api-reference/trading/trading-contracts/get-trading-schedule.md`](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule.md),
+> [`api-reference/trading/trading-contracts/get-trading-schedule.md`](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule),
 > whose response object matches the wire in all six keys. See `client.get_trading_schedule`
 > for which page says what.
 

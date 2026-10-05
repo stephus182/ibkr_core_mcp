@@ -266,7 +266,7 @@ def test_preview_order_mkt_no_price(toolkit):
 def test_preview_order_stp_maps_stop_price_to_price(toolkit):
     """STP orders carry the trigger in `price` — CP API place-order spec:
     "For STP|TRAIL this is the stop price."
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
@@ -289,7 +289,7 @@ def test_preview_order_stp_maps_stop_price_to_price(toolkit):
 def test_preview_order_stop_limit_maps_limit_to_price_and_stop_to_aux(toolkit):
     """STOP_LIMIT requires both: price = limit price, auxPrice = stop price.
     Spec: "You must specify both price and auxPrice for STOP_LIMIT|TRAILLMT orders."
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
@@ -656,7 +656,7 @@ def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
       without -> accepted, full margin impact, `"error": null`
       with    -> HTTP 500 {"error":"Can not contain field # 8089"}
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
     """
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_futures.return_value = [{"conid": 515416632, "symbol": "ES", "expirationDate": "20261218"}]

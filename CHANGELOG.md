@@ -282,6 +282,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **189 documentation links point at a host that answers, and ten of them at pages that
+  exist.** IBKR serves its Web API documentation on two hosts with the same paths; on
+  2026-10-05 `ibkrcampus.com/docs/…` answered HTTP 403 with a Cloudflare error 1000 on every
+  page tried while `www.interactivebrokers.com/docs/…` served them. Every link in the
+  package's docstrings, the living docs and the tests that used the first host now uses the
+  second, by path — each of the 84 target pages checked by its `.md` variant, against IBKR's
+  `llms.txt`, and beside a fabricated control. **Ten `Source:` lines in `models.py` named
+  pages that had never existed** (`contract/contract-rules` for `contract/search-contract-rules`,
+  `session/auth-status` for `session/authentication-status`, and eight more); they are
+  corrected from the index and each replacement confirmed to name the model's endpoint. The
+  documentation MCP server the docs mentioned is unavailable on both hosts and is marked so.
+  Every other documentation link in the living files was fetched as well (344 URLs): all
+  resolve. Released CHANGELOG sections and `docs/audits/` keep the URLs they were written
+  with.
 - **`add_indicators` no longer prints a VWAP for an all-hours series.** The VWAP restarts on
   the UTC day, which a regular US or European session sits inside and an all-hours one does
   not: a CME session opens at 18:00 New York and crosses midnight UTC (measured 2026-09-17 on
