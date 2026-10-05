@@ -29,6 +29,7 @@ Research index: `claudia_ui/.firecrawl/market-data/SOURCES.md` (scrapes of 2026-
 | Hours | `outside_rth` explicit on every tool that reads the cache. Fetch default by type — `STK` false, `FUT` true; readers default false. Every result states the hours and why (`regular trading hours (by default for STK)`, `all trading hours (as given)`) | Operator 2026-10-03 (point 4): "always be explicit about everything"; defaults as given |
 | Stamps | Kept as IBKR's. An all-hours futures series prints its stamps **as session opens, in ET**, with the reading rule; `add_indicators` says `last bar stamped … (its session open)`. Nothing computes a session date | Operator 2026-10-03: "keep IB stamp … should not be modified, only understood correctly by evidence and rules"; §3 for why a calendar cannot do it |
 | Default end date | Today, stated (`ending 2026-10-03 (today, by default)`) | Operator 2026-10-02 ("a default must be stated") |
+| Indicators on these bars | Computed with TradingView's settings, each printed on its line; the averages and bands read `hl2` by default, RSI and MACD `close`. A VWMA and the Volume Ratio weigh by IBKR's filtered volume; VWAP is printed for regular-hours intraday bars only | [`indicators-reference.md`](indicators-reference.md); operator 2026-10-05 |
 
 ---
 

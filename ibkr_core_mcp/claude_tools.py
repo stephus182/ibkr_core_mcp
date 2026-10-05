@@ -151,6 +151,197 @@ def _span_text(df: pd.DataFrame, bar: str, futures_all_hours: bool) -> str:
     return text
 
 
+# What add_indicators computes with when a setting is not given — each printed on the result
+# as "(by default)", never silent. Type, length, StdDev and offset are TradingView's own
+# defaults ("20 days is the default", "2 is the default", "0 is the default", basis SMA:
+# https://www.tradingview.com/support/solutions/43000501840-bollinger-bands-bb/). The source
+# of the averages and bands is the operator's (2026-10-05): hl2, where TradingView's is close.
+# RSI and MACD read close, the price both are defined on (`indicators.rsi`, `indicators.macd`).
+# The functions in `indicators` keep `close` as their own default; this tool always passes one.
+_INDICATOR_DEFAULTS: dict[str, Any] = {
+    "source": "hl2",
+    "oscillator_source": "close",
+    "ma_type": "SMA",
+    "ma_periods": [],
+    "band_period": 20,
+    "band_stds": [2],
+    "offset": 0,
+}
+
+# Pine's wording for the four combined sources, printed beside the name where it is stated.
+_SOURCE_FORMULAS = {
+    "hl2": "(high + low)/2",
+    "hlc3": "(high + low + close)/3",
+    "ohlc4": "(open + high + low + close)/4",
+    "hlcc4": "(high + low + close + close)/4",
+}
+
+
+class _IndicatorSettings(NamedTuple):
+    """What one add_indicators call computes with, and the lines that say so on the result."""
+
+    source: str
+    oscillator_source: str
+    ma_type: str
+    ma_periods: list[int]
+    band_period: int
+    band_stds: list[float]
+    offset: int
+    stated: list[str]
+
+
+def _is_whole(value: Any) -> bool:
+    """A whole number as JSON sends one — `True` is an int in Python and is not a length."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _indicator_settings(inputs: Mapping[str, Any]) -> _IndicatorSettings | str:
+    """The settings add_indicators will compute with, or the sentence that refuses them.
+
+    A source or a type outside TradingView's lists is refused with the list. The schema's
+    `enum` is not enforced server-side, and computing on `close` under the name that was
+    asked for is the silent substitution this tool exists to remove.
+    """
+
+    def setting(key: str) -> tuple[Any, str]:
+        given = inputs.get(key)
+        return (_INDICATOR_DEFAULTS[key], "by default") if given is None else (given, "as given")
+
+    source, source_why = setting("source")
+    oscillator_source, oscillator_why = setting("oscillator_source")
+    ma_type, type_why = setting("ma_type")
+    ma_periods, _ = setting("ma_periods")
+    band_period, length_why = setting("band_period")
+    band_stds, stds_why = setting("band_stds")
+    offset, offset_why = setting("offset")
+
+    refused = "add_indicators: {} Nothing computed."
+    for name, value in (("source", source), ("oscillator_source", oscillator_source)):
+        if value not in _indicators.SOURCES:
+            sources = ", ".join(_indicators.SOURCES)
+            return refused.format(f"{name} {value!r} is not one of TradingView's price sources ({sources}).")
+    if not isinstance(ma_type, str) or ma_type not in _indicators.MA_TYPES:
+        types = ", ".join(_indicators.MA_TYPES)
+        return refused.format(f"ma_type {ma_type!r} is not one of TradingView's moving-average types ({types}).")
+    if not isinstance(ma_periods, list) or not all(_is_whole(n) and n >= 1 for n in ma_periods):
+        return refused.format("ma_periods must be a list of whole numbers of bars, each 1 or more.")
+    if not _is_whole(band_period) or band_period < 1:
+        return refused.format("band_period must be a whole number of bars, 1 or more.")
+    if not isinstance(band_stds, list) or not band_stds:
+        return refused.format("band_stds must be a list of one or more numbers above 0.")
+    if not all(isinstance(x, int | float) and not isinstance(x, bool) and x > 0 for x in band_stds):
+        return refused.format("band_stds must be a list of one or more numbers above 0.")
+    if not _is_whole(offset):
+        return refused.format("offset must be a whole number of bars.")
+
+    def shown(name: str) -> str:
+        return f"{name} = {_SOURCE_FORMULAS[name]}" if name in _SOURCE_FORMULAS else name
+
+    stds = ", ".join(f"{x:g}" for x in band_stds)
+    stated = [
+        f"  Averages and bands — source: {shown(source)} ({source_why}); type: {ma_type} ({type_why}); "
+        f"offset: {offset} ({offset_why})",
+        f"  Bands — length: {band_period} ({length_why}); StdDev: {stds} ({stds_why})",
+        f"  RSI and MACD — source: {shown(oscillator_source)} ({oscillator_why})",
+    ]
+    return _IndicatorSettings(source, oscillator_source, ma_type, ma_periods, band_period, band_stds, offset, stated)
+
+
+def _or_na(rendered: str, values: Sequence[Any], bars: int = 0, needed: int = 0) -> str:
+    """`rendered`, unless a number in it does not exist — then the reason, never `nan`.
+
+    Too few bars names both counts and the remedy: a 200-bar average on a 126-bar window
+    cannot be computed, and the only cure is a longer fetch. `needed` is applied to EMA and
+    MACD as well, which Pine defines from the first bar: a 200-bar EMA on 126 bars is a
+    number, and not one to act on. Enough bars and still no value is a division the
+    indicator's own definition leaves undefined — a flat window under RSI or the Stochastic.
+    """
+    if bars < needed:
+        return f"n/a — {bars} bars in the window, {needed} needed; fetch a longer period"
+    if any(pd.isna(v) for v in values):
+        return "n/a — undefined on the last bar"
+    return rendered
+
+
+def _drawn_on_last_bar(series: pd.Series, offset: int) -> Any:
+    """The value TradingView draws on the last bar when a line is moved by `offset` bars.
+
+    "Changing this number will move the [line] either Forwards or Backwards relative to the
+    current market" (https://www.tradingview.com/support/solutions/43000696841-simple-moving-average/);
+    Pine's `plot`: "Shifts the plot to the left or to the right on the given number of bars".
+    The values are not changed. Moved right by 3, the last bar carries the value computed 3
+    bars earlier; moved left, the line stops short of the last bar and nothing sits on it.
+    """
+    return series.iloc[-1 - offset] if 0 <= offset < len(series) else float("nan")
+
+
+def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, timeframe: str, outside_rth: bool) -> str:
+    """add_indicators' result: the settings, then one line per value in TradingView's labels.
+
+    The averages and bands are labelled as TradingView's chart legend labels them — `SMA 200
+    hl2`, `BB 200 SMA hl2 2.5` (type, length, source, StdDev) — so a line here can be held
+    against the line there. One sentence TradingView has no need of, since it draws the
+    picture: where the last bar's close sits against the bands' basis, in the bands' own
+    standard deviations. It is the close of the bar, and the source's average and deviation.
+    """
+    bars = len(df)
+    shift = f" offset {s.offset}" if s.offset else ""
+    left = f"nothing is drawn on the last bar — the line ends {-s.offset} bar(s) earlier"
+    reach = max(s.offset, 0)  # the bars a line moved right needs beyond its own length
+    lines = [header, *s.stated]
+
+    if not s.ma_periods:
+        lines.append("  Averages: none requested — give ma_periods, e.g. [25, 50, 100, 200]")
+    for length in s.ma_periods:
+        value = _drawn_on_last_bar(_indicators.moving_average(df, length, s.ma_type, s.source), s.offset)
+        text = left if s.offset < 0 else _or_na(f"{value:.2f}", [value], bars, length + reach)
+        lines.append(f"  {s.ma_type} {length} {s.source}{shift}: {text}")
+
+    columns = ("bb_mid", "bb_upper", "bb_lower")
+    for std in s.band_stds:
+        bands = _indicators.bollinger_bands(df, s.band_period, std, s.source, s.ma_type)
+        basis, upper, lower = (_drawn_on_last_bar(bands[c], s.offset) for c in columns)
+        levels = f"{basis:.2f} / {upper:.2f} / {lower:.2f} (basis / upper / lower)"
+        text = left if s.offset < 0 else _or_na(levels, [basis, upper, lower], bars, s.band_period + reach)
+        lines.append(f"  BB {s.band_period} {s.ma_type} {s.source} {std:g}{shift}: {text}")
+
+    one_sigma = _indicators.bollinger_bands(df, s.band_period, 1.0, s.source, s.ma_type)
+    basis = _drawn_on_last_bar(one_sigma["bb_mid"], s.offset)
+    sigma = _drawn_on_last_bar(one_sigma["bb_upper"], s.offset) - basis
+    close = float(df["close"].iloc[-1])
+    distance = (close - basis) / sigma if sigma else float("nan")
+    basis_label = f"{s.ma_type} {s.band_period} {s.source}{shift}"
+    if s.offset < 0 or bars < s.band_period + reach or pd.isna(distance):
+        why = left if s.offset < 0 else _or_na("", [distance], bars, s.band_period + reach)
+        lines.append(f"  last close {close:.2f} vs {basis_label}: {why}")
+    else:
+        lines.append(
+            f"  last close {close:.2f} = {basis_label} {'+' if distance >= 0 else '-'} {abs(distance):.2f} StdDev "
+            f"(1 StdDev = {sigma:.2f}: population standard deviation of {s.source} over {s.band_period} bars)"
+        )
+
+    osc = s.oscillator_source
+    rsi = _indicators.rsi(df, 14, osc).iloc[-1]
+    macd = _indicators.macd(df, source=osc).iloc[-1]
+    macd_line, macd_signal = macd["macd"], macd["macd_signal"]
+    # `add_all` supplies the lines that take no source. Its own RSI, MACD and bands are on
+    # `close` at fixed settings and are not read here: the ones above carry their settings.
+    last = _indicators.add_all(df).iloc[-1]
+    atr, k, d = last["atr"], last["stoch_k"], last["stoch_d"]
+    williams, volume_ratio = last["williams_r"], last["volume_ratio"]
+    lines += [
+        f"  RSI(14) {osc}: {_or_na(f'{rsi:.1f}', [rsi], bars, 15)}",
+        f"  MACD(12,26,9) {osc}: "
+        + _or_na(f"{macd_line:.4f}  Signal: {macd_signal:.4f}", [macd_line, macd_signal], bars, 34),
+        f"  ATR(14): {_or_na(f'{atr:.4f}', [atr], bars, 14)}",
+        f"  VWAP: {_format_vwap(last, timeframe, outside_rth)}",
+        f"  Stoch %K/%D (14,3): {_or_na(f'{k:.1f} / {d:.1f}', [k, d], bars, 16)}",
+        f"  Williams %R (14): {_or_na(f'{williams:.1f}', [williams], bars, 14)}",
+        f"  Volume Ratio (20): {_or_na(f'{volume_ratio:.2f}x avg', [volume_ratio], bars, 20)}",
+    ]
+    return "\n".join(lines)
+
+
 def _describe_listing(listing: Mapping[str, Any]) -> str:
     """One line naming a listing: name, exchange, currency, conid; "unknown" where unread."""
     name = listing.get("name") or "name unknown"
@@ -714,9 +905,22 @@ TOOL_DEFINITIONS = [
         "name": "add_indicators",
         "capabilities": frozenset({"COMPUTE"}),
         "description": (
-            "Load cached market data for a symbol and compute all technical indicators "
-            "(RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, Williams %R, and Volume Ratio). "
-            "Returns a summary of current indicator values."
+            "Load cached market data and compute technical indicators on its last bar, with "
+            "TradingView's settings. Moving averages (ma_periods, ma_type, source, offset) and "
+            "Bollinger bands (band_period, band_stds, ma_type as the 'Basis MA Type', source, "
+            "offset) are labelled as TradingView's chart legend labels them — 'SMA 200 hl2', "
+            "'BB 200 SMA hl2 2' — followed by where the last bar's close sits against the bands' "
+            "basis, in the bands' standard deviations. Then RSI(14) and MACD(12,26,9) on "
+            "oscillator_source, ATR(14), VWAP (intraday bars only), the Fast Stochastic (14,3), "
+            "Williams %R (14) and Volume Ratio (20). "
+            "Every line names the settings it was computed with, and a setting you leave out is "
+            "printed as '(by default)': the averages and bands read hl2 = (high + low)/2 by "
+            "default, RSI and MACD read close. Say which source a figure is on when you quote it. "
+            "Fetch a period longer than your longest length: an average needs its full length in "
+            "bars (a 200-bar average on 126 bars prints 'n/a' with both counts), and EMA, RSI and "
+            "MACD are less exact near the start of the data — nothing is fetched behind the "
+            "scenes. Not offered: MACD's two MA types, RSI's smoothing and divergence, and a "
+            "timeframe other than the cached bars'."
         ),
         "input_schema": {
             "type": "object",
@@ -731,6 +935,57 @@ TOOL_DEFINITIONS = [
                 "outside_rth": {
                     "type": "boolean",
                     "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": list(_indicators.SOURCES),
+                    "description": (
+                        "Price source of the moving averages and the Bollinger bands — TradingView's "
+                        "'Source': hl2 = (high + low)/2, hlc3 = (high + low + close)/3, ohlc4 = "
+                        "(open + high + low + close)/4, hlcc4 = (high + low + close + close)/4. "
+                        "Default hl2, stated on the result (TradingView's own default is close)"
+                    ),
+                },
+                "oscillator_source": {
+                    "type": "string",
+                    "enum": list(_indicators.SOURCES),
+                    "description": (
+                        "Price source of RSI and MACD, same eight names. Default close — the price "
+                        "both are defined on, and TradingView's default"
+                    ),
+                },
+                "ma_type": {
+                    "type": "string",
+                    "enum": list(_indicators.MA_TYPES),
+                    "description": (
+                        "Type of the moving averages and of the bands' basis — TradingView's 'Basis "
+                        "MA Type'. On the bands it moves the basis line only; the deviation stays "
+                        "the population standard deviation of the source. VWMA weighs by IBKR's "
+                        "filtered volume. Default SMA"
+                    ),
+                },
+                "ma_periods": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Lengths of the moving averages to report, in bars, e.g. [25, 50, 100, 200]. None by default",
+                },
+                "band_period": {
+                    "type": "integer",
+                    "description": "Bollinger bands 'Length', in bars. Default 20",
+                },
+                "band_stds": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Bollinger bands 'StdDev' — one band pair per value, e.g. [1, 2, 2.5]. Default [2]",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": (
+                        "TradingView's 'Offset' for the averages and bands, in bars. The values are "
+                        "unchanged; a positive offset draws the line that many bars to the right, so "
+                        "the last bar shows the value computed that many bars earlier, and a negative "
+                        "one draws it to the left, so nothing sits on the last bar. Default 0"
+                    ),
                 },
             },
             "required": ["symbol", "timeframe", "period", "end"],
@@ -1516,7 +1771,7 @@ _UNKNOWN_MONEY = "—"
 _WATCHLIST_CONTENTS_LIMIT = 25
 
 
-def _format_vwap(last: Any, timeframe: str) -> str:
+def _format_vwap(last: Any, timeframe: str, outside_rth: bool) -> str:
     """Render the VWAP line, or say why there is no VWAP to render.
 
     VWAP accumulates across one trading session. On daily or coarser bars each
@@ -1532,23 +1787,30 @@ def _format_vwap(last: Any, timeframe: str) -> str:
     year labelled "VWAP". Saying "n/a" is the honest output.
 
     The session is the UTC calendar day of the bars — `indicators.vwap`'s default, and
-    the only clock `add_all` offers. That is right for the bars this tool can hold:
-    `fetch_market_data` never asks for `outsideRth`, and a US or European regular
-    session sits inside one UTC day. It would be wrong for a CME session, which opens
-    at 18:00 New York and crosses midnight UTC an hour later; `indicators.vwap` takes
-    `tz` and `session_open` for that (DATA-R6, 2026-09-17).
+    the only clock `add_all` offers. That is right for a regular-hours series: a US or
+    European regular session sits inside one UTC day. It is wrong for an all-hours one. A
+    CME session opens at 18:00 New York and crosses midnight UTC (DATA-R6, 2026-09-17: on
+    ES minute bars the figure restarted mid-session), and a US stock's post-market runs to
+    20:00 New York, past midnight UTC for the months New York is on standard time. This
+    said "`fetch_market_data` never asks for `outsideRth`" until 2.2.0 made an all-hours
+    series fetchable (2026-10-03), which made that wrong figure printable; an all-hours
+    series now gets the reason instead (2026-10-05). `indicators.vwap` takes `tz` and
+    `session_open` for a caller who knows the session; this tool does not guess one.
 
     Args:
         last: Final row of the indicator frame.
         timeframe: IBKR bar-size string the bars were loaded at.
+        outside_rth: Whether the cached series covers all hours.
 
     Returns:
-        A formatted price for intraday bars, else an explanatory placeholder.
+        A formatted price for regular-hours intraday bars, else the reason there is none.
     """
     if not _analytics.is_intraday_timeframe(timeframe):
         return f"n/a ({timeframe} bars — VWAP is an intraday, single-session measure)"
+    if outside_rth:
+        return "n/a (an all-hours session crosses the UTC day this VWAP restarts on — none is computed for an all-hours series)"
     value = last.get("vwap", float("nan"))
-    return f"{value:.2f}"
+    return _or_na(f"{value:.2f}", [value])
 
 
 def _money(v: float | None) -> str:
@@ -3255,30 +3517,21 @@ class ClaudeToolkit:
         return f"FYI Notifications ({count}):\n" + "\n".join(lines), None
 
     def _add_indicators(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Compute RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, and Williams %R from cached bars."""
+        """Indicators on the last cached bar, with TradingView's settings — see `_indicator_report`."""
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
+        settings = _indicator_settings(inputs)
+        if isinstance(settings, str):
+            return settings, None
         outside, hours_note, _ = _hours(inputs, default=False, why="by default")
         if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
             return self._cache_miss_text(symbol, timeframe, period, end, outside), None
         df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
         row = self._cache.entry(symbol, timeframe, period, end, outside_rth=outside)
-        df = _indicators.add_all(df)
-        last = df.iloc[-1]
-        lines = [
-            f"Indicators for {symbol} {timeframe}, {hours_note} ({_last_bar_text(df, row)}):",
-            f"  RSI(14):          {last.get('rsi', float('nan')):.1f}",
-            f"  MACD:             {last.get('macd', float('nan')):.4f}  Signal: {last.get('macd_signal', float('nan')):.4f}",
-            f"  BB Upper/Mid/Low: {last.get('bb_upper', float('nan')):.2f} / {last.get('bb_mid', float('nan')):.2f} / {last.get('bb_lower', float('nan')):.2f}",
-            f"  ATR(14):          {last.get('atr', float('nan')):.4f}",
-            f"  VWAP:             {_format_vwap(last, timeframe)}",
-            f"  Stoch %K/%D:      {last.get('stoch_k', float('nan')):.1f} / {last.get('stoch_d', float('nan')):.1f}",
-            f"  Williams %R:      {last.get('williams_r', float('nan')):.1f}",
-            f"  Volume Ratio:     {last.get('volume_ratio', float('nan')):.2f}x avg",
-        ]
-        return "\n".join(lines), None
+        header = f"Indicators for {symbol} {timeframe}, {hours_note} ({_last_bar_text(df, row)}):"
+        return _indicator_report(df, settings, header, timeframe, outside), None
 
     def _run_backtest(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Execute a vectorised backtest strategy on cached OHLCV bars and return performance metrics."""

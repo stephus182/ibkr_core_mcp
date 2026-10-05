@@ -151,8 +151,44 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `docs/market-data-conventions.md`:** what a bar is, by asset class (STK, FUT) and source
   (IBKR, the exchange / the SIPs, TradingView) — stamps, hours, volume, keys, expiry — every
   convention with its dated proof and every official page linked.
+- **Indicators take TradingView's settings, under TradingView's names, and print them on every
+  line (market-data step 4, operator decisions 2026-10-05; register F4).** `add_indicators`
+  computed everything on `close` at fixed lengths and no setting reached the model; a framework
+  of averages and bands on (high + low)/2 could not be asked for at all. It now takes seven
+  optional inputs, each one TradingView's own: **`source`** for the moving averages and the
+  Bollinger bands — Pine's eight, `open` `high` `low` `close` `hl2` `hlc3` `ohlc4` `hlcc4`;
+  **`oscillator_source`** for RSI and MACD; **`ma_type`** — `SMA`, `EMA`, `SMMA (RMA)`, `WMA`,
+  `VWMA`, the type of the averages and the bands' *Basis MA Type*; **`ma_periods`** (a list);
+  **`band_period`** and **`band_stds`** (a list — one band pair each, `[1, 2, 2.5]`); and
+  **`offset`**. The result opens with the configuration, every setting marked `(by default)` or
+  `(as given)`, and labels the averages and bands as TradingView's chart legend does — `SMA 200
+  hl2`, `BB 200 SMA hl2 2.5` — followed by where the last bar's close sits against the bands'
+  basis: `last close 15.00 = SMA 3 hl2 + 1.84 StdDev (1 StdDev = 1.63: population standard
+  deviation of hl2 over 3 bars)`. **Defaults (the operator's decision): the averages and bands
+  read `hl2`, stated; RSI and MACD read `close`, the price both are defined on.** A source or
+  type outside TradingView's lists is refused with the list, never computed on `close` under
+  the name that was asked for. **A line never prints `nan`:** too few bars reads `n/a — 126
+  bars in the window, 200 needed; fetch a longer period`, an undefined value says so, and
+  nothing is fetched behind the scenes — the description tells the model to ask for a period
+  longer than its longest length. The bands' basis and deviation share one source (`ta.bb`);
+  `ma_type` on the bands moves the basis line only, as TradingView's help text says, which John
+  Bollinger's own rule 13 disagrees with — documented, and not yet held against a chart with a
+  non-SMA basis. Offset reports what TradingView draws on the last bar. In
+  `ibkr_core_mcp.indicators`: `SOURCES`, `MA_TYPES`, `price_source`, `moving_average`, and a
+  `source` argument on `sma`, `ema`, `rsi`, `macd` and `bollinger_bands` (which also takes
+  `ma_type`) — **every one defaulting to `close`, so existing callers are unchanged**. Not
+  offered: MACD's MA types, RSI's smoothing and divergence, another timeframe. **New
+  `docs/indicators-reference.md`:** every setting with its TradingView name, its default and
+  whose default it is, each definition in its source's own words, the `n/a` rules, what is not
+  offered, what is not yet established, and every official page. Tests: eleven, the figures
+  worked by hand from Pine's definitions; 32 mutations red.
 
 ### Changed
+- **`add_indicators`' output with no settings given is not what it was.** The Bollinger bands
+  are computed on `hl2` (they were on `close`), and are labelled `BB 20 SMA hl2 2: basis /
+  upper / lower` where the line read `BB Upper/Mid/Low`; RSI and MACD name their source
+  (`RSI(14) close`); the configuration is printed above the values; a value that does not exist
+  reads `n/a` with the reason where it read `nan`. `source="close"` restores the previous bands.
 - **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time
   (register F6; claudia_ui gap #67).**
   - *One colour rule:* on every dialog the button that validates is solid blue and the button
@@ -226,6 +262,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **`add_indicators` no longer prints a VWAP for an all-hours series.** The VWAP restarts on
+  the UTC day, which a regular US or European session sits inside and an all-hours one does
+  not: a CME session opens at 18:00 New York and crosses midnight UTC (measured 2026-09-17 on
+  ES minute bars — the figure restarted mid-session), and a US stock's post-market runs past
+  midnight UTC while New York is on standard time. The code's own comment said this could not
+  arise because "`fetch_market_data` never asks for `outsideRth`"; since this release it does,
+  for every future by default. An all-hours series reads `n/a` with the reason; the tool does
+  not guess a session (`indicators.vwap` still takes `tz` and `session_open`).
+- **`indicators.sma` returns the Series its docstring promised.** It said "a Series named
+  'sma_{period}'" and returned one named `close`. It is named for what it is — type, length,
+  source: `sma_200_hl2`.
 - **`preview_order` previews the time in force it is asked for, and states it (register F7).**
   Every what-if was sent with `tif: "DAY"` and the output said nothing, so a GTC order was
   previewed as a different order than the one proposed. The tool takes `tif` (`DAY`, `GTC`,

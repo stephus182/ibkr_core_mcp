@@ -1424,6 +1424,159 @@ def test_add_indicators_prints_a_vwap_number_on_intraday_bars(toolkit):
     assert any(ch.isdigit() for ch in vwap_line.split("VWAP")[1]), vwap_line
 
 
+def _framework_frame():
+    """Five bars whose hl2 is 6, 8, 10, 12, 14 and whose closes sit one above — small enough
+    to work the averages, the deviation and the distance in deviations by hand, and no number on `close`
+    equals its counterpart on `hl2`."""
+    import pandas as pd
+
+    hl2 = [6.0, 8.0, 10.0, 12.0, 14.0]
+    return pd.DataFrame(
+        {
+            "open": hl2,
+            "high": [v + 2 for v in hl2],
+            "low": [v - 2 for v in hl2],
+            "close": [v + 1 for v in hl2],
+            "volume": 1.0,
+        },
+        index=pd.date_range("2026-05-18", periods=5, freq="B"),
+    )
+
+
+def _indicator_line(text, label):
+    """The value part of the one output line that starts with `label`."""
+    (line,) = [ln for ln in text.splitlines() if ln.strip().startswith(label)]
+    return line.split(label, 1)[1].strip()
+
+
+_AAPL_WINDOW = {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+
+
+def test_add_indicators_reports_the_framework_in_tradingviews_labels_with_every_setting_named(toolkit):
+    """The operator's chart, 2026-10-05: `SMA 200 hl2` and `BB 200 SMA hl2 2.5` — averages and
+    bands of (high + low)/2, and where the last close sits in standard deviations. Worked by
+    hand on the last three bars: hl2 10, 12, 14 → SMA 12; population deviation sqrt(8/3) = 1.633;
+    bands 12 ± 1.633 and 12 ± 2.5 × 1.633; close 15 = +1.84 deviations. On `close` the average would be
+    13, so a source that is named and not used cannot pass. hl2 is the default here and is
+    said to be; RSI and MACD stay on `close` and say so."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute(
+        "add_indicators", {**_AAPL_WINDOW, "ma_periods": [3], "band_period": 3, "band_stds": [1, 2.5]}
+    )
+
+    assert_tool_succeeded(text)
+    assert "source: hl2 = (high + low)/2 (by default)" in text, text
+    assert _indicator_line(text, "SMA 3 hl2:") == "12.00"
+    assert _indicator_line(text, "BB 3 SMA hl2 1:") == "12.00 / 13.63 / 10.37 (basis / upper / lower)"
+    assert _indicator_line(text, "BB 3 SMA hl2 2.5:") == "12.00 / 16.08 / 7.92 (basis / upper / lower)"
+    assert "last close 15.00 = SMA 3 hl2 + 1.84 StdDev (1 StdDev = 1.63:" in text, text
+    assert "RSI and MACD — source: close (by default)" in text, text
+    assert _indicator_line(text, "RSI(14) close:") and _indicator_line(text, "MACD(12,26,9) close:")
+
+
+def test_add_indicators_never_prints_nan_and_says_how_many_bars_it_needs(toolkit):
+    """A 200-bar average cannot exist on a 5-bar window. `nan` reads as a broken tool; the
+    line says what is missing and what to do, on every line that has no value."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "ma_periods": [200]})
+
+    assert_tool_succeeded(text)
+    assert _indicator_line(text, "SMA 200 hl2:") == "n/a — 5 bars in the window, 200 needed; fetch a longer period"
+    assert "nan" not in text.lower(), text
+
+
+@pytest.mark.parametrize(
+    ("offset", "label", "expected"),
+    [
+        # Drawn one bar to the right: the last bar shows the average as of the bar before, (8+10+12)/3.
+        (1, "SMA 3 hl2 offset 1:", "10.00"),
+        # Drawn one bar to the left: the line stops short of the last bar.
+        (-1, "SMA 3 hl2 offset -1:", "nothing is drawn on the last bar — the line ends 1 bar(s) earlier"),
+    ],
+)
+def test_add_indicators_offset_reports_what_tradingview_draws_on_the_last_bar(toolkit, offset, label, expected):
+    """TradingView's Offset moves the line "Forwards or Backwards relative to the current
+    market"; Pine's `plot` "Shifts the plot to the left or to the right on the given number of
+    bars". The values are unchanged — what changes is which one sits on the last bar."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "source": "hl2", "ma_periods": [3], "offset": offset})
+
+    assert _indicator_line(text, label) == expected
+    assert "source: hl2 = (high + low)/2 (as given)" in text, text
+
+
+@pytest.mark.parametrize(
+    ("setting", "names"),
+    [
+        ({"source": "typical"}, "open, high, low, close, hl2, hlc3, ohlc4, hlcc4"),
+        ({"oscillator_source": "mid"}, "open, high, low, close, hl2, hlc3, ohlc4, hlcc4"),
+        ({"ma_type": "HMA"}, "SMA, EMA, SMMA (RMA), WMA, VWMA"),
+        ({"ma_periods": [0]}, "ma_periods"),
+        ({"band_period": 0}, "band_period"),
+        ({"band_stds": []}, "band_stds"),
+        ({"band_stds": [0]}, "band_stds"),
+        ({"offset": 1.5}, "offset"),
+    ],
+)
+def test_add_indicators_refuses_a_setting_it_cannot_honour(toolkit, setting, names):
+    """A source or type outside TradingView's lists is refused with the list — never computed
+    on `close` under the name that was asked for."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, **setting})
+
+    assert "Nothing computed" in text, text
+    assert names in text, text
+
+
+def test_add_indicators_computes_rsi_and_macd_on_the_source_it_names(toolkit):
+    """Flat closes under a rising midpoint. On `close`, the default, RSI has no value — 0/0,
+    which no source defines — and the line says so rather than printing `nan`; on `hl2` it is
+    100. A line labelled `hl2` and computed on `close` would print the first under the
+    second's name."""
+    import pandas as pd
+
+    rising = [float(i) for i in range(40)]
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = pd.DataFrame(
+        {"open": 100.0, "high": [101.0 + 2 * r for r in rising], "low": 99.0, "close": 100.0, "volume": 1.0},
+        index=pd.date_range("2026-03-02", periods=40, freq="B"),
+    )
+
+    on_close, _ = toolkit.execute("add_indicators", _AAPL_WINDOW)
+    on_hl2, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "oscillator_source": "hl2"})
+
+    assert _indicator_line(on_close, "RSI(14) close:") == "n/a — undefined on the last bar"
+    assert "nan" not in on_close.lower(), on_close
+    assert _indicator_line(on_hl2, "RSI(14) hl2:") == "100.0"
+    assert _indicator_line(on_hl2, "MACD(12,26,9) hl2:") != _indicator_line(on_close, "MACD(12,26,9) close:")
+
+
+def test_add_indicators_prints_no_vwap_for_an_all_hours_series(toolkit):
+    """This VWAP restarts on the UTC day. A regular US session sits inside one; an all-hours
+    session does not — a futures session opens at 18:00 New York and crosses midnight UTC
+    (measured 2026-09-17 on ES minute bars: the figure restarted mid-session, DATA-R6). Since
+    2.2.0 an all-hours series can be cached, so the line says why there is no figure instead
+    of printing that one. The regular-hours test above is the counter-case."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _indicator_frame(120, "5min")
+
+    text, _ = toolkit.execute(
+        "add_indicators",
+        {"symbol": "ESZ6", "timeframe": "5min", "period": "1D", "end": "2026-05-22", "outside_rth": True},
+    )
+
+    vwap_line = _indicator_line(text, "VWAP:")
+    assert vwap_line.startswith("n/a") and "all-hours" in vwap_line, vwap_line
+
+
 def _history_payload(n_bars, start_ms, step_ms, warning=None):
     """A get_market_history_paginated return value, optionally flagged incomplete."""
     payload = {

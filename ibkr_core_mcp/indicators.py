@@ -5,6 +5,63 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+SOURCES: tuple[str, ...] = ("open", "high", "low", "close", "hl2", "hlc3", "ohlc4", "hlcc4")
+"""The price sources an indicator can be computed on — TradingView's own list, in its order.
+
+Pine's `input.source()` documents the dropdown as "open/high/low/close/hl2/hlc3/ohlc4/hlcc4"
+(https://www.tradingview.com/pine-script-reference/v6/#fun_input.source, read 2026-10-05).
+TradingView's settings dialog shows the same eight as formulas — `hl2` reads "(H + L)/2"
+there — and its chart legend prints the short name (`SMA 200 hl2`); the short names are the
+vocabulary here. `price_source` holds each definition."""
+
+MA_TYPES: dict[str, str] = {"SMA": "sma", "EMA": "ema", "SMMA (RMA)": "rma", "WMA": "wma", "VWMA": "vwma"}
+"""TradingView's moving-average types, each mapped to the Pine function that defines it.
+
+"The types of moving averages available for built-in indicators are: "SMA", "SMA + Bollinger
+Bands", "EMA", "SMMA (RMA)", "WMA", and "VWMA"."
+https://www.tradingview.com/support/solutions/43000742042/ (read 2026-10-05). The keys are
+that list as written, less "SMA + Bollinger Bands", which is an SMA with `bollinger_bands`
+drawn round it rather than a sixth average. The values (`ta.sma` … `ta.vwma`) name the
+Series `moving_average` returns."""
+
+
+def price_source(df: pd.DataFrame, source: str = "close") -> pd.Series:
+    """The price series an indicator is computed on, by TradingView's name for it.
+
+    Pine v6 defines the four built-in combinations in as many words
+    (https://www.tradingview.com/pine-script-reference/v6/, `hl2`, `hlc3`, `ohlc4`, `hlcc4`):
+
+        hl2    "Is a shortcut for (high + low)/2"
+        hlc3   "Is a shortcut for (high + low + close)/3"
+        ohlc4  "Is a shortcut for (open + high + low + close)/4"
+        hlcc4  "Is a shortcut for (high + low + close + close)/4"
+
+    `open`, `high`, `low` and `close` are the bar's own columns. A name outside `SOURCES` is
+    refused: falling back to `close` would hand back a number computed on something the
+    caller did not ask for, under the name they did ask for.
+
+    Args:
+        df: OHLCV frame.
+        source: One of `SOURCES`. Default `close`, as in every Pine example.
+
+    Returns:
+        Series aligned to `df.index`.
+
+    Raises:
+        ValueError: If `source` is not one of `SOURCES`.
+    """
+    if source in ("open", "high", "low", "close"):
+        return df[source]
+    if source == "hl2":
+        return (df["high"] + df["low"]) / 2
+    if source == "hlc3":
+        return (df["high"] + df["low"] + df["close"]) / 3
+    if source == "ohlc4":
+        return (df["open"] + df["high"] + df["low"] + df["close"]) / 4
+    if source == "hlcc4":
+        return (df["high"] + df["low"] + df["close"] + df["close"]) / 4
+    raise ValueError(f"source must be one of {', '.join(SOURCES)}; got {source!r}")
+
 
 def _wilder_smooth(values: pd.Series, period: int) -> pd.Series:
     """Wilder's smoothing: seed with the mean of the first `period` values, then recur.
@@ -91,13 +148,71 @@ def true_range(df: pd.DataFrame) -> pd.Series:
     ).max(axis=1)
 
 
-def sma(df: pd.DataFrame, period: int = 20) -> pd.Series:
-    """Simple moving average of close price. Returns a Series named 'sma_{period}'."""
-    return df["close"].rolling(period).mean()
+def moving_average(df: pd.DataFrame, period: int = 20, ma_type: str = "SMA", source: str = "close") -> pd.Series:
+    """A moving average of `source`, of one of TradingView's five types, to Pine's definition.
+
+    Each type is the Pine function TradingView names for it, and each of those publishes
+    its own arithmetic (https://www.tradingview.com/pine-script-reference/v6/, `ta.sma`,
+    `ta.ema`, `ta.rma`, `ta.wma`, `ta.vwma`):
+
+        SMA         "the sum of last y values of x, divided by y"
+        EMA         "alpha * source + (1 - alpha) * EMA[1], where alpha = 2 / (length + 1)",
+                    seeded with the first value (`na(sum[1]) ? src`)
+        SMMA (RMA)  "the exponentially weighted moving average with alpha = 1 / length",
+                    seeded with the SMA of the first `length` values — Wilder's smoothing,
+                    the average inside RSI and ATR (`_wilder_smooth`)
+        WMA         "weighting factors decrease in arithmetical progression": the newest bar
+                    weighs `length`, the oldest 1 (`weight = (y - i) * y`, normalised)
+        VWMA        "the same as: sma(source * volume, length) / sma(volume, length)"
+
+    VWMA weighs by the frame's own volume. On IBKR bars that is IBKR's filtered historical
+    volume (docs/market-data-conventions.md), so where an exchange's reported volume differs
+    — crude futures — a VWMA differs from a chart built on that volume, for that reason.
+
+    Args:
+        df: OHLCV frame; `volume` is read for VWMA only.
+        period: Number of bars — TradingView's "Length".
+        ma_type: One of `MA_TYPES`.
+        source: One of `SOURCES`.
+
+    Returns:
+        Series aligned to `df.index`, named `{sma|ema|rma|wma|vwma}_{period}_{source}`.
+        NaN until `period` bars exist, except EMA, which Pine defines from the first bar.
+
+    Raises:
+        ValueError: If `ma_type` is not one of `MA_TYPES` or `source` not one of `SOURCES`.
+    """
+    src = price_source(df, source)
+    if ma_type == "SMA":
+        out = src.rolling(period).mean()
+    elif ma_type == "EMA":
+        out = src.ewm(span=period, adjust=False).mean()
+    elif ma_type == "SMMA (RMA)":
+        out = _wilder_smooth(src, period)
+    elif ma_type == "WMA":
+        # A window longer than the frame is never applied, so its weights are never used; the
+        # cap keeps a wild `period` from allocating them.
+        weights = np.arange(1, min(period, len(src)) + 1, dtype=float)
+        out = src.rolling(period).apply(lambda window: float(window @ weights) / weights.sum(), raw=True)
+    elif ma_type == "VWMA":
+        volume = df["volume"]
+        out = (src * volume).rolling(period).sum() / volume.rolling(period).sum().replace(0, float("nan"))
+    else:
+        raise ValueError(f"ma_type must be one of {', '.join(MA_TYPES)}; got {ma_type!r}")
+    return out.rename(f"{MA_TYPES[ma_type]}_{period}_{source}")
 
 
-def ema(df: pd.DataFrame, period: int = 20) -> pd.Series:
-    """Exponential moving average of close price, seeded with the first close.
+def sma(df: pd.DataFrame, period: int = 20, source: str = "close") -> pd.Series:
+    """Simple moving average of `source`. Returns a Series named `sma_{period}_{source}`.
+
+    `moving_average(df, period, "SMA", source)` — see there for the definition and the
+    sources. The Series is named for what it is: `sma_200_hl2` is not `sma_200_close`.
+    """
+    return moving_average(df, period, "SMA", source)
+
+
+def ema(df: pd.DataFrame, period: int = 20, source: str = "close") -> pd.Series:
+    """Exponential moving average of `source`, seeded with its first value.
 
     Deliberately NOT Wilder's smoothing, and deliberately not SMA-seeded. TradingView
     publishes equivalent Pine source for both averages, and the seeds differ on purpose
@@ -115,16 +230,18 @@ def ema(df: pd.DataFrame, period: int = 20) -> pd.Series:
     indicators Wilder actually defined.
 
     Args:
-        df: OHLCV frame; only `close` is read.
+        df: OHLCV frame.
         period: EMA span; alpha = 2 / (period + 1).
+        source: One of `SOURCES`. Default `close`.
 
     Returns:
-        Series aligned to `df.index`, defined from the first bar.
+        Series aligned to `df.index`, named `ema_{period}_{source}`, defined from the
+        first bar.
     """
-    return df["close"].ewm(span=period, adjust=False).mean()
+    return moving_average(df, period, "EMA", source)
 
 
-def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+def rsi(df: pd.DataFrame, period: int = 14, source: str = "close") -> pd.Series:
     """Relative Strength Index (0–100). Returns a Series. Values >70 overbought, <30 oversold.
 
     Zero average loss is a divide-by-zero for RS, and Wilder's convention resolves it by
@@ -143,14 +260,22 @@ def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
     A perfectly flat series leaves both averages at zero. RS is then 0/0, no source
     defines it, and NaN is returned rather than inventing a neutral 50.
 
+    RSI is defined on closing prices — TradingView's own long form opens `change =
+    change(close)` and ends "exactly equal to rsi(close, 14)"
+    (https://www.tradingview.com/support/solutions/43000502338-relative-strength-index-rsi/)
+    — and `close` is the default here for that reason. `ta.rsi(source, length)` takes any
+    source, and so does this; a caller who moves it off `close` is asking for a different
+    oscillator and should say so wherever the number is shown.
+
     Args:
-        df: OHLCV frame; only `close` is read.
+        df: OHLCV frame.
         period: Wilder smoothing period.
+        source: One of `SOURCES`. Default `close`.
 
     Returns:
         Series aligned to `df.index`, 0–100, NaN only where genuinely undefined.
     """
-    delta = df["close"].diff()
+    delta = price_source(df, source).diff()
     gain = _wilder_smooth(delta.clip(lower=0), period)
     loss = _wilder_smooth(-delta.clip(upper=0), period)
     rs = gain / loss.replace(0, float("nan"))
@@ -160,7 +285,7 @@ def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return result.mask((gain == 0) & (loss > 0), 0.0)
 
 
-def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9, source: str = "close") -> pd.DataFrame:
     """MACD. Columns: 'macd', 'macd_signal', 'histogram'.
 
         "MACD Line: (12-day EMA - 26-day EMA)
@@ -172,17 +297,25 @@ def macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> p
     seed is right here and wrong for `rsi`/`atr`. Verified unchanged by the 2026-09-16
     indicator audit; it is the Wilder-smoothed pair that was wrong, not this.
 
+    "Closing prices are used for these moving averages" (same page), so `close` is the
+    default. `ta.macd(source, fastlen, slowlen, siglen)` takes any source, and so does
+    this. TradingView's indicator also offers an "Oscillator MA type" and a "Signal MA
+    type" (EMA or SMA, https://www.tradingview.com/support/solutions/43000502344-moving-average-convergence-divergence-macd-indicator/);
+    those are not offered here — all three averages are EMAs, the definition quoted above.
+
     Args:
-        df: OHLCV frame; only `close` is read.
+        df: OHLCV frame.
         fast: Span of the faster EMA.
         slow: Span of the slower EMA.
         signal: Span of the EMA taken over the MACD line.
+        source: One of `SOURCES`. Default `close`.
 
     Returns:
         DataFrame indexed like `df`, defined from the first bar.
     """
-    ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
-    ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+    src = price_source(df, source)
+    ema_fast = src.ewm(span=fast, adjust=False).mean()
+    ema_slow = src.ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return pd.DataFrame(
@@ -286,7 +419,9 @@ def _session_labels(index: pd.DatetimeIndex, anchor: str, tz: str | None, sessio
     return clock.to_period(anchor)
 
 
-def bollinger_bands(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.DataFrame:
+def bollinger_bands(
+    df: pd.DataFrame, period: int = 20, std: float = 2.0, source: str = "close", ma_type: str = "SMA"
+) -> pd.DataFrame:
     """Bollinger Bands. Columns: 'bb_upper', 'bb_mid', 'bb_lower'.
 
     The deviation is the POPULATION standard deviation (ddof=0), which is the whole
@@ -307,17 +442,43 @@ def bollinger_bands(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.
     sqrt(20/19) = 2.60% too far from the middle at the default period. Band touches are
     the signal, so a systematically too-wide band under-reports every one of them.
 
+    **One source for the basis and the deviation.** Pine publishes `ta.bb` as
+    `basis = ta.sma(src, length)` and `dev = mult * ta.stdev(src, length)`
+    (https://www.tradingview.com/pine-script-reference/v6/#fun_ta.bb): bands on `hl2` are an
+    average of `hl2` plus and minus a deviation of `hl2`, never an average of one series
+    inside a deviation of another.
+
+    **`ma_type` is TradingView's "Basis MA Type", and it moves the middle line only.**
+    TradingView: "Determines the type of Moving Average that is applied to the basis plot
+    line" (https://www.tradingview.com/support/solutions/43000501840-bollinger-bands-bb/).
+    The deviation stays `ta.stdev`, which Pine computes around the *simple* mean whatever
+    the basis is. John Bollinger's own rules disagree with that combination, and say why the
+    default is an SMA:
+
+        "12. Traditional Bollinger Bands are based upon a simple moving average. This is
+         because a simple average is used in the standard deviation calculation and we wish
+         to be logically consistent."
+        "13. … Exponential averages must be used for BOTH the middle band and in the
+         calculation of standard deviation."
+        https://www.bollingerbands.com/bollinger-band-rules
+
+    TradingView's parameter is what is reproduced here, because matching its settings is the
+    purpose; with a non-SMA basis these are TradingView's bands, not Bollinger's exponential
+    ones. That reading of the help text had not been checked against a TradingView chart with
+    a non-SMA basis when this was written (2026-10-05).
+
     Args:
-        df: OHLCV frame; only `close` is read.
-        period: Lookback for both the middle SMA and the deviation — Bollinger ties
-            them together deliberately.
-        std: Deviation multiplier for the outer bands.
+        df: OHLCV frame.
+        period: Lookback for both the basis and the deviation — TradingView's "Length".
+        std: Deviation multiplier for the outer bands — TradingView's "StdDev".
+        source: One of `SOURCES`. Default `close`.
+        ma_type: One of `MA_TYPES`, for the basis. Default `SMA`.
 
     Returns:
         DataFrame indexed like `df`, NaN for the first `period - 1` bars.
     """
-    mid = df["close"].rolling(period).mean()
-    dev = df["close"].rolling(period).std(ddof=0)
+    mid = moving_average(df, period, ma_type, source)
+    dev = price_source(df, source).rolling(period).std(ddof=0)
     return pd.DataFrame(
         {"bb_upper": mid + std * dev, "bb_mid": mid, "bb_lower": mid - std * dev},
         index=df.index,

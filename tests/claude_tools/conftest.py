@@ -102,6 +102,9 @@ def toolkit(mock_config):
     from ibkr_core_mcp.cache import GDriveCache
 
     cache = MagicMock(spec=GDriveCache)
+    # `entry()` answers a manifest row or None. Left as a bare mock it answers a truthy
+    # MagicMock, which reads as "an all-hours futures series" to everything that asks.
+    cache.entry.return_value = None
     store = MagicMock()
     return ClaudeToolkit(client, cache, store, mock_config)
 

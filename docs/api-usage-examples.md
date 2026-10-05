@@ -64,7 +64,7 @@ else:
 
 ## Technical Indicators
 
-15 pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
+Pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
 
 ```python
 from ibkr_core_mcp import indicators
@@ -82,9 +82,19 @@ vwap_all = indicators.vwap(df, anchor=None)   # whole-frame cumulative, opt-in
 vwap_cme = indicators.vwap(df, tz="America/New_York", session_open="18:00")  # a CME session, not the UTC day
 kc_df    = indicators.keltner_channels(df)    # EMA(20) ± 2 × ATR(10) — ATR length is separate
 tr       = indicators.true_range(df)
+
+# A price source and a moving-average type, in TradingView's names (2.2.0)
+sma_200  = indicators.sma(df, 200, source="hl2")                  # Series named "sma_200_hl2"
+bands    = indicators.bollinger_bands(df, 200, 2.5, source="hl2") # basis and deviation both on hl2
+wma_50   = indicators.moving_average(df, 50, "WMA", "hlc3")       # SMA, EMA, SMMA (RMA), WMA, VWMA
+rsi_hl2  = indicators.rsi(df, 14, source="hl2")                   # close unless told otherwise
 ```
 
-Available: `sma`, `ema`, `rsi`, `macd`, `bollinger_bands`, `atr`, `true_range`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`
+Available: `sma`, `ema`, `moving_average`, `price_source`, `rsi`, `macd`, `bollinger_bands`, `atr`, `true_range`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`; the lists `SOURCES` and `MA_TYPES`
+
+**Every `source` defaults to `close`** — the textbook definition, unchanged. The eight sources,
+the five types, and what each setting corresponds to in TradingView:
+[`indicators-reference.md`](indicators-reference.md).
 
 ### Conventions — which variant each indicator implements
 

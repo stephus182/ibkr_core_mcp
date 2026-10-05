@@ -709,7 +709,9 @@ Delete a specific dataset from the Google Drive cache. Use when stale data needs
 ## Analysis
 
 ### `add_indicators`
-Load cached market data and compute all technical indicators.
+Load cached market data and compute technical indicators on its last bar, **with TradingView's
+settings, under TradingView's names, every one printed on the result**. Full reference — each
+setting's definition, default and official page: [`indicators-reference.md`](indicators-reference.md).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -718,16 +720,53 @@ Load cached market data and compute all technical indicators.
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
 | `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
+| `source` | string | — | Price source of the moving averages and the Bollinger bands — TradingView's *Source*. One of `open`, `high`, `low`, `close`, `hl2` = (high + low)/2, `hlc3` = (high + low + close)/3, `ohlc4` = (open + high + low + close)/4, `hlcc4` = (high + low + close + close)/4. **Default `hl2`**, stated on the result (TradingView's own default is `close`) |
+| `oscillator_source` | string | — | Price source of RSI and MACD, the same eight names. **Default `close`** — the price both are defined on, and TradingView's default |
+| `ma_type` | string | — | Type of the moving averages and of the bands' basis (TradingView's *Basis MA Type*): `SMA`, `EMA`, `SMMA (RMA)`, `WMA`, `VWMA`. On the bands it moves the basis line only; the deviation stays the population standard deviation of the source. **Default `SMA`** |
+| `ma_periods` | integer[] | — | Lengths of the moving averages to report, in bars, e.g. `[25, 50, 100, 200]`. **None by default** — no average line |
+| `band_period` | integer | — | Bollinger bands *Length*. **Default `20`** |
+| `band_stds` | number[] | — | Bollinger bands *StdDev* — one band pair per value, e.g. `[1, 2, 2.5]`. **Default `[2]`** |
+| `offset` | integer | — | TradingView's *Offset* for the averages and bands, in bars. The values are unchanged: a positive offset draws the line to the right, so the last bar shows the value computed that many bars earlier; a negative one draws it to the left, and nothing sits on the last bar. **Default `0`** |
 
-**Output:** Current values for: RSI(14), MACD, MACD signal, Bollinger Bands (upper/mid/lower),
-ATR(14), VWAP, Stochastic %K/%D, Williams %R, Volume Ratio.
+**Output.** Three lines of configuration, each setting marked `(by default)` or `(as given)`,
+then one line per value:
 
-VWAP is reported only for intraday `timeframe` values (`5min`, `1h`, …). It measures a
-single trading session, so on daily or coarser bars it has no meaning and the line reads
-`n/a` with the reason rather than printing a number — see
-`docs/api-usage-examples.md` § Conventions. The session is the UTC day of the bars; this
-tool fetches regular-hours bars only, and a US or European regular session sits inside
-one UTC day, so that boundary is the exchange day for the bars it holds (DATA-R6).
+```text
+Indicators for ESZ6 1h, all trading hours (as given) (last bar stamped 2026-10-01 18:00 ET (its session open)):
+  Averages and bands — source: hl2 = (high + low)/2 (by default); type: SMA (by default); offset: 0 (by default)
+  Bands — length: 200 (as given); StdDev: 1, 2.5 (as given)
+  RSI and MACD — source: close (by default)
+  SMA 25 hl2: <value>
+  SMA 200 hl2: <value>
+  BB 200 SMA hl2 1: <basis> / <upper> / <lower> (basis / upper / lower)
+  BB 200 SMA hl2 2.5: <basis> / <upper> / <lower> (basis / upper / lower)
+  last close <close> = SMA 200 hl2 + <n> StdDev (1 StdDev = <value>: population standard deviation of hl2 over 200 bars)
+  RSI(14) close: <value>
+  MACD(12,26,9) close: <value>  Signal: <value>
+  ATR(14): <value>
+  VWAP: <value, or the reason there is none>
+  Stoch %K/%D (14,3): <value> / <value>
+  Williams %R (14): <value>
+  Volume Ratio (20): <value>x avg
+```
+
+- **The labels are TradingView's chart-legend labels** — `SMA 200 hl2` (type, length, source),
+  `BB 200 SMA hl2 2.5` (length, basis type, source, StdDev) — so a line is held against the line
+  of the same name on a chart.
+- **`last close … ± n StdDev`** says where the last bar's **close** sits against the bands'
+  basis, in the bands' own deviations. The average and the deviation are the source's.
+- **A line never prints `nan`.** Too few bars reads `n/a — 126 bars in the window, 200 needed;
+  fetch a longer period`; a value the indicator's definition leaves undefined (a flat window
+  under RSI) reads `n/a — undefined on the last bar`. Nothing is fetched behind the scenes:
+  ask for a period longer than the longest length.
+- **A source or type outside TradingView's lists is refused with the list** — never computed on
+  `close` under the name that was asked for.
+- **VWAP** is printed for regular-hours intraday bars only. On daily or coarser bars it has no
+  meaning; on an **all-hours** series the session crosses the UTC day this VWAP restarts on, so
+  none is computed. Both read `n/a` with the reason (see
+  [`indicators-reference.md`](indicators-reference.md) § 7).
+- **Not offered:** MACD's two MA-type inputs, RSI's smoothing and divergence, a timeframe other
+  than the cached bars'.
 
 **Prerequisite:** Data must be cached. Call `fetch_market_data` first if needed.
 

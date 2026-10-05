@@ -252,7 +252,7 @@ See [docs/tools-reference.md](https://github.com/stephus182/ibkr_core_mcp/blob/m
 | `delete_alert` | Delete an IBKR price alert |
 | `activate_alert` | Enable or disable an IBKR price alert |
 | `get_watchlists` | List IBKR watchlists and their contents |
-| `add_indicators` | Compute RSI, MACD, Bollinger, ATR, VWAP, … |
+| `add_indicators` | Moving averages and Bollinger bands with TradingView's settings (source, type, length, StdDev, offset), RSI, MACD, ATR, VWAP, … — every setting printed on the result |
 | `run_backtest` | Sandboxed RestrictedPython strategy backtester |
 | `generate_pinescript` | Generate PineScript v5 strategy/indicator |
 | `get_analytics` | Sharpe, Sortino, Calmar, CAGR, max drawdown |

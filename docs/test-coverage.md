@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**2,195 unit tests · 102 integration tests (2,297 total) · 91% line coverage (non-integration)** — counted 2026-10-02 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
+**2,226 unit tests · 102 integration tests (2,328 total) · 91% line coverage (non-integration)** — counted 2026-10-05 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -106,7 +106,7 @@ inside a spawned child process, invisible to single-process coverage instrumenta
 | `order_confirm.py` | 99% | AppleScript `display dialog` fallback path and countdown-tick internals — require a running display/event loop; macOS only |
 | `flex_query.py` | 86% | `import_from_file` (reads a real file), `sync_archive_from_drive`, and `_archive_and_log` (require live GDrive) are integration paths. All error-handling paths (`_send_request`, `_get_statement`, `_parse_trades`) are 100% unit-tested. `_archive_and_log` verified live 2026-06-26 (see below). |
 | `streaming.py` | 95% | The real `websockets.connect` open needs a live gateway; everything after it — `connect()`'s handshake wait, `listen()`'s handshake buffer, `disconnect`, the parsers — is driven against a socket double that drops any send before it has delivered `sts` (F5, 2026-09-29). The 16 uncovered lines are `subscribe`/`unsubscribe`'s `smd`/`umd` wire strings and the parsers' error branches (an unparseable price, volume, conid or record). |
-| `claude_tools.py` | 92% | The untested 9% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
+| `claude_tools.py` | 93% | The untested 7% is live tool handlers that call `IBKRClient` methods and require a running IBKR gateway, plus a few defensive branches. Pure functions (`_parse_live_trades`, `_format_coverage`, tool definitions and routing) are fully tested. |
 
 ---
 
