@@ -41,7 +41,7 @@ Every living document, grouped by what you'd be doing when you need it.
 
 | File | Description |
 |---|---|
-| [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) |
+| [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) — and **time in force**: the three places IBKR states TIF values, what two contracts' rules return, what each surface of this package does with a TIF, auction orders, what is not established |
 | [`security-architecture.md`](security-architecture.md) | **Living security design** — principals and threat model (incl. AI-generated changes), privilege tiers, the trust-boundary map, the eleven invariants each with its enforcing test, subsystem designs (gates, sandbox, SSRF, redaction, transport), CI as a security instrument, the dated decision log, change recipes. `SECURITY.md` is the control inventory; the audits are the evidence |
 
 > The gate policy itself — Touch ID → visual confirmation, enforced inside `IBKRClient`,

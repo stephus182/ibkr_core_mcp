@@ -424,7 +424,10 @@ valid `secType` (only `STK`, `IND`, `BOND`) — this is the only documented FX r
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
 
 ### `get_contract_rules(conid, is_buy) -> ContractRules | dict`
-Order rules for a contract (min tick, valid order types, size constraints).
+Order rules for a contract (min tick, valid order types, size constraints) — **and the times in
+force that contract accepts** (`tifTypes`, typed `tif_types`): the per-contract authority, which
+can hold values IBKR's place-order enum lacks (`GTD`, `OVT`, `OND`). Entries arrive as IBKR
+sends them, `"OND/o,a,LIMIT"`. See `docs/order-management-examples.md` § Time in force.
 **Endpoint:** `POST /iserver/contract/rules`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules
 
@@ -938,6 +941,10 @@ stripped).
 **Endpoint:** `POST /iserver/account/{accountId}/orders`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
+
+**The body's `tif` is sent exactly as given** — no list is applied and no default is added.
+IBKR's enum is `DAY`, `IOC`, `GTC`, `OPG`, `PAX`; a contract's own rules can accept more
+(`docs/order-management-examples.md` § Time in force).
 
 **One ticket per call.** This method wraps the single `order` dict as `{"orders": [order]}`.
 IBKR's endpoint takes an *array* — "Only one order ticket object may be submitted per request,

@@ -580,7 +580,13 @@ class ContractRules(IBKRResponse):
         description="Order types valid outside RTH (IBKR field: orderTypesOutside)",
     )
     tif_types: list[str] = Field(
-        default_factory=list, alias="tifTypes", description="Accepted time-in-force values (IBKR field: tifTypes)"
+        default_factory=list,
+        alias="tifTypes",
+        description=(
+            "The times in force this contract accepts (IBKR field: tifTypes), as IBKR sends them: "
+            "each entry is the TIF, a slash and a list IBKR does not define — 'GTC/o,a', "
+            "'OND/o,a,LIMIT'. Can hold values the place-order enum lacks (GTD, OVT, OND)"
+        ),
     )
     cqt_types: list[str] = Field(
         default_factory=list, alias="cqtTypes", description="Cash-quantity order types (IBKR field: cqtTypes)"

@@ -1134,7 +1134,12 @@ TOOL_DEFINITIONS = [
                 "tif": {
                     "type": "string",
                     "enum": ["DAY", "GTC", "IOC", "OPG"],
-                    "description": "Time in force of the order being previewed — the one you will propose. Omitted: the preview is for a DAY order and says so.",
+                    "description": (
+                        "Time in force of the order being previewed — the one you will propose. Omitted: "
+                        "the preview is for a DAY order and says so. These four are the ones this tool "
+                        "previews; GTD and the overnight values (OVT, OND) exist per contract and cannot "
+                        "be previewed here"
+                    ),
                 },
             },
             "required": ["symbol", "action", "quantity"],
@@ -3657,15 +3662,26 @@ class ClaudeToolkit:
         IND, BOND, FUT (front month), or CASH ('BASE.QUOTE'). OPT is not supported.
         Price mapping per order type follows the CP API place-order spec.
         """
-        # Order type names match IBKR CP API place-order field spec. Only types this
-        # tool can fully parameterize are admitted: TRAIL/TRAILLMT need trailingAmt/
-        # trailingType (not exposed here); MOC/LOC are not in the documented type list.
+        # Order type names are IBKR's (OpenAPI `orderType` enum: MKT, LMT, STP, STOP_LIMIT,
+        # MIDPRICE, TRAIL, TRAILLMT). Only the types this tool can fully parameterize are
+        # offered: TRAIL/TRAILLMT need trailingAmt/trailingType, which it does not take.
+        # MOC/LOC are NOT offered either, and not because they are undocumented — this comment
+        # said "not in the documented type list" until 2026-10-05, which holds for that enum
+        # only: IBKR's order-type pages document `"orderType": "MOC"` / `"LOC"` for the Web
+        # API, and a stock's contract rules list them. Whether the gateway accepts them is
+        # unmeasured, so they are not previewed here (docs/order-management-examples.md
+        # § Time in force, part 5).
         # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
         _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
-        # IBKR's place-order enum for `tif` (same source). A preview is for ONE time in force
-        # and says which (register F7): every preview used to be sent as DAY, silently, so a
-        # GTC order was previewed as a different order than the one proposed.
+        # Four of the five values in IBKR's `tif` enum — "Allowed values: DAY, IOC, GTC, OPG,
+        # PAX" (https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md;
+        # the place-order page above carries no TIF list, which this comment used to cite).
+        # PAX is defined on no page read, so it is not offered; GTD, OVT and OND are in no
+        # enum and are returned per contract by /iserver/contract/rules — not offered here.
+        # A preview is for ONE time in force and says which (register F7): every preview used
+        # to be sent as DAY, silently, so a GTC order was previewed as a different order than
+        # the one proposed.
         _VALID_TIFS = ("DAY", "GTC", "IOC", "OPG")
         given_tif = inputs.get("tif")
         tif = str(given_tif).upper() if given_tif else "DAY"

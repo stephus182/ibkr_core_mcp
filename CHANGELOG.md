@@ -184,6 +184,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   worked by hand from Pine's definitions; 32 mutations red.
 
 ### Changed
+- **Time in force is documented in one place, and two comments that misstated IBKR are
+  corrected (register F11, F15).** New section in `docs/order-management-examples.md`: the
+  three places IBKR states TIF values and how they disagree — the order body's enum (`DAY`,
+  `IOC`, `GTC`, `OPG`, `PAX`), the overnight page (`OVT`, `OND`), and each contract's own rules
+  (which also return `GTD`); what a stock and a future returned (2026-09-24); how a TIF reads
+  back (`DAY` on the status endpoint, `CLOSE` on the live-orders one); what each surface of this
+  package does — the client sends a body's `tif` as given, `preview_order` offers four values
+  and cannot preview `GTD` / `OVT` / `OND`; auction orders; and what is not established (`PAX`,
+  `MOC` / `LOC` on place, a `GTD` order's expiry). `preview_order`'s code said its four values
+  were "IBKR's place-order enum" citing a page that carries no TIF list, and that `MOC` / `LOC`
+  "are not in the documented type list" — IBKR's enum has five values, on another page, and
+  `MOC` / `LOC` are documented for the Web API on IBKR's order-type pages. No behaviour changed.
 - **`add_indicators`' output with no settings given is not what it was.** The Bollinger bands
   are computed on `hl2` (they were on `close`), and are labelled `BB 20 SMA hl2 2: basis /
   upper / lower` where the line read `BB Upper/Mid/Low`; RSI and MACD name their source

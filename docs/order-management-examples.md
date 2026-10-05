@@ -189,6 +189,91 @@ Note that a preview cannot substitute for these checks: measured live 2026-09-20
 a *different instrument* returns a whatif response byte-identical to a valid one, because
 IBKR previews the first ticket and discards the rest. **A mismatched bracket previews clean.**
 
+## Time in force — what IBKR accepts, where it says so, and what this package does with it
+
+Read from IBKR's own pages and from its contract rules on 2026-09-24 (read-only), for
+claudia_ui gap #70. **The values come from three places, and the three do not agree** — so no
+single list here is "the" list, and the authority for one order is that contract's own rules.
+
+**1. Where IBKR states TIF values**
+
+| Where | Values | Source |
+|---|---|---|
+| The order body's `tif` — "Time in force of the order ticket", an enum, required | `DAY`, `IOC`, `GTC`, `OPG`, `PAX` | [submit-new-order](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md); the same five on [get-order-status](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/get-order-status.md) and in IBKR's OpenAPI document (v2.40.0) |
+| Overnight orders — "submitting the affiliated Time-In-Force value" | `OVT` (Overnight), `OND` (Overnight + DAY) | [overnight-order-submission](https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/overnight-order-submission.md). **Not in the enum above** |
+| Per contract — `POST /iserver/contract/rules`, `tifTypes`: "Indicates allowed tif types supported for the contract" | Whatever that contract accepts — measured below. Includes `GTD`, **which is in neither list above** | [search-contract-rules](https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-rules.md) |
+
+**2. What two contracts return** — `tifTypes`, both sides identical, 2026-09-24:
+
+| TIF | F — a US stock (conid 9599491) | ES Dec-26 — a CME future (conid 515416632) |
+|---|---|---|
+| `DAY` | ✅ | ✅ |
+| `GTC` | ✅ | ✅ |
+| `IOC` | ✅ | ✅ |
+| `GTD` | ✅ | ✅ |
+| `OPG` | ✅ `OPG/LIMIT,MARKET,a` | — |
+| `OVT` | ✅ `OVT/o,a,LIMIT` | — |
+| `OND` | ✅ `OND/o,a,LIMIT` | — |
+
+Each entry is the TIF, a slash, and a list (`"GTC/o,a"`, `"OND/o,a,LIMIT"`). IBKR's page does
+not define the list; in the measured values it names order types and the letters `o` and `a`.
+**Two contracts are two measurements, not a rule per asset class** — read the rules of the
+contract in hand: `client.get_contract_rules(conid, is_buy)["tifTypes"]`.
+
+**3. Reading a TIF back**
+
+| Endpoint | Field | What it returned for a DAY order |
+|---|---|---|
+| `/iserver/account/order/status/{id}` | `tif` — "Returns the time in force of the order." | `DAY` |
+| `/iserver/account/orders` | `timeInForce` — "Returns the time in force (tif) of the order." | **`CLOSE`** — a stock and a future alike; `GTC` orders read `GTC`. `CLOSE` is in none of the lists above and does **not** mean a closing-auction order (`docs/ibkr-api-behaviors-reference.md`) |
+| same | `orderDesc` | IBKR's own sentence, which states it: `Buy 1 F Limit 5.10, Day` |
+
+**4. What this package does**
+
+| Surface | Behaviour |
+|---|---|
+| `place_order`, `modify_order` and their `_and_confirm` forms | Send the body's `tif` **exactly as given**. No list is applied and no default is added: a value IBKR does not accept is answered by IBKR. |
+| Gate 2 dialog | Shows the `tif` being sent; a body with none shows `— (not sent)`, never `DAY`. |
+| `get_contract_rules` | Returns the contract's `tifTypes` (typed as `tif_types`), entries as IBKR sends them. **No `ClaudeToolkit` tool exposes it.** |
+| `preview_order` (tool) | Offers `DAY`, `GTC`, `IOC`, `OPG` — four of the enum's five. `PAX`, `GTD`, `OVT` and `OND` cannot be previewed through it, although a contract's rules may accept the last three. Left out, the preview is for `DAY` and says so. It does not read the contract's rules: `OPG` on a contract that does not list it is answered by IBKR's preview, not refused here. |
+| `get_live_orders` (tool) | Quotes `orderDesc`; never prints the row's `timeInForce` as the TIF. |
+| `get_order_status` (tool) | Returns the status endpoint's `tif`. |
+| Price alerts | A different vocabulary: `GTC` or `GTD` only — IBKR documents no `DAY` for an alert (`docs/tools-reference.md`, `create_price_alert`). |
+
+**5. Auction orders — the close is an order type, the open is a TIF**
+
+| Order | Body, per IBKR's order-type pages | Here |
+|---|---|---|
+| Market-on-open | `orderType: "MKT"`, `tif: "OPG"` ([MOO](https://ibkrcampus.com/docs/general/order-types/market-orders/market-on-open.md)) | Expressible; `preview_order` takes it |
+| Limit-on-open | `orderType: "LMT"` + `price`, `tif: "OPG"` ([LOO](https://ibkrcampus.com/docs/general/order-types/basic-orders/limit-orders/limit-on-open.md)) | Expressible; `preview_order` takes it |
+| Market-on-close | `orderType: "MOC"`, `tif: "DAY"` ([MOC](https://ibkrcampus.com/docs/general/order-types/market-orders/market-on-close.md)) | The client sends a body as given; `preview_order` does not offer `MOC` |
+| Limit-on-close | `orderType: "LOC"` + `price` ([LOC](https://ibkrcampus.com/docs/general/order-types/basic-orders/limit-orders/limit-on-close.md)) | Same; `preview_order` does not offer `LOC` |
+
+`MOC` and `LOC` are **documented for the Web API on those pages and absent from the OpenAPI
+`orderType` enum** (`MKT`, `LMT`, `STP`, `STOP_LIMIT`, `MIDPRICE`, `TRAIL`, `TRAILLMT`). F's
+rules list them (`marketonclose`, `limitonclose` in `orderTypes`); ES's rules list neither,
+although IBKR's MOC page names FUT among its products.
+
+**Not established** — stated rather than guessed:
+
+- What `PAX` is. It is in IBKR's enum and defined on none of the pages read.
+- What `o` and `a` mean in a `tifTypes` entry.
+- Whether the gateway accepts `MOC` / `LOC` on place (never sent; a `whatif` would settle it
+  without a write).
+- How a `GTD` order's expiry is given: contract rules return `GTD`, and neither of IBKR's two
+  place-order pages (`v1/endpoints/orders/place-order`, `api-reference/…/submit-new-order`)
+  mentions the value or a field for its date.
+- When an Overnight + Day order ends. IBKR's
+  [lesson](https://www.interactivebrokers.com/campus/trading-lessons/overnight-trading-using-limit-order/)
+  says of "Overnight + Day": "stay active until either filled or 4pm the next day"; its
+  [overnight page](https://www.interactivebrokers.com/en/trading/us-overnight-trading.php)
+  says "the SMART + OVERNIGHT order type keeps your orders working from the overnight session
+  through 8:00 PM the next day". Whether those describe the same order is not stated either.
+
+Evidence: scrapes and read-only captures of 2026-09-24 in
+`claudia_ui/.firecrawl/order-tif/` (git-ignored; `SOURCES.md` indexes them); the `CLOSE`
+readings are dated in `docs/ibkr-api-behaviors-reference.md`.
+
 **IBKR order constraints:**
 - Trade history via API limited to last 7 days (current + 6 previous) — `SQLiteStore` persists indefinitely
 - Orders require `conid` — for a stock, resolve it through `client.get_stocks` and its `isUS`
