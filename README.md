@@ -166,10 +166,15 @@ account_id = accounts[0]["accountId"]
 summary   = client.get_account_summary(account_id)
 positions = client.get_positions(account_id)
 
-# Market data requires a contract ID (conid), not a symbol string
-contracts = client.search_contract("AAPL")
-conid     = contracts[0]["conid"]
-bars      = client.get_market_history(conid, period="1Y", bar="1d")
+# Market data requires a contract ID (conid), not a symbol string — and a ticker is not a
+# listing. Resolve a stock through /trsrv/stocks and its `isUS` flag, and stop when it is not
+# unique: the first match of a symbol search is in no documented order (for IGV it is the
+# Mexican listing, in MXN).
+us = [c for r in client.get_stocks(["AAPL"]) for c in r["contracts"] if c.get("isUS")]
+if len(us) != 1:
+    raise SystemExit(f"AAPL: {len(us)} US listings — name the exchange rather than pick one")
+conid = int(us[0]["conid"])
+bars  = client.get_market_history(conid, period="1y", bar="1d")
 ```
 
 **Rate limits: IBKR counts per IP, this package paces per process.** `IBKRClient` spaces its own
@@ -294,7 +299,7 @@ ws = IBKRWebSocket(gateway_url="https://localhost:5055", session_cookie="")
 
 async def main():
     await ws.connect()
-    conid = 265598  # AAPL — use search_contract() to find conids
+    conid = 265598  # AAPL — resolved as in "Query IBKR" above (get_stocks and its isUS flag)
     await ws.subscribe(conid)
     async for quote in ws.listen():
         print(quote.symbol, quote.last, quote.bid, quote.ask)

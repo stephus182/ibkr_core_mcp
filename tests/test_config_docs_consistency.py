@@ -555,6 +555,27 @@ def test_tracked_markdown_links_only_to_tracked_paths():
     assert bad == [], "links to untracked paths:\n" + "\n".join(bad)
 
 
+_FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+
+
+def test_no_tracked_example_takes_the_first_match_of_search_contract():
+    """`search_contract` is `/iserver/secdef/search`: no `isUS`, no currency, and a result
+    order IBKR does not document — its first match for IGV is the Mexican listing, in MXN
+    (`docs/symbology-reference.md` § 2). Every read path left that pick behind in 2026-08; the
+    README's quick start and the order walkthrough still taught it until 2026-10-05, the
+    second one to build an order body. An example that calls `search_contract` may not index
+    its result: a stock resolves through `get_stocks` and its `isUS` flag, and stops when the
+    listing is not unique."""
+    bad = []
+    for md in _git_ls_files("*.md"):
+        if md.startswith("docs/audits/"):
+            continue  # dated records, never retroactively edited
+        for block in _FENCED_BLOCK_RE.findall((_REPO / md).read_text()):
+            if "search_contract(" in block and "[0]" in block:
+                bad.append(md)
+    assert bad == [], f"an example indexes the result of search_contract: {sorted(set(bad))}"
+
+
 _ENV_READ_RE = re.compile(r'os\.(?:environ(?:\.get)?\(?\[?|getenv\()\s*"([A-Z0-9_]+)"')
 
 

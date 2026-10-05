@@ -279,6 +279,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   any request (the paginated method used to hand an unparseable period to the single call).
   The shape is checked — a whole number of at least one and a unit — not the per-request
   ranges, which the paginated method reaches past by design.
+- **The README's quick start and the order walkthrough no longer take the first match of
+  `search_contract`.** Both examples did `contracts[0]["conid"]` — the second to build an
+  order body — the pick every read path left behind in 2026-08 because the endpoint has no
+  `isUS` flag and no documented order (for IGV the first match is the Mexican listing, in
+  MXN). They resolve through `get_stocks` and `isUS` and stop when the listing is not unique;
+  three sentences that pointed a reader at `search_contract` for a conid say the same, and a
+  docs test fails any tracked example that indexes its result.
 - **`indicators.sma` returns the Series its docstring promised.** It said "a Series named
   'sma_{period}'" and returned one named `close`. It is named for what it is — type, length,
   source: `sma_200_hl2`.

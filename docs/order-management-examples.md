@@ -12,9 +12,14 @@ cfg        = Config.from_env()
 client     = IBKRClient(cfg)
 account_id = client.get_accounts()[0]["accountId"]
 
-contracts = client.search_contract("AAPL")
+# A ticker is not a listing, and this conid is what the order buys. Resolve a stock through
+# /trsrv/stocks and its `isUS` flag and stop when it is not unique — never the first match of a
+# symbol search, whose order IBKR does not document (for IGV it is the Mexican listing, in MXN).
+us = [c for r in client.get_stocks(["AAPL"]) for c in r["contracts"] if c.get("isUS")]
+if len(us) != 1:
+    raise SystemExit(f"AAPL: {len(us)} US listings — name the exchange rather than pick one")
 order = {
-    "conid":     contracts[0]["conid"],
+    "conid":     int(us[0]["conid"]),
     "ticker":    "AAPL",
     "side":      "BUY",
     "quantity":  10,
@@ -186,4 +191,6 @@ IBKR previews the first ticket and discards the rest. **A mismatched bracket pre
 
 **IBKR order constraints:**
 - Trade history via API limited to last 7 days (current + 6 previous) — `SQLiteStore` persists indefinitely
-- Orders require `conid` — resolve via `client.search_contract(symbol)`
+- Orders require `conid` — for a stock, resolve it through `client.get_stocks` and its `isUS`
+  flag, as in Setup. Never take the first match of `client.search_contract(symbol)`: its order is
+  undocumented and it carries neither `isUS` nor a currency (`docs/symbology-reference.md` § 2)

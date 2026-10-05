@@ -93,7 +93,7 @@ limit, use `get_market_history_paginated()`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `conid` | int | — | Contract ID (use `search_contract()` to find) |
+| `conid` | int | — | Contract ID. For a stock, resolve it through `get_stocks()` and its `isUS` flag — never the first match of `search_contract()` (see that method) |
 | `period` | str | `"1y"` | `{1-30}min`, `{1-8}h`, `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y`. A period outside this grammar (`"ytd"`) raises `ValueError` before any request — IBKR would answer it with a window of its own |
 | `bar` | str | `"1d"` | `1min`, `2min`, `3min`, `5min`, `10min`, `15min`, `30min`, `1h`, `2h`, `3h`, `4h`, `8h`, `1d`, `1w`, `1m` |
 | `outside_rth` | bool | `False` | Include pre/post-market bars |
@@ -204,7 +204,13 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data
 ## Contract / Security Definition
 
 ### `search_contract(symbol, sec_type) -> list[Contract | dict]`
-Resolve a symbol to one or more contracts. Returns `[]` if no match.
+Every contract IBKR matches to a symbol. Returns `[]` if no match.
+
+**The list is not ranked and its first element is not "the" contract.** The endpoint carries no
+`isUS` flag, and IBKR documents no order for its results: measured live 2026-07-28, the first
+match for `IGV` was the Mexican listing, in MXN (`docs/symbology-reference.md` § 2). To resolve
+a stock, use `get_stocks()` — `/trsrv/stocks` carries `isUS` per contract — and stop when the
+US listing is not unique, as `docs/api-usage-examples.md` § Market Data does.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
