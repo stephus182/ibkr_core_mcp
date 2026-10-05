@@ -37,7 +37,7 @@ from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import BacktestResult
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
+from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient, _period_problem
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError, StoreError
 from ibkr_core_mcp.flex_dataset import FlexDataset
@@ -533,7 +533,14 @@ TOOL_DEFINITIONS = [
                     "type": "integer",
                     "description": "FUT only: the exact contract to fetch (from get_futures, a position or a trade); skips the front-month rule",
                 },
-                "period": {"type": "string", "description": "History period, lowercase units, e.g. '6m', '1y', '30d'"},
+                "period": {
+                    "type": "string",
+                    "description": (
+                        "History period in IBKR's grammar: a whole number and a unit — min, h, d, w, "
+                        "m (months), y — e.g. '30d', '6m', '1y'. Anything else ('ytd', '6 months') is "
+                        "refused; give a span like year-to-date in days"
+                    ),
+                },
                 "bar": {"type": "string", "description": "Bar size, e.g. '1d', '1h'", "default": "1d"},
                 "end": {
                     "type": "string",
@@ -2459,6 +2466,10 @@ class ClaudeToolkit:
                 None,
             )
         period = inputs["period"]
+        if problem := _period_problem(period):
+            # IBKR would answer `ytd` with a window of its own, and the result and the cache key
+            # would both say `ytd`. Refused before anything is resolved, read or cached.
+            return f"{problem} Nothing was read.", None
         bar = inputs.get("bar", "1d")
         # The end date and the hours are key parts the indicator and backtest tools require, so
         # a default is stated, never silent.

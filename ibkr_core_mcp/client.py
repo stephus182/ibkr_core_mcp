@@ -266,6 +266,40 @@ def _parse_period_days(period: str) -> float | None:
     return float(m.group(1)) * _UNIT_TO_DAYS[m.group(2).lower()]
 
 
+def _period_days(period: str) -> float:
+    """Approximate calendar days of a period, or ValueError if IBKR's grammar does not hold it.
+
+    The grammar is a whole number and a unit — "{1-30}min, {1-8}h, {1-1000}d, {1-792}w,
+    {1-182}m, {1-15}y"
+    (https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md).
+    **A period outside it is not rejected by IBKR**: the endpoint answers with a window of its
+    own and nothing in the response says so (measured 2026-07-06: `6M` returned four months of
+    dailies before the unit was lowercased here; the model sent `ytd` twice in 2026-09 and was
+    told it had its year to date). So the refusal has to be this side of the request.
+
+    The shape is what is checked — a number of at least one, and a unit. The per-request
+    ranges are not: `get_market_history_paginated` reaches past them by design.
+    """
+    days = _parse_period_days(period) if isinstance(period, str) else None
+    if not days:
+        raise ValueError(
+            f"period {period!r} is not in IBKR's grammar — a whole number and a unit: min, h, d, w, "
+            "m (months) or y, e.g. '30d', '6m', '1y'; a span like year-to-date is given in days. "
+            "IBKR does not reject such a period: it answers with a window of its own."
+        )
+    return days
+
+
+def _period_problem(period: Any) -> str | None:
+    """The sentence `_period_days` refuses `period` with, or None — for a caller that answers
+    in words (the tool layer, which may not put an exception's text in a result)."""
+    try:
+        _period_days(period)
+    except ValueError as refusal:
+        return str(refusal)
+    return None
+
+
 def _chunk_days_for_bar(bar: str) -> int:
     """Calendar days per request chunk: under the point cap AND inside IBKR's step table.
 
@@ -905,9 +939,14 @@ class IBKRClient:
         For requests that may exceed 1000 data points, use get_market_history_paginated()
         which chunks the request automatically using the startTime parameter.
 
+        Raises:
+            ValueError: If `period` is not in the grammar above — IBKR would not reject it,
+                it would answer with a window of its own (`_period_days`).
+
         Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
         Endpoint: GET /iserver/marketdata/history
         """
+        _period_days(period)
         return parse_one(
             MarketHistory,
             self._get(
@@ -1003,14 +1042,14 @@ class IBKRClient:
         """
         from datetime import datetime, timedelta
 
-        total_days = _parse_period_days(period)
+        total_days = _period_days(period)
         chunk_days = _chunk_days_for_bar(bar)
 
         # The fast path is an optimisation and is only sound when ONE call can carry the
         # whole span: a width that fits in a chunk still overflows the 1000-point cap for
         # 1-minute bars (see _fits_in_one_call). When in doubt, take the loop — it costs a
         # request and cannot lose data.
-        if total_days is None or (total_days <= chunk_days and _fits_in_one_call(total_days, bar)):
+        if total_days <= chunk_days and _fits_in_one_call(total_days, bar):
             return self.get_market_history(conid, period, bar, outside_rth)
 
         all_bars: list[dict[str, Any]] = []

@@ -270,6 +270,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   arise because "`fetch_market_data` never asks for `outsideRth`"; since this release it does,
   for every future by default. An all-hours series reads `n/a` with the reason; the tool does
   not guess a session (`indicators.vwap` still takes `tz` and `session_open`).
+- **A period IBKR does not know is refused instead of sent.** `fetch_market_data` with
+  `period="ytd"` — sent twice by the model — reached the endpoint as written; IBKR does not
+  reject a period outside its grammar, it answers with a window of its own (measured
+  2026-07-06 for an uppercase unit), and the result and the cache key both said `ytd`. The
+  tool refuses with the grammar before anything is resolved, read or cached, and
+  `IBKRClient.get_market_history` / `get_market_history_paginated` raise `ValueError` before
+  any request (the paginated method used to hand an unparseable period to the single call).
+  The shape is checked — a whole number of at least one and a unit — not the per-request
+  ranges, which the paginated method reaches past by design.
 - **`indicators.sma` returns the Series its docstring promised.** It said "a Series named
   'sma_{period}'" and returned one named `close`. It is named for what it is — type, length,
   source: `sma_200_hl2`.

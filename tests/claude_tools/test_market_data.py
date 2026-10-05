@@ -1587,6 +1587,18 @@ def _history_payload(n_bars, start_ms, step_ms, warning=None):
     return payload
 
 
+def test_fetch_market_data_refuses_a_period_outside_ibkrs_grammar(toolkit):
+    """`period="ytd"` was sent twice by the model; IBKR answered with a window of its own and
+    the result named `ytd` as if it had been honoured, under a cache key that says `YTD`. The
+    period is refused with the grammar before anything is resolved, read or cached."""
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "ytd"})
+
+    assert "period 'ytd'" in text and "min, h, d, w, m" in text and "Nothing was read" in text, text
+    toolkit._client.get_stocks.assert_not_called()
+    toolkit._cache.check.assert_not_called()
+    toolkit._client.get_market_history_paginated.assert_not_called()
+
+
 def test_fetch_market_data_refuses_to_cache_a_truncated_window(toolkit):
     """A partial window saved under the requested period is the dangerous half of API-02.
 

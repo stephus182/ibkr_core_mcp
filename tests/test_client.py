@@ -1220,6 +1220,18 @@ def test_get_trades_empty_after_retry_returns_empty(client):
 # ── get_market_history — period/bar case normalization (verified live 2026-07-06) ──
 
 
+@pytest.mark.parametrize("method", ["get_market_history", "get_market_history_paginated"])
+@pytest.mark.parametrize("period", ["ytd", "6 months", "0d", ""])
+def test_a_period_outside_ibkrs_grammar_is_refused_before_any_request(client, method, period):
+    """IBKR does not reject a period it does not know: it answers with a window of its own
+    (`period="6M"` returned four months of dailies, 2026-07-06), and nothing in the response
+    says so. `ytd` reached the endpoint twice from the model. Refused here, with the grammar,
+    before a request is made — the paginated method used to hand it to the single call."""
+    with patch.object(client._session, "get") as mock_get, pytest.raises(ValueError, match="min, h, d, w, m"):
+        getattr(client, method)(265598, period=period, bar="1d")
+    mock_get.assert_not_called()
+
+
 def test_get_market_history_normalizes_period_and_bar_case(client):
     """Live-verified 2026-07-06: IBKR treats period='6M' as unrecognized and silently
     returns a ~84-bar default (4 months), while '6m' returns the true 6 months.

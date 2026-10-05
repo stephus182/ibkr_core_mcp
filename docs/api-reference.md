@@ -94,7 +94,7 @@ limit, use `get_market_history_paginated()`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `conid` | int | — | Contract ID (use `search_contract()` to find) |
-| `period` | str | `"1y"` | `{1-30}min`, `{1-8}h`, `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
+| `period` | str | `"1y"` | `{1-30}min`, `{1-8}h`, `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y`. A period outside this grammar (`"ytd"`) raises `ValueError` before any request — IBKR would answer it with a window of its own |
 | `bar` | str | `"1d"` | `1min`, `2min`, `3min`, `5min`, `10min`, `15min`, `30min`, `1h`, `2h`, `3h`, `4h`, `8h`, `1d`, `1w`, `1m` |
 | `outside_rth` | bool | `False` | Include pre/post-market bars |
 
