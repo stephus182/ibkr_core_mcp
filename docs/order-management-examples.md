@@ -199,9 +199,9 @@ single list here is "the" list, and the authority for one order is that contract
 
 | Where | Values | Source |
 |---|---|---|
-| The order body's `tif` — "Time in force of the order ticket", an enum, required | `DAY`, `IOC`, `GTC`, `OPG`, `PAX` | [submit-new-order](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md); the same five on [get-order-status](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/get-order-status.md) and in IBKR's OpenAPI document (v2.40.0) |
-| Overnight orders — "submitting the affiliated Time-In-Force value" | `OVT` (Overnight), `OND` (Overnight + DAY) | [overnight-order-submission](https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/overnight-order-submission.md). **Not in the enum above** |
-| Per contract — `POST /iserver/contract/rules`, `tifTypes`: "Indicates allowed tif types supported for the contract" | Whatever that contract accepts — measured below. Includes `GTD`, **which is in neither list above** | [search-contract-rules](https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-rules.md) |
+| The order body's `tif` — "Time in force of the order ticket", an enum, required | `DAY`, `IOC`, `GTC`, `OPG`, `PAX` (on `PAX`, see below) | [submit-new-order](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order); the same five on [get-order-status](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/get-order-status) and in IBKR's OpenAPI document (v2.40.0) |
+| Overnight orders — "submitting the affiliated Time-In-Force value" | `OVT` (Overnight), `OND` (Overnight + DAY) | [overnight-order-submission](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/overnight-order-submission). **Not in the enum above** |
+| Per contract — `POST /iserver/contract/rules`, `tifTypes`: "Indicates allowed tif types supported for the contract" | Whatever that contract accepts — measured below. Includes `GTD`, **which is in neither list above** | [search-contract-rules](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules) |
 
 **2. What two contracts return** — `tifTypes`, both sides identical, 2026-09-24:
 
@@ -244,19 +244,41 @@ contract in hand: `client.get_contract_rules(conid, is_buy)["tifTypes"]`.
 
 | Order | Body, per IBKR's order-type pages | Here |
 |---|---|---|
-| Market-on-open | `orderType: "MKT"`, `tif: "OPG"` ([MOO](https://ibkrcampus.com/docs/general/order-types/market-orders/market-on-open.md)) | Expressible; `preview_order` takes it |
-| Limit-on-open | `orderType: "LMT"` + `price`, `tif: "OPG"` ([LOO](https://ibkrcampus.com/docs/general/order-types/basic-orders/limit-orders/limit-on-open.md)) | Expressible; `preview_order` takes it |
-| Market-on-close | `orderType: "MOC"`, `tif: "DAY"` ([MOC](https://ibkrcampus.com/docs/general/order-types/market-orders/market-on-close.md)) | The client sends a body as given; `preview_order` does not offer `MOC` |
-| Limit-on-close | `orderType: "LOC"` + `price` ([LOC](https://ibkrcampus.com/docs/general/order-types/basic-orders/limit-orders/limit-on-close.md)) | Same; `preview_order` does not offer `LOC` |
+| Market-on-open | `orderType: "MKT"`, `tif: "OPG"` ([MOO](https://www.interactivebrokers.com/docs/general/order-types/market-orders/market-on-open)) | Expressible; `preview_order` takes it |
+| Limit-on-open | `orderType: "LMT"` + `price`, `tif: "OPG"` ([LOO](https://www.interactivebrokers.com/docs/general/order-types/basic-orders/limit-orders/limit-on-open)) | Expressible; `preview_order` takes it |
+| Market-on-close | `orderType: "MOC"`, `tif: "DAY"` ([MOC](https://www.interactivebrokers.com/docs/general/order-types/market-orders/market-on-close)) | The client sends a body as given; `preview_order` does not offer `MOC` |
+| Limit-on-close | `orderType: "LOC"` + `price` ([LOC](https://www.interactivebrokers.com/docs/general/order-types/basic-orders/limit-orders/limit-on-close)) | Same; `preview_order` does not offer `LOC` |
 
 `MOC` and `LOC` are **documented for the Web API on those pages and absent from the OpenAPI
 `orderType` enum** (`MKT`, `LMT`, `STP`, `STOP_LIMIT`, `MIDPRICE`, `TRAIL`, `TRAILLMT`). F's
 rules list them (`marketonclose`, `limitonclose` in `orderTypes`); ES's rules list neither,
 although IBKR's MOC page names FUT among its products.
 
+**`PAX` — listed by IBKR, defined by IBKR nowhere found.** Researched 2026-10-05 at the
+operator's question ("what is it?"):
+
+| Where it was looked for | What is there |
+|---|---|
+| IBKR's OpenAPI document (v2.40.0) | `PAX` is the fifth value of the `tif` enum of the order ticket (`singleOrderSubmissionRequest` — submit and modify) and of `orderStatus`. The description is "Time in force of the order ticket."; no value is described. A third order endpoint in the same document, *Submit New Model Portfolio Order*, lists four: `DAY`, `GTC`, `OPG`, `IOC` |
+| [submit-new-order](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order), [get-order-status](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/get-order-status) | "Allowed values: `DAY`, `IOC`, `GTC`, `OPG`, `PAX`" — the list, no definitions |
+| IBKR's legacy Client Portal Web API reference (v1.0.0, https://www.interactivebrokers.com/api/doc.json) | Defines four and has no `PAX`: "GTC - use Good-Till-Cancel for orders to remain active until it executes or cancelled. OPG - use Open-Price-Guarantee for Limit-On-Open (LOO) or Market-On-Open (MOO) orders. DAY - if not executed a Day order will automatically cancel at the end of the markets regular trading hours. IOC - any portion of an Immediate-or-Cancel order that is not filled as soon as it becomes available in the market is cancelled." |
+| IBKR Campus Web API pages ([trading](https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-trading/), [documentation](https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-doc/)) | No `PAX` |
+| [TWS API order reference](https://interactivebrokers.github.io/tws-api/classIBApi_1_1Order.html) | `DAY`, `GTC`, `IOC`, `GTD`, `OPG`, `FOK`, `DTC` — no `PAX` |
+| Contract rules, measured (part 2) | Neither F's nor ES's `tifTypes` lists `PAX` |
+| IBKR's [Cryptocurrency Trading](https://www.interactivebrokers.com/docs/general/order-types/notes-limitations/cryptocurrency-trading) page | In the pages read, the letters occur otherwise only in **PAXOS**, one of the two venues IBKR's cryptocurrency orders are routed to. That page lists the times in force of a cryptocurrency order — `DAY`, `GTC`, `IOC` for a limit order, `IOC` only for a market order, "Minutes" on the TWS API — and `PAX` is not among them |
+
+So: **what `PAX` does is not established.** That it belongs to orders routed to PAXOS is a
+guess from the name, which IBKR's own cryptocurrency page does not support, and it is not
+stated here as more than that. What is established is narrower and enough to act on: the
+stock and the future measured do not accept it. **This package** sends a body's `tif` as
+given, so a caller can send `PAX`; `preview_order` does not offer it — a tool that offered it
+would be naming a time in force nobody here can describe, for contracts whose rules do not
+list it. One read-only call would settle where it applies: the contract rules of a contract
+that lists `PAX` in `tifTypes`.
+
 **Not established** — stated rather than guessed:
 
-- What `PAX` is. It is in IBKR's enum and defined on none of the pages read.
+- What `PAX` is (above).
 - What `o` and `a` mean in a `tifTypes` entry.
 - Whether the gateway accepts `MOC` / `LOC` on place (never sent; a `whatif` would settle it
   without a write).

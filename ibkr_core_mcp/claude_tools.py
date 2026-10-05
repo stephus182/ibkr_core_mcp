@@ -3679,9 +3679,10 @@ class ClaudeToolkit:
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
         _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
         # Four of the five values in IBKR's `tif` enum — "Allowed values: DAY, IOC, GTC, OPG,
-        # PAX" (https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md;
+        # PAX" (https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order;
         # the place-order page above carries no TIF list, which this comment used to cite).
-        # PAX is defined on no page read, so it is not offered; GTD, OVT and OND are in no
+        # PAX is defined nowhere in IBKR's documentation (searched 2026-10-05) and is in neither
+        # F's nor ES's contract rules, so it is not offered; GTD, OVT and OND are in no
         # enum and are returned per contract by /iserver/contract/rules — not offered here.
         # A preview is for ONE time in force and says which (register F7): every preview used
         # to be sent as DAY, silently, so a GTC order was previewed as a different order than

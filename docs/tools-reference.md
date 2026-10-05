@@ -249,7 +249,7 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 | `limit_price` | number | — | Required for `order_type="LMT"`/`"STOP_LIMIT"`; optional price cap for `"MIDPRICE"` |
 | `stop_price` | number | — | Required for `order_type="STP"`/`"STOP_LIMIT"` |
 | `sec_type` | string | — | `"STK"` (default), `"IND"`, `"BOND"`, `"FUT"` (resolves front month), or `"CASH"` (FX pair, e.g. `"EUR.USD"`) |
-| `tif` | string | — | Time in force of the order being previewed: `"DAY"`, `"GTC"`, `"IOC"` or `"OPG"` — four of the five values in IBKR's place-order enum (the fifth, `PAX`, is defined on no page read). `GTD` and the overnight values `OVT` / `OND` are returned per contract by IBKR's contract rules and **cannot be previewed here**. Omitted: the preview is for a DAY order and says so. Full picture: [`order-management-examples.md`](order-management-examples.md) § Time in force |
+| `tif` | string | — | Time in force of the order being previewed: `"DAY"`, `"GTC"`, `"IOC"` or `"OPG"` — four of the five values in IBKR's place-order enum (the fifth, `PAX`, is defined nowhere in IBKR's documentation and is in neither a stock's nor a future's measured rules). `GTD` and the overnight values `OVT` / `OND` are returned per contract by IBKR's contract rules and **cannot be previewed here**. Omitted: the preview is for a DAY order and says so. Full picture: [`order-management-examples.md`](order-management-examples.md) § Time in force |
 
 **Output:** Text summary — the headline names the order type and the time in force
 (`Order Preview: BUY 1 ES (STP, GTC)`), then `Time in force` (with "none was given, so this

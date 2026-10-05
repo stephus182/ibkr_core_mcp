@@ -271,7 +271,7 @@ def _period_days(period: str) -> float:
 
     The grammar is a whole number and a unit — "{1-30}min, {1-8}h, {1-1000}d, {1-792}w,
     {1-182}m, {1-15}y"
-    (https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md).
+    (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data).
     **A period outside it is not rejected by IBKR**: the endpoint answers with a window of its
     own and nothing in the response says so (measured 2026-07-06: `6M` returned four months of
     dailies before the unit was lowercased here; the model sent `ytd` twice in 2026-09 and was
