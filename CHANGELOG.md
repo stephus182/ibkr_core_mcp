@@ -194,7 +194,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   there; measured over 1,000 or more bars it is within 0.03, the pre-roll difference between
   ES1! and ESZ6's own bars. §12 of the reference carries the table, the measurement and a rule
   of thumb (fetch at least five times an EMA's length for cent-level agreement); the one item
-  left not established is the EMA basis against a chart with identical history.
+  left not established is the EMA basis against a chart with identical history. **Built on the
+  operator's yes ("as text, not charting"): an `EMA` or `SMMA (RMA)` line, and a band line
+  whose basis is one, adds `(over N bars)` — `EMA 200 hl2: 7759.90 (over 479 bars)` — the one
+  piece of information that explains such a gap; SMA, WMA and VWMA lines are unchanged, as are
+  RSI and MACD. Tests: the three types on the worked frame; two mutants red.**
 - **A bar size outside IBKR's step table is refused before any request, second bars with
   their own reason (register F22).** `get_market_history`, `get_market_history_paginated` and
   `fetch_market_data` refuse `bar` values that are not one of the fifteen sizes IBKR's step

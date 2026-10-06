@@ -288,20 +288,24 @@ def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, time
     shift = f" offset {s.offset}" if s.offset else ""
     left = f"nothing is drawn on the last bar — the line ends {-s.offset} bar(s) earlier"
     reach = max(s.offset, 0)  # the bars a line moved right needs beyond its own length
+    # An EMA or SMMA is recursive: its value depends on how much history it was computed over
+    # (witnessed 2026-10-06: EMA 200 hl2 7,759.90 over 479 bars, 7,759.77 over 1,500, TradingView
+    # 7,759.80 over years), so its line says so. A simple average depends on its last N bars only.
+    over = f" (over {bars} bars)" if s.ma_type in ("EMA", "SMMA (RMA)") else ""
     lines = [header, *s.stated]
 
     if not s.ma_periods:
         lines.append("  Averages: none requested — give ma_periods, e.g. [25, 50, 100, 200]")
     for length in s.ma_periods:
         value = _drawn_on_last_bar(_indicators.moving_average(df, length, s.ma_type, s.source), s.offset)
-        text = left if s.offset < 0 else _or_na(f"{value:.2f}", [value], bars, length + reach)
+        text = left if s.offset < 0 else _or_na(f"{value:.2f}{over}", [value], bars, length + reach)
         lines.append(f"  {s.ma_type} {length} {s.source}{shift}: {text}")
 
     columns = ("bb_mid", "bb_upper", "bb_lower")
     for std in s.band_stds:
         bands = _indicators.bollinger_bands(df, s.band_period, std, s.source, s.ma_type)
         basis, upper, lower = (_drawn_on_last_bar(bands[c], s.offset) for c in columns)
-        levels = f"{basis:.2f} / {upper:.2f} / {lower:.2f} (basis / upper / lower)"
+        levels = f"{basis:.2f} / {upper:.2f} / {lower:.2f} (basis / upper / lower){over}"
         text = left if s.offset < 0 else _or_na(levels, [basis, upper, lower], bars, s.band_period + reach)
         lines.append(f"  BB {s.band_period} {s.ma_type} {s.source} {std:g}{shift}: {text}")
 

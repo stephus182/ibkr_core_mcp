@@ -1476,6 +1476,38 @@ def test_add_indicators_reports_the_framework_in_tradingviews_labels_with_every_
     assert _indicator_line(text, "RSI(14) close:") and _indicator_line(text, "MACD(12,26,9) close:")
 
 
+@pytest.mark.parametrize(
+    ("ma_type", "average_line", "basis_line", "over"),
+    [
+        # Pine's EMA seeded with the first value: 6 → 6.8 → 8.4 → 10.2 → 12.1; the deviation stays sqrt(8/3).
+        ("EMA", "EMA 3 hl2:", "BB 3 EMA hl2 1:", " (over 5 bars)"),
+        # SMMA (RMA) seeded with the first SMA: 8 → 9.33 → 10.89; alpha 1/3.
+        ("SMMA (RMA)", "SMMA (RMA) 3 hl2:", "BB 3 SMMA (RMA) hl2 1:", " (over 5 bars)"),
+        # A simple average depends on its last three bars only — nothing to state.
+        ("SMA", "SMA 3 hl2:", "BB 3 SMA hl2 1:", ""),
+    ],
+)
+def test_a_recursive_average_states_how_many_bars_it_was_computed_over(
+    toolkit, ma_type, average_line, basis_line, over
+):
+    """Witnessed 2026-10-06: the same EMA 200 hl2 read 7,759.90 over 479 bars and 7,759.77 over
+    1,500 — TradingView's chart, with years of history, showed 7,759.80 — while the SMA was the
+    same on every history length. An EMA or SMMA value depends on how much history it was
+    computed over, so its line says so (operator: "as text, not charting"); an SMA's does not."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute(
+        "add_indicators", {**_AAPL_WINDOW, "ma_type": ma_type, "ma_periods": [3], "band_period": 3, "band_stds": [1]}
+    )
+
+    assert_tool_succeeded(text)
+    assert _indicator_line(text, average_line).endswith(over), text
+    assert _indicator_line(text, basis_line).endswith(f"(basis / upper / lower){over}"), text
+    if over:
+        assert "(over 5 bars)" not in _indicator_line(text, "RSI(14) close:"), text
+
+
 def test_add_indicators_never_prints_nan_and_says_how_many_bars_it_needs(toolkit):
     """A 200-bar average cannot exist on a 5-bar window. `nan` reads as a broken tool; the
     line says what is missing and what to do, on every line that has no value."""

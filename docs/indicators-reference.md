@@ -98,6 +98,14 @@ here is `ma_periods` plus the band settings.
 | `WMA` | `ta.wma` | "weighting factors decrease in arithmetical progression" — the newest bar weighs `length`, the oldest 1 | after `length` bars |
 | `VWMA` | `ta.vwma` | "the same as: sma(source \* volume, length) / sma(volume, length)" | after `length` bars |
 
+**An `EMA` or `SMMA (RMA)` line states how many bars it was computed over** — `EMA 200 hl2:
+7759.90 (over 479 bars)`, and the same on a band line whose basis is one of those — because a
+recursive average's value depends on its history: the same EMA 200 hl2 on the same bar read
+7,759.90 over 479 bars and 7,759.77 over 1,500, while TradingView's chart, with years of history,
+showed 7,759.80 (§12). An `SMA`, `WMA` or `VWMA` depends on its last `length` bars only, so its
+line says nothing of the kind; RSI's and MACD's lengths are short enough that the history never
+matters once their minimum bars are there. Text only, no chart work (operator, 2026-10-06).
+
 All five: [Pine v6 reference](https://www.tradingview.com/pine-script-reference/v6/), `ta.sma`,
 `ta.ema`, `ta.rma`, `ta.wma`, `ta.vwma`, each with its "same on pine" source.
 
