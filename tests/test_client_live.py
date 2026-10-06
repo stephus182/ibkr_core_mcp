@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import itertools
 import os
+from datetime import datetime
 
 import pytest
 
@@ -1200,6 +1201,76 @@ def test_pagination_works_on_instruments_where_the_forward_direction_does_not(li
         stamps = sorted(b["t"] for b in (out.get("data") or []))
         assert len(stamps) > 100, f"conid {conid} returned {len(stamps)} bars"
         assert len(stamps) == len(set(stamps)), f"conid {conid}: duplicate timestamps"
+
+
+@pytest.mark.integration
+def test_paginated_history_loses_no_bar_at_a_mid_session_seam_on_a_future(live_client, live_config):
+    """Register F23, live: the bar just before a page's oldest bar must be in the result.
+
+    IBKR ends an anchored window two bars before the anchor on intraday bars (measured
+    2026-10-05: 1min 14:00:00 → newest 13:58), so a page anchored ON the previous page's
+    oldest bar never requested the bar before it. Only a page cut by the 1000-point cap
+    inside a session has such a bar — a futures session holds 1,380 one-minute bars, so the
+    front ES contract over three days always has one; AAPL's pages end at the 04:00 ET
+    pre-market open, where the unrequested bar falls in the closure, which is why the
+    AAPL-based tests above could not see it (ESZ6 5d/1min lost 3 of 5,140 bars that day,
+    all three real).
+
+    The witness is IBKR itself: one anchored 20-minute request straddling each seam is a
+    contiguous answer from the endpoint, and every bar it holds must be in the paged result.
+    The front month is resolved, never pinned — a conid or a date written here expires.
+    """
+    from unittest.mock import MagicMock
+
+    from ibkr_core_mcp.claude_tools import ClaudeToolkit
+
+    resolved = ClaudeToolkit(live_client, MagicMock(), MagicMock(), live_config)._resolve_snapshot_conid(
+        "ES", "FUT", None
+    )
+    assert not resolved.error, resolved.error
+
+    pages: list[list[int]] = []
+    inner = live_client._get
+
+    def recording_get(path, params=None):
+        result = inner(path, params)
+        if path == "/iserver/marketdata/history":
+            pages.append(sorted(b["t"] for b in (result or {}).get("data") or [] if b.get("t") is not None))
+        return result
+
+    live_client._get = recording_get
+    try:
+        paged = live_client.get_market_history_paginated(resolved.conid, period="3d", bar="1min", outside_rth=True)
+    finally:
+        live_client._get = inner
+    paged_stamps = {b["t"] for b in (paged.get("data") or [])}
+    assert len(pages) > 1, "3d/1min on a future must page, or this test proves nothing"
+
+    mid_session_seams = 0
+    stamped_pages = [p for p in pages if p]
+    for previous in stamped_pages[:-1]:  # one seam between each page and the next
+        oldest = previous[0]
+        anchor = datetime.utcfromtimestamp(oldest / 1000 + 600).strftime("%Y%m%d-%H:%M:%S")
+        straddle = live_client._get(
+            "/iserver/marketdata/history",
+            {
+                "conid": resolved.conid,
+                "period": "20min",
+                "bar": "1min",
+                "outsideRth": "true",
+                "startTime": anchor,
+                "direction": -1,
+            },
+        )
+        straddle_stamps = {b["t"] for b in (straddle or {}).get("data") or [] if b.get("t") is not None}
+        if any(t < oldest for t in straddle_stamps):
+            mid_session_seams += 1
+        missing = sorted(straddle_stamps - paged_stamps)
+        assert not missing, (
+            f"{len(missing)} bar(s) IBKR serves around the seam at {datetime.utcfromtimestamp(oldest / 1000)} UTC "
+            f"are not in the paged result; first missing {datetime.utcfromtimestamp(missing[0] / 1000)} UTC"
+        )
+    assert mid_session_seams, "every seam fell on a closure — nothing was at stake, run during or after a full session"
 
 
 @pytest.mark.integration

@@ -248,6 +248,28 @@ _MAX_PERIOD_DAYS_FOR_BAR: dict[str, float] = {
     "1w": 5475,
     "1m": 5475,
 }
+# Seconds in one bar of each size `get_market_history_paginated` pages. Used to anchor the
+# next window one bar AFTER the oldest bar held (see the loop). A month is taken as 31 days:
+# on daily and longer bars IBKR ends an anchored window one bar before the anchor, so any
+# anchor inside the following bar is lossless and at worst repeats the oldest bar, which the
+# de-duplication removes.
+_BAR_SECONDS: dict[str, int] = {
+    "1min": 60,
+    "2min": 120,
+    "3min": 180,
+    "5min": 300,
+    "10min": 600,
+    "15min": 900,
+    "30min": 1800,
+    "1h": 3600,
+    "2h": 7200,
+    "3h": 10800,
+    "4h": 14400,
+    "8h": 28800,
+    "1d": 86400,
+    "1w": 7 * 86400,
+    "1m": 31 * 86400,
+}
 _MAX_POINTS = 1000
 _CHUNK_SAFETY = 0.80  # target 80% of limit per chunk
 _MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
@@ -256,6 +278,14 @@ _MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
 # doublings take a 1-day chunk to 16 days, far past any weekend or market holiday, and the
 # broken case measured on 2026-09-22 needed exactly one.
 _MAX_WIDENINGS = 4
+
+
+def _bar_seconds(bar: str) -> int:
+    """Seconds in one bar, for a bar size IBKR's step table offers; ValueError otherwise."""
+    try:
+        return _BAR_SECONDS[bar.lower()]
+    except KeyError:
+        raise ValueError(f"bar {bar!r} is not a size IBKR offers: {', '.join(_BAR_SECONDS)}") from None
 
 
 def _parse_period_days(period: str) -> float | None:
@@ -999,6 +1029,21 @@ class IBKRClient:
         stale, and any analysis run on it would have been confidently wrong. It affected
         every request wider than one chunk — `3y`/`5y` on most bars, and `1y`/`2y` on `1h`.
 
+        ## Where the next window is anchored: one bar after the oldest bar held
+
+        IBKR ends an anchored window *before* the anchor — two bars before it on intraday
+        bars, one bar before it on daily and weekly bars (measured 2026-10-05: `1min` anchor
+        14:00:00 → newest bar 13:58; `1h` 14:00 → 12:00; `1d` any time on Friday → Thursday;
+        `1w` a bar's own stamp → the bar before). Anchored ON the oldest bar held, as this
+        method was until that day, the next window ended two bars back and the bar just
+        before the oldest was never requested — one 1-minute bar lost at every seam the
+        1000-point cap cuts inside a futures session (ESZ6 `5d`/`1min`: 3 of 5,140 bars,
+        all three real; register F23). Anchored one bar later (`_BAR_SECONDS`), the window
+        ends exactly on that bar; on daily bars it ends on the oldest bar itself, a repeat
+        the de-duplication removes. Two bars later was measured too: consecutive pages then
+        share a bar, at the price of one extra request at every session boundary, where IBKR
+        answers with a single bar.
+
         The newest chunk sends **no** `startTime`: "If omitted, the current time is used".
         Measured the same day on SPY `30d`/`1d` — omitted reached 2026-08-05, an explicit
         timestamp of that same moment reached 08-04, and midnight-today reached 08-03. Only
@@ -1057,15 +1102,17 @@ class IBKRClient:
         now = datetime.utcnow()
         target = now - timedelta(days=total_days)
 
-        # The cursor is the END of the next window, and it advances to the OLDEST bar that
+        # The cursor is the END of the next window, and it advances with the OLDEST bar that
         # actually arrived — never by the width that was requested. That distinction is the
         # whole correctness argument: a chunk that hits the 1000-point cap covers less ground
         # than it asked for, and the endpoint says so only by returning fewer bars. Advancing
         # by the request width opened an unannounced hole between every pair of chunks
         # (measured 2026-09-15: 30d/1min returned ~15% of its bars, in five islands).
         # Advancing by the response cannot lose data whatever the size estimate does — it
-        # only takes more requests.
+        # only takes more requests. Where exactly the cursor sits relative to that oldest
+        # bar is decided below, by where IBKR ends an anchored window.
         cursor: datetime | None = None  # None == "now"
+        oldest_seen: datetime | None = None
         truncation_warning: str | None = None
         # How many times the CURRENT window has been doubled after coming back empty. Reset
         # the moment a chunk delivers bars — see the `if not stamps` branch below.
@@ -1134,11 +1181,22 @@ class IBKRClient:
                 break
             widenings = 0
             oldest = datetime.utcfromtimestamp(min(stamps) / 1000)
-            if cursor is not None and oldest >= cursor:
+            if oldest_seen is not None and oldest >= oldest_seen:
                 # No progress: the window did not move back. Stopping beats looping.
                 log.warning("market history pagination stalled at %s (conid=%s bar=%s)", oldest, conid, bar)
                 break
-            cursor = oldest
+            oldest_seen = oldest
+            # The next window must END on the bar just before `oldest`. IBKR ends an
+            # anchored window two bars before the anchor on intraday bars and one bar before
+            # it on daily and weekly bars (measured 2026-10-05 — 1min: anchor 14:00:00 →
+            # newest 13:58; 1h: 14:00 → 12:00; 1d: any time on Friday → Thursday; 1w: a bar's
+            # own stamp → the bar before). Anchored ON `oldest`, as this loop was until that
+            # day, the window ended two bars back and the bar before `oldest` was never
+            # requested: one 1-minute bar lost at every seam a futures session forces
+            # (1,380 bars against the 1000-point cap; ESZ6 5d/1min lost 3, all three real,
+            # register F23). One bar later, the window ends exactly on it; on daily bars it
+            # ends on `oldest` itself, a repeat the de-duplication below removes.
+            cursor = oldest + timedelta(seconds=_bar_seconds(bar))
             if oldest <= target:
                 break
         else:
@@ -1149,7 +1207,7 @@ class IBKRClient:
             # with 33%, and a backtest labelled "1 year" that silently saw four months
             # draws a conclusion about a period it never had. So the response says so, in
             # the response (audit finding API-02, 2026-09-16).
-            truncated_at = cursor.strftime("%Y-%m-%d") if cursor is not None else "an unknown date"
+            truncated_at = oldest_seen.strftime("%Y-%m-%d") if oldest_seen is not None else "an unknown date"
             truncation_warning = (
                 f"INCOMPLETE: asked for {period} of {bar} bars but stopped at the "
                 f"{_MAX_CHUNKS}-chunk safety guard. The data returned goes back only to "
@@ -1163,7 +1221,7 @@ class IBKRClient:
                 conid,
                 period,
                 bar,
-                cursor,
+                oldest_seen,
             )
 
         if not all_bars:

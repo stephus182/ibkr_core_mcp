@@ -1431,17 +1431,18 @@ def test_paged_newest_chunk_omits_starttime_so_it_reaches_today(client):
     assert "direction" not in calls[0]
 
 
-def test_paged_chunks_anchor_on_delivered_data_not_on_requested_width(client):
-    """Each anchor must be where the previous response actually ended, not where it was
-    asked to end.
+def test_paged_chunks_anchor_one_bar_after_the_oldest_bar_delivered(client):
+    """Each anchor must be one bar after the oldest bar the previous response actually
+    held — not where that response was asked to end, and not on the oldest bar itself.
 
-    This replaces a test that asserted anchors sat at cumulative *requested* day offsets.
-    That held only while every chunk returned everything it asked for — exactly the
-    assumption the 1000-point cap breaks. The property that matters is unchanged (windows
-    abut, no hole between them); only the thing it is measured against has moved from the
-    request to the response.
+    The request width is the wrong reference because a chunk that hits the 1000-point cap
+    returns less than it asked for. The oldest bar itself is the wrong anchor because IBKR
+    ends an anchored window BEFORE the anchor (two bars before on intraday bars, one on
+    daily and weekly — measured 2026-10-05), so anchoring on it never requested the bar
+    just before it: one 1-minute bar lost at every mid-session seam (register F23). One bar
+    later, the window ends exactly on that bar; anywhere later wastes an overlap.
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     calls = _paged_calls(client, "5y", "1d")
     assert len(calls) > 1, "5y/1d must paginate, or this test proves nothing"
@@ -1452,13 +1453,42 @@ def test_paged_chunks_anchor_on_delivered_data_not_on_requested_width(client):
         if i:
             anchor = datetime.strptime(params["startTime"], "%Y%m%d-%H:%M:%S")
             assert prev_oldest is not None
-            drift = abs((anchor - prev_oldest).total_seconds())
-            assert drift < 120, (
-                f"chunk {i} anchored {drift / 86400:.2f}d away from the oldest bar "
-                f"chunk {i - 1} returned — that difference is missing data"
+            assert anchor == prev_oldest + timedelta(days=1), (
+                f"chunk {i} anchored at {anchor}, not one bar after the oldest bar chunk {i - 1} "
+                f"returned ({prev_oldest}): earlier loses that bar, later repeats bars"
             )
         resp = fake("/iserver/marketdata/history", params)
         prev_oldest = datetime.utcfromtimestamp(min(b["t"] for b in resp["data"]) / 1000)
+
+
+def test_paged_stops_after_one_window_that_does_not_move_back(client):
+    """A response whose oldest bar is no older than the previous one is the end of the data,
+    not a reason to ask again.
+
+    Without this stop the loop would send the same anchored request until the 120-chunk
+    guard — 118 identical requests against a live gateway whose history endpoint delays
+    callers past ~50 requests a minute (measured 2026-10-05). The stop had no test of its
+    own; a mutant deleting it survived the whole paging suite.
+    """
+    import calendar
+    from datetime import datetime, timedelta
+
+    calls: list[dict[str, Any]] = []
+    now = datetime.utcnow().replace(second=0, microsecond=0)
+    window = [
+        {"t": calendar.timegm((now - timedelta(minutes=i)).timetuple()) * 1000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+        for i in range(1, 11)
+    ]
+
+    def same_window_every_time(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append(params or {})
+        return {"data": window}
+
+    with patch.object(client, "_get", side_effect=same_window_every_time):
+        out = client.get_market_history_paginated(265598, period="30d", bar="1min")
+
+    assert len(calls) == 2, f"{len(calls)} requests for a window that never moved back"
+    assert len(out.get("data", [])) == 10
 
 
 def test_paged_keeps_walking_past_a_window_IBKR_has_no_data_for(client):
@@ -2255,8 +2285,15 @@ def _capped_get(bar_seconds: int, max_points: int = 1000, bars_per_day: float = 
         days = days / 24.0 if unit == "h" else days
         start = end - timedelta(days=days)
         step = timedelta(seconds=bar_seconds)
+        # IBKR ends an anchored window BEFORE the anchor: two bars before it for intraday
+        # bars, one for daily and weekly bars (measured 2026-10-05 — 1min: anchor 14:00:00
+        # → newest 13:58; 1h: 14:00 → 12:00; 1S: 14:00:00 → 13:59:58; 1d: any time on Friday
+        # → Thursday; 1w: a bar's own stamp → the bar before). Until that day this double
+        # ended ON the anchor, which is how a bar lost at every mid-session seam stayed
+        # green here (register F23).
+        newest = end - step * (2 if bar_seconds < 86400 else 1) if params.get("startTime") else end
         stamps: list[datetime] = []
-        t = end
+        t = newest
         while t > start and len(stamps) < 10 * max_points:
             stamps.append(t)
             t -= step

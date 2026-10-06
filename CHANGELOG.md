@@ -282,6 +282,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **`get_market_history_paginated` lost one bar at every page seam cut inside a session
+  (register F23).** IBKR ends an anchored history window *before* the anchor — two bars
+  before it on intraday bars, one on daily and weekly bars (measured 2026-10-05 against the
+  live gateway: `1min` anchor 14:00:00 → newest bar 13:58; `1h` 14:00 → 12:00; `1d` any
+  time on Friday → Thursday; `1w` a bar's own stamp → the bar before). The loop anchored each
+  next page ON the oldest bar it held, so the bar just before that one was never requested.
+  Only a page cut by the 1000-point cap inside a session has such a bar: 1-minute bars on a
+  future (1,380 a session). ESZ6 `5d`/`1min` came back as 7 pages and 5,137 bars with 3
+  missing — 00:19 ET on three days — and each of the three, asked for alone, exists at IBKR
+  with volume. Stocks lose nothing (960 extended-hours bars a day, so every page ends at the
+  04:00 ET open and the unrequested bar lies in the closure); nor do hourly or daily bars,
+  whose pages IBKR ends at a session's first bar (SPY `5y`/`1d`, ESZ6 `6m`/`1h`, measured).
+  Now the next page is anchored one bar after the oldest bar held (`_BAR_SECONDS`): on
+  intraday bars the window then ends exactly on the bar that was lost, with the same number
+  of requests; on daily bars it ends on the oldest bar itself, a repeat the de-duplication
+  removes. The alternative — two bars later, so consecutive pages share a bar — was measured
+  too and costs one extra request at every session boundary, where IBKR then answers with a
+  single bar. The unit double for the endpoint ended its window ON the anchor until this
+  fix, which is how the no-gap test stayed green; it now ends it where IBKR does, and that
+  test, the anchor test and a new live test on the front ES contract (one anchored request
+  straddling each seam, its bars all in the paged result; red on the old code, naming the
+  04:19 UTC bar) go red on the old anchoring. The stop for a window that does not move back
+  gained its own test: a mutant deleting it survived the whole paging suite. Measurements:
+  `claudia_ui/docs/plans/2026-10-05-history-seams-probe/` (git-ignored).
 - **189 documentation links point at a host that answers, and ten of them at pages that
   exist.** IBKR serves its Web API documentation on two hosts with the same paths; on
   2026-10-05 `ibkrcampus.com/docs/…` answered HTTP 403 with a Cloudflare error 1000 on every
