@@ -37,7 +37,7 @@ from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import BacktestResult
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient, _bar_seconds, _period_problem
+from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient, _bar_problem, _bar_seconds, _period_problem
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError, StoreError
 from ibkr_core_mcp.flex_dataset import FlexDataset
@@ -587,7 +587,11 @@ TOOL_DEFINITIONS = [
                         "refused; give a span like year-to-date in days"
                     ),
                 },
-                "bar": {"type": "string", "description": "Bar size, e.g. '1d', '1h'", "default": "1d"},
+                "bar": {
+                    "type": "string",
+                    "description": "Bar size, one of IBKR's step table: 1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m. Second bars (1S) are refused with the reason: IBKR stamps them 60 seconds apart and no stamp is changed here",
+                    "default": "1d",
+                },
                 "end": {
                     "type": "string",
                     "description": "End date YYYY-MM-DD; defaults to today, and the result states which was used",
@@ -2526,6 +2530,9 @@ class ClaudeToolkit:
             # would both say `ytd`. Refused before anything is resolved, read or cached.
             return f"{problem} Nothing was read.", None
         bar = inputs.get("bar", "1d")
+        if problem := _bar_problem(bar):
+            # Second bars: IBKR has them, stamped 60 s apart, and no stamp is changed here.
+            return f"{problem} Nothing was read.", None
         # The end date and the hours are key parts the indicator and backtest tools require, so
         # a default is stated, never silent.
         end = inputs.get("end") or _TODAY()

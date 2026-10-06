@@ -184,6 +184,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   worked by hand from Pine's definitions; 32 mutations red.
 
 ### Changed
+- **A bar size outside IBKR's step table is refused before any request, second bars with
+  their own reason (register F22).** `get_market_history`, `get_market_history_paginated` and
+  `fetch_market_data` refuse `bar` values that are not one of the fifteen sizes IBKR's step
+  table offers (`_bar_problem`), the way a period outside the grammar has been refused since
+  `1165894`: IBKR answers a size it does not know with a size of its own. Second bars are the
+  named case: `bar=1S` is real at IBKR (re-measured 2026-10-05 — 300 genuine one-second bars
+  for five minutes, `barLength: 1`) but their `t` is 60 seconds apart, the last of them reading
+  18:53:59 ET for a true 13:59:58; until now the client lowercased it to `1s`, which IBKR
+  answers with HTTP 500, three attempts and an unhelpful error. The operator's decision: no
+  stamp is ever changed in this package, so second bars are refused with that reason and the
+  list of sizes offered, and remain a question for the study database's own design. The paging
+  loop also sends `bar` lowercased now, as the single call has since 2026-07-06. Tests: four
+  bars × two methods at the client, the tool's refusal (nothing resolved, read or cached), the
+  lowercased loop; mutants red (seconds branch removed, single call unchecked).
 - **`fetch_market_data` never keeps a half candle: a bar is stored only once its period has
   ended for a minute before the read, and every result says when IBKR was read (market-data
   step 5, operator 2026-10-05).** Measured that evening on the live gateway: an un-anchored

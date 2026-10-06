@@ -1599,6 +1599,18 @@ def test_fetch_market_data_refuses_a_period_outside_ibkrs_grammar(toolkit):
     toolkit._client.get_market_history_paginated.assert_not_called()
 
 
+def test_fetch_market_data_refuses_second_bars_with_the_reason(toolkit):
+    """`bar="1S"` reaches IBKR today as `1s` and comes back HTTP 500 after three attempts; the
+    refusal names what IBKR does with second bars and what the tool offers, before anything
+    is resolved, read or cached (register F22; operator 2026-10-05: no stamp is changed)."""
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "ES", "sec_type": "FUT", "period": "1d", "bar": "1S"})
+
+    assert "stamps 60 seconds apart" in text and "1min, 2min" in text and "Nothing was read" in text, text
+    toolkit._client.get_futures.assert_not_called()
+    toolkit._cache.check.assert_not_called()
+    toolkit._client.get_market_history_paginated.assert_not_called()
+
+
 def test_fetch_market_data_refuses_to_cache_a_truncated_window(toolkit):
     """A partial window saved under the requested period is the dangerous half of API-02.
 

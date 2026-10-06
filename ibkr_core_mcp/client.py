@@ -280,12 +280,37 @@ _MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
 _MAX_WIDENINGS = 4
 
 
+_SECOND_BAR_RE = re.compile(r"^\d+\s*s$", re.IGNORECASE)
+
+
+def _bar_problem(bar: Any) -> str | None:
+    """Why `bar` is refused, or None.
+
+    Second bars exist at IBKR — `bar=1S` returns genuine one-second bars, `barLength: 1` —
+    but their `t` is 60 seconds apart: the last of 300 bars ending 13:59:58 ET is stamped
+    18:53:59 (measured 2026-09-25 and 2026-10-05, register F22). This package never changes a
+    stamp (operator, 2026-10-05), so they are refused with that reason rather than lowercased
+    into IBKR's HTTP 500 for `1s`. Any other size outside the step table is refused with the
+    table: IBKR answers a size it does not know with a size of its own, silently.
+    """
+    text = str(bar).strip()
+    offered = ", ".join(_BAR_SECONDS)
+    if _SECOND_BAR_RE.match(text):
+        return (
+            f"bar {bar!r}: second bars are not offered — IBKR serves them with stamps 60 seconds apart "
+            f"(the last of 300 one-second bars ending 13:59:58 ET is stamped 18:53:59), and this package "
+            f"never changes a stamp. Bars offered: {offered}."
+        )
+    if text.lower() not in _BAR_SECONDS:
+        return f"bar {bar!r} is not a size IBKR offers: {offered}."
+    return None
+
+
 def _bar_seconds(bar: str) -> int:
     """Seconds in one bar, for a bar size IBKR's step table offers; ValueError otherwise."""
-    try:
-        return _BAR_SECONDS[bar.lower()]
-    except KeyError:
-        raise ValueError(f"bar {bar!r} is not a size IBKR offers: {', '.join(_BAR_SECONDS)}") from None
+    if problem := _bar_problem(bar):
+        raise ValueError(problem)
+    return _BAR_SECONDS[bar.lower()]
 
 
 def _parse_period_days(period: str) -> float | None:
@@ -971,12 +996,15 @@ class IBKRClient:
 
         Raises:
             ValueError: If `period` is not in the grammar above — IBKR would not reject it,
-                it would answer with a window of its own (`_period_days`).
+                it would answer with a window of its own (`_period_days`) — or `bar` is not a
+                size in the step table, second bars included (`_bar_problem`: IBKR stamps
+                them 60 seconds apart, and no stamp is changed here).
 
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
         Endpoint: GET /iserver/marketdata/history
         """
         _period_days(period)
+        _bar_seconds(bar)  # the step table, before any request
         return parse_one(
             MarketHistory,
             self._get(
@@ -1088,6 +1116,8 @@ class IBKRClient:
         from datetime import datetime, timedelta
 
         total_days = _period_days(period)
+        _bar_seconds(bar)  # the step table, before any request
+        bar = bar.lower()  # the single call lowercases too; IBKR substitutes for a unit it does not know
         chunk_days = _chunk_days_for_bar(bar)
 
         # The fast path is an optimisation and is only sound when ONE call can carry the

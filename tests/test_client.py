@@ -1232,6 +1232,35 @@ def test_a_period_outside_ibkrs_grammar_is_refused_before_any_request(client, me
     mock_get.assert_not_called()
 
 
+@pytest.mark.parametrize("method", ["get_market_history", "get_market_history_paginated"])
+@pytest.mark.parametrize(
+    ("bar", "reason"),
+    [
+        ("1S", "stamps 60 seconds apart"),
+        ("1s", "stamps 60 seconds apart"),
+        ("7min", "1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m"),
+        ("", "1min, 2min"),
+    ],
+)
+def test_a_bar_outside_ibkrs_step_table_is_refused_before_any_request(client, method, bar, reason):
+    """Second bars are real at IBKR (`bar=1S`: 300 bars for five minutes) but stamped 60 s
+    apart — the last of them reads 18:53:59 ET for a true 13:59:58 — and this package never
+    changes a stamp (operator, 2026-10-05), so they are refused with that reason rather than
+    lowercased into IBKR's HTTP 500 (register F22). Any other size outside the step table is
+    refused with the table; IBKR substitutes a size of its own for one it does not know."""
+    with patch.object(client._session, "get") as mock_get, pytest.raises(ValueError, match=reason):
+        getattr(client, method)(265598, period="1d", bar=bar)
+    mock_get.assert_not_called()
+
+
+def test_paged_requests_send_the_bar_lowercased(client):
+    """The single call lowercased `bar` since 2026-07-06; the paging loop sent it as given."""
+    fake, calls = _capped_get(bar_seconds=3600)
+    with patch.object(client, "_get", side_effect=fake):
+        client.get_market_history_paginated(265598, period="6m", bar="1H")
+    assert len(calls) > 1 and all(c["bar"] == "1h" for c in calls), [c["bar"] for c in calls]
+
+
 def test_get_market_history_normalizes_period_and_bar_case(client):
     """Live-verified 2026-07-06: IBKR treats period='6M' as unrecognized and silently
     returns a ~84-bar default (4 months), while '6m' returns the true 6 months.
