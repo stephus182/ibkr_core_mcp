@@ -334,7 +334,31 @@ Each of those tests was held against mutants of the code — a source read as an
 reversed weighting, a deviation taken on `close`, a default relabelled "as given" — and each
 mutant failed one.
 
-**Not established**, as of 2026-10-05:
+**Witnessed on a TradingView chart, 2026-10-06** (operator's screenshots; ES1! · 1h · CME, the
+bar that opened 2026-10-05 16:00 ET — O 7,831.25 H 7,832.50 L 7,828.25 C 7,830.00 — against
+`add_indicators` on ESZ6 1h, all hours, `ma_periods [25, 50, 100, 200]`, `band_period 200`,
+read 2026-10-05 17:28 ET over the 479 bars of a one-month window; a standard-library
+recomputation on a separate raw read agreed with the tool first):
+
+| Legend line | TradingView | This package |
+|---|---|---|
+| SMA 25 / 50 / 100 / 200 hl2 | 7,788.55 / 7,770.00 / 7,754.40 / 7,761.68 | the same four, to the cent |
+| BB 200 SMA hl2 at 1 / 2 / 3 | 7,790.68 / 7,732.67 · 7,819.68 / 7,703.67 · 7,848.69 / 7,674.67 | the same six, to the cent (1 StdDev 29.00) |
+| BB 200 **EMA** hl2 at 1 / 2 / 3 | half-widths 29.00 / 58.01 / 87.01 — unchanged from SMA; basis 7,759.80 | half-widths the same, to the cent; basis 7,759.90 |
+
+So **Basis MA Type moves the basis only** (§4): the deviation is the population standard
+deviation of the source whatever the basis, on the chart as here. The one difference is the
+**EMA basis, 0.10 apart**, and it is the EMA's own: a recursive average depends on how much
+history it was computed over. Measured on the same bar with a longer read: EMA 200 hl2 over the
+last 479 bars 7,759.90; over 700, 7,759.72; over 1,000, 7,759.78; over 1,500 or more, 7,759.77
+(the first bar's weight is 0.83 % after 479 bars, 0.09 % after 700, 0.005 % after 1,000). The
+0.03 that remains against TradingView at full history is the two series' difference before the
+September roll — ES1! carries ESU6's prices there, ESZ6 its own back-month prints — at the weights
+those bars still have. The SMA is the same on every history length. **Rule of thumb for an EMA
+or SMMA (RMA) line: fetch at least five times the length in bars for cent-level agreement with a
+chart that has years of history.** The chart's third band pair was at StdDev 3 (the operator's
+setting); this package's 2.5 run gave 7,834.19 / 7,689.17, i.e. ± 2.5 × 29.00 about the same
+basis. Record: `claudia_ui/docs/plans/2026-10-05-indicators-tv-settings/WITNESS-TARGET.md`.
 
 Established 2026-10-05 and handled at the fetch: IBKR's newest bar **is** the one in progress
 (ES 1h at 18:04 ET: the 18:00 bar, moving between reads), and a bar's last trades arrive one to
@@ -342,12 +366,11 @@ four seconds after it ends. `fetch_market_data` keeps a bar only once its period
 minute before the read, so every bar this tool computes on is complete and "last close" is a
 completed bar's close (`tools-reference.md` § fetch_market_data).
 
-- **This package's figures against a TradingView chart, on the same bars.** The definitions are
-  TradingView's and the arithmetic is tested against them by hand; a line-for-line comparison on
-  live bars has not been run.
-- **`ma_type` other than SMA on the bands, against a TradingView chart.** The reading in §4 is
-  TradingView's help text and Pine's `ta.stdev`; it has not been held against a chart with a
-  non-SMA basis.
+**Not established**, as of 2026-10-06:
+
+- **The EMA basis against a chart with the same history.** The 0.03 residual above is attributed
+  to the pre-roll series difference by arithmetic on weights, not measured on a chart of ESZ6's
+  own bars.
 
 ---
 

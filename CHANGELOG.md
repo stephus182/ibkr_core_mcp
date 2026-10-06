@@ -184,6 +184,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   worked by hand from Pine's definitions; 32 mutations red.
 
 ### Changed
+- **The indicators are witnessed against a TradingView chart (2026-10-06).** The operator's
+  screenshots of ES1! 1h on the bar that opened 2026-10-05 16:00 ET against `add_indicators` on
+  ESZ6: SMA 25 / 50 / 100 / 200 hl2 and the three `BB 200 SMA hl2` pairs (StdDev 1, 2, 3) agree
+  to the cent, ten of ten figures; with Basis MA Type = EMA the band half-widths are unchanged to
+  the cent — so the deviation does not follow the basis type, as `indicators-reference.md` §4
+  read TradingView's help text — and the EMA basis is 0.10 apart (7,759.80 against 7,759.90),
+  which is the EMA's dependence on its history: computed over 479 bars here, the whole chart
+  there; measured over 1,000 or more bars it is within 0.03, the pre-roll difference between
+  ES1! and ESZ6's own bars. §12 of the reference carries the table, the measurement and a rule
+  of thumb (fetch at least five times an EMA's length for cent-level agreement); the one item
+  left not established is the EMA basis against a chart with identical history.
 - **A bar size outside IBKR's step table is refused before any request, second bars with
   their own reason (register F22).** `get_market_history`, `get_market_history_paginated` and
   `fetch_market_data` refuse `bar` values that are not one of the fifteen sizes IBKR's step

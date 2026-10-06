@@ -464,8 +464,9 @@ def bollinger_bands(
 
     TradingView's parameter is what is reproduced here, because matching its settings is the
     purpose; with a non-SMA basis these are TradingView's bands, not Bollinger's exponential
-    ones. That reading of the help text had not been checked against a TradingView chart with
-    a non-SMA basis when this was written (2026-10-05).
+    ones. Witnessed on a TradingView chart 2026-10-06: with the basis switched to EMA the three
+    band pairs' half-widths were unchanged to the cent (29.00 / 58.01 / 87.01 on ES 1h, 200
+    bars), so the chart does what the help text says (`docs/indicators-reference.md` §12).
 
     Args:
         df: OHLCV frame.
