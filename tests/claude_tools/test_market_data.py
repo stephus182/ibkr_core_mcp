@@ -1781,3 +1781,79 @@ def test_check_cache_takes_the_hours(toolkit):
     )
     toolkit._cache.check.assert_called_once_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
     assert "HIT" in text and "all hours" in text, text
+
+
+# ── Market-data batch step 5 (2026-10-05): no half candle — a bar is kept once its period has
+# ended for at least a minute before the read ───────────────────────────────────────────────
+
+_SETTLE_FIXTURE_T0 = 1_791_226_800  # 2026-10-05 19:00:00 UTC (15:00 ET), a Monday during the US session
+
+
+def _hourly_bars(stamps_utc: list[int]) -> dict[str, list[dict[str, float]]]:
+    return {"data": [{"t": t * 1000, "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10} for t in stamps_utc]}
+
+
+def _utc(seconds: int):
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(seconds, tz=UTC).replace(tzinfo=None)
+
+
+@pytest.mark.parametrize(
+    ("read_offset_from_newest_end", "kept", "why"),
+    [
+        (-1800, 2, "the newest bar is still in progress at the read"),
+        (30, 2, "the newest bar ended 30 s before the read: IBKR was still publishing its last trades"),
+        (60, 3, "ended a full minute before the read: kept"),
+    ],
+)
+def test_a_bar_is_kept_only_once_its_period_has_ended_for_a_minute(toolkit, read_offset_from_newest_end, kept, why):
+    """Measured 2026-10-05: an un-anchored request's newest bar is the one in progress, and a
+    bar is served without its last trades for one to four seconds after its period ends. The
+    operator's rule: no half candle, a hard-coded delay, stated. The margin is one minute."""
+    stamps = [_SETTLE_FIXTURE_T0 - 7200, _SETTLE_FIXTURE_T0 - 3600, _SETTLE_FIXTURE_T0]
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_stocks.return_value = [{"contracts": [{"conid": 265598, "isUS": True}]}]
+    toolkit._client.get_market_history_paginated.return_value = _hourly_bars(stamps)
+    read_at = _utc(_SETTLE_FIXTURE_T0 + 3600 + read_offset_from_newest_end)
+
+    with patch("ibkr_core_mcp.claude_tools._NOW", return_value=read_at):
+        text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1d", "bar": "1h"})
+
+    saved = toolkit._cache.save.call_args.args[0]
+    assert len(saved) == kept, f"{why}: {text}"
+    assert f"read from IBKR {read_at.strftime('2026-10-05 %H:%M')}" not in text, (
+        "the read time is printed in ET, not UTC"
+    )
+    assert f"read from IBKR 2026-10-05 {(read_at.hour - 4):02d}:{read_at.minute:02d} ET" in text, text  # EDT that day
+    if kept == 2:
+        assert "Not kept: the bar stamped 2026-10-05 15:00 ET" in text, text  # 19:00 UTC
+    else:
+        assert "Not kept" not in text, text
+
+
+def test_a_fetch_whose_every_bar_is_still_open_saves_nothing_and_says_so(toolkit):
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_stocks.return_value = [{"contracts": [{"conid": 265598, "isUS": True}]}]
+    toolkit._client.get_market_history_paginated.return_value = _hourly_bars([_SETTLE_FIXTURE_T0])
+
+    with patch("ibkr_core_mcp.claude_tools._NOW", return_value=_utc(_SETTLE_FIXTURE_T0 + 600)):
+        text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1d", "bar": "1h"})
+
+    toolkit._cache.save.assert_not_called()
+    assert "none kept" in text and "Nothing saved" in text, text
+
+
+def test_a_cache_hit_states_when_the_bars_were_read_from_ibkr(toolkit):
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2026-09-01", periods=2))
+
+    toolkit._cache.entry.return_value = {"symbol": "IGV", "cached_at": "2026-10-05T21:28:55.123456+00:00"}
+    dated, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-10-05"})
+    toolkit._cache.entry.return_value = {"symbol": "IGV"}
+    undated, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-10-05"})
+
+    assert "read from IBKR 2026-10-05 17:28 ET" in dated, dated
+    assert "read time not recorded for this entry" in undated, undated

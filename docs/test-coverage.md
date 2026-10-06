@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**2,243 unit tests · 103 integration tests (2,346 total) · 91% line coverage (non-integration)** — counted 2026-10-05 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
+**2,248 unit tests · 103 integration tests (2,351 total) · 91% line coverage (non-integration)** — counted 2026-10-05 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28

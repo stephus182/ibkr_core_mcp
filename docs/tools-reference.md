@@ -411,6 +411,25 @@ get_analytics."* A contract IBKR cannot describe (no local symbol from
 cache **hit** still resolves the root first (one `/trsrv/futures` read plus the contract info,
 cached per conid), so it needs the gateway; a stock hit does not.
 
+**No half candle — data is delayed by rule (operator, 2026-10-05; step 5).** An un-anchored
+history request's newest bar is the one IBKR is still writing (ES 1h at 18:04 ET: the 18:00 bar,
+close and volume moving between two reads a minute apart), and IBKR publishes a bar's last
+trades one to four seconds after the bar ends (eight bars watched; `ibkr-api-behaviors-reference.md`).
+So **a bar is kept only once its period has ended for a minute before the read** — hard-coded
+(`_SETTLE_SECONDS`), applied at the fetch, so the cache holds completed bars only and
+`add_indicators`, `run_backtest` and `get_analytics` inherit it. The period is the requested bar
+size: a daily bar is kept from the next morning (stocks 09:31 ET, all-hours futures 18:01 ET).
+Every fetch result states the read time and names what was left out — `…: 479 bars stamped at
+their open (ET) 2026-09-06 18:00 → 2026-10-05 16:00; read from IBKR 2026-10-05 17:28 ET.` and,
+during a session, `Not kept: the bar stamped 2026-10-05 18:00 ET — a bar counts once its period
+has ended for a minute before the read.`; a fetch whose every bar is still open saves nothing and
+says so. A **cache hit** states when its bars were read (`…; read from IBKR 2026-10-05 17:28 ET.`,
+from the manifest's `cached_at`; `read time not recorded for this entry` for older rows), because
+the same key answers all day: a refresh is `delete_cache` then `fetch_market_data`. Entries saved
+before 2.2.0 may end with a bar that was still open at their read; the operator flushes the cache
+at the pin move. This tool is for analysis and backtesting, not live charting: the live price is
+`get_market_snapshot`'s, the live chart is TradingView's.
+
 **The hours are part of the key** (`…_RTH` / `…_ALL`, written both ways, never implied): IBKR's
 **daily stock bar changed on 20 of 20 days** with `outsideRth` (AAPL 2026-10-02: `333.26 /
 334.54 / 330.61 / 333.69` regular, `331.05 / 334.54 / 330.16 / 333.60` all hours), so the two

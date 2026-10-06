@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
@@ -37,7 +37,7 @@ from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import BacktestResult
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient, _period_problem
+from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient, _bar_seconds, _period_problem
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError, StoreError
 from ibkr_core_mcp.flex_dataset import FlexDataset
@@ -392,6 +392,46 @@ def _TODAY() -> str:
     return str(date.today())
 
 
+def _NOW() -> datetime:
+    """The moment of a read, as naive UTC — the frame `bars_to_dataframe` builds is indexed in it."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _et_stamp(moment: Any) -> str:
+    """A datetime or Timestamp (naive = UTC), printed in ET: `2026-10-05 16:00 ET`."""
+    stamp = pd.Timestamp(moment)
+    stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+    return str(stamp.tz_convert(_ET).strftime("%Y-%m-%d %H:%M ET"))
+
+
+# No half candle (operator, 2026-10-05). An un-anchored history request's newest bar is the one
+# IBKR is still writing, and a bar is served without its last trades for one to four seconds
+# after its period ends (eight bars watched; `docs/ibkr-api-behaviors-reference.md`). So a bar
+# is kept only once its period has ended this long before the read: a hard-coded delay, stated
+# on every result, fifteen times the longest lag seen. This tool is for analysis and
+# backtesting, not live charting — the live price is `get_market_snapshot`'s.
+_SETTLE_SECONDS = 60
+
+
+def _complete_bars(df: pd.DataFrame, bar: str, read_at: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a freshly read frame into the bars kept and the bars still open at `read_at`."""
+    cutoff = read_at - timedelta(seconds=_bar_seconds(bar) + _SETTLE_SECONDS)
+    index = df.index.tz_convert(None) if df.index.tz is not None else df.index
+    kept = index <= cutoff
+    return df[kept], df[~kept]
+
+
+_SETTLE_RULE = "a bar counts once its period has ended for a minute before the read"
+
+
+def _not_kept_text(still_open: pd.DataFrame) -> str:
+    newest = _et_stamp(still_open.index[-1])
+    which = (
+        f"the bar stamped {newest}" if len(still_open) == 1 else f"{len(still_open)} bars, the newest stamped {newest}"
+    )
+    return f"Not kept: {which} — {_SETTLE_RULE}."
+
+
 def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
     """Format the within-file duplicate-tradeID warning shared by _verify_flex_import's
     three status branches (pre-validated / hash-verified / cross-checked).
@@ -518,7 +558,13 @@ TOOL_DEFINITIONS = [
             "add_indicators, run_backtest and get_analytics (a future is cached under its own "
             "symbol, e.g. ESZ6). Volume is IBKR's FILTERED historical volume — block trades, "
             "combos and derivative-priced trades excluded — so it is lower than an exchange's "
-            "reported total where those are large (crude futures), and that gap is not an error."
+            "reported total where those are large (crude futures), and that gap is not an error. "
+            "Data is delayed by rule, never a half candle: a bar is kept only once its period has "
+            "ended for a minute before the read (IBKR's newest bar is the one it is still writing, "
+            "and it publishes a bar's last trades a few seconds after the bar ends), so a daily bar "
+            "is kept from the next morning. The result says when IBKR was read and which bar, if "
+            "any, was not kept; a cache hit says when its bars were read. The live price is "
+            "get_market_snapshot's."
         ),
         "input_schema": {
             "type": "object",
@@ -2505,9 +2551,16 @@ class ClaudeToolkit:
             # that this entry was saved before that was recorded — never nothing.
             row = self._cache.entry(cache_symbol, timeframe, period, end, outside_rth=outside) or {}
             served = _describe_listing(row["listing"]) if row.get("listing") else "listing not recorded for this entry"
+            # The same key answers all day, so a hit says when IBKR was actually read.
+            cached_at = row.get("cached_at")
+            read_note = (
+                f"read from IBKR {_et_stamp(datetime.fromisoformat(cached_at))}"
+                if cached_at
+                else "read time not recorded for this entry"
+            )
             return (
-                f"Cache HIT — loaded {label} {timeframe} ({period}) {end_note}, {hours_note}, from Drive — {served}. "
-                f"{_span_text(df, bar, futures_all_hours)}.",
+                f"Cache HIT — loaded {label} {timeframe} ({period}) {end_note}, {hours_note}, from Drive — {served}; "
+                f"{read_note}. {_span_text(df, bar, futures_all_hours)}.",
                 None,
             )
 
@@ -2541,9 +2594,21 @@ class ClaudeToolkit:
                 f"that the period/bar combination is valid for this instrument."
             ), None
 
-        df = _bars_to_dataframe(raw)
+        read_at = _NOW()
+        df, still_open = _complete_bars(_bars_to_dataframe(raw), bar, read_at)
+        if df.empty:
+            return (
+                f"{len(still_open)} bar(s) of {label} {timeframe} ({period}, {hours_note}) read from IBKR "
+                f"{_et_stamp(read_at)}, none kept — {_SETTLE_RULE}. Nothing saved.",
+                None,
+            )
         span = _span_text(df, bar, futures_all_hours)
-        fetched = f"Fetched {label} {timeframe} ({period}) {end_note}, {hours_note}, from IBKR — {resolved.describe()}: {span}."
+        fetched = (
+            f"Fetched {label} {timeframe} ({period}) {end_note}, {hours_note}, from IBKR — {resolved.describe()}: "
+            f"{span}; read from IBKR {_et_stamp(read_at)}."
+        )
+        if len(still_open):
+            fetched += f" {_not_kept_text(still_open)}"
 
         incomplete = raw.get("ibkr_core_warning")
         if incomplete:

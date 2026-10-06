@@ -336,14 +336,18 @@ mutant failed one.
 
 **Not established**, as of 2026-10-05:
 
+Established 2026-10-05 and handled at the fetch: IBKR's newest bar **is** the one in progress
+(ES 1h at 18:04 ET: the 18:00 bar, moving between reads), and a bar's last trades arrive one to
+four seconds after it ends. `fetch_market_data` keeps a bar only once its period has ended for a
+minute before the read, so every bar this tool computes on is complete and "last close" is a
+completed bar's close (`tools-reference.md` § fetch_market_data).
+
 - **This package's figures against a TradingView chart, on the same bars.** The definitions are
   TradingView's and the arithmetic is tested against them by hand; a line-for-line comparison on
   live bars has not been run.
 - **`ma_type` other than SMA on the bands, against a TradingView chart.** The reading in §4 is
   TradingView's help text and Pine's `ta.stdev`; it has not been held against a chart with a
   non-SMA basis.
-- **Whether the last bar IBKR returns is one still in progress.** If it is, "last close" is the
-  latest price at the time of the fetch, not a completed bar's close.
 
 ---
 

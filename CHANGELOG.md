@@ -184,6 +184,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   worked by hand from Pine's definitions; 32 mutations red.
 
 ### Changed
+- **`fetch_market_data` never keeps a half candle: a bar is stored only once its period has
+  ended for a minute before the read, and every result says when IBKR was read (market-data
+  step 5, operator 2026-10-05).** Measured that evening on the live gateway: an un-anchored
+  history request's newest bar is the one IBKR is still writing (ES 1h at 18:04 ET: the 18:00
+  bar, close 7,833.75 → 7,834.75 and volume 1,263 → 1,380 between two reads a minute apart;
+  a 1-minute bar appears about 6 s into its minute), and IBKR publishes a bar's last trades one
+  to four seconds after the bar ends (eight bars watched: short of its last trades at +0.5 s in
+  three of five, final from +1.5 s in five of five, once still short at +3.5 s; nothing moved
+  later, and an anchored re-read agreed with every final value). Until now the fetch stored
+  that newest bar under today's key, a hit later the same day served it as it stood with no
+  word on when it was read, and `add_indicators` reported its price as "last close". The
+  operator's rule: "Do NOT attempt to make half candles" — a hard-coded delay, acknowledged;
+  "accuracy and precision is number one priority, speed is not"; the tool is for analysis and
+  backtesting, the live chart is TradingView's. So `_SETTLE_SECONDS = 60` (fifteen times the
+  longest lag seen): at the fetch, a bar whose period — the requested bar size — had not ended
+  a full minute before the read is not kept, the result names it (`Not kept: the bar stamped
+  2026-10-05 18:00 ET — a bar counts once its period has ended for a minute before the read.`),
+  a fetch whose every bar is still open saves nothing and says so, and the cache therefore
+  holds completed bars only — `add_indicators`, `run_backtest` and `get_analytics` inherit the
+  rule without a line of their own. A daily bar is kept from the next morning. Every fetch
+  result carries `read from IBKR 2026-10-05 17:28 ET`; a cache hit carries it from the
+  manifest's `cached_at` (`read time not recorded for this entry` on older rows). Tests: the
+  rule at −30 min, +30 s and +60 s, the all-open fetch, the hit's read time; three mutants red
+  (margin 0, strict boundary, bar length dropped). Entries saved before 2.2.0 may end with a
+  bar that was open at their read; the cache is flushed at the pin move. Docs:
+  `tools-reference.md`, `market-data-conventions.md`, `indicators-reference.md` (the "last bar
+  in progress" item moves from not established to handled), `ibkr-api-behaviors-reference.md`.
 - **Time in force is documented in one place, and two comments that misstated IBKR are
   corrected (register F11, F15).** New section in `docs/order-management-examples.md`: the
   three places IBKR states TIF values and how they disagree — the order body's enum (`DAY`,
