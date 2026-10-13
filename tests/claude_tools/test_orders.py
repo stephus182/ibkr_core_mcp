@@ -1,6 +1,9 @@
 import re
+from datetime import timedelta
 
 import pytest
+
+from ibkr_core_mcp.claude_tools import _today_date
 
 from .conftest import assert_tool_failed
 
@@ -677,3 +680,50 @@ def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
     call_order = toolkit._client.get_order_preview.call_args[0][1]
     assert call_order["manualIndicator"] is True
     assert "extOperator" not in call_order
+
+
+_LIVE = _today_date() + timedelta(days=76)
+_FUTURE_INFO = {
+    "local_symbol": "ESZ6",
+    "contract_month": "202612",
+    "maturity_date": _LIVE.strftime("%Y%m%d"),
+    "company_name": "E-mini S&P 500",
+    "multiplier": "50",
+    "exchange": "CME",
+}
+
+
+def _preview_future(toolkit, contract_info):
+    """Preview a bare-root ES whose one live contract IBKR describes as `contract_info`."""
+    live = int(_LIVE.strftime("%Y%m%d"))
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 515416632, "expirationDate": live, "ltd": live}
+    ]
+    toolkit._client.get_secdef_info.return_value = [{"conid": 515416632, "currency": "USD"}]
+    toolkit._client.get_contract_info.return_value = contract_info
+    return _preview(toolkit, LIVE_PREVIEW_ACCEPTED, symbol="ES", sec_type="FUT", order_type="LMT", limit_price=6000.0)
+
+
+@pytest.mark.parametrize(
+    ("run", "line"),
+    [
+        (
+            lambda tk: _preview_future(tk, _FUTURE_INFO),
+            f"E-mini S&P 500 · ESZ6 · DEC26 · expires {_LIVE.isoformat()}, CME, USD, conid 515416632",
+        ),
+        (lambda tk: _preview_future(tk, {}), "name unknown, exchange unknown, USD, conid 515416632"),
+        (lambda tk: _preview(tk, LIVE_PREVIEW_ACCEPTED), "TEST CO, NASDAQ, USD, conid 265598"),
+    ],
+    ids=["future-named", "future-ibkr-cannot-describe", "stock"],
+)
+def test_a_preview_names_the_contract_it_priced_with_its_conid(toolkit, run, line):
+    """The preview resolves a contract and used to print only the symbol it was asked for.
+
+    claudia_ui gap #96, 2026-10-08: a preview of `BUY 1 MES` said `Order Preview: BUY 1 MES
+    (LMT, GTC)` and nothing else about the contract, so the model proposed without a conid — the one FUT proposal
+    in 38 that lacked it, and the one whose session had shown none. Anthropic: an agent needs
+    the technical identifier "if only to trigger downstream tool calls"
+    (https://www.anthropic.com/engineering/writing-tools-for-agents). A future IBKR cannot
+    describe is still named by its conid, never by a guess, and the preview still runs.
+    """
+    assert run(toolkit).splitlines()[1] == f"  {'Contract:':<22}{line}"

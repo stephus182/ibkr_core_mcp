@@ -410,6 +410,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   it, names it in the headline (`Order Preview: BUY 1 ES (STP, GTC)`) and on a `Time in force`
   line. With none given the preview is for a DAY order and says "none was given, so this
   preview is for a DAY order".
+- **`preview_order` names the contract it priced, with its conid (claudia_ui gap #96).** The
+  tool resolved a contract — for a futures root, the front month — and printed only the symbol it
+  was asked for, so a model that previewed `MES` and then proposed had no conid to give: live
+  2026-10-08, the one futures proposal in 38 that lacked one, and the one whose session no result
+  had shown it. A `Contract` line under the headline now names the listing in the form the
+  market-data tools use (`_Resolved.describe()`; a future through `_futures_listing`); a future
+  IBKR cannot describe reads `name unknown, exchange unknown, USD, conid <n>`, never a guess, and
+  the preview still runs. The tool's description says so. Anthropic: an agent needs a technical
+  identifier "if only to trigger downstream tool calls"
+  (https://www.anthropic.com/engineering/writing-tools-for-agents).
 - **`get_live_orders` no longer tells the model a DAY order is `TIF=CLOSE` (register F8).** The
   order row's `timeInForce` reads `CLOSE` for a DAY order — a value in no IBKR enum, measured on
   stocks (2026-09-24) and on a future (2026-10-02) — and the tool printed it as the TIF, which

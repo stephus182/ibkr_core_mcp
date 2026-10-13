@@ -1163,7 +1163,8 @@ TOOL_DEFINITIONS = [
             "commission, margin impact, and buying power effect WITHOUT placing the order. "
             "Use this before proposing a trade to verify feasibility and cost. Pass the time in "
             "force of the order you will propose (tif): the preview is for that order and states "
-            "it; with none it is for a DAY order and says so."
+            "it; with none it is for a DAY order and says so. The result names the contract it "
+            "priced — for a futures root, the front month it resolved to — with its conid."
         ),
         "input_schema": {
             "type": "object",
@@ -2160,7 +2161,7 @@ def _preview_warning_lines(result: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def _format_order_preview(result: Mapping[str, Any], headline: str, time_in_force: str = "") -> str:
+def _format_order_preview(result: Mapping[str, Any], headline: str, time_in_force: str = "", contract: str = "") -> str:
     """Render a whatif response for the model, refusal first.
 
     **The refusal is the point.** `error` and `warns` were not read at all until
@@ -2179,6 +2180,8 @@ def _format_order_preview(result: Mapping[str, Any], headline: str, time_in_forc
     Warnings come from `warn` AND `warns` — see `_preview_warning_lines`.
     """
     lines = [headline]
+    if contract:
+        lines.append(f"  {'Contract:':<22}{contract}")
     if time_in_force:
         lines.append(f"  {'Time in force:':<22}{time_in_force}")
     error = result.get("error")
@@ -3796,6 +3799,16 @@ class ClaudeToolkit:
         if resolved.error:
             return resolved.error, None
         conid = resolved.conid
+        # The result names the contract it priced, with its conid (claudia_ui gap #96): the
+        # model proposes with a conid only when a result has shown it one, and this result
+        # used to print just the symbol it was asked for. A future is named in IB's strings
+        # by the function the market-data tools use; one IBKR cannot describe keeps the
+        # resolver's listing ("name unknown", never a guess) and the preview still runs.
+        listing = resolved
+        if sec_type == "FUT":
+            named = self._futures_listing(symbol, conid)
+            if not named.error:
+                listing = named
 
         account_id, err = self._first_account_id()
         if err:
@@ -3835,7 +3848,7 @@ class ClaudeToolkit:
         result = self._client.get_order_preview(account_id, order)
         headline = f"Order Preview: {action} {quantity} {symbol} ({order_type}, {tif})"
         stated = tif if given_tif else "DAY — none was given, so this preview is for a DAY order"
-        return _format_order_preview(result, headline, time_in_force=stated), None
+        return _format_order_preview(result, headline, time_in_force=stated, contract=listing.describe()), None
 
     def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return real-time account/model-partition P&L (daily + unrealized), not per-position.

@@ -252,10 +252,15 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 | `tif` | string | — | Time in force of the order being previewed: `"DAY"`, `"GTC"`, `"IOC"` or `"OPG"` — four of the five values in IBKR's place-order enum (the fifth, `PAX`, is defined nowhere in IBKR's documentation and is in neither a stock's nor a future's measured rules). `GTD` and the overnight values `OVT` / `OND` are returned per contract by IBKR's contract rules and **cannot be previewed here**. Omitted: the preview is for a DAY order and says so. Full picture: [`order-management-examples.md`](order-management-examples.md) § Time in force |
 
 **Output:** Text summary — the headline names the order type and the time in force
-(`Order Preview: BUY 1 ES (STP, GTC)`), then `Time in force` (with "none was given, so this
-preview is for a DAY order" when it was omitted), `Commission est.`, `Equity with loan`,
-`Initial margin`, `Maintenance margin`, `Buying power effect` (equity change). Until 2.2.0
-every preview was sent as DAY and said nothing about it (register F7). Measured live
+(`Order Preview: BUY 1 ES (STP, GTC)`), then `Contract` — the contract priced, with its conid,
+in the form the market-data tools use (`E-mini S&P 500 · ESZ6 · DEC26 · expires 2026-12-18, CME,
+USD, conid 515416632`; a stock `<name>, <exchange>, <currency>, conid <n>`; a future IBKR cannot
+describe `name unknown, exchange unknown, USD, conid <n>`, never a guess) — then `Time in force`
+(with "none was given, so this preview is for a DAY order" when it was omitted), IBKR's refusal
+first when it refused, `Order value`, `Commission est.`, `Initial margin`, `Maintenance margin`,
+`Equity with loan`, `Position`, and IBKR's warnings. Until 2.2.0 every preview was sent as DAY and
+said nothing about it (register F7), and the output named only the symbol it was asked for, so a
+model that previewed a futures root had no conid to propose with (claudia_ui gap #96). Measured live
 2026-10-02 (BUY 1 ES STP, five what-ifs seconds apart — DAY, DAY, GTC, GTC, DAY): IBKR accepted
 the GTC what-if; order value, commission, position and the four warnings were identical between
 DAY and GTC. The three live account figures (initial margin, maintenance margin, equity with
