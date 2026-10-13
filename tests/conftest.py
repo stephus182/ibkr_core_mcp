@@ -199,7 +199,7 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 # the mutant was "caught" was decided by which button a person pressed, and five older tests
 # had the same shape (register F32). So the rule is structural, like the two above it.
 #
-# A gate reaches a person through four doors, each shut in `pytest_configure`:
+# A gate reaches a person through five doors, each shut in `pytest_configure`:
 #
 # 1. `LocalAuthentication` — Gate 1 runs in-process through PyObjC, with no audit event, so
 #    the framework itself is replaced in `sys.modules`. `require_touch_id` imports it inside
@@ -209,6 +209,9 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 # 4. A child process running `_order_dialog.py` or `osascript` — how `order_confirm` shows the
 #    dialog on macOS. Python audits process creation, so the audit hook refuses those two by
 #    the name of what would run, whichever function asked.
+# 5. A child process that would open a browser window — `GatewayManager.open_login_page()`
+#    starts Chrome for the login window (register F44, 2026-10-13). The same hook refuses it
+#    by the Chrome binary's name or by an `--app=` argument.
 #
 # The refusal is `pytest.fail`, a `BaseException`: it passes `require_touch_id`'s
 # `except ImportError` and `_show_confirm_dialog`'s `except Exception` fallback alike. Nothing
@@ -220,10 +223,22 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 #
 # What it cannot see, stated rather than implied: a prompt raised by code that already holds a
 # reference to the real framework taken before configure time, a dialog shown by a child of a
-# child under another name, and anything that disables it on purpose. It catches accidents.
+# child under another name, a browser opened through `webbrowser` on Linux (`xdg-open`) or
+# named inside one shell command string (door 5 reads argument lists and paths, not commands),
+# and anything that disables it on purpose. It catches accidents.
 _HUMAN_GUARD = {"armed": False}
 _human_refusals: list[str] = []  # read by `pytest_sessionfinish`
 _DIALOG_LAUNCHERS = ("_order_dialog.py", "osascript")
+# Door 5: its own list, not the manager's table — a guard that read the code it guards would
+# move with a mutant of it.
+_BROWSER_LAUNCHERS = (
+    "Google Chrome",
+    "chrome.exe",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+)
 # Process creation, with the positions of the arguments that say what would run. Argument
 # order: https://docs.python.org/3.11/library/audit_events.html (checked 2026-10-01).
 _PROCESS_EVENTS: dict[str, tuple[int, ...]] = {
@@ -241,7 +256,7 @@ def _refuse_human(door: str) -> None:
     pytest.fail(
         f"a unit test tried to reach a human ({door}) — replace the gate in the test: Touch ID "
         "with a LocalAuthentication double, the dialog with a patch of the confirm function or "
-        "of order_confirm.subprocess.run",
+        "of order_confirm.subprocess.run, the login window with a patch of subprocess.Popen",
         pytrace=True,
     )
 
@@ -294,16 +309,37 @@ def _names_a_dialog_launcher(value: object) -> str | None:
     return None
 
 
+def _names_a_browser_window(value: object) -> str | None:
+    """The browser window `value` would open, if any: an argument naming a Chrome binary by its
+    last path component, read whole ("Google Chrome" holds a space), or carrying `--app=`."""
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if isinstance(value, os.PathLike):
+        value = os.fspath(value)
+    if isinstance(value, str):
+        if value.startswith("--app="):
+            return "--app="
+        name = value.replace("\\", "/").rsplit("/", 1)[-1]
+        return name if name in _BROWSER_LAUNCHERS else None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if (found := _names_a_browser_window(item)) is not None:
+                return found
+    return None
+
+
 def _human_hook(event: str, args: tuple[object, ...]) -> None:
-    """The audit hook: refuse a child process that would show a Gate 2 dialog."""
+    """The audit hook: refuse a child process that would show a Gate 2 dialog or a browser window."""
     if not _HUMAN_GUARD["armed"]:
         return
     positions = _PROCESS_EVENTS.get(event)
     if positions is None:
         return
     for position in positions:
-        if position < len(args) and (launcher := _names_a_dialog_launcher(args[position])) is not None:
-            _refuse_human(f"{event} {launcher}")
+        if position < len(args):
+            found = _names_a_dialog_launcher(args[position]) or _names_a_browser_window(args[position])
+            if found is not None:
+                _refuse_human(f"{event} {found}")
 
 
 def _shut_the_tk_door(tkinter_module: types.ModuleType) -> None:

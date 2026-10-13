@@ -1,4 +1,5 @@
-"""No unit test can reach a human — a Touch ID prompt or a Gate 2 dialog (register F32).
+"""No unit test can reach a human — a Touch ID prompt, a Gate 2 dialog (register F32) or the
+login window (register F44).
 
 The suite has structural guards for the network (pytest-socket, from configure time) and for
 the operator's data (the audit hook, `test_no_real_data_io.py`). It had none for the two
@@ -8,14 +9,17 @@ opened on the operator's screen during a live session — for a fake order, with
 mocked and sockets blocked, so nothing reached IBKR; but whether that mutant was "caught" was
 decided by which button a person clicked. Five older tests had the same shape.
 
-A gate reaches a person through four doors, and `tests/conftest.py` shuts each from
+A gate reaches a person through five doors, and `tests/conftest.py` shuts each from
 `pytest_configure` on:
 
 1. Apple's `LocalAuthentication` framework — Gate 1, in-process (`human_auth.require_touch_id`);
 2. `AppKit` — the dialog itself, when `_order_dialog` runs in the test process;
 3. `tkinter.Tk` — the non-macOS dialog;
 4. a child process running `_order_dialog.py` or `osascript` — how `order_confirm` shows the
-   dialog on macOS.
+   dialog on macOS;
+5. a child process that would open a browser window — the Chrome login window
+   `GatewayManager.open_login_page()` starts (register F44), by the binary's name or an
+   `--app=` argument.
 
 A test that needs one of them supplies its own double, as the gate tests already did
 (`monkeypatch.setitem(sys.modules, …)`, `patch("…order_confirm.subprocess.run")`); nothing is
@@ -107,6 +111,28 @@ def test_the_dialog_script_cannot_be_launched(tmp_path):
     decoy.write_text("pass\n")
     with refused("_order_dialog.py"):
         subprocess.run([sys.executable, str(decoy)], capture_output=True, text=True, timeout=10, check=False)
+
+
+@pytest.mark.skipif(_TRUE is None, reason="needs a `true` executable to stand in for Chrome")
+def test_a_browser_app_window_cannot_be_opened():
+    """Door 5, the login window (register F44), by its flag. `true` stands in for Chrome: on a
+    broken guard it runs and shows nothing."""
+    assert conftest._HUMAN_GUARD["armed"] is True
+    assert _TRUE is not None
+    with refused("--app="):
+        subprocess.run([_TRUE, "--app=https://localhost:5055"], capture_output=True, timeout=10, check=False)
+
+
+@pytest.mark.skipif(_TRUE is None, reason="needs a `true` executable to stand in for Chrome")
+def test_chrome_cannot_be_launched_by_name(tmp_path):
+    """Door 5 by the binary's name, read whole — the macOS one, "Google Chrome", holds a space.
+    A link to `true` under that name: on a broken guard it runs and shows nothing."""
+    assert conftest._HUMAN_GUARD["armed"] is True
+    assert _TRUE is not None
+    decoy = tmp_path / "Google Chrome"
+    decoy.symlink_to(_TRUE)
+    with refused("Google Chrome"):
+        subprocess.run([str(decoy)], capture_output=True, timeout=10, check=False)
 
 
 @pytest.mark.skipif(_TRUE is None, reason="needs a `true` executable to stand in for the interpreter")
