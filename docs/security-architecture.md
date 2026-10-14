@@ -170,7 +170,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 | Local files | `_import_flex_file`, profile dirs, token persist | `resolve()` + `is_relative_to(~/.ibkr_core)`; `_safe_domain`; 0600 |
 | Browser cookie store | `BrowserCookieAuth` | Browser-name allowlist; CR/LF stripped; only ever sent to loopback |
 | Chromium / httpx | `Crawl4AIScraper.scrape`, `crawl_site`, `search_site_detailed` | `_validate_public_url` before; `_reject_private_requests` per browser request; `_reject_private_httpx_request` per seeder request |
-| Subprocess | `order_confirm`, `gateway/manager`, `backtest` | AST module allowlist; no `shell=True`; constant or JSON-on-stdin arguments |
+| Subprocess | `order_confirm`, `gateway/manager`, `backtest` | AST module allowlist; no `shell=True`; constant or JSON-on-stdin arguments — except the login window's Chrome (`gateway/manager`, F44, 2026-10-13): list form, the binary from a fixed per-platform table or `PATH`, its arguments the manager's own base URL and the home directory, a named-variable environment (no host secret reaches it), and a unit test that would launch it is refused (`tests/conftest.py` door 5) |
 | RestrictedPython `exec` | `backtest._execute_in_subprocess` | Attribute allowlist; frozen namespace; child process; watchdog |
 
 ---

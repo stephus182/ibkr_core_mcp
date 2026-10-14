@@ -13,17 +13,22 @@ which side of the container boundary may renew it.
 `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`. On first use:
 
 1. Start the gateway using the built-in `GatewayManager` (see below)
-2. Open `https://localhost:5055` in Chrome
+2. Open `https://localhost:5055` in Chrome — `GatewayManager.open_login_page()` opens it in a small Chrome
+   window of its own (own profile, 540×680); the caller closes it through the returned handle once the
+   session is verified, as `startup()` does
 3. Log in with IBKR credentials + 2FA (challenge code shown in-browser → IBKR Mobile → enter the response code)
 4. Wait for "Client login succeeds" in browser
-5. The package reads the session cookie automatically
+5. The package reads Chrome's `localhost` cookie when it can. Measured 2026-10-13: the gateway answered
+   `/portfolio/accounts` and `/iserver/accounts` with no cookie at all (12 reads, two sessions), and on
+   macOS the read can be refused — Chrome's cookie file, "Operation not permitted" — so the client warns
+   and continues without one. What a *stale* cookie does is not measured.
 
 **Starting the gateway:**
 ```python
 from ibkr_core_mcp import GatewayManager
 
 gm = GatewayManager()
-gm.startup()   # builds Docker image on first run, then opens browser for login
+gm.startup()   # builds Docker image on first run, then opens the login window
 ```
 
 Or from a script:

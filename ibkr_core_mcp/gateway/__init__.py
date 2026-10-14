@@ -24,6 +24,6 @@ absent, so a restart alone will keep running the old one — that is exactly how
 survived its own removal for a day.
 """
 
-from ibkr_core_mcp.gateway.manager import GatewayManager
+from ibkr_core_mcp.gateway.manager import GatewayManager, LoginWindow
 
-__all__ = ["GatewayManager"]
+__all__ = ["GatewayManager", "LoginWindow"]

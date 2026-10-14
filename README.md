@@ -122,7 +122,7 @@ pip install -e ".[dev,server]"
 from ibkr_core_mcp.gateway import GatewayManager
 
 gm = GatewayManager()
-gm.startup()   # interactive: starts container → opens browser → waits for auth
+gm.startup()   # interactive: starts container → opens the login window → waits for auth
 ```
 
 Or use the programmatic API (for non-interactive environments, e.g. a web UI or a batch job):
@@ -131,21 +131,26 @@ Or use the programmatic API (for non-interactive environments, e.g. a web UI or 
 gm = GatewayManager()
 gm.start()                   # build image (first run) + docker run
 gm.wait_for_gateway()        # wait up to 120 s for Java process
-gm.open_login_page()         # open https://localhost:5055 in browser
+window = gm.open_login_page()  # a small Chrome window of its own (a tab if no Chrome)
 # … user logs in …
-gm.wait_for_auth(timeout=300)  # poll until authenticated
+if gm.wait_for_auth(timeout=300) and window is not None:  # poll until authenticated
+    window.close()             # the login's job is done; a failed one stays open
 ```
 
 `startup()` steps on first run:
 1. Launch Docker Desktop (macOS) if not running
 2. Build the gateway image (~60 MB IBKR zip, cached afterwards)
 3. Start the container on port 5055
-4. Open `https://localhost:5055` in your browser
+4. Open the login (`https://localhost:5055`) in a small Chrome window of its own — its own profile,
+   540×680; a browser tab if there is no Chrome
 5. You log in with your IBKR credentials + 2FA
-6. Verify the session is active
+6. Verify the session is active, then close the login window (a failed login leaves it open)
 
 Log in at `https://localhost:5055` **in Chrome** — the default auth reads Chrome's cookie store for
-`localhost`. To use another browser set `IBKR_AUTH_BROWSER` to one of `chrome`, `chromium`, `firefox`,
+`localhost`. (`open_login_page()` opens the login in a Chrome profile of its own, and on 2026-10-13 the
+gateway answered data reads with no cookie at all; on macOS the default auth can also be refused
+Chrome's cookie file, and then warns and continues without one.) To use another browser set
+`IBKR_AUTH_BROWSER` to one of `chrome`, `chromium`, `firefox`,
 `safari`, `edge` (any other name is refused). The gateway session expires when idle: call
 `client.tickle()` about once a minute from your process (no keepalive loop ships with the package;
 `docs/gateway-auth-reference.md` § Keeping the session alive shows the launchd daemon ClaudIA uses).

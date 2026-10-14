@@ -182,6 +182,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   whose default it is, each definition in its source's own words, the `n/a` rules, what is not
   offered, what is not yet established, and every official page. Tests: eleven, the figures
   worked by hand from Pine's definitions; 32 mutations red.
+- **`LoginWindow` — the login window's handle (register F44; claudia_ui gap #102).** Exported from
+  `ibkr_core_mcp.gateway`. `close()` ends the window's Chrome and returns whether it was its own to
+  close: `False` when that process had already exited by itself — the operator quit it, or the launch
+  was handed to a Chrome already running on the login profile (measured 2026-10-13: that second launch
+  exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
 - **The indicators are witnessed against a TradingView chart (2026-10-06).** The operator's
@@ -331,6 +336,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **The MCP server's `--stream` loop records each execution in the Flex dataset as a
   placeholder**, as `get_trades(source='live')` has since 2026-08-04, so the activity report
   sees the fill and its statement lands on the same row.
+- **`GatewayManager.open_login_page()` opens the login in a small Chrome window of its own and returns
+  its `LoginWindow` (register F44; claudia_ui gap #102)** — its own profile `~/.ibkr_core/login-chrome`,
+  app mode, 540×680, the gateway's login frame (operator: "smaller but still perfectly good"). The launch
+  is list form, no shell, in a process session of its own, and Chrome receives only named environment
+  variables (`PATH`, `HOME`, and those Windows and Linux need for a window), so a host's secrets stay in
+  the host. No Chrome, or one that will not start → the default browser's tab, as before, and `None`.
+  `startup()` closes the window once the session is verified; a failed login leaves it open. Nothing
+  keeps a window on top — no browser or Chrome switch can. Measured 2026-10-13 against the live gateway:
+  two logins through the window, each closed through its handle with no Chrome left behind; the
+  gateway's certificate warning shown in a fresh profile and not again at the second login, six hours
+  later; and `/portfolio/accounts` and `/iserver/accounts` answered with no cookie at all (12 reads, two
+  sessions), so a login in the window's own profile takes nothing from a client that sends no cookie.
+  Not measured: what a stale default-profile cookie does, for a client able to read Chrome's cookie
+  file — on the Mac measured, `BrowserCookieAuth` was refused that file ("Operation not permitted") and
+  sent none.
 
 ### Deprecated
 - **`SQLiteStore.get_trades` and `SQLiteStore.get_all_execution_ids`.** They read the legacy

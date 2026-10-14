@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import platform
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +13,8 @@ import pytest
 import requests
 
 from ibkr_core_mcp.exceptions import GatewayError
-from ibkr_core_mcp.gateway import GatewayManager
+from ibkr_core_mcp.gateway import GatewayManager, LoginWindow
+from ibkr_core_mcp.gateway.manager import _LOGIN_WINDOW_ENV, _find_chrome
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -476,3 +479,167 @@ class TestWaitWrappers:
         assert args[0] == gm.is_authenticated  # check function
         assert args[3] == 120  # timeout
         assert args[4] == 3  # poll_interval
+
+
+# ---------------------------------------------------------------------------
+# The login window (register F44)
+# ---------------------------------------------------------------------------
+
+
+class TestFindChrome:
+    """Where Chrome is: a fixed table per platform, then `PATH`; nothing found → `None`."""
+
+    def test_the_macos_app_bundle_when_it_exists(self) -> None:
+        """The install measured on 2026-10-13."""
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch("ibkr_core_mcp.gateway.manager.Path.is_file", return_value=True),
+        ):
+            assert _find_chrome() == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+    def test_a_chrome_on_path_when_no_known_install_exists(self) -> None:
+        """Linux has no fixed install path; the names are looked up on `PATH`."""
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch(
+                "ibkr_core_mcp.gateway.manager.shutil.which",
+                side_effect=lambda name: "/usr/bin/chromium" if name == "chromium" else None,
+            ),
+        ):
+            assert _find_chrome() == "/usr/bin/chromium"
+
+    def test_none_when_no_chrome_is_installed(self) -> None:
+        """The caller falls back to a browser tab."""
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch("ibkr_core_mcp.gateway.manager.Path.is_file", return_value=False),
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value=None),
+        ):
+            assert _find_chrome() is None
+
+
+class TestLoginWindow:
+    """`close()` ends the Chrome process `open_login_page()` started, and says whether it did."""
+
+    def test_close_ends_a_running_window_and_says_so(self) -> None:
+        """The normal close, at authentication."""
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        assert LoginWindow(process).close() is True
+        process.terminate.assert_called_once_with()
+        process.kill.assert_not_called()
+
+    def test_close_touches_nothing_when_the_process_had_already_exited(self) -> None:
+        """Measured 2026-10-13: a launch on a profile already running exits by itself (rc 0) and
+        the running instance opens the window — this handle cannot reach it. Or the operator
+        quit it. Either way there is nothing of ours to end."""
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = 0
+        assert LoginWindow(process).close() is False
+        process.terminate.assert_not_called()
+
+    def test_close_kills_a_window_that_ignores_terminate(self) -> None:
+        """Never left hanging: ten seconds, then a kill."""
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("chrome", 10), 0]
+        assert LoginWindow(process).close() is True
+        process.kill.assert_called_once_with()
+
+
+class TestOpenLoginPage:
+    """The login opens in a small Chrome window of its own; no Chrome → today's browser tab."""
+
+    def test_opens_a_login_window_of_its_own(self) -> None:
+        """The exact launch, list form: own profile, app mode, the measured 540×680."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager._find_chrome", return_value="/opt/chrome"),
+            patch("ibkr_core_mcp.gateway.manager.Path.home", return_value=Path("/Users/someone")),
+            patch("subprocess.Popen") as popen,
+            patch("webbrowser.open") as tab,
+        ):
+            window = GatewayManager(port=5055).open_login_page()
+        assert isinstance(window, LoginWindow)
+        tab.assert_not_called()
+        args, kwargs = popen.call_args
+        assert args[0] == [
+            "/opt/chrome",
+            "--user-data-dir=/Users/someone/.ibkr_core/login-chrome",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--app=https://localhost:5055",
+            "--window-size=540,680",
+        ]
+        assert kwargs["start_new_session"] is True
+        assert "shell" not in kwargs
+
+    def test_the_window_gets_no_secret_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only named variables reach Chrome — a host's API keys stay in the host."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-key")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        with (
+            patch("ibkr_core_mcp.gateway.manager._find_chrome", return_value="/opt/chrome"),
+            patch("subprocess.Popen") as popen,
+            patch("webbrowser.open"),
+        ):
+            GatewayManager().open_login_page()
+        env = popen.call_args.kwargs["env"]
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert set(env) <= set(_LOGIN_WINDOW_ENV)
+
+    @pytest.mark.parametrize(
+        ("chrome", "popen_error"),
+        [(None, None), ("/opt/chrome", OSError("not executable"))],
+        ids=["no-chrome", "chrome-will-not-start"],
+    )
+    def test_falls_back_to_a_browser_tab(self, chrome: str | None, popen_error: Exception | None) -> None:
+        """Today's behaviour, and no handle: there is no window of ours to close."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager._find_chrome", return_value=chrome),
+            patch("subprocess.Popen", side_effect=popen_error),
+            patch("webbrowser.open") as tab,
+        ):
+            assert GatewayManager(port=5055).open_login_page() is None
+        tab.assert_called_once_with("https://localhost:5055")
+
+
+class TestStartupClosesTheLoginWindow:
+    """`startup()` closes the window it opened once the session is verified, and only then."""
+
+    @staticmethod
+    def _run(*, verified: bool, on_retry: bool, ours: bool = True) -> MagicMock:
+        gm = GatewayManager()
+        window = MagicMock(spec=LoginWindow)
+        window.close.return_value = ours
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "is_running", return_value=True),
+            patch.object(gm, "is_authenticated", side_effect=[False, on_retry]),
+            patch.object(gm, "wait_for_gateway", return_value=True),
+            patch.object(gm, "open_login_page", return_value=window),
+            patch.object(gm, "wait_for_auth", return_value=verified),
+            patch("builtins.input", return_value=""),
+        ):
+            gm.startup()
+        return window
+
+    @pytest.mark.parametrize(
+        ("verified", "on_retry"),
+        [(True, False), (False, True)],
+        ids=["verified", "verified-on-retry"],
+    )
+    def test_a_verified_session_closes_the_window(self, verified: bool, on_retry: bool) -> None:
+        """Authenticated → the window's job is done."""
+        assert self._run(verified=verified, on_retry=on_retry).close.call_count == 1
+
+    def test_an_unverified_session_leaves_the_window_open(self) -> None:
+        """A failed login stays on screen, as a tab did (operator 2026-10-13: "Do not auto-close
+        if it fails")."""
+        assert self._run(verified=False, on_retry=False).close.call_count == 0
+
+    def test_a_window_that_was_not_ours_to_close_is_named(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The launch went to a Chrome already running on the login profile, or the operator
+        quit it: said, not hidden."""
+        self._run(verified=True, on_retry=False, ours=False)
+        assert "Close the login window yourself" in capsys.readouterr().out

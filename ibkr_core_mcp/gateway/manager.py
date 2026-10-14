@@ -8,22 +8,25 @@ Quick start (CLI)::
 
     from ibkr_core_mcp.gateway import GatewayManager
     gm = GatewayManager()
-    gm.startup()          # interactive: starts container, opens browser, waits for auth
+    gm.startup()          # interactive: starts container, opens the login window, waits for auth
 
 Programmatic (non-interactive, e.g. from a web UI such as ClaudIA)::
 
     gm = GatewayManager()
     gm.start()                    # build image + run container
     gm.wait_for_gateway()         # wait up to 120s for Java process
-    gm.open_login_page()          # open https://localhost:5055 in browser
+    window = gm.open_login_page() # a small Chrome window of its own (a tab if no Chrome)
     # … user logs in …
-    gm.wait_for_auth(timeout=300) # poll until authenticated
+    if gm.wait_for_auth(timeout=300) and window is not None:  # poll until authenticated
+        window.close()            # the login's job is done; a failed one stays open
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import shutil
 import subprocess
 import time
 import webbrowser
@@ -63,6 +66,75 @@ present since 2026-07-22 — which also meant the in-container tickler removed f
 `run_gateway.sh` on 2026-08-06 could never take effect. Two defects, one cause: nothing
 ever rebuilt, and nothing could have.
 """
+
+_CHROME_INSTALLS: dict[str, tuple[str, ...]] = {
+    # Measured 2026-10-13 (Chrome 154, register F44).
+    "Darwin": ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",),
+    # Google's default system-wide and per-user installs — not measured here.
+    "Windows": (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    ),
+}
+_CHROME_COMMANDS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+
+LOGIN_WINDOW_SIZE = (540, 680)
+"""The gateway login frame, measured 2026-10-13 (operator: "smaller but still perfectly good")."""
+
+_LOGIN_WINDOW_ENV = (
+    "PATH",
+    "HOME",  # all a macOS Chrome needed (measured 2026-10-13)
+    "SystemRoot",  # Windows — Python's docs: to run a side-by-side assembly, `env` "must include a valid SystemRoot"
+    "LOCALAPPDATA",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+    "DISPLAY",  # Linux — a window needs a display; not measured here
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+)
+"""The only variables the login window's Chrome receives — a host's secrets stay in the host."""
+
+
+def _find_chrome() -> str | None:
+    """The Chrome to open the login window with: a known install for this platform, else the
+    first Chrome or Chromium on `PATH`; `None` when there is none."""
+    for path in _CHROME_INSTALLS.get(platform.system(), ()):
+        if Path(path).is_file():
+            return path
+    for name in _CHROME_COMMANDS:
+        if found := shutil.which(name):
+            return found
+    return None
+
+
+class LoginWindow:
+    """The login window `GatewayManager.open_login_page()` opened: a Chrome process of its own.
+
+    Closing means ending that process (measured 2026-10-13: `terminate()` exits 0, Chrome records
+    a clean session end, and the next launch shows no restore prompt). It is the only control
+    there is — no debugging port, no pipe.
+    """
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        """Hold the process `open_login_page()` started."""
+        self._process = process
+
+    def close(self) -> bool:
+        """End the window's Chrome. `False` when that process had already exited by itself: the
+        operator quit it, or the launch was handed to an instance already running on the login
+        profile (measured: the new process exits rc 0 and the running one opens the window),
+        which this handle cannot reach."""
+        if self._process.poll() is not None:
+            return False
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+        return True
 
 
 class GatewayManager:
@@ -363,10 +435,52 @@ class GatewayManager:
 
     # ── Auth flow ─────────────────────────────────────────────────────────────
 
-    def open_login_page(self) -> None:
-        """Open the IBKR Client Portal login page in the system default browser."""
-        log.info("Opening IBKR login page: %s", self._base_url)
+    def open_login_page(self) -> LoginWindow | None:
+        """Open the IBKR login in a small Chrome window of its own, and return its handle.
+
+        Its own profile (`~/.ibkr_core/login-chrome`), app mode (title bar only), sized to the
+        gateway's login frame, in front with focus — measured 2026-10-13, register F44. A caller
+        closes it with `LoginWindow.close()` once the session is authenticated; one that ignores
+        the result leaves it open, as a tab was. Nothing keeps a window on top: no browser or
+        Chrome switch can.
+
+        No Chrome, or one that will not start → the default browser's tab, as before, and `None`.
+        """
+        chrome = _find_chrome()
+        if chrome is None:
+            log.info("No Chrome found — opening the IBKR login page in the default browser")
+        else:
+            width, height = LOGIN_WINDOW_SIZE
+            args = [
+                chrome,
+                f"--user-data-dir={Path.home() / '.ibkr_core' / 'login-chrome'}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"--app={self._base_url}",
+                f"--window-size={width},{height}",
+            ]
+            env = {name: os.environ[name] for name in _LOGIN_WINDOW_ENV if name in os.environ}
+            try:
+                process = subprocess.Popen(
+                    args,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,  # the window outlives a terminal's Ctrl-C (POSIX; ignored on Windows)
+                )
+            except OSError as exc:
+                log.warning("Chrome would not start for the login window (%s) — opening a tab", exc)
+            else:
+                log.info("Opening the IBKR login window: %s", self._base_url)
+                return LoginWindow(process)
         webbrowser.open(self._base_url)
+        return None
+
+    @staticmethod
+    def _close_login_window(window: LoginWindow | None) -> None:
+        """Close the login window once the session is verified; say so when it was not ours."""
+        if window is not None and not window.close():
+            print("  Close the login window yourself if it is still open.")
 
     # ── Full interactive startup ──────────────────────────────────────────────
 
@@ -381,7 +495,7 @@ class GatewayManager:
           1. Ensure Docker is running (launches Docker Desktop on macOS if needed)
           2. Remove any existing container and start a fresh one
           3. Wait for Java process to become reachable
-          4. Open login page in browser
+          4. Open the login window (Chrome; the default browser's tab if there is none)
           5. Wait for user to complete login + 2FA
           6. Verify authentication
 
@@ -418,20 +532,21 @@ class GatewayManager:
             print("  ✕ Gateway did not start within timeout.")
             return False
 
-        print("▶ Opening IBKR login page in browser...")
-        self.open_login_page()
+        print("▶ Opening the IBKR login...")
+        window = self.open_login_page()
         print()
-        print("  Complete the login in your browser:")
+        print("  Complete the login:")
         print("    1. Enter your IBKR username and password")
         print("    2. Complete 2FA (challenge code → IBKR Mobile → response code)")
         print("    3. Wait for 'Client login succeeds'")
         print()
-        input("Press Enter here once Chrome shows 'Client login succeeds'... ")
+        input("Press Enter here once the page shows 'Client login succeeds'... ")
         print()
 
         print("▶ Verifying IBKR session...")
         if self.wait_for_auth(timeout=60):
             print("  ✔ IBKR session active and ready.")
+            self._close_login_window(window)
             return True
 
         print("  ✕ Session not verified.")
@@ -439,6 +554,7 @@ class GatewayManager:
         input("Press Enter to retry verification... ")
         if self.is_authenticated():
             print("  ✔ IBKR session active.")
+            self._close_login_window(window)
             return True
 
         print("  ✕ Still not authenticated.")
