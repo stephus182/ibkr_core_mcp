@@ -254,3 +254,23 @@ def test_a_config_built_with_a_plain_string_secret_holds_a_secret_str(tmp_path):
     assert isinstance(cfg.flex_token, SecretStr)
     assert cfg.flex_token.get_secret_value() == "tok"
     assert isinstance(cfg.firecrawl_api_key, SecretStr) and not cfg.firecrawl_api_key
+
+
+def test_from_env_holds_back_a_hosts_extra_secret_name(tmp_path, monkeypatch):
+    """A host's own secret — claudia_ui's `ANTHROPIC_API_KEY` — is no `Config` field, and
+    `from_env` must not export it as a setting: the host passes its names through to the
+    loader. Found live on 2026-10-16: the key claudia_ui had removed at startup came back
+    the moment the toolkit's `Config` was built. Break: the parameter not handed to
+    `load_env_file` — red."""
+    from ibkr_core_mcp.config import SECRET_NAMES, Config
+
+    monkeypatch.delenv("HOST_SECRET", raising=False)
+    monkeypatch.delenv("IBKR_GATEWAY_URL", raising=False)
+    path = _write_env(
+        tmp_path / ".env", "HOST_SECRET=host-secret-value\nIBKR_GATEWAY_URL=https://example.invalid/v1/api\n"
+    )
+
+    Config.from_env(dotenv_path=str(path), secret_names=(*SECRET_NAMES, "HOST_SECRET"))
+
+    assert "HOST_SECRET" not in os.environ
+    assert os.environ["IBKR_GATEWAY_URL"] == "https://example.invalid/v1/api"

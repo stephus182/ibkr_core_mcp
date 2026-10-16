@@ -232,7 +232,7 @@ class Config:
                 setattr(self, name, SecretStr(value))
 
     @classmethod
-    def from_env(cls, dotenv_path: str | None = None) -> Config:
+    def from_env(cls, dotenv_path: str | None = None, *, secret_names: Iterable[str] = SECRET_NAMES) -> Config:
         """Load configuration from environment variables (with optional .env file).
 
         Environment variable → field mapping:
@@ -256,9 +256,12 @@ class Config:
 
         A secret (`IBKR_FLEX_TOKEN`, `FIRECRAWL_API_KEY`) is read from the environment if the
         user set it there, else from the file, and is never written to the environment
-        (register F48).
+        (register F48). A host with secrets of its own in the same file passes their names in
+        `secret_names` (its own list, which should include `SECRET_NAMES`), so that none of
+        them is exported as a setting either — claudia_ui's `ANTHROPIC_API_KEY` was, the
+        moment its toolkit's `Config` was built, until 2026-10-16.
         """
-        env = load_env_file(dotenv_path)
+        env = load_env_file(dotenv_path, secret_names=secret_names)
 
         return cls(
             gateway_url=os.environ.get("IBKR_GATEWAY_URL", "https://localhost:5055/v1/api"),
