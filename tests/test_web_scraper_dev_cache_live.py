@@ -51,6 +51,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from dotenv import load_dotenv
+from pydantic import SecretStr
 
 load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 
@@ -83,7 +84,7 @@ def dev_config(tmp_path_factory):
         sqlite_path=tmp / "store.db",
         gdrive_token_file=token_path,
         gdrive_credentials_file=Path(required["GDRIVE_CREDENTIALS_FILE"]).expanduser(),
-        firecrawl_api_key=required["FIRECRAWL_API_KEY"],
+        firecrawl_api_key=SecretStr(required["FIRECRAWL_API_KEY"]),
         gdrive_web_docs_folder_id=required["GDRIVE_WEB_DOCS_FOLDER_ID"],
     )
 

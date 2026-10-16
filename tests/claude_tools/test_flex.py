@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.flex
 
@@ -437,7 +438,7 @@ def test_sync_flex_trades_warns_that_the_archive_did_not_update(toolkit, monkeyp
 
     monkeypatch.setattr(ct, "FlexQueryClient", FakeFlex, raising=False)
     monkeypatch.setattr("ibkr_core_mcp.flex_query.FlexQueryClient", FakeFlex)
-    toolkit._config.flex_token = "tok"
+    toolkit._config.flex_token = SecretStr("tok")
     toolkit._config.flex_query_id = "123"
     monkeypatch.setattr(toolkit, "_first_account_id", lambda: ("U0000000", None))
     monkeypatch.setattr(
@@ -530,7 +531,7 @@ def _sync_with(toolkit, monkeypatch, backup, archive=None):
 
     monkeypatch.setattr(ct, "FlexQueryClient", FakeFlex, raising=False)
     monkeypatch.setattr("ibkr_core_mcp.flex_query.FlexQueryClient", FakeFlex)
-    toolkit._config.flex_token = "tok"
+    toolkit._config.flex_token = SecretStr("tok")
     toolkit._config.flex_query_id = "123"
     monkeypatch.setattr(
         toolkit._store,

@@ -276,3 +276,22 @@ def test_the_store_chmod_warning_names_the_file_without_the_username(monkeypatch
     assert messages, "the chmod failure was not logged at all — the check would be vacuous"
     assert str(tmp_path) not in messages[0], messages[0]
     assert "~/.ibkr_core/store.db" in messages[0], messages[0]
+
+
+def test_the_refused_env_file_warning_names_the_file_without_the_username(monkeypatch, tmp_path):
+    """`load_env_file` logs why a `.env`'s secrets were refused, with the `chmod 600` fix —
+    a line the operator will paste into a shell or an issue. The home directory is `~` in
+    it, as in the two log surfaces above (register F48, 2026-10-16)."""
+    from ibkr_core_mcp.config import load_env_file
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / ".env"
+    target.write_text("IBKR_FLEX_TOKEN=not-a-real-token\n")
+    target.chmod(0o640)
+
+    messages = _emitted("ibkr_core_mcp.config", lambda: load_env_file(target))
+
+    line = next(m for m in messages if "chmod 600" in m)
+    assert str(tmp_path) not in line, line
+    assert "chmod 600 ~/.env" in line, line
+    assert "not-a-real-token" not in line

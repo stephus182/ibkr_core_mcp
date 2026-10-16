@@ -1,6 +1,6 @@
 """SECURITY.md's control inventory must match the code it describes.
 
-**This is a documentation-accuracy check, not one of the eleven invariants.** The invariants
+**This is a documentation-accuracy check, not one of the twelve invariants.** The invariants
 are listed in SECURITY.md § Security Regression Suite; nothing here adds to that list. It
 exists because a *stale copy of a control* is its own failure mode, and this repository has
 now produced that failure three times: the per-endpoint rate-limit table (API-03), the

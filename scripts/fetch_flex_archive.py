@@ -34,7 +34,6 @@ import argparse
 import hashlib
 import io
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,27 +60,15 @@ def _root_tag(payload: bytes) -> str:
         return "unparseable"
 
 
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a .env file without overriding existing values."""
-    if not path.is_file():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def _cache() -> Any:
-    """Return a GDriveCache using ibkr_core_mcp's own auth."""
+def _cache(env_path: Path) -> Any:
+    """Return a GDriveCache using ibkr_core_mcp's own auth, configured from `env_path`."""
     from ibkr_core_mcp import Config
     from ibkr_core_mcp.cache import GDriveCache
 
-    return GDriveCache(Config.from_env())
+    return GDriveCache(Config.from_env(dotenv_path=str(env_path)))
 
 
-def fetch(dest: Path, *, force: bool = False) -> list[dict[str, Any]]:
+def fetch(dest: Path, *, force: bool = False, env_path: Path | None = None) -> list[dict[str, Any]]:
     """Download every .xml under Drive account_data/ to dest. Returns manifest entries.
 
     Uses GDriveCache.list_account_files, which walks subfolders. A single-level listing
@@ -90,7 +77,7 @@ def fetch(dest: Path, *, force: bool = False) -> list[dict[str, Any]]:
     """
     from googleapiclient.http import MediaIoBaseDownload
 
-    cache = _cache()
+    cache = _cache(env_path if env_path is not None else Path.cwd() / ".env")
     service = cache._get_service()
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -183,13 +170,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", type=Path, default=DEFAULT_DEST)
     parser.add_argument("--force", action="store_true", help="re-download even if present")
-    parser.add_argument("--env", type=Path, default=Path.cwd() / ".env")
+    parser.add_argument(
+        "--env",
+        type=Path,
+        default=Path.cwd() / ".env",
+        help="the .env Config.from_env reads (default: ./.env); its secrets never enter this process's environment",
+    )
     args = parser.parse_args(argv)
 
-    _load_dotenv(args.env)
     print(f"Fetching Flex archive → {args.dest}")
     try:
-        manifest = fetch(args.dest, force=args.force)
+        manifest = fetch(args.dest, force=args.force, env_path=args.env)
     except ArchiveFetchError as exc:
         print(f"\nREFUSED  the archive was not updated:\n{exc}\n  No manifest was written.")
         return 2

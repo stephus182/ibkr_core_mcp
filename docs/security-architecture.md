@@ -175,7 +175,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 
 ---
 
-## 5. The eleven invariants and their enforcement
+## 5. The twelve invariants and their enforcement
 
 Each row is a property that must stay true regardless of implementation. "Mechanism" is the
 code that makes it true; "Enforcement" is the test that fails when it stops being true;
@@ -189,11 +189,12 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 | 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open/import; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
 | 5 | Every externally derived URL is checked before the fetch and on every request afterwards | `_validate_public_url` (layer 1: scheme, host, literal parsing with `inet_aton`, DNS); `_reject_private_requests` (layer 2, Playwright route); `_reject_private_httpx_request` (layer 2 for the seeder) | `test_ssrf_boundary.py`: 20-row literal table; validate-before-reach ordering in every handler; both crawler entry points install the Playwright guard; `search_site` installs the httpx hook | New fetch tool: call `_validate_public_url` before constructing anything; if it is not a browser, say in its docstring that it has layer 1 only |
 | 6 | Error text reaching the model or a log passes one redaction function | `_safe_error` (type → sentence) for `execute()`; `redact_error` (detail, scrubbed by shape, one line) everywhere else | `test_error_redaction.py`: 20 secret shapes never survive — including the quoted `{"identifier": "value"}` forms a JSON error body actually has, missed until SEC-06 (2026-09-17), and the same forms severed before their closing quote by a 400-character body preview, missed until SEC-R8 the same day; the figure read 14 against a real 13 before that, an off-by-one nothing checked; no `except … as exc` in the model layer is interpolated, formatted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw | Never interpolate `exc`; wrap it |
-| 7 | Unit tests cannot open sockets, resolve names, or see credentials | pytest-socket's own `disable_socket`/`enable_socket` markers applied at collection (so the block lands before any fixture, module-scoped included) plus a session block for import time; `_no_real_secrets` stubs `load_dotenv` at every import site and removes every package-prefixed variable | `test_no_live_io.py` (the variable set is derived from source); `test_conftest_hygiene.py` for the exemption list | A test that needs DNS goes in `_REAL_DNS_EXEMPT_TESTS` with the reason; one that needs a secret sets a fake with `monkeypatch.setenv` |
+| 7 | Unit tests cannot open sockets, resolve names, or see credentials | pytest-socket's own `disable_socket`/`enable_socket` markers applied at collection (so the block lands before any fixture, module-scoped included) plus a session block for import time; `_no_real_secrets` cuts the loader's default search (`find_dotenv` → `""`), keeps `load_dotenv` a no-op for any third party and removes every package-prefixed variable | `test_no_live_io.py` (the variable set is derived from source); `test_conftest_hygiene.py` for the exemption list | A test that needs DNS goes in `_REAL_DNS_EXEMPT_TESTS` with the reason; one that needs a secret sets a fake with `monkeypatch.setenv` |
 | 8 | Processes are spawned only from three named modules, never through a shell | List-form `subprocess.run`; JSON on stdin for the dialog | `test_subprocess_boundary.py`: import allowlist — module imports **and** `from os import system/exec*/fork*/popen/spawn*`, which the probe missed until SEC-08 (2026-09-17), matched on the imported name so `as` cannot hide it; no `shell=True` | Add the module to `ALLOWED_SPAWN_MODULES` with the reason, in the same commit |
 | 9 | Every value interpolated into a URL path is validated, or carries a written exemption | `_ACCOUNT_ID_RE`, `_REPLY_ID_RE`, `_NUMERIC_PATH_SEGMENT_RE` (order and alert IDs, conids, page indices, notification IDs — one rule since SEC-R7, 2026-09-17) and the `_DELIVERY_OPTIONS` allowlist, applied to the interpolated value itself | `test_path_identifier_validation.py` (added 2026-09-16 — this row claimed the invariant with no test behind it, and it was false for three methods: findings SEC-03, SEC-04); the 2026-07-11 audit's H-2 | New URL with an interpolated value: validate that value in the method, or add it to the test's `ALLOWED` with a reason |
 | 10 | The HTTP transport validates `Host` and `Origin`, and admits only the holder of this launch's bearer token (widened 2026-09-14) | `TransportSecuritySettings` in `build_sse_app`, bare and wildcard loopback entries; `_BearerTokenGate` wrapping the whole app, `token` a required argument of `build_sse_app`; `_issue_sse_token` mints one `secrets.token_urlsafe(32)` per launch into a 0600 file | `test_transport_security.py`: 421 / 403 / loopback passes with and without a port; 401 for an absent, wrong, prefix, case-altered or scheme-altered credential, on `/messages/` and on `/sse`; a valid token reaches the SDK's own check; the signature has no token default | Adding a host means adding it to both allowlists; the test names the accepted set. The token stays required — an optional one makes an unauthenticated server the default again |
 | 11 | On the MCP transport an argument set that fails the tool's `inputSchema` never reaches a handler (added 2026-09-14) | The SDK's `call_tool(validate_input=True)`, written out explicitly in `build_server`; every name `_dispatch` routes is a listed tool, so the SDK's `if validate_input and tool` never falls through | `test_tool_input_validation.py`: four malformed sets never reach `_dispatch`, a well-formed one does, no package call passes `validate_input=False`, the routed names are a subset of the listed ones, and the probe reaches the handler for all four sets with validation off | Never pass `validate_input=False`; a port to an SDK without the flag keeps that test green by adding its own validation step. A new server-local tool is added to `_ALL_TOOL_DEFS` as well as `_dispatch` |
+| 12 | A secret read from `.env` never enters the process environment; the package reads a user-set secret from the environment and writes none (register F48, 2026-10-16) | `load_env_file`: `dotenv_values`, settings exported where unset, secrets as `SecretStr` in `EnvFile.secrets` and in `Config`; a file accessible to group or others refused on POSIX, the refusal through `collapse_home`; `Config.from_env` resolves environment first, then file | `tests/test_config.py` (the loader, the refusal by mode, `from_env`'s contract, the string coercion); `tests/security/test_no_live_io.py`: `load_dotenv` nowhere in the package or `scripts/`, `dotenv_values` only in `config.py`; `tests/security/test_error_redaction.py`: the refusal warning under a throwaway `HOME` | Add a name to `SECRET_NAMES`; never export one; a host adds its own names through the parameter |
 
 `pytest -m security` runs the whole set in about ten seconds; it is also part of every
 unit run, of the pre-push hook, and of CI.
@@ -470,9 +471,10 @@ block in its own `pytest_runtest_setup`, which runs before any fixture of any sc
 session-wide block from `pytest_configure` additionally covers import and collection. (The
 first design used a session block plus a function-scoped fixture; pytest-socket's teardown
 re-enabled sockets after every test, and the first live module's module-scoped fixture ran
-blocked and skipped silently — review 2026-09-13.) `_no_real_secrets` makes `load_dotenv` a
-no-op at every import site and removes every variable carrying a package prefix, so `Config()`
-in a test cannot pull the repository's `.env` into the process.
+blocked and skipped silently — review 2026-09-13.) `_no_real_secrets` cuts the loader's
+default search (`find_dotenv` → `""`), keeps `load_dotenv` a no-op for any third party, and
+removes every variable carrying a package prefix, so `Config()` in a test cannot pull the
+repository's `.env` into the process; an explicit tmp path given by a test still reads.
 
 Two more things a unit test cannot reach, both from `pytest_configure` on, both by structure
 rather than by every test remembering:
@@ -514,7 +516,7 @@ same set, so an MCP client that gates confirmation prompts on those hints sees t
 | ruff check (incl. `S`) | Known-bad calls: `shell=True`, `verify=False` without a reason, `assert`, weak hashes | Architecture; anything list-form | yes |
 | ruff format | — | — | yes |
 | mypy strict | Type errors, unstubbed dependencies | Everything typed correctly and wrong | yes |
-| pytest unit, including `tests/security/` | Behaviour, and the eleven invariants above (structural and canary) | Anything without a test | yes |
+| pytest unit, including `tests/security/` | Behaviour, and the twelve invariants above (structural and canary) | Anything without a test | yes |
 | **pip-audit** (`dependency-audit` job) | A known-vulnerable version in the **resolved** tree, `[dev,server,scraper]`, fresh resolution in requirements mode (`pip install --dry-run --report`, nothing installed), per push and weekly | Unknown vulnerabilities | yes for fixable; no-fix findings go in `security/pip-audit-ignores.txt` with a reason and a re-check date |
 | **gitleaks** (`secret-scan` job) | A committed secret in the pushed range | History before the scan started (run `gitleaks git --redact` locally) | yes |
 | **CodeQL default setup** (GitHub, outside `ci.yml`) | Actions-workflow injection and permissions; a fixed set of Python patterns (URL-substring checks, weak hashing, insecure protocols, …) | **Taint from this codebase's untrusted source** — tool `inputs` dicts are not "remote flow sources" under the `remote` threat model, so its injection queries cannot fire here; not a merge gate | no |
@@ -596,6 +598,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-14 | GitHub Actions stay tag-pinned, not SHA-pinned | `gh secret list` is empty and every job is `contents: read` on a public repository; a moved tag gains nothing | CI holds a write-capable secret (a publish token) |
 | 2026-09-14 | The read-then-fetch exfiltration chain under prompt injection is accepted, not blocked | Any public URL can carry data, so a filter is theatre; what the chain cannot reach — credentials, order execution — is held by test; fetch tools carry `openWorldHint` for clients that confirm outbound calls | A host consumes the server without per-call confirmation, or the tools gain a credential-bearing read |
 | 2026-10-01 | No unit test can reach a person: the gates' four doors (`LocalAuthentication`, `AppKit`, `tkinter.Tk`, a child process running `_order_dialog.py` or `osascript`) are shut from `pytest_configure`, with no exemption | What kept a test from opening a real prompt or dialog was each test replacing both gates. A mutation run skipped Gate 1 in `cancel_order`, the test had replaced Touch ID alone, and the real Gate 2 dialog opened on the operator's screen in a live session (nothing reached IBKR: the DELETE was a mock, sockets blocked) — the mutant's verdict was then a person's click. Five older tests had the same shape (register F32). Stand-ins in `sys.modules` rather than patches of our own functions, because the framework is the one door every route shares | An integration test needs a real gate — then an opt-in by name with a staleness test, as for DNS |
+| 2026-10-16 | Secrets stay in the protected `.env` and never enter the process environment (invariant 12, register F48) | `load_dotenv` copied the whole file into the environment of this process and of every child — the Gate 2 dialog, `osascript`, the docker CLI — none of which needs a token (CWE-526; OWASP Secrets Management). One loader; `SecretStr`; a file open to others refused, as OpenSSH does with a key file. The environment is still read, for the MCP server's contract, never written | Encryption at rest (the OS keychain) if the operator asks for it — only the loader changes |
 
 ---
 
@@ -608,7 +611,10 @@ Dated, so a future reader can tell a decision from a default.
   caller. (§ 6.1)
 - **Docker bridge siblings** can reach the gateway container (SECURITY.md § Residual risk);
   accepted while no other container shares the host.
-- **In-memory secrets** (session cookie, keys) are plain Python strings.
+- **In-memory secrets.** `Config` holds the Flex token and the Firecrawl key as `SecretStr`;
+  the session cookie and the SSE token are plain strings, and each secret is a plain string at
+  the one place that sends it. **`.env` is not encrypted at rest** — deferred by the operator
+  (2026-10-16); the OS keychain is the candidate, and only `load_env_file` would change.
 - **Coverage as a security instrument** — a named-module branch-coverage report — is
   proposed in the audit and not started.
 - **CodeQL cannot see tool inputs.** Do not read its zero as coverage of the model boundary.
@@ -659,6 +665,12 @@ Then run `test_order_write_boundary.py` and update the same three documents in o
 **Accept a pip-audit finding.** Only if there is no fixed release. One line in
 `security/pip-audit-ignores.txt`: ID, why the code path is unreachable or the risk accepted,
 date added, re-check date.
+
+**Add a secret.** Add its variable name to `SECRET_NAMES` in `config.py`; read it from
+`EnvFile.secrets` (or `Config`) as a `SecretStr`; unwrap with `.get_secret_value()` only where
+it is sent; never put it in `os.environ`. Invariant 12's structural test refuses a new
+`load_dotenv`; a new secret read through `os.environ.get("NAME")` is covered by
+`test_no_live_io.py`'s derived scan.
 
 ---
 

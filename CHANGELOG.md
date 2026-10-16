@@ -622,6 +622,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `docs/api-usage-examples.md` print the key; `docs/consumers.md` says what a consumer can now
   delete.
 
+### Security
+- **A secret read from `.env` never enters the process environment (register F48; claudia_ui
+  gaps #100/#103; CWE-526).** `Config.from_env()` and `crawl4ai_profiles_dir_from_env()` ran
+  `load_dotenv(override=False)`, which copied the whole file — `IBKR_FLEX_TOKEN` and
+  `FIRECRAWL_API_KEY` included — into this process's environment, and so into every child it
+  starts: the Gate 2 dialog, `osascript`, the docker CLI, none of which needs a token. One
+  loader, `load_env_file`, now reads the file with `dotenv_values`: a setting is exported where
+  the environment does not already hold it (unchanged), a secret comes back as a
+  `pydantic.SecretStr` in `EnvFile.secrets` and is written nowhere. **`Config.flex_token` and
+  `Config.firecrawl_api_key` are `SecretStr`** (a plain string given to the constructor is
+  coerced at runtime; typed code passes a `SecretStr`; a consumer that reads the value calls
+  `.get_secret_value()`; truthiness is unchanged). On POSIX a `.env` accessible to group or
+  others (any bit of `0o077`) has its secrets **refused**, with `chmod 600 <path>` in the
+  message and the settings still loaded, as OpenSSH ignores a key file that is accessible by
+  others; that warning is the fifth `collapse_home` surface. A secret the user set in the real
+  environment is still read — the MCP server's and README's contract — and never written
+  back. Exported: `load_env_file`, `EnvFile`, `SECRET_NAMES`. `scripts/fetch_flex_archive.py`,
+  `scripts/audit/count_tool_tokens.py` and `scripts/audit/sortino_calmar_worked_example.py`
+  read the file the same way; no `load_dotenv` remains in the package or `scripts/`
+  (`test_the_package_and_scripts_read_env_through_the_one_loader`). Encryption at rest is a
+  stated limit, not built. Design: claudia_ui `docs/plans/2026-10-16-secrets-out-of-environment-design.md`.
+
 ## [2.1.0] — 2026-09-22
 
 ### Fixed

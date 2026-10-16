@@ -10,6 +10,31 @@
 
 ## Changes consumers should know about
 
+### Unreleased — `Config.flex_token` and `.firecrawl_api_key` are `SecretStr`; a `.env` secret never enters the environment
+
+`Config.from_env()` used to run `load_dotenv(override=False)`, so a consumer that called it
+found `IBKR_FLEX_TOKEN` and `FIRECRAWL_API_KEY` in `os.environ` afterwards and every child
+process inherited them (CWE-526; register F48). It now reads the file through
+`load_env_file`: settings still reach the environment where unset, secrets reach the `Config`
+only, as `pydantic.SecretStr`.
+
+What changes for a caller:
+
+- `cfg.flex_token` and `cfg.firecrawl_api_key` are `SecretStr`. `if cfg.flex_token:` keeps
+  working (an empty secret is falsy); `== "…"`, string formatting and `json.dumps` do not —
+  call `.get_secret_value()` at the one place that sends the value. `Config(flex_token="…")`
+  with a plain string still works at runtime (coerced in `__post_init__`), but the parameter
+  is typed `SecretStr`, so typed code — and a test suite under mypy — passes
+  `SecretStr("…")`; assigning the attribute after construction must assign a `SecretStr`.
+- A consumer whose `.env` lies elsewhere than the package's search finds it passes the path:
+  `Config.from_env(dotenv_path="/path/to/.env")`. Until now the secrets reached `from_env`
+  through the environment a host had already filled; they no longer do, so a host that
+  removes secrets from its environment (claudia_ui does) must pass the path or the Flex
+  token reads as "not configured".
+- A secret set in the real environment is still read, and wins over the file.
+- On POSIX a `.env` readable by group or others has its secrets refused — `EnvFile.refused`
+  carries the message (`load_env_file(...)` returns it), and the package logs a warning.
+
 ### Unreleased — `IBKRWebSocket.connect()` completes IBKR's handshake
 
 `connect()` used to return the moment the socket opened. IBKR drops any topic sent before its

@@ -70,7 +70,8 @@ def collapse_home(text: str) -> str:
     `tests/security/test_error_redaction.py` drives each one under a throwaway `HOME` and
     fails if the real path reaches the record — `redact_error` (all exception text),
     `claude_tools._import_flex_file`'s allowed-root refusal, `mcp_server._issue_sse_token`'s
-    token-file line and `store._restrict`'s chmod warning. **This docstring read "every
+    token-file line, `store._restrict`'s chmod warning and `config.load_env_file`'s warning
+    that a `.env` accessible to others had its secrets refused (2026-10-16). **This docstring read "every
     surface" until 2026-09-17 while the last two interpolated the absolute path** (audit
     finding SEC-10, which named the first of them; the second came out of its sweep).
     `local_browser._main`'s `print`s are deliberately outside the inventory: that is the

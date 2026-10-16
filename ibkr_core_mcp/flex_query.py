@@ -499,7 +499,7 @@ class FlexQueryClient:
         Source: https://www.ibkrguides.com/clientportal/performanceandstatements/flex3.htm
         """
         params: dict[str, str] = {
-            "t": self._config.flex_token,
+            "t": self._config.flex_token.get_secret_value(),
             "q": self._config.flex_query_id,
             "v": "3",
         }
@@ -559,7 +559,7 @@ class FlexQueryClient:
         for attempt in range(_MAX_POLL_RETRIES):
             resp = requests.get(
                 url,
-                params={"t": self._config.flex_token, "q": reference_code, "v": "3"},
+                params={"t": self._config.flex_token.get_secret_value(), "q": reference_code, "v": "3"},
                 headers=_REQUEST_HEADERS,
                 timeout=60,
             )

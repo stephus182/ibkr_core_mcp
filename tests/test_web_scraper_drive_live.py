@@ -45,6 +45,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import SecretStr
 
 
 @pytest.fixture(scope="module")
@@ -87,7 +88,7 @@ def live_config(tmp_path_factory):
         sqlite_path=tmp / "store.db",
         gdrive_token_file=token_path,
         gdrive_credentials_file=Path(required["GDRIVE_CREDENTIALS_FILE"]).expanduser(),
-        firecrawl_api_key=required["FIRECRAWL_API_KEY"],
+        firecrawl_api_key=SecretStr(required["FIRECRAWL_API_KEY"]),
     )
 
 

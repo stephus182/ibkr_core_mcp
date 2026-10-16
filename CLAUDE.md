@@ -63,7 +63,7 @@ pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 
-# Security regression suite — the eleven properties of SECURITY.md § Security Regression Suite,
+# Security regression suite — the twelve properties of SECURITY.md § Security Regression Suite,
 # each read from the source or driven with canaries; ~10 s. Part of the unit run and of CI.
 pytest -m security
 
@@ -255,6 +255,14 @@ IBKR_SQLITE_PATH=~/.ibkr_core/store.db
 GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json
 GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 ```
+
+**A secret in `.env` never enters the process environment (register F48, 2026-10-16).**
+`Config.from_env()` reads the file through `load_env_file`: settings are exported where unset,
+`IBKR_FLEX_TOKEN` and `FIRECRAWL_API_KEY` reach the `Config` as `SecretStr` and nowhere else;
+a file accessible to group or others has its secrets refused, with `chmod 600 <path>` in the
+warning. A secret you set in your own shell is still read. Nothing in the package or `scripts/`
+may call `load_dotenv` (a structural test refuses it); the `set -a; source ./.env` line below
+is for the live scraper tests in your own shell and stays a developer's choice.
 
 **Standalone dev exception:** with no `.env` here, `firecrawl_search` correctly reports
 "not configured" and never touches Drive — by design, not a bug, since
@@ -651,7 +659,7 @@ not `@import`s, so they don't load into every session's context automatically.
   per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
 - Scraping *method* — approaching an unfamiliar host, the four-way matrix, reading a blocked
   page, and where we stop on the anti-bot ladder: `docs/web-scraping-methodology.md`
-- Security architecture — principals, privilege tiers, the trust-boundary map, the eleven
+- Security architecture — principals, privilege tiers, the trust-boundary map, the twelve
   invariants with their tests, subsystem designs, CI gates, the decision log, change recipes:
   `docs/security-architecture.md`; the OWASP MCP-guide applicability decision (2026-09-14, the
   principal external baseline, section by section): `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`,

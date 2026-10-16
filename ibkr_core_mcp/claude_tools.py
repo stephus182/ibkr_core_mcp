@@ -4926,7 +4926,7 @@ class ClaudeToolkit:
                 None,
             )
         if self._firecrawl is None:
-            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key)
+            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key.get_secret_value())
 
         query = inputs.get("query", "").strip()
         limit = int(inputs.get("limit", 5))

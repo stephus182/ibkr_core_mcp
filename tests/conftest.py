@@ -602,14 +602,17 @@ def _no_real_secrets(request, monkeypatch):
     in a unit test's environment (docs/audits/security-architecture-audit-2026-09-13.md,
     B6). pytest-socket stops that key from reaching the network, but a test asserting on
     `os.environ` or calling `Config.from_env()` would silently use real values and pass
-    for the wrong reason. `load_dotenv` becomes a no-op at every import site and every
-    variable with a package prefix is removed; tests/security/test_no_live_io.py holds this.
+    for the wrong reason. The loader's default search finds nothing, `load_dotenv` stays a
+    no-op for any third party, and every variable with a package prefix is removed;
+    tests/security/test_no_live_io.py holds this.
     """
     if request.node.get_closest_marker("integration"):
         yield
         return
     noop = lambda *args, **kwargs: False  # noqa: E731
-    monkeypatch.setattr("ibkr_core_mcp.config.load_dotenv", noop)
+    # The loader's default search (`find_dotenv`, walking up from `config.py`) is what would
+    # find this repository's `.env`; an explicit tmp path given by a test still reads.
+    monkeypatch.setattr("ibkr_core_mcp.config.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr("dotenv.load_dotenv", noop)
     monkeypatch.setattr("dotenv.main.load_dotenv", noop)
     for name in [k for k in os.environ if k.startswith(_SECRET_ENV_PREFIXES)]:

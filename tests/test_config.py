@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+import pytest
 
 
 def test_from_env_reads_required_vars(monkeypatch):
@@ -33,7 +36,7 @@ def test_firecrawl_api_key_reads_from_env(monkeypatch):
     from ibkr_core_mcp.config import Config
 
     cfg = Config.from_env()
-    assert cfg.firecrawl_api_key == "fc-abc123"
+    assert cfg.firecrawl_api_key.get_secret_value() == "fc-abc123"
     assert cfg.gdrive_web_docs_folder_id == "webdocs-folder-id"
 
 
@@ -48,7 +51,7 @@ def test_firecrawl_config_defaults_to_empty(monkeypatch, tmp_path):
     # exception") — load_dotenv()'s default search would otherwise pick that up and
     # defeat this test's "no key configured" scenario.
     cfg = Config.from_env(dotenv_path=str(tmp_path / "nonexistent.env"))
-    assert cfg.firecrawl_api_key == ""
+    assert cfg.firecrawl_api_key.get_secret_value() == ""
     assert cfg.gdrive_web_docs_folder_id == ""
 
 
@@ -131,3 +134,123 @@ def test_from_env_does_not_require_an_anthropic_key(monkeypatch):
 
     cfg = Config.from_env()  # must not raise
     assert cfg.gateway_url == "https://localhost:5055/v1/api"
+
+
+# ── Secrets out of the process environment (register F48; claudia_ui gap #103) ──────────
+
+
+def _write_env(path, text, mode=0o600):
+    path.write_text(text, encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+def test_load_env_file_exports_a_setting_and_holds_a_secret_back(tmp_path, monkeypatch):
+    """Design test 1. The setting reaches `os.environ`; the secret does not, comes back as a
+    `SecretStr`, and prints masked. Break: the loader exporting the secret (drop the
+    `in secret` branch) — red."""
+    from pydantic import SecretStr
+
+    from ibkr_core_mcp.config import load_env_file
+
+    monkeypatch.delenv("IBKR_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("IBKR_FLEX_TOKEN", raising=False)
+    path = _write_env(
+        tmp_path / ".env",
+        "IBKR_GATEWAY_URL=https://example.invalid/v1/api\nIBKR_FLEX_TOKEN=flex-secret-value\nBARE_NAME\n",
+    )
+
+    env = load_env_file(path)
+
+    assert os.environ["IBKR_GATEWAY_URL"] == "https://example.invalid/v1/api"
+    assert "BARE_NAME" not in os.environ  # a line with no `=`: python-dotenv yields None, and None is not a value
+    assert "IBKR_FLEX_TOKEN" not in os.environ
+    assert env.path == path and env.refused is None
+    assert isinstance(env.secrets["IBKR_FLEX_TOKEN"], SecretStr)
+    assert env.secrets["IBKR_FLEX_TOKEN"].get_secret_value() == "flex-secret-value"
+    assert "flex-secret-value" not in f"{env!r} {env.secrets['IBKR_FLEX_TOKEN']}"
+
+
+def test_load_env_file_does_not_override_a_setting_the_user_set(tmp_path, monkeypatch):
+    """`load_dotenv(override=False)`'s rule for the non-secrets, kept. Break: dropping the
+    `not in os.environ` check — red."""
+    from ibkr_core_mcp.config import load_env_file
+
+    monkeypatch.setenv("IBKR_GATEWAY_URL", "https://already.set/v1/api")
+    load_env_file(_write_env(tmp_path / ".env", "IBKR_GATEWAY_URL=https://from.file/v1/api\n"))
+
+    assert os.environ["IBKR_GATEWAY_URL"] == "https://already.set/v1/api"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are POSIX")
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o601], ids=["group-read", "other-read", "other-exec"])
+def test_secrets_are_refused_when_the_file_is_accessible_to_others(tmp_path, monkeypatch, mode):
+    """Design test 2. Any bit of 0o077 refuses the secrets, names `chmod 600 <path>`, never
+    the value; the setting still loads. Break: the mask narrowed to 0o007 — the group case
+    goes red."""
+    from ibkr_core_mcp.config import load_env_file
+
+    monkeypatch.delenv("IBKR_GATEWAY_URL", raising=False)
+    path = _write_env(
+        tmp_path / ".env",
+        "IBKR_GATEWAY_URL=https://example.invalid/v1/api\nIBKR_FLEX_TOKEN=flex-secret-value\n",
+        mode,
+    )
+
+    env = load_env_file(path)
+
+    assert env.secrets == {}
+    assert env.refused is not None
+    assert f"chmod 600 {path}" in env.refused
+    assert "flex-secret-value" not in env.refused
+    assert os.environ["IBKR_GATEWAY_URL"] == "https://example.invalid/v1/api"
+
+
+def test_a_missing_file_loads_nothing_and_refuses_nothing(tmp_path):
+    from ibkr_core_mcp.config import load_env_file
+
+    env = load_env_file(tmp_path / "absent.env")
+
+    assert env.path is None and env.secrets == {} and env.refused is None
+
+
+def test_from_env_reads_a_secret_the_user_set_and_writes_none_back(tmp_path, monkeypatch):
+    """Design test 3: the MCP server and README contract. A secret in the real environment is
+    still read (it wins over the file, as `override=False` always had it); a secret from the
+    file reaches the `Config` and not the environment. Breaks: (a) `from_env` exporting the
+    file's secret — red on the `not in os.environ` line; (b) file-over-environment — red on
+    the first value."""
+    from ibkr_core_mcp.config import Config
+
+    monkeypatch.setenv("IBKR_FLEX_TOKEN", "from-the-environment")
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    path = _write_env(tmp_path / ".env", "IBKR_FLEX_TOKEN=from-the-file\nFIRECRAWL_API_KEY=fc-from-file\n")
+
+    cfg = Config.from_env(dotenv_path=str(path))
+
+    assert cfg.flex_token.get_secret_value() == "from-the-environment"
+    assert cfg.firecrawl_api_key.get_secret_value() == "fc-from-file"
+    assert "FIRECRAWL_API_KEY" not in os.environ
+    assert "fc-from-file" not in repr(cfg)
+
+
+def test_a_config_built_with_a_plain_string_secret_holds_a_secret_str(tmp_path):
+    """A consumer that builds `Config(flex_token="…")` by hand keeps working. Break: delete
+    `__post_init__` — red."""
+    from pydantic import SecretStr
+
+    from ibkr_core_mcp.config import Config
+
+    cfg = Config(
+        gateway_url="https://localhost:5055/v1/api",
+        gdrive_folder_id="",
+        sqlite_path=tmp_path / "store.db",
+        gdrive_token_file=tmp_path / "token.json",
+        gdrive_credentials_file=tmp_path / "credentials.json",
+        flex_token="tok",  # type: ignore[arg-type]  # the plain-string form this test is about
+        crawl4ai_profiles_dir=tmp_path / "profiles",
+    )
+
+    assert isinstance(cfg.flex_token, SecretStr)
+    assert cfg.flex_token.get_secret_value() == "tok"
+    assert isinstance(cfg.firecrawl_api_key, SecretStr) and not cfg.firecrawl_api_key

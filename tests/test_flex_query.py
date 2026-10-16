@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 from ibkr_core_mcp.exceptions import FlexQueryError
 
@@ -80,7 +81,7 @@ def test_flex_query_error_exported_from_package():
 def flex_client(mock_config):
     from ibkr_core_mcp.flex_query import FlexQueryClient
 
-    mock_config.flex_token = "tok123"
+    mock_config.flex_token = SecretStr("tok123")
     mock_config.flex_query_id = "123456"
     store = MagicMock()
     cache = MagicMock()
@@ -445,6 +446,7 @@ def test_send_request_includes_fd_td_when_provided(flex_client):
     call_params = mock_get.call_args.kwargs["params"]
     assert call_params["fd"] == "20260101"
     assert call_params["td"] == "20260625"
+    assert call_params["t"] == "tok123"  # the token is unwrapped from its SecretStr at the request (F48)
 
 
 def test_send_request_omits_fd_td_when_none(flex_client):

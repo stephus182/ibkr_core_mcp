@@ -390,11 +390,13 @@ any invalid probe") and left. Since 2026-09-14 one function, `redaction.collapse
 rewrites the home directory as `~`. One definition of "show a
 path", the way `price_text_safe` is one definition of showing a broker price.
 
-**Four surfaces call it**, and the set is an inventory rather than a filter, because a library
+**Five surfaces call it**, and the set is an inventory rather than a filter, because a library
 must not reconfigure the host application's logging: `redact_error` applies it to all exception
-text before the length cap; `_import_flex_file` builds its refusal from it; and, since
+text before the length cap; `_import_flex_file` builds its refusal from it; since
 2026-09-17, `mcp_server._issue_sse_token`'s token-file line and `store._restrict`'s
-chmod-failure warning. Those last two are **logs, not model surfaces** — the rule below is
+chmod-failure warning; and, since 2026-10-16 (register F48), `config.load_env_file`'s warning
+that a `.env` accessible to others had its secrets refused, which carries the `chmod 600` fix
+the operator will paste. Those three are **logs, not model surfaces** — the rule below is
 about the model and was never broken — but the function's own docstring claimed "every surface
 that shows one to the model or a log" while both wrote `/Users/<name>/…` in full (audit finding
 SEC-10; the store one came out of its sweep, which is why the count is stated and checked
@@ -603,7 +605,7 @@ the rest from the 2026-09-13 audit:
 | `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
 | `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
-| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
+| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12) |
 | `test_no_real_data_io.py` | No unit test can reach the operator's data directory (`~/.ibkr_core`, where the trade store, the Drive token, the Drive credentials and the browser profiles default once the scrub has removed the `IBKR_`/`GDRIVE_`/`CRAWL4AI_` variables): an audit hook armed before collection refuses every SQLite open of a database there — by every route to SQLite and every spelling of the path, a `file:` URI read as SQLite reads it, the directory recognised by identity as well as by name — and every file opened, created, changed or removed there, before the operation, with a refusal `except Exception` cannot swallow and a run that fails at session end if one was swallowed anyway. Integration tests are exempt from their setup to their teardown |
 | `test_no_human_reached.py` | No unit test can reach a person — a Touch ID prompt or a Gate 2 dialog. From `pytest_configure` on, the four doors a gate has to a human are shut: Apple's `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that refuse any use, `tkinter.Tk` is replaced where tkinter exists, and an audit hook refuses a child process that would run `_order_dialog.py` or `osascript`, whichever call asked; the refusal is a `BaseException`, recorded, and the run fails at its end if one was swallowed. Nothing is exempt; a test of a gate places its own double. Includes the 2026-10-01 incident replayed through the real call chain (Gate 1 skipped, Gate 2 left real → a refusal, nothing sent), and every test is safe on a broken guard |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
@@ -626,7 +628,9 @@ directory; **(8)** processes are spawned
 only from three named modules, never through a shell; **(9)** every value
 interpolated into a URL path is validated, or carries a written exemption; **(10)** the HTTP transport validates `Host`
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
-transport an argument set that fails the tool's `inputSchema` never reaches a handler.
+transport an argument set that fails the tool's `inputSchema` never reaches a handler;
+**(12)** a secret read from `.env` never enters the process environment, and the package
+writes none there.
 
 CI adds two gates the four code gates cannot provide: `pip-audit` over a **fresh resolve** of
 `.[dev,server,scraper]` (requirements mode — `pip install --dry-run --report` in a throwaway
@@ -763,9 +767,15 @@ package makes no model call and never read it (TOOL-07), and
 `test_config_carries_no_model_vendor_credential` holds that no vendor's model credential returns
 under any name. Both remaining fields are excluded from `repr()`, preventing accidental exposure in logs, tracebacks, and debug output. Exception text is the other channel a key can travel through — a `requests` failure carries the full request URL, Flex token included — which is why every exception the model layer shows or logs passes through `redaction.redact_error` (§ Error text and raw payloads reach the model only through redaction).
 
+Since 2026-10-16 (register F48) the two fields are `pydantic.SecretStr`, read by `load_env_file`
+from the file into the `Config` and never into `os.environ` — `load_dotenv` is gone from the
+package. A `.env` accessible to group or others has its secrets refused on POSIX, with
+`chmod 600 <path>` in the message. The environment is still read for a secret the user set
+there (the MCP server's `"env"` contract), and never written.
+
 ### Credentials Never in Version Control
 
-`.env`, `token.json`, and `credentials.json` must never be committed to the repository. The package loads credentials from environment variables only — never hardcoded defaults. Two checks stand behind the rule: `gitleaks` scans every pushed range in CI (`.gitleaks.toml`), and the unit-test suite never sees the operator's values — `tests/conftest.py` makes `load_dotenv` a no-op and removes every secret-named variable, so a test cannot pass on a real key by accident (`tests/security/test_no_live_io.py`).
+`.env`, `token.json`, and `credentials.json` must never be committed to the repository. The package reads a credential from the environment or from `.env` through `load_env_file` — never from a hardcoded default. Two checks stand behind the rule: `gitleaks` scans every pushed range in CI (`.gitleaks.toml`), and the unit-test suite never sees the operator's values — `tests/conftest.py` cuts the loader's default search, keeps `load_dotenv` a no-op and removes every secret-named variable, so a test cannot pass on a real key by accident (`tests/security/test_no_live_io.py`).
 
 ### OAuth Token File Permissions
 
@@ -795,7 +805,7 @@ This restricts read access to the file owner, preventing other local users from 
 
 ### In-Memory Secrets
 
-The IBKR session cookie is held in process memory as a Python `str`. Core dumps or heap inspections could expose it. This is unavoidable in Python without native memory management — no practical mitigation exists short of OS-level memory protection. Operators should ensure core dumps are disabled in production environments.
+The IBKR session cookie is held in process memory as a Python `str`. Core dumps or heap inspections could expose it. This is unavoidable in Python without native memory management — no practical mitigation exists short of OS-level memory protection. Operators should ensure core dumps are disabled in production environments. Since 2026-10-16 the Flex token and the Firecrawl key are held in `Config` as `pydantic.SecretStr` — masked in `repr`, `str` and any log line that formats them — and unwrapped only at the one place each is sent (register F48); the session cookie stays a plain `str`.
 
 ---
 
@@ -1049,7 +1059,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
 | SSRF via the local browser (`fetch_page` / `crawl_site`) or the seeder (`search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved/shared-range hosts before anything is constructed, parsing decimal/hex/octal literals locally; the validate-before-reach order is asserted by `test_ssrf_boundary.py` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level; `_reject_private_httpx_request` does the same on the seeder's httpx client for `search_site`. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
-| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal and — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus both log surfaces driven under a throwaway `HOME` |
+| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal, — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning, and — since 2026-10-16, F48 — by `config.load_env_file`'s refusal warning | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus all three log surfaces driven under a throwaway `HOME` |
 | Credential exposure in logs or tool results | `repr=False` on `flex_token` and `firecrawl_api_key` (no model credential exists in `Config` to expose, by test); every logged or shown exception passes `redact_error` | Credentials loaded from env vars only, never hardcoded; `gitleaks` in CI; unit tests never load `.env` |
 | Vulnerable dependency in the resolved tree | `pip-audit` over `[dev,server,scraper]`, per push and weekly, fixable findings block | Dependabot alerts on the manifest's direct dependencies |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |

@@ -439,9 +439,9 @@ Copy `.env.example` to `.env` if you want to override any default — nothing is
 | `GDRIVE_CACHE_FOLDER_ID` | optional | Explicit Drive folder for Parquet cache. If unset, auto-created as `market_data/` inside `GOOGLE_DRIVE_FOLDER_ID` |
 | `GDRIVE_TOKEN_FILE` | for GDrive | OAuth2 token path |
 | `GDRIVE_CREDENTIALS_FILE` | for GDrive | OAuth2 credentials path |
-| `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token |
+| `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token — a secret: read from `.env` into the `Config` as a `SecretStr`, never placed in the environment |
 | `IBKR_FLEX_QUERY_ID` | for Flex sync | Flex query ID |
-| `FIRECRAWL_API_KEY` | for whole-web search only | Firecrawl API key. If unset, only `firecrawl_search` returns a "not available" message rather than raising |
+| `FIRECRAWL_API_KEY` | for whole-web search only | Firecrawl API key. If unset, only `firecrawl_search` returns a "not available" message rather than raising — a secret: read from `.env` into the `Config` as a `SecretStr`, never placed in the environment |
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | optional | Explicit Drive folder for scraped docs/search snapshots. If unset, auto-created as `web_docs/` inside `GOOGLE_DRIVE_FOLDER_ID` |
 | `CRAWL4AI_PROFILES_DIR` | optional | Saved Crawl4AI login profiles for paywalled sites (default: `~/.ibkr_core/crawl4ai_profiles`) |
 

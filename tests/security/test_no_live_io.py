@@ -109,6 +109,46 @@ def test_constructing_a_config_does_not_load_the_repository_dotenv(tmp_path):
 def test_config_from_env_sees_only_what_the_test_set(monkeypatch):
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test-only")
     cfg = Config.from_env()
-    assert cfg.firecrawl_api_key == "fc-test-only"
-    assert cfg.flex_token == ""
+    assert cfg.firecrawl_api_key.get_secret_value() == "fc-test-only"
+    assert cfg.flex_token.get_secret_value() == ""
     assert cfg.gdrive_token_file == Path("~/.ibkr_core/token.json").expanduser()
+
+
+# ── Constitution §12 — one loader, and no `load_dotenv` anywhere (register F48) ─────────
+
+_DOTENV_LOADERS = ("load_dotenv", "dotenv_values")
+_THE_ONE_LOADER = PACKAGE_DIR / "config.py"
+
+
+def _dotenv_loader_sites(root: Path) -> dict[str, set[str]]:
+    """Every file under `root` that names a python-dotenv loader, with the names it uses."""
+    import ast
+
+    found: dict[str, set[str]] = {}
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names}
+        if used := names & set(_DOTENV_LOADERS):
+            found[str(path.relative_to(root.parent))] = used
+    return found
+
+
+def test_the_package_and_scripts_read_env_through_the_one_loader():
+    """Constitution §12 (register F48): `load_dotenv` appears nowhere in the package or in
+    `scripts/`, and `dotenv_values` only inside `config.py`. A second loader is a second
+    place a secret can be exported from. Break: a `load_dotenv` call anywhere — red."""
+    from .structural import SCRIPTS_DIR
+
+    sites = {**_dotenv_loader_sites(PACKAGE_DIR), **_dotenv_loader_sites(SCRIPTS_DIR)}
+    assert sites == {str(_THE_ONE_LOADER.relative_to(PACKAGE_DIR.parent)): {"dotenv_values"}}, sites
+
+
+def test_the_loader_scan_sees_each_spelling(tmp_path):
+    (tmp_path / "a.py").write_text("from dotenv import load_dotenv\nload_dotenv()\n")
+    (tmp_path / "b.py").write_text("import dotenv\ndotenv.dotenv_values('.env')\n")
+    assert _dotenv_loader_sites(tmp_path) == {
+        f"{tmp_path.name}/a.py": {"load_dotenv"},
+        f"{tmp_path.name}/b.py": {"dotenv_values"},
+    }

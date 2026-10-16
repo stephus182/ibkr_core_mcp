@@ -10,7 +10,7 @@ from ibkr_core_mcp.backtest import BacktestResult, run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.claude_tools import ClaudeToolkit
 from ibkr_core_mcp.client import BracketPairing, IBKRClient, pair_bracket_response
-from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.config import SECRET_NAMES, Config, EnvFile, load_env_file
 from ibkr_core_mcp.exceptions import (
     BacktestError,
     BacktestRuntimeError,
@@ -85,6 +85,9 @@ except PackageNotFoundError:
 __all__ = [
     # Core
     "Config",
+    "EnvFile",
+    "load_env_file",
+    "SECRET_NAMES",
     "IBKRClient",
     "GDriveCache",
     "SQLiteStore",

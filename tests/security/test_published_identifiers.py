@@ -15,7 +15,7 @@ and was never swept across the class.
 An account number is not a credential; it cannot authenticate or trade. What it does is
 name the account holder to their broker, beside a real name and address in every commit.
 
-This test is a guard, not a twelfth security invariant. The eleven are unchanged.
+This test is a guard, not a thirteenth security invariant. The twelve are unchanged.
 """
 
 from __future__ import annotations
