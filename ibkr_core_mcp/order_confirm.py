@@ -684,7 +684,10 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
     Two rows since 2026-10-17 (claudia_ui gap #36): `Parent — At IBKR` when the parent is an
     order already working at IBKR (an attach, `client.attach_order_and_confirm`) rather than
     a ticket about to be sent; and `⚠ Partial fill`, red and bold, when the parent is above
-    one lot and carries no `allOrNone: true` (`_partial_fill_warning`).
+    one lot and carries no `allOrNone: true` (`_partial_fill_warning`). On an attach the
+    title reads ATTACHED ORDER, the Action row and the banner are the CHILD's side — the
+    order being sent — and the disclaimer says the parent is already working and not sent
+    again (measured live 2026-10-18).
 
     Exactly one notional row is shown and it names whose it is. A bracket's legs are opposite,
     so a row called `Total` would be read as their sum; the child's notional is left off
@@ -868,11 +871,23 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
     # — the exposure being opened — exactly as the place dialog's does. `_banner` special-cases
     # only CANCEL and MODIFY, the two acts whose verb must beat the side. The word BRACKET is
     # carried by the title, and each leg is named on its own rows.
+    # An attach sends the CHILD, never the parent (`_working_at_ibkr` is set only by the attach
+    # write): the Action row — which decides the banner — is the side being sent, and the title
+    # and disclaimer say the parent is already working. Live 2026-10-18 the bracket wording read
+    # "The parent order is sent to Interactive Brokers now" under a green BUY banner while a
+    # SELL stop was being sent — the last screen before a write must not state a falsehood.
+    attach = bool(parent.get("_working_at_ibkr"))
+    if attach:
+        details["Action"] = str(children[0].get("side", "")).strip().upper()
     _show_confirm_dialog(
-        title="⚠  LIVE BRACKET ORDER CONFIRMATION",
+        title="⚠  LIVE ATTACHED ORDER CONFIRMATION" if attach else "⚠  LIVE BRACKET ORDER CONFIRMATION",
         details=details,
         disclaimer=(
-            "This is a LIVE bracket. The parent order is sent to Interactive Brokers now; "
+            "This is a LIVE attached order. The parent is already working at Interactive Brokers "
+            "and is not sent again; the child is sent now and held by IBKR until the parent fills. "
+            "Real financial transactions may result that cannot be undone."
+            if attach
+            else "This is a LIVE bracket. The parent order is sent to Interactive Brokers now; "
             "each child becomes live the moment the parent fills. Real financial transactions "
             "may result that cannot be undone."
         ),

@@ -206,7 +206,18 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monit
 `GET /iserver/account/order/status/{orderId}` on a bracket **child** returns **both**
 `parent_order_id` and `oca_group_id`, holding the **same** value — and that value is the
 **parent's own `order_id`**. `oca_group_type` reads `ReduceOnFillNonBlock`. The **parent**
-carries neither field; it carries `children_order_ids` (a string).
+carries neither field; it carries `children_order_ids` (a string — **semicolon-separated** when
+there is more than one child: `"<id>;<id>"`, measured 2026-10-18 with two children attached to one
+Ford parent; the 2026-09-22 reading had one child per parent, so the separator was unmeasured then).
+
+**The live-orders feed carries the link too (measured 2026-10-18, Ford, a parent with two and
+then three attached children):** each child's row in `GET /iserver/account/orders` carries
+`parentId` (an **int**) equal to the parent's `orderId`, and `ocaGroupId` (an int) with the
+same value; the parent's row carries neither, and `order_ref` (the `cOID` echo) sits on the
+parent's row only. After the parent is cancelled its row leaves the feed; its held children were
+seen both lingering as `Inactive` rows that still carry `parentId` (the first parent of the
+session, ten minutes later) and gone within three seconds (the second parent) — so a reader must
+accept a child whose parent is absent from the feed. Neither key is on any IBKR page.
 
 **Measured live 2026-09-22** against the account holder's gateway: a read-only probe of
 resting orders, no write of any kind, on **two independent brackets**, both CL futures.

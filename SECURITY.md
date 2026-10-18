@@ -189,7 +189,7 @@ the link at ERROR and never reports it as success.
 | `cancel_order` | Cancellation confirmation |
 | `reply_order` | IBKR reply confirmation |
 | `place_bracket_and_confirm` | Every leg on one screen: parent, each held child, one notional named as the parent's |
-| `attach_order_and_confirm` | The bracket dialog with one more row, `Parent — At IBKR` (the working order's id, state and children count), and the red `⚠ Partial fill` line on a multi-lot parent without all-or-none |
+| `attach_order_and_confirm` | The bracket dialog titled `LIVE ATTACHED ORDER CONFIRMATION`, its banner the child's side (the order being sent), one more row `Parent — At IBKR` (the working order's id, state and children count), and the red `⚠ Partial fill` line on a multi-lot parent without all-or-none |
 
 **Explicitly ungated.** What these have in common is not that they read — it is that none of
 them can place, modify, cancel or confirm an order. That is the property the gates protect, and

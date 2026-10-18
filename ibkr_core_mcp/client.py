@@ -774,14 +774,17 @@ _STATUS_ORDER_TYPE = {
 def _children_count(status: Mapping[str, Any]) -> int:
     """How many children IBKR already reports on a parent.
 
-    `children_order_ids` is a comma-separated STRING on the status read (measured
-    2026-09-22, `docs/ibkr-api-behaviors-reference.md`); a list is accepted in case IBKR
-    ever changes its mind, and an absent field is zero.
+    `children_order_ids` is a STRING on the status read, **semicolon**-separated — measured
+    2026-10-18 with two children attached to one Ford parent: `"<id>;<id>"`
+    (`docs/ibkr-api-behaviors-reference.md`). The 2026-09-22 reading saw one child, so the
+    separator was unmeasured and a comma was assumed until the live session showed otherwise.
+    A comma is still accepted; a list is accepted in case IBKR ever changes its mind; an
+    absent field is zero.
     """
     raw = status.get("children_order_ids")
     if isinstance(raw, list | tuple):
         return len(raw)
-    return len([x for x in str(raw or "").split(",") if x.strip()])
+    return len([x for x in re.split(r"[;,]", str(raw or "")) if x.strip()])
 
 
 def _parent_from_status(order_id: str, status: Mapping[str, Any]) -> dict[str, Any]:
@@ -836,8 +839,15 @@ def _parent_from_status(order_id: str, status: Mapping[str, Any]) -> dict[str, A
         parent["price"] = float(stop)
     elif limit not in (None, ""):
         parent["price"] = float(limit)
+    # The display keys the cancel dialog derives from the same read (`_cancel_dialog_details`):
+    # the company name and the currency, so the parent's rows read "F — FORD MOTOR CO" and
+    # "7.39 USD" rather than "F" and "7.39" (live 2026-10-18).
+    for key, field in (("_companyName", "company_name"), ("_currency", "currency")):
+        if status.get(field):
+            parent[key] = status[field]
     if str(status.get("sec_type") or "").strip().upper() in ("FUT", "FOP"):
         parent["manualIndicator"] = True
+        parent["_multiplier_unknown"] = True
     return parent
 
 
@@ -3381,9 +3391,15 @@ class IBKRClient:
         # Gate 1, bound to this ticket AND this parent: an authorization earned for one
         # parent never covers a child of another.
         scope = _order_write_scope("attach", account_id, ticket, order_id=parent_order_id)
-        label = _order_label(parent)
+        # Named by the CHILD being sent, never by the parent: the Touch ID prompt and every reply
+        # dialog of this write say "SELL 1 F (attached to order …)". Live 2026-10-18 the reply
+        # dialog for a SELL stop was titled with the parent's "BUY 1 F" — the last screen before
+        # a send must name the order it sends. The child carries no ticker on the wire (the
+        # contract is the conid), so the parent's is lent to the label only.
+        child_label = _order_label({**kid, "ticker": parent["ticker"]})
+        label = f"{child_label} (attached to order {parent_order_id})"
         authorization = _authorize_order_write(
-            f"attach an order to IBKR order {parent_order_id} — {label}", scope, label
+            f"attach {child_label} to IBKR order {parent_order_id} ({_order_label(parent)})", scope, label
         )
         log.info("Gate 1: granted for %s (%s)", scope, label)
         # Gate 2: the bracket dialog, the parent shown as IBKR's.

@@ -28,7 +28,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   position. In every class-level control from day one: `GATED_OWNERS`, the documented-controls
   inventory, the denied-gate cases, the document enumerations; `get_order_status` is the second
   named pre-gate exemption of the transitive probe, beside `_ensure_accounts_initialized`.
-  Tests: seven, four mutations red. See `docs/consumers.md`.
+  **Measured live 2026-10-18 on Ford** (a parent, three attached children, the parent cancel;
+  then two children in one request as a probe): every response carried `parent_order_id`;
+  each child's status read `parent_order_id` = `oca_group_id` = the parent's id, type
+  `ReduceOnFillNonBlock`; the live-orders feed row of a child carries `parentId` (int) and
+  `ocaGroupId` (int) equal to the parent's `orderId`. Three things the session corrected the
+  same day: `children_order_ids` is **semicolon**-separated (a comma split counted two children
+  as one); the authorization's label names the CHILD it sends — `SELL 1 F (attached to order …)`
+  — never the parent, so the reply dialogs are titled for the order being sent; the parent's
+  rows carry the company name and currency the status read reports. Tests: nine, six mutations
+  red. The `get_order_status` tool already hands the model the whole status, links included;
+  a test now holds it to that, so a typed reader that kept only documented keys would go red.
+  See `docs/consumers.md`.
 - **The bracket dialog names a parent already working at IBKR, and warns in red on a multi-lot
   parent without all-or-none (claudia_ui gap #36, operator 2026-10-17).** `Parent — At IBKR`
   (`order <id> · <state> · <n> attached`) when the parent carries `_working_at_ibkr`, which only
@@ -38,8 +49,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   never on futures (refused on CME, NYMEX and COMEX, measured 2026-09-21 and 2026-10-17), so a
   parent carrying `allOrNone: true` cannot partially fill and a parent of 1 cannot either. Every
   dialog row whose key starts with `⚠` now renders label and value bold in the banner's red —
-  the cancel dialog's `⚠ Linked orders` and `⚠ Attached orders` rows included. Tests: three;
-  four mutations red.
+  the cancel dialog's `⚠ Linked orders` and `⚠ Attached orders` rows included. On an attach
+  the title reads `LIVE ATTACHED ORDER CONFIRMATION`, the Action row and the banner are the
+  **child's** side — the order being sent — and the disclaimer says the parent is already
+  working and not sent again (live 2026-10-18 the reused bracket wording read "The parent order
+  is sent to Interactive Brokers now" under a green BUY banner while a SELL stop was sent).
+  Tests: four; five mutations red.
 - **`ConfirmationDeclinedError` — a declined Gate 2 dialog has its own type (register F6).** A
   subclass of `HumanAuthError`, exported, raised by all three renderers when the abandon button
   is pressed, with the dialog's own sentence for what the click leaves in place. See *Changed*.

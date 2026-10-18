@@ -537,6 +537,24 @@ def test_get_order_status_happy_path(toolkit):
     toolkit._client.get_order_status.assert_called_once_with("42")
 
 
+def test_get_order_status_hands_the_model_a_bracket_legs_links(toolkit):
+    """A bracket leg's links — `parent_order_id`, `oca_group_id`, `children_order_ids` — reach
+    the model exactly as IBKR reports them. They are on no IBKR page (measured 2026-09-22 and
+    2026-10-18), so the day this reader is typed into a model that keeps only documented keys,
+    the text would lose them silently; this is the guard (claudia_ui #36, plan A6)."""
+    toolkit._client.get_order_status.return_value = {
+        "order_id": "124",
+        "order_status": "PreSubmitted",
+        "parent_order_id": "123",
+        "oca_group_id": "123",
+        "children_order_ids": "125;126",
+    }
+    text, _fig = toolkit.execute("get_order_status", {"order_id": "124"})
+    for key in ("parent_order_id", "oca_group_id", "children_order_ids"):
+        assert key in text, key
+    assert "125;126" in text
+
+
 def test_get_order_status_error(toolkit):
     """Propagates exception through _safe_error."""
     toolkit._client.get_order_status.side_effect = RuntimeError("order not found")

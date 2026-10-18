@@ -4835,9 +4835,15 @@ def test_attach_runs_touch_id_once_then_the_bracket_dialog_then_posts_one_ticket
 
 
 def test_attach_shows_the_parent_as_working_at_ibkr_on_the_dialog(client):
-    """The dialog's parent row says the parent is IBKR's, its state, and what it already carries."""
+    """The dialog's parent row says the parent is IBKR's, its state, and what it already carries.
+    `children_order_ids` is SEMICOLON-separated (measured 2026-10-18 with two children); a
+    comma-split counted two children as one."""
     with (
-        _patch.object(client, "get_order_status", return_value=_working_parent_status(children_order_ids="130,131")),
+        _patch.object(
+            client,
+            "get_order_status",
+            return_value=_working_parent_status(children_order_ids="130;131", company_name="APPLE INC", currency="USD"),
+        ),
         _patch("ibkr_core_mcp.client.require_touch_id"),
         _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as dialog,
         _patch.object(client._session, "post") as mock_post,
@@ -4846,6 +4852,9 @@ def test_attach_shows_the_parent_as_working_at_ibkr_on_the_dialog(client):
         client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
     parent = dialog.call_args.args[0]
     assert parent["_working_at_ibkr"] == "order 123 · Submitted · 2 attached"
+    # The company name and currency the cancel dialog derives from the same read (live
+    # 2026-10-18 the parent's rows showed `F` and `7.39` with no name and no currency).
+    assert (parent["_companyName"], parent["_currency"]) == ("APPLE INC", "USD")
 
 
 def test_attach_gate_1_scope_names_the_kind_and_the_parent(client):
@@ -4866,6 +4875,28 @@ def test_attach_gate_1_scope_names_the_kind_and_the_parent(client):
         mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
         client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
     assert scopes[0].startswith("attach:U1234567:123:")
+
+
+def test_attach_names_the_child_it_sends_on_gate_1_and_the_reply_dialogs(client):
+    """The label every reply dialog of this write carries names the CHILD being sent, never the
+    parent: a SELL stop attached to a BUY parent is "SELL 2 AAPL (attached to order 123)".
+    Live 2026-10-18 the reply dialog for a SELL stop was titled with the parent's "BUY 1 F"."""
+    seen: dict[str, str] = {}
+
+    def _grant(reason: str, scope: str, label: str) -> object:
+        seen.update(reason=reason, label=label)
+        return object()
+
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client._authorize_order_write", side_effect=_grant),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "STP", "price": 140.0})
+    assert seen["label"] == "SELL 2 AAPL (attached to order 123)"
+    assert seen["reason"] == "attach SELL 2 AAPL to IBKR order 123 (BUY 2 AAPL)"
 
 
 def test_attach_logs_a_response_that_does_not_report_the_link(client, caplog):

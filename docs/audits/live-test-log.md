@@ -830,3 +830,42 @@ Gateway as published. Evidence and the full elimination table:
 `docs/ibkr-api-behaviors-reference.md` § Price alerts. The entries above are left as
 written, because they record what was observed on their dates.
 
+## Run: 2026-10-18 — attach a child to a working order, through the seam (claudia_ui #36)
+
+**Branch:** `release/2.2.0` (A1–A4 at `e4c2549`, the live fixes uncommitted at the time of the run).
+**Gateway:** the operator's, logged in by the operator; preflight `FREE` before, `LIVE` after.
+**Instrument:** Ford (conid 9599491, SMART, USD), a Saturday — the market closed, every order
+PreSubmitted, prices at 60 % and 150 % of the last so nothing could fill. **Account and order
+ids are not reproduced here** (public repository); the operator's record is in claudia_ui's
+git-ignored probe folder `docs/plans/probes/2026-10-17-bracket-live/`.
+
+### Results
+
+| Step | Result |
+|---|---|
+| `place_order_and_confirm`, a BUY 1 LMT parent | PASS — one Touch ID, the single-order dialog, one precaution reply confirmed through its dialog |
+| `attach_order_and_confirm`, a SELL STP child | PASS — one Touch ID, the bracket dialog with `Parent — At IBKR: order … · PreSubmitted · 0 attached`, one precaution reply; the response carried `parent_order_id`; `attached_entry` found it |
+| a second child (SELL LMT), then on the second parent a third (SELL STP) | PASS — `1 attached`, then `2 attached` on the dialog; the parent's `children_order_ids` read `id;id;id` |
+| the raw live-orders feed | each child's row carries `parentId` (int) and `ocaGroupId` (int) equal to the parent's `orderId`; the parent's row carries neither, and `order_ref` only |
+| each child's status | `parent_order_id` = `oca_group_id` = the parent's id, `oca_group_type` ReduceOnFillNonBlock, side `S`, the parent's TIF as a literal, `total_size` `"1.0"` |
+| PROBE: two children in ONE request, posted directly (the one gate bypass of the session, on the operator's word) | accepted as a shape up to a precaution reply ("Confirm Mandatory Cap Price"), deliberately left unanswered; the parent then counted four children. Conditional on the closed market |
+| `cancel_order` on the parent, twice (two parents) | PASS — the cancel dialog's `⚠ Attached orders` row red bold; the parent `Cancelled`, `children_order_ids` empty; the first parent's children lingered as `Inactive` feed rows still carrying `parentId`, the second parent's were gone within 3 s |
+| `confirm_bracket_dialog` from the shell, a 2-lot parent, no client | the `⚠ Partial fill` row red bold; nothing connected |
+
+### Found and fixed the same day (test-first, mutations red)
+
+1. `children_order_ids` is **semicolon**-separated; a comma split counted two children as one
+   (`_children_count`, `docs/ibkr-api-behaviors-reference.md`).
+2. The attach write's authorization label named the PARENT, so the reply dialogs of a SELL stop
+   were titled `BUY 1 F`; it now names the child it sends, `SELL 1 F (attached to order …)`.
+3. The reused bracket dialog said the parent "is sent to Interactive Brokers now" under the
+   parent's banner; on an attach it is now titled ATTACHED ORDER, its banner and Action row the
+   child's side, its disclaimer saying the parent is already working. The parent's rows carry the
+   company name and currency the status read reports.
+
+### Open
+
+- The unanswered precaution reply of the probe (two orders that no longer exist) was left pending
+  at IBKR; later reads and the cancel were served normally.
+- A child's lingering as `Inactive` after the parent cancel was seen once and not seen once;
+  the cause was not established.

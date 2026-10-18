@@ -2469,3 +2469,21 @@ def test_bracket_dialog_warns_in_red_only_on_a_multi_lot_parent_without_all_or_n
             f"Quantity {quantity:g}: a partial fill of the parent leaves each held child at {quantity:g}. "
             "Nothing here corrects that."
         )
+
+
+def test_bracket_dialog_for_an_attach_names_the_child_it_sends_and_a_parent_already_working():
+    """An attach sends the CHILD, never the parent (live 2026-10-18: the reused bracket wording
+    read "The parent order is sent to Interactive Brokers now" under a green BUY banner while a
+    SELL stop was sent). With `_working_at_ibkr` set: the title says ATTACHED, the Action row —
+    which decides the banner — is the child's side, and the disclaimer says the parent is
+    already working. Without it, the bracket wording is exactly what it was."""
+    attach = _bracket_call(
+        {**_bracket_parent(), "_working_at_ibkr": "order 123 · Submitted · 0 attached"}, [_bracket_child()]
+    )
+    assert attach["title"] == "⚠  LIVE ATTACHED ORDER CONFIRMATION"
+    assert attach["details"]["Action"] == "BUY"  # the child's side; the parent is a SELL
+    assert "already working" in attach["disclaimer"] and "sent to Interactive Brokers now" not in attach["disclaimer"]
+    bracket = _bracket_call(_bracket_parent(), [_bracket_child()])
+    assert bracket["title"] == "⚠  LIVE BRACKET ORDER CONFIRMATION"
+    assert bracket["details"]["Action"] == "SELL"  # the parent's side
+    assert "sent to Interactive Brokers now" in bracket["disclaimer"]
