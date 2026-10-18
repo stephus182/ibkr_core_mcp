@@ -10,6 +10,24 @@
 
 ## Changes consumers should know about
 
+### Unreleased — one child attached to a working order; two new rows on the bracket dialog
+
+**New public API** (claudia_ui gap #36, design 2026-10-17):
+
+| Name | What it is |
+|---|---|
+| `IBKRClient.attach_order_and_confirm(account_id, parent_order_id, child, *, reply_log=None)` | Touch-ID gated. **One** child on an order already working — IBKR's sequential bracket form. The parent is read from IBKR **before Gate 1** and refused (`ValueError`) unless working; the child is completed from IBKR's record (contract, size, opposite side, TIF unless stated) and the caller's conid, side and quantity are overridden; Gate 1 scope kind `attach`, bound to the ticket **and** the parent's id; Gate 2 is the bracket dialog with a `Parent — At IBKR` row; one ticket posted, its reply chain resolved. Returns IBKR's terminal entries. Two children are two calls |
+| `attached_entry(parent_order_id, entries)` → `dict` or `None` | The entry IBKR reports as attached to the parent, by the `parent_order_id` it echoes, never by position. A **module-level function** — `from ibkr_core_mcp import attached_entry`. The write runs it and logs a response without the link at ERROR; a consumer runs it to word the outcome |
+
+**What a consumer does with the result.** `attached_entry(...)` returning `None` after a write
+means IBKR answered without reporting the link: the order may exist unattached. Say so, and never
+say "attached".
+
+**The bracket dialog carries two new rows:** `Parent — At IBKR` on an attach, and `⚠ Partial fill`
+on any bracket whose parent is above one lot without `allOrNone: true` — rendered red and bold, as
+every `⚠` row now is. A consumer that sets `allOrNone` by product class (IBKR's list: stocks, ETFs,
+options, bonds, EFPs; never futures) sees the line only where a partial fill is possible.
+
 ### Unreleased — `Config.flex_token` and `.firecrawl_api_key` are `SecretStr`; a `.env` secret never enters the environment
 
 `Config.from_env()` used to run `load_dotenv(override=False)`, so a consumer that called it

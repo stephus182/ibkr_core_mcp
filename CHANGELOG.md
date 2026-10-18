@@ -10,6 +10,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`attach_order_and_confirm` — one child attached to an order already working at IBKR
+  (claudia_ui gap #36, design 2026-10-17 § 1).** IBKR's sequential bracket form, built as
+  exactly that: the parent is read from IBKR (`get_order_status`) **before Gate 1** and refused
+  unless working, so no fingerprint is spent on a filled or cancelled order; the child is
+  completed from IBKR's record — the parent's contract and size, the opposite side, the
+  parent's TIF unless the child states one — never from the caller, whose conid, side and
+  quantity are overridden; the bracket rules (`_bracket_tickets`: link, opposite side, same
+  contract, child ≤ parent) run unchanged with `parentId` = IBKR's own order id; one Touch ID
+  with the new scope kind `attach`, bound to the ticket **and** the parent's id, so an
+  authorization earned for one parent never covers a child of another; `confirm_bracket_dialog`
+  as Gate 2; one ticket posted through the array endpoint and the reply chain the bracket
+  uses. **One child per write** — two children on a working order are two calls. A response
+  that does not report the link is logged at ERROR and returned intact, never reported as
+  success. `attached_entry(parent_order_id, entries)` — module-level, pure, exported beside
+  `pair_bracket_response` — finds the child by the `parent_order_id` IBKR echoes, never by
+  position. In every class-level control from day one: `GATED_OWNERS`, the documented-controls
+  inventory, the denied-gate cases, the document enumerations; `get_order_status` is the second
+  named pre-gate exemption of the transitive probe, beside `_ensure_accounts_initialized`.
+  Tests: seven, four mutations red. See `docs/consumers.md`.
+- **The bracket dialog names a parent already working at IBKR, and warns in red on a multi-lot
+  parent without all-or-none (claudia_ui gap #36, operator 2026-10-17).** `Parent — At IBKR`
+  (`order <id> · <state> · <n> attached`) when the parent carries `_working_at_ibkr`, which only
+  the attach write sets; `⚠ Partial fill` — "Quantity N: a partial fill of the parent leaves
+  each held child at N. Nothing here corrects that." — keyed on the attribute and the quantity,
+  never on the instrument: IBKR offers all-or-none on stocks, ETFs, options, bonds and EFPs and
+  never on futures (refused on CME, NYMEX and COMEX, measured 2026-09-21 and 2026-10-17), so a
+  parent carrying `allOrNone: true` cannot partially fill and a parent of 1 cannot either. Every
+  dialog row whose key starts with `⚠` now renders label and value bold in the banner's red —
+  the cancel dialog's `⚠ Linked orders` and `⚠ Attached orders` rows included. Tests: three;
+  four mutations red.
 - **`ConfirmationDeclinedError` — a declined Gate 2 dialog has its own type (register F6).** A
   subclass of `HumanAuthError`, exported, raised by all three renderers when the abandon button
   is pressed, with the dialog's own sentence for what the click leaves in place. See *Changed*.
@@ -189,6 +219,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`_resolve_reply_chain` extracted from `place_bracket_and_confirm` (2026-10-17).** The walk
+  over every index of a multi-ticket reply chain is one private method, shared by the bracket
+  and the attach writes. No behaviour change: the existing `test_place_bracket_*` tests pin it —
+  a reply on the second ticket, a terminal leg kept while another still replies, a re-sent
+  reply id refused, replies answered in index order back-to-back.
 - **The indicators are witnessed against a TradingView chart (2026-10-06).** The operator's
   screenshots of ES1! 1h on the bar that opened 2026-10-05 16:00 ET against `add_indicators` on
   ESZ6: SMA 25 / 50 / 100 / 200 hl2 and the three `BB 200 SMA hl2` pairs (StdDev 1, 2, 3) agree
