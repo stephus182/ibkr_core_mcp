@@ -144,13 +144,16 @@ cancel_order()  ──► require_touch_id() ──► cancel_dialog()  ──�
 reply_order()   ──► require_touch_id() ──► reply_dialog()   ──► POST /iserver/reply/{replyId}
 place_bracket_and_confirm()
                 ──► require_touch_id() ──► bracket_dialog() ──► POST /iserver/account/{id}/orders
+attach_order_and_confirm()
+                ──► require_touch_id() ──► bracket_dialog() ──► POST /iserver/account/{id}/orders  (one child, parentId = a working order's id)
 ```
 
-`place_order_and_confirm` / `modify_order_and_confirm` / `place_bracket_and_confirm` run the
+`place_order_and_confirm` / `modify_order_and_confirm` / `place_bracket_and_confirm` /
+`attach_order_and_confirm` run the
 write's gates once and then, for each precaution reply IBKR returns, the reply dialog (covered
 by the write's `OrderWriteAuthorization`, so no second fingerprint). The order dict is copied at
 method entry, so the body the dialog shows is the body sent. Since 2026-09-13 this whole shape
-is read from the source by `tests/security/test_order_write_boundary.py`: those six functions
+is read from the source by `tests/security/test_order_write_boundary.py`: those seven functions
 are the only ones that may build an order-write URL, each must call a gate before its first
 network call, and `claude_tools.py` / `mcp_server.py` may not name any of them.
 
@@ -163,6 +166,18 @@ leg. Its reply chain is resolved per ticket, index-aligned: the single-order idi
 `response[0]` would leave a precaution raised against the child unanswered and drop that leg,
 leaving a resting position with no exit.
 
+`attach_order_and_confirm` (2026-10-17) attaches **one** child to an order already working at
+IBKR — the sequential bracket form. The parent is read from IBKR (`get_order_status`) **before
+Gate 1** and refused unless working, so no fingerprint is spent on a filled or cancelled
+order; that read is the second named pre-gate exemption in the boundary test, beside
+`_ensure_accounts_initialized`, and like it a GET of the operator's own data. The child is
+completed from IBKR's record — contract, size, opposite side, TIF — never from the caller;
+the bracket rules run unchanged; Gate 1's scope binds the ticket **and the parent's id**
+(kind `attach`), so an authorization earned for one parent never covers a child of another;
+Gate 2 is the bracket dialog with a `Parent — At IBKR` row. One child per write, one Touch
+ID per write. The post-send check (`attached_entry`) logs a response that does not report
+the link at ERROR and never reports it as success.
+
 ### Gated vs. Ungated Endpoints
 
 **Gated (Touch ID → confirmation dialog required before any order-write request):**
@@ -174,6 +189,7 @@ leaving a resting position with no exit.
 | `cancel_order` | Cancellation confirmation |
 | `reply_order` | IBKR reply confirmation |
 | `place_bracket_and_confirm` | Every leg on one screen: parent, each held child, one notional named as the parent's |
+| `attach_order_and_confirm` | The bracket dialog with one more row, `Parent — At IBKR` (the working order's id, state and children count), and the red `⚠ Partial fill` line on a multi-lot parent without all-or-none |
 
 **Explicitly ungated.** What these have in common is not that they read — it is that none of
 them can place, modify, cancel or confirm an order. That is the property the gates protect, and
@@ -617,7 +633,7 @@ the rest from the 2026-09-13 audit:
 
 Each structural file also feeds its checker a deliberately-violating snippet, so the guard is
 proven able to fire. The properties, as a constitution: **(1)** no order reaches IBKR except
-through the six gated functions — the five public writes plus the private
+through the seven gated functions — the six public writes plus the private
 `_resolve_one_reply` — and the model layer never references them; **(2)** preview is
 not execution; **(3)** every tool declares its capabilities and none declares `ORDER_EXECUTION`;
 **(4)** strategy code cannot touch the filesystem, processes or network, and its allowlist is
@@ -1079,7 +1095,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 The following rules are enforced at PR review. Any PR that violates them will be rejected:
 
 1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's account and body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
-2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`.
+2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`.
 3. **Never make an authorization global or persistent, and never let a reply skip its dialog** — one biometric per order write, one dialog per message. The device-password fallback under `LAPolicyDeviceOwnerAuthentication` is Apple's recovery path and stays.
 4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution. Every new tool declares its `capabilities`; `ORDER_EXECUTION` may never appear, and a handler that touches a sink its declaration omits fails `tests/security/test_tool_capabilities.py`.
 5. **Never forward raw exception messages to the LLM or a log** — `_safe_error` for tool error returns; `redact_error` wherever detail is needed. `tests/security/test_error_redaction.py` fails on a bare `{exc}`, `str(exc)` or `log.warning(..., exc)` in `claude_tools.py` / `mcp_server.py`.

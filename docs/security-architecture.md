@@ -112,7 +112,7 @@ flowchart TB
         T6["SANDBOX EXECUTION<br/>run_backtest — model<br/>code, in a child process"]
     end
 
-    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order · place_bracket_and_confirm<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
+    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order · place_bracket_and_confirm · attach_order_and_confirm<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
 
     M --> REACH
     H == "Gate 1 · Touch ID, then Gate 2 · an explicit click —<br/>once per write, with a dialog for every reply" ==> OE
@@ -162,7 +162,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 
 | Sink | Only through | Guarded by |
 |---|---|---|
-| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply`, `place_bracket_and_confirm` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
+| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply`, `place_bracket_and_confirm`, `attach_order_and_confirm` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
 | `POST …/orders/whatif` | `_whatif`, called by `get_order_preview` (one ticket) and `get_bracket_preview` (bracket array) | AST test that only `_whatif` builds the path; both entry points asserted to call no gate |
 | IBKR alerts / watchlists / FYI / account switch | `IBKRClient` ungated writers | Identifier regexes; capability declaration `ACCOUNT_STATE` |
 | Google Drive | `GDriveCache`, `WebDocsStore` | Cache-key regexes, slugs `[a-z0-9-]`, OAuth token file 0600 |
@@ -183,7 +183,7 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 
 | # | Invariant | Mechanism | Enforcement (`tests/security/`) | To change deliberately |
 |---|---|---|---|---|
-| 1 | No order reaches IBKR except through the six functions in `GATED_OWNERS` — the five public `IBKRClient` writes plus the private `_resolve_one_reply` — and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before the first network call, checked **transitively** so a helper one call deeper is seen, with `_ensure_accounts_initialized` the single named exemption (IBKR's documented order prerequisite; a GET of the operator's own account list); `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
+| 1 | No order reaches IBKR except through the seven functions in `GATED_OWNERS` — the six public `IBKRClient` writes plus the private `_resolve_one_reply` — and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before the first network call, checked **transitively** so a helper one call deeper is seen, with two named exemptions, each a GET of the operator's own data — `_ensure_accounts_initialized` (IBKR's documented order prerequisite; the account list) and `get_order_status` (the attach write's read of its parent before Gate 1, 2026-10-17; a parent that is not working is refused before any fingerprint); `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
 | 2 | Preview is not execution | Every preview posts to `/orders/whatif` through `_whatif` and calls no gate | `test_preview_is_not_execution.py`: path asserted; literal built once (**still one builder after `get_bracket_preview` was added 2026-09-20** — the set stayed size 1 because both entry points delegate); both entry points asserted gate-free; `preview_order` touches only `get_order_preview` | None foreseeable |
 | 3 | Every tool declares its capabilities; `ORDER_EXECUTION` has no legal spelling | `capabilities` on all 46 definitions from a vocabulary that omits `ORDER_EXECUTION`; `tools` strips the field; the MCP server derives `ToolAnnotations` from the same set | `test_tool_capabilities.py`: declared, known, non-empty; the forbidden name absent from the vocabulary; `READ_ONLY` exclusive; dispatch dict and definitions name the same tools; every sink the handler's source touches is declared; annotations derived | New tool: declare; new sink in an existing handler: add to the declaration **and** the mutating-tool list in the test |
 | 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open/import; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
@@ -222,8 +222,8 @@ unit run, of the pre-push hook, and of CI.
 
 ### 6.1 Order writes — two gates and one authorization
 
-`place_order`, `modify_order`, `cancel_order`, `reply_order` and `place_bracket_and_confirm`
-each run **Gate 1**
+`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm` and
+`attach_order_and_confirm` each run **Gate 1**
 (`human_auth.require_touch_id`, `LAPolicyDeviceOwnerAuthentication`, 60 s) and then **Gate 2**
 (`order_confirm.*`, a modal with the full order and an explicit button; Enter does not
 confirm; after 60 s the modal dismisses itself and nothing is sent — `ConfirmationTimeoutError`,
@@ -242,6 +242,16 @@ from this section, from the table in § 4 and from the diagram in § 3 until 202
 present in `GATED_OWNERS` and `SECURITY.md` throughout; the omission is now machine-checked
 across every tracked document by
 `test_every_document_that_enumerates_the_gated_writes_enumerates_them_ALL`.
+
+`attach_order_and_confirm` is the sixth (2026-10-17, for the 2.2.0 seam): **one** child on
+an order already working at IBKR, the sequential bracket form. It reads the parent from IBKR
+**before** Gate 1 and refuses one that is not working, so no fingerprint is spent on an order
+nothing can be attached to — that read is the second named pre-gate exemption (invariant 1),
+a GET of the operator's own order. The child is completed from IBKR's record rather than the
+caller's, the bracket rules run unchanged, the Gate 1 scope binds the ticket **and the
+parent's id** (kind `attach`), and Gate 2 is `confirm_bracket_dialog` with a `Parent — At
+IBKR` row. One ticket per write; the response is checked for the link (`attached_entry`) and
+a response without it is logged, never reported as success.
 
 The chained variants `place_order_and_confirm` / `modify_order_and_confirm` take **one**
 fingerprint per write and pass an `OrderWriteAuthorization` down the call chain: bound to the
@@ -647,8 +657,8 @@ an exception, wrap it in `redact_error`. Run `pytest -m security`; every one of 
 failing test if forgotten.
 
 **Add an IBKR endpoint.** Validate every path-interpolated identifier with the regex helpers
-in `client.py`. If it writes an order, it is one of the six functions in `GATED_OWNERS` (the
-five public writes plus `_resolve_one_reply`) or it does not
+in `client.py`. If it writes an order, it is one of the seven functions in `GATED_OWNERS` (the
+six public writes plus `_resolve_one_reply`) or it does not
 exist. If it mutates anything else, the tool that exposes it declares `ACCOUNT_STATE`.
 
 **Add a subprocess.** Add the module to `ALLOWED_SPAWN_MODULES` with a one-line reason; list

@@ -369,11 +369,11 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, `reply_order`, or
-`place_bracket_and_confirm` must pass both gates — in order — before **any order-write
-request** reaches IBKR. Those five are the whole **public** set. `GATED_OWNERS` in
-`tests/security/test_order_write_boundary.py` — which is what the boundary is checked
-against — holds **six** names: those five plus the private `_resolve_one_reply`, which
+Every call to `place_order`, `modify_order`, `cancel_order`, `reply_order`,
+`place_bracket_and_confirm` or `attach_order_and_confirm` must pass both gates — in order —
+before **any order-write request** reaches IBKR. Those six are the whole **public** set.
+`GATED_OWNERS` in `tests/security/test_order_write_boundary.py` — which is what the boundary
+is checked against — holds **seven** names: those six plus the private `_resolve_one_reply`, which
 answers one chained precaution reply and therefore builds `/iserver/reply/{}` itself. No
 other function in `client.py` may build an order-write URL. This paragraph said the five
 *were* `GATED_OWNERS` until 2026-09-22. That is invisible to a caller — the sixth is private
@@ -423,8 +423,9 @@ contacts nothing on a decline.
 | `cancel_order` | Touch ID → cancel dialog |
 | `reply_order` | Touch ID → reply dialog |
 | `place_bracket_and_confirm` | **One** Touch ID bound to the *whole ticket array* (so a child altered after the fingerprint falls outside it), then **one** Gate 2 dialog carrying the parent and every child, then a reply dialog per pending reply on *any* ticket until every chain is terminal. Two dialogs are deliberately not offered: they would permit the parent to be sent with the child declined, which is the one state a bracket exists to prevent |
+| `attach_order_and_confirm` | **One** Touch ID bound to the child ticket **and the parent's order id** (scope kind `attach`), then the bracket dialog with a `Parent — At IBKR` row, then a reply dialog per pending reply. One child per write — IBKR's sequential bracket form. The parent is read from IBKR and refused unless working, **before** Gate 1, so no fingerprint is spent on an order nothing can be attached to (2026-10-17) |
 
-`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`; it is not a branch of the single-order path, which stays live-proven and unmodified. Its read-only twin is `get_bracket_preview` (ungated, like `get_order_preview`), and `pair_bracket_response` tells the caller which returned entry is which leg — IBKR's response is **not** index-aligned with the submission.
+`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`; it is not a branch of the single-order path, which stays live-proven and unmodified. Its read-only twin is `get_bracket_preview` (ungated, like `get_order_preview`), and `pair_bracket_response` tells the caller which returned entry is which leg — IBKR's response is **not** index-aligned with the submission. An **attached order** — one child on an order already working — is `attach_order_and_confirm` (2026-10-17): IBKR's sequential bracket form, one ticket per write, the child completed from IBKR's own record of the parent; `attached_entry` finds the child in the response by the `parent_order_id` IBKR echoes.
 
 **Explicitly ungated.** What these share is not that they read — it is that none can place,
 modify, cancel or confirm an order. They are *not* all read-only.

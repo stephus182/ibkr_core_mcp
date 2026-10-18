@@ -27,7 +27,7 @@ Any other `IBKR_GATEWAY_URL` raises `ConfigError` at construction time.
 
 **Account/order ID initialization:** Every order read/write method (`get_live_orders`,
 `get_orders_raw`, `get_order_status`, `place_order`, `modify_order`, `cancel_order`,
-`reply_order`, `place_bracket_and_confirm`, `get_order_preview`, `get_bracket_preview`) calls `get_brokerage_accounts()` once per client instance
+`reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `get_order_preview`, `get_bracket_preview`) calls `get_brokerage_accounts()` once per client instance
 before its own request — the official docs require `GET /iserver/accounts` to run before
 order operations. The call is cached on `_accounts_initialized`; callers never need to invoke
 `get_brokerage_accounts()` directly under normal use.
@@ -1118,6 +1118,42 @@ throwing would destroy the only account of what happened.
 Accepts and returns `Mapping[str, Any]`, not `dict`: a typed IBKR row is a `Mapping` and is
 not a `dict`, and a `dict` filter here would silently discard every row a caller supplied.
 
+### `attach_order_and_confirm(account_id, parent_order_id, child, *, reply_log=None) -> list[dict]` — Touch ID gated
+Attaches **one** child to an order already working at IBKR — the sequential bracket form
+(2026-10-17, claudia_ui gap #36). In IBKR's model an attached order is a bracket child whose
+parent already exists, and the method is exactly that:
+
+- **The parent is read from IBKR** (`get_order_status`) **before Gate 1** and refused
+  (`ValueError`) unless working — `PreSubmitted`, `Submitted`, `PendingSubmit`, `ApiPending`.
+  No fingerprint is spent on a filled, cancelled or inactive order.
+- **The child is completed from IBKR's record, never from the caller:** the parent's conid
+  and size, the opposite side, the parent's TIF unless the child states one. The caller owns
+  the order type, the prices, a stated `tif` and `outsideRTH`. `parentId` is IBKR's own order
+  id, so `_bracket_tickets`' rules — link, opposite side, same contract, child ≤ parent — run
+  unchanged.
+- **One Touch ID**, scope kind `attach`, bound to the ticket **and** the parent's id: an
+  authorization earned for one parent never covers a child of another. **Gate 2 is
+  `confirm_bracket_dialog`** with one added row, `Parent — At IBKR` (`order <id> · <state> ·
+  <n> attached`), and the red `⚠ Partial fill` line when the parent is above one lot without
+  `allOrNone: true`.
+- One ticket is posted, as a one-element array, to the endpoint the bracket uses; its reply
+  chain is resolved by the walker the bracket write uses. `place_order_and_confirm` is not
+  reused and not modified.
+- **One child per write.** Two children on a working order are two calls — IBKR documents the
+  sequential form one order at a time, and one Touch ID covers one write.
+- Returns the terminal entries. The one post-send check is `attached_entry`: a response with no
+  entry whose `parent_order_id` is the parent is logged at ERROR and returned intact, never
+  raised over (the order is placed by then) and never reported as success.
+
+**Endpoint:** `GET /iserver/account/order/status/{orderId}`, then `POST /iserver/account/{accountId}/orders`, then `POST /iserver/reply/{replyId}` per pending reply
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+
+### `attached_entry(parent_order_id, entries) -> dict | None` — module-level, pure
+The terminal entry IBKR reports as attached to `parent_order_id`, found by the
+`parent_order_id` IBKR echoes and never by position (the response order is arbitrary,
+measured 2026-09-21/22), else `None`. Imports from `ibkr_core_mcp` beside
+`pair_bracket_response`, for the same reason: it encodes IBKR's wire shape.
+
 ---
 
 ## Account / Admin
@@ -1137,7 +1173,7 @@ account, and per-account capability flags (`supportsCashQty`, `supportsFractions
 or querying open orders.** `IBKRClient._ensure_accounts_initialized()` calls this once per
 client instance (cached) and runs automatically at the top of every order read/write
 method (`get_live_orders`, `get_orders_raw`, `get_order_status`, `place_order`, `modify_order`,
-`cancel_order`, `reply_order`, `place_bracket_and_confirm`, `get_order_preview`, `get_bracket_preview`) — callers do not need to call this
+`cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `get_order_preview`, `get_bracket_preview`) — callers do not need to call this
 directly under normal use.
 
 **Returns:** a `BrokerageSession` over the 12-key object IBKR sends — `accounts` (list of account ID strings), `selectedAccount`, `isPaper`, `isFT`, `sessionId`, `serverInfo`, `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles` (measured 2026-09-17; verified live as an object, NOT a bare list, on 2026-06-30). `session.is_paper` and `session.selected_account` are the two a caller branches on; the account-keyed blocks stay mappings.

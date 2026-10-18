@@ -56,7 +56,7 @@ no bypass, and the boundary is held by tests.
 
 ### macOS — required for order execution
 
-Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
+Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
 
 | Requirement | Minimum |
 |---|---|
@@ -449,7 +449,7 @@ Copy `.env.example` to `.env` if you want to override any default — nothing is
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`: one Touch ID bound to the *whole array*, and one Gate 2 dialog showing every leg, because two dialogs would allow the parent to be sent with the child declined, which is the one state a bracket exists to prevent (see [CLAUDE.md — Security & Fingerprint Authentication](https://github.com/stephus182/ibkr_core_mcp/blob/main/CLAUDE.md#security--fingerprint-authentication)):
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`: one Touch ID bound to the *whole array*, and one Gate 2 dialog showing every leg, because two dialogs would allow the parent to be sent with the child declined, which is the one state a bracket exists to prevent (see [CLAUDE.md — Security & Fingerprint Authentication](https://github.com/stephus182/ibkr_core_mcp/blob/main/CLAUDE.md#security--fingerprint-authentication)):
 
 ### Gate 1 — Touch ID (macOS LocalAuthentication)
 
@@ -484,7 +484,7 @@ Since the 2026-09-13 security architecture audit, the properties above are enfor
 that read the source, not only by convention (`pytest -m security`, ~10 s, part of every unit
 run and of CI):
 
-- the three order-write endpoints are built only inside the six functions of `GATED_OWNERS` — the five public writes plus the private `_resolve_one_reply` that answers one chained precaution reply — each runs a gate before its first network call, and the tool layer never references an order write;
+- the three order-write endpoints are built only inside the seven functions of `GATED_OWNERS` — the six public writes plus the private `_resolve_one_reply` that answers one chained precaution reply — each runs a gate before its first network call, and the tool layer never references an order write;
 - the whatif preview is the only ungated order path;
 - every tool declares its `capabilities`, none declares `ORDER_EXECUTION`, and a handler that touches an undeclared sink fails;
 - strategy code cannot read or write a file, spawn a process or reach the network (canary tests), and what it may touch is a frozen allowlist;

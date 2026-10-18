@@ -225,6 +225,8 @@ _GATED_ORDER_WRITES = frozenset(
         # being mentioned somewhere in SECURITY.md would be a weaker claim than being known
         # to be gated (claudia_ui gap #36, 2026-09-21).
         "place_bracket_and_confirm",
+        # One child to a working order, through the same array endpoint (2026-10-17).
+        "attach_order_and_confirm",
     }
 )
 

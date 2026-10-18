@@ -1,9 +1,9 @@
-"""Security constitution §1 — no order reaches IBKR except through the six functions in
+"""Security constitution §1 — no order reaches IBKR except through the seven functions in
 `GATED_OWNERS` below, and no toolkit or MCP handler references them or their endpoints.
 
 The gates (Touch ID, then a confirmation dialog) live inside `place_order`,
-`modify_order`, `cancel_order`, `reply_order` and `place_bracket_and_confirm`
-(+ `_resolve_one_reply` for the chained replies). That is the right place — innermost call
+`modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm` and
+`attach_order_and_confirm` (+ `_resolve_one_reply` for the chained replies). That is the right place — innermost call
 site — but until 2026-09-13 it was
 enforced by docstrings and grep: `client._post("/iserver/account/…/orders", …)` from a new
 tool handler would have been lint-clean, fully typed and gate-free
@@ -54,6 +54,9 @@ GATED_OWNERS = {
     # rather than calling `place_order` — the single-order path is live-proven and must not
     # gain a branch (claudia_ui gap #36). It therefore owns the URL and must gate it.
     "place_bracket_and_confirm",
+    # One child attached to an order already working: the same array endpoint, a one-element
+    # array, its own Touch ID scoped to the ticket and the parent id (2026-10-17).
+    "attach_order_and_confirm",
 }
 GATE_CALLS = (
     "require_touch_id",
@@ -75,6 +78,7 @@ ORDER_WRITE_NAMES = {
     "place_order_and_confirm",
     "modify_order_and_confirm",
     "place_bracket_and_confirm",
+    "attach_order_and_confirm",
     "_resolve_one_reply",
     "_authorize_order_write",
     "OrderWriteAuthorization",
@@ -302,6 +306,13 @@ PRE_GATE_EXEMPT = {
         "IBKR's documented prerequisite for order operations; a GET of the operator's own "
         "account list. Ordering pinned by test_place_order_initializes_accounts_before_touch_id."
     ),
+    "get_order_status": (
+        "The attach write reads its parent from IBKR BEFORE Gate 1 and refuses one that is not "
+        "working, so no fingerprint is spent on an order nothing can be attached to (claudia_ui "
+        "gap #36, design 2026-10-17 § 1): a GET of the operator's own order — the read "
+        "`cancel_order` makes between its gates for its dialog. Ordering pinned by "
+        "test_attach_refuses_a_parent_that_is_not_working_before_any_gate."
+    ),
 }
 
 
@@ -335,7 +346,8 @@ def test_the_transitive_probe_sees_the_exempted_call():
     probe is blind, not because the property holds.
 
     Five of them since 2026-09-21: `place_bracket_and_confirm` opens the same way, because a
-    bracket needs the account list resolved exactly as a single order does. `_resolve_one_reply`
+    bracket needs the account list resolved exactly as a single order does; six since
+    2026-10-17, `attach_order_and_confirm` likewise. `_resolve_one_reply`
     is absent because it does not make that call — it runs inside a chain whose opening write
     already did."""
     reaching = methods_reaching_the_network(CLIENT, NETWORK_CALLS)
@@ -347,7 +359,14 @@ def test_the_transitive_probe_sees_the_exempted_call():
         gates = call_lines(fn, GATE_CALLS)
         if [ln for ln in call_lines(fn, reaching - {name}) if ln < min(gates)]:
             seen.add(name)
-    assert seen == {"place_order", "modify_order", "cancel_order", "reply_order", "place_bracket_and_confirm"}, seen
+    assert seen == {
+        "place_order",
+        "modify_order",
+        "cancel_order",
+        "reply_order",
+        "place_bracket_and_confirm",
+        "attach_order_and_confirm",
+    }, seen
 
 
 def test_the_transitive_probe_ignores_a_helper_that_touches_nothing():
@@ -369,6 +388,28 @@ def test_no_pre_gate_exemption_outlives_its_call_site():
 # `test_the_denied_gate_case_list_covers_every_public_gated_write` can assert it is complete:
 # a write added without a case here would be silently exempt from the behavioural half of
 # SEC-02, which is the failure this whole file exists to prevent one level up.
+
+
+def _attach_to_a_working_parent(c: Any) -> None:
+    """The attach write reads its parent from IBKR before any gate and refuses one that is
+    not working, so a denied Gate 1 is reachable only through a working parent: that read
+    is answered here, and the write — the thing under test — is what the denied gate stops."""
+    from unittest.mock import patch
+
+    working = {
+        "order_status": "Submitted",
+        "side": "B",
+        "total_size": "1",
+        "conid": 265598,
+        "order_type": "LIMIT",
+        "limit_price": "150.0",
+        "tif": "DAY",
+        "symbol": "AAPL",
+    }
+    with patch.object(c, "get_order_status", return_value=working):
+        c.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+
+
 _DENIED_GATE_CASES = [
     ("place_order", lambda c: c.place_order("U1234567", {"conid": 265598, "side": "BUY", "quantity": 1})),
     ("modify_order", lambda c: c.modify_order("U1234567", "123", {"conid": 265598, "quantity": 1})),
@@ -382,6 +423,7 @@ _DENIED_GATE_CASES = [
             [{"conid": 265598, "parentId": "C-1", "side": "SELL", "quantity": 1}],
         ),
     ),
+    ("attach_order_and_confirm", _attach_to_a_working_parent),
 ]
 
 
@@ -541,7 +583,11 @@ def test_every_public_gated_write_is_named_in_the_README_and_SECURITY_docs():
 # `GATED_OWNERS`, the living documents split cleanly: seven name four or five of them and
 # are genuinely listing the gated writes, while the two that mention one or two in passing
 # (`docs/test-coverage.md`, `docs/ibkr-api-behaviors-reference.md`) name three and omit
-# `place_order` or `modify_order`, which no real enumeration would. Hence four.
+# `place_order` or `modify_order`, which no real enumeration would. Hence four. The sixth
+# public member, `attach_order_and_confirm` (2026-10-17), left the seven enumerating documents
+# where they were and pushed one more over the threshold by being named in it:
+# `docs/consumers.md`, a dated per-release log that never lists the gated set and is excluded
+# below for the same reason as CHANGELOG.
 #
 # The first version of this guard used a threshold of five, calibrated by hand against the
 # wrong set — the seven names a reader thinks of, rather than the five `GATED_OWNERS`
@@ -557,6 +603,10 @@ _NOT_AN_ENUMERATION = {
     # the five writes that existed then is correct, and editing it would falsify the record
     # — the same reason CLAUDE.md gives for leaving cpapi-v1 URLs in audit artifacts.
     "CHANGELOG.md",
+    # The same shape, per release, for consumers: each section says what changed in that
+    # release and names the writes that changed then. It crossed the threshold on 2026-10-17
+    # by naming the sixth write in its own section, not by enumerating the gated set.
+    "docs/consumers.md",
 }
 _NOT_AN_ENUMERATION_DIRS = (
     # Evidence artifacts, committed as run and not maintained.

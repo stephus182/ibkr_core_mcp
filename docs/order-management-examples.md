@@ -189,6 +189,33 @@ Note that a preview cannot substitute for these checks: measured live 2026-09-20
 a *different instrument* returns a whatif response byte-identical to a valid one, because
 IBKR previews the first ticket and discards the rest. **A mismatched bracket previews clean.**
 
+```python
+# Attach ONE child to an order already working — IBKR's sequential bracket form (2026-10-17).
+# The parent is read from IBKR and refused unless working, BEFORE Touch ID; the child takes
+# the parent's contract, size and opposite side from that record, never from here.
+from ibkr_core_mcp import attached_entry
+
+try:
+    entries = client.attach_order_and_confirm(
+        account_id,
+        parent_order_id,  # IBKR's own order id — the bracket's parent above, or any working order
+        {"orderType": "STP", "price": 172.00, "tif": "GTC"},  # a protective stop
+    )
+except ValueError as e:
+    # Refused BEFORE Touch ID: the parent is not working, or the pair fails a bracket rule.
+    print(f"Nothing attached, nothing sent: {e}")
+except HumanAuthError as e:
+    print(f"Not sent: {e}")
+else:
+    child = attached_entry(parent_order_id, entries)
+    if child is None:
+        # Logged at ERROR by the method itself; never report this as success.
+        print(f"IBKR's response does not report a child attached to {parent_order_id}: {entries}")
+```
+
+A second child — a profit taker on the same parent — is a second call: one child per write,
+one Touch ID per write, as IBKR documents the sequential form.
+
 ## Time in force — what IBKR accepts, where it says so, and what this package does with it
 
 Read from IBKR's own pages and from its contract rules on 2026-09-24 (read-only), for
