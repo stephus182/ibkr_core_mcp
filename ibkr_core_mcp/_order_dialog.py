@@ -238,11 +238,14 @@ def _run_alert(data: dict[str, Any]) -> None:
     buttons.objectAtIndex_(0).setKeyEquivalent_("")  # disable Return on confirm
     buttons.objectAtIndex_(1).setKeyEquivalent_("\x1b")  # Escape = cancel
 
-    def _attributed(text: str, font: Any) -> Any:
-        """An attributed string in `font`, in the label colour."""
+    def _attributed(text: str, font: Any, colour: Any = None) -> Any:
+        """An attributed string in `font`; the label colour unless a colour is given."""
         return NSAttributedString.alloc().initWithString_attributes_(
             text,
-            {NSFontAttributeName: font, NSForegroundColorAttributeName: NSColor.labelColor()},
+            {
+                NSFontAttributeName: font,
+                NSForegroundColorAttributeName: NSColor.labelColor() if colour is None else colour,
+            },
         )
 
     def _measure(value: Any) -> float:
@@ -270,11 +273,19 @@ def _run_alert(data: dict[str, Any]) -> None:
     # disclaimer, above the banner: the reading order the dialog always had.
     regular, bold = NSFont.systemFontOfSize_(13), NSFont.boldSystemFontOfSize_(13)
     detail_value = NSMutableAttributedString.alloc().init()
+    # A row whose key starts with ⚠ is a warning — label and value both bold, in the banner's
+    # red: the bracket dialog's partial-fill line and the cancel dialog's linked-order rows
+    # (operator, 2026-10-17). Made only when a dialog carries one, so every other dialog's
+    # AppKit calls are exactly what they were.
+    warning_colour = (
+        NSColor.colorWithRed_green_blue_alpha_(*_RED, 1.0) if any(str(k).startswith("⚠") for k in details) else None
+    )
     for i, (key, val) in enumerate(details.items()):
         if i:
             detail_value.appendAttributedString_(_attributed("\n", regular))
-        detail_value.appendAttributedString_(_attributed(f"{key}: ", regular))
-        detail_value.appendAttributedString_(_attributed(str(val), bold))
+        colour = warning_colour if str(key).startswith("⚠") else None
+        detail_value.appendAttributedString_(_attributed(f"{key}: ", regular if colour is None else bold, colour))
+        detail_value.appendAttributedString_(_attributed(str(val), bold, colour))
     detail_h = _measure(detail_value)
     disclaimer_value = _attributed(disclaimer, NSFont.systemFontOfSize_(12))
     disclaimer_h = _measure(disclaimer_value)

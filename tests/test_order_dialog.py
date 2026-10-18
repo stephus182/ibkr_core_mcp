@@ -294,3 +294,34 @@ def test_a_row_this_code_does_not_recognise_never_fails_the_dialog(
     _order_dialog._run_alert(_base_payload(confirm_label="VALIDATE", abandon_label="DISCARD"))
 
     assert capsys.readouterr().out.strip() == "CONFIRMED"
+
+
+def test_a_row_whose_key_starts_with_the_warning_sign_is_drawn_red_and_bold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bracket dialog's `⚠ Partial fill` line and the cancel dialog's linked-order rows
+    (operator, 2026-10-17): label AND value in the banner's red, both bold. An ordinary row
+    keeps its regular label in the label colour."""
+    fake = _install_fake_appkit(monkeypatch)
+    fake.NSAlert.alloc.return_value.init.return_value.runModal.return_value = 1000
+    colours: dict[tuple[float, ...], MagicMock] = {}
+    fake.NSColor.colorWithRed_green_blue_alpha_.side_effect = lambda *rgba: colours.setdefault(
+        rgba, MagicMock(name=f"colour{rgba}")
+    )
+
+    from ibkr_core_mcp import _order_dialog
+
+    _order_dialog._run_alert(
+        _base_payload(details={"Symbol": "AAPL", "⚠ Partial fill": "Quantity 2: a partial fill …"})
+    )
+
+    runs = {
+        c.args[0]: c.args[1]
+        for c in fake.NSAttributedString.alloc.return_value.initWithString_attributes_.call_args_list
+    }
+    red = colours[(0.72, 0.10, 0.10, 1.0)]
+    bold, regular = fake.NSFont.boldSystemFontOfSize_.return_value, fake.NSFont.systemFontOfSize_.return_value
+    for text in ("⚠ Partial fill: ", "Quantity 2: a partial fill …"):
+        assert runs[text][fake.NSFontAttributeName] is bold, text
+        assert runs[text][fake.NSForegroundColorAttributeName] is red, text
+    assert runs["Symbol: "][fake.NSFontAttributeName] is regular
+    assert runs["Symbol: "][fake.NSForegroundColorAttributeName] is fake.NSColor.labelColor.return_value
+    assert runs["AAPL"][fake.NSForegroundColorAttributeName] is fake.NSColor.labelColor.return_value

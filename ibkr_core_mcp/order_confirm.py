@@ -643,6 +643,27 @@ def _as_float_or_none(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _partial_fill_warning(parent: dict[str, Any]) -> str | None:
+    """The one line a multi-lot parent without all-or-none must show (operator, 2026-10-17).
+
+    All-or-none makes a partial fill impossible, and IBKR offers it on stocks, ETFs, options,
+    bonds and EFPs only — never on futures (refused on CME, NYMEX and COMEX, measured
+    2026-09-21 and 2026-10-17). A parent of 1 cannot partially fill. So the line is keyed on
+    the ATTRIBUTE and the quantity, never on the instrument: right by construction on every
+    product, with no copy of IBKR's product list here. The partial-fill behaviour itself is
+    deliberately unmeasured and uncorrected (design 2026-10-17, A3): this says so.
+
+    Rendered red and bold by the dialog, as every row whose key starts with `⚠` is.
+    """
+    quantity = _as_float_or_none(parent.get("quantity"))
+    if quantity is None or quantity <= 1 or parent.get("allOrNone") is True:
+        return None
+    return (
+        f"Quantity {quantity:g}: a partial fill of the parent leaves each held child at {quantity:g}. "
+        "Nothing here corrects that."
+    )
+
+
 def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]], account_id: str) -> None:
     """Gate 2 for a bracket: ONE dialog carrying the parent and every child.
 
@@ -659,6 +680,11 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
     The child is shown as **held**, never as working. `PreSubmitted` is a working state for a
     single order and a held one for a bracket child, and the difference is the only thing the
     human needs to understand about the second leg.
+
+    Two rows since 2026-10-17 (claudia_ui gap #36): `Parent — At IBKR` when the parent is an
+    order already working at IBKR (an attach, `client.attach_order_and_confirm`) rather than
+    a ticket about to be sent; and `⚠ Partial fill`, red and bold, when the parent is above
+    one lot and carries no `allOrNone: true` (`_partial_fill_warning`).
 
     Exactly one notional row is shown and it names whose it is. A bracket's legs are opposite,
     so a row called `Total` would be read as their sum; the child's notional is left off
@@ -717,6 +743,14 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         details[f"Parent — {key}"] = value
     if notional is not None:
         details["Parent notional (est.)"] = notional
+    # An attach: the parent is IBKR's, not a ticket about to be sent. `client._parent_from_status`
+    # sets the key; a bracket placed at entry carries none and shows no such row.
+    working = parent.get("_working_at_ibkr")
+    if working:
+        details["Parent — At IBKR"] = str(working)
+    warning = _partial_fill_warning(parent)
+    if warning:
+        details["⚠ Partial fill"] = warning
 
     seen: dict[str, int] = {}
     for child in children:

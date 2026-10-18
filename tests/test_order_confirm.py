@@ -2433,3 +2433,39 @@ def test_the_names_a_host_matches_and_calls_are_public():
     assert issubclass(ibkr_core_mcp.ConfirmationDeclinedError, ibkr_core_mcp.HumanAuthError)
     assert issubclass(ibkr_core_mcp.ConfirmationTimeoutError, ibkr_core_mcp.HumanAuthError)
     assert ibkr_core_mcp.set_dialog_icon is order_confirm.set_dialog_icon
+
+
+# ---------------------------------------------------------------------------
+# The bracket dialog for an attach, and the partial-fill line (claudia_ui gap #36, design 2026-10-17)
+# ---------------------------------------------------------------------------
+
+
+def test_bracket_dialog_shows_the_parent_as_working_at_ibkr_when_it_already_is():
+    """An attach's parent is IBKR's, not a ticket about to be sent: the dialog says so on one
+    row, from the display key `client._parent_from_status` sets — and only then."""
+    parent = {**_bracket_parent(), "_working_at_ibkr": "order 123 · Submitted · 0 attached"}
+    details = _bracket_details(parent, [_bracket_child()])
+    assert details["Parent — At IBKR"] == "order 123 · Submitted · 0 attached"
+    assert "Parent — At IBKR" not in _bracket_details(_bracket_parent(), [_bracket_child()])
+
+
+@pytest.mark.parametrize(
+    ("quantity", "all_or_none", "warned"),
+    [(1, None, False), (2, True, False), (2, None, True), (2, False, True), (3.0, None, True)],
+    ids=["one-lot", "aon", "two-lots", "aon-false", "three-lots"],
+)
+def test_bracket_dialog_warns_in_red_only_on_a_multi_lot_parent_without_all_or_none(quantity, all_or_none, warned):
+    """Keyed on the ATTRIBUTE, not the instrument (operator, 2026-10-17): a parent carrying
+    `allOrNone: true` cannot partially fill and shows nothing; a parent of 1 cannot either;
+    any other parent above one lot does, whatever it trades — futures cannot carry the
+    attribute at all (refused on CME, NYMEX and COMEX, measured 2026-09-21 and 2026-10-17)."""
+    parent = {**_bracket_parent(), "quantity": quantity}
+    if all_or_none is not None:
+        parent["allOrNone"] = all_or_none
+    details = _bracket_details(parent, [_bracket_child(quantity=quantity)])
+    assert ("⚠ Partial fill" in details) is warned
+    if warned:
+        assert details["⚠ Partial fill"] == (
+            f"Quantity {quantity:g}: a partial fill of the parent leaves each held child at {quantity:g}. "
+            "Nothing here corrects that."
+        )
