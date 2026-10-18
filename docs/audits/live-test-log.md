@@ -865,7 +865,8 @@ git-ignored probe folder `docs/plans/probes/2026-10-17-bracket-live/`.
 
 ### Open
 
-- The unanswered precaution reply of the probe (two orders that no longer exist) was left pending
-  at IBKR; later reads and the cancel were served normally.
+- The unanswered precaution reply of the probe (two orders that no longer exist): declined later the
+  same day through the gated `reply_order(…, ibkr_confirmed=False)` — IBKR answered HTTP 503, the
+  documented fate of a reply left unanswered once another request has been made. Nothing pending.
 - A child's lingering as `Inactive` after the parent cancel was seen once and not seen once;
   the cause was not established.
