@@ -4750,3 +4750,156 @@ def test_a_manual_indicator_that_is_not_a_bool_is_refused_before_any_gate(client
     touch_id.assert_not_called()
     dialog.assert_not_called()
     mock_del.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Attach — ONE child to an order already working at IBKR (claudia_ui gap #36, design 2026-10-17)
+# ---------------------------------------------------------------------------
+
+
+def _working_parent_status(**over: Any) -> dict[str, Any]:
+    """A parent as IBKR's order-status read reports it (field names measured 2026-09-22;
+    `total_size` and the prices arrive as strings, `children_order_ids` is a string)."""
+    status: dict[str, Any] = {
+        "order_id": "123",
+        "order_status": "Submitted",
+        "conid": 265598,
+        "side": "B",
+        "total_size": "2",
+        "order_type": "LIMIT",
+        "limit_price": "150.0",
+        "tif": "GTC",
+        "symbol": "AAPL",
+        "sec_type": "STK",
+        "children_order_ids": "",
+    }
+    status.update(over)
+    return status
+
+
+def test_attach_refuses_a_parent_that_is_not_working_before_any_gate(client):
+    """A filled, cancelled or inactive order cannot take a child; refused before Touch ID."""
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status(order_status="Filled")),
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch,
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as dialog,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="not working"),
+    ):
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "STP", "price": 140.0})
+    touch.assert_not_called()
+    dialog.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_attach_derives_contract_side_size_and_tif_from_ibkr_not_from_the_caller(client):
+    """The caller's conid, side and quantity are overridden by the parent as IBKR holds it;
+    an absent child TIF is the parent's, written as a literal."""
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm(
+            "U1234567", "123", {"conid": 1, "side": "BUY", "quantity": 9, "orderType": "STP", "price": 140.0}
+        )
+    mock_post.assert_called_once()
+    assert mock_post.call_args[0][0] == f"{client._base}/iserver/account/U1234567/orders"
+    (ticket,) = mock_post.call_args.kwargs["json"]["orders"]
+    assert (ticket["conid"], ticket["side"], ticket["quantity"], ticket["tif"]) == (265598, "SELL", 2, "GTC")
+    assert ticket["parentId"] == "123" and "cOID" not in ticket and ticket["acctId"] == "U1234567"
+    assert "ticker" not in ticket, "the contract on the wire is the conid"
+    assert all(not k.startswith("_") for k in ticket), "display-only keys reached IBKR"
+
+
+def test_attach_runs_touch_id_once_then_the_bracket_dialog_then_posts_one_ticket(client):
+    """One Touch ID, the BRACKET dialog (never the single-order one), one POST."""
+    seq: list[str] = []
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: seq.append("touch")),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog", side_effect=lambda *a: seq.append("dialog")),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=lambda *a: seq.append("SINGLE-DIALOG")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+
+        def _record_post(*_a: Any, **_k: Any) -> Any:
+            seq.append("post")
+            return _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+
+        mock_post.side_effect = _record_post
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    assert seq == ["touch", "dialog", "post"]
+
+
+def test_attach_shows_the_parent_as_working_at_ibkr_on_the_dialog(client):
+    """The dialog's parent row says the parent is IBKR's, its state, and what it already carries."""
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status(children_order_ids="130,131")),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as dialog,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    parent = dialog.call_args.args[0]
+    assert parent["_working_at_ibkr"] == "order 123 · Submitted · 2 attached"
+
+
+def test_attach_gate_1_scope_names_the_kind_and_the_parent(client):
+    """An authorization earned for an attach to one parent never covers a child of another,
+    nor a bracket placed at entry: the kind and the parent's id are both in the scope."""
+    scopes: list[str] = []
+
+    def _grant(reason: str, scope: str, label: str) -> object:
+        scopes.append(scope)
+        return object()
+
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client._authorize_order_write", side_effect=_grant),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    assert scopes[0].startswith("attach:U1234567:123:")
+
+
+def test_attach_logs_a_response_that_does_not_report_the_link(client, caplog):
+    """The one post-send check: the response entry's `parent_order_id` equals the parent, else
+    the result is logged at ERROR and returned intact — never raised over (the order is placed
+    by now) and never treated as success."""
+    import logging
+
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+        caplog.at_level(logging.ERROR, logger="ibkr_core_mcp.client"),
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124"}])
+        terminal = client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    assert terminal == [{"order_id": "124"}]
+    assert "not report the order attached to 123" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        ([{"order_id": "9"}, {"order_id": "124", "parent_order_id": "123"}], "124"),
+        ([{"order_id": "124", "parent_order_id": 123}], "124"),
+        ([{"order_id": "124"}], None),
+    ],
+    ids=["second-entry", "numeric-link", "no-link"],
+)
+def test_attached_entry_finds_the_child_by_its_parent_link_whatever_the_order(entries, expected):
+    """IBKR's response order is arbitrary (measured 2026-09-21/22): the link is found by the
+    `parent_order_id` IBKR echoes, never by position."""
+    from ibkr_core_mcp import attached_entry
+
+    found = attached_entry("123", entries)
+    assert (found or {}).get("order_id") == expected

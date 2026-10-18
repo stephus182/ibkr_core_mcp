@@ -422,9 +422,11 @@ def _order_write_scope(kind: str, account_id: str, body: Mapping[str, Any], orde
     loudly instead of quietly minting the weaker scope.
 
     Args:
-        kind: "place", "modify", "cancel" or "place_bracket". It is part of the scope, so an
-            authorization earned for one kind can never cover another — a bracket's
-            authorization is not a single order's, even where the parent body matches.
+        kind: "place", "modify", "cancel", "place_bracket" or "attach". It is part of the
+            scope, so an authorization earned for one kind can never cover another — a
+            bracket's authorization is not a single order's, even where the parent body
+            matches. An attach's scope also carries the parent's id, so an authorization
+            earned for one parent never covers a child of another.
         account_id: The account the write is aimed at — part of the transaction.
         body: The order body about to be sent. For a bracket this is the whole ticket array
             wrapped as `{"orders": [...]}`, so every leg is inside the scope; bound to the
@@ -752,6 +754,132 @@ def pair_bracket_response(tickets: Sequence[Mapping[str, Any]], entries: Sequenc
         problems.append(f"an entry matched no ticket: {said!r}" if said else "an entry matched no ticket")
 
     return BracketPairing(parent_entry, tuple(children), tuple(unmatched), tuple(problems))
+
+
+# The states in which IBKR will take a child on an existing order. A parent in any other
+# state — filled, cancelled, inactive — is refused before any gate (design 2026-10-17 § 1).
+_ATTACHABLE_PARENT_STATUSES = frozenset({"PreSubmitted", "Submitted", "PendingSubmit", "ApiPending"})
+# IBKR's order-status read spells the side as a letter (measured 2026-09-22); a body wants the word.
+_STATUS_SIDE = {"B": "BUY", "S": "SELL", "BUY": "BUY", "SELL": "SELL"}
+# The status read names the type in IBKR's long form; the body takes the short one.
+_STATUS_ORDER_TYPE = {
+    "LIMIT": "LMT",
+    "MARKET": "MKT",
+    "STOP": "STP",
+    "STOP_LIMIT": "STOP_LIMIT",
+    "STP LMT": "STOP_LIMIT",
+}
+
+
+def _children_count(status: Mapping[str, Any]) -> int:
+    """How many children IBKR already reports on a parent.
+
+    `children_order_ids` is a comma-separated STRING on the status read (measured
+    2026-09-22, `docs/ibkr-api-behaviors-reference.md`); a list is accepted in case IBKR
+    ever changes its mind, and an absent field is zero.
+    """
+    raw = status.get("children_order_ids")
+    if isinstance(raw, list | tuple):
+        return len(raw)
+    return len([x for x in str(raw or "").split(",") if x.strip()])
+
+
+def _parent_from_status(order_id: str, status: Mapping[str, Any]) -> dict[str, Any]:
+    """A working IBKR order as a parent ticket for the bracket rules and the bracket dialog.
+
+    Everything a child derives — contract, side, size, TIF — comes from IBKR's record, never
+    from a caller's copy. The parent is never re-sent: `cOID` here is the link a child carries
+    as `parentId` (IBKR's own order id), which is what makes `_bracket_tickets`' link rule
+    apply unchanged. A parent in any state but working is refused before any gate.
+
+    The one display-only key it adds, `_working_at_ibkr`, is the bracket dialog's extra row
+    for an attach: the parent is IBKR's, in this state, already carrying this many children.
+    `_`-prefixed, so `_bracket_tickets` strips it and it never reaches the wire.
+
+    Raises:
+        ValueError: The parent is not working, or IBKR's record lacks a side, a size or a
+            conid — a child cannot be derived from what is not there, and nothing is guessed.
+    """
+    state = str(status.get("order_status") or status.get("status") or "").strip()
+    if state not in _ATTACHABLE_PARENT_STATUSES:
+        raise ValueError(
+            f"Order {order_id} is {state or 'in an unknown state'}, not working — nothing can be attached to it"
+        )
+    side = _STATUS_SIDE.get(str(status.get("side") or "").strip().upper())
+    if side is None:
+        raise ValueError(f"Order {order_id}: IBKR reports no side, so a child's side cannot be derived")
+    quantity = status.get("total_size", status.get("size"))
+    conid = status.get("conid")
+    if quantity in (None, "") or conid in (None, ""):
+        raise ValueError(f"Order {order_id}: IBKR reports no size or no conid, so a child cannot be derived")
+    size = float(quantity)
+    raw_type = str(status.get("order_type") or "").strip().upper()
+    parent: dict[str, Any] = {
+        "conid": int(float(conid)),
+        "side": side,
+        "quantity": int(size) if size.is_integer() else size,
+        "orderType": _STATUS_ORDER_TYPE.get(raw_type, raw_type or "MKT"),
+        "tif": str(status.get("tif") or "DAY").strip().upper(),
+        "ticker": str(status.get("symbol") or status.get("ticker") or ""),
+        "cOID": str(order_id),
+        "_working_at_ibkr": f"order {order_id} · {state} · {_children_count(status)} attached",
+    }
+    # The body's price fields, by type: a stop-limit carries the limit as `price` and the
+    # stop as `auxPrice`; a stop carries its trigger as `price`; a limit its limit.
+    limit, stop = status.get("limit_price"), status.get("stop_price")
+    if parent["orderType"] == "STOP_LIMIT":
+        if limit not in (None, ""):
+            parent["price"] = float(limit)
+        if stop not in (None, ""):
+            parent["auxPrice"] = float(stop)
+    elif parent["orderType"] == "STP" and stop not in (None, ""):
+        parent["price"] = float(stop)
+    elif limit not in (None, ""):
+        parent["price"] = float(limit)
+    if str(status.get("sec_type") or "").strip().upper() in ("FUT", "FOP"):
+        parent["manualIndicator"] = True
+    return parent
+
+
+def _complete_child(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
+    """The child as IBKR defines an attached order: the parent's contract and size, the
+    opposite side, the parent's TIF unless the child states its own.
+
+    The caller's values for the derived fields are overridden, not merged — a caller's
+    conid, side or quantity never reaches the wire. What the caller does own stays as
+    given: the order type, the prices, a stated TIF, `outsideRTH`.
+    """
+    kid = dict(child)
+    kid["conid"] = parent["conid"]
+    kid["quantity"] = parent["quantity"]
+    kid["side"] = "SELL" if parent["side"] == "BUY" else "BUY"
+    kid["parentId"] = parent["cOID"]
+    kid.pop("cOID", None)
+    if not str(kid.get("tif") or "").strip():
+        kid["tif"] = parent["tif"]
+    if parent.get("manualIndicator"):
+        kid["manualIndicator"] = True
+    # Display-only keys travel to the dialog and are stripped before the wire. `ticker` is
+    # NOT copied: the contract on the wire is the conid, as in this package's own documented
+    # bracket example, and the dialog inherits the parent's `ticker` for the screen itself.
+    for key in ("_companyName", "_multiplier", "_multiplier_unknown", "_currency"):
+        if key in parent and key not in kid:
+            kid[key] = parent[key]
+    return kid
+
+
+def attached_entry(parent_order_id: str, entries: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The terminal entry IBKR reports as attached to `parent_order_id`, else None. Pure, no network.
+
+    IBKR's response order is arbitrary (measured 2026-09-21/22), so the link is found by the
+    `parent_order_id` IBKR echoes, never by position. Public for the same reason
+    `pair_bracket_response` is: it encodes IBKR's wire shape, and the caller that words the
+    outcome for a human needs the same reader the write used.
+    """
+    for entry in entries:
+        if str(entry.get("parent_order_id") or "") == str(parent_order_id):
+            return dict(entry)
+    return None
 
 
 def _described_with_status(status: Mapping[str, Any]) -> str | None:
@@ -2983,6 +3111,57 @@ class IBKRClient:
         record["confirmed"] = True
         return self._post(f"/iserver/reply/{reply_id}", {"confirmed": True})
 
+    def _resolve_reply_chain(
+        self,
+        response: list[dict[str, Any]],
+        reply_log: list[dict[str, Any]] | None,
+        authorization: OrderWriteAuthorization,
+        scope: str,
+    ) -> list[dict[str, Any]]:
+        """Walk every index of a multi-ticket reply chain until no entry carries an `id`.
+
+        Extracted from `place_bracket_and_confirm` on 2026-10-17 so the attach write shares
+        it; the bracket tests pin its behaviour — a reply on the SECOND ticket, a terminal
+        leg kept while another still replies, a re-sent reply id refused, replies answered
+        in index order back-to-back. The rationale is that method's docstring: IBKR's reply
+        array is index-aligned with the submitted tickets, so every entry carrying an `id` is
+        resolved, and the terminal entries are accumulated rather than replaced because the
+        composition of a reply's response is not yet measured (M6).
+
+        Returns the terminal entries — everything IBKR said that was not a question — in
+        the order first seen, de-duplicated on exact equality (and only that; see
+        `place_bracket_and_confirm`).
+
+        Raises:
+            IBKRAPIError: IBKR re-sent a reply id that was already answered — a loop, not a
+                chain, and every round of it would prompt a human again.
+        """
+        terminal: list[dict[str, Any]] = []
+        answered: set[str] = set()
+        while True:
+            # `dict` and not `Mapping` here, deliberately: `response` is `_as_reply_list` over
+            # a `_post` body, so these rows are JSON the caller decoded a moment ago and can
+            # never be a typed model. The two checks that read data a CALLER may supply —
+            # `pair_bracket_response` and `_cancel_dialog_details` — take `Mapping`.
+            pending = [entry for entry in response if isinstance(entry, dict) and "id" in entry]
+            for entry in response:
+                if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
+                    terminal.append(entry)
+            if not pending:
+                return terminal
+            latest: list[dict[str, Any]] = []
+            for entry in pending:
+                reply_id = str(entry["id"])
+                if reply_id in answered:
+                    # Answering the same precaution twice is not a chain. Each round costs a
+                    # human dialog, so an unguarded loop would prompt forever.
+                    raise IBKRAPIError(f"IBKR re-sent reply {reply_id}, which was already answered")
+                answered.add(reply_id)
+                latest.extend(
+                    _as_reply_list(self._resolve_one_reply(entry, reply_log, authorization=authorization, scope=scope))
+                )
+            response = latest
+
     def place_order_and_confirm(
         self,
         account_id: str,
@@ -3128,39 +3307,92 @@ class IBKRClient:
         # Gate 2, once, both legs.
         confirm_bracket_dialog(parent, children, account_id)
         response = _as_reply_list(self._post(f"/iserver/account/{account_id}/orders", {"orders": tickets}))
-        terminal: list[dict[str, Any]] = []
-        answered: set[str] = set()
-        while True:
-            # `dict` and not `Mapping` here, deliberately: `response` is `_as_reply_list` over
-            # a `_post` body, so these rows are JSON this method decoded a moment ago and can
-            # never be a typed model. The two checks that read data a CALLER may supply —
-            # `pair_bracket_response` and `_cancel_dialog_details` — take `Mapping`.
-            pending = [entry for entry in response if isinstance(entry, dict) and "id" in entry]
-            for entry in response:
-                if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
-                    terminal.append(entry)
-            if not pending:
-                # Verify before returning, so a caller that never calls pair_bracket_response
-                # still leaves a record. NOT raised: the orders are already placed by now, and
-                # swallowing IBKR's response to throw would destroy the only account of what
-                # happened. The caller decides what to tell a human; this decides that nobody
-                # can fail to be told.
-                pairing = pair_bracket_response(tickets, terminal)
-                for problem in pairing.problems:
-                    log.error("Bracket response did not pair cleanly: %s", problem)
-                return terminal
-            latest: list[dict[str, Any]] = []
-            for entry in pending:
-                reply_id = str(entry["id"])
-                if reply_id in answered:
-                    # Answering the same precaution twice is not a chain. Each round costs a
-                    # human dialog, so an unguarded loop would prompt forever.
-                    raise IBKRAPIError(f"IBKR re-sent reply {reply_id}, which was already answered")
-                answered.add(reply_id)
-                latest.extend(
-                    _as_reply_list(self._resolve_one_reply(entry, reply_log, authorization=authorization, scope=scope))
-                )
-            response = latest
+        terminal = self._resolve_reply_chain(response, reply_log, authorization, scope)
+        # Verify before returning, so a caller that never calls pair_bracket_response still
+        # leaves a record. NOT raised: the orders are already placed by now, and swallowing
+        # IBKR's response to throw would destroy the only account of what happened. The
+        # caller decides what to tell a human; this decides that nobody can fail to be told.
+        pairing = pair_bracket_response(tickets, terminal)
+        for problem in pairing.problems:
+            log.error("Bracket response did not pair cleanly: %s", problem)
+        return terminal
+
+    def attach_order_and_confirm(
+        self,
+        account_id: str,
+        parent_order_id: str,
+        child: dict[str, Any],
+        *,
+        reply_log: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Attach ONE child to an order already working at IBKR — IBKR's sequential bracket form.
+
+        In IBKR's model an attached order is a bracket child whose parent already exists, and
+        this is exactly that: the parent is read from IBKR (`get_order_status`) and refused
+        unless working; the child is completed from that record (`_complete_child`: the
+        parent's contract and size, the opposite side, the parent's TIF unless the child
+        states one); the bracket rules run unchanged (`_bracket_tickets`: link, opposite side,
+        same contract, child ≤ parent); one Touch ID with scope kind `attach`, bound to the
+        ticket AND the parent's id; the bracket dialog with the parent's "At IBKR" row; one
+        ticket posted, carrying `parentId` = IBKR's own order id.
+
+        **One child per write.** IBKR documents the sequential form one order at a time, and
+        one Touch ID covers one write (the standing rule, 2026-09-11): two children on a
+        working order are two calls. No cap on how many children a parent may carry — IBKR
+        decides, and the dialog shows what the parent already has.
+
+        `place_order_and_confirm` is not reused and not modified (D5): the ticket goes
+        through the same array endpoint the bracket write uses, as a one-element array, and
+        its reply chain through the same walker.
+
+        Returns IBKR's terminal entries. The one post-send check is `attached_entry`: a
+        response that does not report the link — no entry whose `parent_order_id` is the
+        parent — is logged at ERROR and returned intact, never treated as success and never
+        raised over, because the order is placed by then. The caller words it
+        (claudia_ui gap #36, design 2026-10-17 § 1).
+
+        Args:
+            account_id: The account the parent works in and the child is sent to.
+            parent_order_id: IBKR's order id of the working parent.
+            child: The child ticket as the caller wants it — order type, prices, a TIF if
+                not the parent's, `outsideRTH` if stated, display-only `_` keys. Its conid,
+                side and quantity are derived from the parent and never taken from here.
+            reply_log: When given, receives one record per resolved reply.
+
+        Raises:
+            ValueError: The parent is not working, cannot yield a child (no side, size or
+                conid in IBKR's record), or the pair fails a bracket rule — all before any gate.
+            HumanAuthError: Touch ID failed, or the human declined the dialog or any reply.
+            IBKRAPIError: IBKR re-sent a reply id that was already answered.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status
+        Endpoint: GET /iserver/account/order/status/{orderId}, then
+                  POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
+        """
+        _validate_account_id(account_id)
+        _validate_order_id(parent_order_id)
+        self._ensure_accounts_initialized()
+        parent = _parent_from_status(parent_order_id, self.get_order_status(parent_order_id))
+        kid = _complete_child(parent, child)
+        # The bracket rules, unchanged, before any gate; [0] is the parent, never sent.
+        ticket = self._bracket_tickets(parent, [kid])[1]
+        ticket["acctId"] = account_id
+        # Gate 1, bound to this ticket AND this parent: an authorization earned for one
+        # parent never covers a child of another.
+        scope = _order_write_scope("attach", account_id, ticket, order_id=parent_order_id)
+        label = _order_label(parent)
+        authorization = _authorize_order_write(
+            f"attach an order to IBKR order {parent_order_id} — {label}", scope, label
+        )
+        log.info("Gate 1: granted for %s (%s)", scope, label)
+        # Gate 2: the bracket dialog, the parent shown as IBKR's.
+        confirm_bracket_dialog(parent, [kid], account_id)
+        response = _as_reply_list(self._post(f"/iserver/account/{account_id}/orders", {"orders": [ticket]}))
+        terminal = self._resolve_reply_chain(response, reply_log, authorization, scope)
+        if attached_entry(parent_order_id, terminal) is None:
+            log.error("IBKR's response does not report the order attached to %s: %s", parent_order_id, terminal)
+        return terminal
 
     def modify_order_and_confirm(
         self,

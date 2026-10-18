@@ -9,7 +9,7 @@ from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth, NoAuth, TokenAut
 from ibkr_core_mcp.backtest import BacktestResult, run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.claude_tools import ClaudeToolkit
-from ibkr_core_mcp.client import BracketPairing, IBKRClient, pair_bracket_response
+from ibkr_core_mcp.client import BracketPairing, IBKRClient, attached_entry, pair_bracket_response
 from ibkr_core_mcp.config import SECRET_NAMES, Config, EnvFile, load_env_file
 from ibkr_core_mcp.exceptions import (
     BacktestError,
@@ -98,6 +98,7 @@ __all__ = [
     # not exported as a namespace, so these are reachable only from here.
     "pair_bracket_response",
     "BracketPairing",
+    "attached_entry",
     # Auth
     "AuthStrategy",
     "BrowserCookieAuth",

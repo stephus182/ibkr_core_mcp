@@ -87,7 +87,7 @@ class OrderWriteAuthorization:
 
     @property
     def kind(self) -> str:
-        """The kind of write this was granted for — `place`, `modify`, `place_bracket`.
+        """The kind of write this was granted for — `place`, `modify`, `place_bracket`, `attach`.
 
         The scope's first segment (`client._order_write_scope` returns `<kind>:<account>:…`).
         The reply dialog reads it to say what its CANCEL button leaves (register F35).
