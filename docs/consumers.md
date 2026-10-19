@@ -16,7 +16,7 @@
 
 | Name | What it is |
 |---|---|
-| `IBKRClient.attach_order_and_confirm(account_id, parent_order_id, child, *, reply_log=None)` | Touch-ID gated. **One** child on an order already working — IBKR's sequential bracket form. The parent is read from IBKR **before Gate 1** and refused (`ValueError`) unless working; the child is completed from IBKR's record (contract, size, opposite side, TIF unless stated) and the caller's conid, side and quantity are overridden; Gate 1 scope kind `attach`, bound to the ticket **and** the parent's id; Gate 2 is the bracket dialog titled for an attach, the child's side on its banner, with a `Parent — At IBKR` row; one ticket posted, its reply chain resolved. Returns IBKR's terminal entries. Two children are two calls. Measured live 2026-10-18 |
+| `IBKRClient.attach_order_and_confirm(account_id, parent_order_id, child, *, reply_log=None)` | Touch-ID gated. **One** child on an order already working — IBKR's sequential bracket form. The parent is read from IBKR **before Gate 1** and refused (`ValueError`) unless working; the child is completed from IBKR's record (contract, size, opposite side, TIF unless stated — a stated TIF longer than the parent's is refused before any gate, 2026-10-18) and the caller's conid, side and quantity are overridden; Gate 1 scope kind `attach`, bound to the ticket **and** the parent's id; Gate 2 is the bracket dialog titled for an attach, the child's side on its banner, with a `Parent — At IBKR` row; one ticket posted, its reply chain resolved. Returns IBKR's terminal entries. Two children are two calls. Measured live 2026-10-18 |
 | `attached_entry(parent_order_id, entries)` → `dict` or `None` | The entry IBKR reports as attached to the parent, by the `parent_order_id` it echoes, never by position. A **module-level function** — `from ibkr_core_mcp import attached_entry`. The write runs it and logs a response without the link at ERROR; a consumer runs it to word the outcome |
 
 **What a consumer does with the result.** `attached_entry(...)` returning `None` after a write
@@ -303,7 +303,7 @@ ticket array, and it has its own entry point rather than a branch of the single-
 
 | Name | What it is |
 |---|---|
-| `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved |
+| `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved; a child whose TIF is longer than the parent's is refused (`ValueError`) before any gate — IBKR's rule, 2026-10-18 |
 | `IBKRClient.get_bracket_preview(account_id, parent, children)` | Whatif for a parent plus its children. Read-only, ungated, like `get_order_preview`. Both legs are sent so the array is validated as one unit, but IBKR prices the **first ticket only** — a mismatched bracket previews clean (measured live 2026-09-20, re-confirmed 2026-09-22), so a clean preview is never evidence about the child |
 | `pair_bracket_response(tickets, entries)` → `BracketPairing` | Which returned entry is which leg. A **module-level function**, not a method on `IBKRClient` — `from ibkr_core_mcp import pair_bracket_response` |
 

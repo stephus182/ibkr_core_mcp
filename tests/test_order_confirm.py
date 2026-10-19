@@ -2167,6 +2167,30 @@ def test_bracket_dialog_ALSO_refuses_a_child_larger_than_the_parent():
     mock_show.assert_not_called()
 
 
+def test_bracket_dialog_ALSO_refuses_a_child_tif_longer_than_the_parent():
+    """IBKR's child-TIF rule at Gate 2 as well as in `_bracket_tickets`, for the reason H1 is:
+    this dialog is public API, callable without the builder, and the last screen before the send.
+    TWS guide, Using the Orders Panel: a longer child TIF is overridden by the parent's."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 10.0, "tif": "DAY"}
+    child = {
+        "parentId": "C-1",
+        "conid": 1,
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 9.0,
+        "tif": "GTC",
+    }
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="TIF"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
 # `confirm_bracket_dialog`'s `Raises:` lists six refusals. Three of them had an escape
 # clause its twin `_bracket_tickets` does not have, measured 2026-09-21 by driving each:
 #

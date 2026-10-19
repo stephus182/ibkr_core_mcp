@@ -229,6 +229,33 @@ choose. Nothing here asks for an OCA group: `_bracket_tickets` sends `cOID` on t
 `parentId` on each child, exactly as IBKR's bracket page documents, and `isSingleGroup` is
 never set. The grouping is IBKR's own behaviour for a `parentId`-linked bracket.
 
+### Documented after all (2026-10-18): the group's cancel rule, the child's size and TIF
+
+Three passages of IBKR's TWS guide, read 2026-10-18, cover what this entry carried as measured
+only (the field names stay on no page):
+
+- **Order Types › One-Cancels-All:** "By default, once an order in the group fills, all other
+  linked orders are canceled. If an order is partially filled, the remaining orders will be reduced
+  proportionately … If an order is canceled by the client before execution, all remaining orders
+  in the OCA group will automatically be canceled, but if one of the orders is rejected or
+  canceled by the system, the remaining order(s) WILL NOT automatically be canceled."
+  (https://www.ibkrguides.com/traderworkstation/order-types.htm). `ReduceOnFillNonBlock` is OCA
+  type 3, "remaining orders are proportionately reduced in size with no block"
+  (https://www.interactivebrokers.com/docs/general/order-types/complex-orders/oca-types).
+- **Define Order Preset Value:** "Auto-cancel parent — for orders with a parent-child pair, check
+  to have the parent order canceled when the child order is canceled" — off unless set, and no
+  such field on the Web API ticket, so cancelling a child leaves the parent working
+  (https://www.ibkrguides.com/traderworkstation/define-order-preset-value.htm).
+- **Using the Orders Panel:** a child's "Order Quantity … can be modified to be equal to or less
+  than the quantity in the Leaves status field" (H1's cousin on a working child), and "You must
+  set the TIF for a child order equal to or shorter than that of the parent. Otherwise, the TIF
+  of the parent order will override that of the child order" — enforced since 2026-10-18 by
+  `order_confirm.child_tif_defect`, in `_bracket_tickets` and the bracket dialog
+  (https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm).
+
+Still on no page found: what cancelling the PARENT does to its children (measured 2026-09-22
+cancelled, 2026-10-18 left `Inactive`), and what a PARTIAL fill of the parent does to them.
+
 ### Why this entry exists: H1 is per child, not a sum
 
 *A bracket child is never larger than the parent* (H1) is enforced **per child** —

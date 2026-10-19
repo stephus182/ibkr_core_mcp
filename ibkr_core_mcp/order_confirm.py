@@ -25,6 +25,7 @@ import math
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from decimal import Decimal, DecimalException, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -560,6 +561,38 @@ _CONTRACT_CLASS_KEYS = ("secType", "manualIndicator", "ticker")
 
 _HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
 
+# IBKR's rule for an attached order's time in force — TWS guide, Using the Orders Panel
+# (https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm, read 2026-10-18):
+# "You must set the TIF for a child order equal to or shorter than that of the parent.
+# Otherwise, the TIF of the parent order will override that of the child order." Ranked by
+# duration from the guide's own Times in Force: IOC cancels what does not fill at once, OPG
+# lives to the open, DAY to the session's end, GTC "until the order fills or is canceled". A
+# TIF outside these four (GTD, FOK, …) is not ranked and not compared — both legs' TIF rows are
+# on the dialog regardless.
+TIF_DURATION_RANK: dict[str, int] = {"IOC": 0, "OPG": 1, "DAY": 2, "GTC": 3}
+
+
+def child_tif_defect(parent: Mapping[str, Any], child: Mapping[str, Any]) -> str | None:
+    """Why a child's TIF is refused against its parent's, or None. Pure, no network.
+
+    Only a STATED pair is compared: a child carrying no TIF takes the parent's downstream
+    (`client._complete_child` on an attach, the caller's own builder on a bracket), and an
+    unranked TIF on either leg cannot be ordered. A longer child is refused before any gate
+    rather than rewritten by IBKR after the human approved what the screen said (claudia_ui
+    gap #36, operator rule 2026-10-18). `_bracket_tickets` raises `ValueError` on it for the
+    place, attach and preview paths; `confirm_bracket_dialog` repeats it as `HumanAuthError`.
+    """
+    child_tif = str(child.get("tif") or "").strip().upper()
+    parent_tif = str(parent.get("tif") or "").strip().upper()
+    # An absent TIF ranks as nothing, exactly like an unranked one: one lookup covers both.
+    child_rank, parent_rank = TIF_DURATION_RANK.get(child_tif), TIF_DURATION_RANK.get(parent_tif)
+    if child_rank is None or parent_rank is None or child_rank <= parent_rank:
+        return None
+    return (
+        f"a child's TIF ({child_tif}) must be equal to or shorter than the parent's ({parent_tif}): "
+        "IBKR overrides a longer one with the parent's"
+    )
+
 
 def _multi_child_disclosure(parent: dict[str, Any], children: list[dict[str, Any]]) -> str | None:
     """What a human seeing several full-size children against one parent is not being told.
@@ -847,6 +880,12 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
                 ) from None
             if oversized:
                 raise HumanAuthError("Bracket confirmation refused: a child is larger than the parent")
+        # The child's TIF is equal to or shorter than the parent's — IBKR's rule, quoted on
+        # `child_tif_defect`. Repeated here as well as in `client._bracket_tickets` for the reason
+        # the rules above are: this dialog is public API, and the last screen before the send.
+        tif_defect = child_tif_defect(parent, child)
+        if tif_defect:
+            raise HumanAuthError(f"Bracket confirmation refused: {tif_defect}")
         # LMT reads as the profit taker; anything else is the protective leg. The label is
         # cosmetic — the link and the side are what were just checked.
         kind = "Profit taker" if str(child.get("orderType") or "").strip().upper() in ("LMT", "LIMIT") else "Stop loss"
@@ -967,8 +1006,10 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
                 "CANCEL THE OTHER ORDERS IN THAT GROUP — for a bracket, the other exit leg. "
                 "Measured 2026-09-22 on a held bracket: cancelling ONE child removed the "
                 "SIBLING as well, while the parent stayed working — so the position would "
-                "later open with no protection at all. IBKR documents none of this, so treat "
-                "it as a warning rather than a promise."
+                "later open with no protection at all. IBKR's TWS guide documents the group "
+                "rule (Order Types, One-Cancels-All, read 2026-10-18): a member the client "
+                "cancels takes the rest of the group; one the system rejects or cancels does "
+                "not. The field names themselves are on no page."
             )
         # The other end of the same relationship, and deliberately a DIFFERENT field: a
         # bracket parent carries no `oca_group_id`, so nothing is inferred for it from an

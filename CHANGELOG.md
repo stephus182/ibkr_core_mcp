@@ -10,6 +10,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **A bracket child's TIF longer than the parent's is refused before any gate (claudia_ui
+  gap #36, operator rule 2026-10-18).** IBKR's rule, TWS guide › Using the Orders Panel: "You
+  must set the TIF for a child order equal to or shorter than that of the parent. Otherwise, the
+  TIF of the parent order will override that of the child order" — so a GTC exit on a DAY parent
+  would reach IBKR as DAY after the human approved GTC. `order_confirm.child_tif_defect` ranks
+  IOC < OPG < DAY < GTC from the guide's own Times in Force; `_bracket_tickets` raises
+  `ValueError` on it for the place, attach and preview paths alike, and `confirm_bracket_dialog`
+  repeats it as `HumanAuthError`, the pattern of the link, side, contract and H1 rules. Only a
+  stated pair is compared: a child with no TIF takes the parent's, and an unranked TIF (GTD,
+  FOK) is shown on both legs' rows, not compared. The cancel dialog's `⚠ Linked orders` row
+  now cites the same guide (Order Types › One-Cancels-All) for the OCA cancel rule it carried
+  as measured only: a member the client cancels takes the rest of the group, one the system
+  rejects or cancels does not; the field names stay undocumented
+  (`docs/ibkr-api-behaviors-reference.md`).
 - **`attach_order_and_confirm` — one child attached to an order already working at IBKR
   (claudia_ui gap #36, design 2026-10-17 § 1).** IBKR's sequential bracket form, built as
   exactly that: the parent is read from IBKR (`get_order_status`) **before Gate 1** and refused

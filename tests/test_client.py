@@ -4286,9 +4286,10 @@ def test_cancelling_a_bracket_child_warns_that_the_linked_legs_go_too(client):
     # the parent stayed working, leaving a position that would open with no protection.
     assert "SIBLING" in warning
     assert "parent stayed working" in warning
-    # Dated and hedged: IBKR documents none of these fields, so it is an observation.
+    # Dated, and sourced since 2026-10-18: the TWS guide documents the group rule (a member the
+    # client cancels takes the group; one the system cancels does not); the fields stay unnamed.
     assert "2026-09-22" in warning
-    assert "documents none of this" in warning
+    assert "TWS guide documents the group rule" in warning and "on no page" in warning
 
 
 def test_cancelling_a_bracket_PARENT_warns_from_its_own_field_not_from_an_absent_one(client):
@@ -4423,6 +4424,49 @@ def test_bracket_tickets_ACCEPTS_the_normal_opposite_side_pair_in_IBKRS_OWN_CASI
         [dict(children[0], side="Sell")],
     )
     assert [t["side"] for t in tickets] == ["Buy", "Sell"], "the casing the caller sent must reach IBKR unchanged"
+
+
+# --- the child's TIF: equal to or shorter than the parent's (IBKR's rule, 2026-10-18) ------
+# TWS guide, Using the Orders Panel: "You must set the TIF for a child order equal to or shorter
+# than that of the parent. Otherwise, the TIF of the parent order will override that of the
+# child order." Refused before any gate rather than rewritten by IBKR after Gate 2.
+
+
+def test_bracket_tickets_refuses_a_child_tif_longer_than_the_parents(client):
+    """A GTC child on a DAY parent: IBKR would send it as DAY after the human approved GTC."""
+    parent, children = _bracket_pair()
+    with pytest.raises(ValueError, match="TIF"):
+        client._bracket_tickets(dict(parent, tif="DAY"), [dict(children[0], tif="GTC")])
+
+
+@pytest.mark.parametrize(
+    "parent_tif, child_tif",
+    [("GTC", "GTC"), ("GTC", "DAY"), ("DAY", "IOC"), ("DAY", "opg"), ("GTC", None)],
+)
+def test_bracket_tickets_accepts_a_child_tif_equal_shorter_or_absent(client, parent_tif, child_tif):
+    """The discriminating half: a ceiling, not an equality — equal and shorter pass, the caller's
+    casing is kept, and an absent child TIF (derived from the parent downstream) is no violation."""
+    parent, children = _bracket_pair()
+    child = (
+        dict(children[0], tif=child_tif)
+        if child_tif is not None
+        else {k: v for k, v in children[0].items() if k != "tif"}
+    )
+    tickets = client._bracket_tickets(dict(parent, tif=parent_tif), [child])
+    assert tickets[1].get("tif") == child_tif
+
+
+def test_place_bracket_refuses_a_longer_child_tif_before_touch_id(client):
+    """The refusal costs no fingerprint and no POST, like the side and contract rules."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="TIF"),
+    ):
+        client.place_bracket_and_confirm("U1234567", dict(parent, tif="DAY"), [dict(children[0], tif="GTC")])
+    mock_tid.assert_not_called()
+    mock_post.assert_not_called()
 
 
 # --- pair_bracket_response: which entry belongs to which ticket ---------------------------

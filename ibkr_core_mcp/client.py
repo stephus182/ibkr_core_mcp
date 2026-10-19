@@ -118,6 +118,7 @@ from ibkr_core_mcp.models import (
     parse_one,
 )
 from ibkr_core_mcp.order_confirm import (
+    child_tif_defect,
     confirm_bracket_dialog,
     confirm_cancel_dialog,
     confirm_modify_dialog,
@@ -3342,7 +3343,7 @@ class IBKRClient:
         unless working; the child is completed from that record (`_complete_child`: the
         parent's contract and size, the opposite side, the parent's TIF unless the child
         states one); the bracket rules run unchanged (`_bracket_tickets`: link, opposite side,
-        same contract, child ≤ parent); one Touch ID with scope kind `attach`, bound to the
+        same contract, child ≤ parent, child TIF ≤ the parent's); one Touch ID with scope kind `attach`, bound to the
         ticket AND the parent's id; the bracket dialog with the parent's "At IBKR" row; one
         ticket posted, carrying `parentId` = IBKR's own order id.
 
@@ -3573,8 +3574,16 @@ class IBKRClient:
         two pages disagree: the field table says `BUY`/`SELL`, the bracket example writes
         `"Buy"`/`"Sell"`. The caller's own casing is passed through untouched.
 
+        **A child's TIF is equal to or shorter than the parent's** (claudia_ui gap #36, operator
+        rule 2026-10-18). IBKR's TWS guide: "You must set the TIF for a child order equal to or
+        shorter than that of the parent. Otherwise, the TIF of the parent order will override
+        that of the child order" — so a GTC exit on a DAY parent would reach IBKR as DAY after
+        the human approved GTC. `order_confirm.child_tif_defect` holds the ranking and the
+        quote; only a stated pair is compared.
+
         Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
                 https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+                https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm
         """
         ref = parent.get("cOID")
         # Blank-after-strip, not merely falsy: `cOID="   "` passed a bare truthiness test,
@@ -3632,6 +3641,13 @@ class IBKRClient:
                         f"A bracket child may never be larger than the parent: "
                         f"child {kid_qty:g} > parent {parent_qty:g}"
                     )
+            # The child's TIF is equal to or shorter than the parent's — IBKR's rule, quoted on
+            # `order_confirm.child_tif_defect` with its ranking. Checked here so a place is
+            # refused BEFORE Touch ID and the preview inherits it; the dialog repeats it, as it
+            # does the rules above. Only a stated pair is compared: a child with no TIF takes
+            # the parent's downstream.
+            if (tif_defect := child_tif_defect(parent, kid)) is not None:
+                raise ValueError(f"A bracket child's TIF is refused: {tif_defect}")
         return [{k: v for k, v in t.items() if not k.startswith("_")} for t in (parent, *children)]
 
     def get_bracket_preview(
@@ -3641,7 +3657,8 @@ class IBKRClient:
 
         Read-only, no gates, like `get_order_preview`. Both legs are sent so the ticket ARRAY
         is validated as one unit: `_bracket_tickets` runs the same structural rules here as on
-        the write path — the parent→child link, one contract, opposite sides, H1 — so a pair
+        the write path — the parent→child link, one contract, opposite sides, H1, the child's TIF
+        no longer than the parent's — so a pair
         that could not be placed is not priced either.
 
         **They are not sent for the price.** This said "because a preview of the parent alone
