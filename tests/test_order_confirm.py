@@ -1093,7 +1093,7 @@ def test_the_bracket_dialog_does_not_mutate_the_tickets_it_is_given():
         confirm_bracket_dialog(parent, children, "U1")
 
     # The screen DID inherit, or this test would pass by the mechanism never running.
-    assert mock_show.call_args.kwargs["details"]["Profit taker — Symbol"] == "ES — ESU6 · SEP26"
+    assert mock_show.call_args.kwargs["details"]["Profit taker"]["Symbol"] == "ES — ESU6 · SEP26"
     # ...and not one key of the caller's own dicts moved.
     assert parent == parent_before
     assert children == children_before
@@ -1611,6 +1611,46 @@ def _bracket_details(parent: dict[str, Any], children: list[dict[str, Any]]) -> 
     return dict(_bracket_call(parent, children)["details"])
 
 
+def _flat_rows(details: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Every row of a sectioned dialog in reading order: a section's rows under its title."""
+    rows: list[tuple[str, Any]] = []
+    for key, value in details.items():
+        if isinstance(value, dict):
+            rows.extend(value.items())
+        else:
+            rows.append((key, value))
+    return rows
+
+
+def test_detail_lines_render_a_section_as_a_title_and_indented_rows():
+    """The plain renderers (osascript, tkinter) and the AppKit one agree on the shape: a flat
+    row is `key: value`; a section is a blank line, its title once, then its rows indented."""
+    from ibkr_core_mcp.order_confirm import _detail_lines
+
+    lines = _detail_lines({"Account": "U1", "Parent": {"Symbol": "F", "Price": "7.46"}, "Order ID": "7"})
+    assert lines == ["Account: U1", "", "Parent", "    Symbol: F", "    Price: 7.46", "", "Order ID: 7"]
+
+
+def test_bracket_dialog_is_three_sections_each_titled_once():
+    """Operator design 2026-10-19 (after the first live bracket): three distinct sections —
+    Parent, Profit taker, Stop loss — the title once as a header, never repeated on every
+    row (`Parent — Symbol`, `Stop loss — TIF` …), separated for readability. Account and
+    Action stay above the sections: the banner and the side are the dialog's, not a leg's."""
+    d = _bracket_details(
+        _bracket_parent(),
+        [_bracket_child(), _bracket_child(orderType="STP", price=None, auxPrice=7600.0)],
+    )
+    assert list(d)[:2] == ["Account", "Action"]
+    assert [k for k, v in d.items() if isinstance(v, dict)] == ["Parent", "Profit taker", "Stop loss"]
+    for key, _value in _flat_rows(d):
+        assert " — " not in key, key
+    assert "Account" not in d["Parent"] and "Action" in d["Parent"]
+    assert d["Parent"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert next(iter(d["Profit taker"])) == "Held by IBKR"
+    assert d["Stop loss"]["Held by IBKR"] == "until the parent fills"
+    assert d["Stop loss"]["Order Type"] == "STP"
+
+
 def test_bracket_dialog_shows_both_legs_in_one_call():
     """One Gate 2 for the pair: the human sees the parent AND the child before SEND.
 
@@ -1623,24 +1663,24 @@ def test_bracket_dialog_shows_both_legs_in_one_call():
     assert kwargs["abandon_label"] == "DO NOT SEND"
     d = kwargs["details"]
     assert d["Account"] == "U1234567"
-    assert d["Parent — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
-    assert d["Parent — Quantity"] == "1 (×50 per contract)"
-    assert d["Parent — Order Type"] == "LMT"
-    assert d["Parent — Price"] == "7,725.00"
-    assert d["Parent — TIF"] == "GTC"
-    assert d["Profit taker — Action"] == "BUY"
-    assert d["Profit taker — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
-    assert d["Profit taker — Order Type"] == "LMT"
-    assert d["Profit taker — Price"] == "7,700.00"
-    assert d["Profit taker — TIF"] == "GTC"
+    assert d["Parent"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Parent"]["Quantity"] == "1 (×50 per contract)"
+    assert d["Parent"]["Order Type"] == "LMT"
+    assert d["Parent"]["Price"] == "7,725.00"
+    assert d["Parent"]["TIF"] == "GTC"
+    assert d["Profit taker"]["Action"] == "BUY"
+    assert d["Profit taker"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Profit taker"]["Order Type"] == "LMT"
+    assert d["Profit taker"]["Price"] == "7,700.00"
+    assert d["Profit taker"]["TIF"] == "GTC"
 
 
 def test_bracket_dialog_says_the_child_is_held_never_working():
     """`PreSubmitted` is a working state for a single order and a HELD one for a bracket
     child (review 2026-09-08 item 2). The dialog must never call the child working."""
     d = _bracket_details(_bracket_parent(), [_bracket_child()])
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
-    rendered = " ".join(f"{k}: {v}" for k, v in d.items()).lower()
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
+    rendered = " ".join(f"{k}: {v}" for k, v in _flat_rows(d)).lower()
     assert "working" not in rendered
 
 
@@ -1648,10 +1688,10 @@ def test_bracket_dialog_labels_the_notional_as_the_parents_only():
     """Review item 8: a bracket's two legs are OPPOSITE, so a row called `Total` would be
     read as their sum. Exactly one notional row, and it names whose it is."""
     d = _bracket_details(_bracket_parent(), [_bracket_child()])
-    assert d["Parent notional (est.)"] == "386,250.00 USD (×50 multiplier)"
+    assert d["Parent"]["Notional (est.)"] == "386,250.00 USD (×50 multiplier)"
     assert "Total (est.)" not in d
-    notionals = [k for k in d if "notional" in k.lower() or "total" in k.lower()]
-    assert notionals == ["Parent notional (est.)"], notionals
+    notionals = [k for k, _v in _flat_rows(d) if "notional" in k.lower() or "total" in k.lower()]
+    assert notionals == ["Notional (est.)"], notionals
 
 
 def test_bracket_dialog_side_colour_is_the_parents():
@@ -1719,60 +1759,22 @@ def _bracket(parent_qty=1, child_qtys=(1, 1)):
     return parent, children
 
 
-def test_a_multi_child_bracket_discloses_that_the_children_outsize_the_parent():
-    """A two-child bracket renders two full-size SELLs under a one-lot BUY, and nothing said
-    only one of them can fill — so the arithmetic read as an instruction to sell twice what
-    was being bought. That is the alarming reading and the wrong one.
-
-    The disclosure is NOT a guardrail: IBKR's own published bracket is a full-size profit
-    taker AND a full-size stop on one position (50/50/50), so refusing the aggregate would
-    refuse the standard shape. See `_bracket_tickets` for why H1 stays per-child.
-    """
-    details = _bracket_details(*_bracket(parent_qty=1, child_qtys=(1, 1)))
-    disclosure = details["Children together"]
-    assert "total 2 against a parent of 1" in disclosure
-    assert "one filling cancels the others" in disclosure
-    # Dated and hedged, never stated as a permanent guarantee about THIS order.
-    assert "2026-09-22" in disclosure
-    assert "cannot verify the link for the order about to be submitted" in disclosure
-    # The partial-fill unknown is disclosed, not policed.
-    assert "PARTIALLY" in disclosure
-
-
 @pytest.mark.parametrize(
-    ("why", "parent_qty", "child_qtys"),
-    [
-        ("a single child cannot outsize anything by aggregation", 1, (1,)),
-        ("a genuine scale-out does not oversubscribe the parent", 3, (1, 1)),
-        ("equal aggregate is not an excess", 2, (1, 1)),
-    ],
+    ("parent_qty", "child_qtys"),
+    [(1, (1, 1)), (1, (None, None)), (3, (1, 1)), (2, (1,))],
 )
-def test_the_aggregate_disclosure_stays_quiet_when_there_is_nothing_to_disclose(why, parent_qty, child_qtys):
-    """The counter-cases, and what makes the test above discriminating rather than a banner
-    printed on every bracket. A warning shown always is a warning read never."""
-    details = _bracket_details(*_bracket(parent_qty=parent_qty, child_qtys=child_qtys))
-    assert "Children together" not in details, why
-
-
-def test_a_child_with_no_stated_quantity_counts_as_full_size_in_the_disclosure():
-    """`_bracket_tickets` documents an absent child quantity as DERIVED from the parent, so
-    an all-derived two-child bracket is two full-size legs and the arithmetic is still
-    exact. Counting an absent quantity as ZERO would suppress the disclosure on exactly the
-    bracket that most needs it — the one whose legs the caller never sized by hand."""
-    details = _bracket_details(*_bracket(parent_qty=1, child_qtys=(None, None)))
-    assert "total 2 against a parent of 1" in details["Children together"]
-
-
-def test_the_disclosure_drops_the_arithmetic_when_the_parent_states_no_quantity():
-    """The only case where the numbers cannot be stated. The disclosure must still appear —
-    the mutual-exclusivity point does not depend on arithmetic — but it must not invent a
-    total it cannot compute, which is this package's rule everywhere else on this dialog
-    (an unknown is named, never guessed)."""
-    parent, children = _bracket(parent_qty=1, child_qtys=(None, None))
-    del parent["quantity"]
-    disclosure = _bracket_details(parent, children)["Children together"]
-    assert "each sized to the full parent quantity" in disclosure
-    assert "total" not in disclosure.split("They are exits")[0]
+def test_the_bracket_dialog_carries_no_children_together_paragraph(parent_qty, child_qtys):
+    """Operator 2026-10-19, after the first live bracket: the `Children together` paragraph
+    ("These 2 children total 2 against a parent of 1 … observed 2026-09-22 … ReduceOnFillNonBlock
+    … IBKR does not document …") was too long to be read — "too long text is NOT explicit and
+    loses impact". The partial-fill risk is the one thing it had to say, and the red
+    `⚠ Partial fill` row says it, exactly when it exists. Nothing else is printed for two
+    children, whatever their sizes; review item 2026-09-08 (the aggregate reading) is withdrawn."""
+    parent, children = _bracket(parent_qty=parent_qty, child_qtys=child_qtys)
+    details = _bracket_details(parent, children)
+    assert "Children together" not in details
+    for key, _value in _flat_rows(details):
+        assert "together" not in key.lower() and "observed" not in str(_value)
 
 
 def test_bracket_dialog_child_inherits_the_parents_contract_display_keys():
@@ -1789,14 +1791,14 @@ def test_bracket_dialog_child_inherits_the_parents_contract_display_keys():
     price, which passes with or without the fix — a test that cannot fail is not a control.
     """
     d = _bracket_details(_bracket_parent(), [_bracket_child()])
-    assert d["Profit taker — Symbol"] == d["Parent — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
-    assert d["Profit taker — Quantity"] == d["Parent — Quantity"] == "1 (×50 per contract)"
+    assert d["Profit taker"]["Symbol"] == d["Parent"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Profit taker"]["Quantity"] == d["Parent"]["Quantity"] == "1 (×50 per contract)"
 
 
 def test_bracket_dialog_never_overrides_a_display_key_the_child_carries():
     """Inheritance fills gaps; it never overwrites what the caller established."""
     d = _bracket_details(_bracket_parent(), [_bracket_child(_companyName="ITS OWN LABEL", _multiplier=50)])
-    assert d["Profit taker — Symbol"] == "ES — ITS OWN LABEL"
+    assert d["Profit taker"]["Symbol"] == "ES — ITS OWN LABEL"
 
 
 # The two futures signals added on 2026-09-21 — `secType` and `manualIndicator` — are read
@@ -1835,9 +1837,9 @@ def test_bracket_dialog_legs_agree_on_the_instrument_class_however_it_was_declar
         "price": 7400.0,
     }
     d = _bracket_details(parent, [child])
-    assert "USD" not in d["Parent — Price"], d["Parent — Price"]
-    assert "USD" not in d["Profit taker — Price"], (
-        f"index points labelled as currency on the leg the human has never seen: {d['Profit taker — Price']!r}"
+    assert "USD" not in d["Parent"]["Price"], d["Parent"]["Price"]
+    assert "USD" not in d["Profit taker"]["Price"], (
+        f"index points labelled as currency on the leg the human has never seen: {d['Profit taker']['Price']!r}"
     )
 
 
@@ -1866,8 +1868,8 @@ def test_bracket_dialog_still_shows_the_currency_on_BOTH_legs_of_an_equity_brack
         "price": 160.0,
     }
     d = _bracket_details(parent, [child])
-    assert "USD" in d["Parent — Price"], d["Parent — Price"]
-    assert "USD" in d["Profit taker — Price"], d["Profit taker — Price"]
+    assert "USD" in d["Parent"]["Price"], d["Parent"]["Price"]
+    assert "USD" in d["Profit taker"]["Price"], d["Profit taker"]["Price"]
 
 
 def test_bracket_dialog_does_not_MUTATE_the_tickets_it_is_shown():
@@ -1937,7 +1939,7 @@ def test_bracket_dialog_shows_a_stop_loss_child_under_its_own_name():
     """D1 makes the profit taker v1, but the signature takes a list and a `stop_loss`
     sibling is designed to be additive — a STP child must not be labelled a profit taker."""
     d = _bracket_details(_bracket_parent(), [_bracket_child(orderType="STP", price=None, auxPrice=7800.0)])
-    assert d["Stop loss"] == "held by IBKR until the parent fills"
+    assert d["Stop loss"]["Held by IBKR"] == "until the parent fills"
     assert "Profit taker" not in d
 
 
@@ -1945,8 +1947,8 @@ def test_bracket_dialog_shows_the_outside_rth_attribute_of_each_leg():
     """R4 (user, 2026-09-21): the child inherits the parent's `outsideRTH`. The dialog
     shows what each ticket actually carries — it derives nothing here."""
     d = _bracket_details(_bracket_parent() | {"outsideRTH": True}, [_bracket_child(outsideRTH=True)])
-    assert d["Parent — Outside RTH"] == "Yes"
-    assert d["Profit taker — Outside RTH"] == "Yes"
+    assert d["Parent"]["Outside RTH"] == "Yes"
+    assert d["Profit taker"]["Outside RTH"] == "Yes"
 
 
 def test_bracket_dialog_refuses_a_parent_with_no_side():
@@ -1970,10 +1972,10 @@ def test_bracket_dialog_shows_every_child_when_two_are_the_same_kind():
         _bracket_parent(),
         [_bracket_child(price=7700.0), _bracket_child(price=7650.0)],
     )
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
-    assert d["Profit taker 2"] == "held by IBKR until the parent fills"
-    assert d["Profit taker — Price"] == "7,700.00"
-    assert d["Profit taker 2 — Price"] == "7,650.00"
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
+    assert d["Profit taker 2"]["Held by IBKR"] == "until the parent fills"
+    assert d["Profit taker"]["Price"] == "7,700.00"
+    assert d["Profit taker 2"]["Price"] == "7,650.00"
 
 
 def test_bracket_dialog_refuses_a_child_on_a_different_contract():
@@ -2004,14 +2006,14 @@ def test_bracket_dialog_refuses_a_child_on_a_different_contract():
 def test_bracket_dialog_accepts_a_child_that_names_the_same_contract():
     """The check is a mismatch refusal, not a requirement that the child carry a conid."""
     d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child(conid=649180671)])
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
 
 
 def test_bracket_dialog_accepts_a_child_that_carries_no_conid_of_its_own():
     """The child's conid is derived from the parent (D2), so a ticket without one is normal
     and must not be refused — only a stated mismatch is."""
     d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child()])
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
 
 
 # ---------------------------------------------------------------------------
@@ -2469,8 +2471,8 @@ def test_bracket_dialog_shows_the_parent_as_working_at_ibkr_when_it_already_is()
     row, from the display key `client._parent_from_status` sets — and only then."""
     parent = {**_bracket_parent(), "_working_at_ibkr": "order 123 · Submitted · 0 attached"}
     details = _bracket_details(parent, [_bracket_child()])
-    assert details["Parent — At IBKR"] == "order 123 · Submitted · 0 attached"
-    assert "Parent — At IBKR" not in _bracket_details(_bracket_parent(), [_bracket_child()])
+    assert details["Parent"]["At IBKR"] == "order 123 · Submitted · 0 attached"
+    assert "At IBKR" not in _bracket_details(_bracket_parent(), [_bracket_child()])["Parent"]
 
 
 @pytest.mark.parametrize(
@@ -2487,11 +2489,11 @@ def test_bracket_dialog_warns_in_red_only_on_a_multi_lot_parent_without_all_or_n
     if all_or_none is not None:
         parent["allOrNone"] = all_or_none
     details = _bracket_details(parent, [_bracket_child(quantity=quantity)])
-    assert ("⚠ Partial fill" in details) is warned
+    assert ("⚠ Partial fill" in details["Parent"]) is warned
     if warned:
-        assert details["⚠ Partial fill"] == (
-            f"Quantity {quantity:g}: a partial fill of the parent leaves each held child at {quantity:g}. "
-            "Nothing here corrects that."
+        assert details["Parent"]["⚠ Partial fill"] == (
+            f"Parent {quantity:g} lots without All-or-None: it can fill in part, and IBKR does not "
+            f"document what becomes of the {quantity:g}-lot children."
         )
 
 

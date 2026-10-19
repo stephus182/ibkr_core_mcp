@@ -217,7 +217,10 @@ same value; the parent's row carries neither, and `order_ref` (the `cOID` echo) 
 parent's row only. After the parent is cancelled its row leaves the feed; its held children were
 seen both lingering as `Inactive` rows that still carry `parentId` (the first parent of the
 session, ten minutes later) and gone within three seconds (the second parent) — so a reader must
-accept a child whose parent is absent from the feed. Neither key is on any IBKR page.
+accept a child whose parent is absent from the feed. Neither key is on any IBKR page. **Since
+2026-10-19 the two order tools read a child's origin through `parentId`** (`claude_tools._order_origin`):
+until then a ClaudIA-staged child, having no `order_ref` of its own, was labelled EXTERNAL and the model
+refused to propose its cancel (claudia_ui #36 live acceptance, step 2).
 
 **Measured live 2026-09-22** against the account holder's gateway: a read-only probe of
 resting orders, no write of any kind, on **two independent brackets**, both CL futures.

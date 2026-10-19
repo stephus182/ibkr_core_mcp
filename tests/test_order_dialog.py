@@ -325,3 +325,43 @@ def test_a_row_whose_key_starts_with_the_warning_sign_is_drawn_red_and_bold(monk
     assert runs["Symbol: "][fake.NSFontAttributeName] is regular
     assert runs["Symbol: "][fake.NSForegroundColorAttributeName] is fake.NSColor.labelColor.return_value
     assert runs["AAPL"][fake.NSForegroundColorAttributeName] is fake.NSColor.labelColor.return_value
+
+
+def test_a_section_is_drawn_as_a_title_once_above_its_indented_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operator design 2026-10-19: the bracket dialog is three sections — the title once, in
+    bold, a blank line before it, its rows beneath it indented — never `Parent — Symbol` on
+    every row. A warning row inside a section is red and bold like a top-level one."""
+    fake = _install_fake_appkit(monkeypatch)
+    fake.NSAlert.alloc.return_value.init.return_value.runModal.return_value = 1000
+    colours: dict[tuple[float, ...], MagicMock] = {}
+    fake.NSColor.colorWithRed_green_blue_alpha_.side_effect = lambda *rgba: colours.setdefault(
+        rgba, MagicMock(name=f"colour{rgba}")
+    )
+
+    from ibkr_core_mcp import _order_dialog
+
+    _order_dialog._run_alert(
+        _base_payload(
+            details={
+                "Account": "U1",
+                "Action": "BUY",
+                "Parent": {"Symbol": "F", "⚠ Partial fill": "Quantity 2 …"},
+                "Stop loss": {"Held by IBKR": "until the parent fills"},
+            }
+        )
+    )
+
+    calls = fake.NSAttributedString.alloc.return_value.initWithString_attributes_.call_args_list
+    texts = [c.args[0] for c in calls]
+    runs = {c.args[0]: c.args[1] for c in calls}
+    bold, regular = fake.NSFont.boldSystemFontOfSize_.return_value, fake.NSFont.systemFontOfSize_.return_value
+    red = colours[(0.72, 0.10, 0.10, 1.0)]
+    # the title once, bold, after a blank line; the rows indented beneath it
+    assert texts.index("\n\n") < texts.index("Parent") < texts.index("    Symbol: ") < texts.index("F")
+    assert runs["Parent"][fake.NSFontAttributeName] is bold
+    assert runs["    Symbol: "][fake.NSFontAttributeName] is regular and runs["F"][fake.NSFontAttributeName] is bold
+    assert "Parent — Symbol: " not in runs
+    assert texts.index("Stop loss") < texts.index("    Held by IBKR: ")
+    assert runs["    ⚠ Partial fill: "][fake.NSForegroundColorAttributeName] is red
+    assert runs["Quantity 2 …"][fake.NSFontAttributeName] is bold
+    assert runs["Account: "][fake.NSFontAttributeName] is regular

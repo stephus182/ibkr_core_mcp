@@ -501,6 +501,73 @@ def test_execute_get_live_orders_still_falls_back_to_external_without_order_ref(
     assert "EXTERNAL" in text
 
 
+# A bracket child carries no reference of its own: IBKR puts `order_ref` on the parent only
+# and `parentId` on the child (measured 2026-10-18 on Ford, three children). Until 2026-10-19
+# both tools labelled such a child EXTERNAL "read-only via API", and a model told the user a
+# ClaudIA-staged stop loss could not be cancelled (claudia_ui #36 live acceptance, step 2).
+
+_BRACKET_PARENT = {
+    "orderId": 11,
+    "ticker": "F",
+    "side": "BUY",
+    "totalSize": 1,
+    "price": "7.46",
+    "status": "PreSubmitted",
+    "clientId": 0,
+    "order_ref": "CLAUDIA-1792374874525",
+}
+_BRACKET_CHILD = {
+    "orderId": 12,
+    "ticker": "F",
+    "side": "SELL",
+    "totalSize": 1,
+    "price": "",
+    "status": "PreSubmitted",
+    "clientId": 0,
+    "parentId": 11,
+    "ocaGroupId": "11",
+}
+
+
+def test_get_live_orders_a_bracket_child_inherits_its_parents_origin(toolkit):
+    """The child's origin is its parent's, read through `parentId` from the same response;
+    the line says it is attached and to which order."""
+    toolkit._client.get_live_orders.return_value = [_BRACKET_CHILD, _BRACKET_PARENT]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    child_line = next(ln for ln in text.splitlines() if "orderId=12" in ln)
+    assert "origin=ClaudIA-staged" in child_line
+    assert "attached child of order 11" in child_line
+    assert "EXTERNAL" not in text
+
+
+def test_get_live_orders_a_child_whose_parent_is_absent_is_not_called_external(toolkit):
+    """A child whose parent has left the list (filled, cancelled) is not read-only by any rule
+    this row can see: say the origin is not determinable here and name the parent, never
+    EXTERNAL — that label tells the model to refuse a cancel."""
+    toolkit._client.get_live_orders.return_value = [_BRACKET_CHILD]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    assert "attached child of order 11" in text
+    assert "not in this list" in text and "not determinable" in text
+    assert "EXTERNAL" not in text
+
+
+def test_get_live_orders_a_child_of_an_external_parent_is_external_too(toolkit):
+    """The discriminating half: inheritance carries the parent's own origin, whichever it is."""
+    parent = {k: v for k, v in _BRACKET_PARENT.items() if k != "order_ref"}
+    toolkit._client.get_live_orders.return_value = [parent, _BRACKET_CHILD]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    child_line = next(ln for ln in text.splitlines() if "orderId=12" in ln)
+    assert "origin=EXTERNAL" in child_line and "attached child of order 11" in child_line
+
+
+def test_diagnose_orders_a_bracket_child_inherits_its_parents_origin(toolkit):
+    """The raw view applies the one origin rule the live view does."""
+    toolkit._client.get_orders_raw.return_value = {"orders": [_BRACKET_CHILD, _BRACKET_PARENT]}
+    text, _fig = toolkit.execute("diagnose_orders", {})
+    child_line = next(ln for ln in text.splitlines() if "orderId=12" in ln)
+    assert "origin=ClaudIA-staged" in child_line and "attached child of order 11" in child_line
+
+
 def test_diagnose_orders_labels_claudia_staged_via_order_ref(toolkit):
     """_diagnose_orders must use the same order_ref-first lookup as _get_live_orders —
     they were inconsistent before this fix (get_live_orders computed an origin label,

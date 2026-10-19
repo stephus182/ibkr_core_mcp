@@ -3441,7 +3441,7 @@ def test_the_dialogs_inherited_keys_never_reach_the_wire(client):
     # The screen DID inherit — otherwise this test would pass by the dialog doing nothing.
     # Before `ticker` joined the inherited set this row read `UNKNOWN (conid 649180671)`.
     details = mock_show.call_args.kwargs["details"]
-    assert details["Profit taker — Symbol"] == "ES — ESU6 · SEP26", details
+    assert details["Profit taker"]["Symbol"] == "ES — ESU6 · SEP26", details
 
     # The wire did NOT.
     posted = mock_post.call_args.kwargs["json"]["orders"]

@@ -786,6 +786,10 @@ TOOL_DEFINITIONS = [
             "When reporting such orders, explicitly state: 'I can see this order but cannot modify "
             "or cancel it — use IBKR mobile or TWS to manage it.' Never skip or silently omit "
             "externally-placed orders. Always flag their origin when it differs from ClaudIA staging. "
+            "A bracket child carries no reference of its own: its origin is its parent's, read "
+            "through parentId, and its line says 'attached child of order N'; a child whose parent "
+            "is not in the list reads 'origin not determinable' — then get_order_status's "
+            "cannot_cancel_order flag is the authority, not this label. "
             "Each line quotes IBKR's own description of the order, which states its time in force "
             "in words (', Day', ', GTC'); for the typed value use get_order_status."
         ),
@@ -1982,6 +1986,54 @@ def _iso_date(yyyymmdd: Any) -> str | None:
     if len(text) != 8 or not text.isdigit():
         return None
     return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+
+
+_EXTERNAL_LIVE = "EXTERNAL (mobile/TWS/web portal) — read-only via API"
+
+
+def _order_reference(o: Any) -> str:
+    """IBKR's `order_ref` — the real Live Orders field, snake_case (verified 2026-07-10 against
+    the CP API scrape) — with the spellings this package has seen as fallbacks only."""
+    return str(o.get("order_ref") or o.get("orderRef") or o.get("cOID") or o.get("clientOrderId") or "")
+
+
+def _own_origin(o: Any, external: str) -> str:
+    """An order's origin from its own row: a `CLAUDIA-` reference is definitive; a non-zero
+    clientId is another API client; anything else is external. clientId alone is unreliable —
+    both Client Portal API and mobile orders show clientId=0 (2026-07-10)."""
+    if _order_reference(o).startswith("CLAUDIA-"):
+        return "ClaudIA-staged"
+    client_id = o.get("clientId")
+    if client_id not in (None, "", 0, "0", "absent"):
+        return f"API (clientId={client_id})"
+    return external
+
+
+def _order_origin(o: Any, by_id: dict[str, Any], external: str) -> str:
+    """The one origin rule of both order views (`get_live_orders`, `diagnose_orders`).
+
+    A bracket child carries no reference of its own: IBKR puts `order_ref` on the PARENT only
+    and `parentId` on the child (measured 2026-10-18 on Ford, a parent with three attached
+    children; `docs/ibkr-api-behaviors-reference.md`). So a child's origin is its parent's,
+    read through `parentId` from the same response — never its own row's absence of a
+    reference. Until 2026-10-19 both views labelled such a child EXTERNAL "read-only via API",
+    and a model told its user a ClaudIA-staged stop loss could not be cancelled (claudia_ui
+    #36 live acceptance). A child whose parent is not in the list (filled, cancelled) is said
+    to be not determinable from this row, never EXTERNAL: `get_order_status`'s
+    `cannot_cancel_order` is the authority on whether it can be cancelled.
+    """
+    if _order_reference(o).startswith("CLAUDIA-") or o.get("clientId") not in (None, "", 0, "0", "absent"):
+        return _own_origin(o, external)
+    parent_id = o.get("parentId", o.get("parent_order_id"))
+    if parent_id in (None, ""):
+        return external
+    parent = by_id.get(str(parent_id))
+    if parent is None:
+        return (
+            f"attached child of order {parent_id}, which is not in this list — origin not "
+            f"determinable from this row; get_order_status says whether it can be cancelled"
+        )
+    return f"{_own_origin(parent, external)} (attached child of order {parent_id}; IBKR puts the reference on the parent only)"
 
 
 def _today_date() -> date:
@@ -3275,6 +3327,7 @@ class ClaudeToolkit:
         if not orders:
             return "No open orders.", None
         lines = []
+        by_id = {str(o.get("orderId")): o for o in orders}
         for o in orders:
             ticker = o.get("ticker") or o.get("symbol") or "?"
             side = o.get("side", "?")
@@ -3288,23 +3341,10 @@ class ClaudeToolkit:
             # in words; the raw field is printed under its own name only without one (F8).
             description = " ".join(str(o.get("orderDesc") or "").split())
             raw_tif = o.get("timeInForce") or o.get("tif") or ""
-            order_ref = (
-                o.get("order_ref")  # IBKR's real Live Orders field (snake_case) — verified
-                # against docs/audits/audit-evidence/scrapes/cpapi-v1.md
-                or o.get("orderRef")  # kept in case IBKR ever adds a camelCase alias
-                or o.get("cOID")
-                or o.get("clientOrderId")
-                or ""
-            )
-            client_id = o.get("clientId")
-            # Determine origin: CLAUDIA-prefixed cOID is definitive; clientId is unreliable
-            # because both ClaudIA (Client Portal API) and mobile orders may show clientId=0
-            if order_ref.startswith("CLAUDIA-"):
-                origin = "ClaudIA-staged"
-            elif client_id and client_id != 0:
-                origin = f"API (clientId={client_id})"
-            else:
-                origin = "EXTERNAL (mobile/TWS/web portal) — read-only via API"
+            order_ref = _order_reference(o)
+            # One rule for both views (`_order_origin`): the reference is definitive, clientId
+            # unreliable, and a bracket child reads its parent's origin through `parentId`.
+            origin = _order_origin(o, by_id, external=_EXTERNAL_LIVE)
             # outsideRTH decides when a stop on a US future can trigger. The row carries
             # it undocumented — measured 2026-09-04: False on a stock GTC limit, None on an
             # ES futures limit — so three states, and None must read as not reported.
@@ -3339,17 +3379,13 @@ class ClaudeToolkit:
         # Show every order with all fields + note which would be filtered
         terminal = {"Filled", "Cancelled", "ApiCancelled", "Expired"}
         lines = []
+        by_id = {str(o.get("orderId")): o for o in orders}
         for o in orders:
             status = o.get("status", "MISSING")
             filtered = " [FILTERED by get_live_orders]" if status in terminal or not status else ""
-            order_ref = o.get("order_ref") or o.get("orderRef") or o.get("cOID") or ""
+            order_ref = _order_reference(o)
             client_id = o.get("clientId", "absent")
-            if order_ref.startswith("CLAUDIA-"):
-                origin = "ClaudIA-staged"
-            elif client_id not in (0, "0", "absent", None):
-                origin = f"API (clientId={client_id})"
-            else:
-                origin = "EXTERNAL"
+            origin = _order_origin(o, by_id, external="EXTERNAL")
             lines.append(
                 f"orderId={o.get('orderId')} ticker={o.get('ticker', o.get('symbol'))} "
                 f"side={o.get('side')} qty={o.get('totalSize')} price={o.get('price')} "

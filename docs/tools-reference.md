@@ -197,7 +197,11 @@ Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify
 **Output:** Text list of working orders — one line per order with `orderId`, `ticker`, `side`,
 quantity, price, `status`, IBKR's own description of the order (`orderDesc`, which states the
 time in force in words — "…, Day"), `outsideRTH`, and origin (`ClaudIA-staged`,
-`API (clientId=...)`, or `EXTERNAL`). The row's `timeInForce` is not printed as the TIF: it
+`API (clientId=...)`, or `EXTERNAL`). A bracket child carries no reference of its own (IBKR puts
+`order_ref` on the parent only, `parentId` on the child — measured 2026-10-18), so its origin is its
+parent's, read through `parentId` from the same response, and the line reads `(attached child of
+order N; …)`; a child whose parent is not in the list reads "origin not determinable from this
+row" — `get_order_status`'s `cannot_cancel_order` is then the authority (2026-10-19). The row's `timeInForce` is not printed as the TIF: it
 reads `CLOSE` for a DAY order, stock or future (measured 2026-09-24 and 2026-10-02), a value in
 no IBKR enum; without a description it is printed under its own name. `get_order_status`
 returns the typed `tif`.
@@ -216,7 +220,8 @@ shape, so you can see whether orders are present but filtered, or genuinely abse
 **Inputs:** none
 
 **Output:** Text list of every order with all fields plus a `[FILTERED by get_live_orders]`
-marker on terminal-status orders — or the raw JSON response verbatim for the edge cases where
+marker on terminal-status orders, the origin by the same rule as `get_live_orders` (a bracket child
+inherits its parent's) — or the raw JSON response verbatim for the edge cases where
 the response isn't a populated list (empty list, or an unexpected non-list shape).
 
 **IBKR endpoint:** `GET /iserver/account/orders`

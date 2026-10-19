@@ -1136,7 +1136,7 @@ parent already exists, and the method is exactly that:
   child being sent (`SELL 1 F (attached to order …)`), so every reply dialog of the write is
   titled for that order. **Gate 2 is `confirm_bracket_dialog`**, titled `LIVE ATTACHED ORDER
   CONFIRMATION`, its banner and Action row the child's side, its disclaimer saying the parent
-  is already working and not sent again, with one added row, `Parent — At IBKR` (`order <id> ·
+  is already working and not sent again, with one added row in the Parent section, `At IBKR` (`order <id> ·
   <state> · <n> attached`), and the red `⚠ Partial fill` line when the parent is above one lot
   without `allOrNone: true`. Measured live 2026-10-18 on Ford.
 - One ticket is posted, as a one-element array, to the endpoint the bracket uses; its reply

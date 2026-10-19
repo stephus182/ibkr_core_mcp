@@ -248,6 +248,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **The bracket dialog is three sections, each titled once (operator design 2026-10-19, after
+  the first live bracket).** `Parent`, `Profit taker`, `Stop loss` — a blank line, the title once in
+  bold, the leg's rows indented beneath it — instead of `Parent — Symbol`, `Stop loss — TIF` on every
+  row; `Account` and the banner's `Action` stay above the sections, and the Parent section keeps the
+  parent's own Action, which an attach dialog had shown nowhere (its top-level Action is the child's).
+  A section is a dict value in `details`, drawn the same way by all three renderers
+  (`_detail_lines` for osascript and tkinter, `_order_dialog._run_alert` in AppKit); a `⚠` row inside
+  a section is red and bold like a top-level one. `At IBKR` and `Notional (est.)` are Parent rows;
+  each child section opens with `Held by IBKR: until the parent fills`. **The `Children together`
+  paragraph is withdrawn** ("too long text is NOT explicit and loses impact"): the one thing it had
+  to say, the partial-fill risk, is the red `⚠ Partial fill` row, now one sentence — `Parent N lots
+  without All-or-None: it can fill in part, and IBKR does not document what becomes of the N-lot
+  children.` — shown exactly when the risk exists. Review item 2026-09-08 (the aggregate reading)
+  is superseded by this.
 - **`_resolve_reply_chain` extracted from `place_bracket_and_confirm` (2026-10-17).** The walk
   over every index of a multi-ticket reply chain is one private method, shared by the bracket
   and the attach writes. No behaviour change: the existing `test_place_bracket_*` tests pin it —
@@ -422,6 +436,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **`get_live_orders` and `diagnose_orders` called a bracket child EXTERNAL, "read-only via
+  API" (claudia_ui #36 live acceptance, 2026-10-19).** IBKR puts `order_ref` on the parent only
+  and `parentId` on the child (measured 2026-10-18), so a ClaudIA-staged child had no reference of
+  its own and fell through to the external label — and the model, following its instructions,
+  told the user a ClaudIA-staged stop loss could not be cancelled. One rule now, `_order_origin`,
+  for both views: a child's origin is its parent's, read through `parentId` from the same
+  response, its line saying `(attached child of order N; IBKR puts the reference on the parent
+  only)`; a child whose parent is not in the list reads "origin not determinable from this row"
+  and points at `get_order_status`'s `cannot_cancel_order`, never EXTERNAL. The two views had
+  also tested `clientId` differently (`"0"` was another API client in one, external in the
+  other); the stricter test is the one kept. The tool description says so.
 - **`get_market_history_paginated` lost one bar at every page seam cut inside a session
   (register F23).** IBKR ends an anchored history window *before* the anchor — two bars
   before it on intraday bars, one on daily and weekly bars (measured 2026-10-05 against the

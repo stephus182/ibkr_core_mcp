@@ -538,7 +538,7 @@ _CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", 
 # does not inherit the class is described differently from its own parent.
 #
 # Added 2026-09-21 with the signals themselves. Without them one ES bracket rendered
-# `Parent — Price 7,300.00` beside `Profit taker — Price 7,400.00 USD` — index points
+# the Parent section's Price `7,300.00` beside the Profit taker's `7,400.00 USD` — index points
 # labelled as dollars on the leg the human has never seen before, which is the divergence
 # the list above exists to prevent and which the comment above claimed was measured not to
 # happen. That measurement was taken with `_multiplier` set, before these two doors existed.
@@ -559,7 +559,8 @@ _CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", 
 # inheriting the label asserts nothing that was not already enforced.
 _CONTRACT_CLASS_KEYS = ("secType", "manualIndicator", "ticker")
 
-_HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
+# The first row of every child section: what IBKR does with the leg until the parent fills.
+_HELD_ROW = ("Held by IBKR", "until the parent fills")
 
 # IBKR's rule for an attached order's time in force — TWS guide, Using the Orders Panel
 # (https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm, read 2026-10-18):
@@ -594,79 +595,6 @@ def child_tif_defect(parent: Mapping[str, Any], child: Mapping[str, Any]) -> str
     )
 
 
-def _multi_child_disclosure(parent: dict[str, Any], children: list[dict[str, Any]]) -> str | None:
-    """What a human seeing several full-size children against one parent is not being told.
-
-    A two-child bracket renders two full-size SELLs under a one-lot BUY. Nothing on the
-    screen says only one of them can fill, so the arithmetic reads as an instruction to sell
-    twice what is being bought — the alarming reading, and the wrong one.
-
-    **This is a DISCLOSURE, never a guardrail.** The legs are supposed to total more than the
-    parent: IBKR's own published bracket is a full-size profit taker AND a full-size stop on
-    one position (50/50/50), so refusing the aggregate would refuse the standard shape. H1 is
-    enforced per child, and `_bracket_tickets`' docstring records why.
-
-    What is said, and the standing of each claim:
-
-    - The arithmetic is CERTAIN. It comes from the dialog's own inputs and needs nothing from
-      IBKR.
-    - The grouping is MEASURED, dated, and stated as an observation rather than a guarantee:
-      on 2026-09-22, two resting brackets each reported `oca_group_id` equal to the parent's
-      own order id with `oca_group_type: "ReduceOnFillNonBlock"`. **This dialog cannot verify
-      the link for the order about to be submitted** — `oca_group_id` exists only after IBKR
-      has accepted the tickets — so the sentence says what was seen before, not what will be.
-    - The partial-fill case is stated as UNKNOWN, because it is. The children are sized to the
-      full parent quantity and IBKR documents nothing about what becomes of them if the parent
-      fills only partially. Deliberately not policed: core could only correct an oversized
-      child by issuing a `modify_order`, and an invariant that only an order write can repair
-      is not enforceable from here.
-
-    Args:
-        parent: The parent ticket.
-        children: Its child tickets.
-
-    Returns:
-        The disclosure, or None when there is at most one child, or when the children are
-        stated and do not exceed the parent (a scale-out, where the alarming reading does
-        not arise).
-    """
-    if len(children) < 2:
-        return None
-    parent_qty = _as_float_or_none(parent.get("quantity"))
-    # An absent child quantity is DERIVED from the parent (`_bracket_tickets` says so), so it
-    # counts as a full-size leg rather than as zero — counting it as zero would suppress the
-    # disclosure on exactly the all-derived bracket that most needs it.
-    child_total = 0.0
-    for child in children:
-        qty = _as_float_or_none(child.get("quantity"))
-        if qty is None:
-            qty = parent_qty
-        if qty is None:
-            child_total = math.nan
-            break
-        child_total += qty
-    if parent_qty is not None and math.isfinite(child_total):
-        if child_total <= parent_qty:
-            return None  # a genuine scale-out: the legs do not oversubscribe the parent
-        known = True
-    else:
-        known = False
-    totals = (
-        f"These {len(children)} children total {_quantity_text(child_total)} "
-        f"against a parent of {_quantity_text(parent_qty)}. "
-        if known
-        else f"These {len(children)} children are each sized to the full parent quantity. "
-    )
-    return (
-        totals + "They are exits for ONE position, not additional orders: IBKR groups a "
-        "parent's children so that one filling cancels the others (observed 2026-09-22 on "
-        "resting brackets, which reported an OCA group of type ReduceOnFillNonBlock; this "
-        "dialog cannot verify the link for the order about to be submitted, because IBKR "
-        "assigns it only after accepting the tickets). IBKR does not document what becomes "
-        "of the children if the parent fills only PARTIALLY."
-    )
-
-
 def _as_float_or_none(value: Any) -> float | None:
     """`value` as a finite float, or None — NaN and infinities are not quantities."""
     try:
@@ -684,7 +612,10 @@ def _partial_fill_warning(parent: dict[str, Any]) -> str | None:
     2026-09-21 and 2026-10-17). A parent of 1 cannot partially fill. So the line is keyed on
     the ATTRIBUTE and the quantity, never on the instrument: right by construction on every
     product, with no copy of IBKR's product list here. The partial-fill behaviour itself is
-    deliberately unmeasured and uncorrected (design 2026-10-17, A3): this says so.
+    deliberately unmeasured and uncorrected (design 2026-10-17, A3): this says so, in ONE
+    sentence — the operator's rule after the first live bracket (2026-10-19): "just state what
+    is needed: partial fill risk only; too long text is NOT explicit and loses impact". The
+    `Children together` paragraph that used to follow the legs was withdrawn the same day.
 
     Rendered red and bold by the dialog, as every row whose key starts with `⚠` is.
     """
@@ -692,8 +623,8 @@ def _partial_fill_warning(parent: dict[str, Any]) -> str | None:
     if quantity is None or quantity <= 1 or parent.get("allOrNone") is True:
         return None
     return (
-        f"Quantity {quantity:g}: a partial fill of the parent leaves each held child at {quantity:g}. "
-        "Nothing here corrects that."
+        f"Parent {quantity:g} lots without All-or-None: it can fill in part, and IBKR does not "
+        f"document what becomes of the {quantity:g}-lot children."
     )
 
 
@@ -714,7 +645,7 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
     single order and a held one for a bracket child, and the difference is the only thing the
     human needs to understand about the second leg.
 
-    Two rows since 2026-10-17 (claudia_ui gap #36): `Parent — At IBKR` when the parent is an
+    Two rows since 2026-10-17 (claudia_ui gap #36): the Parent section's `At IBKR` row when the parent is an
     order already working at IBKR (an attach, `client.attach_order_and_confirm`) rather than
     a ticket about to be sent; and `⚠ Partial fill`, red and bold, when the parent is above
     one lot and carries no `allOrNone: true` (`_partial_fill_warning`). On an attach the
@@ -769,24 +700,31 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         )
     inherited = {key: parent[key] for key in (*_CONTRACT_DISPLAY_KEYS, *_CONTRACT_CLASS_KEYS) if key in parent}
 
+    # Three sections, each titled once — Parent, then one per child — above which only the
+    # dialog's own rows sit: the account, and the Action that decides the banner (operator
+    # design 2026-10-19, after the first live bracket: "3 distinct sections, do not repeat the
+    # title each time, separate for better readability"). A section is a dict value; every
+    # renderer draws it as a blank line, the title, then its rows indented (`_detail_lines`).
     parent_rows = _order_rows(parent, account_id)
     details: dict[str, Any] = {
         "Account": parent_rows.pop("Account"),
-        "Action": parent_rows.pop("Action"),  # the PARENT's side — it decides the banner colour
+        "Action": parent_rows["Action"],  # the PARENT's side — it decides the banner colour
     }
     notional = parent_rows.pop("Total (est.)", None)
-    for key, value in parent_rows.items():
-        details[f"Parent — {key}"] = value
+    # The parent's own Action stays in its section: on an attach the top-level Action is the
+    # CHILD's (below), and until 2026-10-19 the parent's side appeared nowhere on that dialog.
+    parent_section: dict[str, Any] = dict(parent_rows)
     if notional is not None:
-        details["Parent notional (est.)"] = notional
+        parent_section["Notional (est.)"] = notional
     # An attach: the parent is IBKR's, not a ticket about to be sent. `client._parent_from_status`
     # sets the key; a bracket placed at entry carries none and shows no such row.
     working = parent.get("_working_at_ibkr")
     if working:
-        details["Parent — At IBKR"] = str(working)
+        parent_section["At IBKR"] = str(working)
     warning = _partial_fill_warning(parent)
     if warning:
-        details["⚠ Partial fill"] = warning
+        parent_section["⚠ Partial fill"] = warning
+    details["Parent"] = parent_section
 
     seen: dict[str, int] = {}
     for child in children:
@@ -898,13 +836,7 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         rows = _order_rows({**inherited, **child}, account_id)
         rows.pop("Account", None)
         rows.pop("Total (est.)", None)
-        details[kind] = _HELD_UNTIL_PARENT_FILLS
-        for key, value in rows.items():
-            details[f"{kind} — {key}"] = value
-
-    disclosure = _multi_child_disclosure(parent, children)
-    if disclosure:
-        details["Children together"] = disclosure
+        details[kind] = {_HELD_ROW[0]: _HELD_ROW[1], **rows}
 
     # No `action=`: a bracket IS a placement, so the banner stays the parent's side and colour
     # — the exposure being opened — exactly as the place dialog's does. `_banner` special-cases
@@ -1145,6 +1077,26 @@ def reply_message_text(message: str) -> str:
 _SIDE_KEYS = ("Action", "side", "Side")
 
 
+def _detail_lines(details: Mapping[str, Any]) -> list[str]:
+    """The rows as plain text, one shape for every renderer (2026-10-19): a flat row is
+    `key: value`; a section — a dict value, the bracket dialog's Parent / Profit taker / Stop
+    loss — is a blank line, its title once, then its rows indented beneath it; a flat row
+    after a section gets a blank line before it. The AppKit renderer draws the same shape
+    with the title in bold (`_order_dialog._run_alert`)."""
+    lines: list[str] = []
+    after_section = False
+    for key, value in details.items():
+        if isinstance(value, dict):
+            lines.extend(["", str(key), *(f"    {k}: {v}" for k, v in value.items())])
+            after_section = True
+        else:
+            if after_section:
+                lines.append("")
+                after_section = False
+            lines.append(f"{key}: {value}")
+    return lines
+
+
 def _extract_side(details: dict[str, Any]) -> str | None:
     """Return the order side from whichever key carries it, or None if none does.
 
@@ -1343,7 +1295,7 @@ def _show_osascript_dialog(
 
     Source: https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_cmds.html#//apple_ref/doc/uid/TP40000983-CH216-SW12
     """
-    detail_lines = "\n".join(f"{k}: {v}" for k, v in details.items())
+    detail_lines = "\n".join(_detail_lines(details))
     message = f"{detail_lines}\n\n{disclaimer}"
 
     script = (
@@ -1428,11 +1380,19 @@ def _show_tkinter_dialog(
 
     detail_frame = tk.Frame(dialog, padx=20, pady=10)
     detail_frame.pack(fill="x")
-    for i, (key, val) in enumerate(details.items()):
+    for i, line in enumerate(_detail_lines(details)):
+        # A section title (no colon) in bold across both columns; a row split at its colon;
+        # a blank line as an empty row — the shape `_detail_lines` gives every renderer.
+        key, sep, val = line.partition(": ")
+        if not sep:
+            tk.Label(detail_frame, text=key, font=("Helvetica", 11, "bold"), anchor="w").grid(
+                row=i, column=0, columnspan=2, sticky="w", pady=2
+            )
+            continue
         tk.Label(detail_frame, text=f"{key}:", font=("Helvetica", 11, "bold"), anchor="w").grid(
             row=i, column=0, sticky="w", pady=2
         )
-        tk.Label(detail_frame, text=str(val), font=("Helvetica", 11), anchor="w").grid(
+        tk.Label(detail_frame, text=val, font=("Helvetica", 11), anchor="w").grid(
             row=i, column=1, sticky="w", padx=(10, 0), pady=2
         )
 

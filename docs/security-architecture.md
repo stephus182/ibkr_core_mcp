@@ -249,8 +249,8 @@ an order already working at IBKR, the sequential bracket form. It reads the pare
 nothing can be attached to — that read is the second named pre-gate exemption (invariant 1),
 a GET of the operator's own order. The child is completed from IBKR's record rather than the
 caller's, the bracket rules run unchanged, the Gate 1 scope binds the ticket **and the
-parent's id** (kind `attach`), and Gate 2 is `confirm_bracket_dialog` with a `Parent — At
-IBKR` row. One ticket per write; the response is checked for the link (`attached_entry`) and
+parent's id** (kind `attach`), and Gate 2 is `confirm_bracket_dialog` with an `At IBKR` row in
+its Parent section. One ticket per write; the response is checked for the link (`attached_entry`) and
 a response without it is logged, never reported as success.
 
 The chained variants `place_order_and_confirm` / `modify_order_and_confirm` take **one**

@@ -277,15 +277,36 @@ def _run_alert(data: dict[str, Any]) -> None:
     # red: the bracket dialog's partial-fill line and the cancel dialog's linked-order rows
     # (operator, 2026-10-17). Made only when a dialog carries one, so every other dialog's
     # AppKit calls are exactly what they were.
+    all_keys = [k for key, val in details.items() for k in ((key, *val) if isinstance(val, dict) else (key,))]
     warning_colour = (
-        NSColor.colorWithRed_green_blue_alpha_(*_RED, 1.0) if any(str(k).startswith("⚠") for k in details) else None
+        NSColor.colorWithRed_green_blue_alpha_(*_RED, 1.0) if any(str(k).startswith("⚠") for k in all_keys) else None
     )
-    for i, (key, val) in enumerate(details.items()):
-        if i:
-            detail_value.appendAttributedString_(_attributed("\n", regular))
+
+    def _row(key: Any, val: Any, indent: str) -> None:
         colour = warning_colour if str(key).startswith("⚠") else None
-        detail_value.appendAttributedString_(_attributed(f"{key}: ", regular if colour is None else bold, colour))
+        detail_value.appendAttributedString_(
+            _attributed(f"{indent}{key}: ", regular if colour is None else bold, colour)
+        )
         detail_value.appendAttributedString_(_attributed(str(val), bold, colour))
+
+    # A dict value is a SECTION (the bracket dialog's Parent / Profit taker / Stop loss,
+    # operator design 2026-10-19): a blank line, its title once in bold, its rows indented
+    # beneath it — the shape `order_confirm._detail_lines` gives the plain renderers.
+    after_section = False
+    for i, (key, val) in enumerate(details.items()):
+        if isinstance(val, dict):
+            if i:
+                detail_value.appendAttributedString_(_attributed("\n\n", regular))
+            detail_value.appendAttributedString_(_attributed(str(key), bold))
+            for sub_key, sub_val in val.items():
+                detail_value.appendAttributedString_(_attributed("\n", regular))
+                _row(sub_key, sub_val, "    ")
+            after_section = True
+            continue
+        if i:
+            detail_value.appendAttributedString_(_attributed("\n\n" if after_section else "\n", regular))
+        after_section = False
+        _row(key, val, "")
     detail_h = _measure(detail_value)
     disclaimer_value = _attributed(disclaimer, NSFont.systemFontOfSize_(12))
     disclaimer_h = _measure(disclaimer_value)

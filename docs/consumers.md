@@ -23,7 +23,9 @@
 means IBKR answered without reporting the link: the order may exist unattached. Say so, and never
 say "attached".
 
-**The bracket dialog carries two new rows:** `Parent — At IBKR` on an attach, and `⚠ Partial fill`
+**The bracket dialog is three sections since 2026-10-19** (`Parent`, `Profit taker`, `Stop loss`, each
+titled once, a dict value per section in `details`) **and carries two rows added in this window:** the
+Parent section's `At IBKR` on an attach, and `⚠ Partial fill`
 on any bracket whose parent is above one lot without `allOrNone: true` — rendered red and bold, as
 every `⚠` row now is. A consumer that sets `allOrNone` by product class (IBKR's list: stocks, ETFs,
 options, bonds, EFPs; never futures) sees the line only where a partial fill is possible.
