@@ -248,6 +248,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`add_indicators` tells the model how to report its lines (register F40, claudia_ui gap
+  #95).** Live 2026-10-08 the tool returned `EMA 20 hl2: 332.05 (over 123 bars)` and the reply read
+  `EMA 20 (hl2): 332.05`, "rising": the clause agreed on 2026-10-06 — the number of bars a
+  recursive average was computed over, which is part of its value — was dropped, and a slope the
+  result does not carry was added. The fix is in the tool's own text, not a host's prompt
+  (operator 2026-10-08; Anthropic ranks the tool definition above prompt rules for how a model
+  uses a result, https://www.anthropic.com/engineering/writing-tools-for-agents): the description
+  now says to report each line as printed, `'(over N bars)'` included, and that no line carries a
+  slope, trend or direction; and the result's own first body line repeats it on every call —
+  `Quote each line as printed, '(over N bars)' included — the bar count is part of the value; no
+  line carries a slope, trend or direction.` Verified on the live path by the host
+  (claudia_ui's live list): the reply quotes the clause and adds no direction — left to that run.
 - **The bracket dialog is three sections, each titled once (operator design 2026-10-19, after
   the first live bracket).** `Parent`, `Profit taker`, `Stop loss` — a blank line, the title once in
   bold, the leg's rows indented beneath it — instead of `Parent — Symbol`, `Stop loss — TIF` on every

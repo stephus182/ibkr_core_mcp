@@ -757,11 +757,13 @@ setting's definition, default and official page: [`indicators-reference.md`](ind
 | `band_stds` | number[] | — | Bollinger bands *StdDev* — one band pair per value, e.g. `[1, 2, 2.5]`. **Default `[2]`** |
 | `offset` | integer | — | TradingView's *Offset* for the averages and bands, in bars. The values are unchanged: a positive offset draws the line to the right, so the last bar shows the value computed that many bars earlier; a negative one draws it to the left, and nothing sits on the last bar. **Default `0`** |
 
-**Output.** Three lines of configuration, each setting marked `(by default)` or `(as given)`,
-then one line per value:
+**Output.** One line telling the model how to report what follows (register F40, 2026-10-20:
+live, the model had dropped an EMA's `(over N bars)` and called it "rising"), three lines of
+configuration, each setting marked `(by default)` or `(as given)`, then one line per value:
 
 ```text
 Indicators for ESZ6 1h, all trading hours (as given) (last bar stamped 2026-10-01 18:00 ET (its session open)):
+  Quote each line as printed, '(over N bars)' included — the bar count is part of the value; no line carries a slope, trend or direction.
   Averages and bands — source: hl2 = (high + low)/2 (by default); type: SMA (by default); offset: 0 (by default)
   Bands — length: 200 (as given); StdDev: 1, 2.5 (as given)
   RSI and MACD — source: close (by default)

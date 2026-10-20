@@ -98,6 +98,11 @@ def test_execute_add_indicators(toolkit):
     )
     assert_tool_succeeded(text)
     assert fig is None
+    # The description tells the model how to report the result (register F40): the bar count
+    # is part of an EMA's or SMMA's value, and no line carries a direction to add.
+    tool = next(t for t in toolkit.tools if t["name"] == "add_indicators")
+    assert "'(over N bars)'" in tool["description"] and "part of the value" in tool["description"]
+    assert "no line carries a slope, trend or direction" in tool["description"]
     assert "RSI" in text
 
 
@@ -1506,6 +1511,13 @@ def test_a_recursive_average_states_how_many_bars_it_was_computed_over(
     assert _indicator_line(text, basis_line).endswith(f"(basis / upper / lower){over}"), text
     if over:
         assert "(over 5 bars)" not in _indicator_line(text, "RSI(14) close:"), text
+    # Live 2026-10-08 (register F40, claudia_ui #95): the model dropped the clause and called the
+    # EMA "rising". The result's own first body line says what the lines are and are not, so the
+    # rule travels with the tool to any host (Anthropic: the tool text is the lever).
+    note = text.splitlines()[1].strip()
+    assert note.startswith("Quote each line as printed"), text
+    assert "'(over N bars)'" in note and "part of the value" in note, text
+    assert "no line carries a slope, trend or direction" in note, text
 
 
 def test_add_indicators_never_prints_nan_and_says_how_many_bars_it_needs(toolkit):

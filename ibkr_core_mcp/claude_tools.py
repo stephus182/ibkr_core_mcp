@@ -275,6 +275,12 @@ def _drawn_on_last_bar(series: pd.Series, offset: int) -> Any:
     return series.iloc[-1 - offset] if 0 <= offset < len(series) else float("nan")
 
 
+_INDICATOR_REPORT_NOTE = (
+    "  Quote each line as printed, '(over N bars)' included — the bar count is part of the value; "
+    "no line carries a slope, trend or direction."
+)
+
+
 def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, timeframe: str, outside_rth: bool) -> str:
     """add_indicators' result: the settings, then one line per value in TradingView's labels.
 
@@ -292,7 +298,10 @@ def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, time
     # (witnessed 2026-10-06: EMA 200 hl2 7,759.90 over 479 bars, 7,759.77 over 1,500, TradingView
     # 7,759.80 over years), so its line says so. A simple average depends on its last N bars only.
     over = f" (over {bars} bars)" if s.ma_type in ("EMA", "SMMA (RMA)") else ""
-    lines = [header, *s.stated]
+    # Live 2026-10-08 (register F40): the model dropped the clause and called an EMA "rising".
+    # The result says what its lines are and are not, in the result itself, so the rule reaches
+    # the model on every call and travels with the tool to any host.
+    lines = [header, _INDICATOR_REPORT_NOTE, *s.stated]
 
     if not s.ma_periods:
         lines.append("  Averages: none requested — give ma_periods, e.g. [25, 50, 100, 200]")
@@ -985,7 +994,10 @@ TOOL_DEFINITIONS = [
             "bars (a 200-bar average on 126 bars prints 'n/a' with both counts), and EMA, RSI and "
             "MACD are less exact near the start of the data — nothing is fetched behind the "
             "scenes. Not offered: MACD's two MA types, RSI's smoothing and divergence, and a "
-            "timeframe other than the cached bars'."
+            "timeframe other than the cached bars'. Report each line as printed, '(over N bars)' "
+            "included: the bar count is part of the value of an EMA or SMMA, which depends on how "
+            "much history it was computed over. The result states the last bar's values and nothing "
+            "else — no line carries a slope, trend or direction, so do not add one."
         ),
         "input_schema": {
             "type": "object",
