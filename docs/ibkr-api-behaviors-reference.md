@@ -257,7 +257,44 @@ only (the field names stay on no page):
   (https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm).
 
 Still on no page found: what cancelling the PARENT does to its children (measured 2026-09-22
-cancelled, 2026-10-18 left `Inactive`), and what a PARTIAL fill of the parent does to them.
+cancelled, 2026-10-18 left `Inactive`, 2026-11-06 gone from the feed with the one child read
+`Cancelled` — next section), and what a PARTIAL fill of the parent does to them.
+
+### On a CME future, market open (measured 2026-11-06)
+
+One session on the front-month Micro E-mini S&P 500 in CME's regular hours, through claudia_ui's
+bracket and attach paths (gap #36): one bracket placed 5 % below the market, one stop attached
+to its working parent, the parent cancelled 4 min 44 s after placement. Nothing filled. Each
+line is what IBKR returned, read out of band; order ids and the account are not reproduced.
+
+- **A one-child bracket is accepted.** A two-ticket array — the parent with `cOID`, one profit
+  taker with `parentId` — was taken as it stands. IBKR's bracket page shows the three-ticket
+  form only.
+- **A working parent reads `Submitted`; its held child `PreSubmitted`.** On the placement
+  response, the feed and the status read alike. Every leg of the 2026-10-18/19 Ford sessions had
+  read `PreSubmitted` because that market was closed, so this is the first parent placed through
+  this package and read while working. The status read names the class and the root:
+  `sec_type: "FUT"`, `symbol` the root, never the local symbol.
+- **`outsideRTH` is reported for a futures order that set it — and `null` for one that did
+  not.** The stop attached with `outsideRTH: true` read `outsideRTH: true` on its feed row and
+  `outside_rth: true` on status while held. The futures parent and its profit taker, which never
+  carried the attribute, read `null` on both; a stock order resting in the same book read
+  `false` on its feed row. After the cancel the same stop's status read `outside_rth: null`. So
+  on these futures rows `null` stood for "not set", and the cancelled order no longer reported
+  what it had been set to.
+- **After the parent's cancel both held children left the feed.** Status read `Cancelled` for
+  the parent (`children_order_ids` empty) and for the one child read on status, the stop; the
+  profit taker was not read there. Both were absent from the feed at the next read, 58 s after
+  the cancel — no `Inactive` rows this time. The cancelled child's status still carries
+  `parent_order_id` and `oca_group_id`.
+- **One precaution reply per write.** The bracket placement drew `Confirm Mandatory Cap Price`
+  (the preview had announced it in `warn`), the attached stop `Stop Variant Order Confirmation`.
+- **The cancel was a bare `DELETE`** — that caller passes no `manual_indicator` yet — and was
+  accepted, as every bare futures cancel counted before it (`cancel_order`). The gateway's
+  request log shows the line without a query string.
+
+Not reached that day: a fill — so a **released** child, the OCA cancel firing and a released
+stop's `outsideRTH` were not measured in this session.
 
 ### Why this entry exists: H1 is per child, not a sum
 
