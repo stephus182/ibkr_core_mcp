@@ -10,6 +10,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`ContractRules` carries IBKR's per-contract fractional rule: `fractional_order_types`
+  (`fraqTypes`) and `fractional_digits` (`fraqInt`) (register F27; claudia_ui #18).** IBKR: "permitted
+  order types for use with fractional trading" and "decimal places for fractional order size"
+  (archived reference, `docs/audits/audit-evidence/scrapes/cpapi-v1.md`). Measured 2026-09-28 on
+  IDEALPRO: EUR.USD and EUR.CHF list all nine order types with 2 decimals, CHF.USD `[]` with 0 — the
+  rule is per contract, never per asset class — and the entries are IBKR's lowercase order-type
+  NAMES, not the order body's codes (2026-10-06). Neither had a typed field until now — the raw
+  mapping (`rules["fraqTypes"]`) always served them; the attributes and their defaults are new. The
+  defaults (`[]`, `0`) read as "no fractions", so a reply without them fails closed. The rules do not
+  reflect the account's own permission (AAPL lists eight types while this account's whatif says it
+  "doesn't have permission to trade fractional shares") — a consumer still needs IBKR's answer.
 - **The Gate 2 dialog has a default icon of its own: a generic exchange glyph
   (`ibkr_core_mcp/assets/exchange-icon.png`, with its SVG source beside it; claudia_ui gap
   #111, operator 2026-11-07: "generic and simple", a PNG that works on Windows too).** Solid
@@ -262,6 +273,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`preview_order` previews a fractional quantity as given (register F37; claudia_ui #18).** The
+  tool cast `quantity` to `int` and its schema typed it `integer`, so a 1000.5 ticket was previewed
+  as 1000 and the preview did not describe the order about to be proposed. IBKR's whatif takes
+  `quantity` as a float ("the total number of shares traded", archived reference) and accepts a
+  fraction where the contract's rules permit it (measured 2026-10-06: EUR.USD SELL 1000.5 priced
+  with IBKR's own arithmetic on the fraction; CHF.USD 1000.5 → IBKR's own HTTP 500). The schema is
+  `number` and says a fraction is previewed as given; a whole number — `10` or JSON's `10.0` — still
+  goes out as the int `10`, as every preview was sent until now, and the headline states the
+  quantity priced (`SELL 1000.5 EUR.USD`); zero and negatives are refused as before ("a positive
+  number"). ClaudIA's side (fractional proposals) was built and live-verified on FX 2026-10-06.
 - **The Gate 2 dialog is the core's own modal window, one layout at every height (claudia_ui
   gap #111; operator 2026-11-06: "buttons CENTERED, same order blue-red AND side by side …
   always the same and expected").** `_order_dialog.py` drew an `NSAlert` until now, and NSAlert
@@ -351,7 +372,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   for five minutes, `barLength: 1`) but their `t` is 60 seconds apart, the last of them reading
   18:53:59 ET for a true 13:59:58; until now the client lowercased it to `1s`, which IBKR
   answers with HTTP 500, three attempts and an unhelpful error. The operator's decision: no
-  stamp is ever changed in this package, so second bars are refused with that reason and the
+  stamp is ever changed in this package, so this package refuses second bars with that reason and the
   list of sizes offered, and remain a question for the study database's own design. The paging
   loop also sends `bar` lowercased now, as the single call has since 2026-07-06. Tests: four
   bars × two methods at the client, the tool's refusal (nothing resolved, read or cached), the
@@ -496,6 +517,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **The `bar` description and the second-bar refusal name who refuses and who returns (register
+  F39, seen live 2026-10-08).** "Second bars (1S) are refused with the reason: IBKR stamps them 60
+  seconds apart" — passive, no subject — let the model tell the user "IBKR refuses them" without
+  calling the tool. IBKR does return `bar=1S`; this package refuses it because the stamps are 60
+  seconds apart and no stamp is changed here. Both texts now say exactly that: "This tool refuses
+  second bars (1S): IBKR does return them, but stamps them 60 seconds apart, and no stamp is
+  changed here" and "this package does not offer second bars — IBKR does return them, but with
+  stamps 60 seconds apart (…), and this package never changes a stamp". Behaviour unchanged.
 - **`get_live_orders` and `diagnose_orders` called a bracket child EXTERNAL, "read-only via
   API" (claudia_ui #36 live acceptance, 2026-10-19).** IBKR puts `order_ref` on the parent only
   and `parentId` on the child (measured 2026-10-18), so a ClaudIA-staged child had no reference of

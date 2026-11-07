@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, NamedTuple
@@ -37,7 +38,14 @@ from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import BacktestResult
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient, _bar_problem, _bar_seconds, _period_problem
+from ibkr_core_mcp.client import (
+    _ACCOUNT_ID_RE,
+    IBKRClient,
+    _bar_problem,
+    _bar_seconds,
+    _period_problem,
+    _whole_or_fraction,
+)
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError, StoreError
 from ibkr_core_mcp.flex_dataset import FlexDataset
@@ -602,7 +610,7 @@ TOOL_DEFINITIONS = [
                 },
                 "bar": {
                     "type": "string",
-                    "description": "Bar size, one of IBKR's step table: 1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m. Second bars (1S) are refused with the reason: IBKR stamps them 60 seconds apart and no stamp is changed here",
+                    "description": "Bar size, one of IBKR's step table: 1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m. This tool refuses second bars (1S): IBKR does return them, but stamps them 60 seconds apart, and no stamp is changed here",
                     "default": "1d",
                 },
                 "end": {
@@ -1187,7 +1195,14 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker symbol, e.g. AAPL"},
                 "action": {"type": "string", "description": "'BUY' or 'SELL'"},
-                "quantity": {"type": "integer", "description": "Number of shares"},
+                "quantity": {
+                    "type": "number",
+                    "description": (
+                        "Number of shares or contracts. A fraction (e.g. 1000.5) is previewed as given, exactly as "
+                        "it will be proposed; IBKR accepts or refuses it itself — the contract's rules "
+                        "(fraqTypes / fraqInt) and the account's fractional permission both apply."
+                    ),
+                },
                 "order_type": {
                     "type": "string",
                     "description": "'MKT', 'LMT', 'STP' (stop-market), 'STOP_LIMIT', or 'MIDPRICE'. Trailing types (TRAIL/TRAILLMT) are not supported by this tool.",
@@ -3819,7 +3834,13 @@ class ClaudeToolkit:
         tif = str(given_tif).upper() if given_tif else "DAY"
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
-        quantity = int(inputs["quantity"])
+        # A fraction is previewed AS GIVEN (register F37, claudia_ui #18): `int()` previewed 1000 for
+        # a 1000.5 ticket, so the preview did not describe the order about to be proposed. IBKR's
+        # whatif takes `quantity` as a float ("Used to designate the total number of shares traded",
+        # archived reference) and accepts a fraction where the contract's rules permit it (measured
+        # 2026-10-06: EUR.USD 1000.5 priced; CHF.USD 1000.5 → IBKR's own HTTP 500). A whole number
+        # stays an int, as every preview until now was sent.
+        quantity = _whole_or_fraction(inputs["quantity"])
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
         stop_price = inputs.get("stop_price")
@@ -3829,8 +3850,10 @@ class ClaudeToolkit:
             return f"Invalid action {action!r}. Must be BUY or SELL.", None
         if order_type not in _VALID_ORDER_TYPES:
             return f"Invalid order_type {order_type!r}. Must be one of: {', '.join(sorted(_VALID_ORDER_TYPES))}.", None
-        if quantity <= 0:
-            return f"Invalid quantity {quantity}. Must be a positive integer.", None
+        if not math.isfinite(quantity) or quantity <= 0:
+            # `1e400` is valid JSON and parses to `inf`; `inf <= 0` is False, and the old `int()` raised
+            # before any request — so not finite is refused here, never POSTed as `Infinity` (review).
+            return f"Invalid quantity {quantity}. Must be a positive number.", None
         if tif not in _VALID_TIFS:
             return f"Invalid tif {tif!r}. Must be one of: {', '.join(_VALID_TIFS)}.", None
         if order_type == "LMT" and limit_price is None:
@@ -3866,7 +3889,7 @@ class ClaudeToolkit:
             "conid": conid,  # IBKR requires int
             "orderType": order_type,
             "side": action,
-            "quantity": int(quantity),  # int matches place_order convention
+            "quantity": quantity,  # an int for a whole number, the fraction itself otherwise (F37)
             "tif": tif,
         }
         if sec_type in ("FUT", "FOP"):

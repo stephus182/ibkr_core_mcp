@@ -595,6 +595,24 @@ class ContractRules(IBKRResponse):
     size_increment: int = Field(
         default=0, alias="sizeIncrement", description="Quantity step — an int (IBKR field: sizeIncrement)"
     )
+    # The per-contract fractional rule (register F27; claudia_ui #18). IBKR: "permitted order types
+    # for use with fractional trading" and "decimal places for fractional order size" (archived
+    # reference, docs/audits/audit-evidence/scrapes/cpapi-v1.md § Contract Rules; the live page was
+    # unreachable to the scraper on 2026-11-07). Measured 2026-09-28 on IDEALPRO: EUR.USD and
+    # EUR.CHF list all nine order types with 2 decimals, CHF.USD `[]` with 0 — per contract, never
+    # per asset class. The defaults read as "no fractions", so a reply without the fields fails
+    # closed. The entries are IBKR's lowercase order-type NAMES (`limit`, `stop_limit`, …), not the
+    # order body's codes (measured 2026-10-06, register F37). Note: the rules do not reflect the
+    # ACCOUNT's permission — AAPL lists eight types while this account's whatif answers "doesn't
+    # have permission to trade fractional shares" (same measurement).
+    fractional_order_types: list[str] = Field(
+        default_factory=list,
+        alias="fraqTypes",
+        description="Order types permitted with a fractional quantity, IBKR's names (IBKR field: fraqTypes)",
+    )
+    fractional_digits: int = Field(
+        default=0, alias="fraqInt", description="Decimal places allowed in a fractional quantity (IBKR field: fraqInt)"
+    )
     increment: float = Field(default=0.0, description="Price step — a float, unlike sizeIncrement")
     increment_type: int = Field(
         default=0, alias="incrementType", description="IBKR enum int, not a bool (IBKR field: incrementType)"

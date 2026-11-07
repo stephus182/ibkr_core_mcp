@@ -1913,3 +1913,13 @@ def test_a_cache_hit_states_when_the_bars_were_read_from_ibkr(toolkit):
 
     assert "read from IBKR 2026-10-05 17:28 ET" in dated, dated
     assert "read time not recorded for this entry" in undated, undated
+
+
+def test_the_bar_description_names_who_refuses_second_bars(tool_definition):
+    """Register F39 (seen live 2026-10-08): the description read "Second bars (1S) are refused with
+    the reason: IBKR stamps them 60 seconds apart…" — passive, no subject — and the model told
+    the user "IBKR refuses them". IBKR does return them; this tool refuses them. The actor is named."""
+    bar = tool_definition("fetch_market_data")["input_schema"]["properties"]["bar"]["description"]
+    assert "This tool refuses second bars (1S)" in bar, bar
+    assert "IBKR does return them" in bar, bar
+    assert "are refused" not in bar, "no passive voice: the model supplies a subject of its own"

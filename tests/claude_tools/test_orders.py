@@ -812,3 +812,62 @@ def test_a_preview_names_the_contract_it_priced_with_its_conid(toolkit, run, lin
     describe is still named by its conid, never by a guess, and the preview still runs.
     """
     assert run(toolkit).splitlines()[1] == f"  {'Contract:':<22}{line}"
+
+
+# ── Fractional quantities reach the whatif as given (register F37; claudia_ui #18) ──────────────
+
+
+def _whatif_body(toolkit):
+    """The order body the tool handed to `get_order_preview`."""
+    return toolkit._client.get_order_preview.call_args.args[1]
+
+
+def test_a_fractional_quantity_is_previewed_as_given_and_the_headline_states_it(toolkit):
+    """IBKR's whatif accepts a fraction where the contract's rules permit it (measured 2026-10-06:
+    EUR.USD SELL 1000.5 previewed with IBKR's own arithmetic on the fraction; CHF.USD 1000.5 →
+    IBKR's own HTTP 500). `int(quantity)` previewed 1000 for a 1000.5 ticket, so the preview did
+    not describe the order about to be proposed. The quantity goes through unchanged and the
+    result says which quantity it priced."""
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, action="SELL", quantity=1000.5)
+
+    assert _whatif_body(toolkit)["quantity"] == 1000.5, _whatif_body(toolkit)
+    assert "SELL 1000.5 AAPL" in text, text
+
+
+def test_a_whole_quantity_stays_a_whole_number_in_the_body_and_the_headline(toolkit):
+    """A whole quantity is still sent as IBKR has always received it — `10`, not `10.0` — so
+    nothing changes for every order the tool previewed until now."""
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=10)
+    body = _whatif_body(toolkit)
+
+    assert body["quantity"] == 10 and isinstance(body["quantity"], int), body
+    assert "BUY 10 AAPL" in text and "10.0" not in text, text
+
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=10.0)  # a JSON number that is whole
+    body = _whatif_body(toolkit)
+    assert body["quantity"] == 10 and isinstance(body["quantity"], int), body
+    assert "BUY 10 AAPL" in text and "10.0" not in text, text
+
+
+def test_a_non_positive_or_non_finite_quantity_is_refused_before_any_call(toolkit):
+    """Zero and negatives as before. Not finite too (review 2026-11-07): `1e400` is valid JSON and
+    `json.loads` gives `inf`; `inf <= 0` is False, so without this guard it would be POSTed as
+    `Infinity` — the one outcome worse than the old `int()`, which raised before any request."""
+    for quantity in (0, -1, -0.5, float("inf"), float("-inf"), float("nan"), 1e400):
+        toolkit._client.get_order_preview.reset_mock()
+        text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=quantity)
+        assert "Invalid quantity" in text and "positive" in text, (quantity, text)
+        assert "integer" not in text, "a fraction is a valid quantity now; the refusal must not say otherwise"
+        toolkit._client.get_order_preview.assert_not_called()
+
+
+def test_a_whole_quantity_above_two_to_the_53_stays_exact(toolkit):
+    """Through a float, 2**53 + 1 would round to 2**53; an int stays an int (review 2026-11-07)."""
+    _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=2**53 + 1)
+    assert _whatif_body(toolkit)["quantity"] == 2**53 + 1
+
+
+def test_the_preview_schema_takes_a_number_and_says_a_fraction_is_previewed_as_given(tool_definition):
+    quantity = tool_definition("preview_order")["input_schema"]["properties"]["quantity"]
+    assert quantity["type"] == "number", quantity
+    assert "fraction" in quantity["description"].lower(), quantity

@@ -4978,3 +4978,32 @@ def test_attached_entry_finds_the_child_by_its_parent_link_whatever_the_order(en
 
     found = attached_entry("123", entries)
     assert (found or {}).get("order_id") == expected
+
+
+def test_the_second_bar_refusal_names_who_refuses_and_who_returns():
+    """Register F39: the refusal text, like the tool description, says that IBKR DOES return
+    second bars and that this package is the one refusing them — never a passive "are refused"
+    a model could pin on IBKR."""
+    from ibkr_core_mcp.client import _bar_problem
+
+    problem = _bar_problem("1S")
+    assert problem is not None
+    assert "this package does not offer second bars" in problem, problem
+    assert "IBKR does return them" in problem, problem
+    assert "stamps 60 seconds apart" in problem, problem
+    assert "are not offered" not in problem and "are refused" not in problem, problem
+
+
+def test_whole_or_fraction_shapes_a_quantity_as_ibkr_should_see_it():
+    """One rule for the attach parent and the preview (register F37; review 2026-11-07): a whole
+    number is an int whether it arrived as `10`, `10.0` or `"10"`; a fraction stays itself; an int
+    never rounds through float; finiteness is the caller's refusal, not this function's."""
+    from ibkr_core_mcp.client import _whole_or_fraction
+
+    assert _whole_or_fraction(10) == 10 and isinstance(_whole_or_fraction(10), int)
+    assert _whole_or_fraction(10.0) == 10 and isinstance(_whole_or_fraction(10.0), int)
+    assert _whole_or_fraction("10") == 10 and isinstance(_whole_or_fraction("10"), int)
+    assert _whole_or_fraction(1000.5) == 1000.5
+    assert _whole_or_fraction("10.5") == 10.5
+    assert _whole_or_fraction(2**53 + 1) == 2**53 + 1, "an int must not round through float"
+    assert _whole_or_fraction(True) == 1, "a bool was always the number 1 here (int(True)); unchanged"

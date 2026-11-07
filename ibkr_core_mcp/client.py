@@ -284,23 +284,40 @@ _MAX_WIDENINGS = 4
 _SECOND_BAR_RE = re.compile(r"^\d+\s*s$", re.IGNORECASE)
 
 
+def _whole_or_fraction(value: Any) -> int | float:
+    """A quantity as IBKR should see it: an int when it is whole, the fraction itself otherwise.
+
+    JSON carries `10` and `10.0` alike; both are the whole number 10 and go out as `10`, as every
+    order and preview was sent until 2026-11-07. `1000.5` stays `1000.5` (register F37). An int
+    stays an int without a trip through float, so a quantity above 2**53 keeps its exact value
+    (review, 2026-11-07); a bool is a number here only in the sense it always was (`True` → 1).
+    Not finite (`inf`, `nan` — `1e400` is valid JSON and parses to `inf`) is the CALLER's refusal:
+    this function only shapes the number.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
 def _bar_problem(bar: Any) -> str | None:
     """Why `bar` is refused, or None.
 
     Second bars exist at IBKR — `bar=1S` returns genuine one-second bars, `barLength: 1` —
     but their `t` is 60 seconds apart: the last of 300 bars ending 13:59:58 ET is stamped
     18:53:59 (measured 2026-09-25 and 2026-10-05, register F22). This package never changes a
-    stamp (operator, 2026-10-05), so they are refused with that reason rather than lowercased
-    into IBKR's HTTP 500 for `1s`. Any other size outside the step table is refused with the
+    stamp (operator, 2026-10-05), so this package refuses them with that reason — naming itself as
+    the one refusing and IBKR as the one returning them (register F39: a passive "are refused" let a
+    model tell the user "IBKR refuses them") — rather than lowercasing them into IBKR's HTTP 500 for `1s`. Any other size outside the step table is refused with the
     table: IBKR answers a size it does not know with a size of its own, silently.
     """
     text = str(bar).strip()
     offered = ", ".join(_BAR_SECONDS)
     if _SECOND_BAR_RE.match(text):
         return (
-            f"bar {bar!r}: second bars are not offered — IBKR serves them with stamps 60 seconds apart "
-            f"(the last of 300 one-second bars ending 13:59:58 ET is stamped 18:53:59), and this package "
-            f"never changes a stamp. Bars offered: {offered}."
+            f"bar {bar!r}: this package does not offer second bars — IBKR does return them, but with stamps "
+            f"60 seconds apart (the last of 300 one-second bars ending 13:59:58 ET is stamped 18:53:59), and "
+            f"this package never changes a stamp. Bars offered: {offered}."
         )
     if text.lower() not in _BAR_SECONDS:
         return f"bar {bar!r} is not a size IBKR offers: {offered}."
@@ -821,7 +838,7 @@ def _parent_from_status(order_id: str, status: Mapping[str, Any]) -> dict[str, A
     parent: dict[str, Any] = {
         "conid": int(float(conid)),
         "side": side,
-        "quantity": int(size) if size.is_integer() else size,
+        "quantity": _whole_or_fraction(size),
         "orderType": _STATUS_ORDER_TYPE.get(raw_type, raw_type or "MKT"),
         "tif": str(status.get("tif") or "DAY").strip().upper(),
         "ticker": str(status.get("symbol") or status.get("ticker") or ""),

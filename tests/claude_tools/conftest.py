@@ -80,6 +80,21 @@ def assert_tool_failed(text: str, containing: str | None = None) -> None:
 
 
 @pytest.fixture
+def tool_definition():
+    """One tool's definition from TOOL_DEFINITIONS, by name — for tests of a schema or a description.
+
+    Unannotated on purpose: mypy strict reads the list as `dict[str, Collection[str]]`, and a test
+    indexes the schema freely through an `Any` return (test_alerts.py's `_tool` is the same idiom).
+    """
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    def _lookup(name):
+        return next(t for t in TOOL_DEFINITIONS if t["name"] == name)
+
+    return _lookup
+
+
+@pytest.fixture
 def toolkit(mock_config):
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
 

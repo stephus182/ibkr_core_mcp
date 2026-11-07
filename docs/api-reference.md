@@ -428,6 +428,12 @@ Order rules for a contract (min tick, valid order types, size constraints) — *
 force that contract accepts** (`tifTypes`, typed `tif_types`): the per-contract authority, which
 can hold values IBKR's place-order enum lacks (`GTD`, `OVT`, `OND`). Entries arrive as IBKR
 sends them, `"OND/o,a,LIMIT"`. See `docs/order-management-examples.md` § Time in force.
+**The per-contract fractional rule** (since 2026-11-07, register F27): `fractional_order_types`
+(`fraqTypes`, IBKR's lowercase order-type names permitted with a fractional quantity) and
+`fractional_digits` (`fraqInt`, the decimals allowed) — `[]` / `0` when IBKR sends neither, so a
+reply without them reads as "no fractions". Per contract, never per asset class: EUR.USD and EUR.CHF
+permit two decimals, CHF.USD none (measured 2026-09-28). The rules do not reflect the account's own
+fractional permission — only IBKR's whatif or order reply does.
 **Endpoint:** `POST /iserver/contract/rules`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules
 
@@ -1039,7 +1045,10 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modi
 Whatif preview — cost, commission, margin impact. No order placed, no security gates. Same
 underscore-field-stripping as `place_order()`. One ticket; a bracket has its own entry point
 below. Both post through the private `_whatif`, which is the only function permitted to build
-the whatif path.
+the whatif path. The body goes through as given — a fractional `quantity` included: IBKR's
+whatif takes it as a float and accepts a fraction where the contract's rules permit one (EUR.USD
+1000.5 priced; CHF.USD 1000.5 → IBKR's own HTTP 500, measured 2026-10-06), and the `preview_order`
+tool no longer casts it to an int (register F37, 2026-11-07).
 **Endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order
 
