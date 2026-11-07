@@ -1176,10 +1176,10 @@ def test_reply_dialog_title_names_the_order_when_told():
 
 
 def _fake_appkit(detail_height: float = 90.0, disclaimer_height: float = 34.0):
-    """A MagicMock AppKit: NSAlert confirms; attributed strings report the given heights."""
+    """A MagicMock AppKit: the modal loop confirms; attributed strings report the given heights."""
     ak = MagicMock()
-    alert = ak.NSAlert.alloc.return_value.init.return_value
-    alert.runModal.return_value = 1000
+    ak.NSApplication.sharedApplication.return_value.runModalForWindow_.return_value = 1000
+    ak.NSMakeRect.side_effect = lambda *xywh: xywh  # frames readable as (x, y, w, h)
     detail = ak.NSMutableAttributedString.alloc.return_value.init.return_value
     detail.boundingRectWithSize_options_context_.return_value = MagicMock(size=MagicMock(height=detail_height))
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
@@ -1190,10 +1190,10 @@ def _fake_appkit(detail_height: float = 90.0, disclaimer_height: float = 34.0):
 
 
 def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
-    """User design 2026-09-10/11: the full order detail on every pop-up, in bold.
-
-    NSAlert informative text is plain, so detail and disclaimer live in the accessory view:
-    detail (bold) above the disclaimer (regular) above the banner — the order read today.
+    """User design 2026-09-10/11: the full order detail on every pop-up, in bold, read top to
+    bottom — detail (bold) above the disclaimer (regular) above the banner above the buttons.
+    Since 2026-11-07 the dialog is the core's own window (claudia_ui #111): the same reading
+    order, laid out by frames in a 452-pt window, the heights measured from the text.
     """
     import sys
 
@@ -1212,20 +1212,22 @@ def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
                 "timeout_s": 1,
             }
         )
-    alert = ak.NSAlert.alloc.return_value.init.return_value
-    alert.setInformativeText_.assert_called_once_with("")
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
     # Found by its text: the two button titles are made after it.
     disc_attrs = next(c.args[1] for c in made.call_args_list if c.args[0] == "This is a LIVE order.")
     assert disc_attrs[ak.NSFontAttributeName] == ak.NSFont.systemFontOfSize_.return_value
-    # container = banner 48 + gap 8 + disclaimer (34 + 2) + gap 8 + detail (90 + 2); the
-    # container is the first rect made, the banner box the second; then the disclaimer field
-    # sits just above the banner and the detail field above that — the reading order.
+    # The frames, by their measured sizes: disclaimer (34 + 2) and detail (90 + 2) fields 404
+    # wide inside the 420-pt body, the banner box 420 × 48, the buttons 32 tall. Reading order
+    # is y descending: detail above disclaimer above banner above the row.
     rects = [c.args for c in ak.NSMakeRect.call_args_list]
-    assert rects[0] == (0, 0, 420, 48 + 8 + 36 + 8 + 92)
-    assert rects[1] == (0, 0, 420, 48)
-    assert (8, 48 + 8, 404, 36) in rects  # disclaimer field
-    assert (8, 48 + 8 + 36 + 8, 404, 92) in rects  # detail field, above it
+    (detail_y,) = [y for x, y, w, h in rects if (x, w, h) == (24, 404, 92)]
+    (disclaimer_y,) = [y for x, y, w, h in rects if (x, w, h) == (24, 404, 36)]
+    (banner_y,) = [y for x, y, w, h in rects if (x, w, h) == (16, 420, 48)]
+    button_ys = {y for x, y, w, h in rects if h == 32}
+    assert detail_y > disclaimer_y > banner_y > max(button_ys), (detail_y, disclaimer_y, banner_y, button_ys)
+    # 16 + 32 + 16 (row) + 48 + 8 + 36 + 8 + 92 (body) + 12 + 22 + 8 + 56 + 8 (title, icon): one window
+    window_rect = ak.NSWindow.alloc.return_value.initWithContentRect_styleMask_backing_defer_.call_args.args[0]
+    assert window_rect == (0, 0, 452, 362)
 
 
 def test_a_futures_price_is_not_a_currency_amount():
@@ -2330,7 +2332,7 @@ def test_dialog_outcome_token_is_one_per_way_the_modal_can_end():
     """Only the first button's response is CONFIRMED; a timer that fired is never a decision."""
     from ibkr_core_mcp import _order_dialog as script
 
-    first, second = script._NS_ALERT_FIRST_BUTTON_RETURN, script._NS_ALERT_FIRST_BUTTON_RETURN + 1
+    first, second = script._CONFIRM_CODE, script._ABANDON_CODE
     assert script.outcome_token(first) == script.CONFIRMED
     assert script.outcome_token(second) == script.CANCELLED
     assert script.outcome_token(second, timed_out=True) == script.TIMED_OUT

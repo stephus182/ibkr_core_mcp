@@ -91,6 +91,7 @@ ibkr_core_mcp = [
     "gateway/Dockerfile",
     "gateway/conf.yaml",
     "gateway/*.sh",
+    "assets/*",
 ]
 
 [tool.pytest.ini_options]

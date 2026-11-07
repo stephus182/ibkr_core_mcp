@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Stock exchange</title>
+  <path fill="#000000" d="
+    M512 105 L922 305 V377 H102 V305 Z
+    M166 441 H264 V711 H166 Z
+    M364 441 H462 V711 H364 Z
+    M562 441 H660 V711 H562 Z
+    M760 441 H858 V711 H760 Z
+    M166 775 H858 V847 H922 V919 H102 V847 H166 Z"/>
+</svg>

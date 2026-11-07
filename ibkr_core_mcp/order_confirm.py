@@ -7,8 +7,8 @@ reflexive acceptance, so it requires a pointed, explicit action. Any cancellatio
 or timeout raises `HumanAuthError` and the IBKR endpoint is never contacted.
 
 Three backends, but never three in one sequence — the platform picks the pair. On macOS:
-an AppKit `NSAlert` run in a subprocess (colour-coded by side; see `_order_dialog.py` for
-why it must be a subprocess), falling back to an AppleScript `display dialog` if that
+the core's own AppKit modal window run in a subprocess (one layout at every height, colour-coded
+by side; see `_order_dialog.py` for why it must be a subprocess), falling back to an AppleScript `display dialog` if that
 subprocess fails. Everywhere else: a tkinter modal, which macOS never reaches. A host with
 no backend available fails closed rather than proceeding unconfirmed. This paragraph read
 "tried in order: ... AppKit, a tkinter modal, and an AppleScript fallback" until 2026-09-17,
@@ -1143,12 +1143,13 @@ _dialog_icon: str | None = None
 def set_dialog_icon(path: str | Path | None) -> None:
     """Set the image the Gate 2 dialogs show as their icon, or clear it with None.
 
-    A host's own mark, set once at startup. This package ships none — and no broker's logo:
-    it is not a broker's product — so without one the dialog shows the system's default (the
-    Python launcher's rocket on macOS). The file is read by the dialog when it opens; one that
-    cannot be read leaves the default in place and never fails a confirmation. The icon keeps
-    the system's size and position. AppKit dialogs only: the osascript and tkinter fallbacks
-    draw none.
+    A host's own mark, set once at startup, drawn as it is (a logo keeps its colours). Without
+    one the dialog shows the package's own generic exchange glyph (`assets/exchange-icon.png`,
+    since 2026-11-07, as a template image tinted to the label colour) — no broker's logo: it is
+    not a broker's product. The file is read by the dialog when it opens; one that cannot be read
+    falls back to the glyph, and the glyph to the application's icon, and never fails a
+    confirmation. The icon is 56 pt, centred over the title (`_order_dialog._build_dialog`).
+    AppKit dialogs only: the osascript and tkinter fallbacks draw none.
     """
     global _dialog_icon  # one process-wide setting, like the dialogs themselves
     _dialog_icon = None if path is None else str(path)

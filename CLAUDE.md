@@ -403,7 +403,7 @@ Measured with Gate 1 denying: one GET on a fresh session, zero once initialised,
 | Gate | Mechanism | Behaviour |
 |---|---|---|
 | **Gate 1 — Touch ID** | Apple `LocalAuthentication` (`LAPolicyDeviceOwnerAuthentication`) | Touch ID/Face ID first, falls back to the device's system password on a failed/cancelled biometric scan. 60-second timeout. |
-| **Gate 2 — Visual confirmation** | On macOS an AppKit `NSAlert` in a subprocess (`osascript` if that fails); a `tkinter` modal elsewhere. Full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
+| **Gate 2 — Visual confirmation** | On macOS the core's own AppKit modal window in a subprocess — one layout at every height since 2026-11-07, an `NSAlert` before (`osascript` if that fails); a `tkinter` modal elsewhere. Full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
 
 If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and no order is placed, modified or cancelled.
 

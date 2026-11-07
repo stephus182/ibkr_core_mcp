@@ -10,6 +10,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **The Gate 2 dialog has a default icon of its own: a generic exchange glyph
+  (`ibkr_core_mcp/assets/exchange-icon.png`, with its SVG source beside it; claudia_ui gap
+  #111, operator 2026-11-07: "generic and simple", a PNG that works on Windows too).** Solid
+  black on a transparent 1024-px canvas, drawn as a *template* image, so AppKit tints it to the
+  label colour in light and dark mode from the one file; a host's own icon
+  (`order_confirm.set_dialog_icon`) is drawn as it is and keeps its colours; a file AppKit cannot
+  read falls to the next, the application's icon last — an icon is never a reason to fail a
+  confirmation. The glyph is looked for beside the module's **real** file
+  (`_order_dialog._default_icon`, `Path(__file__).resolve()`): the first live dialog after it
+  was added drew the application's icon, because a strict editable install runs the script
+  through a symlink farm snapshotted at install time and the new `assets/` directory was not in
+  the farm — a test through a real symlink holds it, and the wheel probe (`scripts/verify_wheel.py`
+  `DATA_FILES`, `[tool.setuptools.package-data]` `assets/*`) ships both files. Seen live with
+  the glyph on 2026-11-07.
 - **A bracket child's TIF longer than the parent's is refused before any gate (claudia_ui
   gap #36, operator rule 2026-10-18).** IBKR's rule, TWS guide › Using the Orders Panel: "You
   must set the TIF for a child order equal to or shorter than that of the parent. Otherwise, the
@@ -248,6 +262,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **The Gate 2 dialog is the core's own modal window, one layout at every height (claudia_ui
+  gap #111; operator 2026-11-06: "buttons CENTERED, same order blue-red AND side by side …
+  always the same and expected").** `_order_dialog.py` drew an `NSAlert` until now, and NSAlert
+  chooses among three layouts by its content's height and its labels' width (measured
+  off-screen 2026-11-06, macOS 27 / PyObjC 12.2.2): the same bracket dialog came out with its
+  buttons side by side at the bottom right one time and stacked and centred the next, and the
+  swap that put the validating button first ran on one of the three. `_build_dialog` now lays
+  out a titled `NSWindow` with no close, minimise or zoom button — the icon, the title, the
+  typed rows, the disclaimer, the banner, and ONE row of two equal 150 × 32 pt buttons 12 pt
+  apart, centred, the validating button blue on the LEFT and the abandon button red on the
+  RIGHT — and `_run_alert` runs it with `runModalForWindow_` at `NSModalPanelWindowLevel`.
+  Each button's target is a plain Python `_Decision` whose two methods stop the loop with 1000
+  and 1001, the codes `outcome_token` already read, so the three stdout tokens, the JSON
+  payload, the timer in `NSModalPanelRunLoopMode`, `order_confirm.py`, the AppleScript
+  fallback and every caller are unchanged; Escape stays the abandon button's and Return is
+  nobody's. The tests find each button by its TITLE and hold the frames (blue left of red,
+  equal, 12 apart, centred in the window), the same frames at a 100-pt and a 2,000-pt body,
+  the mask and level, the click → code → token chain and the icon fallback; ten mutants each
+  killed by its own test; the three dialogs drawn off-screen from the shipped code. Sources:
+  Apple, `runModal(for:)` — "returns the argument passed to stopModal(withCode:)", centres the
+  window and makes it key itself, fires only the modal loop's timers; `NSButton.keyEquivalent`
+  — none by default. **The validating button also refuses keyboard focus**
+  (`refusesFirstResponder`): with Full Keyboard Access on, Space presses the focused button, and
+  "explicit mouse click on the confirm button" (SECURITY.md § Gate 2; OWASP Transaction
+  Authorization § 1.1, What You See Is What You Sign) must hold for the keyboard too — the
+  abandon button may take focus, so Space can at most abandon (review finding, operator
+  2026-11-07). **What keeps the button target alive** is PyObjC's outer autorelease pool, not
+  the Python reference (`NSControl.target` is weak and points at the proxy; measured:
+  `objc.recycleAutoreleasePool()` makes a target None, nothing in this one-shot script recycles
+  it, and the live loop kept the target through a 49-second dialog; were it ever gone, a click
+  would do nothing and the dialog would end TIMED_OUT, never CONFIRMED). Seen live 2026-11-07
+  from ClaudIA: the place dialog three times, the cancel dialog, the bracket dialog — the one
+  layout at every height, each ended with the red button; a dialog left alone timed out at 60 s
+  (claudia_ui Live Test Log).
 - **`add_indicators` tells the model how to report its lines (register F40, claudia_ui gap
   #95).** Live 2026-10-08 the tool returned `EMA 20 hl2: 332.05 (over 123 bars)` and the reply read
   `EMA 20 (hl2): 332.05`, "rising": the clause agreed on 2026-10-06 — the number of bars a

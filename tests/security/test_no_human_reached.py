@@ -73,7 +73,7 @@ def test_touch_id_cannot_prompt(monkeypatch):
 
 
 def test_the_dialog_cannot_run_inside_the_test_process():
-    """Door 2. `_order_dialog._run_alert` builds an `NSAlert`; here it gets the stand-in."""
+    """Door 2. `_order_dialog._run_alert` builds the core's own AppKit window; here it gets the stand-in."""
     assert sys.modules["AppKit"] is conftest._DIALOG_FRAMEWORK  # before anything real
     with refused("AppKit"):
         _order_dialog._run_alert({"title": "t", "details": {}, "confirm_label": "OK"})

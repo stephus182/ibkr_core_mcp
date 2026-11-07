@@ -890,8 +890,10 @@ Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/tr
 Every method in this section enforces two sequential security gates before any API call is made:
 1. **Gate 1:** macOS Touch ID / Face ID (`LAPolicyDeviceOwnerAuthentication`, falls back to the
    device's system password on a failed/cancelled biometric scan, 60s timeout).
-2. **Gate 2:** a modal dialog carrying the full order details. On macOS an AppKit `NSAlert`
-   run in a subprocess, falling back to an AppleScript `display dialog` if that subprocess
+2. **Gate 2:** a modal dialog carrying the full order details. On macOS the core's own AppKit
+   modal window run in a subprocess (one layout for every dialog at every height since
+   2026-11-07 — claudia_ui gap #111; an `NSAlert` until then), falling back to an AppleScript
+   `display dialog` if that subprocess
    fails; a `tkinter` modal only off macOS — which an order write never reaches, because
    Gate 1 is macOS-only and raises first. Return confirms on none of the three; the
    per-renderer mechanisms are in `SECURITY.md` § Gate 2. This line named `tkinter` as *the*
