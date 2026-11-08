@@ -60,7 +60,7 @@ flowchart TB
     P -->|yes| FAST["Return at once.<br/>Session preserved, no 2FA"]
     P -->|no| R{"Container running?"}
     R -->|yes| SKIP["Leave it alone"]
-    R -->|no| ST["start()<br/>removes any container,<br/>builds the image only if absent"]
+    R -->|no| ST["start()<br/>restarts a current container in place,<br/>else recreates it"]
     SKIP --> W["wait_for_gateway<br/>GET /tickle, 120 s"]
     ST --> W
     W --> L["Open the login page;<br/>the human does 2FA"]
@@ -73,17 +73,33 @@ flowchart TB
     class ST,DEG destr
 ```
 
-The two diamonds are the whole point. `start()` removes any existing container, and the session
-lives in that container's Java process — so calling it throws the session away and forces a
-fresh 2FA. Until 2026-08-06 it ran on **every** launch where the gateway was not already
-authenticated, discarding sessions a pre-flight would have found perfectly usable. A container
-that is absent or stopped cannot hold a session, so recreating one is free; a *running* one is
-left alone.
+The two diamonds are the whole point. `start()` always ends on a fresh Java process, and the
+session lives in that process — so calling it throws the session away and forces a fresh 2FA.
+Until 2026-08-06 it ran on **every** launch where the gateway was not already authenticated,
+discarding sessions a pre-flight would have found perfectly usable. A container that is absent
+or stopped cannot hold a session, so starting one loses none; a *running* one is left alone.
+
+**Restarted in place, or recreated (register F43, 2.2.0).** A container that runs the image the
+tag names now and was made with the manager's own run options is restarted in place —
+`docker restart` starts a stopped container and gives a running one a new process (measured
+2026-11-07 on a throwaway container, then seen on the gateway's own) — so its own files survive,
+the gateway's log among them: the one place a login IBKR refused shows (claudia_ui gap #93). `start()` records its run options on the container as the
+label `ibkr-core-mcp.run-options`; a container on another image, made with other options (a
+port, the loopback binding, a variable) or without the label — every one made before 2.2.0 — is
+removed and run anew, as is one Docker will not restart. Docker Compose decides the same way: it
+recreates a container when "the service's configuration or image was changed after the
+container's creation" ([compose up](https://docs.docker.com/reference/cli/docker/compose/up/)).
+`restart()` is `start()`.
 
 **A rebuild is not automatic.** `start()` builds the image only when it is absent, so after
 changing anything that ships into it (`Dockerfile`, `conf.yaml`, `run_gateway.sh`,
-`healthcheck.sh`) you must `docker rmi ibkr-core-gateway` first — a restart alone keeps running
-the old image. That is exactly how the in-container tickler survived its own removal for a day.
+`healthcheck.sh`) you must `docker rmi -f ibkr-core-gateway` first — a restart alone keeps
+running the old image. That is exactly how the in-container tickler survived its own removal for
+a day. `-f` because the container still uses the image: Docker refuses without it, stopped
+container or not ("must be forced", measured 2026-11-07 on a throwaway image), and with it removes
+only the tag. The next `start()` then finds no image under the tag: it removes the container,
+builds the image and runs a new one. The old image stays on disk, untagged, until it is removed
+(`docker image prune`).
 
 ---
 

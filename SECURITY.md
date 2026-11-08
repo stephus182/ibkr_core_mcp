@@ -711,13 +711,15 @@ Accepted rather than fixed, for now, because the practical precondition is steep
 
 ### Subprocess Injection Analysis
 
-All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The three values that appear in subprocess arguments are:
+All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The five values that appear in their arguments are:
 
 | Value | Type | Source | Injection risk |
 |---|---|---|---|
 | `self._port` | `int` | Constructor parameter | None — integers cannot carry shell metacharacters |
 | `self.IMAGE_NAME` | class constant `"ibkr-core-gateway"` | Hardcoded | None |
 | `self.CONTAINER_NAME` | class constant `"ibkr_core_gateway"` | Hardcoded | None |
+| `_RUN_OPTIONS_LABEL` | module constant `"ibkr-core-mcp.run-options"` | Hardcoded; the label's value is the run options, built from `self._port` and constants (register F43) | None |
+| `_DOCKER_DIR` | `Path` | `Path(__file__).resolve().parent` — the package's own `gateway/` directory, `docker build`'s context | None — one list element, never parsed by a shell |
 
 No user-supplied string reaches any subprocess argument.
 
@@ -731,7 +733,7 @@ The two bundled shell scripts receive all configuration via Docker environment v
 
 All values originate from `manager.py` constants or the integer `port` parameter. No external input is expanded by the shell inside the container.
 
-`GATEWAY_PORT` is the only variable passed, and the shrink is itself the security change. A third script, `tickler.sh`, ran a `while true` loop POSTing `/tickle` on three `TICKLE_*` variables; it left the image on 2026-08-06 and the tree on 2026-08-07, and the variables stopped being passed the same day. An in-container renewal loop is not a neutral convenience — it cannot see the host-side suspend flag that coordinates a login, and on 2026-08-05 three of them kept a **borrowed** SSO session alive through every attempt to clear it (`POST /logout` could not; `docker restart` could). Renewal is the caller's, from the host. `healthcheck.sh` was changed from POST to GET on the same reasoning: `/tickle` is documented as preventing a session from ending, so a POST there is a session-affecting write dressed as a health check.
+`GATEWAY_PORT` is the only variable passed, and the shrink is itself the security change. A third script, `tickler.sh`, ran a `while true` loop POSTing `/tickle` on three `TICKLE_*` variables; it left the image on 2026-08-06 and the tree on 2026-08-07, and the variables stopped being passed the same day. Since 2.2.0 `start()` reuses a container only when it was made with exactly the options it gives today — the loopback-only publish and this one variable, recorded on the container as the label `ibkr-core-mcp.run-options` (register F43) — so an option removed from `start()`, as these were, also leaves the running container at the next start, and a container made before 2.2.0 is recreated. An in-container renewal loop is not a neutral convenience — it cannot see the host-side suspend flag that coordinates a login, and on 2026-08-05 three of them kept a **borrowed** SSO session alive through every attempt to clear it (`POST /logout` could not; `docker restart` could). Renewal is the caller's, from the host. `healthcheck.sh` was changed from POST to GET on the same reasoning: `/tickle` is documented as preventing a session from ending, so a POST there is a session-affecting write dressed as a health check.
 
 ### conf.yaml Security Decisions
 

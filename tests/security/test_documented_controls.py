@@ -339,3 +339,13 @@ def test_security_md_states_the_real_number_of_collapse_home_surfaces():
         f"{sum(sites.values())}: {sites}. Add the new one to the inventory and give it a "
         "canary in test_error_redaction.py, or the inventory reads as complete while it is not."
     )
+
+
+def test_security_md_names_the_label_a_reused_gateway_container_is_judged_by():
+    """SECURITY.md says a gateway container is reused only when it was made with today's run
+    options — the loopback-only publish among them — recorded under a label (register F43).
+    The label it names must be the one `start()` writes, or the documented control is a stale
+    copy: the failure mode this module exists for."""
+    from ibkr_core_mcp.gateway.manager import _RUN_OPTIONS_LABEL
+
+    assert f"`{_RUN_OPTIONS_LABEL}`" in (_ROOT / "SECURITY.md").read_text()

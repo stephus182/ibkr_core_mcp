@@ -13,7 +13,7 @@ Quick start (CLI)::
 Programmatic (non-interactive, e.g. from a web UI such as ClaudIA)::
 
     gm = GatewayManager()
-    gm.start()                    # build image + run container
+    gm.start()                    # restart the container in place, or build + run one
     gm.wait_for_gateway()         # wait up to 120s for Java process
     window = gm.open_login_page() # a small Chrome window of its own (a tab if no Chrome)
     # … user logs in …
@@ -23,6 +23,7 @@ Programmatic (non-interactive, e.g. from a web UI such as ClaudIA)::
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -66,6 +67,14 @@ present since 2026-07-22 — which also meant the in-container tickler removed f
 `run_gateway.sh` on 2026-08-06 could never take effect. Two defects, one cause: nothing
 ever rebuilt, and nothing could have.
 """
+
+_RUN_OPTIONS_LABEL = "ibkr-core-mcp.run-options"
+"""The label `start()` records a container's run options under, so a later start can tell
+whether they changed (register F43). Docker's key format: lower case, `.`-separated namespaces,
+no reserved prefix (https://docs.docker.com/engine/manage-resources/labels/); the namespace is the
+package's name, there being no domain of ours to reverse ("Don't use a domain in your label key
+without the domain owner's permission", same page). A label is not visible to the process inside
+(https://docs.docker.com/reference/cli/docker/container/run/#label)."""
 
 _CHROME_INSTALLS: dict[str, tuple[str, ...]] = {
     # Measured 2026-10-13 (Chrome 154, register F44).
@@ -249,15 +258,65 @@ class GatewayManager:
             == 0
         )
 
-    def start(self) -> None:
-        """Build image if needed, then start the gateway container.
+    def _is_current(self, recorded: str) -> bool:
+        """True when the container runs the image the tag names now and was made with the run
+        options `recorded` — Docker Compose's rule, which recreates a container when "the
+        service's configuration or image was changed after the container's creation"
+        (https://docs.docker.com/reference/cli/docker/compose/up/).
 
-        Any existing container (running or stopped) is removed first so the
-        new container starts with a clean unauthenticated session.
+        The image by id, so a rebuild takes effect; the options by the label `start()` writes, so
+        a changed port, binding or variable does too. A container without that label — made
+        before 2.2.0, or by hand — is not current; nor is one when there is none.
+        """
+        container = subprocess.run(
+            ["docker", "container", "inspect", self.CONTAINER_NAME], capture_output=True, text=True
+        )
+        if container.returncode != 0:
+            return False
+        image = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", self.IMAGE_NAME],
+            capture_output=True,
+            text=True,
+        )
+        made = json.loads(container.stdout)[0]
+        labels = made["Config"]["Labels"] or {}
+        return bool(made["Image"] == image.stdout.strip() and labels.get(_RUN_OPTIONS_LABEL) == recorded)
+
+    def start(self) -> None:
+        """Start the gateway on a fresh Java process — so on a clean, unauthenticated session.
+
+        A current container (`_is_current`) is restarted in place: `docker restart` starts a
+        stopped one and gives a running one a new process, and the container's own files — the
+        gateway's log, the one place a refused login shows — are kept (measured 2026-11-07 on a
+        throwaway container; register F43). Any other container is removed and a new one run, the image built first
+        if it is absent; so is one Docker will not restart.
         """
         self.ensure_docker_running()
+        options = [
+            "-p",
+            f"127.0.0.1:{self._port}:{self._port}",
+            # GATEWAY_PORT is the only variable anything in the image reads, and
+            # `healthcheck.sh` is the only reader — it builds the probe URL from
+            # it. `run_gateway.sh` never references the variable; its wait loop
+            # reaches the port only by calling that script.
+            # Three TICKLE_* variables were passed here until
+            # 2026-08-07, addressed to a tickler.sh that had been out of the
+            # image since 2026-08-06 and is now deleted outright. Do not add
+            # them back: session renewal is the caller's, because a loop inside
+            # the container cannot see the host-side suspend flag that
+            # coordinates a login. Guarded by a test asserting their absence.
+            "-e",
+            f"GATEWAY_PORT={self._port}",
+        ]
+        recorded = " ".join(options)
+        if self._is_current(recorded):
+            restarted = subprocess.run(["docker", "restart", self.CONTAINER_NAME], capture_output=True, text=True)
+            if restarted.returncode == 0:
+                log.info("Gateway container restarted in place: %s", self.CONTAINER_NAME)
+                return
+            log.warning("docker restart failed (%s) — recreating the container", restarted.stderr.strip())
         if self.container_exists():
-            log.info("Removing existing gateway container for clean restart")
+            log.info("Removing the existing gateway container")
             self.stop()
         if not self.image_exists():
             self.build_image()
@@ -270,20 +329,9 @@ class GatewayManager:
                     "-d",
                     "--name",
                     self.CONTAINER_NAME,
-                    "-p",
-                    f"127.0.0.1:{self._port}:{self._port}",
-                    # GATEWAY_PORT is the only variable anything in the image reads, and
-                    # `healthcheck.sh` is the only reader — it builds the probe URL from
-                    # it. `run_gateway.sh` never references the variable; its wait loop
-                    # reaches the port only by calling that script.
-                    # Three TICKLE_* variables were passed here until
-                    # 2026-08-07, addressed to a tickler.sh that had been out of the
-                    # image since 2026-08-06 and is now deleted outright. Do not add
-                    # them back: session renewal is the caller's, because a loop inside
-                    # the container cannot see the host-side suspend flag that
-                    # coordinates a login. Guarded by a test asserting their absence.
-                    "-e",
-                    f"GATEWAY_PORT={self._port}",
+                    "--label",
+                    f"{_RUN_OPTIONS_LABEL}={recorded}",
+                    *options,
                     self.IMAGE_NAME,
                 ],
                 check=True,
@@ -302,8 +350,8 @@ class GatewayManager:
         log.info("Gateway container stopped: %s", self.CONTAINER_NAME)
 
     def restart(self) -> None:
-        """Stop then start — resets to a clean unauthenticated session."""
-        self.stop()
+        """`start()`, which already ends on a fresh process: a clean, unauthenticated session.
+        A `stop()` first would remove the container — and its log — for nothing (register F43)."""
         self.start()
 
     # ── Gateway health ────────────────────────────────────────────────────────
@@ -493,7 +541,7 @@ class GatewayManager:
 
         Full path (first start or after session loss):
           1. Ensure Docker is running (launches Docker Desktop on macOS if needed)
-          2. Remove any existing container and start a fresh one
+          2. Restart the container in place — or recreate it, if its image or run options changed
           3. Wait for Java process to become reachable
           4. Open the login window (Chrome; the default browser's tab if there is none)
           5. Wait for user to complete login + 2FA
@@ -511,13 +559,13 @@ class GatewayManager:
             return True
 
         print("▶ Starting IBKR gateway container...")
-        # Start ONLY when nothing is running. `start()` removes any existing container,
-        # which destroys whatever session it held — and until 2026-08-06 that ran on every
+        # Start ONLY when nothing is running. `start()` ends on a fresh Java process, which
+        # destroys whatever session the container held — and until 2026-08-06 that ran on every
         # launch where the gateway was not already authenticated, throwing away sessions
         # that a pre-flight would have found perfectly usable and forcing a fresh 2FA.
         #
         # A container that is absent or stopped cannot hold a session (it lives in the
-        # Java process), so recreating one is free. A RUNNING container is left alone.
+        # Java process), so starting one loses none. A RUNNING container is left alone.
         #
         # NOTE: claudia_ui no longer calls this method at all — it goes through
         # claudia.gateway_session, which owns the sequencing and pre-flights first. This

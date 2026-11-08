@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**2,336 unit tests · 103 integration tests (2,439 total) · 92% line coverage (non-integration)** — counted 2026-11-07 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
+**2,344 unit tests · 103 integration tests (2,447 total) · 92% line coverage (non-integration)** — counted 2026-11-07 on `release/2.2.0` with the commands below. The history of this figure is in `git log` and the CHANGELOG, not here.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28
@@ -86,7 +86,7 @@ Live integration test log: [`docs/audits/live-test-log.md`](audits/live-test-log
 | `auth.py` | 93% | 81, 142–143 | `browser_cookie3` import and cookie-apply path — requires a real installed browser's cookie store |
 | `pinescript.py` | 90% | 143–144, 232, 234, 236, 239 | KeyError in template `.format()` (only triggers if a template variable is missing from a custom indicator dict — not reachable via public API); timeframe-inference edge cases for sub-1-minute and multi-day intervals |
 | `web_scraper.py` | 95% | 88–89, 229, 427, 562–563, 584–585, 648–649 | Retry-After parse fallback, a 4xx branch in `_raise_for_status`, and Drive error paths in `WebDocsStore` (upload/manifest failures). The old `crawl()` pagination branches are gone with the method itself (2026-07-30). |
-| `gateway/manager.py` | 96% | 184–185, 191, 244, 510–511, 526, 532–533 | Moved up from the low-coverage table (73%) on 2026-10-13, when the login window's tests (register F44) reached `open_login_page()` and the login half of `startup()`. Left: Docker Desktop failing to launch and the poll's sleep in `ensure_docker_running`, `container_exists`, and `startup()`'s fast path, container start and a gateway that never answers — each needs Docker, or a scenario no test drives. |
+| `gateway/manager.py` | 96% | 193–194, 200, 558–559, 574, 580–581 | Moved up from the low-coverage table (73%) on 2026-10-13, when the login window's tests (register F44) reached `open_login_page()` and the login half of `startup()`; `container_exists` is reached since 2026-11-07, by the container-reuse tests (register F43). Left: Docker Desktop failing to launch and the poll's sleep in `ensure_docker_running`, and `startup()`'s fast path, container start and a gateway that never answers — each needs Docker, or a scenario no test drives. |
 
 ---
 

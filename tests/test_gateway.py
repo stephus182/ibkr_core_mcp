@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import platform
 import subprocess
+from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -21,8 +24,69 @@ from ibkr_core_mcp.gateway.manager import _LOGIN_WINDOW_ENV, _find_chrome
 # ---------------------------------------------------------------------------
 
 
-def _run_result(returncode: int, stdout: str = "") -> SimpleNamespace:
-    return SimpleNamespace(returncode=returncode, stdout=stdout)
+def _run_result(returncode: int, stdout: str = "", stderr: str = "") -> SimpleNamespace:
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+_IMAGE_ID = "sha256:" + "1" * 64
+"""What `docker image inspect --format {{.Id}}` reports for the gateway image in these tests."""
+
+
+def _fake_docker(
+    container: dict[str, object] | None, restart_rc: int = 0
+) -> tuple[Callable[..., SimpleNamespace], list[list[str]]]:
+    """A `subprocess.run` for the docker commands `start()` issues; every argv is recorded.
+
+    `container` is what `docker container inspect` reports (`None`: there is none — rc 1 and
+    `[]`, measured 2026-11-07); the image is present, as `_IMAGE_ID`; `docker restart` answers
+    `restart_rc`; every other command succeeds.
+    """
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(argv)
+        if argv[1:3] == ["container", "inspect"]:
+            return _run_result(1, "[]") if container is None else _run_result(0, json.dumps([container]))
+        if argv[1:3] == ["image", "inspect"]:
+            return _run_result(0, _IMAGE_ID + "\n")
+        if argv[1] == "inspect":  # container_exists()
+            return _run_result(1 if container is None else 0)
+        if argv[1] == "restart":
+            return _run_result(restart_rc, stderr="Error response from daemon" if restart_rc else "")
+        return _run_result(0)
+
+    return run, calls
+
+
+def _container_made_by(gm: GatewayManager) -> dict[str, object]:
+    """What `docker container inspect` reports for the container `gm.start()` runs on a host that
+    has none: the image's id, the label the base image brings (the live container carries
+    Ubuntu's OCI labels, read 2026-11-07) and every label `start()` set, kept byte for byte
+    (measured the same day)."""
+    run, calls = _fake_docker(None)
+    with patch("subprocess.run", side_effect=run):
+        gm.start()
+    argv = next(argv for argv in calls if argv[1] == "run")
+    labels = {"org.opencontainers.image.title": "ubuntu"}
+    for flag, value in pairwise(argv):
+        if flag == "--label":
+            key, _, text = value.partition("=")
+            labels[key] = text
+    return {"Image": _IMAGE_ID, "Config": {"Labels": labels}}
+
+
+def _published_beyond_loopback(made: dict[str, object]) -> dict[str, object]:
+    """`made` with one option changed alone: its recorded publish on every interface, not loopback."""
+    config = made["Config"]
+    assert isinstance(config, dict)
+    labels = {key: text.replace("127.0.0.1:", "0.0.0.0:") for key, text in config["Labels"].items()}
+    assert labels != config["Labels"], "no label records a loopback publish: this case would test nothing"
+    return made | {"Config": {"Labels": labels}}
+
+
+def _verbs(calls: list[list[str]]) -> list[str]:
+    """The docker sub-commands issued, in order, among those that keep or replace a container."""
+    return [argv[1] for argv in calls if argv[1] in {"restart", "stop", "rm", "run"}]
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +200,7 @@ class TestBuildImage:
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run", side_effect=subprocess.CalledProcessError(125, "docker")),
@@ -150,22 +215,86 @@ class TestBuildImage:
 
 
 class TestStart:
-    def test_stops_existing_container_before_starting(self) -> None:
+    def test_a_current_container_is_restarted_in_place(self) -> None:
+        """Nothing is removed or run anew, so the container's own files — the gateway's log, the
+        one place a refused login shows — are kept (register F43). `docker restart`, not `docker
+        start`: it gives a running container a new process too (measured 2026-11-07), and
+        `start()` ends on a clean, unauthenticated session either way."""
         gm = GatewayManager()
-        with (
-            patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "container_exists", return_value=True),
-            patch.object(gm, "stop") as mock_stop,
-            patch.object(gm, "image_exists", return_value=True),
-            patch("subprocess.run"),
-        ):
+        run, calls = _fake_docker(_container_made_by(gm))
+        with patch("subprocess.run", side_effect=run):
             gm.start()
-        mock_stop.assert_called_once()
+        assert ["docker", "restart", "ibkr_core_gateway"] in calls
+        assert _verbs(calls) == ["restart"], calls
+
+    @pytest.mark.parametrize(
+        "made",
+        [
+            pytest.param(
+                lambda: _container_made_by(GatewayManager()) | {"Image": "sha256:" + "0" * 64},
+                id="an-older-image",
+            ),
+            pytest.param(lambda: _container_made_by(GatewayManager(port=5056)), id="other-run-options"),
+            pytest.param(
+                lambda: _published_beyond_loopback(_container_made_by(GatewayManager())),
+                id="published-beyond-loopback",
+            ),
+            pytest.param(
+                lambda: {"Image": _IMAGE_ID, "Config": {"Labels": {"org.opencontainers.image.title": "ubuntu"}}},
+                id="not-this-label",
+            ),
+            pytest.param(lambda: {"Image": _IMAGE_ID, "Config": {"Labels": None}}, id="no-labels-at-all"),
+        ],
+    )
+    def test_a_container_that_is_not_current_is_removed_and_run_anew(
+        self, made: Callable[[], dict[str, object]]
+    ) -> None:
+        """Docker Compose's rule: recreate when "the service's configuration or image was changed
+        after the container's creation" (docs.docker.com/reference/cli/docker/compose/up/). The
+        image by id, so a rebuild takes effect; the run options by the label `start()` writes, so
+        a changed port, binding or variable does too. A container without that label — every one
+        made before 2.2.0, or one made by hand — is never taken for current."""
+        gm = GatewayManager()
+        run, calls = _fake_docker(made())
+        with patch("subprocess.run", side_effect=run):
+            gm.start()
+        assert _verbs(calls) == ["stop", "rm", "run"], calls
+
+    def test_the_label_records_every_option_the_container_is_run_with(self) -> None:
+        """One list feeds `docker run` and the label, so nothing reaches the container unrecorded:
+        an option added beside that list would never be compared, and a container made without it
+        would be restarted in place as current."""
+        run, calls = _fake_docker(None)
+        with patch("subprocess.run", side_effect=run):
+            GatewayManager().start()
+        argv = next(argv for argv in calls if argv[1] == "run")
+        label = argv[argv.index("--label") + 1]
+        recorded = label.partition("=")[2]
+        assert argv == [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            "ibkr_core_gateway",
+            "--label",
+            label,
+            *recorded.split(" "),
+            "ibkr-core-gateway",
+        ]
+
+    def test_a_container_docker_will_not_restart_is_removed_and_run_anew(self) -> None:
+        """So reusing a container never leaves the gateway down where recreating it would not."""
+        gm = GatewayManager()
+        run, calls = _fake_docker(_container_made_by(gm), restart_rc=1)
+        with patch("subprocess.run", side_effect=run):
+            gm.start()
+        assert _verbs(calls) == ["restart", "stop", "rm", "run"], calls
 
     def test_builds_image_when_missing(self) -> None:
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=False),
             patch.object(gm, "build_image") as mock_build,
@@ -178,6 +307,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -202,6 +332,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -217,6 +348,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -245,15 +377,14 @@ class TestStop:
 
 
 class TestRestart:
-    def test_calls_stop_then_start(self) -> None:
+    def test_restart_restarts_a_current_container_in_place(self) -> None:
+        """`restart()` is `start()`: a `stop()` first would remove the container — and the log
+        register F43 keeps — for nothing, since `start()` already ends on a fresh process."""
         gm = GatewayManager()
-        with (
-            patch.object(gm, "stop") as mock_stop,
-            patch.object(gm, "start") as mock_start,
-        ):
+        run, calls = _fake_docker(_container_made_by(gm))
+        with patch("subprocess.run", side_effect=run):
             gm.restart()
-        assert mock_stop.call_count == 1
-        assert mock_start.call_count == 1
+        assert _verbs(calls) == ["restart"], calls
 
 
 # ---------------------------------------------------------------------------

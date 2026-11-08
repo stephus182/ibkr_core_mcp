@@ -273,6 +273,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`GatewayManager.start()` restarts a current container in place instead of removing it, and
+  `restart()` is `start()` (register F43; claudia_ui gap #93).** Every start removed the
+  container and ran a new one, and the gateway's own log — kept in the container, the one place a
+  login IBKR refused shows — went with it. A container that runs the image the tag names now and
+  was made with the manager's own run options, recorded on it as the label
+  `ibkr-core-mcp.run-options`, is `docker restart`ed instead: a stopped one starts, a running one
+  gets a new Java process, so the session is as clean as before and the container's files are
+  kept. Any other container — another image, other options, not this label — is removed and run
+  anew as before, and so is one Docker will not restart. That is Docker Compose's rule: it recreates a
+  container when "the service's configuration or image was changed after the container's
+  creation" (https://docs.docker.com/reference/cli/docker/compose/up/). The label, not the port
+  alone, because a container keeps the options it was made with: the `TICKLE_*` variables removed
+  on 2026-08-07 would have stayed in a reused container. Measured 2026-11-07 on a throwaway
+  container: `docker restart` started a stopped one and gave a running one a new pid, and a file
+  written inside survived both. Containers made before this release do not carry this label, so the
+  first start after upgrading recreates the container once. Seen live on the gateway's own container
+  the same day, with no login: recreated once, then a stop and a start restarted it in place, its
+  log kept and appended to.
 - **`preview_order` previews a fractional quantity as given (register F37; claudia_ui #18).** The
   tool cast `quantity` to `int` and its schema typed it `integer`, so a 1000.5 ticket was previewed
   as 1000 and the preview did not describe the order about to be proposed. IBKR's whatif takes
