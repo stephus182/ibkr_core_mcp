@@ -69,13 +69,12 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 import urllib3
 
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
-from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.config import Config, require_loopback_url
 from ibkr_core_mcp.exceptions import (
     ConfigError,
     ConfirmationDeclinedError,
@@ -974,13 +973,9 @@ class IBKRClient:
                 self-signed certificate, so the host is pinned to localhost to keep
                 that exemption from ever applying to a remote server.
         """
-        self._base = config.gateway_url.rstrip("/")
-        _host = urlparse(config.gateway_url).hostname
-        if _host not in ("localhost", "127.0.0.1", "::1"):
-            raise ConfigError(
-                f"IBKRClient: verify=False is only permitted for localhost; "
-                f"got {_host!r}. Set IBKR_GATEWAY_URL to a localhost address."
-            )
+        # The one pin for every certificate-exempt call (register F45, condition C): a line before
+        # `verify = False`, held there by tests/security/test_tls_policy.py.
+        self._base = require_loopback_url(config.gateway_url).rstrip("/")
         self._session = requests.Session()
         self._session.verify = False
         auth = auth or BrowserCookieAuth()

@@ -39,6 +39,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+from ibkr_core_mcp.config import require_loopback_url  # noqa: E402
 from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -374,6 +375,7 @@ class GatewayManager:
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server
         Endpoint: GET /tickle
         """
+        require_loopback_url(self._api_url)  # before `verify=False` (F45, condition C; test_tls_policy.py)
         try:
             resp = requests.get(
                 f"{self._api_url}/tickle",
@@ -394,6 +396,7 @@ class GatewayManager:
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
         Endpoint: GET /iserver/auth/status
         """
+        require_loopback_url(self._api_url)  # before `verify=False` (F45, condition C; test_tls_policy.py)
         try:
             resp = requests.get(
                 f"{self._api_url}/iserver/auth/status",

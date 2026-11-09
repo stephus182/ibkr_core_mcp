@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from ibkr_core_mcp.config import is_loopback_url
+
 if TYPE_CHECKING:
     from ibkr_core_mcp.store import SQLiteStore
 
@@ -340,11 +342,12 @@ class IBKRWebSocket:
                 "It's a base dependency of ibkr_core_mcp — try: pip install --upgrade ibkr_core_mcp"
             ) from exc
 
-        parsed = urlparse(self._ws_url)
-        if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        # The one pin for every certificate-exempt call (register F45, condition C): a line before
+        # `CERT_NONE`, held there by tests/security/test_tls_policy.py. `StreamingError`, as before.
+        if not is_loopback_url(self._ws_url):
             from ibkr_core_mcp.exceptions import StreamingError
 
-            raise StreamingError(f"IBKRWebSocket only connects to localhost; got {parsed.hostname!r}")
+            raise StreamingError(f"IBKRWebSocket only connects to localhost; got {urlparse(self._ws_url).hostname!r}")
 
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ssl_ctx.check_hostname = False  # self-signed cert on localhost

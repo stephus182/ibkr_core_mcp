@@ -36,10 +36,12 @@ import stat
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import dotenv_values, find_dotenv
 from pydantic import SecretStr
 
+from ibkr_core_mcp.exceptions import ConfigError
 from ibkr_core_mcp.redaction import collapse_home
 
 log = logging.getLogger(__name__)
@@ -58,6 +60,58 @@ dialog, `osascript`, the docker CLI — needs a token. A host adds its own names
 # Our mask: any permission bit for group or others. OpenSSH's man page asks the same of a
 # private key file — "not accessible by others" — and ignores one that is.
 _OTHERS_MASK = 0o077
+
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+"""The hosts a request made with certificate verification off may be sent to.
+
+The Client Portal Gateway runs on this machine and serves a self-signed certificate, so every
+call to it disables verification — and that exemption must never apply to any other host: the
+session cookie would travel to it in clear. One definition (register F45, condition C): until
+2026-11-09 the tuple was written twice, in `IBKRClient.__init__` and `IBKRWebSocket.connect`,
+and the manager's two polls carried none. `tests/security/test_tls_policy.py` holds that every
+function in the package that disables verification calls one of the two helpers below on a
+line before it does.
+"""
+
+
+def is_loopback_url(url: str) -> bool:
+    """Whether `url` names one of `LOOPBACK_HOSTS` as its host.
+
+    The host is what `urlparse` reports — so `https://localhost@example.com/` is `example.com`,
+    `https:///x` has none, and an invalid IPv6 literal that makes `urlparse` raise is not
+    loopback either. Nothing else about the URL is judged here.
+    """
+    try:
+        return urlparse(url).hostname in LOOPBACK_HOSTS
+    except ValueError:  # an invalid IPv6 literal, e.g. "https://[::1:5055"
+        return False
+
+
+def require_loopback_url(url: str) -> str:
+    """`url`, unchanged, when `is_loopback_url(url)`; else `ConfigError`.
+
+    The message names the host and never the URL — a URL can carry userinfo, and this message is
+    one an operator pastes. Raised at the one place a certificate-exempt request is about to be
+    made, so a non-loopback gateway URL fails before any request, not inside one.
+
+    Args:
+        url: The gateway URL about to be used with verification off.
+
+    Returns:
+        The same URL, so a caller can pin inline: `base = require_loopback_url(url)`.
+
+    Raises:
+        ConfigError: The host is not `localhost`, `127.0.0.1` or `::1`.
+    """
+    if is_loopback_url(url):
+        return url
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        host = None
+    raise ConfigError(
+        f"verify=False is only permitted for localhost; got {host!r}. Set IBKR_GATEWAY_URL to a localhost address."
+    )
 
 
 @dataclass(frozen=True)

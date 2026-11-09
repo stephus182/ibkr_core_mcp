@@ -819,6 +819,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   delete.
 
 ### Security
+- **Every function that disables certificate verification pins its URL to loopback first, through
+  one helper, and the set of such functions is held by test (register F45, condition C).**
+  `config.LOOPBACK_HOSTS`, `config.is_loopback_url(url)` and `config.require_loopback_url(url)`
+  (returns the URL; raises `ConfigError` naming the host, never the URL) replace the two inline
+  tuples of `IBKRClient.__init__` and `IBKRWebSocket.connect`, and the manager's two polls —
+  `is_gateway_reachable`, `is_authenticated` — pin before their `verify=False` for the first
+  time. `SECURITY.md` had said "exactly three code paths … every one pinned to loopback" since
+  2026-07 and nothing held either half (F45 security review, probe M6).
+  `tests/security/test_tls_policy.py` now holds both: an AST scan over the package finds every
+  function with a `verify=False` keyword, a `.verify = False`, a `check_hostname = False` or a
+  `verify_mode = ssl.CERT_NONE`, requires the set to equal a declared allowlist, and requires the
+  first call to a pin helper to sit on a line before the first disabling line in each. The
+  client's and the socket's errors and messages are unchanged (`ConfigError`, `StreamingError`).
 - **No unit test can start `docker`, `open` or `caffeinate` (register F45, door 6 — the first
   commit of the gateway session owner's move into the core).** An audit hook in
   `tests/conftest.py`, armed from `pytest_configure`, refuses a child process by the name of what

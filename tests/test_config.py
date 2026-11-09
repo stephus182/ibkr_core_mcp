@@ -274,3 +274,73 @@ def test_from_env_holds_back_a_hosts_extra_secret_name(tmp_path, monkeypatch):
 
     assert "HOST_SECRET" not in os.environ
     assert os.environ["IBKR_GATEWAY_URL"] == "https://example.invalid/v1/api"
+
+
+# ── One loopback pin for every certificate-exempt call (register F45, condition C) ──────────
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://localhost:5055/v1/api",
+        "https://127.0.0.1:5055/v1/api",
+        "https://[::1]:5055/v1/api",
+        "http://localhost/",
+        "wss://localhost:5055/v1/api/ws",
+    ],
+)
+def test_a_loopback_url_passes_the_pin_unchanged(url):
+    """The three hosts the gateway can be reached on from the same machine, on any scheme or port.
+    `require_loopback_url` hands the URL back as it was, so a caller can pin inline."""
+    from ibkr_core_mcp.config import is_loopback_url, require_loopback_url
+
+    assert is_loopback_url(url) is True
+    assert require_loopback_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.example.com/v1/api",
+        "https://192.168.1.10:5055/v1/api",
+        "https://localhost.example.com/v1/api",
+        "https://localhost@example.com/v1/api",  # userinfo: the host is example.com
+        "https:///v1/api",  # no hostname
+        "https://",  # a bare scheme
+        "/v1/api",
+        "",
+    ],
+)
+def test_anything_but_a_loopback_host_is_refused(url):
+    """A public host, a private one, a name that merely starts with `localhost`, `localhost` as
+    userinfo, no host at all, a bare scheme, a bare path, nothing: none may carry a request made
+    with certificate verification off. `require_loopback_url` raises `ConfigError`, the error the
+    client's constructor has raised for this since the pin was written."""
+    from ibkr_core_mcp.config import is_loopback_url, require_loopback_url
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    assert is_loopback_url(url) is False
+    with pytest.raises(ConfigError, match="localhost"):
+        require_loopback_url(url)
+
+
+def test_the_refusal_names_the_host_and_never_the_url():
+    """A URL can carry userinfo — a password — and the refusal is a message an operator pastes."""
+    from ibkr_core_mcp.config import require_loopback_url
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    with pytest.raises(ConfigError) as raised:
+        require_loopback_url("https://user:s3cret-value@example.com/v1/api")
+    assert "example.com" in str(raised.value)
+    assert "s3cret-value" not in str(raised.value)
+
+
+def test_an_unparseable_url_is_refused_not_raised_through():
+    """An invalid IPv6 literal makes `urlparse` raise `ValueError`; that is "not loopback", with the
+    one error type the pin promises."""
+    from ibkr_core_mcp.config import is_loopback_url, require_loopback_url
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    assert is_loopback_url("https://[::1:5055/v1/api") is False
+    with pytest.raises(ConfigError):
+        require_loopback_url("https://[::1:5055/v1/api")
