@@ -714,7 +714,7 @@ Accepted rather than fixed, for now, because the practical precondition is steep
 
 ### Subprocess Injection Analysis
 
-All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The five values that appear in their arguments are:
+All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The seven values that appear in their arguments are:
 
 | Value | Type | Source | Injection risk |
 |---|---|---|---|
@@ -723,8 +723,32 @@ All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker",
 | `self.CONTAINER_NAME` | class constant `"ibkr_core_gateway"` | Hardcoded | None |
 | `_RUN_OPTIONS_LABEL` | module constant `"ibkr-core-mcp.run-options"` | Hardcoded; the label's value is the run options, built from `self._port` and constants (register F43) | None |
 | `_DOCKER_DIR` | `Path` | `Path(__file__).resolve().parent` — the package's own `gateway/` directory, `docker build`'s context | None — one list element, never parsed by a shell |
+| `GATEWAY_LOG_DIR` | module constant `"/app/api_gateway/logs"` | Hardcoded — the gateway's own log directory inside the container, `read_login_events`' last argument (register F45, 2026-11-09) | None |
+| `LOGIN_PHRASES` | six module constants (`preflight.py`) | Hardcoded; each is its own `-e` argument to `grep -F`, which reads them literally | None — fixed strings, list form |
 
-No user-supplied string reaches any subprocess argument.
+No user-supplied string reaches any subprocess argument. `read_login_events(timeout=15.0)` has
+**no container parameter** — the consumer's version took one — so nothing a caller passes can
+reach `docker exec`, where a value beginning with `-` is read as an option (OWASP OS Command
+Injection: every command injection is also an argument injection).
+
+### The gateway's own log, read in-container (register F45, 2026-11-09)
+
+The one place a login IBKR refused shows is the gateway's internal log, inside the container
+(`/app/api_gateway/logs/gw.<UTC date>.log`); `docker logs` carries none of it. `read_login_events`
+reads it with one command and no shell anywhere: `docker exec ibkr_core_gateway grep -rHF
+--include=gw.[0-9]*.log -e <phrase>… /app/api_gateway/logs`, the six phrases
+`preflight.LOGIN_PHRASES` verbatim, with `env={PATH, HOME, DOCKER_*}` and nothing else of the
+host's environment (measured 2026-10-12: `PATH` alone runs `docker exec`; `HOME` holds the
+CLI's configuration, `DOCKER_*` select a daemon), and a 15 s timeout as a backstop — the
+command ends on its own over finite files. The log carries the username, a numeric user id,
+session cookies, a MAC address and device identifiers, verbatim; **only the time, the event
+and its code leave the reader** (`preflight.login_events` cuts each matching line to those
+three before anything can log, print or store it — OWASP Logging Cheat Sheet, "Data to
+exclude"), a phrase line without a leading time is refused rather than guessed, and a partial
+read (exit 2) is never parsed. The exit rule is measured: 0 → parse; 1 with empty stderr → no
+login recorded; anything else → unreadable, the first line of stderr (≤ 200 chars) the
+reason; an `OSError` passes `redact_error`. A unit test that would run it is refused by name
+(`tests/conftest.py` door 6).
 
 ### Shell Scripts (healthcheck.sh, run_gateway.sh)
 

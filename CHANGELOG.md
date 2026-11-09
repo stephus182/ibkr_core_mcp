@@ -30,6 +30,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   that no string literal under `ibkr_core_mcp/gateway/` names the consumer or its commands,
   and two docstrings in `manager.py` and `__init__.py` that did were rewritten. Nothing is
   exported from the package root yet; the command line arrives with step 1's sixth commit.
+- **`ibkr_core_mcp.gateway.manager.read_login_events(timeout=15.0)` — the gateway's own log,
+  read in-container, reduced to time, event and code (register F45, step 1, condition D).**
+  Moved from the consumer with its tests; one change: **no container parameter** — the
+  command is `docker exec <GatewayManager.CONTAINER_NAME> grep -rHF --include=gw.[0-9]*.log
+  -e <phrase>… <GATEWAY_LOG_DIR>`, constants and the six fixed phrases only, so nothing a caller
+  passes can reach `docker exec` (a value beginning with `-` is read as an option). The
+  environment is `PATH`, `HOME` and `DOCKER_*` and nothing else of the host's; the exit rule is
+  the measured one (0 → parse; 1 with empty stderr → no login recorded; else unreadable, the
+  first line of stderr the reason); an `OSError` passes `redact_error`. Returns `(events, "")`
+  or `(None, reason)`, never raises. `GATEWAY_LOG_DIR` and `_docker_env` move with it. The
+  manager's six existing exception log lines pass `redact_error` too, and
+  `test_error_redaction.py`'s raw-interpolation probe now covers `gateway/manager.py`.
 - **`ContractRules` carries IBKR's per-contract fractional rule: `fractional_order_types`
   (`fraqTypes`) and `fractional_digits` (`fraqInt`) (register F27; claudia_ui #18).** IBKR: "permitted
   order types for use with fractional trading" and "decimal places for fractional order size"

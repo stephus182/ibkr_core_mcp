@@ -41,6 +41,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ibkr_core_mcp.config import require_loopback_url  # noqa: E402
 from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
+from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, LoginEvent, login_events  # noqa: E402
+from ibkr_core_mcp.redaction import redact_error  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +107,71 @@ _LOGIN_WINDOW_ENV = (
     "XDG_RUNTIME_DIR",
 )
 """The only variables the login window's Chrome receives — a host's secrets stay in the host."""
+
+
+GATEWAY_LOG_DIR = "/app/api_gateway/logs"
+"""The gateway's real log, inside the container. `docker logs` shows only container start-up
+chatter and status codes — verified 2026-08-06 by probing `GET /` (HTTP 302) and finding no
+corresponding line. Every request the Java process serves is written here instead, which is
+where a failing login is actually visible (`gw.<UTC date>.log`)."""
+
+
+def _docker_env() -> dict[str, str]:
+    """The docker CLI's environment: PATH, HOME and any DOCKER_* variable — nothing else.
+
+    The explicit environment of the spawn recipe (`docs/security-architecture.md` § 10): nothing
+    of the host's, an API key included, reaches the child. Measured 2026-10-12: PATH alone runs
+    `docker exec`; HOME holds the CLI's own configuration (contexts), and DOCKER_* select a
+    daemon where one is configured that way.
+    """
+    return {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
+
+
+def read_login_events(timeout: float = 15.0) -> tuple[list[LoginEvent] | None, str]:
+    """The login events of the gateway's own log, or None and why they could not be read.
+
+    One command and no shell anywhere: `docker exec <CONTAINER_NAME> grep -rHF
+    --include=gw.[0-9]*.log -e <phrase>… <GATEWAY_LOG_DIR>`. grep's own `--include` picks the
+    dated files (the `gw.message.*` files are not read), and only the lines carrying one of
+    `LOGIN_PHRASES` leave the container, to be cut to time, event and code by `login_events`
+    before anything else sees them — the log carries the username, a numeric user id, session
+    cookies, a MAC address and device ids, verbatim. The command ends on its own over finite
+    files; the timeout is a backstop, because stopping a `docker exec` client leaves its command
+    running inside the container (measured 2026-10-12).
+
+    **No container parameter** (register F45, condition D): the container is the class
+    constant and the directory the module's, so nothing a caller passes can reach `docker exec`,
+    where a value beginning with `-` is read as an option. The environment is `_docker_env()`.
+
+    The exit rule, measured the same day against the real container: 0 → parse; 1 with an
+    empty stderr → no line matched, so no login is recorded; anything else → unreadable, the
+    first line of stderr the reason. Exit 1 alone cannot tell "no line matched" from "no such
+    container" — only stderr does — and a partial read (a file gone) prints lines AND exits 2;
+    those lines are never used, since what the missing file held is exactly what would make
+    the verdict answer about an older login. Never raises for any of it: the caller keeps the
+    HTTP verdict and says why the log could not help; an `OSError`'s text passes `redact_error`.
+
+    Returns:
+        `(events, "")` when read — an empty list when no login line exists — else
+        `(None, reason)`.
+    """
+    command = ["docker", "exec", GatewayManager.CONTAINER_NAME, "grep", "-rHF", "--include=gw.[0-9]*.log"]
+    for phrase in LOGIN_PHRASES:
+        command += ["-e", phrase]
+    command.append(GATEWAY_LOG_DIR)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=_docker_env())
+    except subprocess.TimeoutExpired:
+        return None, f"docker did not answer within {timeout:g} s"
+    except OSError as exc:
+        return None, f"docker could not be run: {redact_error(exc)}"
+    problem = result.stderr.strip()
+    if result.returncode == 0 or (result.returncode == 1 and not problem):
+        try:
+            return login_events(result.stdout), ""
+        except ValueError as exc:  # `login_events`' own format refusal; through the one redaction function (G)
+            return None, redact_error(exc)
+    return None, (problem.splitlines()[0][:200] if problem else f"docker exited {result.returncode}")
 
 
 def _find_chrome() -> str | None:
@@ -384,10 +451,10 @@ class GatewayManager:
             )
             return 200 <= resp.status_code < 600
         except requests.exceptions.RequestException as exc:
-            log.debug("Gateway not reachable yet: %s", exc)
+            log.debug("Gateway not reachable yet: %s", redact_error(exc))
             return False
         except Exception as exc:
-            log.warning("Unexpected error checking gateway reachability: %s", exc)
+            log.warning("Unexpected error checking gateway reachability: %s", redact_error(exc))
             return False
 
     def is_authenticated(self) -> bool:
@@ -404,10 +471,10 @@ class GatewayManager:
                 timeout=5,
             )
         except requests.exceptions.RequestException as exc:
-            log.debug("Auth status check failed (gateway unreachable): %s", exc)
+            log.debug("Auth status check failed (gateway unreachable): %s", redact_error(exc))
             return False
         except Exception as exc:
-            log.warning("Unexpected error checking auth status: %s", exc)
+            log.warning("Unexpected error checking auth status: %s", redact_error(exc))
             return False
 
         if resp.status_code != 200:
@@ -417,7 +484,7 @@ class GatewayManager:
         try:
             return bool(resp.json().get("authenticated", False))
         except Exception as exc:
-            log.warning("Auth status response was not valid JSON: %s", exc)
+            log.warning("Auth status response was not valid JSON: %s", redact_error(exc))
             return False
 
     # ── Polling helper ────────────────────────────────────────────────────────
@@ -520,7 +587,7 @@ class GatewayManager:
                     start_new_session=True,  # the window outlives a terminal's Ctrl-C (POSIX; ignored on Windows)
                 )
             except OSError as exc:
-                log.warning("Chrome would not start for the login window (%s) — opening a tab", exc)
+                log.warning("Chrome would not start for the login window (%s) — opening a tab", redact_error(exc))
             else:
                 log.info("Opening the IBKR login window: %s", self._base_url)
                 return LoginWindow(process)

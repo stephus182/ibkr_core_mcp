@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
+import os
 import platform
 import subprocess
 from collections.abc import Callable
@@ -17,7 +19,8 @@ import requests
 
 from ibkr_core_mcp.exceptions import GatewayError
 from ibkr_core_mcp.gateway import GatewayManager, LoginWindow
-from ibkr_core_mcp.gateway.manager import _LOGIN_WINDOW_ENV, _find_chrome
+from ibkr_core_mcp.gateway.manager import _LOGIN_WINDOW_ENV, GATEWAY_LOG_DIR, _find_chrome, read_login_events
+from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, LoginEvent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -774,3 +777,129 @@ class TestStartupClosesTheLoginWindow:
         quit it: said, not hidden."""
         self._run(verified=True, on_retry=False, ours=False)
         assert "Close the login window yourself" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The gateway's own log, read in-container (register F45, condition D)
+# ---------------------------------------------------------------------------
+#
+# Moved from the consumer that wrote the read (its `read_login_events` took the container's name
+# as an argument); here the command is built from `GatewayManager.CONTAINER_NAME` and the module's
+# constants only, so no caller can hand `docker exec` a name — or an option — of its own.
+
+_PHRASE_LINE = "/app/api_gateway/logs/gw.2026-10-07.log:17:53:14.123 filler Client login succeeds\n"
+
+
+class TestReadLoginEvents:
+    def test_the_log_read_is_one_shell_free_bounded_command(self) -> None:
+        """List form, never a shell: here not even inside the container, because grep's own
+        `--include` picks the dated files (measured 2026-10-12: the same 93 lines as the shell
+        glob) — and a command that ends on its own, the timeout only a backstop (stopping a
+        `docker exec` client leaves its command running in the container, measured that day)."""
+        with patch("subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            read_login_events()
+
+        phrases = [arg for phrase in LOGIN_PHRASES for arg in ("-e", phrase)]
+        assert run.call_args.args[0] == [
+            "docker",
+            "exec",
+            "ibkr_core_gateway",
+            "grep",
+            "-rHF",
+            "--include=gw.[0-9]*.log",
+            *phrases,
+            "/app/api_gateway/logs",
+        ]
+        assert run.call_args.kwargs["timeout"] > 0
+        assert "shell" not in run.call_args.kwargs
+
+    def test_the_command_is_built_from_constants_and_takes_no_container_argument(self) -> None:
+        """Condition D. The container is the class constant and the directory the module's; the one
+        parameter is the timeout. A `container` parameter would be a value a caller — one day a
+        model-derived one — could hand to `docker exec`, and a value beginning with `-` is read by
+        docker as an option (OS Command Injection cheat sheet: every command injection is also an
+        argument injection)."""
+        assert list(inspect.signature(read_login_events).parameters) == ["timeout"]
+        assert GATEWAY_LOG_DIR == "/app/api_gateway/logs"
+
+    def test_the_docker_cli_gets_path_home_and_docker_variables_only(self) -> None:
+        """The spawn recipe's explicit environment: nothing of the host's — an API key included —
+        reaches the child. Measured 2026-10-12: PATH alone runs `docker exec` here; HOME holds
+        the CLI's configuration, DOCKER_* choose a daemon."""
+        environment = {
+            "PATH": "/usr/bin",
+            "HOME": "/home/operator",
+            "DOCKER_HOST": "unix:///probe.sock",
+            "ANTHROPIC_API_KEY": "sk-not-a-real-key",
+            "IBKR_GATEWAY_URL": "https://localhost:5055/v1/api",
+        }
+        with patch.dict(os.environ, environment, clear=True), patch("subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            read_login_events()
+
+        assert run.call_args.kwargs["env"] == {
+            "PATH": "/usr/bin",
+            "HOME": "/home/operator",
+            "DOCKER_HOST": "unix:///probe.sock",
+        }
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected"),
+        [
+            (
+                MagicMock(returncode=0, stdout=_PHRASE_LINE, stderr=""),
+                ([LoginEvent("2026-10-07 17:53:14", "login", "")], ""),
+            ),
+            (MagicMock(returncode=1, stdout="", stderr=""), ([], "")),
+            (
+                MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr="Error response from daemon: No such container: ibkr_core_gateway\n",
+                ),
+                (None, "Error response from daemon: No such container: ibkr_core_gateway"),
+            ),
+            (
+                MagicMock(
+                    returncode=2,
+                    stdout=_PHRASE_LINE,
+                    stderr="grep: /app/api_gateway/logs/x.log: No such file or directory\n",
+                ),
+                (None, "grep: /app/api_gateway/logs/x.log: No such file or directory"),
+            ),
+            (
+                MagicMock(
+                    returncode=0,
+                    stdout="/app/api_gateway/logs/gw.2026-10-07.log:no time giving up\n",
+                    stderr="",
+                ),
+                # Condition G: the format refusal passes `redact_error` too, so its type name leads.
+                (None, "ValueError: gateway log format not recognised: a 'giving up' line has no leading time"),
+            ),
+            (
+                OSError(2, "No such file or directory", "docker"),
+                # Condition G: the OSError's text passes `redact_error` — its type name leads.
+                (None, "docker could not be run: FileNotFoundError: [Errno 2] No such file or directory: 'docker'"),
+            ),
+            (subprocess.TimeoutExpired(["docker"], 15), (None, "docker did not answer within 15 s")),
+        ],
+        ids=[
+            "read",
+            "no-line-matched-is-no-login",
+            "no-such-container-also-exits-1",
+            "a-partial-read-is-not-parsed",
+            "a-line-without-a-time",
+            "no-docker-program",
+            "timed-out",
+        ],
+    )
+    def test_the_log_read_fails_open_with_its_reason(self, outcome: object, expected: object) -> None:
+        """The exit rule, measured 2026-10-12 against the real container: 0 → parse; 1 with an
+        empty stderr → nothing matched; anything else → unreadable, stderr's first line the reason.
+        Exit 1 alone cannot tell "no line matched" from "no such container" — only stderr does —
+        and a partial read prints lines AND exits 2: those lines are never used, since what the
+        missing file held is exactly what would make the verdict answer about an older login."""
+        effect = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
+        with patch("subprocess.run", **effect):
+            assert read_login_events() == expected

@@ -477,13 +477,13 @@ def test_confirm_session_is_one_get_of_portfolio_accounts_and_never_posts():
     with (
         patch(
             "ibkr_core_mcp.gateway.preflight.requests.get",
-            return_value=_accounts(200, [{"accountId": "U1234567"}, {"accountId": "U7654321"}]),
+            return_value=_accounts(200, [{"accountId": "U1234567"}, {"accountId": "U1111111"}]),
         ) as get,
         patch("ibkr_core_mcp.gateway.preflight.requests.post") as post,
     ):
         ok, detail = confirm_session(_URL)
     assert ok is True
-    assert detail == "account(s) U1234567, U7654321"
+    assert detail == "account(s) U1234567, U1111111"
     assert [c.args[0] for c in get.call_args_list] == [f"{_URL}/portfolio/accounts"]
     assert not post.called
 

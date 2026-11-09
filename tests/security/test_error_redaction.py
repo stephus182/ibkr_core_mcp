@@ -176,7 +176,7 @@ def _names_exc(node: ast.expr, bound: str) -> bool:
     return isinstance(node, ast.Name) and node.id == bound
 
 
-@pytest.mark.parametrize("module", ["claude_tools.py", "mcp_server.py", "gateway/preflight.py"])
+@pytest.mark.parametrize("module", ["claude_tools.py", "mcp_server.py", "gateway/preflight.py", "gateway/manager.py"])
 def test_the_model_layer_interpolates_no_raw_exception(module):
     """The model layer, and — since register F45 (condition G) — every gateway module that renders
     an exception into a reading an operator or a host will show: a `requests` error carries the
