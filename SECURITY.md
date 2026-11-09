@@ -680,6 +680,23 @@ venv, installing nothing — weekly as well as per push, ignores only from
 `security/pip-audit-ignores.txt` with a reason and a re-check date) and `gitleaks` over the
 pushed range (`.gitleaks.toml`: default rules plus the Firecrawl and Anthropic key shapes).
 
+Two more since 2026-11-09 (MCP security checklist 1.3 and 2.2, `docs/audits/mcp-security-checklist-2026-11-09.md`):
+an **SBOM** of what a user installs — `.[server,scraper]` resolved on the runner — as a CycloneDX
+1.6 JSON artifact per push and per week (`sbom` job; the package itself and every dependency,
+112 components when generated locally on 2026-11-09), so a vulnerability advisory can be answered
+with "do we ship it?" from the artifact; and a **scan of the gateway image** (`gateway-image-scan`
+job: the image built from `ibkr_core_mcp/gateway/` exactly as `GatewayManager` builds it, then
+`trivy` over its OS packages and Java libraries, CRITICAL and HIGH, unfixed findings ignored).
+The scan is **informational until its first run has been seen** (`continue-on-error`, as the
+forward-compat lane began), then a CRITICAL finding blocks. The released artifacts carry PEP 740
+provenance attestations from Trusted Publishing (checklist 1.2): `pypi-attestations verify pypi
+--repository https://github.com/stephus182/ibkr_core_mcp pypi:ibkr_core_mcp-2.1.0-py3-none-any.whl`
+answered `OK` for the wheel and the sdist on 2026-11-09; a consumer verifies its pinned release
+that way (`docs/consumers.md`). Dependencies stay version floors, not hashes — a hash-pinned lock
+would be the churn the 2026-09-13 decision declined, and PyPI artifacts are immutable, so the
+integrity gap it would close is the index serving a different file for the same version, which
+the attestation already covers.
+
 Publishing (2.0.1): releases upload through PyPI Trusted Publishing from `.github/workflows/publish.yml`,
 behind a reviewed GitHub environment (`pypi`, tag rule `v*`); no PyPI token exists anywhere, and
 `id-token: write` is granted only to the two publish jobs (`docs/security-architecture.md` § 7).

@@ -93,6 +93,70 @@ jobs:
           IGNORES=$(sed 's/#.*//' security/pip-audit-ignores.txt | awk 'NF { printf "--ignore-vuln %s ", $1 }')
           pip-audit --strict --desc --vulnerability-service osv --progress-spinner off $IGNORES -r /tmp/audit-requirements.txt
 
+  # Gate 7 (MCP security checklist 1.3, 2026-11-09): a Software Bill of Materials of what a user
+  # installs — `.[server,scraper]` resolved on this runner — as a CycloneDX 1.6 JSON artifact per
+  # push and per week, beside pip-audit's verdict on the same tree. The scraper extra is included
+  # because it is what the audit covers and where findings have surfaced. It is an artifact, not
+  # a gate: a reader of a vulnerability advisory asks "do we ship it?", and this answers.
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install what a user installs
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[server,scraper]"
+
+      - name: Generate the SBOM
+        # `environment`: the resolved tree of this interpreter, the package itself included.
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-py environment --output-format JSON --output-file sbom.cdx.json
+          python -c "import json; d=json.load(open('sbom.cdx.json')); print(d['bomFormat'], d['specVersion'], len(d['components']), 'components')"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 90
+
+  # Gate 8 (MCP security checklist 2.2, 2026-11-09): the gateway image — eclipse-temurin plus
+  # IBKR's Client Portal zip, built from `ibkr_core_mcp/gateway/` exactly as `GatewayManager`
+  # builds it — scanned for known vulnerabilities in its OS packages and Java libraries. The
+  # Java process in that image holds the live brokerage session on the operator's machine, and
+  # nothing else here looks inside it. INFORMATIONAL (`continue-on-error`) until its first run
+  # has been seen, as the forward-compat lane was; then `continue-on-error` goes and a CRITICAL
+  # finding blocks. Weekly as well as per push, like pip-audit: the image's base acquires
+  # advisories without a commit here.
+  gateway-image-scan:
+    name: Gateway image scan (trivy)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # informational until the first run is seen (2026-11-09); then blocking
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the gateway image as GatewayManager does
+        run: docker build -t ibkr-core-gateway:ci ibkr_core_mcp/gateway
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ibkr-core-gateway:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
   secret-scan:
     name: Secret scan (gitleaks)
     if: github.event_name != 'schedule'

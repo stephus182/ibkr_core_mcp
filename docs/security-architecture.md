@@ -545,6 +545,8 @@ same set, so an MCP client that gates confirmation prompts on those hints sees t
 | pytest unit, including `tests/security/` | Behaviour, and the thirteen invariants above (structural and canary) | Anything without a test | yes |
 | **pip-audit** (`dependency-audit` job) | A known-vulnerable version in the **resolved** tree, `[dev,server,scraper]`, fresh resolution in requirements mode (`pip install --dry-run --report`, nothing installed), per push and weekly | Unknown vulnerabilities | yes for fixable; no-fix findings go in `security/pip-audit-ignores.txt` with a reason and a re-check date |
 | **gitleaks** (`secret-scan` job) | A committed secret in the pushed range | History before the scan started (run `gitleaks git --redact` locally) | yes |
+| **SBOM** (`sbom` job, 2026-11-09) | Nothing by itself — it records what a user installs (`.[server,scraper]` resolved on the runner, CycloneDX 1.6) per push and per week, so an advisory is answered from the artifact | A vulnerability nobody has published; the operator's own environment, which may differ from the runner's resolve | no — an artifact |
+| **trivy** (`gateway-image-scan` job, 2026-11-09) | A known-vulnerable OS package or Java library in the gateway image, built as `GatewayManager` builds it; CRITICAL and HIGH, unfixed ignored | IBKR's own code inside the zip beyond its libraries; the image the operator built before the Dockerfile last changed | informational until the first run is seen, then yes on CRITICAL |
 | **CodeQL default setup** (GitHub, outside `ci.yml`) | Actions-workflow injection and permissions; a fixed set of Python patterns (URL-substring checks, weak hashing, insecure protocols, …) | **Taint from this codebase's untrusted source** — tool `inputs` dicts are not "remote flow sources" under the `remote` threat model, so its injection queries cannot fire here; not a merge gate | no |
 | **Dependabot alerts** (GitHub) | Advisories against the *manifest's* direct dependencies | Transitive dependencies (the nltk advisory was seen by pip-audit only) | no |
 
@@ -565,17 +567,21 @@ flowchart TB
 
     DA["dependency-audit<br/>pip-audit · push + weekly"]
     SS["secret-scan<br/>gitleaks · pushed range"]
+    SB["sbom<br/>CycloneDX of what a user installs · artifact"]
+    GS["gateway-image-scan<br/>trivy over the built image · informational first"]
 
     CI --> A1
     CI --> DA
     CI --> SS
+    CI --> SB
+    CI --> GS
 
     OUT["CodeQL · Dependabot<br/>outside ci.yml, never gates"]
     CI -. "reported only" .-> OUT
 
     class HOOK,A1,A2,A3,A4,DA,SS gate
     class STOP stop
-    class OUT soft
+    class OUT,SB,GS soft
 ```
 
 Two facts to keep straight when reading results: CodeQL's zero open alerts is partly blindness,

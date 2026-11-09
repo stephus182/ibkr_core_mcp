@@ -10,6 +10,25 @@
 
 ## Changes consumers should know about
 
+### Unreleased — verify the release you pin: PEP 740 attestations
+
+Every release since 2.0.1 is published by Trusted Publishing from `publish.yml`, and PyPI holds a
+PEP 740 provenance attestation for each artifact — checked for 2.1.0 on 2026-11-09 (one bundle,
+GitHub publisher `stephus182/ibkr_core_mcp`, workflow `publish.yml`). pip does not verify it at
+install, so a consumer that pins an exact version (claudia_ui's `core-ref.txt`) can verify the
+artifact it installs, in CI or by hand, with the reference tool:
+
+```bash
+pip install pypi-attestations
+pypi-attestations verify pypi --repository https://github.com/stephus182/ibkr_core_mcp \
+  pypi:ibkr_core_mcp-2.1.0-py3-none-any.whl
+# OK: ibkr_core_mcp-2.1.0-py3-none-any.whl          (measured 2026-11-09, pypi-attestations 0.0.31; the sdist likewise)
+```
+
+`--repository` is the claim being checked: the artifact was built by *this* repository's publish
+workflow, not merely signed by someone. A failure is a stop, not a warning — the file on PyPI is
+not the one the tag built. (MCP security checklist 1.2, `docs/audits/mcp-security-checklist-2026-11-09.md`.)
+
 ### Unreleased — the package keeps an audit record; a host configures and names itself once
 
 Every tool call and every gated order write now leaves one redacted JSON line in

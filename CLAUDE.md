@@ -142,7 +142,13 @@ machine happens to have and is not what CI checks; that difference produced a ne
 2026-09-16. Reproduce CI exactly with the command in `.github/workflows/ci.yml`. And
 `gitleaks` over the pushed range, configured by `.gitleaks.toml`. Neither is in the pre-push
 hook. Added 2026-09-13; the reasoning is in
-`docs/audits/security-architecture-audit-2026-09-13.md` § Phase 3.
+`docs/audits/security-architecture-audit-2026-09-13.md` § Phase 3. **Two more since 2026-11-09**
+(MCP security checklist, `docs/audits/mcp-security-checklist-2026-11-09.md`): `sbom`, a CycloneDX
+artifact of what a user installs, per push and per week; and `gateway-image-scan`, `trivy` over the
+gateway image built as `GatewayManager` builds it — **informational until its first run has been
+seen**, then blocking on CRITICAL. Neither needs a local step; the SBOM can be generated here with
+`cyclonedx-py environment --output-format JSON --output-file sbom.cdx.json` from a venv that has
+`cyclonedx-bom`.
 
 `[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` and `scripts/`. `tests/` is also checked
 (`files = ["ibkr_core_mcp", "tests", "scripts"]`) but under a narrower `tests.*` override that relaxes

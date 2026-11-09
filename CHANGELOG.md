@@ -908,6 +908,17 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   delete.
 
 ### Security
+- **CI publishes an SBOM and scans the gateway image; the release attestations are verified
+  (MCP security checklist 1.2, 1.3, 2.2 — 2026-11-09).** `ci.yml` gains `sbom` — a CycloneDX 1.6
+  JSON of what a user installs (`.[server,scraper]` resolved on the runner, the package itself
+  included), an artifact per push and per week — and `gateway-image-scan` — the gateway image
+  built from `ibkr_core_mcp/gateway/` as `GatewayManager` builds it, scanned by `trivy` for
+  CRITICAL and HIGH findings in its OS packages and Java libraries, unfixed ignored;
+  **informational until its first run has been seen**, then blocking on CRITICAL. PEP 740:
+  `pypi-attestations verify pypi --repository https://github.com/stephus182/ibkr_core_mcp` answered
+  `OK` for the 2.1.0 wheel and sdist, and `docs/consumers.md` gives a consumer the recipe to
+  verify the release it pins. Dependencies stay floors, not hashes (the 2026-09-13 decision; the
+  attestation covers the integrity gap a lock would).
 - **`IBKRWebSocket.connect` pins TLS 1.2 as the minimum on its own context (MCP security
   checklist 5.1, 2026-11-09).** The one `SSLContext` the package builds now says
   `minimum_version = TLSVersion.TLSv1_2` itself, held in source by `test_tls_policy.py`; the
