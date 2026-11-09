@@ -105,6 +105,7 @@ import requests
 import urllib3
 
 from ibkr_core_mcp.config import require_loopback_url
+from ibkr_core_mcp.exceptions import RestartRefusedError
 from ibkr_core_mcp.gateway.manager import read_login_events
 from ibkr_core_mcp.gateway.preflight import (
     REFUSED_GUIDANCE,
@@ -564,14 +565,15 @@ class GatewayManagerLike(Protocol):
         """Whether the gateway container is currently running."""
         ...
 
-    def start(self) -> None:
+    def start(self, *, force: bool = False) -> None:
         """Start the gateway on a fresh Java process — a clean, unauthenticated session. A
         current container is restarted in place and keeps its log; any other is recreated
-        (register F43)."""
+        (register F43). Guarded: a LIVE, REFUSED or VALIDATING session raises
+        `RestartRefusedError` unless `force` (condition F)."""
         ...
 
-    def restart(self) -> None:
-        """`start()`: a fresh process, so whatever session the container held is gone."""
+    def restart(self, *, force: bool = False) -> None:
+        """`start(force=force)`: a fresh process, so whatever session the container held is gone."""
         ...
 
     def wait_for_gateway(self, timeout: int = ..., poll_interval: int = ...) -> bool:
@@ -988,8 +990,15 @@ def _recover(
     emit: Callable[[str], None] | None = None,
     reach_timeout: int = 120,
     lock: SuspendLock | None = None,
+    force: bool = False,
 ) -> SessionState:
     """Clear a session the gateway cannot use, by restarting the container.
+
+    The restart is guarded inside `manager.start()` (condition F): a LIVE, REFUSED or
+    VALIDATING session raises `RestartRefusedError`, which this turns into a reading — the
+    phase read off the wire, the refusal as `detail` — never an exception to a button, and
+    never a session left in RECOVERING. `force` is passed through, and only an operator's
+    explicit `--force` sets it; `_establish` never does.
 
     ## Why this does not call `POST /logout`
 
@@ -1021,7 +1030,12 @@ def _recover(
     try:
         session.publish(declare(SessionPhase.RECOVERING))
         say("▶ Restarting the gateway container to clear the session…")
-        manager.restart()
+        try:
+            manager.restart(force=force)
+        except RestartRefusedError as exc:
+            say(f"✕ Restart refused: {exc.reason}")
+            session.publish(session.read_now(api_url).stale_copy(exc.reason))
+            return session.state()
         if not manager.wait_for_gateway(timeout=reach_timeout):
             session.publish(
                 SessionState(

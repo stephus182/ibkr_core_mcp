@@ -383,6 +383,21 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`GatewayManager.start()` and `restart()` are guarded: a LIVE, REFUSED or VALIDATING
+  session raises `RestartRefusedError` before any Docker command (register F45, step 2,
+  commit 9/13; condition F).** A restart gives the gateway a fresh Java process and so ends
+  whatever session the container holds. The guard is the consumer's reset rule as a function,
+  `gateway.manager.restart_refusal(api_url) -> (code, reason) | None`: read the session; a
+  gateway that does not answer has nothing to protect (None — `startup()`'s own path to
+  `start()`); FREE is refined by the gateway's log; READY, REFUSED and VALIDATING refuse with
+  the verdict's code and its headline and guidance (a working session must not be ended for
+  nothing — a needless re-login is what escalates into the IB Key challenge; a restart did not
+  clear IBKR's refusal on 2026-10-08; a login IBKR is still answering would be cut off); FREE,
+  BORROWED and CONTESTED go ahead. `start(force=True)` / `restart(force=True)` skip it. The
+  owner's `recover(..., force=False)` turns a refusal into a reading — the phase from the wire,
+  the refusal as `detail` — and `establish()` never forces. `RestartRefusedError(GatewayError)`
+  carries `.code` and `.reason`. Tests: the reset rule's cases on `start()`, the refusal
+  function over eight readings, the owner's handling; five mutations red one at a time.
 - **`GatewayManager.startup()` reads the session before opening any login page, and opens none
   on a reading that must not be logged into (register F45, step 1).** After `wait_for_gateway`
   it runs the pre-flight's rule — `preflight.read_state`, `verdict`, the gateway's own log after a

@@ -40,11 +40,13 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ibkr_core_mcp.config import require_loopback_url  # noqa: E402
-from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
+from ibkr_core_mcp.exceptions import GatewayError, RestartRefusedError  # noqa: E402
 from ibkr_core_mcp.gateway.preflight import (  # noqa: E402
     _MARK,
     EXIT_FREE,
     EXIT_READY,
+    EXIT_REFUSED,
+    EXIT_VALIDATING,
     LOGIN_PHRASES,
     LoginEvent,
     login_events,
@@ -182,6 +184,41 @@ def read_login_events(timeout: float = 15.0) -> tuple[list[LoginEvent] | None, s
         except ValueError as exc:  # `login_events`' own format refusal; through the one redaction function (G)
             return None, redact_error(exc)
     return None, (problem.splitlines()[0][:200] if problem else f"docker exited {result.returncode}")
+
+
+_RESTART_REFUSED_CODES = frozenset({EXIT_READY, EXIT_REFUSED, EXIT_VALIDATING})
+"""The verdicts a restart must not be run against: it would destroy a working session, or help
+nothing — IBKR's refusal survived a restart on 2026-10-08 (started again 15:47:49 UTC, refused
+again 15:49:37), and a login IBKR is still answering would be cut off."""
+
+
+def restart_refusal(api_url: str) -> tuple[int, str] | None:
+    """Why a restart of the gateway must not happen now, or None when it may.
+
+    The reset rule, verbatim from the consumer's script, as a function `start()` applies before
+    touching Docker (register F45, step 2, condition F): read the session; a gateway that does
+    not answer has no session to protect (None — this is also `startup()`'s path to `start()`);
+    FREE is refined by the gateway's own log, the one reading the log can change; `EXIT_READY`,
+    `EXIT_REFUSED` and `EXIT_VALIDATING` refuse with the verdict's code and its headline and
+    guidance; FREE, BORROWED and CONTESTED let the restart go ahead. One more GET before a
+    restart that ends the session: it can preserve nothing the restart destroys.
+
+    Args:
+        api_url: The gateway's API base URL, loopback (`read_state` pins it).
+
+    Returns:
+        `(code, reason)` — the reason is the headline, a blank line, the guidance — or None.
+    """
+    state = read_state(api_url)
+    if not state.reachable:
+        return None
+    found = verdict(state)
+    if found[0] == EXIT_FREE:
+        found = refine_with_log(found, *read_login_events())
+    code, headline, guidance = found
+    if code in _RESTART_REFUSED_CODES:
+        return code, f"{headline}\n\n{guidance}"
+    return None
 
 
 def _find_chrome() -> str | None:
@@ -360,15 +397,29 @@ class GatewayManager:
         labels = made["Config"]["Labels"] or {}
         return bool(made["Image"] == image.stdout.strip() and labels.get(_RUN_OPTIONS_LABEL) == recorded)
 
-    def start(self) -> None:
+    def start(self, *, force: bool = False) -> None:
         """Start the gateway on a fresh Java process — so on a clean, unauthenticated session.
+
+        **Guarded** (register F45, condition F): before any Docker command the session is read,
+        and a LIVE, REFUSED or VALIDATING one raises `RestartRefusedError` with the verdict's
+        code and reason — `restart_refusal` is the rule. `force=True` skips the guard; a caller
+        that passes it intends to destroy the session.
 
         A current container (`_is_current`) is restarted in place: `docker restart` starts a
         stopped one and gives a running one a new process, and the container's own files — the
         gateway's log, the one place a refused login shows — are kept (measured 2026-11-07 on a
-        throwaway container; register F43). Any other container is removed and a new one run, the image built first
-        if it is absent; so is one Docker will not restart.
+        throwaway container; register F43). Any other container is removed and a new one run,
+        the image built first if it is absent; so is one Docker will not restart.
+
+        Raises:
+            RestartRefusedError: The session must not be ended now, and nothing was run.
+            GatewayError: Docker could not run the container.
         """
+        if not force:
+            refusal = restart_refusal(self._api_url)
+            if refusal is not None:
+                code, reason = refusal
+                raise RestartRefusedError(reason, code=code)
         self.ensure_docker_running()
         options = [
             "-p",
@@ -427,10 +478,11 @@ class GatewayManager:
         subprocess.run(["docker", "rm", self.CONTAINER_NAME], capture_output=True)
         log.info("Gateway container stopped: %s", self.CONTAINER_NAME)
 
-    def restart(self) -> None:
-        """`start()`, which already ends on a fresh process: a clean, unauthenticated session.
-        A `stop()` first would remove the container — and its log — for nothing (register F43)."""
-        self.start()
+    def restart(self, *, force: bool = False) -> None:
+        """`start(force=force)`, which already ends on a fresh process: a clean, unauthenticated
+        session, behind the same guard. A `stop()` first would remove the container — and its
+        log — for nothing (register F43)."""
+        self.start(force=force)
 
     # ── Gateway health ────────────────────────────────────────────────────────
 

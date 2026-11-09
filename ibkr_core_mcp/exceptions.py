@@ -181,3 +181,20 @@ class StreamingError(IBKRCoreError):
 
 class GatewayError(IBKRCoreError):
     """Raised when the IBKR Client Portal Gateway cannot be started or reached."""
+
+
+class RestartRefusedError(GatewayError):
+    """`GatewayManager.start()` / `restart()` refused to end the session the container holds.
+
+    A restart gives the gateway a fresh Java process and so a clean, unauthenticated session.
+    It is refused — before any Docker command — where it would destroy something or help
+    nothing: a LIVE session, a login IBKR REFUSED (a restart did not clear one, 2026-10-08), or
+    one IBKR is still VALIDATING. `force=True` overrides. `code` is the pre-flight's verdict
+    code; `reason` its headline and guidance (register F45, step 2, condition F).
+    """
+
+    def __init__(self, reason: str, *, code: int) -> None:
+        """Carry the verdict's code and its text."""
+        super().__init__(reason)
+        self.reason = reason
+        self.code = code

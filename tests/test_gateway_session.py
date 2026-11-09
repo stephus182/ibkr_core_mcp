@@ -26,9 +26,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import ConfigError
+from ibkr_core_mcp.exceptions import ConfigError, RestartRefusedError
 from ibkr_core_mcp.gateway import session as session_module
-from ibkr_core_mcp.gateway.preflight import GatewayState, LoginEvent
+from ibkr_core_mcp.gateway.preflight import EXIT_READY, GatewayState, LoginEvent
 from ibkr_core_mcp.gateway.session import (
     COMPETE,
     GatewaySession,
@@ -337,14 +337,14 @@ class FakeManager:
         self.calls.append("is_running")
         return self._running
 
-    def start(self) -> None:
+    def start(self, *, force: bool = False) -> None:
         """Record the call and mark the container running."""
-        self.calls.append("start")
+        self.calls.append("start" if not force else "start(force)")
         self._running = True
 
-    def restart(self) -> None:
+    def restart(self, *, force: bool = False) -> None:
         """Record the call and mark the container running."""
-        self.calls.append("restart")
+        self.calls.append("restart" if not force else "restart(force)")
         self._running = True
 
     def wait_for_gateway(self, timeout: int = 120, poll_interval: int = 3) -> bool:
@@ -648,16 +648,70 @@ def test_recovery_holds_the_lock_across_the_restart(wire):
 
     original = gm.restart
 
-    def spy() -> None:
+    def spy(*, force: bool = False) -> None:
         """Record whether the lock was active at the moment of the restart."""
         seen.append(SuspendLock.is_active(lock.path))
-        original()
+        original(force=force)
 
     gm.restart = spy  # type: ignore[method-assign]
     session.recover(gm, url=_URL, emit=lambda _: None, lock=lock)
 
     assert seen == [True]
     assert not lock.path.exists()
+
+
+class RefusingManager(FakeManager):
+    """A manager whose restart guard refuses unless forced — what the real `start()` does on a
+    LIVE, REFUSED or VALIDATING reading (register F45, condition F)."""
+
+    def restart(self, *, force: bool = False) -> None:
+        """Record the attempt; refuse unless forced."""
+        self.calls.append("restart" if not force else "restart(force)")
+        if not force:
+            raise RestartRefusedError("Session is LIVE\n\nDo not log in again.", code=EXIT_READY)
+        self._running = True
+
+
+def test_a_refused_restart_is_published_as_the_current_reading_with_the_reason(wire):
+    """The guard lives inside `start()`; the owner turns its refusal into a reading — the phase
+    read off the wire, the refusal as `detail` — never an exception to a button, and never a
+    session left in RECOVERING."""
+    gm = RefusingManager(running=True)
+    lock = wire(gm, [_authenticated()], confirmations=[True])
+    session = GatewaySession()
+    lines: list[str] = []
+
+    result = session.recover(gm, url=_URL, emit=lines.append, lock=lock)
+
+    assert result.phase is SessionPhase.LIVE
+    assert "Session is LIVE" in result.detail
+    assert result.is_suspended is False
+    assert gm.calls.count("restart") == 1 and "restart(force)" not in gm.calls
+    assert not lock.path.exists(), "the lock leaked after a refused restart"
+    assert any("refused" in line.lower() for line in lines), lines
+
+
+def test_force_reaches_the_manager_and_overrides_the_guard(wire):
+    gm = RefusingManager(running=True)
+    lock = wire(gm, [_free()])
+    session = GatewaySession()
+
+    result = session.recover(gm, url=_URL, emit=lambda _: None, lock=lock, force=True)
+
+    assert "restart(force)" in gm.calls
+    assert result.phase is SessionPhase.FREE
+
+
+def test_establish_never_forces_a_restart(wire):
+    """From BORROWED with `allow_restart`, the owner asks for a restart and lets the guard decide:
+    a borrowed session is not refused, so it goes ahead — but never with `force`."""
+    gm = FakeManager(running=True)
+    lock = wire(gm, [_borrowed(), _free()])
+    session = GatewaySession()
+
+    _establish(session, gm, lock, allow_restart=True, login_timeout=20)
+
+    assert "restart" in gm.calls and "restart(force)" not in gm.calls
 
 
 # ── Unreachable ──────────────────────────────────────────────────────────────

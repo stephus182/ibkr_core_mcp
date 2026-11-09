@@ -17,9 +17,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from ibkr_core_mcp.exceptions import GatewayError
+from ibkr_core_mcp.exceptions import GatewayError, RestartRefusedError
 from ibkr_core_mcp.gateway import GatewayManager, LoginWindow
-from ibkr_core_mcp.gateway.manager import _LOGIN_WINDOW_ENV, GATEWAY_LOG_DIR, _find_chrome, read_login_events
+from ibkr_core_mcp.gateway.manager import (
+    _LOGIN_WINDOW_ENV,
+    GATEWAY_LOG_DIR,
+    _find_chrome,
+    read_login_events,
+    restart_refusal,
+)
 from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, GatewayState, LoginEvent
 
 # ---------------------------------------------------------------------------
@@ -90,6 +96,16 @@ def _published_beyond_loopback(made: dict[str, object]) -> dict[str, object]:
 def _verbs(calls: list[list[str]]) -> list[str]:
     """The docker sub-commands issued, in order, among those that keep or replace a container."""
     return [argv[1] for argv in calls if argv[1] in {"restart", "stop", "rm", "run"}]
+
+
+@pytest.fixture(autouse=True)
+def _no_gateway_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`start()` reads the session before touching Docker (the restart guard, register F45,
+    condition F). Every test in this module that is not about the guard runs against a gateway
+    that does not answer — nothing to protect — stated here rather than left to pytest-socket's
+    refusal, which the guard would otherwise read as the same thing by accident. A test about
+    the guard or the startup gate patches `read_state` itself, inside, and wins."""
+    monkeypatch.setattr("ibkr_core_mcp.gateway.manager.read_state", lambda url, timeout=5.0: _UNREACHABLE)
 
 
 # ---------------------------------------------------------------------------
@@ -994,3 +1010,124 @@ class TestStartupGate:
         ):
             gm.startup()
         read.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# The restart guard inside start() — register F45, step 2, condition F
+# ---------------------------------------------------------------------------
+
+
+class TestRestartGuard:
+    """`start()` ends on a fresh Java process, which destroys whatever session the container
+    holds. Before touching Docker it reads the session, and refuses — `RestartRefusedError`,
+    nothing run — where a restart would destroy something or help nothing: a LIVE session (a
+    needless re-login is what escalates into the IB Key challenge), a REFUSED one (a restart did
+    not clear IBKR's refusal on 2026-10-08: started again 15:47:49 UTC, refused again 15:49:37),
+    a VALIDATING one (a restart would cut off a login IBKR is still answering). FREE and
+    BORROWED are what a restart is for; `force=True` overrides every refusal. The rule is the
+    consumer's reset script's, verbatim, with its five cases as this test."""
+
+    @staticmethod
+    def _start(reading: GatewayState, events: object = ([], ""), *, force: bool = False) -> list[list[str]]:
+        gm = GatewayManager()
+        run, calls = _fake_docker(None)
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+            patch.object(gm, "ensure_docker_running"),
+            patch("subprocess.run", side_effect=run),
+        ):
+            gm.start(force=force)
+        return calls
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "code"),
+        [(_LIVE, ([], ""), 0), (_FREE, (_REFUSED_LOG, ""), 5), (_FREE, (_VALIDATING_LOG, ""), 6)],
+        ids=["live", "refused", "validating"],
+    )
+    def test_a_restart_that_would_destroy_or_help_nothing_is_refused_and_nothing_runs(
+        self, reading: GatewayState, events: object, code: int
+    ) -> None:
+        gm = GatewayManager()
+        run, calls = _fake_docker(None)
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+            patch.object(gm, "ensure_docker_running") as docker_up,
+            patch("subprocess.run", side_effect=run),
+            pytest.raises(RestartRefusedError) as refused,
+        ):
+            gm.start()
+        assert refused.value.code == code
+        assert refused.value.reason, "a refusal names its reason"
+        assert isinstance(refused.value, GatewayError)
+        assert calls == [], "a refused restart ran a docker command"
+        docker_up.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "force"),
+        [
+            (_FREE, ([], ""), False),
+            (_BORROWED, ([], ""), False),
+            (_UNREACHABLE, ([], ""), False),
+            (_FREE, (_REFUSED_LOG, ""), True),
+            (_LIVE, ([], ""), True),
+        ],
+        ids=["free", "borrowed", "unreachable", "refused-forced", "live-forced"],
+    )
+    def test_a_restart_that_can_help_or_is_forced_runs(
+        self, reading: GatewayState, events: object, force: bool
+    ) -> None:
+        """A gateway that does not answer has no session to protect — `startup()`'s own path to
+        `start()` is exactly that case."""
+        calls = self._start(reading, events, force=force)
+        assert _verbs(calls) == ["run"], calls
+
+    def test_the_log_is_read_only_after_a_free_reading(self) -> None:
+        gm = GatewayManager()
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=_LIVE),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events") as log_read,
+            patch.object(gm, "ensure_docker_running"),
+            pytest.raises(RestartRefusedError),
+        ):
+            gm.start()
+        log_read.assert_not_called()
+
+    def test_restart_carries_force_through_to_start(self) -> None:
+        gm = GatewayManager()
+        with patch.object(gm, "start") as start:
+            gm.restart(force=True)
+        start.assert_called_once_with(force=True)
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "expected"),
+        [
+            (_UNREACHABLE, ([], ""), None),
+            (_FREE, ([], ""), None),
+            (_FREE, (None, "no such container"), None),
+            (_BORROWED, ([], ""), None),
+            (_CONTESTED, ([], ""), None),
+            (_LIVE, ([], ""), 0),
+            (_FREE, (_REFUSED_LOG, ""), 5),
+            (_FREE, (_VALIDATING_LOG, ""), 6),
+        ],
+        ids=["unreachable", "free", "free-log-unreadable", "borrowed", "contested", "live", "refused", "validating"],
+    )
+    def test_restart_refusal_is_the_reset_rule(
+        self, reading: GatewayState, events: object, expected: int | None
+    ) -> None:
+        """The rule as a function: None where a restart may go ahead, else the verdict's code and
+        its headline with the guidance — what `reset` prints as its reason."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+        ):
+            refusal = restart_refusal("https://localhost:5055/v1/api")
+        if expected is None:
+            assert refusal is None
+            return
+        assert refusal is not None
+        code, reason = refusal
+        assert code == expected
+        assert "\n\n" in reason, "the reason is the headline, then the guidance"
