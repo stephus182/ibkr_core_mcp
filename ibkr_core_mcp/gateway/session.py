@@ -1055,7 +1055,7 @@ def _recover(
     suspend.acquire("recovering the session")
     try:
         session.publish(declare(SessionPhase.RECOVERING))
-        say("▶ Restarting the gateway container to clear the session…")
+        say("▶ Restarting the gateway container to clear the session, unless the session must be kept…")
         try:
             manager.restart(force=force)
         except RestartRefusedError as exc:
