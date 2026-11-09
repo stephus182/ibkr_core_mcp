@@ -1,8 +1,10 @@
 """IBKR Client Portal Gateway lifecycle management.
 
 Packages the official IBKR gateway as a Docker image (`Dockerfile`, `conf.yaml`,
-`run_gateway.sh`, `healthcheck.sh` ship as package data) and exposes `GatewayManager`
-to build, run and reach it.
+`run_gateway.sh`, `healthcheck.sh` ship as package data), exposes `GatewayManager`
+to build, run and reach it, and — since register F45, step 2 — the session's one owner,
+`get_session()` (`gateway/session.py`): the only code that opens a login, posts to a session
+endpoint or restarts a container holding a session.
 
 ⚠ **The caller must run its own keepalive. There is no tickler in the container.**
 
@@ -26,5 +28,14 @@ survived its own removal for a day.
 """
 
 from ibkr_core_mcp.gateway.manager import GatewayManager, LoginWindow
+from ibkr_core_mcp.gateway.session import GatewaySession, SessionPhase, SessionState, SuspendLock, get_session
 
-__all__ = ["GatewayManager", "LoginWindow"]
+__all__ = [
+    "GatewayManager",
+    "GatewaySession",
+    "LoginWindow",
+    "SessionPhase",
+    "SessionState",
+    "SuspendLock",
+    "get_session",
+]

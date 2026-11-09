@@ -160,12 +160,16 @@ def test_the_documented_0600_token_write_lives_where_security_md_says():
     package = _ROOT / "ibkr_core_mcp"
     holders = sorted(p.name for p in package.rglob("*.py") if sequence in p.read_text())
 
-    # Two secrets, two writers, and they are different secrets — this test found the second
-    # one itself when a first version asserted a single holder and failed.
+    # Three files, three writers, each its own control — this test found the second one itself
+    # when a first version asserted a single holder and failed, and the third arrived with the
+    # gateway session owner (register F45, step 2).
     #   gdrive_auth.py  the Google Drive OAuth refresh token (this section)
     #   mcp_server.py   the per-launch SSE bearer token (§ Transport Security), whose own
     #                   comment cites gdrive_auth for the same O_CREAT/chmod reasoning
-    assert holders == ["gdrive_auth.py", "mcp_server.py"], f"the 0600 write now lives in {holders}"
+    #   session.py      the gateway suspend lock (§ Session Security; condition E) — not a
+    #                   secret but a flag beside the trade store, private because that
+    #                   directory is; a 0700 directory is created for it when none exists
+    assert holders == ["gdrive_auth.py", "mcp_server.py", "session.py"], f"the 0600 write now lives in {holders}"
 
     # The property that matters for the Drive token: ONE implementation, and neither of the
     # two consumers carries a copy. Both did once; the copy in web_scraper.py is what missed

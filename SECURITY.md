@@ -933,6 +933,14 @@ os.chmod(token_path, 0o600)   # O_CREAT's mode applies only on creation; the chm
 (`gdrive_auth.persist_credentials` — **the one place it exists.** `cache.GDriveCache` and
 `web_scraper.WebDocsStore` both delegate to it.)
 
+The same `O_CREAT … 0o600` idiom writes two other files, each its own control and none a
+copy of this one: `mcp_server._issue_sse_token` (the per-launch SSE token, § Transport
+Security) and, since 2026-11-09, `gateway.session.SuspendLock.acquire` (the gateway suspend
+lock, created in a 0700 directory when none exists — not a secret but a flag beside the trade
+store, private because that directory is; register F45, condition E).
+`tests/security/test_documented_controls.py` holds the three as an inventory, so a fourth
+writer, or a copy of the token write, is red there.
+
 > This read "and the same sequence in `cache.GDriveCache._get_service` and
 > `web_scraper.WebDocsStore._get_service`" until 2026-09-16, and was stale in one direction
 > and about to be stale in the other. `cache.py` had already been refactored to delegate, so

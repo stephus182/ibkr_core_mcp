@@ -177,7 +177,15 @@ def _names_exc(node: ast.expr, bound: str) -> bool:
 
 
 @pytest.mark.parametrize(
-    "module", ["claude_tools.py", "mcp_server.py", "gateway/preflight.py", "gateway/manager.py", "gateway/__main__.py"]
+    "module",
+    [
+        "claude_tools.py",
+        "mcp_server.py",
+        "gateway/preflight.py",
+        "gateway/manager.py",
+        "gateway/__main__.py",
+        "gateway/session.py",
+    ],
 )
 def test_the_model_layer_interpolates_no_raw_exception(module):
     """The model layer, and — since register F45 (condition G) — every gateway module that renders
@@ -319,3 +327,30 @@ def test_the_audit_warning_names_the_file_without_the_username(monkeypatch, tmp_
     line = next(m for m in messages if "Audit record not written" in m)
     assert str(tmp_path) not in line, line
     assert "~/blocker/audit.jsonl" in line, line
+
+
+def test_the_suspend_lock_release_warning_collapses_the_home_directory(tmp_path, monkeypatch, caplog):
+    """Condition E (register F45): a lock that cannot be removed is logged once, through
+    `redact_error`, so the line carries `~` and never the operator's home directory in clear.
+    Driven, not read: the lock sits in a throwaway HOME whose directory is made unwritable."""
+    import logging
+    import os
+    import stat
+
+    from ibkr_core_mcp.gateway.session import SuspendLock
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    lock = SuspendLock(path=home / ".ibkr_core" / "session.suspend")
+    lock.acquire("login in progress")
+    os.chmod(lock.path.parent, stat.S_IRUSR | stat.S_IXUSR)  # 0500: the file cannot be unlinked
+    try:
+        with caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.gateway.session"):
+            lock.release()
+    finally:
+        os.chmod(lock.path.parent, stat.S_IRWXU)
+        lock.path.unlink(missing_ok=True)
+    lines = [r.getMessage() for r in caplog.records if "suspend lock" in r.getMessage()]
+    assert len(lines) == 1, lines
+    assert str(home) not in lines[0] and "~/.ibkr_core/session.suspend" in lines[0], lines[0]

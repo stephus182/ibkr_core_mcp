@@ -23,6 +23,22 @@ guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. De
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
 ### Added
+- **`ibkr_core_mcp.gateway.session` — the gateway session's one owner (register F45, step 2,
+  commit 8/13).** Moved from the consumer with its 56 tests as the specification:
+  `SessionPhase` (nine states), `SessionState`, `classify` / `observe` / `declare` /
+  `describe`, `GatewaySession` (the holder, `read_now`, `establish`, `recover`, the 60 s poll
+  with the one soft-recovery write), `SuspendLock`, `release_session`, `attempt_soft_recovery`,
+  `get_session()`; `confirm_session` is `preflight`'s. Exported from `ibkr_core_mcp.gateway`.
+  What changed in the move: the owner reads the gateway's own log itself (`_establish`'s
+  `read_login` defaults to `manager.read_login_events`); the lock is written 0600 in a 0700
+  directory and a lock naming a pid below 1 is malformed, never active, with the liveness check
+  platform-bound (`os.kill(pid, 0)` on POSIX; `OpenProcess` on Windows, where `os.kill` would
+  terminate the lock's owner) — condition E; `compete` is `COMPETE: Final = False`, spelled
+  once and held in source — condition F; `release_session` and `attempt_soft_recovery` pin
+  their URL before sending (C) and every exception rendered passes `redact_error` (G),
+  including the lock's release warning. The two session writes are allowed in this module and
+  `client.py`'s two deprecated methods only (`test_gateway_boundary.py`); the login page is
+  opened from `manager.py` and this module only.
 - **`ibkr_core_mcp.secret_store` — secrets at rest in the OS keychain, read before the `.env`
   file (MCP security checklist 7.1; the operator's 2026-10-16 deferral lifted 2026-11-09).**
   `keyring>=25` is a new base dependency. `Config.from_env` resolves a secret in one order — the

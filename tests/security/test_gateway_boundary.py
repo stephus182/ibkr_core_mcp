@@ -78,6 +78,7 @@ SESSION_WRITE_NAMES = frozenset(
 SESSION_WRITE_ENDPOINTS = re.compile(r"ssodh/init|/logout|reauthenticate")
 SESSION_WRITE_OWNERS: dict[str, set[str]] = {
     "client.py": {"logout", "reauthenticate"},  # deprecated at step 2, removed in 3.0
+    "gateway/session.py": {"release_session", "attempt_soft_recovery"},  # the owner (F45 step 2)
 }
 # The calls that send: `requests`' verbs and the client's own primitives.
 _SENDERS = frozenset({"get", "post", "put", "patch", "delete", "head", "request", "_get", "_post", "_put"})
@@ -87,7 +88,7 @@ _SENDERS = frozenset({"get", "post", "put", "patch", "delete", "head", "request"
 MANAGER_DRIVERS = frozenset({"start", "restart", "stop", "startup"})
 MANAGER_DRIVING_MODULES = frozenset({"gateway/manager.py"})
 LOGIN_OPENERS = frozenset({"open_login_page", "open"})  # `open` as in `webbrowser.open`
-LOGIN_OPENING_MODULES = frozenset({"gateway/manager.py"})
+LOGIN_OPENING_MODULES = frozenset({"gateway/manager.py", "gateway/session.py"})  # the owner, from FREE only
 
 # Lower-case; matched against each literal lower-cased. `python -m claudia` is covered by `claudia`.
 CONSUMER_NAMES = ("claudia", "gateway-reset.sh", "ibkr-keepalive.sh", "docs/ibkr-gateway.md")
