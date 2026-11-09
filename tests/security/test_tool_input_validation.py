@@ -33,7 +33,7 @@ from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, Te
 
 from ibkr_core_mcp.mcp_server import _ALL_TOOL_DEFS, _EXISTING_TOOL_NAMES, build_server
 
-from .structural import PACKAGE_DIR, function_named, keyword_literal_lines, package_sources
+from .structural import PACKAGE_DIR, callee_name, function_named, keyword_literal_lines, package_sources
 
 pytestmark = pytest.mark.security
 
@@ -102,17 +102,30 @@ def test_every_name_the_dispatcher_routes_is_a_listed_tool():
     `tools/list` did not return — it logs "not listed, no validation will be performed" and
     calls the handler anyway (mcp 1.29.0, server.py). So the property above rests on a second
     fact: every name `_dispatch` can route is a listed tool. Invariant 3 holds that for the
-    toolkit's 44; this holds it for the two the server adds itself."""
-    dispatch = ast.unparse(function_named((PACKAGE_DIR / "mcp_server.py").read_text(), "_dispatch"))
+    toolkit's 44; this holds it for the two the server adds itself.
+
+    The names are compared in `_dispatch` or in a helper of this module it calls — since
+    2026-11-09 the two local tools live in `_local_tool`, so `_dispatch` can record each call's
+    audit entry once around them — and the probe follows those calls, so a routed name cannot
+    hide one function deeper."""
+    source = (PACKAGE_DIR / "mcp_server.py").read_text()
+    module_functions = {fn.name for fn in ast.walk(ast.parse(source)) if isinstance(fn, ast.FunctionDef)}
+    dispatch = function_named(source, "_dispatch")
+    helpers = {
+        name
+        for node in ast.walk(dispatch)
+        if isinstance(node, ast.Call) and (name := callee_name(node)) in module_functions
+    }
     routed: set[str] = set()
-    for node in ast.walk(ast.parse(dispatch)):
-        if not (isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) and node.left.id == "name"):
-            continue
-        if not isinstance(node.ops[0], ast.Eq):
-            continue
-        target = node.comparators[0]
-        if isinstance(target, ast.Constant) and isinstance(target.value, str):
-            routed.add(target.value)
+    for fn_name in ("_dispatch", *sorted(helpers)):
+        for node in ast.walk(function_named(source, fn_name)):
+            if not (isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) and node.left.id == "name"):
+                continue
+            if not isinstance(node.ops[0], ast.Eq):
+                continue
+            target = node.comparators[0]
+            if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                routed.add(target.value)
     listed = {str(t["name"]) for t in _ALL_TOOL_DEFS}
     assert routed, "the dispatch-name probe found no routed names to check"
     assert routed <= listed, sorted(routed - listed)

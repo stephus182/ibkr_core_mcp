@@ -300,3 +300,22 @@ def test_the_refused_env_file_warning_names_the_file_without_the_username(monkey
     assert str(tmp_path) not in line, line
     assert "chmod 600 ~/.env" in line, line
     assert "not-a-real-token" not in line
+
+
+def test_the_audit_warning_names_the_file_without_the_username(monkeypatch, tmp_path):
+    """The sixth `collapse_home` surface (2026-11-09): `audit.record`'s warning that a record could
+    not be written names the file — with `~`, never the account name — and the exception through
+    `redact_error`. Driven under a throwaway `HOME` like the other log surfaces."""
+    from ibkr_core_mcp import audit
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    blocker = tmp_path / "blocker"
+    blocker.write_text("")  # a file where the record's directory should be
+    audit.configure(blocker / "audit.jsonl")
+    messages = _emitted(
+        "ibkr_core_mcp.audit", lambda: audit.record("tool_call", actor="model", tool="t", decision="executed")
+    )
+
+    line = next(m for m in messages if "Audit record not written" in m)
+    assert str(tmp_path) not in line, line
+    assert "~/blocker/audit.jsonl" in line, line

@@ -10,6 +10,24 @@
 
 ## Changes consumers should know about
 
+### Unreleased — the package keeps an audit record; a host configures and names itself once
+
+Every tool call and every gated order write now leaves one redacted JSON line in
+`~/.ibkr_core/audit.jsonl` (`ibkr_core_mcp.audit`; MCP security checklist 8.1). What a host does:
+
+- **Configure once at start:** `audit.configure(cfg.audit_log_path)` — the new `Config.audit_log_path`
+  (env `IBKR_AUDIT_LOG`, default `~/.ibkr_core/audit.jsonl`). Without it the default path is used;
+  constructors never configure, so a `Config` built in a test cannot repoint the record.
+- **Name yourself:** `with audit.context(client="your-app 1.2", agent="<model id>"):` around the
+  code that drives the toolkit or the client — the `client` and `agent` fields read `unknown`
+  otherwise. The MCP server fills `client` from the initialize handshake by itself.
+- **Nothing else.** `ClaudeToolkit.execute` records every call; the seven gated writes record
+  themselves with the gates' own outcome (`sent`, `denied`, `declined`, `timed_out`, `refused`,
+  `error`). A host that already keeps its own transcript or decision store keeps it; this is the
+  package's record of what it did, redacted (every string through `redact_text`, account ids
+  masked, no response text), 0600, one rotation at 20 MB, and never an exception into your path.
+- The two new public names in `ibkr_core_mcp.redaction`: `redact_text(text, limit)`.
+
 ### Unreleased — `startup()` opens no login on a session that must not be logged into; the gateway package has a command line (register F45, step 1)
 
 **Behaviour change in `GatewayManager.startup()`.** Once the gateway answers, and before any

@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, NamedTuple
@@ -33,6 +34,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from ibkr_core_mcp import analytics as _analytics
+from ibkr_core_mcp import audit
 from ibkr_core_mcp import indicators as _indicators
 from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import BacktestResult
@@ -2522,12 +2524,37 @@ class ClaudeToolkit:
             "fetch_page": self._handle_fetch_page,
         }
         handler = handlers.get(name)
-        if not handler:
-            return f"Unknown tool: {name}", None
-        try:
-            return handler(inputs)
-        except Exception as e:
-            return _safe_error(name, e), None
+        # One audit record per call — the tool, the inputs redacted, the decision, the result's
+        # size, never its text (`audit.py`; MCP security checklist 8.1). Inside `audit.call()`,
+        # so anything the call leads to shares its id.
+        started = time.monotonic()
+        with audit.call():
+            if not handler:
+                audit.record("tool_call", actor="model", tool=name, params=inputs, decision="unknown_tool")
+                return f"Unknown tool: {name}", None
+            try:
+                text, fig = handler(inputs)
+            except Exception as e:
+                audit.record(
+                    "tool_call",
+                    actor="model",
+                    tool=name,
+                    params=inputs,
+                    decision="error",
+                    outcome=type(e).__name__,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+                return _safe_error(name, e), None
+            audit.record(
+                "tool_call",
+                actor="model",
+                tool=name,
+                params=inputs,
+                decision="executed",
+                summary=audit.summary_of(str(text)),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return text, fig
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

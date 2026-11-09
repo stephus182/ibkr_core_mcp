@@ -340,6 +340,7 @@ ibkr_core_mcp/
 ├── analytics.py          # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
 ├── claude_tools.py       # Claude tool definitions + handlers (44 tools, portable; each declares `capabilities`)
 ├── redaction.py          # redact_error — the one path for exception text the model layer shows or logs
+├── audit.py              # The audit record — one redacted JSON line per tool call and per gated order write (checklist 8.1)
 ├── mcp_server.py         # MCP server (stdio + SSE transports) — 46 tools, 4 resources
 ├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
 ├── order_confirm.py      # Gate 2: builds the confirmation dialog + side extraction
@@ -458,6 +459,7 @@ declarations). Documentation only — no gate or classification changed.
 - Never move the gates out of `IBKRClient` — enforcement must be at the innermost call site.
 - The required policy is `LAPolicyDeviceOwnerAuthentication` (Touch ID/Face ID, falling back to the device's system password on a failed/cancelled biometric scan) — Apple's own recovery path for a genuinely-failed biometric read, not a bypass this library adds. The stricter biometrics-only policy was evaluated and rejected: a failed scan under it has no recovery path at all. Don't change this policy without updating both this file and `README.md`'s Security section in the same PR.
 - Any PR that weakens these gates *beyond* the documented policy above — e.g. skipping `require_touch_id`/`confirm_order_dialog` entirely, caching a prior success, or adding a fallback beyond the OS's own password prompt — will be rejected.
+- **Every gated write carries `@_audited_write("<its name>")`** (2026-11-09): one redacted audit record per write — sent, denied, declined, timed out, refused or in error — in `~/.ibkr_core/audit.jsonl`; `tests/security/test_order_write_boundary.py` holds it on every `GATED_OWNERS` member.
 - **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate — directly or through a helper, with
   `_ensure_accounts_initialized` the one exemption, named and reasoned in the test — or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audits that produced them: `docs/audits/security-architecture-audit-2026-09-13.md` (invariants 1–10) and `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` (invariant 11, and the SSE bearer token in 10).
 

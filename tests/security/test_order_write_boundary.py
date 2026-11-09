@@ -24,6 +24,7 @@ from .structural import (
     PACKAGE_DIR,
     attribute_names_referenced,
     call_lines,
+    callee_name,
     function_named,
     functions_calling,
     functions_using_url_templates,
@@ -121,6 +122,21 @@ def test_order_write_authorizations_are_minted_in_exactly_one_place():
         if found:
             owners[path.name] = found
     assert owners == {"client.py": {"_authorize_order_write"}}, owners
+
+
+def test_every_gated_write_records_an_audit_entry():
+    """MCP security checklist 8.1 (2026-11-09): each gated write carries `@_audited_write("<its own
+    name>")`, so every order write — sent, denied at Gate 1, declined or timed out at Gate 2,
+    refused before the gates, rejected by IBKR — leaves one redacted record. The decorator is on
+    the gated method itself, beside the gates, for the same reason the gates are: a wrapper one
+    level up can be bypassed by calling what it wraps."""
+    for name in GATED_OWNERS:
+        fn = function_named(CLIENT, name)
+        audited = [d for d in fn.decorator_list if isinstance(d, ast.Call) and callee_name(d) == "_audited_write"]
+        assert audited, f"{name} is not decorated with _audited_write"
+        assert audited[0].args and ast.literal_eval(audited[0].args[0]) == name, (
+            f"{name}'s audit label is not its own name"
+        )
 
 
 # ── Guards on the guards ───────────────────────────────────────────────────────

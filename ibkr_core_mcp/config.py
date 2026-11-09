@@ -271,6 +271,10 @@ class Config:
     # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.local_browser
     # create-profile <url>`.
     crawl4ai_profiles_dir: Path = field(default_factory=lambda: crawl4ai_profiles_dir_from_env())
+    # Where the audit record — one redacted line per tool call and per order or session write —
+    # is appended (`audit.py`; MCP security checklist 8.1, 2026-11-09). A host passes it to
+    # `audit.configure()` once at start; the package's default is beside the trade store.
+    audit_log_path: Path = field(default_factory=lambda: Path("~/.ibkr_core/audit.jsonl").expanduser())
 
     def __post_init__(self) -> None:
         """A plain string given for a secret field becomes a `SecretStr`.
@@ -303,6 +307,7 @@ class Config:
           FIRECRAWL_API_KEY          → firecrawl_api_key       (optional; enables web scraper)
           GDRIVE_WEB_DOCS_FOLDER_ID  → gdrive_web_docs_folder_id (optional; auto-created as web_docs/)
           CRAWL4AI_PROFILES_DIR      → crawl4ai_profiles_dir   (default: ~/.ibkr_core/crawl4ai_profiles)
+          IBKR_AUDIT_LOG             → audit_log_path          (default: ~/.ibkr_core/audit.jsonl)
 
         Raises nothing: every value resolves to a default or an empty string, and the
         feature that needs one reports "not configured" at the point of use. `ANTHROPIC_API_KEY`
@@ -335,4 +340,5 @@ class Config:
             crawl4ai_profiles_dir=Path(
                 os.environ.get("CRAWL4AI_PROFILES_DIR", _DEFAULT_CRAWL4AI_PROFILES_DIR)
             ).expanduser(),
+            audit_log_path=Path(os.environ.get("IBKR_AUDIT_LOG", "~/.ibkr_core/audit.jsonl")).expanduser(),
         )

@@ -24,7 +24,7 @@ from mcp.server.models import InitializationOptions
 from mcp.types import Resource, TextContent, Tool, ToolAnnotations
 from pydantic import AnyUrl
 
-from ibkr_core_mcp import __version__
+from ibkr_core_mcp import __version__, audit
 from ibkr_core_mcp.claude_tools import READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
 from ibkr_core_mcp.flex_dataset import FlexDataset, FlexExecution
 from ibkr_core_mcp.models import json_default
@@ -115,33 +115,64 @@ def _legacy_trade_row(e: FlexExecution) -> dict[str, Any]:
     }
 
 
+def _local_tool(name: str, args: dict[str, Any], store: SQLiteStore) -> str | None:
+    """The two server-local tools; None for a name that is neither."""
+    if name == "add_price_alert":
+        aid = store.add_alert(
+            int(args["conid"]),
+            str(args["symbol"]),
+            float(args["threshold"]),
+            str(args["direction"]),
+        )
+        sym = str(args["symbol"]).upper()
+        return f"Alert #{aid} created: {sym} {args['direction']} {args['threshold']}."
+    if name == "get_price_alerts":
+        alerts = store.get_alerts(active_only=bool(args.get("active_only", True)))
+        if not alerts:
+            return "No price alerts."
+        return "\n".join(
+            f"#{a['id']} {a['symbol']} {a['direction']} {a['threshold']} "
+            f"{'[triggered]' if a['triggered_at'] else '[active]'}"
+            for a in alerts
+        )
+    return None
+
+
 def _dispatch(name: str, args: dict[str, Any], toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
-    """Route a tool call to the right handler. Never raises — always returns str."""
+    """Route a tool call to the right handler. Never raises — always returns str.
+
+    A toolkit tool records its own audit entry in `execute()`; the two server-local tools record
+    theirs here, the same way (`audit.py`; MCP security checklist 8.1).
+    """
+    if name in _EXISTING_TOOL_NAMES:
+        text, _ = toolkit.execute(name, args)
+        return text
+    with audit.call():
+        try:
+            local = _local_tool(name, args, store)
+        except Exception as exc:
+            audit.record(
+                "tool_call", actor="model", tool=name, params=args, decision="error", outcome=type(exc).__name__
+            )
+            return _safe_error(name, exc)
+        if local is None:
+            audit.record("tool_call", actor="model", tool=name, params=args, decision="unknown_tool")
+            return f"Unknown tool: {name!r}"
+        audit.record(
+            "tool_call", actor="model", tool=name, params=args, decision="executed", summary=audit.summary_of(local)
+        )
+        return local
+
+
+def _client_label(server: Server) -> str:
+    """The MCP client's name and version from the initialize handshake, for the audit record;
+    `mcp` when the request carries none."""
     try:
-        if name in _EXISTING_TOOL_NAMES:
-            text, _ = toolkit.execute(name, args)
-            return text
-        if name == "add_price_alert":
-            aid = store.add_alert(
-                int(args["conid"]),
-                str(args["symbol"]),
-                float(args["threshold"]),
-                str(args["direction"]),
-            )
-            sym = str(args["symbol"]).upper()
-            return f"Alert #{aid} created: {sym} {args['direction']} {args['threshold']}."
-        if name == "get_price_alerts":
-            alerts = store.get_alerts(active_only=bool(args.get("active_only", True)))
-            if not alerts:
-                return "No price alerts."
-            return "\n".join(
-                f"#{a['id']} {a['symbol']} {a['direction']} {a['threshold']} "
-                f"{'[triggered]' if a['triggered_at'] else '[active]'}"
-                for a in alerts
-            )
-        return f"Unknown tool: {name!r}"
-    except Exception as exc:
-        return _safe_error(name, exc)
+        params = server.request_context.session.client_params
+    except Exception:  # outside a request, or a session that has not initialised
+        return "mcp"
+    info = getattr(params, "clientInfo", None)
+    return f"{info.name} {info.version}" if info is not None else "mcp"
 
 
 def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
@@ -166,7 +197,8 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
     # tests/security/test_tool_input_validation.py).
     @server.call_tool(validate_input=True)
     async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
-        text = _dispatch(name, arguments or {}, toolkit, store)
+        with audit.context(client=_client_label(server)):
+            text = _dispatch(name, arguments or {}, toolkit, store)
         return [TextContent(type="text", text=text)]
 
     @server.list_resources()
@@ -585,6 +617,7 @@ def main() -> None:
     from ibkr_core_mcp import ClaudeToolkit, Config, GDriveCache, IBKRClient, SQLiteStore
 
     cfg = Config.from_env()
+    audit.configure(cfg.audit_log_path)  # the record's one configuration, by the process that owns it
     store = SQLiteStore(cfg)
     toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), store, cfg)
     server = build_server(toolkit, store)

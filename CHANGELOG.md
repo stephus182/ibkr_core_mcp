@@ -23,6 +23,28 @@ guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. De
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
 ### Added
+- **`ibkr_core_mcp.audit` — one redacted record per tool call and per gated order write (MCP
+  security checklist 8.1; `docs/audits/mcp-security-checklist-2026-11-09.md`).** A JSON line
+  appended to `~/.ibkr_core/audit.jsonl` (`Config.audit_log_path`, env `IBKR_AUDIT_LOG`; a host
+  calls `audit.configure(path)` once — the MCP server's `main()` does) with `ts`, a correlation
+  `id` (shared by every record inside one `audit.call()`), `kind`, `actor`, `client` and `agent`
+  (a host's names through `audit.context(...)`; the MCP server fills `client` from the
+  initialize handshake), the tool or the gated action, the parameters **redacted** — every
+  string through the new `redaction.redact_text` (the same patterns as `redact_error`), account
+  ids masked, values capped at 200 characters, nesting at three levels — the decision
+  (`executed`, `unknown_tool`; for a write the gates' own outcome: `sent`, `denied`, `declined`,
+  `timed_out`, `refused`, `error`), the exception's type as `outcome`, a result's **length** as
+  `summary` and the duration. Never a response body, never a secret, never the home directory
+  in clear. Written from `ClaudeToolkit.execute` (every call), `mcp_server._dispatch` (the two
+  server-local tools) and `client._audited_write` on all seven `GATED_OWNERS`, held there by
+  `test_every_gated_write_records_an_audit_entry`. Fail-open: one redacted warning per path,
+  never an exception into the recorded path; the file is 0600 in a 0700 directory, one `.1`
+  rotation at 20 MB. Supersedes the 2026-09-14 decision not to keep one, whose objection —
+  unredacted parameters — this answers. Tests: 24 (fields, redaction, permissions, rotation,
+  correlation, context, fail-open, the tool-call and order-write records); two mutations red
+  (the decorator dropped from one write; the redaction dropped). `test_tool_input_validation`'s
+  routed-names probe follows `_dispatch`'s helper, where the two local tools now live. See
+  `docs/consumers.md`.
 - **`ibkr_core_mcp.gateway.preflight` — the gateway session's readings and the rule that turns
   one into a verdict, read-only (register F45, step 1).** Moved from the consumer that wrote them,
   with their tests as the specification of the move: `GatewayState`, `read_state` (two GETs,

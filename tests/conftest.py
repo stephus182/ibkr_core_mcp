@@ -487,6 +487,7 @@ def mock_config(tmp_path, tmp_db):
         sqlite_path=tmp_db,
         gdrive_token_file=tmp_path / "token.json",
         gdrive_credentials_file=tmp_path / "credentials.json",
+        audit_log_path=tmp_path / "audit.jsonl",
     )
 
 
@@ -640,6 +641,24 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.enable_socket)
         else:
             item.add_marker(pytest.mark.disable_socket)
+
+
+@pytest.fixture(autouse=True)
+def _audit_record_under_tmp(request, tmp_path):
+    """Every unit test's audit record lands under `tmp_path`.
+
+    `audit.record` defaults to `~/.ibkr_core/audit.jsonl`, and a tool call or an order write in a
+    test records itself — so without this the operator-data hook above would refuse the first
+    such test, loudly, and rightly. Configured per test rather than once: a test that configures
+    its own path (the audit tests do) must not leak it to the next.
+    """
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+    from ibkr_core_mcp import audit
+
+    audit.configure(tmp_path / "audit.jsonl")
+    yield
 
 
 @pytest.fixture(autouse=True)

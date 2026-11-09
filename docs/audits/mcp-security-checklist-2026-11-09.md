@@ -132,3 +132,15 @@ N/A names the condition that would make it apply.
 - **Method.** Each answer was checked against the file or test it names on 2026-11-09, on the
   `release/2.2.0` worktree at step 1 of F45; the PyPI attestation was read from PyPI's integrity
   endpoint, the CORS and TLS facts by grep of the source. Nothing was run against the live gateway.
+
+## Follow-up, later the same day (2026-11-09, between F45's two steps)
+
+The operator's call on the first pass: fix now, without overkill. Status changes, each with its
+commit on `release/2.2.0`:
+
+| Item | Was | Now | How |
+|---|---|---|---|
+| 5.1 TLS ≥ 1.2 | PARTIAL | **YES** | `IBKRWebSocket.connect` pins `minimum_version = TLSv1_2` on the one context the package builds, held in source by `test_tls_policy.py`; every other connection is `requests` over urllib3 ≥ 2.2.2, whose documented default minimum is TLS 1.2 (`SECURITY.md` § TLS Policy). Measured first: the interpreter's default was already 1.2 |
+| 8.1 Per-call audit record | NO | **YES** | `ibkr_core_mcp.audit`: one redacted JSON line per tool call (`execute`, the two server-local tools) and per gated order write (`@_audited_write` on all seven `GATED_OWNERS`), with `ts`, correlation `id`, `kind`, `actor`, `client`, `agent`, tool/action, redacted `params`, `decision`, `outcome` (type only), `summary` (a length), `duration_ms`; 0600 in 0700, one rotation, fail-open. Session writes record from F45 step 2. `SECURITY.md` § Audit Record |
+| 1.3 SBOM · 2.2 image scan · 1.2 attestation recipe | PARTIAL | pending in this series | CI jobs and the consumers recipe, next commits |
+| 5.4 gateway CORS · 7.1 secrets at rest | PARTIAL | awaiting the operator | a rebuilt image and a fresh login; the 2026-10-16 deferral |

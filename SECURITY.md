@@ -425,13 +425,15 @@ any invalid probe") and left. Since 2026-09-14 one function, `redaction.collapse
 rewrites the home directory as `~`. One definition of "show a
 path", the way `price_text_safe` is one definition of showing a broker price.
 
-**Five surfaces call it**, and the set is an inventory rather than a filter, because a library
+**Six surfaces call it**, and the set is an inventory rather than a filter, because a library
 must not reconfigure the host application's logging: `redact_error` applies it to all exception
 text before the length cap; `_import_flex_file` builds its refusal from it; since
 2026-09-17, `mcp_server._issue_sse_token`'s token-file line and `store._restrict`'s
-chmod-failure warning; and, since 2026-10-16 (register F48), `config.load_env_file`'s warning
+chmod-failure warning; since 2026-10-16 (register F48), `config.load_env_file`'s warning
 that a `.env` accessible to others had its secrets refused, which carries the `chmod 600` fix
-the operator will paste. Those three are **logs, not model surfaces** — the rule below is
+the operator will paste; and, since 2026-11-09, `audit.record`'s warning that a record could not
+be written, which names the file (every string *inside* a record passes `redact_text`, which
+collapses the home directory itself). Those three are **logs, not model surfaces** — the rule below is
 about the model and was never broken — but the function's own docstring claimed "every surface
 that shows one to the model or a log" while both wrote `/Users/<name>/…` in full (audit finding
 SEC-10; the store one came out of its sweep, which is why the count is stated and checked
@@ -815,6 +817,44 @@ This is intentional. **Every function that disables certificate verification pin
 
 ---
 
+## Audit Record — every tool call and every order or session write, redacted
+
+Since 2026-11-09 (MCP security checklist 8.1, `docs/audits/mcp-security-checklist-2026-11-09.md`)
+the package keeps its own record of what it was asked to do and what it did: one JSON object
+per line, appended to `~/.ibkr_core/audit.jsonl` by default (`Config.audit_log_path`, env
+`IBKR_AUDIT_LOG`; a host calls `audit.configure(path)` once at start — the MCP server's `main()`
+does). It supersedes the 2026-09-14 decision not to keep one, whose ground was that a parameter
+log would carry model-supplied URLs and paths into a channel the redaction did not cover
+(`docs/security-architecture.md` § 8).
+
+| Field | Content |
+|---|---|
+| `ts`, `id` | UTC time; a correlation id — every record made inside one `audit.call()` shares it, so a tool call and the writes it leads to correlate |
+| `kind`, `actor` | `tool_call` (`actor: model`), `order_write` (`actor: operator` — the human at the gates), `session_write` (register F45 step 2) |
+| `client`, `agent` | Set by the host through `audit.context(client=…, agent=…)`; the MCP server fills `client` from the initialize handshake's `clientInfo`; `unknown` otherwise |
+| `tool` / `action` | The tool's name; a write's gated method (`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `_resolve_one_reply`) |
+| `params` | A tool's inputs, or a write's arguments summarised (an order's recognisable fields and the names of its other keys; a list as its length) — **every string redacted** |
+| `decision` | `executed`, `unknown_tool`; for a write the gates' own outcome: `sent`, `denied` (Gate 1), `declined` / `timed_out` (Gate 2 and a reply answered no), `refused` (before any gate), `error` |
+| `outcome`, `summary`, `duration_ms` | `ok` or the exception's type name — never its text; a result's **length**, never its text; the time taken |
+
+**What makes the channel safe to keep.** Every string in a record passes `redaction.redact_text`
+— the same secret shapes, query strings and home-directory collapse `redact_error` applies to an
+exception — then an account-id mask (`U` and 6–9 digits → `U******`) and a 200-character cap;
+nesting is cut at three levels; a response body is never recorded. **It is evidence, not a
+gate:** a write that fails is one redacted warning per path and never an exception into the path
+it records. The file is `0600` in a `0700` directory, with one `.1` rotation at 20 MB.
+
+**Where it is written from, held by test.** `ClaudeToolkit.execute` records every tool call
+(`tests/claude_tools/test_audit_record.py`); `mcp_server._dispatch` records the two server-local
+tools; every member of `GATED_OWNERS` carries `@_audited_write("<its name>")`
+(`tests/security/test_order_write_boundary.py::test_every_gated_write_records_an_audit_entry`) —
+on the gated method itself, beside the gates, for the reason the gates are there. The record's own
+contract — fields, redaction, permissions, rotation, correlation, fail-open — is `tests/test_audit.py`.
+
+**What it is not.** Not a SIEM, not an alert (checklist 8.2, 8.3: a single-operator workstation
+has neither); not tamper-evident beyond the file's mode (an operator-owned file, like every
+other under `~/.ibkr_core`). It is the prerequisite for both, and the record a host can ship.
+
 ## Secrets Management
 
 ### API Keys and Tokens in Config
@@ -1137,7 +1177,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
 | SSRF via the local browser (`fetch_page` / `crawl_site`) or the seeder (`search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved/shared-range hosts before anything is constructed, parsing decimal/hex/octal literals locally; the validate-before-reach order is asserted by `test_ssrf_boundary.py` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level; `_reject_private_httpx_request` does the same on the seeder's httpx client for `search_site`. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
-| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal, — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning, and — since 2026-10-16, F48 — by `config.load_env_file`'s refusal warning | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus all three log surfaces driven under a throwaway `HOME` |
+| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal, — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning, — since 2026-10-16, F48 — by `config.load_env_file`'s refusal warning, and — since 2026-11-09 — by `audit.record`'s could-not-write warning; every string inside an audit record passes `redact_text` | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus all four log surfaces driven under a throwaway `HOME` |
 | Credential exposure in logs or tool results | `repr=False` on `flex_token` and `firecrawl_api_key` (no model credential exists in `Config` to expose, by test); every logged or shown exception passes `redact_error` | Credentials loaded from env vars only, never hardcoded; `gitleaks` in CI; unit tests never load `.env` |
 | Vulnerable dependency in the resolved tree | `pip-audit` over `[dev,server,scraper]`, per push and weekly, fixable findings block | Dependabot alerts on the manifest's direct dependencies |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |
@@ -1170,6 +1210,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 12. **Never register the MCP call handler with `validate_input=False`**, and add every new server-local tool to `_ALL_TOOL_DEFS` as well as to `_dispatch` — the SDK validates only tools it has listed. Give any future tool that returns structured content an `outputSchema`. `tests/security/test_tool_input_validation.py` holds the first two; the third is a rule until a structured tool exists.
 13. **Never give `build_sse_app`'s `token` a default, and never print the token** — a default makes an unauthenticated server reachable by forgetting an argument, and a terminal is not a secret store. The file is 0600 under `~/.ibkr_core/`; only its path is logged.
 14. **Never show the model an absolute path built from `Path.home()`** — pass it through `redaction.collapse_home` so the message names the root, not the account.
+15. **Never add a gated write without `@_audited_write("<its name>")`, and never record a result's text or an unredacted parameter** — a record passes `redaction.redact_text` on every string; `tests/security/test_order_write_boundary.py` and `tests/test_audit.py` hold both.
 
 ---
 

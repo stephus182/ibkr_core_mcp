@@ -60,19 +60,21 @@ Endpoint reference: https://www.interactivebrokers.com/docs/web-api/
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
 import math
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar, cast
 
 import requests
 import urllib3
 
+from ibkr_core_mcp import audit
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
 from ibkr_core_mcp.config import Config, require_loopback_url
 from ibkr_core_mcp.exceptions import (
@@ -469,6 +471,63 @@ def _order_label(order: Mapping[str, Any]) -> str:
     """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     return f"{order.get('side', '?')} {order.get('quantity', '?')} {symbol}"
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _write_decision(exc: BaseException) -> str:
+    """The audit record's `decision` for a write that raised: the gates' own outcomes by type."""
+    if isinstance(exc, ConfirmationTimeoutError):
+        return "timed_out"
+    if isinstance(exc, (ConfirmationDeclinedError, ReplyNotConfirmedError)):
+        return "declined"
+    if isinstance(exc, HumanAuthError):
+        return "denied"
+    if isinstance(exc, (OrderValidationError, ConfigError, ValueError)):
+        return "refused"
+    return "error"
+
+
+def _audited_write(action: str) -> Callable[[_F], _F]:
+    """Every gated write leaves one redacted audit record — sent, denied, declined, timed out,
+    refused or in error — with the call's arguments summarised (`audit.summarise`: the order's
+    recognisable fields, the account id masked at record time) and the human as the actor
+    (MCP security checklist 8.1, 2026-11-09). On the gated method itself, beside the gates, for
+    the reason the gates are there: a wrapper one level up can be bypassed by calling what it
+    wraps. `tests/security/test_order_write_boundary.py` holds that every `GATED_OWNERS` member
+    carries it under its own name."""
+
+    def wrap(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def run(self: Any, *args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                result = fn(self, *args, **kwargs)
+            except BaseException as exc:
+                audit.record(
+                    "order_write",
+                    actor="operator",
+                    action=action,
+                    params=audit.summarise(args, kwargs),
+                    decision=_write_decision(exc),
+                    outcome=type(exc).__name__,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+                raise
+            audit.record(
+                "order_write",
+                actor="operator",
+                action=action,
+                params=audit.summarise(args, kwargs),
+                decision="sent",
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return result
+
+        return cast(_F, run)
+
+    return wrap
 
 
 def _authorize_order_write(
@@ -2540,6 +2599,7 @@ class IBKRClient:
     # Order Management (write — human auth required)
     # ------------------------------------------------------------------
 
+    @_audited_write("place_order")
     def place_order(
         self,
         account_id: str,
@@ -2638,6 +2698,7 @@ class IBKRClient:
         # ever applied by `place_order_and_confirm`, one layer too late to save the dict.
         return _as_reply_list(data)
 
+    @_audited_write("modify_order")
     def modify_order(
         self,
         account_id: str,
@@ -2721,6 +2782,7 @@ class IBKRClient:
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", api_order)
 
+    @_audited_write("cancel_order")
     def cancel_order(
         self,
         account_id: str,
@@ -3014,6 +3076,7 @@ class IBKRClient:
             details["outsideRTH"] = True
         return {k: v for k, v in details.items() if v not in (None, "")}
 
+    @_audited_write("reply_order")
     def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict[str, Any]]:
         """Confirm an order requiring an explicit IBKR reply (e.g. after a warning).
 
@@ -3048,6 +3111,7 @@ class IBKRClient:
         # point is that one endpoint is not read three ways.
         return _as_reply_list(data)
 
+    @_audited_write("_resolve_one_reply")
     def _resolve_one_reply(
         self,
         entry: dict[str, Any],
@@ -3233,6 +3297,7 @@ class IBKRClient:
             )
         return response
 
+    @_audited_write("place_bracket_and_confirm")
     def place_bracket_and_confirm(
         self,
         account_id: str,
@@ -3340,6 +3405,7 @@ class IBKRClient:
             log.error("Bracket response did not pair cleanly: %s", problem)
         return terminal
 
+    @_audited_write("attach_order_and_confirm")
     def attach_order_and_confirm(
         self,
         account_id: str,
