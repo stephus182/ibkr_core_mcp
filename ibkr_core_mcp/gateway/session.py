@@ -82,7 +82,9 @@ Every URL a function here sends to passes `require_loopback_url` first (conditio
 passes `redact_error` (condition G); the suspend lock is written 0600 in a 0700 directory and a
 lock naming a pid below 1 is malformed, never active (condition E); `compete` is a `Final`
 False spelled once (condition F). `ssodh/init` and `/logout` are posted from this module and
-nowhere else in the package (`tests/security/test_gateway_boundary.py`).
+nowhere else in the package (`tests/security/test_gateway_boundary.py`); each of the three
+session writes — the logout, the soft recovery, the restart that clears a session — leaves one
+redacted `session_write` record in the audit log (MCP security checklist 8.1).
 """
 
 from __future__ import annotations
@@ -104,6 +106,7 @@ from typing import Any, Final, Protocol
 import requests
 import urllib3
 
+from ibkr_core_mcp import audit
 from ibkr_core_mcp.config import require_loopback_url
 from ibkr_core_mcp.exceptions import RestartRefusedError
 from ibkr_core_mcp.gateway.manager import read_login_events
@@ -755,13 +758,25 @@ def release_session(gateway_url_: str, timeout: float = 10.0) -> tuple[bool, str
             warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
             resp = requests.post(f"{gateway_url_}/logout", timeout=timeout, verify=False)  # noqa: S501 - localhost gateway, self-signed cert; pinned above (SECURITY.md § TLS Policy)
     except Exception as exc:
+        audit.record("session_write", actor="operator", decision="error", outcome=type(exc).__name__, action="logout")
         return False, redact_error(exc)
     if resp.status_code != 200:
+        audit.record(
+            "session_write",
+            actor="operator",
+            decision="not_released",
+            outcome=f"HTTP {resp.status_code}",
+            action="logout",
+        )
         return False, f"HTTP {resp.status_code}"
     try:
-        return bool(resp.json().get("status")), resp.text.strip()
+        released, detail = bool(resp.json().get("status")), resp.text.strip()
     except Exception:
-        return False, resp.text.strip()[:120]
+        released, detail = False, resp.text.strip()[:120]
+    audit.record(
+        "session_write", actor="operator", decision="released" if released else "not_released", action="logout"
+    )
+    return released, detail
 
 
 # Guidance attached to a login that never completed. It leads with the other-app collision
@@ -1044,9 +1059,18 @@ def _recover(
         try:
             manager.restart(force=force)
         except RestartRefusedError as exc:
+            audit.record(
+                "session_write",
+                actor="operator",
+                decision="refused",
+                outcome=f"code {exc.code}",
+                action="restart",
+                params={"force": force},
+            )
             say(f"✕ Restart refused: {exc.reason}")
             session.publish(session.read_now(api_url).stale_copy(exc.reason))
             return session.state()
+        audit.record("session_write", actor="operator", decision="restarted", action="restart", params={"force": force})
         if not manager.wait_for_gateway(timeout=reach_timeout):
             session.publish(
                 SessionState(
@@ -1221,10 +1245,22 @@ def attempt_soft_recovery(url: str, timeout: float = 5.0) -> bool:
                 verify=False,  # noqa: S501 - localhost gateway, self-signed cert; pinned above (SECURITY.md § TLS Policy)
             )
         if resp.status_code != 200:
+            audit.record(
+                "session_write",
+                actor="owner",
+                decision="not_recovered",
+                outcome=f"HTTP {resp.status_code}",
+                action="ssodh_init",
+            )
             return False
         body = resp.json()
     except Exception as exc:
+        audit.record("session_write", actor="owner", decision="error", outcome=type(exc).__name__, action="ssodh_init")
         log.debug("ssodh/init failed: %s", redact_error(exc))
         return False
     auth = (body.get("iserver") or {}).get("authStatus") or body
-    return bool(auth.get("authenticated"))
+    recovered = bool(auth.get("authenticated"))
+    audit.record(
+        "session_write", actor="owner", decision="recovered" if recovered else "not_recovered", action="ssodh_init"
+    )
+    return recovered

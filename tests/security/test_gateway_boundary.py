@@ -335,3 +335,21 @@ def test_the_driver_probe_sees_each_shape_and_lets_a_handover_through():
     assert login_openers(
         "def d(gm):\n    gm.open_login_page()\ndef e(u):\n    webbrowser.open(u)\ndef f(p):\n    open(p)\n"
     ) == {"d", "e"}
+
+
+# ── Every session write records an audit entry (checklist 8.1; register F45, step 2) ────────────
+
+SESSION_WRITE_FUNCTIONS = frozenset({"release_session", "attempt_soft_recovery", "_recover"})
+"""The owner's three writes: the one logout, the one re-authentication, the one container restart
+that ends a session. `SECURITY.md` § Audit Record promises a `session_write` record for each."""
+
+
+def test_every_session_write_records_an_audit_entry():
+    source = (GATEWAY_DIR / "session.py").read_text()
+    recording = {
+        fn.name
+        for fn in _functions(ast.parse(source))
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "audit.record"
+    }
+    assert recording >= SESSION_WRITE_FUNCTIONS, SESSION_WRITE_FUNCTIONS - recording

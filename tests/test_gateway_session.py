@@ -1455,3 +1455,59 @@ def test_the_keepalive_refuses_a_non_loopback_url_before_any_request(monkeypatch
     with pytest.raises(ConfigError):
         keepalive_loop("ftp://nope", awake=FakeAwake(), say=lambda _: None, once=True)
     assert sent == []
+
+
+# ── Every session write leaves an audit record (MCP security checklist 8.1; register F45, step 2) ─
+
+
+def _records(tmp_path) -> list[dict[str, Any]]:
+    path = tmp_path / "audit.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_release_session_leaves_one_record_with_ibkrs_answer(monkeypatch, tmp_path):
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.post", lambda *a, **k: _resp(200, {"status": False}))
+    release_session(_URL)
+    (record,) = _records(tmp_path)
+    assert record["kind"] == "session_write" and record["action"] == "logout"
+    assert record["actor"] == "operator" and record["decision"] == "not_released"
+
+
+def test_soft_recovery_leaves_one_record_by_the_owner(monkeypatch, tmp_path):
+    body = {"iserver": {"authStatus": {"authenticated": True, "connected": True}}}
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.post", lambda *a, **k: _resp(200, body))
+    attempt_soft_recovery(_URL)
+    (record,) = _records(tmp_path)
+    assert record["kind"] == "session_write" and record["action"] == "ssodh_init"
+    assert record["actor"] == "owner" and record["decision"] == "recovered"
+
+
+def test_a_failed_write_records_the_exceptions_type_and_never_its_text(monkeypatch, tmp_path):
+    """A `requests` error carries its URL; the record carries the type (as `redact_error` would
+    the text, but the record needs no text at all)."""
+
+    def boom(*a, **k):
+        raise OSError("refused at https://localhost:5055/v1/api?token=secret-value")
+
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.post", boom)
+    release_session(_URL)
+    (record,) = _records(tmp_path)
+    assert record["decision"] == "error" and record["outcome"] == "OSError"
+    assert "secret-value" not in json.dumps(record)
+
+
+@pytest.mark.parametrize("refused", [False, True], ids=["restarted", "refused"])
+def test_recover_records_the_restart_or_its_refusal(wire, tmp_path, refused):
+    gm = RefusingManager(running=True) if refused else FakeManager(running=True)
+    lock = wire(gm, [_authenticated() if refused else _free()], confirmations=[True])
+    session = GatewaySession()
+
+    session.recover(gm, url=_URL, emit=lambda _: None, lock=lock)
+
+    (record,) = [r for r in _records(tmp_path) if r["kind"] == "session_write"]
+    assert record["action"] == "restart" and record["actor"] == "operator"
+    assert record["params"] == {"force": False}
+    if refused:
+        assert record["decision"] == "refused" and record["outcome"] == f"code {EXIT_READY}"
+    else:
+        assert record["decision"] == "restarted" and record["outcome"] == "ok"

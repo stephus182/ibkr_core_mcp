@@ -23,6 +23,13 @@ guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. De
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
 ### Added
+- **Every session write leaves an audit record (MCP security checklist 8.1; register F45, step 2 —
+  the `session_write` kind the audit entry below promised).** `gateway.session.release_session`
+  (`action: logout` — `released` / `not_released` / `error`), `attempt_soft_recovery`
+  (`action: ssodh_init`, `actor: owner` — `recovered` / `not_recovered` / `error`) and the
+  owner's `_recover` (`action: restart`, `params: {force}` — `restarted`, or `refused` with the
+  guard's code as `outcome`). A failed write records the exception's type, never its text. Held
+  in source by `test_gateway_boundary.py::test_every_session_write_records_an_audit_entry`.
 - **`python -m ibkr_core_mcp.gateway keepalive [--print-url] [--interval S]`, the package's own
   host-side tickler (register F45, step 2, commit 11/13).** `gateway.session.keepalive_loop`:
   `GET /tickle` every 55 s (IBKR's ~1 per minute), a line only on a state change (under launchd
