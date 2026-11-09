@@ -35,6 +35,7 @@ ALLOWLIST: dict[str, set[str]] = {
     "client.py": {"__init__"},  # IBKRClient: `self._session.verify = False`
     "streaming.py": {"connect"},  # IBKRWebSocket: `CERT_NONE`, `check_hostname = False`
     "gateway/manager.py": {"is_gateway_reachable", "is_authenticated"},  # the two polls
+    "gateway/preflight.py": {"read_state", "_read_sso", "confirm_session"},  # the readings (F45 step 1)
 }
 PIN_CALLS = ("is_loopback_url", "require_loopback_url")
 

@@ -10,6 +10,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`ibkr_core_mcp.gateway.preflight` — the gateway session's readings and the rule that turns
+  one into a verdict, read-only (register F45, step 1).** Moved from the consumer that wrote them,
+  with their tests as the specification of the move: `GatewayState`, `read_state` (two GETs,
+  `/tickle` and `/sso/validate`, never a write), `confirm_session` (`GET /portfolio/accounts`:
+  the proof a session serves data, and IBKR's documented prerequisite for the portfolio
+  endpoints), `verdict` with the seven `EXIT_*` codes (READY, UNREACHABLE, FREE, CONTESTED,
+  BORROWED, and REFUSED / VALIDATING from the gateway's own log), `LOGIN_PHRASES`,
+  `LoginEvent`, `login_events` (the log cut to time, event and code — the username, cookies
+  and device ids it carries stop there), `last_login`, `refine_with_log`, and
+  `gateway_api_url(env_file=None)` — the URL through `Config.from_env`, pinned to loopback.
+  Three things changed on the way: every request is preceded by `require_loopback_url`
+  (condition C); every exception that becomes a reading passes `redact_error` (condition G —
+  a `requests` error carries its URL); and every string names this package's commands and
+  documents, never a consumer's — the BORROWED guidance now ends with
+  `python -m ibkr_core_mcp.gateway reset`, the restart that cleared a borrowed session on
+  2026-08-05, where it named a `--release` that did not; the REFUSED and VALIDATING guidance
+  point at `docs/gateway-auth-reference.md`. `tests/security/test_gateway_boundary.py` holds
+  that no string literal under `ibkr_core_mcp/gateway/` names the consumer or its commands,
+  and two docstrings in `manager.py` and `__init__.py` that did were rewritten. Nothing is
+  exported from the package root yet; the command line arrives with step 1's sixth commit.
 - **`ContractRules` carries IBKR's per-contract fractional rule: `fractional_order_types`
   (`fraqTypes`) and `fractional_digits` (`fraqInt`) (register F27; claudia_ui #18).** IBKR: "permitted
   order types for use with fractional trading" and "decimal places for fractional order size"

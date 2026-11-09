@@ -10,7 +10,7 @@ Quick start (CLI)::
     gm = GatewayManager()
     gm.startup()          # interactive: starts container, opens the login window, waits for auth
 
-Programmatic (non-interactive, e.g. from a web UI such as ClaudIA)::
+Programmatic (non-interactive, e.g. from a host application's own UI)::
 
     gm = GatewayManager()
     gm.start()                    # restart the container in place, or build + run one
@@ -47,9 +47,9 @@ log = logging.getLogger(__name__)
 _DOCKER_DIR = Path(__file__).resolve().parent
 """The Docker build context — **resolved through symlinks, and that is load-bearing.**
 
-`Path(__file__).parent` was wrong under the install this project mandates. A strict
-editable install (`--config-settings editable_mode=strict`, required for mypy — see
-claudia_ui/CLAUDE.md) puts a symlink farm at
+`Path(__file__).parent` was wrong under the install a consumer of this package works with. A
+strict editable install (`--config-settings editable_mode=strict`, which mypy needs to resolve
+an editable package — the consumer's developer guide says so) puts a symlink farm at
 `build/__editable__…/ibkr_core_mcp/gateway/`, so `__file__` lives there and its parent is
 that farm. Every entry in it, `Dockerfile` included, is a symlink to an absolute path
 outside the directory.
@@ -538,7 +538,7 @@ class GatewayManager:
     def startup(self) -> bool:
         """Full interactive startup sequence for CLI use.
 
-        Fast path (normal ClaudIA restart):
+        Fast path (a host restarting while the gateway is up):
           If the container is already running and authenticated, returns immediately.
           The IBKR session is preserved — no login required.
 

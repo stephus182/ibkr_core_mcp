@@ -16,7 +16,7 @@ It was removed because it could not be silenced. IBKR renews a session on **any*
 (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server), so a login
 or a deliberate session-clear requires every actor to go quiet — and a loop inside the
 container cannot see the host-side flag that coordinates that. Renewal is now the host's
-job; claudia_ui does it with `scripts/ibkr-keepalive.sh` under launchd.
+job, from outside the container, by a loop that honours the host-side suspend lock.
 
 **Changing anything that ships into the image requires `docker rmi ibkr-core-gateway`
 before the change takes effect.** `GatewayManager.start()` builds only when the image is
