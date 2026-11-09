@@ -886,6 +886,13 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   delete.
 
 ### Security
+- **`IBKRWebSocket.connect` pins TLS 1.2 as the minimum on its own context (MCP security
+  checklist 5.1, 2026-11-09).** The one `SSLContext` the package builds now says
+  `minimum_version = TLSVersion.TLSv1_2` itself, held in source by `test_tls_policy.py`; the
+  interpreter's default was already TLS 1.2 when measured (Python 3.11.18, OpenSSL 3.5.9), so
+  the change makes the floor the package's statement rather than the host's OpenSSL
+  configuration. Every other connection is `requests` over urllib3 ≥ 2.2.2, whose documented
+  default minimum is TLS 1.2 (`SECURITY.md` § TLS Policy).
 - **Invariant 13 — the model layer never reaches the gateway package (register F45, condition
   A).** `tests/security/test_gateway_boundary.py` holds that `claude_tools.py` and
   `mcp_server.py` import nothing from `ibkr_core_mcp.gateway` (either statement form, any

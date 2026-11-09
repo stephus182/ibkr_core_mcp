@@ -160,3 +160,35 @@ def test_the_probe_sees_each_spelling(spelling, snippet):
 def test_the_probe_ignores_verification_left_on():
     snippet = "def f(s, c, u):\n    s.verify = True\n    c.check_hostname = True\n    c.verify_mode = ssl.CERT_REQUIRED\n    return s.get(u, verify=True)\n"
     assert disabling_functions(snippet) == {}
+
+
+# ── The one context the package builds pins its own TLS minimum ─────────────────────────────
+
+
+def _pins_minimum_tls_1_2(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether `fn` assigns `ssl.TLSVersion.TLSv1_2` to an attribute named `minimum_version`."""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Attribute) and t.attr == "minimum_version" for t in node.targets
+        ):
+            value = node.value
+            if isinstance(value, ast.Attribute) and value.attr == "TLSv1_2":
+                return True
+    return False
+
+
+def test_the_websocket_context_pins_tls_1_2_as_its_minimum_in_source():
+    """MCP security checklist 5.1 (2026-11-09). Every other connection goes through `requests`,
+    whose urllib3 ≥ 2 negotiates TLS 1.2 or later by default; the one `SSLContext` this package
+    builds — `IBKRWebSocket.connect` — says so itself. Measured the same day: the interpreter's
+    default was already TLS 1.2 (Python 3.11.18, OpenSSL 3.5.9), so this is the package's own
+    statement, held here, not an inheritance from whatever OpenSSL configuration the host has."""
+    source = (PACKAGE_DIR / "streaming.py").read_text()
+    connect = next(fn for fn in _functions(ast.parse(source)) if fn.name == "connect")
+    assert _pins_minimum_tls_1_2(connect), "IBKRWebSocket.connect does not set minimum_version = TLSVersion.TLSv1_2"
+
+
+def test_the_minimum_probe_sees_the_pin_and_its_absence():
+    assert _pins_minimum_tls_1_2(_only("def f(c):\n    c.minimum_version = ssl.TLSVersion.TLSv1_2\n"))
+    assert not _pins_minimum_tls_1_2(_only("def f(c):\n    c.verify_mode = ssl.CERT_NONE\n"))
+    assert not _pins_minimum_tls_1_2(_only("def f(c):\n    c.minimum_version = ssl.TLSVersion.TLSv1\n"))

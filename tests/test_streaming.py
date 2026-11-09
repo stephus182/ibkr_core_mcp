@@ -859,3 +859,21 @@ async def test_a_reconnect_does_not_replay_the_previous_socket_s_handshake_frame
     with _websockets_returning(second):
         await ws.connect()
     assert [item async for item in ws.listen()] == []
+
+
+async def test_connect_pins_tls_1_2_as_the_minimum_on_its_own_context() -> None:
+    """The one `SSLContext` this package builds is the WebSocket's; every other connection goes
+    through `requests`, whose urllib3 ≥ 2 negotiates TLS 1.2 or later by default. This context
+    says so itself rather than inheriting the interpreter's default (MCP security checklist 5.1,
+    2026-11-09). The loopback exemption — `CERT_NONE`, no hostname check — stays, pinned to a
+    loopback URL by `tests/security/test_tls_policy.py`."""
+    import ssl
+    import sys
+
+    socket = _GatewaySocket([_SYSTEM, _ACT, _STS_AUTHENTICATED])
+    ws = _client()
+    with _websockets_returning(socket):
+        await ws.connect()
+        ctx = sys.modules["websockets"].connect.call_args.kwargs["ssl"]
+    assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
+    assert ctx.verify_mode == ssl.CERT_NONE and ctx.check_hostname is False

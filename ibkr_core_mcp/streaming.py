@@ -350,6 +350,9 @@ class IBKRWebSocket:
             raise StreamingError(f"IBKRWebSocket only connects to localhost; got {urlparse(self._ws_url).hostname!r}")
 
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        # The package's own statement, not the interpreter's default (which was TLS 1.2 on
+        # 2026-11-09, Python 3.11 / OpenSSL 3.5): held by tests/security/test_tls_policy.py.
+        ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ssl_ctx.check_hostname = False  # self-signed cert on localhost
         ssl_ctx.verify_mode = ssl.CERT_NONE
 

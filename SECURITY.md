@@ -1016,12 +1016,24 @@ until then the seeder had layer 1 only, and a sitemap listing a loopback URL was
 | Connection | TLS verification |
 |---|---|
 | IBKR Client Portal Gateway (`localhost:5055`) — Python REST (`IBKRClient`, `GatewayManager` polls) | `verify=False` — intentional; self-signed cert on loopback only; each function pins its URL through `config.require_loopback_url` on a line before (`test_tls_policy.py`, 2026-11-09) |
-| IBKR Client Portal Gateway — WebSocket (`IBKRWebSocket`) | `ssl.CERT_NONE` — same certificate; `connect()` refuses any non-loopback URL before sending the cookie |
+| IBKR Client Portal Gateway — WebSocket (`IBKRWebSocket`) | `ssl.CERT_NONE` — same certificate; `connect()` refuses any non-loopback URL before sending the cookie; its context pins `minimum_version = TLSVersion.TLSv1_2` itself (`test_tls_policy.py`, 2026-11-09) |
 | IBKR Client Portal Gateway — container-internal (`healthcheck.sh`) | `curl -sk` — verification disabled; self-signed cert on loopback within the Docker network |
 | IBKR Flex Web Service (`ndcdyn.interactivebrokers.com`) | Standard TLS, no overrides |
 | Google Drive API | Standard TLS via Google client library |
 
 No external IBKR or third-party connections are made with verification disabled. The set of functions that disable it, and that each pins its URL first, is held by `tests/security/test_tls_policy.py` (register F45, 2026-11-09).
+
+**TLS 1.2 or later, everywhere.** Every HTTP connection goes through `requests`, and so through
+urllib3, whose floor here is `urllib3>=2.2.2`; urllib3 v2 "Changed the default minimum TLS
+version to TLS 1.2 (previously was TLS 1.0)" and documents why — "Dropping TLS 1.0 and 1.1 by
+default means you won't be vulnerable to TLS downgrade attacks if a vulnerability in TLS 1.0
+or 1.1 were discovered in the future" (v2 migration guide, § HTTPS requires TLS 1.2+, read
+2026-11-09). The one `SSLContext` this package builds itself, `IBKRWebSocket.connect`'s, sets
+`minimum_version = ssl.TLSVersion.TLSv1_2` rather than inheriting the interpreter's default —
+which was already TLS 1.2 on the day it was measured (Python 3.11.18, OpenSSL 3.5.9) and is
+held in source by `test_tls_policy.py` so a host's OpenSSL configuration cannot lower it.
+Cipher suites are the platform's; nothing in the package widens them. (MCP security
+checklist 5.1, `docs/audits/mcp-security-checklist-2026-11-09.md`.)
 
 ### Rate Limiting and Retry Safety
 
