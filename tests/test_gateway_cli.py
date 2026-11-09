@@ -411,3 +411,21 @@ def test_keepalive_runs_the_owners_loop_with_a_sleep_assertion_and_a_sigterm_han
     assert signum == signal.SIGTERM
     with pytest.raises(SystemExit):
         handler(signum, None)
+
+
+@pytest.mark.parametrize("command", ["keepalive", "up"])
+def test_ctrl_c_stops_quietly_with_the_shells_interrupt_code(command, capsys):
+    """Ctrl-C is how `keepalive` is stopped by hand and how an operator gives up on `up`'s wait:
+    one line and exit 130, as a shell reports an interrupt — not a traceback. The cleanup is the
+    loop's and the owner's `finally` (the sleep assertion, the suspend lock), which runs either way."""
+    session = MagicMock()
+    session.establish.side_effect = KeyboardInterrupt
+    with (
+        patch(f"{_MOD}.keepalive_loop", side_effect=KeyboardInterrupt),
+        patch(f"{_MOD}.signal.signal"),
+        patch(f"{_MOD}.get_session", return_value=session),
+        patch(f"{_MOD}.GatewayManager"),
+    ):
+        assert main([command]) == 130
+    captured = capsys.readouterr()
+    assert "Stopped." in captured.err and "Traceback" not in captured.err + captured.out

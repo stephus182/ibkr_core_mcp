@@ -6,7 +6,7 @@
                                                                               exit: 0 LIVE, 1 DOWN, 3 otherwise
     python -m ibkr_core_mcp.gateway reset     [--force] [--env-file PATH]     exit: the after verdict's code; 1 when refused
     python -m ibkr_core_mcp.gateway keepalive [--print-url] [--interval S] [--env-file PATH]
-                                                                              runs until Ctrl-C or SIGTERM; 1 on an unusable URL
+                                                                              runs until Ctrl-C (exit 130) or SIGTERM (0); 1 on an unusable URL
 
 Presentation only. Every decision about the session — what a reading means, whether a login
 may start, whether a restart may happen — belongs to `preflight` (the readings and the rule)
@@ -319,7 +319,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         _say(redact_error(exc), err=True)
         return 1
-    result: int = args.run(url, args)
+    try:
+        result: int = args.run(url, args)
+    except KeyboardInterrupt:
+        # Ctrl-C: how `keepalive` is stopped by hand and how `up`'s wait is given up. The cleanup
+        # already ran in the loop's and the owner's `finally`; a traceback would only look broken.
+        _say("Stopped.", err=True)
+        return 130
     return result
 
 
