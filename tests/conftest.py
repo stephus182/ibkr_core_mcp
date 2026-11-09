@@ -560,6 +560,14 @@ def pytest_configure(config):
     # And the machine (door 6, register F45): `docker`, `open`, `caffeinate` by name, from here on.
     sys.addaudithook(_desktop_hook)
     _DESKTOP_GUARD["armed"] = True
+    # And the operator's keychain (door 7, 2026-11-09): `keyring`'s null backend for the whole run,
+    # so `secret_store` reads nothing of the operator's and nothing prompts; a test of the store
+    # sets an in-memory stand-in for its own duration. Set, never read first: asking `keyring` for
+    # the current backend would initialise the real one.
+    import keyring
+    import keyring.backends.null
+
+    keyring.set_keyring(keyring.backends.null.Keyring())
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

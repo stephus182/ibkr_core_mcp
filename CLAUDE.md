@@ -266,7 +266,10 @@ GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 `Config.from_env()` reads the file through `load_env_file`: settings are exported where unset,
 `IBKR_FLEX_TOKEN` and `FIRECRAWL_API_KEY` reach the `Config` as `SecretStr` and nowhere else;
 a file accessible to group or others has its secrets refused, with `chmod 600 <path>` in the
-warning. A secret you set in your own shell is still read. Nothing in the package or `scripts/`
+warning. A secret you set in your own shell is still read, and since 2026-11-09 the OS keychain
+is read between the two (`secret_store`; `python -m ibkr_core_mcp.secret_store set
+IBKR_FLEX_TOKEN`) — the test suite sets `keyring`'s null backend so no unit test reaches yours
+(door 7). Nothing in the package or `scripts/`
 may call `load_dotenv` (a structural test refuses it); the `set -a; source ./.env` line below
 is for the live scraper tests in your own shell and stays a developer's choice.
 
@@ -357,6 +360,7 @@ ibkr_core_mcp/
 ├── pinescript.py         # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py       # Proactive per-endpoint pacing (sliding window) + backoff on 429
 ├── config.py             # Config dataclass loaded from environment variables
+├── secret_store.py       # The OS keychain behind the one loader — a secret is read env → keychain → .env (checklist 7.1)
 ├── gdrive_auth.py        # Shared Google OAuth token/refresh helper (used by cache + web_scraper)
 └── gateway/
     ├── __init__.py

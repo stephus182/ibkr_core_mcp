@@ -10,6 +10,30 @@
 
 ## Changes consumers should know about
 
+### Unreleased — secrets at rest: the OS keychain is read before the `.env` file
+
+`keyring>=25` is a new base dependency. `Config.from_env` now resolves `IBKR_FLEX_TOKEN`,
+`FIRECRAWL_API_KEY` and every name you pass as `secret_names` in one order: the environment you
+set, then the OS keychain (macOS Keychain, Windows Credential Locker, Linux Secret Service;
+service `ibkr_core_mcp`, the variable name as the account), then the `.env` file. Nothing changes
+for a host that does nothing: a secret in `.env` or in the environment is read as before, and a
+machine without a usable keychain reads as "absent" with one DEBUG line on the
+`ibkr_core_mcp.secret_store` logger. No secret enters the environment from either store
+(invariant 12).
+
+To move a secret: `python -m ibkr_core_mcp.secret_store set IBKR_FLEX_TOKEN` (typed, never
+echoed, never an argument), or `import-env .env` to store every secret the file holds and be
+told which lines to remove; `list [--env-file PATH]` prints where each is held and never a value.
+Your own names — `ANTHROPIC_API_KEY`, say — take `--names ANTHROPIC_API_KEY` on each subcommand,
+as they take `secret_names=` in code; in Python, `secret_store.read_secret(name)` returns a
+`SecretStr | None` and `secret_store.resolve(name, env)` the stored value in keychain-then-file
+order.
+
+**Your test suite:** set `keyring`'s null backend once in `pytest_configure`
+(`keyring.set_keyring(keyring.backends.null.Keyring())`) so no unit test reads the operator's
+keychain — this package's suite does (door 7), and a `Config.from_env()` inside a test otherwise
+reads the real one.
+
 ### Unreleased — verify the release you pin: PEP 740 attestations
 
 Every release since 2.0.1 is published by Trusted Publishing from `publish.yml`, and PyPI holds a

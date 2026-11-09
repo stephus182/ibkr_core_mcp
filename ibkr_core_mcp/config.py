@@ -41,6 +41,7 @@ from urllib.parse import urlparse
 from dotenv import dotenv_values, find_dotenv
 from pydantic import SecretStr
 
+from ibkr_core_mcp import secret_store
 from ibkr_core_mcp.exceptions import ConfigError
 from ibkr_core_mcp.redaction import collapse_home
 
@@ -147,6 +148,15 @@ def _too_open(path: Path) -> str | None:
     )
 
 
+def _secret(from_environment: str | None, stored: SecretStr | None) -> SecretStr:
+    """A secret as `from_env` resolves it: the user's own environment first — the documented
+    contract for the MCP server and any other client — then the stores at rest in
+    `secret_store.resolve`'s order (the OS keychain, then the file), else empty."""
+    if from_environment:
+        return SecretStr(from_environment)
+    return stored if stored is not None else SecretStr("")
+
+
 def load_env_file(
     dotenv_path: str | os.PathLike[str] | None = None,
     *,
@@ -222,14 +232,6 @@ def crawl4ai_profiles_dir_from_env(dotenv_path: str | None = None) -> Path:
     """
     load_env_file(dotenv_path)
     return Path(os.environ.get("CRAWL4AI_PROFILES_DIR", _DEFAULT_CRAWL4AI_PROFILES_DIR)).expanduser()
-
-
-def _secret(from_environment: str | None, from_file: SecretStr | None) -> SecretStr:
-    """A secret as `from_env` resolves it: the user's own environment first — the documented
-    contract for the MCP server and any other client — then the file, else empty."""
-    if from_environment:
-        return SecretStr(from_environment)
-    return from_file if from_file is not None else SecretStr("")
 
 
 @dataclass
@@ -314,8 +316,8 @@ class Config:
         was the single exception until 2026-09-17 — see the module docstring (TOOL-07).
 
         A secret (`IBKR_FLEX_TOKEN`, `FIRECRAWL_API_KEY`) is read from the environment if the
-        user set it there, else from the file, and is never written to the environment
-        (register F48). A host with secrets of its own in the same file passes their names in
+        user set it there, else from the OS keychain (`secret_store`, since 2026-11-09), else
+        from the file, and is never written to the environment (register F48). A host with secrets of its own in the same file passes their names in
         `secret_names` (its own list, which should include `SECRET_NAMES`), so that none of
         them is exported as a setting either — claudia_ui's `ANTHROPIC_API_KEY` was, the
         moment its toolkit's `Config` was built, until 2026-10-16.
@@ -330,12 +332,17 @@ class Config:
             gdrive_credentials_file=Path(
                 os.environ.get("GDRIVE_CREDENTIALS_FILE", "~/.ibkr_core/credentials.json")
             ).expanduser(),
-            flex_token=_secret(os.environ.get("IBKR_FLEX_TOKEN"), env.secrets.get("IBKR_FLEX_TOKEN")),
+            # A secret: the environment the user set (the documented contract), then the OS keychain
+            # (`secret_store`, 2026-11-09), then the file — never written back anywhere. The
+            # environment is read here by literal name, as every variable is (test_no_live_io).
+            flex_token=_secret(os.environ.get("IBKR_FLEX_TOKEN"), secret_store.resolve("IBKR_FLEX_TOKEN", env)),
             flex_query_id=os.environ.get("IBKR_FLEX_QUERY_ID", ""),
             gdrive_cache_folder_id=os.environ.get("GDRIVE_CACHE_FOLDER_ID", ""),
             gdrive_db_folder_id=os.environ.get("GDRIVE_DB_FOLDER_ID", ""),
             gdrive_account_folder_id=os.environ.get("GDRIVE_ACCOUNT_FOLDER_ID", ""),
-            firecrawl_api_key=_secret(os.environ.get("FIRECRAWL_API_KEY"), env.secrets.get("FIRECRAWL_API_KEY")),
+            firecrawl_api_key=_secret(
+                os.environ.get("FIRECRAWL_API_KEY"), secret_store.resolve("FIRECRAWL_API_KEY", env)
+            ),
             gdrive_web_docs_folder_id=os.environ.get("GDRIVE_WEB_DOCS_FOLDER_ID", ""),
             crawl4ai_profiles_dir=Path(
                 os.environ.get("CRAWL4AI_PROFILES_DIR", _DEFAULT_CRAWL4AI_PROFILES_DIR)

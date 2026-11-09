@@ -642,7 +642,7 @@ the rest from the 2026-09-13 audit:
 | `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
 | `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
-| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12) |
+| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12); `keyring` is imported only by `secret_store.py`, and under pytest its backend is the null one from `pytest_configure` on (door 7, 2026-11-09) |
 | `test_no_real_data_io.py` | No unit test can reach the operator's data directory (`~/.ibkr_core`, where the trade store, the Drive token, the Drive credentials and the browser profiles default once the scrub has removed the `IBKR_`/`GDRIVE_`/`CRAWL4AI_` variables): an audit hook armed before collection refuses every SQLite open of a database there — by every route to SQLite and every spelling of the path, a `file:` URI read as SQLite reads it, the directory recognised by identity as well as by name — and every file opened, created, changed or removed there, before the operation, with a refusal `except Exception` cannot swallow and a run that fails at session end if one was swallowed anyway. Integration tests are exempt from their setup to their teardown |
 | `test_no_human_reached.py` | No unit test can reach a person — a Touch ID prompt or a Gate 2 dialog. From `pytest_configure` on, the five doors a gate has to a human are shut: Apple's `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that refuse any use, `tkinter.Tk` is replaced where tkinter exists, and an audit hook refuses a child process that would run `_order_dialog.py` or `osascript`, or open the Chrome login window (register F44), whichever call asked; the refusal is a `BaseException`, recorded, and the run fails at its end if one was swallowed. Nothing is exempt; a test of a gate places its own double. Includes the 2026-10-01 incident replayed through the real call chain (Gate 1 skipped, Gate 2 left real → a refusal, nothing sent), and every test is safe on a broken guard |
 | `test_gateway_boundary.py` | Constitution (13), register F45: the model layer — `claude_tools.py`, `mcp_server.py` — imports nothing from `ibkr_core_mcp.gateway` (both statement forms, any depth) and names no session write (`logout`, `reauthenticate`, `release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`, `get_session`, `read_login_events`, `KeepAwake`, `restart_refusal`), proven on the review's probe M1; the three session endpoints (`ssodh/init`, `/logout`, `reauthenticate`) are *called* only in the owner set — `IBKRClient.logout` / `reauthenticate` until step 2 — by an AST walk that ignores prose; a `GatewayManager` is driven (`start`, `restart`, `stop`, `startup`) and the login page opened only inside the gateway package; and no string literal under `ibkr_core_mcp/gateway/` — docstrings included — names the consumer or one of its commands or documents, so every message the package prints names its own `python -m ibkr_core_mcp.gateway …` and `docs/gateway-auth-reference.md` |
@@ -664,7 +664,7 @@ not execution; **(3)** every tool declares its capabilities and none declares `O
 frozen; **(5)** every externally derived URL is checked before the fetch and on every browser
 request; **(6)** error text reaching the model or a log passes one redaction function; **(7)**
 unit tests cannot open sockets, resolve names, see credentials, reach the operator's data
-directory or start a desktop command (`docker`, `open`, `caffeinate`); **(8)** processes are spawned
+directory or keychain, or start a desktop command (`docker`, `open`, `caffeinate`); **(8)** processes are spawned
 only from three named modules, never through a shell; **(9)** every value
 interpolated into a URL path is validated, or carries a written exemption; **(10)** the HTTP transport validates `Host`
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
@@ -895,6 +895,25 @@ from the file into the `Config` and never into `os.environ` — `load_dotenv` is
 package. A `.env` accessible to group or others has its secrets refused on POSIX, with
 `chmod 600 <path>` in the message. The environment is still read for a secret the user set
 there (the MCP server's `"env"` contract), and never written.
+
+Since 2026-11-09 (MCP security checklist 7.1) the store at rest is the operating system's own
+keychain — macOS Keychain, Windows Credential Locker, the Secret Service on Linux — through the
+`keyring` library, one entry per secret name under the service `ibkr_core_mcp`
+(`ibkr_core_mcp.secret_store`). `Config.from_env` resolves a secret in one order: the
+environment the user set, then the keychain, then the `.env` file. `config.py` stays the one
+reader of the environment, `load_env_file` the one reader of files, and the keychain, like the
+file, is never written back to the environment. A workstation without a usable keychain runs
+from the file as before: every keychain error reads as "absent", with one DEBUG line. The
+operator's command line never prints a value — `python -m ibkr_core_mcp.secret_store set NAME`
+reads it with `getpass` (an argument would land in shell history), `list` prints names and
+where each is held, `import-env PATH` moves a file's secrets into the keychain and names the
+lines to remove, `delete NAME`; a host's own names come through `--names`, as through
+`secret_names` in code. Under pytest the keychain is unreachable: `tests/conftest.py` sets
+`keyring`'s null backend from `pytest_configure` on (door 7), and `keyring` is imported in
+`secret_store.py` and nowhere else (`test_no_live_io.py`). What stays a 0600 file: the Drive
+OAuth token and the SSE token, which the package writes and rotates itself and nobody types,
+and the `.env` route itself, for the settings and for a machine without a keychain. This lifts
+the operator's 2026-10-16 deferral of encryption at rest (`docs/security-architecture.md` § 8).
 
 ### Credentials Never in Version Control
 

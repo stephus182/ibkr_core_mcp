@@ -23,6 +23,21 @@ guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. De
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
 ### Added
+- **`ibkr_core_mcp.secret_store` — secrets at rest in the OS keychain, read before the `.env`
+  file (MCP security checklist 7.1; the operator's 2026-10-16 deferral lifted 2026-11-09).**
+  `keyring>=25` is a new base dependency. `Config.from_env` resolves a secret in one order — the
+  environment the user set, the OS keychain (service `ibkr_core_mcp`, the variable name as the
+  account), the `.env` file — for `SECRET_NAMES` and every name a host passes; `config.py` stays
+  the one reader of the environment and `load_env_file` the one reader of files, and neither
+  store is ever written back to the environment. A keychain that cannot be used reads as absent,
+  with one DEBUG line. The command line never prints a value: `set NAME` (typed with `getpass`),
+  `list [--env-file PATH]` (where each is held), `import-env PATH` (stores the file's secrets and
+  names the lines to remove), `delete NAME`; `--names` for a host's own. Door 7 in the test
+  suite: `pytest_configure` sets `keyring`'s null backend, and `keyring` is imported in
+  `secret_store.py` alone (`test_no_live_io.py`). Tests in `tests/test_secret_store.py` plus the
+  door; five mutations red one at a time (file before keychain; a stored value over the
+  environment; a keychain failure propagating; the door removed; a second importer). See
+  `docs/consumers.md`.
 - **`ibkr_core_mcp.audit` — one redacted record per tool call and per gated order write (MCP
   security checklist 8.1; `docs/audits/mcp-security-checklist-2026-11-09.md`).** A JSON line
   appended to `~/.ibkr_core/audit.jsonl` (`Config.audit_log_path`, env `IBKR_AUDIT_LOG`; a host
@@ -908,6 +923,11 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   delete.
 
 ### Security
+- **Door 7: no unit test can reach the operator's keychain (2026-11-09).** `pytest_configure`
+  sets `keyring`'s null backend for the whole run, before any test imports `secret_store`; a test
+  of the store sets an in-memory stand-in for its own duration; `test_no_live_io.py` holds that
+  the backend under pytest is null and that `keyring` has one importer. Mutation: the door
+  removed → red.
 - **CI publishes an SBOM and scans the gateway image; the release attestations are verified
   (MCP security checklist 1.2, 1.3, 2.2 — 2026-11-09).** `ci.yml` gains `sbom` — a CycloneDX 1.6
   JSON of what a user installs (`.[server,scraper]` resolved on the runner, the package itself

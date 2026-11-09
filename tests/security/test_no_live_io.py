@@ -152,3 +152,27 @@ def test_the_loader_scan_sees_each_spelling(tmp_path):
         f"{tmp_path.name}/a.py": {"load_dotenv"},
         f"{tmp_path.name}/b.py": {"dotenv_values"},
     }
+
+
+# ── Constitution §7 (2026-11-09) — the operator's keychain is read in one module, and never under pytest ──
+
+
+def test_the_keychain_is_read_in_one_module_and_shut_under_pytest():
+    """Door 7 (MCP security checklist 7.1): `keyring` is imported only in `secret_store.py`, so the
+    keychain has one reader to reason about; and under pytest the backend is keyring's null one from
+    `pytest_configure` on, so no test — a `Config.from_env()` included — can read or write the
+    operator's keychain or make it prompt."""
+    import ast
+
+    import keyring
+    import keyring.backends.null
+
+    importers: set[str] = set()
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        roots = {alias.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for alias in n.names}
+        roots |= {(n.module or "").split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        if "keyring" in roots:
+            importers.add(path.name)
+    assert importers == {"secret_store.py"}, importers
+    assert isinstance(keyring.get_keyring(), keyring.backends.null.Keyring)

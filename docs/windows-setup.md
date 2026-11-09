@@ -78,6 +78,11 @@ GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 
 Python expands `~` correctly on Windows.
 
+Secrets (`IBKR_FLEX_TOKEN`, `FIRECRAWL_API_KEY`) can live in the Windows Credential Locker instead
+of the file: `python -m ibkr_core_mcp.secret_store set IBKR_FLEX_TOKEN` stores one (typed, never
+echoed), and `Config.from_env` reads the Locker before `.env` (`keyring`'s Windows backend, since
+2026-11-09). `python -m ibkr_core_mcp.secret_store list` shows where each is held, never a value.
+
 ---
 
 ## IBKR Gateway
