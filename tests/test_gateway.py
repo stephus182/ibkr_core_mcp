@@ -20,7 +20,7 @@ import requests
 from ibkr_core_mcp.exceptions import GatewayError
 from ibkr_core_mcp.gateway import GatewayManager, LoginWindow
 from ibkr_core_mcp.gateway.manager import _LOGIN_WINDOW_ENV, GATEWAY_LOG_DIR, _find_chrome, read_login_events
-from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, LoginEvent
+from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, GatewayState, LoginEvent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -751,6 +751,9 @@ class TestStartupClosesTheLoginWindow:
             patch.object(gm, "is_running", return_value=True),
             patch.object(gm, "is_authenticated", side_effect=[False, on_retry]),
             patch.object(gm, "wait_for_gateway", return_value=True),
+            # The F45 gate reads the session before the page: FREE, and a log with no login.
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=GatewayState(reachable=True)),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=([], "")),
             patch.object(gm, "open_login_page", return_value=window),
             patch.object(gm, "wait_for_auth", return_value=verified),
             patch("builtins.input", return_value=""),
@@ -903,3 +906,91 @@ class TestReadLoginEvents:
         effect = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
         with patch("subprocess.run", **effect):
             assert read_login_events() == expected
+
+
+# ---------------------------------------------------------------------------
+# startup()'s gate: the session is read before any login page (register F45, step 1)
+# ---------------------------------------------------------------------------
+
+_FREE = GatewayState(reachable=True)
+_LIVE = GatewayState(reachable=True, authenticated=True, connected=True)
+_CONTESTED = GatewayState(reachable=True, competing=True)
+_BORROWED = GatewayState(reachable=True, sso_valid=True, client_app="IBKRMOBILE_000.a-000", sso_user="ibkruser")
+_UNREACHABLE = GatewayState(reachable=False, detail="ConnectionError")
+_REFUSED_LOG = [
+    LoginEvent("2026-10-07 18:00:00", "login", ""),
+    LoginEvent("2026-10-07 18:00:01", "validate", "401"),
+    LoginEvent("2026-10-07 18:00:13", "giving up", ""),
+]
+_VALIDATING_LOG = [LoginEvent("2026-10-07 18:00:00", "login", ""), LoginEvent("2026-10-07 18:00:01", "validate", "401")]
+
+
+class TestStartupGate:
+    """After the gateway answers and before the login page, `startup()` reads the session and refuses
+    to open a login on any reading but FREE: a live session would be re-authenticated for nothing
+    (the IB Key escalation), a contested or borrowed one would start the tug-of-war the readings
+    exist to prevent, a refused one needs a website login first, a validating one needs nothing."""
+
+    @staticmethod
+    def _startup(reading: GatewayState, events: object = ([], "")) -> tuple[bool, MagicMock]:
+        gm = GatewayManager()
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "is_running", return_value=True),
+            patch.object(gm, "is_authenticated", return_value=False),
+            patch.object(gm, "wait_for_gateway", return_value=True),
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+            patch.object(gm, "open_login_page", return_value=None) as opened,
+            patch.object(gm, "wait_for_auth", return_value=False),
+            patch("builtins.input", return_value=""),
+        ):
+            result = gm.startup()
+        return result, opened
+
+    def test_a_live_session_returns_true_and_opens_no_login(self, capsys: pytest.CaptureFixture[str]) -> None:
+        result, opened = self._startup(_LIVE)
+        assert result is True
+        opened.assert_not_called()
+        assert "[OK] Session is LIVE" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "mark"),
+        [
+            (_CONTESTED, ([], ""), "BUSY"),
+            (_BORROWED, ([], ""), "BORROWED"),
+            (_FREE, (_REFUSED_LOG, ""), "REFUSED"),
+            (_FREE, (_VALIDATING_LOG, ""), "VALIDATING"),
+            (_UNREACHABLE, ([], ""), "DOWN"),
+        ],
+        ids=["contested", "borrowed", "refused", "validating", "unreachable-after-the-wait"],
+    )
+    def test_a_session_that_must_not_be_logged_into_returns_false_and_opens_no_login(
+        self, reading: GatewayState, events: object, mark: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The four refusing verdicts of the design, and one more: a gateway that stopped answering
+        between `wait_for_gateway` and the read gets no login page either — nothing is read from, and
+        no page opened for, a gateway that does not answer."""
+        result, opened = self._startup(reading, events)
+        assert result is False
+        opened.assert_not_called()
+        assert f"[{mark}]" in capsys.readouterr().out
+
+    def test_a_free_session_opens_the_login_as_before(self) -> None:
+        result, opened = self._startup(_FREE)
+        opened.assert_called_once()
+        assert result is False  # `wait_for_auth` is False here: the login was not completed
+
+    def test_the_log_is_read_only_after_a_free_reading(self) -> None:
+        """The `docker exec` runs only where it can change the answer."""
+        gm = GatewayManager()
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "is_running", return_value=True),
+            patch.object(gm, "is_authenticated", return_value=False),
+            patch.object(gm, "wait_for_gateway", return_value=True),
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=_LIVE),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events") as read,
+        ):
+            gm.startup()
+        read.assert_not_called()

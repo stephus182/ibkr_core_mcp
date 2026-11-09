@@ -10,6 +10,35 @@
 
 ## Changes consumers should know about
 
+### Unreleased — `startup()` opens no login on a session that must not be logged into; the gateway package has a command line (register F45, step 1)
+
+**Behaviour change in `GatewayManager.startup()`.** Once the gateway answers, and before any
+login page, it reads the session — `GET /tickle`, `GET /sso/validate`, and after a FREE reading
+the gateway's own log through `docker exec` — and acts on the verdict: a **live** session returns
+`True` at once (as the fast path already did when the container was running); a **contested**
+session (another IBKR client competing), a **borrowed** one (the gateway holding an SSO session
+issued to another app), a login **IBKR refused**, a login IBKR is **still validating**, or a
+gateway that stopped answering, print the verdict and its guidance and return `False` **without
+opening a login page**. Only a **free** gateway goes on to the login as before. A consumer that
+relied on `startup()` opening the page on every unauthenticated gateway now gets `False` and the
+printed reason on those readings — which is what the readings exist to say: on three of the four
+a login is the wrong move.
+
+**New public module `ibkr_core_mcp.gateway.preflight`** — the readings and the rule, read-only:
+`GatewayState`, `read_state(url)`, `confirm_session(url)`, `verdict(state)` with
+`EXIT_READY … EXIT_VALIDATING`, `LOGIN_PHRASES`, `LoginEvent`, `login_events`, `last_login`,
+`refine_with_log`, `gateway_api_url(env_file=None)`. **New in `gateway.manager`:**
+`read_login_events(timeout=15.0)` — the gateway's own log reduced to time, event and code; no
+container argument. **New in `config`:** `LOOPBACK_HOSTS`, `is_loopback_url`,
+`require_loopback_url`. `read_state` and `confirm_session` raise `ConfigError` on a
+non-loopback URL before any request.
+
+**New command line:** `python -m ibkr_core_mcp.gateway preflight [--env-file PATH]` (exit: the
+verdict's code, 0 READY · 1 DOWN · 2 FREE · 3 BUSY · 4 BORROWED · 5 REFUSED · 6 VALIDATING) and
+`… diagnose [--env-file PATH]` (0 on READY or FREE, else 3). `--env-file` is the `.env` a host
+keeps elsewhere; a non-loopback gateway URL exits 1 before any request. The user id is never
+printed. Step 2 adds `up`, `reset`, `keepalive` and `preflight --release`.
+
 ### Unreleased — one child attached to a working order; two new rows on the bracket dialog
 
 **New public API** (claudia_ui gap #36, design 2026-10-17):

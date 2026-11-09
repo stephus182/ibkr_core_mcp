@@ -355,6 +355,7 @@ ibkr_core_mcp/
     ├── __init__.py
     ├── manager.py        # GatewayManager — Docker lifecycle, auth polling
     ├── preflight.py      # The session's readings (/tickle, /sso/validate, /portfolio/accounts) and the verdict rule (F45)
+    ├── __main__.py       # `python -m ibkr_core_mcp.gateway preflight|diagnose` — the operator's command line (F45)
     ├── Dockerfile        # eclipse-temurin:21 + IBKR Client Portal zip
     ├── conf.yaml         # Gateway config (port, SSL, CORS, IP allowlist)
     ├── run_gateway.sh    # Entrypoint: start the Java process and wait — nothing else

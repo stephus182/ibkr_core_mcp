@@ -63,14 +63,17 @@ flowchart TB
     R -->|no| ST["start()<br/>restarts a current container in place,<br/>else recreates it"]
     SKIP --> W["wait_for_gateway<br/>GET /tickle, 120 s"]
     ST --> W
-    W --> L["Open the login page;<br/>the human does 2FA"]
+    W --> G{"Read the session (F45):<br/>preflight.read_state → verdict,<br/>the gateway's log after FREE"}
+    G -->|"READY"| FAST2["Return True — a live<br/>session, no login page"]
+    G -->|"CONTESTED · BORROWED ·<br/>REFUSED · VALIDATING · DOWN"| NO["Return False — the verdict<br/>and its guidance printed,<br/>NO login page"]
+    G -->|"FREE"| L["Open the login page;<br/>the human does 2FA"]
     L --> V{"wait_for_auth<br/>60 s, then one manual retry"}
     V -->|yes| OK["Authenticated"]
     V -->|no| DEG["Returns False — tools<br/>error until you log in"]
 
-    class FAST,OK safe
-    class P,R guard
-    class ST,DEG destr
+    class FAST,FAST2,OK safe
+    class P,R,G guard
+    class ST,DEG,NO destr
 ```
 
 The two diamonds are the whole point. `start()` always ends on a fresh Java process, and the
@@ -90,6 +93,22 @@ removed and run anew, as is one Docker will not restart. Docker Compose decides 
 recreates a container when "the service's configuration or image was changed after the
 container's creation" ([compose up](https://docs.docker.com/reference/cli/docker/compose/up/)).
 `restart()` is `start()`.
+
+**The gate before the login page (register F45, step 1, 2026-11-09).** `is_authenticated`
+cannot tell "nobody has logged in" from a login IBKR refused, a session another IBKR app holds
+(`competing`), a session the gateway is holding *for* another app (the 2026-08-05 borrowed
+session), or a login IBKR is still answering — every one reads `authenticated: false`. Until
+F45 `startup()` opened the login page on all of them, and on three of the four that is the
+wrong move: a needless re-login is what escalates into the IB Key challenge, a login on a
+contested session starts the tug-of-war, and a refused login needs a website login first. So
+once the gateway answers, `startup()` reads the session the way `python -m ibkr_core_mcp.gateway
+preflight` does — `preflight.read_state` (GET `/tickle`, GET `/sso/validate`), `verdict`, and
+after a FREE reading the gateway's own log (`manager.read_login_events`) — and acts on the
+verdict: **READY** returns `True` at once; **CONTESTED, BORROWED, REFUSED, VALIDATING**, and a
+gateway that stopped answering between the wait and the read, print the `[WORD] headline` and
+the guidance and return `False` with **no login page**; only **FREE** goes on to the page. The
+runbook below says what each verdict asks of you. Step 2 of F45 replaces this body with the
+session owner's own sequence, which polls the login to completion instead of asking for Enter.
 
 **A rebuild is not automatic.** `start()` builds the image only when it is absent, so after
 changing anything that ships into it (`Dockerfile`, `conf.yaml`, `run_gateway.sh`,

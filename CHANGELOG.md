@@ -42,6 +42,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   or `(None, reason)`, never raises. `GATEWAY_LOG_DIR` and `_docker_env` move with it. The
   manager's six existing exception log lines pass `redact_error` too, and
   `test_error_redaction.py`'s raw-interpolation probe now covers `gateway/manager.py`.
+- **`python -m ibkr_core_mcp.gateway preflight | diagnose [--env-file PATH]` — the operator's
+  command line over the gateway session (register F45, step 1).** `preflight` prints the verdict
+  block — `[WORD] headline`, the guidance, the flags of a reachable reading — refined by the
+  gateway's own log after a FREE reading, and exits with the verdict's code (0 READY, 1 DOWN,
+  2 FREE, 3 BUSY, 4 BORROWED, 5 REFUSED, 6 VALIDATING); `diagnose` prints the headline, the
+  guidance, the flags and the login timeline (time, event and code per line, from the newest
+  login) and exits 0 on READY or FREE, else 3. `--env-file` is the `.env` a host keeps
+  elsewhere, read through `Config.from_env`; a non-loopback gateway URL is printed and exits 1
+  before any request. The user id is never printed and the username only in a BORROWED
+  verdict; every line is flushed; the module imports no `subprocess` (the one spawn stays in
+  the manager). The consumer's `preflight` and `diagnose` commands, word for word, with the
+  module names changed.
 - **`ContractRules` carries IBKR's per-contract fractional rule: `fractional_order_types`
   (`fraqTypes`) and `fractional_digits` (`fraqInt`) (register F27; claudia_ui #18).** IBKR: "permitted
   order types for use with fractional trading" and "decimal places for fractional order size"
@@ -305,6 +317,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`GatewayManager.startup()` reads the session before opening any login page, and opens none
+  on a reading that must not be logged into (register F45, step 1).** After `wait_for_gateway`
+  it runs the pre-flight's rule — `preflight.read_state`, `verdict`, the gateway's own log after a
+  FREE reading — and acts on the verdict: READY returns `True` at once; CONTESTED, BORROWED,
+  REFUSED, VALIDATING, and a gateway that stopped answering between the wait and the read, print
+  `[WORD] headline`, the guidance and "No login page opened." and return `False`; only FREE goes
+  on to the login window as before. `is_authenticated` cannot tell those four from "nobody has
+  logged in", and on three of them a login is the wrong move (the IB Key escalation, the
+  tug-of-war, a refusal that needs a website login first). The log is read only after a FREE
+  reading. See `docs/consumers.md`.
 - **`GatewayManager.start()` restarts a current container in place instead of removing it, and
   `restart()` is `start()` (register F43; claudia_ui gap #93).** Every start removed the
   container and ran a new one, and the gateway's own log — kept in the container, the one place a

@@ -41,7 +41,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ibkr_core_mcp.config import require_loopback_url  # noqa: E402
 from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
-from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, LoginEvent, login_events  # noqa: E402
+from ibkr_core_mcp.gateway.preflight import (  # noqa: E402
+    _MARK,
+    EXIT_FREE,
+    EXIT_READY,
+    LOGIN_PHRASES,
+    LoginEvent,
+    login_events,
+    read_state,
+    refine_with_log,
+    verdict,
+)
 from ibkr_core_mcp.redaction import redact_error  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -613,6 +623,10 @@ class GatewayManager:
           1. Ensure Docker is running (launches Docker Desktop on macOS if needed)
           2. Restart the container in place — or recreate it, if its image or run options changed
           3. Wait for Java process to become reachable
+          3b. Read the session before any login (register F45, step 1): a live session returns
+              True at once; a contested, borrowed, refused or still-validating one — or a gateway
+              that stopped answering — prints the verdict and returns False with no login page;
+              only FREE goes on
           4. Open the login window (Chrome; the default browser's tab if there is none)
           5. Wait for user to complete login + 2FA
           6. Verify authentication
@@ -637,9 +651,9 @@ class GatewayManager:
         # A container that is absent or stopped cannot hold a session (it lives in the
         # Java process), so starting one loses none. A RUNNING container is left alone.
         #
-        # NOTE: claudia_ui no longer calls this method at all — it goes through
-        # claudia.gateway_session, which owns the sequencing and pre-flights first. This
-        # guard exists so the CLI path here cannot destroy a session either.
+        # NOTE: a host that owns the sequence (F45 step 2 brings that owner into this package)
+        # does not call this method; this guard exists so the CLI path here cannot destroy a
+        # session either.
         if not self.is_running():
             self.start()
         else:
@@ -648,6 +662,24 @@ class GatewayManager:
         print("▶ Waiting for gateway to be reachable...")
         if not self.wait_for_gateway():
             print("  ✕ Gateway did not start within timeout.")
+            return False
+
+        # The gate (register F45, step 1): read the session before any login page. A login IBKR
+        # refused, a session another app holds or the gateway is holding for another app, and a
+        # login IBKR is still answering all look like "not authenticated" to `is_authenticated`;
+        # each is a reason NOT to open the page — the pre-flight's rule, applied here too.
+        found = verdict(read_state(self._api_url))
+        if found[0] == EXIT_FREE:
+            found = refine_with_log(found, *read_login_events())
+        code, headline, guidance = found
+        if code == EXIT_READY:
+            print(f"  [{_MARK[code]}] {headline}")
+            return True
+        if code != EXIT_FREE:
+            print(f"  [{_MARK[code]}] {headline}")
+            for paragraph in guidance.split("\n\n"):
+                print(f"  {paragraph}")
+            print("  No login page opened.")
             return False
 
         print("▶ Opening the IBKR login...")
