@@ -271,6 +271,23 @@ said "42 read-only tools" while eight of them mutated state outside the machine
 | PA reporting | `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` |
 | Web scraping | `firecrawl_search`, `search_site`, `crawl_site`, `fetch_page` |
 
+### No gateway session operation in the tool surface (register F45, 2026-11-09)
+
+The gateway package — `ibkr_core_mcp.gateway`: the container, the login page, the session's
+readings and, from F45 step 2, its writes (`/logout`, `ssodh/init`, the suspend lock, the
+recovery) — declares no tool, and the model layer cannot reach it: `claude_tools.py` and
+`mcp_server.py` import nothing from it and name none of `logout`, `reauthenticate`,
+`release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`,
+`get_session`, `read_login_events`, `KeepAwake`, `restart_refusal` (constitution **(13)**,
+`tests/security/test_gateway_boundary.py`). The capability registry alone did not hold this:
+a handler that declared `ACCOUNT_STATE` could have called `logout`, and one importing
+`GatewayManager` under `if False:` passed the whole suite (F45 review, probes M1 and M2).
+The same file holds that the three session endpoints are *called* only in the owner set
+(`IBKRClient.logout` / `reauthenticate` until step 2) and that a `GatewayManager` is *driven* —
+`start`, `restart`, `stop`, `startup`, the login page — only inside the gateway package; a host
+constructs one and hands it to the owner. A gateway operation is the operator's, through the
+command line or a host's button, and the model learns what it needs from a 401.
+
 ### Capability declarations
 
 Every tool definition carries a `capabilities` frozenset drawn from `claude_tools.CAPABILITIES`
@@ -624,7 +641,7 @@ the rest from the 2026-09-13 audit:
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12) |
 | `test_no_real_data_io.py` | No unit test can reach the operator's data directory (`~/.ibkr_core`, where the trade store, the Drive token, the Drive credentials and the browser profiles default once the scrub has removed the `IBKR_`/`GDRIVE_`/`CRAWL4AI_` variables): an audit hook armed before collection refuses every SQLite open of a database there — by every route to SQLite and every spelling of the path, a `file:` URI read as SQLite reads it, the directory recognised by identity as well as by name — and every file opened, created, changed or removed there, before the operation, with a refusal `except Exception` cannot swallow and a run that fails at session end if one was swallowed anyway. Integration tests are exempt from their setup to their teardown |
 | `test_no_human_reached.py` | No unit test can reach a person — a Touch ID prompt or a Gate 2 dialog. From `pytest_configure` on, the four doors a gate has to a human are shut: Apple's `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that refuse any use, `tkinter.Tk` is replaced where tkinter exists, and an audit hook refuses a child process that would run `_order_dialog.py` or `osascript`, whichever call asked; the refusal is a `BaseException`, recorded, and the run fails at its end if one was swallowed. Nothing is exempt; a test of a gate places its own double. Includes the 2026-10-01 incident replayed through the real call chain (Gate 1 skipped, Gate 2 left real → a refusal, nothing sent), and every test is safe on a broken guard |
-| `test_gateway_boundary.py` | The gateway package is the consumer-independent home of the IBKR session: no string literal under `ibkr_core_mcp/gateway/` — docstrings included — names the consumer or one of its commands or documents (`claudia`, `gateway-reset.sh`, `ibkr-keepalive.sh`, `docs/ibkr-gateway.md`), so every message the package prints names its own `python -m ibkr_core_mcp.gateway …` and `docs/gateway-auth-reference.md`; the probe is proven against a docstring, a plain string, an f-string part and another letter case, and ignores a comment. Condition A's checks — the model layer imports nothing from the package and names no session write; the session endpoints and the container are driven only by the owner — arrive with register F45's fifth commit |
+| `test_gateway_boundary.py` | Constitution (13), register F45: the model layer — `claude_tools.py`, `mcp_server.py` — imports nothing from `ibkr_core_mcp.gateway` (both statement forms, any depth) and names no session write (`logout`, `reauthenticate`, `release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`, `get_session`, `read_login_events`, `KeepAwake`, `restart_refusal`), proven on the review's probe M1; the three session endpoints (`ssodh/init`, `/logout`, `reauthenticate`) are *called* only in the owner set — `IBKRClient.logout` / `reauthenticate` until step 2 — by an AST walk that ignores prose; a `GatewayManager` is driven (`start`, `restart`, `stop`, `startup`) and the login page opened only inside the gateway package; and no string literal under `ibkr_core_mcp/gateway/` — docstrings included — names the consumer or one of its commands or documents, so every message the package prints names its own `python -m ibkr_core_mcp.gateway …` and `docs/gateway-auth-reference.md` |
 | `test_tls_policy.py` | Every function in the package that disables certificate verification — `verify=False`, `.verify = False`, `check_hostname = False`, `verify_mode = ssl.CERT_NONE` — is one of a declared set, and each calls `config.is_loopback_url` / `require_loopback_url` on a line before its first disabling line; the probe is proven against an unpinned call, a pin placed after the call, each spelling, and verification left on |
 | `test_no_desktop_reached.py` | No unit test can start a process that reaches the operator's machine: `docker` (the container holding the live IBKR session), `open` (Docker Desktop) and `caffeinate` are refused by name — each word's last path component — on every process-creation event from `pytest_configure` on, the refusal a `BaseException` recorded for the run's end; integration tests alone are exempt, from setup to teardown, because they read the gateway's own log through `docker exec` by design. Sized to an inventory of every start a full run makes (2026-11-09: 16, all `git`, `python3.11`, `ruff`); every test safe on a broken guard — the `open` and `caffeinate` cases run a decoy linked to `true` |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
@@ -649,7 +666,9 @@ interpolated into a URL path is validated, or carries a written exemption; **(10
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
 transport an argument set that fails the tool's `inputSchema` never reaches a handler;
 **(12)** a secret read from `.env` never enters the process environment, and the package
-writes none there.
+writes none there; **(13)** the model layer imports nothing from the gateway package and names no
+session write, the session endpoints are called only in the owner set, and a manager is driven
+only inside the gateway package.
 
 CI adds two gates the four code gates cannot provide: `pip-audit` over a **fresh resolve** of
 `.[dev,server,scraper]` (requirements mode — `pip install --dry-run --report` in a throwaway

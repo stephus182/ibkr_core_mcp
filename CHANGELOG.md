@@ -851,6 +851,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   delete.
 
 ### Security
+- **Invariant 13 — the model layer never reaches the gateway package (register F45, condition
+  A).** `tests/security/test_gateway_boundary.py` holds that `claude_tools.py` and
+  `mcp_server.py` import nothing from `ibkr_core_mcp.gateway` (either statement form, any
+  depth) and name no session write — `logout`, `reauthenticate`, `release_session`,
+  `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`, `get_session`,
+  `read_login_events`, `KeepAwake`, `restart_refusal`; that the three session endpoints
+  (`ssodh/init`, `/logout`, `reauthenticate`) are *called* only in the owner set
+  (`IBKRClient.logout` and `reauthenticate` until step 2); and that a `GatewayManager` is
+  *driven* (`start`, `restart`, `stop`, `startup`) and the login page opened only inside the
+  gateway package — a host constructs a manager and hands it to the owner. The two owner-set
+  checks are the consumer's AST tests, ported. Why: the review's probe M1 — a READ_ONLY handler
+  importing `GatewayManager` under `if False:` and calling `.restart()` — passed the whole
+  security suite on 2026-11-08, and M2 showed a handler that declared `ACCOUNT_STATE` could call
+  `logout`; the tree was clean, nothing held it so. Proven by applying M1 to `_get_positions`:
+  three checks red, nothing else.
 - **Every function that disables certificate verification pins its URL to loopback first, through
   one helper, and the set of such functions is held by test (register F45, condition C).**
   `config.LOOPBACK_HOSTS`, `config.is_loopback_url(url)` and `config.require_loopback_url(url)`

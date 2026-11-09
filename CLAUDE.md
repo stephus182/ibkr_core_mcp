@@ -63,7 +63,7 @@ pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 
-# Security regression suite — the twelve properties of SECURITY.md § Security Regression Suite,
+# Security regression suite — the thirteen properties of SECURITY.md § Security Regression Suite,
 # each read from the source or driven with canaries; ~10 s. Part of the unit run and of CI.
 pytest -m security
 
@@ -661,7 +661,7 @@ not `@import`s, so they don't load into every session's context automatically.
   per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
 - Scraping *method* — approaching an unfamiliar host, the four-way matrix, reading a blocked
   page, and where we stop on the anti-bot ladder: `docs/web-scraping-methodology.md`
-- Security architecture — principals, privilege tiers, the trust-boundary map, the twelve
+- Security architecture — principals, privilege tiers, the trust-boundary map, the thirteen
   invariants with their tests, subsystem designs, CI gates, the decision log, change recipes:
   `docs/security-architecture.md`; the OWASP MCP-guide applicability decision (2026-09-14, the
   principal external baseline, section by section): `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`,
