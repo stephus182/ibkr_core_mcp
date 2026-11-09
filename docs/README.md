@@ -116,6 +116,7 @@ Dated filenames, not retroactively edited.
 
 | Audit | What it covers |
 |---|---|
+| [`mcp-security-checklist-2026-11-09.md`](audits/mcp-security-checklist-2026-11-09.md) | **Latest** — an enterprise MCP security checklist (29 items, 8 sections, scored 2–4) answered item by item against this package: 4 YES, 16 PARTIAL, 2 NO, 7 N/A, each with the test or file that makes it true, the deployment and provenance axes read for a single-operator local workstation, and the deep-dive order that follows. A first pass between F45's two steps |
 | [`integration-suite-audit-2026-09-20.md`](audits/integration-suite-audit-2026-09-20.md) | First full-suite run against a live gateway after the `v2.0.1` release — four findings CI cannot reach, incl. `preview_order` sending `extOperator` so every futures whatif was rejected |
 | [`live-test-log.md`](audits/live-test-log.md) | **Running log** — every live integration run against a real gateway/Drive/Firecrawl, dated. Append, don't rewrite |
 | [`claude-tools-audit-2026-07.md`](audits/claude-tools-audit-2026-07.md) | The full `claude_tools.py` audit — 42 tool descriptions vs official docs, token measurements, the follow-up register |

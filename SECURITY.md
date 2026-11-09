@@ -73,7 +73,9 @@ The principal external baseline is the OWASP GenAI Security Project's
 [*A Practical Guide for Secure MCP Server Development*, v1.0, February 2026](https://genai.owasp.org/resource/a-practical-guide-for-secure-mcp-server-development/)
 — the PDF behind that page's *Download* link, cited by section below. It was retrieved in
 full on 2026-09-14 and mapped item by item in
-`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. The summary:
+`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. The summary: An enterprise MCP security checklist
+(29 scored items) was read beside it on 2026-11-09:
+`docs/audits/mcp-security-checklist-2026-11-09.md`.
 
 | OWASP domain | Standing here | Where in this document |
 |---|---|---|
@@ -1163,6 +1165,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 
 | Date | Commit | Scope | Outcome |
 |---|---|---|---|
+| 2026-11-09 | `release/2.2.0`, F45 step 1 | An enterprise MCP security checklist — 29 items in 8 sections (origin, application security, environment, authentication, communications, action security, secrets, monitoring), each scored 2–4 — answered against this package with the test or file behind each answer: `docs/audits/mcp-security-checklist-2026-11-09.md` | 4 YES, 16 PARTIAL, 2 NO, 7 N/A. No item scored 4 is a NO; the NOs are monitoring (8.1 a dated decision, 8.3). PyPI holds a PEP 740 provenance attestation for 2.1.0 (verified). Deep dive ordered: a redacted per-call record of order and session writes, attestation verification and an SBOM in CI, a gateway image scan, a measured TLS minimum, the gateway's wildcard CORS measured |
 | 2026-05-25 | `4dbe6ad` | All production modules | 2 Critical, 5 High, 5 Medium resolved. 3 Low/Info accepted. |
 | 2026-05-25 | `5f7b5ab` | `flex_query.py` | URL validation, datetime error handling hardened. |
 | 2026-06-10 | `bc8032b` | `gateway/` module — `GatewayManager`, `Dockerfile`, `tickler.sh`, `healthcheck.sh`, `conf.yaml` | 5 Low/Informational findings (GW-01 – GW-05) accepted. No code changes required. All subprocess calls use list form; no user input reaches shell. Docker container exposed on localhost only, no privileged mode. |
