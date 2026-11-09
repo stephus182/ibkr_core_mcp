@@ -5012,3 +5012,26 @@ def test_whole_or_fraction_shapes_a_quantity_as_ibkr_should_see_it():
     assert _whole_or_fraction("10.5") == 10.5
     assert _whole_or_fraction(2**53 + 1) == 2**53 + 1, "an int must not round through float"
     assert _whole_or_fraction(True) == 1, "a bool was always the number 1 here (int(True)); unchanged"
+
+
+# ── The two session writes a client could make are deprecated: the owner is the one path (F45) ──
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [("logout", "/logout"), ("reauthenticate", "/iserver/reauthenticate")],
+)
+def test_logout_and_reauthenticate_warn_of_their_deprecation_and_still_post(client, method, endpoint):
+    """Register F45, step 2: the gateway session has one owner (`ibkr_core_mcp.gateway.session`),
+    and a client method that ends or re-establishes the session is a second authority over it.
+    Both methods stay until 3.0 and still send — a host that calls them is warned, not broken —
+    and the warning names where the session writes live now."""
+    with (
+        pytest.warns(DeprecationWarning, match="ibkr_core_mcp.gateway.session") as warned,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response({"status": True})
+        getattr(client, method)()
+    mock_post.assert_called_once()
+    assert mock_post.call_args.args[0].endswith(endpoint)
+    assert len(warned) == 1 and "3.0" in str(warned[0].message)

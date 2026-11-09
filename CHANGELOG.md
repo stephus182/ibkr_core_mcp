@@ -708,6 +708,13 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   sent none.
 
 ### Deprecated
+- **`IBKRClient.logout()` and `IBKRClient.reauthenticate()` — removed in 3.0 (register F45,
+  step 2, commit 12/13).** Each emits a `DeprecationWarning` naming the gateway session's one
+  owner, `ibkr_core_mcp.gateway.session`, and still sends its request. The replacements: `python
+  -m ibkr_core_mcp.gateway preflight --release` / `release_session(url)` for the one opt-in
+  logout; `reset` / `recover()` for a session a restart can clear; nothing for a soft timeout,
+  which the owner's poll recovers. `test_gateway_boundary.py` keeps both in the owner set until
+  3.0. See `docs/consumers.md`.
 - **`SQLiteStore.get_trades` and `SQLiteStore.get_all_execution_ids`.** They read the legacy
   `trades` table, which no reader in this package uses any more; use `FlexDataset.executions`
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.

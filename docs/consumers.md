@@ -10,6 +10,22 @@
 
 ## Changes consumers should know about
 
+### Unreleased — `IBKRClient.logout()` and `reauthenticate()` are deprecated; the session owner is the one path (register F45, step 2)
+
+Both methods now emit a `DeprecationWarning` and will be removed in 3.0. They still send their
+request, so nothing breaks today — but each is a second authority over the one brokerage
+session, which is what the gateway session owner (`ibkr_core_mcp.gateway.session`, this
+release) exists to remove. Use instead:
+
+- to drop a held session, `python -m ibkr_core_mcp.gateway preflight --release` — the one
+  logout in the package, opt-in, and possibly ending an IBKR Mobile session too (IBKR does not
+  document the scope of `/logout`); in Python, `gateway.session.release_session(url)`;
+- to clear a session a restart can clear (a borrowed one), `python -m ibkr_core_mcp.gateway
+  reset` or `get_session().recover(GatewayManager())`;
+- for a soft timeout (`connected` with `authenticated` false after a working session), nothing:
+  the owner's poll recovers it with `ssodh/init` and `compete: false`. `reauthenticate` is
+  IBKR's own deprecated endpoint and ends fresh logins — never call it proactively.
+
 ### Unreleased — secrets at rest: the OS keychain is read before the `.env` file
 
 `keyring>=25` is a new base dependency. `Config.from_env` now resolves `IBKR_FLEX_TOKEN`,

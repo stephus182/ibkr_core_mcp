@@ -67,6 +67,7 @@ import logging
 import math
 import re
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
@@ -1148,7 +1149,18 @@ class IBKRClient:
 
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/re-authenticate-the-brokerage-session-deprecated
         Endpoint: POST /iserver/reauthenticate (Deprecated)
+
+        **Deprecated in this package too (register F45, step 2; removed in 3.0).** The gateway
+        session has one owner, `ibkr_core_mcp.gateway.session`: a soft timeout is recovered by
+        its poll (`attempt_soft_recovery`, `ssodh/init` with `compete: false`), and nothing else
+        re-establishes a session. A `DeprecationWarning` is emitted; the request is still sent.
         """
+        warnings.warn(
+            "IBKRClient.reauthenticate() is deprecated and will be removed in 3.0: the gateway session's "
+            "one owner is ibkr_core_mcp.gateway.session (a soft timeout is recovered by its poll).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._post("/iserver/reauthenticate")
 
     def validate_sso(self) -> dict[str, Any]:
@@ -3993,5 +4005,17 @@ class IBKRClient:
 
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/logout-of-the-current-session
         Endpoint: POST /logout
+
+        **Deprecated (register F45, step 2; removed in 3.0).** The gateway session has one owner,
+        `ibkr_core_mcp.gateway.session`: `release_session(url)` is the one logout in the package,
+        reached by `python -m ibkr_core_mcp.gateway preflight --release` and never run
+        automatically — its scope is undocumented and may end an IBKR Mobile session too. A
+        `DeprecationWarning` is emitted; the request is still sent.
         """
+        warnings.warn(
+            "IBKRClient.logout() is deprecated and will be removed in 3.0: the gateway session's one owner "
+            "is ibkr_core_mcp.gateway.session (release_session; `python -m ibkr_core_mcp.gateway preflight --release`).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._post("/logout")
