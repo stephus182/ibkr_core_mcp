@@ -2896,6 +2896,7 @@ def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
     import pathlib
     from datetime import datetime, timedelta
 
+    from ibkr_core_mcp.auth import NoAuth
     from ibkr_core_mcp.client import IBKRClient
     from ibkr_core_mcp.config import Config
 
@@ -2906,7 +2907,11 @@ def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
         gdrive_token_file=pathlib.Path("/tmp/t.json"),
         gdrive_credentials_file=pathlib.Path("/tmp/c.json"),
     )
-    c = IBKRClient(cfg)
+    # `NoAuth()`, as every other client in the suite: the default `BrowserCookieAuth()` reads
+    # the operator's keychain on macOS (`security find-generic-password … "Chrome Safe Storage"`
+    # through browser_cookie3) — a real credential read from a unit test, found by the door-6
+    # inventory of 2026-11-09 (register F45). This test patches the HTTP and needs no cookie.
+    c = IBKRClient(cfg, auth=NoAuth())
 
     def ms(dt):
         return calendar.timegm(dt.timetuple()) * 1000

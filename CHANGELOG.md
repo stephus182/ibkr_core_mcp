@@ -819,6 +819,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   delete.
 
 ### Security
+- **No unit test can start `docker`, `open` or `caffeinate` (register F45, door 6 — the first
+  commit of the gateway session owner's move into the core).** An audit hook in
+  `tests/conftest.py`, armed from `pytest_configure`, refuses a child process by the name of what
+  would run — each word's last path component — with a `BaseException` that `except Exception`
+  cannot swallow and a record that turns the run red at its end; integration tests alone are
+  exempt, from setup to teardown, because the live gateway test reads the gateway's own log
+  through `docker exec` by design. Why now: the gateway package is about to hold the session
+  owner, whose recovery path restarts the container holding the live IBKR session, and every
+  manager test patched the spawn by name — a test that patched one call and not another, or a
+  mutant that moved the call, could have restarted the operator's live gateway from a unit run
+  (register F32's class, on the machine instead of the screen). Inventoried first, with a
+  recording hook over one full run: 16 starts, all `git`, `python3.11` or `ruff` — and one
+  `security find-generic-password … "Chrome Safe Storage"`: a unit test building
+  `IBKRClient(cfg)` with the default `BrowserCookieAuth`, so browser_cookie3 asked the operator's
+  keychain for Chrome's cookie-encryption password on every run. **That test now passes
+  `auth=NoAuth()`** as every other client in the suite does (OWASP least privilege; invariant 7),
+  and the start is gone (measured after: 16 starts, none `security`).
+  `tests/security/test_no_desktop_reached.py`: eight tests, every one safe on a broken guard.
 - **A secret read from `.env` never enters the process environment (register F48; claudia_ui
   gaps #100/#103; CWE-526).** `Config.from_env()` and `crawl4ai_profiles_dir_from_env()` ran
   `load_dotenv(override=False)`, which copied the whole file — `IBKR_FLEX_TOKEN` and

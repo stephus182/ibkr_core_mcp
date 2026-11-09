@@ -389,6 +389,87 @@ def _human_violations(refusals: list[str]) -> list[str]:
     return [f"a test tried to reach a human: {refusal}" for refusal in refusals]
 
 
+# ── …and no unit test starts a desktop command or a daemon (register F45, door 6) ─────────
+#
+# `gateway/manager.py` drives the docker CLI — `docker restart` ends the live IBKR session, held
+# in the container's Java process — starts Docker Desktop with `open -a Docker`, and from F45
+# holds a `caffeinate -i` assertion for the keepalive. The socket guard stops none of these, and
+# every test of the manager patches `subprocess.run` / `Popen` by name; until 2026-11-09 that was
+# all that kept a unit test off the operator's gateway. A test that patched one call and not
+# another, or a mutant that moved the call, would have acted on the machine — F32's class, on
+# the machine instead of the screen. So the rule is structural, like the three above it: the
+# same kind of audit hook refuses a child process by the name of what would run, read as each
+# word's last path component (ClaudIA's `_names_a_desktop_command`, 2026-10-16).
+#
+# Inventoried first, with a recording hook over one full run (2026-11-09): 16 real starts, every
+# one `git` (the tree reads of the docs and identifier tests), `python3.11` (the interpreter, for
+# two `--collect-only` runs and the backtest's unguarded child) or `ruff` (the flex-schema script
+# formatting its output). The inventory also found one `security find-generic-password` — a unit
+# test building `IBKRClient(cfg)` with the default `BrowserCookieAuth`, so browser_cookie3 asked
+# the keychain for Chrome's cookie-encryption password — fixed by `auth=NoAuth()` rather than
+# refused here: it is a dependency's spawn, not the package's. Refusing by name fires on nothing
+# the suite does, so nothing is exempt but integration tests, which run `docker exec` on the
+# gateway's own log by design (F45's `tests/test_gateway_live.py`): the door opens for them from
+# setup to teardown, as the operator-data hook does. Its own list, not the manager's table — a
+# guard that read the code it guards would move with a mutant of it.
+#
+# What it cannot see, stated rather than implied: a command under another name or through a
+# wrapper script, a child of a child, and anything that disarms it on purpose. It catches
+# accidents. `tests/security/test_no_desktop_reached.py` is what fails when it stops working,
+# and every test there is safe on a broken guard.
+_DESKTOP_GUARD = {"armed": False}
+_desktop_refusals: list[str] = []  # read by `pytest_sessionfinish`
+_DESKTOP_COMMANDS = ("docker", "open", "caffeinate")
+
+
+def _names_a_desktop_command(value: object) -> str | None:
+    """The desktop command `value` would run, if any: a path, a command line, or a list of them,
+    read by each word's last path component (`'…/bin/docker'` → `docker`; `'"$HOME/x" -i'` → `x`)."""
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if isinstance(value, os.PathLike):
+        value = os.fspath(value)
+    if isinstance(value, str):
+        for word in value.split():
+            name = word.strip("'\"").replace("\\", "/").rsplit("/", 1)[-1]
+            if name in _DESKTOP_COMMANDS:
+                return name
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if (found := _names_a_desktop_command(item)) is not None:
+                return found
+    return None
+
+
+def _refuse_desktop(door: str) -> None:
+    """Record the attempt and fail the test: a unit test was about to act on the operator's machine."""
+    _desktop_refusals.append(door)
+    pytest.fail(
+        f"a unit test tried to reach the desktop ({door}) — patch the call (subprocess.run / Popen) "
+        "in the test: a mutant of the code under test must not be able to act on the operator's machine",
+        pytrace=True,
+    )
+
+
+def _desktop_hook(event: str, args: tuple[object, ...]) -> None:
+    """The audit hook: refuse a child process that would run `docker`, `open` or `caffeinate`."""
+    if not _DESKTOP_GUARD["armed"]:
+        return
+    positions = _PROCESS_EVENTS.get(event)
+    if positions is None:
+        return
+    for position in positions:
+        if position < len(args) and (found := _names_a_desktop_command(args[position])) is not None:
+            _refuse_desktop(f"{event} {found}")
+
+
+def _desktop_violations(refusals: list[str]) -> list[str]:
+    """One violation per recorded start — the decision behind `pytest_sessionfinish`, as a pure
+    function."""
+    return [f"a test started a desktop command: {refusal}" for refusal in refusals]
+
+
 @pytest.fixture
 def tmp_db(tmp_path):
     """Temporary SQLite database path."""
@@ -475,10 +556,14 @@ def pytest_configure(config):
     # And the two gates, for the same reason again: a module-scoped fixture or an import can
     # reach Touch ID or a dialog as easily as a test body can.
     _shut_the_doors_to_a_human()
+    # And the machine (door 6, register F45): `docker`, `open`, `caffeinate` by name, from here on.
+    sys.addaudithook(_desktop_hook)
+    _DESKTOP_GUARD["armed"] = True
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fail the run if a refusal of the operator's directory, or of a human gate, was swallowed.
+    """Fail the run if a refusal of the operator's directory, of a human gate or of a desktop
+    command was swallowed.
 
     A refusal raised in a thread fails no test, and `except BaseException` would hide one
     anywhere, so every refusal of the real directory is recorded and reported here. A hook
@@ -487,7 +572,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
     violations = _refusal_violations(_operator_refusals)
     reached = _human_violations(_human_refusals)
-    if not violations and not reached:
+    started = _desktop_violations(_desktop_refusals)
+    if not violations and not reached and not started:
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     lines: list[str] = []
@@ -495,6 +581,12 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         lines += ["", "REAL DATA REACHED FOR BY THE TEST SUITE (tests/conftest.py, constitution §7):", *violations]
     if reached:
         lines += ["", "A HUMAN GATE REACHED FOR BY THE TEST SUITE (tests/conftest.py, register F32):", *reached]
+    if started:
+        lines += [
+            "",
+            "A DESKTOP COMMAND REACHED FOR BY THE TEST SUITE (tests/conftest.py, register F45 door 6):",
+            *started,
+        ]
     for line in lines:
         if reporter is not None:
             reporter.write_line(line, red=True, bold=True)
@@ -507,24 +599,28 @@ def pytest_unconfigure(config):
     from pytest_socket import enable_socket
 
     _OPERATOR_GUARD["armed"] = False
+    _DESKTOP_GUARD["armed"] = False
     _open_the_doors_again()
     enable_socket()
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
-    """Disarm the operator-data hook for an integration test, before its fixtures are filled —
-    `tryfirst`, so a module-scoped `live_client` is set up inside the exemption."""
+    """Disarm the operator-data hook and the desktop door for an integration test, before its
+    fixtures are filled — `tryfirst`, so a module-scoped `live_client` is set up inside the
+    exemption. The live gateway and its container are those tests' subject."""
     if item.get_closest_marker("integration"):
         _OPERATOR_GUARD["armed"] = False
+        _DESKTOP_GUARD["armed"] = False
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_runtest_teardown(item, nextitem):
-    """Arm it again after an integration test's fixtures are torn down — `trylast`, for the
+    """Arm both again after an integration test's fixtures are torn down — `trylast`, for the
     same module-scoped reason."""
     if item.get_closest_marker("integration"):
         _OPERATOR_GUARD["armed"] = True
+        _DESKTOP_GUARD["armed"] = True
 
 
 def pytest_collection_modifyitems(config, items):
