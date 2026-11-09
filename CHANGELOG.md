@@ -23,6 +23,19 @@ guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. De
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
 ### Added
+- **`python -m ibkr_core_mcp.gateway up | reset`, and `preflight --release` (register F45, step
+  2, commit 10/13).** `up [--wait-timeout S] [--allow-restart]` is the owner's whole sequence,
+  rendered — exit 0 LIVE, 1 DOWN, 3 for everything that blocks a login, so "opened the page and
+  it was never completed" cannot look like success; there is no `--no-wait`, because opening the
+  page suspends every tickler and a suspension has to be bounded by whoever declared it. `reset
+  [--force]` prints the verdict, asks the owner to clear the session by restarting the
+  container, prints the verdict again and, on FREE, says to log in now at the gateway's own
+  URL; the guard inside `start()` is what refuses a LIVE, REFUSED or VALIDATING session, and the
+  command only prints its reason and exits 1. `preflight --release` posts `/logout` first — the
+  one opt-in logout in the package, never without the flag, and possibly ending an IBKR Mobile
+  session too (its scope is undocumented) — then re-reads. The command line constructs a
+  `GatewayManager` and hands it to the owner; it drives none (`test_gateway_boundary.py`). The
+  consumer's three launcher tests moved with the module names changed.
 - **`ibkr_core_mcp.gateway.session` — the gateway session's one owner (register F45, step 2,
   commit 8/13).** Moved from the consumer with its 56 tests as the specification:
   `SessionPhase` (nine states), `SessionState`, `classify` / `observe` / `declare` /
@@ -383,6 +396,21 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`GatewayManager.startup()` is the owner's sequence: `get_session().establish(self,
+  url=…, allow_restart=False)`, True when the session is LIVE (register F45, step 2, commit
+  10/13).** The command line's `up`, a host's button and this method now share one sequence and
+  cannot drift. Gone with the old body: the two `input()` prompts (the owner polls until
+  authenticated, connected and confirmed against a data endpoint, or its 300 s timeout) and
+  step 1's gate inside the method. What that gate held is held by the owner's rules, with two
+  differences a consumer should know: a login IBKR **refused** is named before the page opens
+  and the page still opens — the operator's rule of 2026-10-12 (the remedy is a website login,
+  then one gateway login; withholding the page would deadlock it), which step 1's gate had
+  overridden; and a login IBKR is still **validating** gets no second page — the owner's one
+  addition in the move, since its rule had no case for it and step 1's protection would have
+  gone with the body it guarded (`test_a_login_ibkr_is_still_answering_gets_no_second_page`).
+  A LIVE session is left alone; CONTESTED and BORROWED are reported and never resolved from
+  here; a gateway that does not answer gets no page. The F44 window handling is the owner's:
+  closed at the first authenticated-and-connected reading, left open and said otherwise.
 - **`GatewayManager.start()` and `restart()` are guarded: a LIVE, REFUSED or VALIDATING
   session raises `RestartRefusedError` before any Docker command (register F45, step 2,
   commit 9/13; condition F).** A restart gives the gateway a fresh Java process and so ends

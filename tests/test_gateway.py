@@ -755,47 +755,30 @@ class TestOpenLoginPage:
 
 
 class TestStartupClosesTheLoginWindow:
-    """`startup()` closes the window it opened once the session is verified, and only then."""
+    """`startup()` closes the window it opened once the session is authenticated and connected,
+    and only then — the owner's rule (register F44; held in full by the owner's own tests),
+    reached through `startup()` here so the method cannot drift from it."""
 
-    @staticmethod
-    def _run(*, verified: bool, on_retry: bool, ours: bool = True) -> MagicMock:
-        gm = GatewayManager()
+    def test_a_verified_session_closes_the_window(self, tmp_path: Path) -> None:
         window = MagicMock(spec=LoginWindow)
-        window.close.return_value = ours
-        with (
-            patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "is_running", return_value=True),
-            patch.object(gm, "is_authenticated", side_effect=[False, on_retry]),
-            patch.object(gm, "wait_for_gateway", return_value=True),
-            # The F45 gate reads the session before the page: FREE, and a log with no login.
-            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=GatewayState(reachable=True)),
-            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=([], "")),
-            patch.object(gm, "open_login_page", return_value=window),
-            patch.object(gm, "wait_for_auth", return_value=verified),
-            patch("builtins.input", return_value=""),
-        ):
-            gm.startup()
-        return window
+        window.close.return_value = True
+        result, _, _ = TestStartupThroughTheOwner._startup(_FREE, tmp_path=tmp_path, window=window, then=(_LIVE,))
+        assert result is True
+        assert window.close.call_count == 1
 
-    @pytest.mark.parametrize(
-        ("verified", "on_retry"),
-        [(True, False), (False, True)],
-        ids=["verified", "verified-on-retry"],
-    )
-    def test_a_verified_session_closes_the_window(self, verified: bool, on_retry: bool) -> None:
-        """Authenticated → the window's job is done."""
-        assert self._run(verified=verified, on_retry=on_retry).close.call_count == 1
+    def test_an_unverified_session_leaves_the_window_open_and_says_so(self, tmp_path: Path) -> None:
+        """A failed login stays on screen (operator 2026-10-13: "Do not auto-close if it fails")."""
+        window = MagicMock(spec=LoginWindow)
+        result, _, lines = TestStartupThroughTheOwner._startup(_FREE, tmp_path=tmp_path, window=window)
+        assert result is False
+        assert window.close.call_count == 0
+        assert any("Close the login window" in line for line in lines), lines
 
-    def test_an_unverified_session_leaves_the_window_open(self) -> None:
-        """A failed login stays on screen, as a tab did (operator 2026-10-13: "Do not auto-close
-        if it fails")."""
-        assert self._run(verified=False, on_retry=False).close.call_count == 0
-
-    def test_a_window_that_was_not_ours_to_close_is_named(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """The launch went to a Chrome already running on the login profile, or the operator
-        quit it: said, not hidden."""
-        self._run(verified=True, on_retry=False, ours=False)
-        assert "Close the login window yourself" in capsys.readouterr().out
+    def test_a_window_that_was_not_ours_to_close_is_named(self, tmp_path: Path) -> None:
+        window = MagicMock(spec=LoginWindow)
+        window.close.return_value = False
+        _, _, lines = TestStartupThroughTheOwner._startup(_FREE, tmp_path=tmp_path, window=window, then=(_LIVE,))
+        assert any("close it yourself" in line.lower() for line in lines), lines
 
 
 # ---------------------------------------------------------------------------
@@ -925,7 +908,7 @@ class TestReadLoginEvents:
 
 
 # ---------------------------------------------------------------------------
-# startup()'s gate: the session is read before any login page (register F45, step 1)
+# startup() through the owner (register F45, step 2); the readings below serve the restart guard too
 # ---------------------------------------------------------------------------
 
 _FREE = GatewayState(reachable=True)
@@ -941,75 +924,131 @@ _REFUSED_LOG = [
 _VALIDATING_LOG = [LoginEvent("2026-10-07 18:00:00", "login", ""), LoginEvent("2026-10-07 18:00:01", "validate", "401")]
 
 
-class TestStartupGate:
-    """After the gateway answers and before the login page, `startup()` reads the session and refuses
-    to open a login on any reading but FREE: a live session would be re-authenticated for nothing
-    (the IB Key escalation), a contested or borrowed one would start the tug-of-war the readings
-    exist to prevent, a refused one needs a website login first, a validating one needs nothing."""
+class TestStartupThroughTheOwner:
+    """`startup()` is `get_session().establish(self, url=…, emit=…, allow_restart=False)` and
+    returns whether the session is LIVE (register F45, step 2): one sequence for the CLI, a
+    host's button and this method, so they cannot drift. Step 1's gate inside `startup()` is
+    gone with the body it guarded; what it held is held here, by the owner's rules — a LIVE
+    session is left alone, CONTESTED and BORROWED get no page, a gateway that does not answer
+    gets no page, a login IBKR is still VALIDATING gets no page (the owner's one addition in the
+    move, since its rule had no case for it), and a REFUSED last login is named before the page
+    opens — the operator's rule of 2026-10-12, which step 1's gate had overridden."""
 
     @staticmethod
-    def _startup(reading: GatewayState, events: object = ([], "")) -> tuple[bool, MagicMock]:
+    def _startup(
+        reading: GatewayState,
+        events: object = ([], ""),
+        confirmations: tuple[bool, ...] = (True,),
+        *,
+        tmp_path: Path,
+        window: MagicMock | None = None,
+        then: tuple[GatewayState, ...] = (),
+    ) -> tuple[bool, MagicMock, list[str]]:
+        """Run `startup()` against stand-ins: `reading` first, `then` the readings that follow
+        (the last repeats), the data half answering `confirmations` in turn."""
+        from ibkr_core_mcp.gateway import session as owner
+
         gm = GatewayManager()
+        clock = {"t": 0.0}
+        reads = [reading, *then]
+
+        def monotonic() -> float:
+            clock["t"] += 5.0
+            return clock["t"]
+
+        confs = list(confirmations)
+        lines: list[str] = []
+        real_lock = owner.SuspendLock  # captured before the patch below replaces the name
+        lock_dir = tmp_path
         with (
             patch.object(gm, "ensure_docker_running"),
             patch.object(gm, "is_running", return_value=True),
-            patch.object(gm, "is_authenticated", return_value=False),
             patch.object(gm, "wait_for_gateway", return_value=True),
-            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
-            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
-            patch.object(gm, "open_login_page", return_value=None) as opened,
-            patch.object(gm, "wait_for_auth", return_value=False),
-            patch("builtins.input", return_value=""),
+            patch.object(gm, "open_login_page", return_value=window) as opened,
+            patch(
+                "ibkr_core_mcp.gateway.session.read_state",
+                side_effect=lambda url, timeout=5.0: reads.pop(0) if len(reads) > 1 else reads[0],
+            ),
+            patch(
+                "ibkr_core_mcp.gateway.session.confirm_session",
+                side_effect=lambda url, timeout=10.0: (
+                    (confs.pop(0) if len(confs) > 1 else confs[0]),
+                    "account(s) <redacted>",
+                ),
+            ),
+            patch("ibkr_core_mcp.gateway.session.read_login_events", return_value=events),
+            patch("ibkr_core_mcp.gateway.session.SuspendLock", lambda: real_lock(path=lock_dir / "session.suspend")),
+            patch("ibkr_core_mcp.gateway.session.get_session", return_value=owner.GatewaySession()),
+            patch("ibkr_core_mcp.gateway.session.time.sleep", lambda _s: None),
+            patch("ibkr_core_mcp.gateway.session.time.monotonic", monotonic),
+            patch("builtins.print", lambda *a, **k: lines.append(" ".join(str(x) for x in a))),
         ):
             result = gm.startup()
-        return result, opened
+        return result, opened, lines
 
-    def test_a_live_session_returns_true_and_opens_no_login(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result, opened = self._startup(_LIVE)
+    def test_a_live_session_returns_true_and_opens_no_login(self, tmp_path: Path) -> None:
+        result, opened, lines = self._startup(_LIVE, tmp_path=tmp_path)
         assert result is True
         opened.assert_not_called()
-        assert "[OK] Session is LIVE" in capsys.readouterr().out
+        assert any("Already authenticated" in line for line in lines), lines
 
-    @pytest.mark.parametrize(
-        ("reading", "events", "mark"),
-        [
-            (_CONTESTED, ([], ""), "BUSY"),
-            (_BORROWED, ([], ""), "BORROWED"),
-            (_FREE, (_REFUSED_LOG, ""), "REFUSED"),
-            (_FREE, (_VALIDATING_LOG, ""), "VALIDATING"),
-            (_UNREACHABLE, ([], ""), "DOWN"),
-        ],
-        ids=["contested", "borrowed", "refused", "validating", "unreachable-after-the-wait"],
-    )
-    def test_a_session_that_must_not_be_logged_into_returns_false_and_opens_no_login(
-        self, reading: GatewayState, events: object, mark: str, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """The four refusing verdicts of the design, and one more: a gateway that stopped answering
-        between `wait_for_gateway` and the read gets no login page either — nothing is read from, and
-        no page opened for, a gateway that does not answer."""
-        result, opened = self._startup(reading, events)
+    def test_an_authenticated_session_whose_data_half_is_dark_is_not_live(self, tmp_path: Path) -> None:
+        result, opened, _ = self._startup(_LIVE, confirmations=(False,), tmp_path=tmp_path)
         assert result is False
         opened.assert_not_called()
-        assert f"[{mark}]" in capsys.readouterr().out
 
-    def test_a_free_session_opens_the_login_as_before(self) -> None:
-        result, opened = self._startup(_FREE)
+    @pytest.mark.parametrize(
+        ("reading", "events"),
+        [
+            (_CONTESTED, ([], "")),
+            (_BORROWED, ([], "")),
+            (_FREE, (_VALIDATING_LOG, "")),
+            (_UNREACHABLE, ([], "")),
+        ],
+        ids=["contested", "borrowed", "validating", "unreachable-after-the-wait"],
+    )
+    def test_a_session_that_must_not_be_logged_into_returns_false_and_opens_no_login(
+        self, reading: GatewayState, events: object, tmp_path: Path
+    ) -> None:
+        result, opened, _ = self._startup(reading, events, tmp_path=tmp_path)
+        assert result is False
+        opened.assert_not_called()
+
+    def test_a_refused_last_login_is_named_and_the_page_still_opens(self, tmp_path: Path) -> None:
+        """The operator's rule (2026-10-12): the remedy is a website login THEN one gateway login,
+        and withholding the page would deadlock it; the note comes first."""
+        result, opened, lines = self._startup(_FREE, (_REFUSED_LOG, ""), tmp_path=tmp_path)
+        assert result is False
         opened.assert_called_once()
-        assert result is False  # `wait_for_auth` is False here: the login was not completed
+        note = next(i for i, line in enumerate(lines) if "IBKR refused the last gateway login" in line)
+        page = next(i for i, line in enumerate(lines) if "Login page opened" in line)
+        assert note < page
 
-    def test_the_log_is_read_only_after_a_free_reading(self) -> None:
+    def test_a_free_session_opens_the_login_and_an_unfinished_one_is_not_live(self, tmp_path: Path) -> None:
+        result, opened, lines = self._startup(_FREE, tmp_path=tmp_path)
+        opened.assert_called_once()
+        assert result is False
+        assert not any("Press Enter" in line for line in lines), "the two input() prompts are gone with the body"
+
+    def test_the_log_is_read_only_after_a_free_reading(self, tmp_path: Path) -> None:
         """The `docker exec` runs only where it can change the answer."""
-        gm = GatewayManager()
-        with (
-            patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "is_running", return_value=True),
-            patch.object(gm, "is_authenticated", return_value=False),
-            patch.object(gm, "wait_for_gateway", return_value=True),
-            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=_LIVE),
-            patch("ibkr_core_mcp.gateway.manager.read_login_events") as read,
-        ):
-            gm.startup()
+        with patch("ibkr_core_mcp.gateway.session.read_login_events") as read:
+            self._startup(_LIVE, tmp_path=tmp_path)
         read.assert_not_called()
+
+    def test_startup_hands_the_owner_its_own_gateway_url_and_never_a_restart(self) -> None:
+        """A manager on another port reads that port; and `startup()` never asks for a restart —
+        a borrowed session is reported, not cleared, from here."""
+        gm = GatewayManager(port=5056)
+        session = MagicMock()
+        session.establish.return_value = SimpleNamespace(phase="free")
+        with patch("ibkr_core_mcp.gateway.session.get_session", return_value=session):
+            gm.startup()
+        kwargs = session.establish.call_args.kwargs
+        assert session.establish.call_args.args == (gm,)
+        assert kwargs["url"] == "https://localhost:5056/v1/api"
+        assert kwargs["allow_restart"] is False
+        assert callable(kwargs["emit"])
 
 
 # ---------------------------------------------------------------------------

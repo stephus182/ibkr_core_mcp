@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import ast
 import os
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ibkr_core_mcp.gateway import __main__ as cli
 from ibkr_core_mcp.gateway.__main__ import main
-from ibkr_core_mcp.gateway.preflight import EXIT_READY, EXIT_REFUSED, GatewayState, LoginEvent
+from ibkr_core_mcp.gateway.preflight import EXIT_FREE, EXIT_READY, EXIT_REFUSED, GatewayState, LoginEvent
+from ibkr_core_mcp.gateway.session import SessionPhase, SessionState
 from tests.security.structural import spawn_sites
 
 _MOD = "ibkr_core_mcp.gateway.__main__"
@@ -166,7 +168,7 @@ def test_diagnose_reads_a_free_gateway_through_its_log():
 # ── --env-file, the URL, and the shape of the module ─────────────────────────
 
 
-@pytest.mark.parametrize("command", ["preflight", "diagnose"])
+@pytest.mark.parametrize("command", ["preflight", "diagnose", "up", "reset"])
 def test_env_file_is_the_one_url_read_and_a_non_loopback_url_exits_1_before_any_request(
     command, tmp_path, monkeypatch, capsys
 ):
@@ -200,7 +202,7 @@ def test_help_exits_zero_and_names_the_subcommands(capsys):
         main(["--help"])
     assert raised.value.code == 0
     out = capsys.readouterr().out
-    assert "preflight" in out and "diagnose" in out
+    assert "preflight" in out and "diagnose" in out and "up" in out and "reset" in out
 
 
 def test_no_subcommand_is_a_usage_error():
@@ -235,3 +237,140 @@ def test_the_module_reads_no_environment_but_through_the_loader():
     source = Path(cli.__file__).read_text()
     assert "environ" not in source
     assert os.environ is not None  # the import above is for the assertion's reader
+
+
+# ── up: the owner's sequence, rendered; exit codes a shell branches on (step 2) ───────────────
+#
+# Moved from the consumer's launcher tests with the module names changed: the three that drove
+# its `main`. Presentation only — the CLI passes a progress sink and the flags through and
+# renders what comes back; a branch of its own here is how a launcher and a button drift.
+
+
+def _state(phase: SessionPhase) -> SessionState:
+    """A minimal state carrying just the phase the CLI branches on."""
+    return SessionState(phase=phase, as_of=datetime.now(UTC), detail="because")
+
+
+@pytest.mark.parametrize(
+    "phase,expected",
+    [
+        (SessionPhase.LIVE, 0),
+        (SessionPhase.DOWN, 1),
+        (SessionPhase.FREE, 3),
+        (SessionPhase.DEGRADED, 3),
+        (SessionPhase.BORROWED, 3),
+        (SessionPhase.CONTESTED, 3),
+    ],
+)
+def test_exit_code_per_phase(phase, expected):
+    """A host's start script branches on these, so every phase must map deliberately.
+
+    0 only for a confirmed session, 1 only for a gateway that is not answering, and 3 for
+    everything that blocks a login — a set that is deliberately not empty, because "opened the
+    login page and it was never completed" is a real outcome and must not look like success.
+    """
+    session = MagicMock()
+    session.establish.return_value = _state(phase)
+    with patch(f"{_MOD}.get_session", return_value=session), patch(f"{_MOD}.GatewayManager"):
+        assert main(["up"]) == expected
+
+
+def test_the_cli_delegates_rather_than_deciding():
+    """Presentation only: the CLI must not re-implement any part of the sequence."""
+    session = MagicMock()
+    session.establish.return_value = _state(SessionPhase.LIVE)
+    with patch(f"{_MOD}.get_session", return_value=session), patch(f"{_MOD}.GatewayManager") as manager:
+        main(["up", "--allow-restart", "--wait-timeout", "45"])
+
+    args, kwargs = session.establish.call_args
+    assert args == (manager.return_value,), "the CLI constructs a manager and hands it over, driving none"
+    assert kwargs["url"] == "https://localhost:5055/v1/api"
+    assert kwargs["allow_restart"] is True
+    assert kwargs["login_timeout"] == 45.0
+    assert callable(kwargs["emit"])
+    manager.return_value.start.assert_not_called()
+    manager.return_value.restart.assert_not_called()
+
+
+def test_there_is_no_way_to_skip_the_wait():
+    """Returning early would strand the session in AUTHENTICATING: opening the login page suspends
+    every tickler in the system, and a suspension has to be bounded by whoever declared it."""
+    with pytest.raises(SystemExit):
+        main(["up", "--no-wait"])
+
+
+# ── reset: the before verdict, the owner's recovery, the after verdict ──────────────────────
+
+
+def _reset(before: GatewayState, after: GatewayState, *argv: str) -> tuple[int, MagicMock, str]:
+    session = MagicMock()
+    session.recover.return_value = _state(SessionPhase.FREE)
+    with (
+        patch(f"{_MOD}.read_state", side_effect=[before, after]),
+        patch(f"{_MOD}.read_login_events", return_value=([], "")),
+        patch(f"{_MOD}.get_session", return_value=session),
+        patch(f"{_MOD}.GatewayManager") as manager,
+        patch(f"{_MOD}._say", side_effect=lambda line="", **_k: _OUT.append(line)),
+    ):
+        _OUT.clear()
+        code = main(["reset", *argv])
+        manager.return_value.start.assert_not_called()
+        manager.return_value.restart.assert_not_called()
+    return code, session, "\n".join(_OUT)
+
+
+_OUT: list[str] = []
+
+
+def test_reset_on_a_live_session_exits_1_and_the_owner_is_asked_without_force(capsys):
+    """The guard inside `start()` is what refuses; the command line only prints the reason and
+    maps it to exit 1, the consumer's reset script's code."""
+    code, session, out = _reset(_LIVE, _LIVE)
+    assert code == 1
+    session.recover.assert_called_once()
+    assert session.recover.call_args.kwargs["force"] is False
+    assert "[OK]" in out
+
+
+def test_reset_on_a_free_gateway_restarts_and_says_to_log_in_now():
+    code, session, out = _reset(_FREE, _FREE)
+    assert code == EXIT_FREE
+    session.recover.assert_called_once()
+    assert "Log in NOW" in out and "https://localhost:5055" in out
+    assert "python -m ibkr_core_mcp.gateway preflight" in out
+
+
+def test_reset_force_reaches_the_owner_and_exits_with_the_after_verdict():
+    code, session, _ = _reset(_LIVE, _FREE, "--force")
+    assert session.recover.call_args.kwargs["force"] is True
+    assert code == EXIT_FREE
+
+
+# ── preflight --release: the one opt-in logout, never without the flag ─────────────────────
+
+
+def test_preflight_release_posts_the_logout_once_then_re_reads(capsys):
+    with (
+        patch(f"{_MOD}.release_session", return_value=(True, '{"status":true}')) as release,
+        patch(f"{_MOD}.read_state", return_value=_FREE),
+        patch(f"{_MOD}.read_login_events", return_value=([], "")),
+    ):
+        assert main(["preflight", "--release"]) == EXIT_FREE
+    release.assert_called_once_with("https://localhost:5055/v1/api")
+    assert "released=True" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", [["preflight"], ["diagnose"], ["up"], ["reset"]])
+def test_no_command_but_release_posts_a_logout(command):
+    session = MagicMock()
+    session.establish.return_value = _state(SessionPhase.LIVE)
+    session.recover.return_value = _state(SessionPhase.FREE)
+    with (
+        patch(f"{_MOD}.release_session") as release,
+        patch(f"{_MOD}.read_state", return_value=_LIVE),
+        patch(f"{_MOD}.read_login_events", return_value=([], "")),
+        patch(f"{_MOD}.get_session", return_value=session),
+        patch(f"{_MOD}.GatewayManager"),
+    ):
+        main(command)
+    release.assert_not_called()

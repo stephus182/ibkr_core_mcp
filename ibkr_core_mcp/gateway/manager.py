@@ -42,7 +42,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from ibkr_core_mcp.config import require_loopback_url  # noqa: E402
 from ibkr_core_mcp.exceptions import GatewayError, RestartRefusedError  # noqa: E402
 from ibkr_core_mcp.gateway.preflight import (  # noqa: E402
-    _MARK,
     EXIT_FREE,
     EXIT_READY,
     EXIT_REFUSED,
@@ -219,6 +218,12 @@ def restart_refusal(api_url: str) -> tuple[int, str] | None:
     if code in _RESTART_REFUSED_CODES:
         return code, f"{headline}\n\n{guidance}"
     return None
+
+
+def _flushed(line: str) -> None:
+    """Print one of the owner's lines and flush it: under a redirected shell stdout is
+    block-buffered, and a command silent for its whole wait reads as a hang."""
+    print(line, flush=True)
 
 
 def _find_chrome() -> str | None:
@@ -656,109 +661,30 @@ class GatewayManager:
         webbrowser.open(self._base_url)
         return None
 
-    @staticmethod
-    def _close_login_window(window: LoginWindow | None) -> None:
-        """Close the login window once the session is verified; say so when it was not ours."""
-        if window is not None and not window.close():
-            print("  Close the login window yourself if it is still open.")
-
     # ── Full interactive startup ──────────────────────────────────────────────
 
     def startup(self) -> bool:
-        """Full interactive startup sequence for CLI use.
+        """Bring the session to LIVE through the owner, or say why it cannot get there.
 
-        Fast path (a host restarting while the gateway is up):
-          If the container is already running and authenticated, returns immediately.
-          The IBKR session is preserved — no login required.
+        `get_session().establish(self, url=…, emit=…, allow_restart=False)` — the one sequence the
+        command line (`python -m ibkr_core_mcp.gateway up`), a host's button and this method share
+        (register F45, step 2), so the three cannot drift: Docker up; the container started only
+        when none is running (a running one may hold a session, and only a read may say); the
+        gateway answering; the session read before anything is touched; a login page only from
+        FREE, with every tickler suspended by the lock, polled until authenticated, connected and
+        confirmed against a data endpoint, or the owner's 300 s timeout. A LIVE session is left
+        alone. CONTESTED and BORROWED are reported, never resolved from here (`up --allow-restart`
+        or `reset` clears a borrowed one). A login IBKR refused is named before the page opens —
+        the remedy is a website login, then one gateway login (operator rule, 2026-10-12). A login
+        IBKR is still validating gets no second page. The two `input()` prompts of the old body
+        are gone: the owner polls.
 
-        Full path (first start or after session loss):
-          1. Ensure Docker is running (launches Docker Desktop on macOS if needed)
-          2. Restart the container in place — or recreate it, if its image or run options changed
-          3. Wait for Java process to become reachable
-          3b. Read the session before any login (register F45, step 1): a live session returns
-              True at once; a contested, borrowed, refused or still-validating one — or a gateway
-              that stopped answering — prints the verdict and returns False with no login page;
-              only FREE goes on
-          4. Open the login window (Chrome; the default browser's tab if there is none)
-          5. Wait for user to complete login + 2FA
-          6. Verify authentication
-
-        Returns True if the session is authenticated and ready.
+        Returns:
+            True when the session is LIVE — authenticated, connected and serving data.
         """
-        print("▶ Ensuring Docker is running...")
-        self.ensure_docker_running()
+        # The owner imports this module (for `read_login_events`); a module-level import here
+        # would be circular.
+        from ibkr_core_mcp.gateway.session import SessionPhase, get_session
 
-        # If the gateway is already up and authenticated, nothing to do.
-        # This is the normal case when restarting ClaudIA without touching IB.
-        if self.is_running() and self.is_authenticated():
-            print("  ✔ IBKR gateway already running and authenticated — skipping startup.")
-            return True
-
-        print("▶ Starting IBKR gateway container...")
-        # Start ONLY when nothing is running. `start()` ends on a fresh Java process, which
-        # destroys whatever session the container held — and until 2026-08-06 that ran on every
-        # launch where the gateway was not already authenticated, throwing away sessions
-        # that a pre-flight would have found perfectly usable and forcing a fresh 2FA.
-        #
-        # A container that is absent or stopped cannot hold a session (it lives in the
-        # Java process), so starting one loses none. A RUNNING container is left alone.
-        #
-        # NOTE: a host that owns the sequence (F45 step 2 brings that owner into this package)
-        # does not call this method; this guard exists so the CLI path here cannot destroy a
-        # session either.
-        if not self.is_running():
-            self.start()
-        else:
-            print("  ✔ Container already running — leaving it alone.")
-
-        print("▶ Waiting for gateway to be reachable...")
-        if not self.wait_for_gateway():
-            print("  ✕ Gateway did not start within timeout.")
-            return False
-
-        # The gate (register F45, step 1): read the session before any login page. A login IBKR
-        # refused, a session another app holds or the gateway is holding for another app, and a
-        # login IBKR is still answering all look like "not authenticated" to `is_authenticated`;
-        # each is a reason NOT to open the page — the pre-flight's rule, applied here too.
-        found = verdict(read_state(self._api_url))
-        if found[0] == EXIT_FREE:
-            found = refine_with_log(found, *read_login_events())
-        code, headline, guidance = found
-        if code == EXIT_READY:
-            print(f"  [{_MARK[code]}] {headline}")
-            return True
-        if code != EXIT_FREE:
-            print(f"  [{_MARK[code]}] {headline}")
-            for paragraph in guidance.split("\n\n"):
-                print(f"  {paragraph}")
-            print("  No login page opened.")
-            return False
-
-        print("▶ Opening the IBKR login...")
-        window = self.open_login_page()
-        print()
-        print("  Complete the login:")
-        print("    1. Enter your IBKR username and password")
-        print("    2. Complete 2FA (challenge code → IBKR Mobile → response code)")
-        print("    3. Wait for 'Client login succeeds'")
-        print()
-        input("Press Enter here once the page shows 'Client login succeeds'... ")
-        print()
-
-        print("▶ Verifying IBKR session...")
-        if self.wait_for_auth(timeout=60):
-            print("  ✔ IBKR session active and ready.")
-            self._close_login_window(window)
-            return True
-
-        print("  ✕ Session not verified.")
-        print("    Reload the login page, log in again, then retry.")
-        input("Press Enter to retry verification... ")
-        if self.is_authenticated():
-            print("  ✔ IBKR session active.")
-            self._close_login_window(window)
-            return True
-
-        print("  ✕ Still not authenticated.")
-        print("    Starting anyway — IBKR tools will error until you log in.")
-        return False
+        state = get_session().establish(self, url=self._api_url, emit=_flushed, allow_restart=False)
+        return state.phase is SessionPhase.LIVE

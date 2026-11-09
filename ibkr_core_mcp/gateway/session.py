@@ -108,6 +108,7 @@ from ibkr_core_mcp.config import require_loopback_url
 from ibkr_core_mcp.exceptions import RestartRefusedError
 from ibkr_core_mcp.gateway.manager import read_login_events
 from ibkr_core_mcp.gateway.preflight import (
+    _VALIDATING_GUIDANCE,
     REFUSED_GUIDANCE,
     GatewayState,
     LastLogin,
@@ -852,7 +853,8 @@ def _establish(
 
     A login IBKR refused leaves the HTTP side exactly as no login does, so FREE alone would
     open the page with no word. The log is read once before the page (`read_login`, the
-    manager's own reader by default — a `docker exec`, so a test passes a stand-in): a refused
+    manager's own reader by default — a `docker exec`, so a test passes a stand-in): a login
+    IBKR has not answered yet gets no second page (the pre-flight's VALIDATING rule); a refused
     last login is named, with the remedy. The page still opens — the remedy is a website login
     THEN one gateway login, and withholding the page would deadlock it. During the wait, a
     login newer than the one seen before the page (the log's own timestamps, never a clock)
@@ -927,6 +929,15 @@ def _establish(
 
     # ── FREE: the one phase that earns a login page ──────────────────────────
     readable, seen = _seen_login(read_log)
+    if seen is not None and seen.outcome == "validating":
+        # IBKR has not answered the newest login (at most 13 s, measured) — or the gateway
+        # stalled mid-validation. A second page now is a second login against the one being
+        # answered; the pre-flight's own rule says do not. The one case added in the move
+        # (register F45, step 2): the consumer's owner had no rule for it, and step 1's gate
+        # inside `startup()`, which held it, went with the body it guarded.
+        say(f"⚠ IBKR has not answered the last gateway login yet ({seen.at} UTC) — no second login page.")
+        say(f"  {_VALIDATING_GUIDANCE}")
+        return state
     if seen is not None and seen.outcome == "refused":
         say(f"⚠ IBKR refused the last gateway login ({seen.at} UTC).")
         say(f"  {REFUSED_GUIDANCE}")

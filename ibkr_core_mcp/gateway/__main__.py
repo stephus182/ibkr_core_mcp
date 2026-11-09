@@ -1,22 +1,39 @@
 """`python -m ibkr_core_mcp.gateway` — the operator's command line over the gateway session.
 
-    python -m ibkr_core_mcp.gateway preflight [--env-file PATH]    exit: the verdict's code, 0–6
-    python -m ibkr_core_mcp.gateway diagnose  [--env-file PATH]    exit: 0 on READY or FREE, else 3
+    python -m ibkr_core_mcp.gateway preflight [--release] [--env-file PATH]   exit: the verdict's code, 0–6
+    python -m ibkr_core_mcp.gateway diagnose  [--env-file PATH]               exit: 0 on READY or FREE, else 3
+    python -m ibkr_core_mcp.gateway up        [--wait-timeout S] [--allow-restart] [--env-file PATH]
+                                                                              exit: 0 LIVE, 1 DOWN, 3 otherwise
+    python -m ibkr_core_mcp.gateway reset     [--force] [--env-file PATH]     exit: the after verdict's code; 1 when refused
 
 Presentation only. Every decision about the session — what a reading means, whether a login
-may start — belongs to `preflight` (the readings and the rule) and, from step 2 of register
-F45, to the session owner; this module turns them into lines and exit codes a shell can branch
-on, so a script, a button and a hand on the keyboard cannot drift apart.
+may start, whether a restart may happen — belongs to `preflight` (the readings and the rule)
+and to the session owner (`session`, register F45 step 2); this module turns them into lines
+and exit codes a shell can branch on, so a script, a button and a hand on the keyboard cannot
+drift apart. It constructs a `GatewayManager` and hands it to the owner; it drives none.
 
 `preflight` prints one verdict block: the one word in brackets, the headline, the guidance,
 then the flags of a reachable reading; after a FREE reading the gateway's own log refines it
 (`manager.read_login_events`, the one process spawn, which lives in the manager — this module
 never imports `subprocess`). Run it before touching the login page: only one brokerage session
 exists per username across Client Portal, TWS and IBKR Mobile, and a needless re-login is
-what escalates into the IB Key challenge/response.
+what escalates into the IB Key challenge/response. `--release` posts `/logout` first — the one
+opt-in logout in the package, never run without the flag, and possibly ending an IBKR Mobile
+session too (its scope is undocumented) — then re-reads.
 
 `diagnose` prints the headline, the guidance, the flags and the login timeline — time, event
 and code per line, from the newest login — and touches nothing: two GETs and one log read.
+
+`up` is the owner's whole sequence — Docker, the container only when none runs, the reading,
+the login page only from FREE with every tickler suspended, the wait until confirmed — and
+there is no `--no-wait`: opening the page suspends every tickler, and a suspension has to be
+bounded by whoever declared it. `--allow-restart` lets a BORROWED session be cleared by a
+restart; off by default, since a restart destroys a session.
+
+`reset` prints the verdict, asks the owner to clear the session by restarting the container,
+and prints the verdict again. The guard inside `GatewayManager.start()` is what refuses — a
+LIVE, REFUSED or VALIDATING session — and this command only prints its reason and exits 1;
+`--force` overrides. On a FREE after-reading it says to log in now, while the slot is clear.
 
 `--env-file` is the path `Config.from_env` reads (a host's `.env`); the default is the loader's
 own search. A gateway URL that is not loopback is printed and exits 1 **before any request**.
@@ -33,7 +50,7 @@ import sys
 from collections.abc import Sequence
 
 from ibkr_core_mcp.exceptions import ConfigError
-from ibkr_core_mcp.gateway.manager import read_login_events
+from ibkr_core_mcp.gateway.manager import _RESTART_REFUSED_CODES, GatewayManager, read_login_events
 from ibkr_core_mcp.gateway.preflight import (
     _MARK,
     EXIT_FREE,
@@ -46,6 +63,7 @@ from ibkr_core_mcp.gateway.preflight import (
     refine_with_log,
     verdict,
 )
+from ibkr_core_mcp.gateway.session import SessionPhase, get_session, release_session
 from ibkr_core_mcp.redaction import redact_error
 
 
@@ -117,7 +135,17 @@ def _preflight(url: str) -> int:
     return _report(state, found)
 
 
-def _diagnose(url: str) -> int:
+def _preflight_command(url: str, args: argparse.Namespace) -> int:
+    """`preflight`, with the opt-in `--release` first."""
+    if args.release:
+        _say("Releasing the gateway's held session (POST /logout)…\n")
+        released, detail = release_session(url)
+        _say(f"  released={released}  {detail}\n")
+        _say("Re-checking:\n")
+    return _preflight(url)
+
+
+def _diagnose(url: str, args: argparse.Namespace) -> int:
     """The reading, the guidance, the flags and the login timeline; 0 on READY or FREE, else 3."""
     state = read_state(url)
     events, problem = read_login_events()
@@ -134,6 +162,57 @@ def _diagnose(url: str) -> int:
     return 0 if code in (EXIT_READY, EXIT_FREE) else 3
 
 
+def _up(url: str, args: argparse.Namespace) -> int:
+    """The owner's sequence, rendered; 0 LIVE, 1 DOWN, 3 for everything that blocks a login —
+    "opened the login page and it was never completed" is a real outcome and must not look
+    like success."""
+    result = get_session().establish(
+        GatewayManager(),
+        url=url,
+        emit=_say,
+        allow_restart=args.allow_restart,
+        login_timeout=args.wait_timeout,
+    )
+    _say()
+    _say(f"  {result.phase.value.upper()} — {result.detail}")
+    _say()
+    if result.phase is SessionPhase.DOWN:
+        return 1
+    if result.phase is SessionPhase.LIVE:
+        return 0
+    return 3
+
+
+def _reset(url: str, args: argparse.Namespace) -> int:
+    """The before verdict, the owner's recovery, the after verdict; exit = the after code, 1 when
+    the guard inside `start()` refused (its reason is the owner's line)."""
+    _say("── Before ─────────────────────────────────────────────────────────")
+    before = _preflight(url)
+    _say()
+    get_session().recover(GatewayManager(), url=url, emit=_say, force=args.force)
+    if before in _RESTART_REFUSED_CODES and not args.force:
+        return 1
+    _say()
+    _say("── After ──────────────────────────────────────────────────────────")
+    after = _preflight(url)
+    if after == EXIT_FREE:
+        login_url = url.removesuffix("/v1/api")
+        _say(
+            "\nThe slot is clear. Log in NOW, while it is:\n\n"
+            f"  1. Open {login_url}\n"
+            '  2. Complete the login through to "Client login succeeds"\n'
+            "  3. Keep IBKR Mobile logged out until you are done\n\n"
+            "Then confirm with:  python -m ibkr_core_mcp.gateway preflight\n"
+            "It should read [OK] Session is LIVE."
+        )
+    else:
+        _say(
+            "\nStill not free. Re-read the verdict above — if it names another CLIENT_APP, that\n"
+            "app must be logged out from its own Log Out menu item (closing it is not enough)."
+        )
+    return after
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The command line: one subcommand per operation, each taking `--env-file`."""
     parser = argparse.ArgumentParser(
@@ -141,18 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="The IBKR Client Portal Gateway session, from the operator's side: read it before touching it.",
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
-    for name, run, help_text in (
-        (
-            "preflight",
-            _preflight,
-            "read the session (two GETs; the gateway's log after a FREE reading) and exit with the verdict's code",
-        ),
-        (
-            "diagnose",
-            _diagnose,
-            "the reading, its guidance, the flags and the login timeline; exit 0 on READY or FREE, else 3",
-        ),
-    ):
+
+    def add(name: str, run: object, help_text: str) -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=help_text, description=help_text)
         command.add_argument(
             "--env-file",
@@ -161,6 +230,47 @@ def build_parser() -> argparse.ArgumentParser:
             help="the .env Config.from_env reads (default: the loader's own search)",
         )
         command.set_defaults(run=run)
+        return command
+
+    preflight = add(
+        "preflight",
+        _preflight_command,
+        "read the session (two GETs; the gateway's log after a FREE reading) and exit with the verdict's code",
+    )
+    preflight.add_argument(
+        "--release",
+        action="store_true",
+        help="POST /logout first — drop the session the gateway holds — then re-read; opt-in, and possibly "
+        "ending an IBKR Mobile session too (its scope is undocumented)",
+    )
+    add(
+        "diagnose",
+        _diagnose,
+        "the reading, its guidance, the flags and the login timeline; exit 0 on READY or FREE, else 3",
+    )
+    up = add(
+        "up", _up, "bring the session to LIVE through the owner, or say why it cannot; exit 0 LIVE, 1 DOWN, 3 otherwise"
+    )
+    up.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=300.0,
+        help="seconds to wait for a login to complete (default 300). There is no --no-wait: opening the login "
+        "page suspends every tickler in the system, and a suspension has to be bounded by whoever declared it",
+    )
+    up.add_argument(
+        "--allow-restart",
+        action="store_true",
+        help="clear a session borrowed from another IBKR app by restarting the container; off by default, "
+        "since a restart destroys a session",
+    )
+    reset = add(
+        "reset",
+        _reset,
+        "clear the session by restarting the container — refused on a LIVE, REFUSED or VALIDATING one; "
+        "exit: the after verdict's code, 1 when refused",
+    )
+    reset.add_argument("--force", action="store_true", help="restart even where the guard refuses")
     return parser
 
 
@@ -172,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         _say(redact_error(exc), err=True)
         return 1
-    result: int = args.run(url)
+    result: int = args.run(url, args)
     return result
 
 

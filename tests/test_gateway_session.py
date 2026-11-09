@@ -785,6 +785,10 @@ _REFUSED_AT_11 = [
     LoginEvent("2026-10-07 11:00:00", "validate", "401"),
     LoginEvent("2026-10-07 11:00:13", "giving up", ""),
 ]
+_VALIDATING_AT_12 = [
+    LoginEvent("2026-10-07 12:00:00", "login", ""),
+    LoginEvent("2026-10-07 12:00:01", "validate", "401"),
+]
 
 
 def _log_reads(*readings: tuple[list[LoginEvent] | None, str]) -> Any:
@@ -824,6 +828,28 @@ def test_a_refused_last_login_is_named_before_the_login_page_opens(wire, before,
     notes = [i for i, c in enumerate(gm.calls) if "IBKR refused the last gateway login" in c]
     assert bool(notes) is noted
     assert all(i < gm.calls.index("open_login_page") for i in notes)
+
+
+def test_a_login_ibkr_is_still_answering_gets_no_second_page(wire):
+    """The one case the owner gained in the move (register F45, step 2): the newest login has no
+    answer yet — IBKR takes up to 13 s (measured), or the gateway stalled mid-validation — so a
+    second page would be a second login against the one being answered. The pre-flight's
+    VALIDATING rule, applied where the page would open; the FREE reading is returned, no lock
+    taken, and the guidance said."""
+    gm = WindowManager(running=True)
+    lock = wire(gm, [_free()])
+    session = GatewaySession()
+    lines: list[str] = []
+
+    result = _establish(
+        session, gm, lock, read_login=_log_reads((_VALIDATED_AT_10 + _VALIDATING_AT_12, "")), emit=lines.append
+    )
+
+    assert "open_login_page" not in gm.calls
+    assert result.phase is SessionPhase.FREE and result.is_suspended is False
+    assert not lock.path.exists()
+    assert any("has not answered the last gateway login" in line for line in lines), lines
+    assert any("Do not log in again" in line for line in lines), lines
 
 
 def test_a_newer_refused_login_ends_the_wait_at_once(wire):
