@@ -923,6 +923,20 @@ the consumer's `docs/plans/2026-11-09-f45-*` (local).
   delete.
 
 ### Security
+- **The gateway's CORS origin is its own, not IBKR's wildcard (MCP security checklist 5.4,
+  2026-11-09).** `gateway/conf.yaml` `cors.origin.allowed` `"*"` → `"https://localhost:5055"`;
+  `allowCredentials` stays `false`. Nothing legitimate is cross-origin — the login page is the
+  gateway's own origin and every client here is a process without an `Origin` header. Held in
+  source by `test_documented_controls.py` (no wildcard, an https loopback origin, `SECURITY.md`
+  quoting the same value). The image must be rebuilt: `docker rmi -f ibkr-core-gateway`, then
+  `startup()`. **The wildcard was not mitigated**, as `SECURITY.md` had said: measured 2026-11-09
+  before the rebuild, a foreign origin's preflight was approved for `POST`/`DELETE`/`PUT` with
+  `Content-Type`, and a request with no cookie and that origin was served on the authenticated
+  session — the session is the gateway process's, so `allowCredentials: false` protected nothing.
+  After the rebuild (measured 13:07 EST, fresh login authenticated): the foreign origin's
+  preflight and its plain `GET` are refused by the gateway itself, `403 CORS Rejected - Invalid
+  origin`; the gateway's own origin is approved; a request with no `Origin`, as every client
+  here sends, is served.
 - **Door 7: no unit test can reach the operator's keychain (2026-11-09).** `pytest_configure`
   sets `keyring`'s null backend for the whole run, before any test imports `secret_store`; a test
   of the store sets an in-memory stand-in for its own duration; `test_no_live_io.py` holds that
