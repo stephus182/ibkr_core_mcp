@@ -9,6 +9,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Register F45, step 1 (2026-11-09) — the gateway session owner begins its move into this
+package, reads only.** Seven commits, each with the four gates green: door 6 in the test
+suite (no unit test starts `docker`, `open` or `caffeinate`), one loopback pin for every
+certificate-exempt call held by test, `gateway/preflight.py` (the readings and the verdict rule),
+`gateway/manager.read_login_events` (the gateway's own log, in-container, constants only),
+invariant 13 (the model layer never reaches the gateway package), the command line
+(`python -m ibkr_core_mcp.gateway preflight | diagnose`) and `startup()`'s gate, then the
+documents. The entries live in their sections below — *Added* (the module, the log read, the
+command line), *Changed* (`startup()`), *Security* (door 6, the pin, invariant 13). No session
+write entered the package in step 1; step 2 brings the owner (`gateway/session.py`), the reset
+guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. Design and review:
+the consumer's `docs/plans/2026-11-09-f45-*` (local).
+
 ### Added
 - **`ibkr_core_mcp.gateway.preflight` — the gateway session's readings and the rule that turns
   one into a verdict, read-only (register F45, step 1).** Moved from the consumer that wrote them,

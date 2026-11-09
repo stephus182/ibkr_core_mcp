@@ -215,6 +215,157 @@ installed, nothing renews an idle session.**
 
 ---
 
+## When a login will not take
+
+Three sections that each cost a real debugging session on the consumer's side, moved here with
+register F45 (2026-11-09) because the readings, the rule and the command line that act on them
+now live in this package. The consumer's page points at these.
+
+### A borrowed session — the login that could not succeed (diagnosed 2026-08-05)
+
+For days, the gateway login failed with a correctly-formatted 8-digit IB Key response and
+the right username, while IBKR Mobile logged in on demand. The cause was not 2FA at all.
+
+**`/tickle` alone could not see it, and every field it does expose pointed the wrong way:**
+
+| Signal | Reading | What it suggested | Why it was wrong |
+|---|---|---|---|
+| `userId` | populated | a good session | SSO was valid — but not *ours* |
+| `ssoExpires` | renewing | session alive | kept alive by our own ticklers |
+| `competing` | **false** | uncontested | the gateway never got far enough to register a claim; the flag describes a fight, and there was no fight |
+| `authStatus` | `authenticated:false, connected:false` | just log in again | the retry was doomed before it started |
+
+**`GET /sso/validate` answered it in one field:**
+
+```text
+CLIENT_APP : IBKRMOBILE_000.a-000      ← the phone's session, held by the gateway
+USER_NAME  : ibkruser
+RESULT     : True
+```
+
+Only one brokerage session exists per username across Client Portal, TWS and IBKR Mobile
+([multiple sessions](https://www.interactivebrokers.com/docs/web-api/authentication/multiple-sessions.md)).
+The gateway was holding a session **issued to the phone**, which it cannot authenticate as
+— so the login page rejected a correct code however often it was retried. `preflight` reads
+this as `[BORROWED] SSO session belongs to IBKRMOBILE_…` (exit 4), and `startup()` opens no
+login page on it.
+
+Two follow-ons, both measured rather than reasoned about:
+
+- **`POST /iserver/auth/ssodh/init` cannot rescue this.** Twice, it moved `connected`
+  False→True and left `authenticated` False. It raises the bridge; it cannot supply an
+  authentication that never happened.
+- **`POST /logout` returned `{"status": true}` and the session came straight back**, with a
+  full 10-minute window. Three independent ticklers renewed it every ~60s — the container's
+  own `tickler.sh` (gone since 2026-08-06), the host's launchd keepalive, and the host
+  application's connectivity poll (which no longer tickles; the 60 s read is the session
+  owner's). **The keepalive built to protect a good session cannot tell a good session from a
+  borrowed one**, and had been preserving an unusable one all day. **The three-tickler
+  explanation is not sufficient — measured again 2026-09-10 with the container tickler gone
+  and the host application stopped:** a `POST /logout` still returned `{"status": true}` and
+  cleared nothing, and the session still came back with a full ~10-minute window. Treat
+  `POST /logout` as unable to clear a *borrowed* session at all — it is another client's SLS
+  session, not the gateway's to end — and go straight to the container restart.
+
+**What resolved it: `docker restart`.** The session is held in the gateway's local process
+memory, not re-served from IBKR, so a restart drops it with nothing to race. Login then
+succeeded first time, and `/sso/validate` came back `CLIENT_APP: None` — the session
+belonged to the gateway itself. That is what `python -m ibkr_core_mcp.gateway reset` does
+(F45 step 2; until it ships, `docker restart ibkr_core_gateway` by hand after reading
+`preflight`). Four theories died before this one: a stale gateway build (SHA-256 identical to
+a fresh download), a wrong `ip2loc` (IBKR's own shipped default), an IB Key registered to
+another username (same username, user-confirmed), and 2FA itself.
+
+### Refused after "Client login succeeds" (2026-10-07/08)
+
+Five logins in a row completed in the browser, and the page read *"Client login succeeds"*.
+Yet the preflight read `[FREE]`, `/tickle` answered 401 to every caller, including Chrome's
+own request with its cookie, and the keepalive never logged `OK`. **The container's stdout
+showed nothing; the gateway's internal log showed everything:**
+
+```bash
+docker exec ibkr_core_gateway sh -c 'ls /app/api_gateway/logs'   # gw.<YYYY-MM-DD>.log, UTC times
+```
+
+```text
+GatewayHttpProxy : Client login succeeds
+BaseServiceProxy : -> GET /v1/api/sso/validate?gw=1,401
+BaseServiceProxy : failed /v1/api/sso/validate?gw=1 | reason Access Denied
+GatewayHttpProxy : authentication to cp failed, retry 1   … retry 5
+GatewayHttpProxy : giving up ...
+```
+
+The gateway labels an **upstream** 401 "Access Denied" (read in its own code), so IBKR's side
+refused the gateway's validation of a login that had just succeeded. A good login reads
+`sso/validate?gw=1,200` → `authenticated to cp` → `ssodh/init` 200 → `tickle,200`.
+
+**What cleared it (2026-10-08 12:15 EDT): one login on IBKR's website in Chrome, a log-out,
+then one gateway login.** The validation passed at once, and a direct gateway login the same
+afternoon (16:35 EDT) was validated at the first attempt. This matches Voyz/ibeam #267 and the
+ibeam wiki's "Authentication loop", where IBKR-side refusals of this kind are reported as
+sporadic and the website login can raise an extra identity confirmation that the gateway
+never shows. **IBKR's reason is not visible to us and is not established.** Ruled out by
+evidence: our code, the gateway image, macOS, and cookies. The log carries the username, a
+numeric user id, cookies, tokens and device identifiers; redact before sharing.
+
+**The package reads that log for you.** One read — `docker exec ibkr_core_gateway grep -rHF
+--include=gw.[0-9]*.log -e <phrase>… /app/api_gateway/logs`, no shell, an explicit environment
+(`gateway.manager.read_login_events`) — and only the time, the event and its code survive it;
+no line of the log is printed or stored. The rule (`preflight.last_login`): take the last
+*"Client login succeeds"* in the container's logs, whatever its age — *"giving up"* after it
+and no *"authenticated to cp"* means refused; neither yet means IBKR is still answering. The
+page writes *"Client login succeeds"* one second **before** IBKR is asked, so it is not a
+session. A restart did not clear one (2026-10-08: the container started 15:47:49 UTC, the
+next login was refused at 15:49:37). Since register F43 `start()` restarts a current container
+in place, so the log survives a start; a container that is removed and re-created loses its
+log, and with it the evidence. Where it shows: `preflight` reads `[REFUSED]` (exit 5) or
+`[VALIDATING]` (exit 6); `startup()` opens no login page on either; the session owner (F45
+step 2: `up`, a host's button) names a refused last login before the page opens and ends the
+wait at once if the new login is refused too; `diagnose` prints the login timeline. Checked
+against every login on record, 2026-10-07 → 10-13: five refused, five validated, and two
+*"giving up"* episodes with no login that are not refusals.
+
+### Runbook: a login that will not take
+
+```bash
+python -m ibkr_core_mcp.gateway preflight     # ALWAYS first — read-only: two GETs, then (after FREE) one read of the gateway's log
+```
+
+| Verdict | Exit | What it means | Do this |
+|---|---|---|---|
+| `[OK] Session is LIVE` | 0 | already authenticated | **Nothing.** A needless re-login is what escalates into the IB Key challenge |
+| `[DOWN] Gateway is NOT answering` | 1 | no usable HTTP response | start the container |
+| `[FREE] …` | 2 | nothing holds the slot | log in now, through to *"Client login succeeds"* |
+| `[BUSY] Another IBKR client holds the session` | 3 | `competing`/`collision` set | fully close the other client, re-check |
+| `[BORROWED] SSO session belongs to X` | 4 | the gateway holds another app's session | log out of X **from its Log Out menu item**, then `python -m ibkr_core_mcp.gateway reset` (F45 step 2; `docker restart ibkr_core_gateway` by hand until then) |
+| `[REFUSED] IBKR refused the last gateway login (…)` | 5 | the gateway's own log: IBKR refused its validation of the last login | **one login on IBKR's website in your browser, then log out, then one gateway login.** Not another gateway login first, not a restart |
+| `[VALIDATING] IBKR has not answered the last login yet (…)` | 6 | the last login is still being validated (a refusal took up to 13 s, measured) | **nothing** — do not log in again; re-run in a few seconds |
+
+Closing or swiping an app away is **not** logging out — IBKR's own gateway walkthrough
+warns it *"may cause a stale login session"*, which is precisely the state above.
+
+`python -m ibkr_core_mcp.gateway reset` (F45 step 2) restarts the container and re-checks. Its
+guard sits inside `GatewayManager.start()` itself, where the restart happens, not in the command:
+a **live** session is refused (`--force` overrides) — a tool built to fix a login must not be
+able to break one — and so are `[REFUSED]` and `[VALIDATING]`: a restart did not clear IBKR's
+refusal on 2026-10-08, and it would cut off a login IBKR is still answering.
+
+**HTTP 401 is not a failure.** It is the gateway answering that it holds no session — a
+freshly started or freshly logged-out gateway, and the best possible moment to log in.
+`read_state` treats it as `reachable=True`; folding it into `reachable=False` once produced
+*"Gateway is NOT answering. Start it first"* about a gateway that was running perfectly and
+waiting (fixed 2026-08-05, pinned by `test_a_401_means_alive_and_ready_not_down`, with a
+sibling test proving the carve-out still reports a genuine outage as DOWN).
+
+**A login IBKR refused reads `[REFUSED]`, not `[FREE]`**: after a `FREE` HTTP reading the
+preflight reads the gateway's own log (§ Refused after *"Client login succeeds"*). Until
+2026-10-12 it could not tell a refused login from no login: during the 2026-10-07/08 incident
+it read `[FREE]` ("a login can proceed") between refused logins. When the log cannot be read,
+`[FREE]` says so on its last line — a refused login would then not show, and
+`python -m ibkr_core_mcp.gateway diagnose` is the next step.
+
+---
+
 ## Rate limits
 
 IBKR's documented global limit is **10 requests/second** for any endpoint not in its

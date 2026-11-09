@@ -18,8 +18,9 @@ or a deliberate session-clear requires every actor to go quiet — and a loop in
 container cannot see the host-side flag that coordinates that. Renewal is now the host's
 job, from outside the container, by a loop that honours the host-side suspend lock.
 
-**Changing anything that ships into the image requires `docker rmi ibkr-core-gateway`
-before the change takes effect.** `GatewayManager.start()` builds only when the image is
+**Changing anything that ships into the image requires `docker rmi -f ibkr-core-gateway`
+before the change takes effect** (`-f` because the gateway's container, stopped or not, still
+uses the image and Docker refuses a plain `rmi` — measured 2026-11-07). `GatewayManager.start()` builds only when the image is
 absent, so a restart alone will keep running the old one — that is exactly how the tickler
 survived its own removal for a day.
 """
