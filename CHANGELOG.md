@@ -23,6 +23,21 @@ guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. De
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
 ### Added
+- **`python -m ibkr_core_mcp.gateway keepalive [--print-url] [--interval S]`, the package's own
+  host-side tickler (register F45, step 2, commit 11/13).** `gateway.session.keepalive_loop`:
+  `GET /tickle` every 55 s (IBKR's ~1 per minute), a line only on a state change (under launchd
+  the loop runs for months), and the suspend lock honoured — an active lock means `SUSPENDED`
+  and no request, since IBKR renews a session on any request and this is the one renewer a
+  login or a recovery cannot silence in-process. `gateway.manager.KeepAwake` holds a
+  `caffeinate -i` assertion on OK and releases it on WARN, so a 24/7 install does not keep the
+  Mac awake for a gateway that is not up; one child at a time, terminated and waited for, `PATH`
+  alone in its environment, a no-op said once at DEBUG where there is no `caffeinate`. The
+  command installs a SIGTERM handler that raises `SystemExit`, so `launchctl bootout` reaches the
+  `finally` that releases the assertion; every line is flushed. `--print-url` prints what it
+  would tickle and contacts nothing; the URL comes through the one loader (`--env-file`), so the
+  consumer's grep-and-sed reader of one `.env` line is replaced by python-dotenv's own grammar.
+  A URL that is not loopback exits 1 before any request. Behaviour identical to the consumer's
+  bash script, which it replaces, with its tests as Python.
 - **`python -m ibkr_core_mcp.gateway up | reset`, and `preflight --release` (register F45, step
   2, commit 10/13).** `up [--wait-timeout S] [--allow-restart]` is the owner's whole sequence,
   rendered — exit 0 LIVE, 1 DOWN, 3 for everything that blocks a login, so "opened the page and

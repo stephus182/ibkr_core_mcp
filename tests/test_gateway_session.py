@@ -36,10 +36,12 @@ from ibkr_core_mcp.gateway.session import (
     SessionState,
     SuspendLock,
     _pid_alive,
+    _tick,
     attempt_soft_recovery,
     classify,
     declare,
     describe,
+    keepalive_loop,
     observe,
     release_session,
 )
@@ -1330,3 +1332,126 @@ def test_the_owner_reads_the_gateway_log_itself_by_default(wire, monkeypatch):
     _establish(GatewaySession(), gm, lock)
 
     assert reads, "the owner did not read the gateway's log before the login page"
+
+
+# ── The keepalive loop: the host-side tickler that honours the lock (register F45, step 2) ─────
+#
+# Replaces the consumer's bash script and its tests: an active lock → SUSPENDED and no request;
+# 200 → OK and the sleep assertion held; anything else → WARN and the assertion released; a line
+# only on a state change; the URL pinned before the first request.
+
+
+class FakeAwake:
+    """Records `hold` / `release` in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def hold(self) -> None:
+        self.calls.append("hold")
+
+    def release(self) -> None:
+        self.calls.append("release")
+
+
+def _tickle(status: int | Exception):
+    def get(url, timeout=5.0, verify=True):
+        if isinstance(status, Exception):
+            raise status
+        return _resp(status, {})
+
+    return get
+
+
+def _loop(monkeypatch, tmp_path, status, *, ticks: int = 1, lock_active: bool = False) -> tuple[list[str], FakeAwake]:
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.get", _tickle(status))
+    lock = tmp_path / "session.suspend"
+    if lock_active:
+        lock.write_text(json.dumps({"pid": os.getpid(), "reason": "login", "since": "x"}))
+    lines: list[str] = []
+    awake = FakeAwake()
+    remaining = {"n": ticks}
+
+    def sleep(_seconds: float) -> None:
+        remaining["n"] -= 1
+        if remaining["n"] <= 0:
+            raise KeyboardInterrupt  # the operator's Ctrl-C; `once=False` loops until then
+
+    with pytest.raises(KeyboardInterrupt):
+        keepalive_loop(_URL, lock_path=lock, interval=55.0, awake=awake, sleep=sleep, say=lines.append)
+    return lines, awake
+
+
+def test_an_active_lock_means_suspended_and_no_request(monkeypatch, tmp_path):
+    """The one renewer outside every host process; the lock is the only thing that can reach it."""
+    sent: list[str] = []
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.get", lambda *a, **k: sent.append(str(a)))
+    lock = tmp_path / "session.suspend"
+    lock.write_text(json.dumps({"pid": os.getpid(), "reason": "login", "since": "x"}))
+    lines: list[str] = []
+    awake = FakeAwake()
+
+    keepalive_loop(_URL, lock_path=lock, awake=awake, say=lines.append, once=True)
+
+    assert sent == []
+    assert any("SUSPENDED" in line for line in lines), lines
+    assert "hold" not in awake.calls, "the machine is not held awake for a session that does not exist yet"
+
+
+def test_a_200_is_ok_and_holds_the_machine_awake(monkeypatch, tmp_path):
+    lines, awake = _loop(monkeypatch, tmp_path, 200)
+    assert any("OK  (HTTP 200)" in line for line in lines), lines
+    assert awake.calls[0] == "hold"
+
+
+@pytest.mark.parametrize(
+    ("status", "state", "calls"),
+    [(200, "OK", ["hold"]), (401, "WARN", ["release"]), (OSError("refused"), "WARN", ["release"])],
+    ids=["200", "401", "unreachable"],
+)
+def test_one_tick_holds_on_ok_and_releases_on_warn(monkeypatch, tmp_path, status, state, calls):
+    """The tick itself, apart from the loop's own release on the way out: the assertion follows the
+    gateway's answer, so a Mac is held awake for a session worth keeping and for nothing else."""
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.get", _tickle(status))
+    awake = FakeAwake()
+    assert _tick(_URL, tmp_path / "session.suspend", awake)[0] == state
+    assert awake.calls == calls
+
+
+@pytest.mark.parametrize("status", [401, 500, OSError("refused")], ids=["401", "500", "unreachable"])
+def test_anything_else_is_warn_and_releases_the_assertion(monkeypatch, tmp_path, status):
+    """A 401 is a gateway with no session: nothing worth keeping the Mac awake for. An exception
+    reads as HTTP 000, as `curl` reported it; its text is not printed."""
+    lines, awake = _loop(monkeypatch, tmp_path, status)
+    warn = [line for line in lines if "WARN" in line]
+    assert warn and "gateway may be down or not authenticated" in warn[0], lines
+    assert awake.calls[0] == "release", "released on the WARN tick itself, not only when the loop ends"
+    if isinstance(status, Exception):
+        assert "HTTP 000" in warn[0] and "refused" not in warn[0]
+
+
+def test_a_line_only_on_a_state_change(monkeypatch, tmp_path):
+    """Under launchd the loop runs for months; a line per tick would grow the log unbounded."""
+    lines, _ = _loop(monkeypatch, tmp_path, 200, ticks=4)
+    ok = [line for line in lines if "OK  (HTTP 200)" in line]
+    assert len(ok) == 1, lines
+
+
+def test_the_first_line_names_what_is_tickled_and_how_often(monkeypatch, tmp_path):
+    lines, _ = _loop(monkeypatch, tmp_path, 200)
+    assert lines[0].startswith("Starting") and f"{_URL}/tickle" in lines[0] and "55" in lines[0]
+
+
+def test_the_assertion_is_released_when_the_loop_ends(monkeypatch, tmp_path):
+    """Ctrl-C or SIGTERM: the `finally` releases `caffeinate`, or the child would hold the Mac
+    awake after the daemon is gone — the bash script's `trap cleanup EXIT INT TERM`."""
+    _, awake = _loop(monkeypatch, tmp_path, 200)
+    assert awake.calls[-1] == "release"
+
+
+def test_the_keepalive_refuses_a_non_loopback_url_before_any_request(monkeypatch):
+    sent: list[str] = []
+    monkeypatch.setattr("ibkr_core_mcp.gateway.session.requests.get", lambda *a, **k: sent.append(str(a)))
+    with pytest.raises(ConfigError):
+        keepalive_loop("ftp://nope", awake=FakeAwake(), say=lambda _: None, once=True)
+    assert sent == []

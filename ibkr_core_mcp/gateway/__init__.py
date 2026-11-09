@@ -6,7 +6,10 @@ to build, run and reach it, and — since register F45, step 2 — the session's
 `get_session()` (`gateway/session.py`): the only code that opens a login, posts to a session
 endpoint or restarts a container holding a session.
 
-⚠ **The caller must run its own keepalive. There is no tickler in the container.**
+⚠ **There is no tickler in the container; the package's own keepalive is
+`python -m ibkr_core_mcp.gateway keepalive` (register F45, step 2), to be run from outside any
+host process — a launchd or systemd unit with the venv's Python — and it honours the suspend
+lock.**
 
 `tickler.sh` was removed from the image on 2026-08-06 and this docstring used to say the
 opposite — that the bundled tickler kept the session alive "so callers do not need their
@@ -17,8 +20,9 @@ sessions time out with nothing to explain why.
 It was removed because it could not be silenced. IBKR renews a session on **any** request
 (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server), so a login
 or a deliberate session-clear requires every actor to go quiet — and a loop inside the
-container cannot see the host-side flag that coordinates that. Renewal is now the host's
-job, from outside the container, by a loop that honours the host-side suspend lock.
+container cannot see the host-side flag that coordinates that. Renewal is done from outside
+the container by a loop that honours the host-side suspend lock — `gateway.session.keepalive_loop`,
+which the `keepalive` subcommand runs.
 
 **Changing anything that ships into the image requires `docker rmi -f ibkr-core-gateway`
 before the change takes effect** (`-f` because the gateway's container, stopped or not, still

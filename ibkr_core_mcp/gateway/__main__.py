@@ -5,6 +5,8 @@
     python -m ibkr_core_mcp.gateway up        [--wait-timeout S] [--allow-restart] [--env-file PATH]
                                                                               exit: 0 LIVE, 1 DOWN, 3 otherwise
     python -m ibkr_core_mcp.gateway reset     [--force] [--env-file PATH]     exit: the after verdict's code; 1 when refused
+    python -m ibkr_core_mcp.gateway keepalive [--print-url] [--interval S] [--env-file PATH]
+                                                                              runs until Ctrl-C or SIGTERM; 1 on an unusable URL
 
 Presentation only. Every decision about the session — what a reading means, whether a login
 may start, whether a restart may happen — belongs to `preflight` (the readings and the rule)
@@ -35,6 +37,12 @@ and prints the verdict again. The guard inside `GatewayManager.start()` is what 
 LIVE, REFUSED or VALIDATING session — and this command only prints its reason and exits 1;
 `--force` overrides. On a FREE after-reading it says to log in now, while the slot is clear.
 
+`keepalive` is the host-side tickler — the one renewer a login cannot silence in-process, so it
+honours the suspend lock — with the `caffeinate -i` assertion held only while the gateway
+answers. A launchd or systemd unit runs it with the venv's Python; `--print-url` prints what it
+would tickle and contacts nothing. SIGTERM (`launchctl bootout`) is turned into `SystemExit` so
+the assertion is released on the way out.
+
 `--env-file` is the path `Config.from_env` reads (a host's `.env`); the default is the loader's
 own search. A gateway URL that is not loopback is printed and exits 1 **before any request**.
 Nothing here prints the IBKR user id; the username appears only in a BORROWED verdict, where
@@ -46,11 +54,13 @@ indistinguishable from a hang.
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 from collections.abc import Sequence
+from types import FrameType
 
 from ibkr_core_mcp.exceptions import ConfigError
-from ibkr_core_mcp.gateway.manager import _RESTART_REFUSED_CODES, GatewayManager, read_login_events
+from ibkr_core_mcp.gateway.manager import _RESTART_REFUSED_CODES, GatewayManager, KeepAwake, read_login_events
 from ibkr_core_mcp.gateway.preflight import (
     _MARK,
     EXIT_FREE,
@@ -63,7 +73,7 @@ from ibkr_core_mcp.gateway.preflight import (
     refine_with_log,
     verdict,
 )
-from ibkr_core_mcp.gateway.session import SessionPhase, get_session, release_session
+from ibkr_core_mcp.gateway.session import KEEPALIVE_INTERVAL, SessionPhase, get_session, keepalive_loop, release_session
 from ibkr_core_mcp.redaction import redact_error
 
 
@@ -213,6 +223,21 @@ def _reset(url: str, args: argparse.Namespace) -> int:
     return after
 
 
+def _exit_on_sigterm(signum: int, frame: FrameType | None) -> None:
+    """`launchctl bootout` sends SIGTERM; raising lets the loop's `finally` release `caffeinate`."""
+    raise SystemExit(0)
+
+
+def _keepalive(url: str, args: argparse.Namespace) -> int:
+    """The tickler, or with `--print-url` the URL it would tickle and nothing contacted."""
+    if args.print_url:
+        _say(f"{url}/tickle")
+        return 0
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
+    keepalive_loop(url, interval=args.interval, awake=KeepAwake(), say=_say)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The command line: one subcommand per operation, each taking `--env-file`."""
     parser = argparse.ArgumentParser(
@@ -271,6 +296,18 @@ def build_parser() -> argparse.ArgumentParser:
         "exit: the after verdict's code, 1 when refused",
     )
     reset.add_argument("--force", action="store_true", help="restart even where the guard refuses")
+    keepalive = add(
+        "keepalive",
+        _keepalive,
+        "tickle the gateway every 55 s from outside any host process, honouring the suspend lock, with "
+        "caffeinate held while it answers; runs until Ctrl-C or SIGTERM",
+    )
+    keepalive.add_argument(
+        "--print-url", action="store_true", help="print the URL it would tickle and exit; nothing contacted"
+    )
+    keepalive.add_argument(
+        "--interval", type=float, default=KEEPALIVE_INTERVAL, metavar="S", help="seconds between tickles (default 55)"
+    )
     return parser
 
 

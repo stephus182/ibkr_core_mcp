@@ -22,6 +22,7 @@ from ibkr_core_mcp.gateway import GatewayManager, LoginWindow
 from ibkr_core_mcp.gateway.manager import (
     _LOGIN_WINDOW_ENV,
     GATEWAY_LOG_DIR,
+    KeepAwake,
     _find_chrome,
     read_login_events,
     restart_refusal,
@@ -1170,3 +1171,101 @@ class TestRestartGuard:
         code, reason = refusal
         assert code == expected
         assert "\n\n" in reason, "the reason is the headline, then the guidance"
+
+
+# ---------------------------------------------------------------------------
+# KeepAwake — the keepalive's sleep assertion (register F45, step 2, commit 11)
+# ---------------------------------------------------------------------------
+
+
+class TestKeepAwake:
+    """`caffeinate -i`, held only while the gateway is reachable and released the moment it is not,
+    so a 24/7 keepalive does not keep the Mac awake for a gateway that is not even up. A spawn
+    site in the one allowed module; door 6 refuses the real command in a unit test, so every
+    test here patches `subprocess.Popen` by name."""
+
+    def test_hold_starts_one_caffeinate_with_path_alone_in_its_environment(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process) as popen,
+            patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "IBKR_FLEX_TOKEN": "not-for-the-child"}, clear=False),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.hold()  # a live child: not spawned again
+        popen.assert_called_once()
+        argv = popen.call_args.args[0]
+        kwargs = popen.call_args.kwargs
+        assert argv == ["/usr/bin/caffeinate", "-i"]
+        assert kwargs["env"] == {"PATH": "/usr/bin:/bin"}
+        assert kwargs["stdin"] is subprocess.DEVNULL and kwargs["stdout"] is subprocess.DEVNULL
+        assert kwargs["stderr"] is subprocess.DEVNULL
+
+    def test_release_terminates_and_waits_so_no_zombie_is_left(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.release()
+            awake.release()  # idempotent
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=10)
+        process.kill.assert_not_called()
+
+    def test_release_kills_a_child_that_ignores_terminate(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("caffeinate", 10), 0]
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.release()
+        process.kill.assert_called_once_with()
+
+    def test_a_dead_child_is_replaced_on_the_next_hold(self) -> None:
+        first, second = MagicMock(spec=subprocess.Popen), MagicMock(spec=subprocess.Popen)
+        first.poll.return_value = 1  # exited by itself
+        second.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", side_effect=[first, second]) as popen,
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.hold()
+        assert popen.call_count == 2
+
+    def test_without_caffeinate_both_are_no_ops_that_log_once_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Linux and Windows: nothing to hold; one DEBUG line, not one per tick."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value=None),
+            patch("subprocess.Popen") as popen,
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.hold()
+            awake.release()
+        popen.assert_not_called()
+        notes = [r for r in caplog.records if "caffeinate" in r.getMessage()]
+        assert len(notes) == 1 and notes[0].levelno == logging.DEBUG
+
+    def test_the_context_manager_releases_on_exit(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process),
+            KeepAwake() as awake,
+        ):
+            awake.hold()
+        process.terminate.assert_called_once_with()

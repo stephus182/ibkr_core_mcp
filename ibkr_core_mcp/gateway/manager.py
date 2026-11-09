@@ -119,6 +119,9 @@ _LOGIN_WINDOW_ENV = (
 )
 """The only variables the login window's Chrome receives — a host's secrets stay in the host."""
 
+_KEEPAWAKE_ENV = ("PATH",)
+"""The only variable `caffeinate` receives (register F45, step 2)."""
+
 
 GATEWAY_LOG_DIR = "/app/api_gateway/logs"
 """The gateway's real log, inside the container. `docker logs` shows only container start-up
@@ -264,6 +267,63 @@ class LoginWindow:
             self._process.kill()
             self._process.wait()
         return True
+
+
+class KeepAwake:
+    """A sleep-prevention assertion — `caffeinate -i` — held only while the gateway is reachable.
+
+    The keepalive loop (`session.keepalive_loop`) calls `hold()` on every OK tick and `release()`
+    on every WARN one, so a 24/7 launchd install does not keep the Mac awake for a gateway that
+    is not even up. One child at a time: `hold()` with a live child does nothing. `release()`
+    terminates the child and waits for it, as `LoginWindow.close()` does, so no zombie is left;
+    `__exit__` releases. The child gets `PATH` alone in its environment — a host's secrets stay
+    in the host. On a platform without `caffeinate` (Linux, Windows) both are no-ops, said once
+    at DEBUG. A spawn site in the one allowed module (`tests/security/test_subprocess_boundary.py`);
+    door 6 refuses the real command in a unit test (register F45, step 2).
+    """
+
+    def __init__(self) -> None:
+        """No assertion held yet."""
+        self._process: subprocess.Popen[bytes] | None = None
+        self._said_absent = False
+
+    def hold(self) -> None:
+        """Start `caffeinate -i` unless one of ours is already running."""
+        if self._process is not None and self._process.poll() is None:
+            return
+        path = shutil.which("caffeinate")
+        if path is None:
+            if not self._said_absent:
+                log.debug("No caffeinate on this platform — nothing holds the machine awake for the gateway")
+                self._said_absent = True
+            return
+        self._process = subprocess.Popen(
+            [path, "-i"],
+            env={name: os.environ[name] for name in _KEEPAWAKE_ENV if name in os.environ},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def release(self) -> None:
+        """End the assertion; idempotent."""
+        process, self._process = self._process, None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+    def __enter__(self) -> KeepAwake:
+        """Hand back the handle; `hold()` is the loop's to call."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Always release, including on the way out of a loop that was interrupted."""
+        self.release()
 
 
 class GatewayManager:

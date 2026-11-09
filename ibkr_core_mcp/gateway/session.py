@@ -1063,6 +1063,107 @@ def _recover(
         suspend.release()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# The keepalive — the host-side tickler, which honours the lock.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class Awake(Protocol):
+    """What the keepalive holds while the gateway answers: `manager.KeepAwake`, or a stand-in."""
+
+    def hold(self) -> None:
+        """Hold the machine awake."""
+        ...
+
+    def release(self) -> None:
+        """Let it sleep."""
+        ...
+
+
+KEEPALIVE_INTERVAL = 55.0
+"""Seconds between tickles — slightly under IBKR's recommended ~1 per minute
+(https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server.md)."""
+
+
+def _tick(api_url: str, lock_path: Path, awake: Awake, timeout: float = 5.0) -> tuple[str, str]:
+    """One tick: `(state, http_code)` — `SUSPENDED` with no request while a live process holds
+    the lock (and the assertion untouched: nothing is held awake for a session that does not
+    exist yet); else `GET /tickle` → `OK` and `hold()` on 200, `WARN` and `release()` on anything
+    else, an exception reading as `000` the way `curl` reported it, its text never printed."""
+    if SuspendLock.is_active(lock_path):
+        return "SUSPENDED", ""
+    require_loopback_url(api_url)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+            resp = requests.get(f"{api_url}/tickle", timeout=timeout, verify=False)  # noqa: S501 - localhost gateway, self-signed cert; pinned above (SECURITY.md § TLS Policy)
+        code = str(resp.status_code)
+    except Exception:
+        code = "000"
+    if code == "200":
+        awake.hold()
+        return "OK", code
+    awake.release()
+    return "WARN", code
+
+
+def keepalive_loop(
+    api_url: str,
+    *,
+    lock_path: Path = DEFAULT_SUSPEND_LOCK,
+    interval: float = KEEPALIVE_INTERVAL,
+    awake: Awake,
+    sleep: Callable[[float], None] = time.sleep,
+    say: Callable[[str], None] = print,
+    once: bool = False,
+) -> None:
+    """Keep the gateway's session alive from outside any host process, honouring the lock.
+
+    IBKR renews a session on **any** request, so this is the one renewer a login or a recovery
+    cannot silence in-process — the lock file is the only thing that reaches it, and a tick
+    under an active lock sends nothing. Behaviour identical to the consumer's bash loop it
+    replaces: `GET /tickle` every `interval` seconds, a line only on a state change (under
+    launchd the loop runs for months), the sleep assertion held on OK and released on WARN, and
+    released on the way out whatever ended the loop — Ctrl-C, or the SIGTERM the command line
+    turns into `SystemExit`. `say` is expected to flush (the command line's does): under launchd
+    stdout is a file and block-buffered, and the `SUSPENDED` line is live evidence only if it
+    lands at once.
+
+    Args:
+        api_url: The gateway's API base URL; pinned to loopback before anything is sent.
+        lock_path: The suspend lock to honour; the package's default path, a contract.
+        interval: Seconds between ticks.
+        awake: The sleep assertion to hold and release.
+        sleep: Injected for tests.
+        say: Where the lines go.
+        once: One tick, then return — the test seam.
+
+    Raises:
+        ConfigError: `api_url` is not a loopback host — before the first request.
+    """
+    require_loopback_url(api_url)
+    tickle = f"{api_url}/tickle"
+    say(f"Starting — tickling {tickle} every {interval:g}s")
+    last = ""
+    try:
+        while True:
+            state, code = _tick(api_url, lock_path, awake)
+            if state != last:
+                stamp = datetime.now().astimezone().strftime("%H:%M:%S %Z")
+                if state == "SUSPENDED":
+                    say(f"{stamp}  SUSPENDED  — a login or recovery is in progress; not tickling")
+                elif state == "OK":
+                    say(f"{stamp}  OK  (HTTP {code})")
+                else:
+                    say(f"{stamp}  WARN  (HTTP {code}) — gateway may be down or not authenticated")
+                last = state
+            if once:
+                return
+            sleep(interval)
+    finally:
+        awake.release()
+
+
 _SESSION: GatewaySession | None = None
 
 

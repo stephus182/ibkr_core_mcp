@@ -168,7 +168,7 @@ def test_diagnose_reads_a_free_gateway_through_its_log():
 # ── --env-file, the URL, and the shape of the module ─────────────────────────
 
 
-@pytest.mark.parametrize("command", ["preflight", "diagnose", "up", "reset"])
+@pytest.mark.parametrize("command", ["preflight", "diagnose", "up", "reset", "keepalive"])
 def test_env_file_is_the_one_url_read_and_a_non_loopback_url_exits_1_before_any_request(
     command, tmp_path, monkeypatch, capsys
 ):
@@ -202,7 +202,7 @@ def test_help_exits_zero_and_names_the_subcommands(capsys):
         main(["--help"])
     assert raised.value.code == 0
     out = capsys.readouterr().out
-    assert "preflight" in out and "diagnose" in out and "up" in out and "reset" in out
+    assert "preflight" in out and "diagnose" in out and "up" in out and "reset" in out and "keepalive" in out
 
 
 def test_no_subcommand_is_a_usage_error():
@@ -374,3 +374,40 @@ def test_no_command_but_release_posts_a_logout(command):
     ):
         main(command)
     release.assert_not_called()
+
+
+# ── keepalive: the host-side tickler, as a subcommand ───────────────────────────────────────
+
+
+def test_keepalive_print_url_names_the_tickle_url_and_contacts_nothing(tmp_path, monkeypatch, capsys):
+    """The consumer's test seam and the operator's one-line diagnostic; the URL through the one
+    loader, with its grammar — the bash script's own grep-and-sed reader is gone."""
+    monkeypatch.delenv("IBKR_GATEWAY_URL", raising=False)
+    env = tmp_path / ".env"
+    env.write_text('export IBKR_GATEWAY_URL = "https://127.0.0.1:5056/v1/api/"  # the port\n')
+    env.chmod(0o600)
+    with patch(f"{_MOD}.keepalive_loop") as loop, patch(f"{_MOD}.read_state") as read:
+        assert main(["keepalive", "--print-url", "--env-file", str(env)]) == 0
+    assert capsys.readouterr().out.strip() == "https://127.0.0.1:5056/v1/api/tickle"
+    loop.assert_not_called()
+    read.assert_not_called()
+
+
+def test_keepalive_runs_the_owners_loop_with_a_sleep_assertion_and_a_sigterm_handler():
+    """`launchctl bootout` sends SIGTERM; without a handler that raises `SystemExit` the `finally`
+    releasing `caffeinate` never runs and the child holds the Mac awake after the daemon is gone
+    (the bash script's `trap cleanup EXIT INT TERM`)."""
+    import signal
+
+    with patch(f"{_MOD}.keepalive_loop") as loop, patch(f"{_MOD}.signal.signal") as install:
+        assert main(["keepalive", "--interval", "30"]) == 0
+    kwargs = loop.call_args.kwargs
+    assert loop.call_args.args == ("https://localhost:5055/v1/api",)
+    assert kwargs["interval"] == 30.0
+    assert type(kwargs["awake"]).__name__ == "KeepAwake"
+    assert kwargs["say"] is cli._say
+    install.assert_called_once()
+    signum, handler = install.call_args.args
+    assert signum == signal.SIGTERM
+    with pytest.raises(SystemExit):
+        handler(signum, None)
