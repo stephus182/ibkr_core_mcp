@@ -22,6 +22,15 @@ write entered the package in step 1; step 2 brings the owner (`gateway/session.p
 guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. Design and review:
 the consumer's `docs/plans/2026-11-09-f45-*` (local).
 
+**Register F45, step 2 (2026-11-09) — the owner.** Seven more commits, each with the four gates
+green and every guard proven by mutation: `gateway/session.py` with its 56 moved tests (the
+lock private, a pid below 1 malformed, the liveness check platform-bound; `COMPETE: Final =
+False`); the restart guard inside `start()` (`RestartRefusedError`, `restart_refusal`); `startup()`
+through the owner, `up`, `reset`, `preflight --release`; the package's own keepalive (`KeepAwake`,
+`keepalive_loop`, `keepalive`); the deprecations on `IBKRClient.logout` / `reauthenticate`; an
+audit record for every session write; then the documents. The entries live in their sections
+below. The consumer's half — importing the owner, deleting its own copies — waits for the pin.
+
 ### Added
 - **Every session write leaves an audit record (MCP security checklist 8.1; register F45, step 2 —
   the `session_write` kind the audit entry below promised).** `gateway.session.release_session`

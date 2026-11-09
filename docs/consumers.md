@@ -10,6 +10,39 @@
 
 ## Changes consumers should know about
 
+### Unreleased — the gateway session has one owner in the package: `get_session()`, `up` / `reset` / `keepalive`, `startup()` through the owner (register F45, step 2)
+
+**What a host imports.** `from ibkr_core_mcp.gateway import get_session, GatewayManager` —
+`get_session()` is the process-wide owner (`GatewaySession`). `get_session().establish(
+GatewayManager(), url=cfg.gateway_url, emit=print)` brings the session to LIVE or says why it
+cannot, blocking (call it from `asyncio.to_thread`); `recover(manager, force=False)` clears a
+session by restarting the container, behind the guard below; `start(url=…)` begins the 60 s
+poll every other component reads from, `state()` / `phase` / `is_live()` / `may_call_ibkr()` are
+the synchronous reads, and `subscribe(callback)` fires on a phase change. `SessionPhase`,
+`SessionState` and `SuspendLock` are exported too. The lock path (`~/.ibkr_core/session.suspend`)
+is a contract: a keepalive still installed from a host reads the same file.
+
+**Behaviour changes.** `GatewayManager.startup()` is now the owner's sequence and returns
+whether the session is LIVE — the two `input()` prompts are gone (nothing reads stdin), a login
+IBKR **refused** is named and the page still opens (the step-1 gate had refused the page; the
+operator's rule of 2026-10-12 stands), and a login IBKR is still **validating** gets no second
+page. `GatewayManager.start()` / `restart()` raise `RestartRefusedError` (`.code`, `.reason`)
+on a LIVE, REFUSED or VALIDATING session unless `force=True`; `recover()` reports that refusal
+as a reading, never an exception. Every session write — the logout, the soft recovery, the
+restart — leaves a redacted `session_write` record in the audit log.
+
+**The command line.** `python -m ibkr_core_mcp.gateway up [--wait-timeout S] [--allow-restart]`
+(0 LIVE · 1 DOWN · 3 otherwise; no `--no-wait`), `reset [--force]` (the before verdict, the
+restart behind the guard, the after verdict; 1 when refused), `keepalive [--print-url]
+[--interval S]` (the host-side tickler; a launchd or systemd unit runs it with the venv's
+Python), `preflight --release` (the one opt-in logout). All take `--env-file`.
+
+**Your test suite.** The owner's I/O is three names in `ibkr_core_mcp.gateway.session`:
+`read_state`, `confirm_session`, `read_login_events` — patch them there, pass
+`lock=SuspendLock(path=tmp_path / "session.suspend")`, and stand in `sleep` and `monotonic`.
+`read_login_events` is a `docker exec`; a unit test must stand it in (this package's door 6
+refuses the real command).
+
 ### Unreleased — `IBKRClient.logout()` and `reauthenticate()` are deprecated; the session owner is the one path (register F45, step 2)
 
 Both methods now emit a `DeprecationWarning` and will be removed in 3.0. They still send their
@@ -99,7 +132,9 @@ gateway that stopped answering, print the verdict and its guidance and return `F
 opening a login page**. Only a **free** gateway goes on to the login as before. A consumer that
 relied on `startup()` opening the page on every unauthenticated gateway now gets `False` and the
 printed reason on those readings — which is what the readings exist to say: on three of the four
-a login is the wrong move.
+a login is the wrong move. **Superseded at step 2 for two readings** (the section above): a
+login IBKR refused is named and the page opens, by the operator's rule; a login IBKR is still
+validating still gets no page. The others stand.
 
 **New public module `ibkr_core_mcp.gateway.preflight`** — the readings and the rule, read-only:
 `GatewayState`, `read_state(url)`, `confirm_session(url)`, `verdict(state)` with

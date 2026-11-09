@@ -22,7 +22,7 @@ Every living document, grouped by what you'd be doing when you need it.
 
 | File | Description |
 |---|---|
-| [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`, the `python -m ibkr_core_mcp.gateway preflight` / `diagnose` command line, and the runbook for a login that will not take (borrowed, refused, validating). **Start here** — nothing else works until the gateway is authenticated |
+| [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`, the `python -m ibkr_core_mcp.gateway preflight | diagnose | up | reset | keepalive` command line, and the runbook for a login that will not take (borrowed, refused, validating). **Start here** — nothing else works until the gateway is authenticated |
 | [`windows-setup.md`](windows-setup.md) | Windows install/run guide — what works out of the box vs. what needs an extra step (Touch ID gate) |
 | [`consumers.md`](consumers.md) | Which projects install this package, and what they use it for |
 

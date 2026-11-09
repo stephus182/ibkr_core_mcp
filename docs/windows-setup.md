@@ -100,6 +100,14 @@ that is not this one. `GatewayManager` is the only supported way to run the gate
 
 Open `https://localhost:5055` in Chrome, log in with IBKR credentials + 2FA. The package reads the session cookie automatically once authenticated.
 
+`startup()` is the session owner's sequence (register F45, step 2): it polls the login to
+completion — no Enter prompt — and `python -m ibkr_core_mcp.gateway up --env-file .env` is the
+same sequence from a script. Two Windows notes: the suspend lock's liveness check uses
+`OpenProcess`, because `os.kill(pid, 0)` would terminate the lock's owner on Windows; and there
+is no `caffeinate`, so `python -m ibkr_core_mcp.gateway keepalive` runs without the sleep
+assertion (said once at DEBUG) — use `powercfg` or a scheduled task if the machine must stay
+awake for the gateway.
+
 ---
 
 ## Google Drive — Portability Architecture

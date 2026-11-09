@@ -14,8 +14,9 @@ which side of the container boundary may renew it.
 
 1. Start the gateway using the built-in `GatewayManager` (see below)
 2. Open `https://localhost:5055` in Chrome — `GatewayManager.open_login_page()` opens it in a small Chrome
-   window of its own (own profile, 540×680); the caller closes it through the returned handle once the
-   session is verified, as `startup()` does
+   window of its own (own profile, 540×680); the session owner closes it at the first
+   authenticated-and-connected reading — `startup()` and `python -m ibkr_core_mcp.gateway up` both run
+   the owner's sequence — and leaves a failed login's window open, saying so
 3. Log in with IBKR credentials + 2FA (challenge code shown in-browser → IBKR Mobile → enter the response code)
 4. Wait for "Client login succeeds" in browser
 5. The package reads Chrome's `localhost` cookie when it can. Measured 2026-10-13: the gateway answered
@@ -31,9 +32,10 @@ gm = GatewayManager()
 gm.startup()   # builds Docker image on first run, then opens the login window
 ```
 
-Or from a script:
+Or from a script — the same sequence, with exit codes a shell can branch on (0 LIVE, 1 DOWN, 3
+otherwise):
 ```bash
-python -c "from ibkr_core_mcp import GatewayManager; GatewayManager().startup()"
+python -m ibkr_core_mcp.gateway up --env-file .env
 ```
 
 The gateway Docker image (`ibkr-core-gateway`) is built from assets bundled
@@ -56,24 +58,27 @@ flowchart TB
     classDef guard fill:#fff3d6,stroke:#b54708,color:#111827
     classDef destr fill:#fde3e1,stroke:#b42318,color:#111827
 
-    S["startup()"] --> P{"Running AND<br/>authenticated?"}
-    P -->|yes| FAST["Return at once.<br/>Session preserved, no 2FA"]
-    P -->|no| R{"Container running?"}
-    R -->|yes| SKIP["Leave it alone"]
-    R -->|no| ST["start()<br/>restarts a current container in place,<br/>else recreates it"]
+    S["startup() · up · a host's button<br/>= get_session().establish(manager)"] --> D["ensure_docker_running"]
+    D --> R{"Container running?"}
+    R -->|yes| SKIP["Leave it alone until<br/>the session is read"]
+    R -->|no| ST["start() — guarded, but nothing<br/>answers: a fresh process, no session lost"]
     SKIP --> W["wait_for_gateway<br/>GET /tickle, 120 s"]
     ST --> W
-    W --> G{"Read the session (F45):<br/>preflight.read_state → verdict,<br/>the gateway's log after FREE"}
-    G -->|"READY"| FAST2["Return True — a live<br/>session, no login page"]
-    G -->|"CONTESTED · BORROWED ·<br/>REFUSED · VALIDATING · DOWN"| NO["Return False — the verdict<br/>and its guidance printed,<br/>NO login page"]
-    G -->|"FREE"| L["Open the login page;<br/>the human does 2FA"]
-    L --> V{"wait_for_auth<br/>60 s, then one manual retry"}
-    V -->|yes| OK["Authenticated"]
-    V -->|no| DEG["Returns False — tools<br/>error until you log in"]
+    W -->|"no answer"| DOWN["DOWN — no page, False"]
+    W --> G{"read_now: read_state, and<br/>confirm_session when authenticated"}
+    G -->|"LIVE"| OK["Return True — left alone"]
+    G -->|"DEGRADED · CONTESTED · BORROWED"| NO["Return False — reported, never<br/>resolved from here; NO login page"]
+    G -->|"FREE"| LOG{"The gateway's log:<br/>the newest login"}
+    LOG -->|"validating"| NO2["No second page — False"]
+    LOG -->|"refused"| NOTE["Name it, with the remedy"]
+    LOG -->|"validated · none · unreadable"| L
+    NOTE --> L["Lock held → login window;<br/>poll read_state, ≤ 300 s"]
+    L -->|"authenticated + connected,<br/>then confirmed"| OK2["Close the window — True"]
+    L -->|"timeout · borrowed · refused again"| DEG["Window left open, said — False"]
 
-    class FAST,FAST2,OK safe
-    class P,R,G guard
-    class ST,DEG,NO destr
+    class OK,OK2 safe
+    class R,G,LOG guard
+    class ST,DOWN,NO,NO2,DEG destr
 ```
 
 The two diamonds are the whole point. `start()` always ends on a fresh Java process, and the
@@ -94,21 +99,22 @@ recreates a container when "the service's configuration or image was changed aft
 container's creation" ([compose up](https://docs.docker.com/reference/cli/docker/compose/up/)).
 `restart()` is `start()`.
 
-**The gate before the login page (register F45, step 1, 2026-11-09).** `is_authenticated`
-cannot tell "nobody has logged in" from a login IBKR refused, a session another IBKR app holds
-(`competing`), a session the gateway is holding *for* another app (the 2026-08-05 borrowed
-session), or a login IBKR is still answering — every one reads `authenticated: false`. Until
-F45 `startup()` opened the login page on all of them, and on three of the four that is the
-wrong move: a needless re-login is what escalates into the IB Key challenge, a login on a
-contested session starts the tug-of-war, and a refused login needs a website login first. So
-once the gateway answers, `startup()` reads the session the way `python -m ibkr_core_mcp.gateway
-preflight` does — `preflight.read_state` (GET `/tickle`, GET `/sso/validate`), `verdict`, and
-after a FREE reading the gateway's own log (`manager.read_login_events`) — and acts on the
-verdict: **READY** returns `True` at once; **CONTESTED, BORROWED, REFUSED, VALIDATING**, and a
-gateway that stopped answering between the wait and the read, print the `[WORD] headline` and
-the guidance and return `False` with **no login page**; only **FREE** goes on to the page. The
-runbook below says what each verdict asks of you. Step 2 of F45 replaces this body with the
-session owner's own sequence, which polls the login to completion instead of asking for Enter.
+**`startup()` is the owner's sequence (register F45, step 2, 2026-11-09).** It is
+`get_session().establish(self, url=…, allow_restart=False)` — the same sequence `python -m
+ibkr_core_mcp.gateway up` and a host's button run, so the three cannot drift — and it returns
+whether the session is LIVE: authenticated, connected and confirmed against
+`/portfolio/accounts`. Docker up; the container started only when none is running (a running one
+may hold a session, and only a read may say whether it does); the gateway answering; the session
+read before anything is touched; the login page only from FREE, with every tickler suspended by
+the lock, polled until confirmed or the owner's 300 s timeout — the two `input()` prompts of the
+old body are gone. A LIVE session is left alone. CONTESTED and BORROWED are reported and never
+resolved from here (`up --allow-restart` or `reset` clears a borrowed one). A login IBKR
+**refused** is named before the page opens, and the page still opens: the remedy is a website
+login, then one gateway login, and withholding the page would deadlock it (operator rule,
+2026-10-12 — step 1's gate had refused the page here for six hours of an unreleased branch). A
+login IBKR is still **validating** gets no second page. The window of our own closes at the
+first authenticated-and-connected reading; a failed login's window stays open, and a line says
+to close it (⌘Q on macOS). The runbook below says what each verdict asks of you.
 
 **A rebuild is not automatic.** `start()` builds the image only when it is absent, so after
 changing anything that ships into it (`Dockerfile`, `conf.yaml`, `run_gateway.sh`,
@@ -131,7 +137,7 @@ stateDiagram-v2
     Reachable --> Authenticated: browser login + 2FA
     Authenticated --> Reachable: idle timeout, POST /logout
     Reachable --> Down: stop()
-    Authenticated --> Down: stop(), restart()
+    Authenticated --> Down: stop(), restart(force=True)
 
     note right of Down
         GET /tickle raises
@@ -153,6 +159,13 @@ gateway that was running perfectly (measured 2026-08-05).
 **An idle timeout lands you in `Reachable`, not `Down`.** The container is still up and the
 port still answers; only the session is gone. That is a browser login away, not a restart.
 
+**A restart is guarded (register F45, step 2).** `start()` and `restart()` read the session
+before any Docker command and refuse — `RestartRefusedError`, nothing run — a LIVE session (a
+needless re-login is what escalates into the IB Key challenge), a login IBKR REFUSED (a restart
+did not clear one on 2026-10-08) and a login IBKR is still VALIDATING (a restart would cut it
+off). FREE and BORROWED go ahead; `force=True` overrides. `python -m ibkr_core_mcp.gateway
+reset [--force]` is the operator's way through it, and prints the guard's reason.
+
 Both probes are **GET**, not POST, since 2026-08-06: `/tickle` is documented as "pings the
 server to prevent the session from ending", so a POST is a session-affecting write dressed as a
 health check — and `wait_for_gateway` calls it in a loop. Merely asking "is it up?" renewed the
@@ -171,7 +184,7 @@ flowchart TB
     FLAG[("~/.ibkr_core/session.suspend<br/>set by SuspendLock during a login<br/>or a deliberate session-clear")]
 
     subgraph HOST["Host — can read the flag"]
-        KA["ibkr-keepalive.sh, under launchd<br/>GET /tickle, holds caffeinate"]
+        KA["python -m ibkr_core_mcp.gateway keepalive<br/>under launchd or systemd — GET /tickle, holds caffeinate"]
         APP["Your code — client.tickle(),<br/>and every other request"]
     end
 
@@ -192,8 +205,8 @@ flowchart TB
     class DEAD dead
 ```
 
-**The session expires without activity, and nothing in the container renews it — you must run
-your own keepalive.** This page said the opposite until 2026-08-07: that a bundled `tickler.sh`
+**The session expires without activity, and nothing in the container renews it — run the
+package's keepalive, `python -m ibkr_core_mcp.gateway keepalive`, from outside any host process.** This page said the opposite until 2026-08-07: that a bundled `tickler.sh`
 POSTed `/tickle` every 60 s so callers did not need one. That was the reassuring half of the
 claim, and a caller who believed it ran no keepalive and watched sessions expire with nothing to
 explain why. The in-container tickler was removed on 2026-08-06 and the script deleted on
@@ -202,16 +215,21 @@ page was missed.
 
 Renewal cannot live in the container, and the diagram is the reason: the flag that coordinates a
 login or a deliberate session-clear is `~/.ibkr_core/session.suspend`, written host-side by
-`claudia/gateway_session.py :: SuspendLock`, and nothing inside the container can read it. IBKR
+`gateway.session.SuspendLock` (0600, in a 0700 directory; a lock whose owner is gone, or whose
+pid is below 1, is ignored), and nothing inside the container can read it. IBKR
 renews a session on **any** request, not just `/tickle`, so one un-silenceable renewer defeats
 every attempt to clear a session — on 2026-08-05 three such ticklers renewed a **borrowed**
 session every 60 s, and `POST /logout` could not clear it, only `docker restart` could.
 
-Call `client.tickle()` from the host, and pause it while a login is in flight. claudia_ui does
-this with `scripts/ibkr-keepalive.sh` under launchd (`RunAtLoad` + `KeepAlive`, installed by
-`scripts/install-ibkr-keepalive-daemon.sh`); it honours the suspend flag and holds the
-`caffeinate` assertion that stops the Mac sleeping the session away. **If that daemon is not
-installed, nothing renews an idle session.**
+Run `python -m ibkr_core_mcp.gateway keepalive --env-file <your .env>` with the venv's Python
+from outside any host process — under launchd (`RunAtLoad` + `KeepAlive`) or systemd. It
+tickles every 55 s, honours the suspend flag (an active lock → `SUSPENDED`, nothing sent), holds
+the `caffeinate -i` assertion only while the gateway answers (released on WARN, and on the way
+out — SIGTERM is turned into `SystemExit` so `launchctl bootout` reaches it), writes a line only
+on a state change, and `--print-url` shows what it would tickle without contacting anything. A
+URL that is not loopback exits 1 before the first request. The consumer's bash script did the
+same until 2.2.0 and reads the same lock path, so the two can run side by side during a
+migration. **If no keepalive runs, nothing renews an idle session.**
 
 ---
 

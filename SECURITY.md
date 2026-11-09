@@ -276,8 +276,8 @@ said "42 read-only tools" while eight of them mutated state outside the machine
 ### No gateway session operation in the tool surface (register F45, 2026-11-09)
 
 The gateway package — `ibkr_core_mcp.gateway`: the container, the login page, the session's
-readings and, from F45 step 2, its writes (`/logout`, `ssodh/init`, the suspend lock, the
-recovery) — declares no tool, and the model layer cannot reach it: `claude_tools.py` and
+readings and, since step 2 the same day, its writes (`/logout`, `ssodh/init`, the suspend lock,
+the recovery) — declares no tool, and the model layer cannot reach it: `claude_tools.py` and
 `mcp_server.py` import nothing from it and name none of `logout`, `reauthenticate`,
 `release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`,
 `get_session`, `read_login_events`, `KeepAwake`, `restart_refusal` (constitution **(13)**,
@@ -285,7 +285,8 @@ recovery) — declares no tool, and the model layer cannot reach it: `claude_too
 a handler that declared `ACCOUNT_STATE` could have called `logout`, and one importing
 `GatewayManager` under `if False:` passed the whole suite (F45 review, probes M1 and M2).
 The same file holds that the three session endpoints are *called* only in the owner set
-(`IBKRClient.logout` / `reauthenticate` until step 2) and that a `GatewayManager` is *driven* —
+(`gateway/session.py`'s `release_session` and `attempt_soft_recovery`, and `IBKRClient.logout` /
+`reauthenticate`, deprecated, until 3.0) and that a `GatewayManager` is *driven* —
 `start`, `restart`, `stop`, `startup`, the login page — only inside the gateway package; a host
 constructs one and hands it to the owner. A gateway operation is the operator's, through the
 command line or a host's button, and the model learns what it needs from a 401.
@@ -719,6 +720,37 @@ The MCP page's hijacking section (now *State Handle Hijacking*, about server-min
 - The cookie is not logged or included in any `repr()` output, and it is only ever sent to a loopback host: `IBKRClient.__init__` and `IBKRWebSocket.connect` both refuse a non-loopback gateway URL before attaching it.
 - The gateway validates the session server-side on every request; a stale or invalid cookie returns HTTP 401, which is surfaced as `IBKRAuthError` immediately (see rate limiter below — 401 is **never** retried).
 
+### The gateway session's owner (register F45, step 2, 2026-11-09)
+
+`ibkr_core_mcp.gateway.session` is the one place in the package that opens a login, posts to a
+session endpoint or restarts a container holding a session (`test_gateway_boundary.py`). What it
+holds, each by a test a mutation turns red:
+
+- **The suspend lock** (`SuspendLock`, condition E) is written 0600 in a directory created 0700,
+  beside the trade store; a lock naming a dead process, a malformed one, or one with a pid below
+  1 is ignored — `os.kill(0, 0)` and `os.kill(-1, 0)` succeed, so a lock saying `pid: 0` would
+  have suspended every keepalive forever. The liveness check is platform-bound: `os.kill(pid, 0)`
+  on POSIX, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` on Windows, where `os.kill` with any
+  signal but the two console events terminates the process (the `os` documentation). Fail-open.
+- **`compete` is `COMPETE: Final = False`** (condition F), spelled once: the soft recovery's
+  `ssodh/init` never evicts an IBKR Mobile or TWS session, and the constant is held in source and
+  on the wire.
+- **A restart is guarded inside `GatewayManager.start()`** (condition F): a LIVE, REFUSED or
+  VALIDATING session raises `RestartRefusedError` before any Docker command — the consumer's reset
+  rule as `manager.restart_refusal`, so no route to a restart can skip it but `force=True`.
+- **The two writes pin their URL and redact every exception** (conditions C and G):
+  `release_session` and `attempt_soft_recovery` call `require_loopback_url` before sending
+  (`test_tls_policy.py`), and every exception rendered in the module — the writes, the poll loop,
+  the lock's release warning — passes `redact_error` (`test_error_redaction.py`).
+- **Every session write leaves a `session_write` audit record** (§ Audit Record): the logout, the
+  soft recovery, the restart or its refusal — the decision and, for a failure, the exception's
+  type, never its text.
+- **The keepalive honours the lock** (`keepalive_loop`, `python -m ibkr_core_mcp.gateway
+  keepalive`): an active lock means `SUSPENDED` and no request; `caffeinate -i` (`KeepAwake`) is
+  held only while the gateway answers, with `PATH` alone in its environment.
+- **`IBKRClient.logout()` / `reauthenticate()` are deprecated** and removed in 3.0; until then they
+  stay in the owner set.
+
 ### Browser Allowlist
 
 `BrowserCookieAuth` validates the browser name against an explicit allowlist before `getattr` access on the `browser_cookie3` module:
@@ -789,6 +821,17 @@ read (exit 2) is never parsed. The exit rule is measured: 0 → parse; 1 with em
 login recorded; anything else → unreadable, the first line of stderr (≤ 200 chars) the
 reason; an `OSError` passes `redact_error`. A unit test that would run it is refused by name
 (`tests/conftest.py` door 6).
+
+### The restart guard and the sleep assertion (register F45, step 2, 2026-11-09)
+
+`start()` and `restart()` read the session before any Docker command (`restart_refusal`: two
+GETs, and the gateway's log after a FREE reading) and refuse to end a LIVE, REFUSED or VALIDATING
+one — `RestartRefusedError` with the verdict's code and reason, nothing run, `ensure_docker_running`
+not even called; `force=True` overrides. `KeepAwake` is the manager's second `Popen`:
+`caffeinate -i`, resolved with `shutil.which`, `PATH` alone in its environment, all three fds on
+`DEVNULL`, one child at a time, terminated and waited for on release. Both are spawn sites in the
+one allowed module (`test_subprocess_boundary.py`), and door 6 refuses `docker` and `caffeinate`
+in every unit test, so every test of them patches `subprocess.run` / `Popen` by name.
 
 ### Shell Scripts (healthcheck.sh, run_gateway.sh)
 

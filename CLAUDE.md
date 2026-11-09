@@ -364,9 +364,10 @@ ibkr_core_mcp/
 ├── gdrive_auth.py        # Shared Google OAuth token/refresh helper (used by cache + web_scraper)
 └── gateway/
     ├── __init__.py
-    ├── manager.py        # GatewayManager — Docker lifecycle, auth polling
+    ├── manager.py        # GatewayManager — Docker lifecycle; start() guarded by restart_refusal; read_login_events; KeepAwake (F45)
     ├── preflight.py      # The session's readings (/tickle, /sso/validate, /portfolio/accounts) and the verdict rule (F45)
-    ├── __main__.py       # `python -m ibkr_core_mcp.gateway preflight|diagnose` — the operator's command line (F45)
+    ├── session.py        # The session's one owner: establish / recover / the poll, SuspendLock, the two writes, keepalive_loop (F45 step 2)
+    ├── __main__.py       # `python -m ibkr_core_mcp.gateway preflight|diagnose|up|reset|keepalive` — the operator's command line (F45)
     ├── Dockerfile        # eclipse-temurin:21 + IBKR Client Portal zip
     ├── conf.yaml         # Gateway config (port, SSL, CORS, IP allowlist)
     ├── run_gateway.sh    # Entrypoint: start the Java process and wait — nothing else
