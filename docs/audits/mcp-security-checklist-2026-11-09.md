@@ -173,8 +173,9 @@ is the sheet, cell for cell, generated from the file. For the wording it superse
 "condensed" questions and the "summarised, not reproduced" columns of the sections above; their
 answers are unchanged. Two things here are not the sheet's own. The item IDs: the file stores
 them as dates (1.1 as 1 January), so each is restored from its row's section and position and
-checked against that date. And the name of the organisation in item 6.2's best practice, which
-is still left out and written `[the organisation]`. The sheet's answer and comment columns are
+checked against that date. And one phrase of item 6.2's best practice: where the sheet names an
+organisation, this reads "the project's" — the checklist is generic, and here it is applied to
+this project (operator, 2026-11-11). The sheet's answer and comment columns are
 empty. Its scores agree with the sections above for all 29 items (checked when this was
 generated). Wording, spelling and punctuation are the sheet's.
 
@@ -424,7 +425,7 @@ generated). Wording, spelling and punctuation are the sheet's.
 - **6.2** (score 4) — Are critical or irreversible MCP tool actions (financial, contractual, destructive, mass-mutation) subject to non-bypassable Human-in-the-Loop (HITL) confirmation with full context shown to the approver?
   - Best practice (how to implement):
     - Enforce HITL validation that cannot be disabled by an unprivileged user (destructive hint present in the tool decoration)
-    - Explicitely check the tools to verify consistency with [the organisation] risk based evaluation (risk appetite may defer from editor's proposition)
+    - Explicitely check the tools to verify consistency with the project's risk based evaluation (risk appetite may defer from editor's proposition)
     - Request approval via server-side Elicitation for any critical or irreversible action.
     - Display the full tool call, parameters, and downstream effect to the approver.
   - Expected risk (if not complied):

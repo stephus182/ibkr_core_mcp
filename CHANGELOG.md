@@ -1039,8 +1039,9 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   the 29 items with their best practice, expected risk, deployment pattern, provenance and
   score — where the document had carried condensed questions and summarised columns. The item
   IDs are restored from each row's section and position (the file stores them as dates) and
-  checked against those dates; the scores agree with the document's for all 29 items; the
-  organisation named in one item's wording is still left out. `security/*.xlsx` and an office
+  checked against those dates; the scores agree with the document's for all 29 items; where
+  one item's wording names an organisation the appendix reads "the project's", the checklist
+  being generic. `security/*.xlsx` and an office
   suite's lock file beside it are ignored. `docs/security-architecture.md` § 11 points at it.
 - **The login window's Chrome profile is documented as a store at rest, with what its Chrome
   sends to Google (2026-11-11; documentation only, no code).** `SECURITY.md` gains § The login
