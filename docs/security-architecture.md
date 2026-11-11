@@ -752,6 +752,7 @@ it — a host's own name needs `--names`. Invariant 12's structural test refuses
 - Contributor rules: `CLAUDE.md` § Security & Fingerprint Authentication
 - The audit that produced this document, with probe evidence: `docs/audits/security-architecture-audit-2026-09-13.md`
 - The external baseline (OWASP MCP guide v1.0), mapped section by section: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`
+- The operator's MCP security checklist (29 items, eight sections), answered item by item, with the checklist's own text in full in its appendix (added 2026-11-11): `docs/audits/mcp-security-checklist-2026-11-09.md`
 - Earlier security audits: `docs/audits/security-audit-2026-07-11.md` and predecessors
 - Order flow examples: `docs/order-management-examples.md`
 - Web scraper boundaries: `docs/web-scraper-reference.md`, `docs/web-scraping-methodology.md`

@@ -1033,6 +1033,15 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   delete.
 
 ### Security
+- **The MCP security checklist's own text is in the repository, in full; the spreadsheet stays out
+  (2026-11-11; documentation only).** `docs/audits/mcp-security-checklist-2026-11-09.md` gains an
+  appendix generated from the operator's sheet, cell for cell — the four framing questions and
+  the 29 items with their best practice, expected risk, deployment pattern, provenance and
+  score — where the document had carried condensed questions and summarised columns. The item
+  IDs are restored from each row's section and position (the file stores them as dates) and
+  checked against those dates; the scores agree with the document's for all 29 items; the
+  organisation named in one item's wording is still left out. `security/*.xlsx` and an office
+  suite's lock file beside it are ignored. `docs/security-architecture.md` § 11 points at it.
 - **The login window's Chrome profile is documented as a store at rest, with what its Chrome
   sends to Google (2026-11-11; documentation only, no code).** `SECURITY.md` gains § The login
   window's profile: what `~/.ibkr_core/login-chrome` holds after a login (the gateway's seven

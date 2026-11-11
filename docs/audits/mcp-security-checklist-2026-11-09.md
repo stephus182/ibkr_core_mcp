@@ -164,3 +164,337 @@ three gain a line:
 
 3.4 (minimal interface, no unused listener) is unaffected: the socket Chrome leaves behind has
 nothing listening on it.
+
+## Appendix (added 2026-11-11) — the checklist as shared, in full
+
+An addition, on the operator's word of 2026-11-11: the checklist's text may live in this
+repository; the spreadsheet itself stays out of it (`security/*.xlsx` is ignored). This appendix
+is the sheet, cell for cell, generated from the file. For the wording it supersedes the
+"condensed" questions and the "summarised, not reproduced" columns of the sections above; their
+answers are unchanged. Two things here are not the sheet's own. The item IDs: the file stores
+them as dates (1.1 as 1 January), so each is restored from its row's section and position and
+checked against that date. And the name of the organisation in item 6.2's best practice, which
+is still left out and written `[the organisation]`. The sheet's answer and comment columns are
+empty. Its scores agree with the sections above for all 29 items (checked when this was
+generated). Wording, spelling and punctuation are the sheet's.
+
+### 0. Framing questions
+
+- **0.0** Is the MCP server developed internally (Make) or acquired from a third party (Buy)? (include vendor details and ownership responsibilities)
+- **0.1** How many users access the MCP server, and what are the user types (internal vs. external, standard vs. privileged users, service accounts, etc.)?
+- **0.2** List the tools and functions provided by the MCP server and describe the actions they enable (panel "List of tools").
+- **0.3** What is the "Security rating" and Sensitivity Level handled by the MCP server?
+
+### 1. Origin & Integrity
+
+- **1.1** (score 2) — Has the MCP server vendor (and the underlying tool providers it federates) completed the enterprise Third-Party Risk Management (TPRM) process including the MCP server itself?
+  - Best practice (how to implement):
+    - Require formal security attestations (SOC 2 Type II, ISO 27001) covering the AI/LLM perimeter.
+    - Maintain an allow-list of approved MCP servers and OSS repositories.
+    - Apply binary authorization to block execution of unsigned or unverified code.
+  - Expected risk (if not complied):
+    - Supply chain compromise introducing backdoors into the data processing infrastructure.
+    - Silent installation of malicious components via unvetted third-party dependencies.
+  - Deployment pattern: Vendor-hosted SaaS | Enterprise-hosted server
+  - Server provenance / trust label: Provided by a vendor
+- **1.2** (score 3) — Is the MCP server installed from a trusted source with appropriate controls to verify its authenticity and prevent the use of unverified software?
+  - Best practice (how to implement):
+    - Use cryptographic signatures (Sigstore, GPG) to validate authenticity and provenance before installation.
+    - Verify remote attestations (SLSA L3+) to ensure code integrity prior to deployment.
+    - Pin by content digest, not by mutable version tag.
+  - Expected risk (if not complied):
+    - Download and execution of a malicious package impersonating a legitimate component (typosquatting).
+    - Substitution of a legitimate tool with a tampered version during the build process.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Provided by a vendor | Adopted from open source | Unverified origin
+- **1.3** (score 3) — Is a Software Bill of Materials (SBOM) maintained, with automated CVE scanning, hash-pinned dependencies, and a build-blocking policy on critical CVEs?
+  - Best practice (how to implement):
+    - Implement SBOM (SPDX / CycloneDX) tracking for all MCP components.
+    - Pin dependencies using cryptographic hash pinning rather than version ranges.
+    - Automatically scan for CVEs in all MCP server dependencies and block the pipeline on critical findings.
+  - Expected risk (if not complied):
+    - Exploitation of a known public vulnerability present in an unpatched third-party library.
+    - Privilege escalation or remote code execution on the application host.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source
+
+### 2. Application Security
+
+- **2.1** (score 2) — Has a manual secure code review been performed by AppSec engineers, with explicit coverage of MCP-specific patterns ( Enforced Input type validation, MCP tool hint declarations (readOnly, destructive, openWorld, idempotent), authentication discovery setup correctly (./well-known paths)?
+  - Best practice (how to implement):
+    - Apply strict code reviews targeting file path canonicalization and absence of unparameterized SQL or shell queries.
+    - Require sign-off from an AppSec reviewer for any MCP-relevant change.
+    - Block the pipeline on any critical injection vulnerability (Command, SQL, Path Traversal).
+  - Expected risk (if not complied):
+    - Introduction of injection flaws or improper input handling.
+    - Discovery of exploitable vulnerabilities by internal or external attackers.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Adopted from open source
+- **2.2** (score 3) — Are automated AppSec controls (SAST, DAST, SCA, secret scanning, container scanning) integrated into CI/CD with blocking thresholds on critical findings?
+  - Best practice (how to implement):
+    - Automate a full SDLC pipeline: SAST for code, DAST on exposed endpoints, SCA for dependencies, secret scanning, and container image scanning.
+    - Enforce code signature verification and version upgrade policies.
+    - Block deployment on critical or unresolved high findings.
+  - Expected risk (if not complied):
+    - Rushed deployment of a new version introducing major security regressions.
+    - Bypass of preventive controls through a misconfigured production pipeline.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Adopted from open source
+- **2.3** (score 2) — Have penetration tests or red team exercises covered MCP-specific attack vectors (MITRE ATLAS / OWASP API/ OWASP MCP)?
+  - Best practice (how to implement):
+    - Include scenarios simulating indirect prompt injection and tool poisoning in penetration test scope.
+    - Use AI-specific attack frameworks (MITRE ATLAS, OWASP LLM Top 10) to evaluate resilience.
+    - Re-test after material changes to tools or prompts.
+  - Expected risk (if not complied):
+    - Security blind spot on attack vectors unique to autonomous agent architectures.
+    - No evaluation of system resilience against malicious instructions injected via external data sources.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+
+### 3. Environment
+
+- **3.1** (score 3) — Is the MCP server running in a secure sandboxed environment, with additional Trusted Execution Environment (TEE) protections applied when handling highly sensitive data?
+  - Best practice (how to implement):
+    - Replace standard containers (e.g., Docker) with hardened sandboxes such as gVisor, Kata Containers, or strict SELinux/AppArmor profiles.
+    - For maximum isolation, run within Trusted Execution Environments (TEEs) such as Intel TDX or AMD-SEV/SNP.
+  - Expected risk (if not complied):
+    - Full compromise of the host machine if a vulnerability is successfully exploited.
+    - Privilege escalation granting the attacker access to adjacent processes or the entire host system.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source
+- **3.2** (score 3) — Is the MCP server isolated through network segmentation, with access limited to required resources only through a default-deny policy and allow-list, and is admin access secured with enterprise IAM and MFA?
+  - Best practice (how to implement):
+    - Implement Kubernetes NetworkPolicies / VPC SGs with default-deny.
+    - Constrain outbound egress to an explicit allow-list (LLM provider, data sources, identity provider).
+    - Apply Zero-Trust network access controls.
+  - Expected risk (if not complied):
+    - Unauthorized lateral movement across internal network segments.
+    - Exposure of sensitive internal resources due to overly permissive network access.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **3.3** (score 2) — Are development, test, and production environments strictly separated, with no production data, secrets, or identities accessible from lower environments (synthetic or fully anonymized data only)?
+  - Best practice (how to implement):
+    - Maintain strict logical and physical separation between dev, test, and prod networks.
+    - Ensure no production credentials, tokens, or databases are accessible from lower environments.
+    - Use synthetic or fully anonymized data in non-prod.
+  - Expected risk (if not complied):
+    - Accidental or compromised processing of production data in a less-secured test environment.
+    - Production compromise by pivoting from a vulnerability left open in the development environment.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source
+- **3.4** (score 2) — Does the server bind only to the minimal required network interface (loopback 127.0.0.1 for local stdio; explicit private interface for remote), with all unused listeners and debug endpoints disabled in production?
+  - Best practice (how to implement):
+    - For local transports: enforce binding exclusively to the loopback interface (127.0.0.1).
+    - For remote transports: implement strict NetworkPolicies with a default-deny posture.
+    - Disable unused listeners and debug endpoints in production.
+  - Expected risk (if not complied):
+    - Unintended exposure of the service on the corporate network, making it discoverable by internal attackers.
+    - Exploitation of a local development machine via DNS rebinding attacks from a browser.
+  - Deployment pattern: Local workstation | Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **3.5** (score 2) — Is an emergency shutdown / kill-switch mechanism available, regularly tested (≥ quarterly), and operable within minutes by the SOC without requiring developer involvement?
+  - Best practice (how to implement):
+    - Implement rapid rollback and an emergency shutdown process for malicious or malfunctioning MCP components.
+    - Integrate a circuit-breaker mechanism controllable via API Gateway or feature flagging.
+    - Test the kill-switch quarterly via tabletop or live exercise.
+  - Expected risk (if not complied):
+    - Inability to stop an ongoing data exfiltration or malicious propagation in real time.
+    - Collateral damage requiring broad system shutdowns to isolate a single failing component.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+
+### 4. Authentication & Authorization
+
+- **4.1** (score 3) — Is OAuth 2.1 (or equivalent) used for authorization with PKCE, refresh-token rotation, and no implicit or password grant flows?
+  - Best practice (how to implement):
+    - Deploy OAuth 2.1 for secure delegation with short-lived tokens.
+    - Support DPoP (proof-of-possession) to prevent token replay.
+    - Perform Token Exchange (RFC 8693) to maintain auditability of delegated actions.
+  - Expected risk (if not complied):
+    - Unauthorized access to service resources via interception of unprotected requests.
+    - Fraudulent impersonation of a legitimate user by a malicious third-party application.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **4.2** (score 4) — Is end-user authentication delegated to the enterprise IdP (Entra ID) via OIDC with mandatory phishing-resistant MFA, and is local/anonymous authentication disabled?
+  - Best practice (how to implement):
+    - Authenticate users via OIDC with mandatory phishing-resistant MFA.
+    - Assign AI agents and servers cryptographic workload identities (SPIFFE / SPIRE).
+    - Block any local or anonymous authentication path.
+  - Expected risk (if not complied):
+    - Inability to audit and attribute actions to a specific individual or system with certainty.
+    - Privilege escalation via misuse of a service account with overly permissive rights.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **4.3** (score 3) — Are access tokens short-lived (≤1h), sender-constrained (DPoP or mTLS-bound), and replay-protected, with refresh tokens rotated and revocable in real time?
+  - Best practice (how to implement):
+    - Issue access tokens (JWT) with the shortest possible lifetime.
+    - Implement DPoP or mTLS-bound tokens to prevent replay.
+    - Restrict scopes to the strict minimum required.
+  - Expected risk (if not complied):
+    - Immediate reuse of a stolen access token to initiate an undetectable illegitimate session.
+    - Prolonged session hijacking following a temporary access compromise.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **4.4** (score 4) — Are token claims (aud, iss, scope, sub) strictly verified server-side, with audience binding enforced and tokens issued for other services categorically rejected (anti confused-deputy)?
+  - Best practice (how to implement):
+    - On the target server, decode the JWT and strictly verify the 'aud' and 'iss' claims.
+    - Reject any token whose audience does not exactly match the target server's identifier.
+    - Enforce scope-based authorization on every request.
+  - Expected risk (if not complied):
+    - Fraudulent reuse of a legitimate token (issued for a low-privilege service) to access a critical service.
+    - Confused Deputy vulnerability where an intermediate component acts illegitimately on behalf of another.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **4.5** (score 4) — Are roles, scopes, and permissions managed centrally (RBAC / ABAC via OPA, Cedar, OpenFGA) and enforced at the tool-parameter level (not just the endpoint), with least-privilege defaults?
+  - Best practice (how to implement):
+    - Externalize access control using policy engines (OPA, Cedar, OpenFGA).
+    - Define fine-grained permission models restricting actions at the tool-parameter level.
+    - Default to read-only when write access is not functionally justified.
+  - Expected risk (if not complied):
+    - Exploitation of critical tools (e.g., data modification) without justified business need.
+    - Historically over-permissive default permissions violating the least-privilege principle.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **4.6** (score 4) — Is multi-tenancy enforced with strict isolation of data, sessions, tool access, vector indexes, and cryptographic material between tenants (validated by periodic cross-tenant pentests)?
+  - Best practice (how to implement):
+    - Cryptographically separate data using tenant-specific encryption keys.
+    - Prevent any sharing of memory, secrets, vector partitions, or execution contexts between tenants.
+    - Validate isolation through periodic cross-tenant penetration testing.
+  - Expected risk (if not complied):
+    - Cross-tenant data leak allowing tenant A to read tenant B's private context or raw data.
+    - Immediate breach of legal compliance obligations under cloud trust agreements.
+  - Deployment pattern: Shared / multi-tenant platform
+  - Server provenance / trust label: Provided by a vendor | Adopted from open source
+
+### 5. Communications
+
+- **5.1** (score 3) — Are all communications encrypted using TLS 1.2 or higher, with weak ciphers and protocol downgrade explicitly disabled?
+  - Best practice (how to implement):
+    - Enforce TLS 1.2 for all HTTP transport communications.
+    - For server-to-server communications, apply a Service Mesh (e.g., Istio) for automatic mTLS.
+    - Disable TLS ≤1.1 and weak cipher suites at the load balancer.
+  - Expected risk (if not complied):
+    - Passive interception or active modification of data in transit by a network-positioned attacker.
+    - Theft of authentication tokens or confidential business data transmitted in cleartext.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **5.2** (score 3) — Are TLS certificates fully validated (chain, hostname, expiration, revocation via OCSP stapling or CRL) with no exceptions in production code, and is mutual TLS used for server-to-server links?
+  - Best practice (how to implement):
+    - Apply mutual authentication (mTLS) to cryptographically verify the identity of both ends of each connection.
+    - Automate certificate lifecycle management and alert on imminent expiration.
+    - Forbid TLS-verification bypass in production code.
+  - Expected risk (if not complied):
+    - Imperceptible traffic redirection to an attacker-controlled destination.
+    - Successful endpoint impersonation leading to exfiltration of client system requests.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **5.3** (score 2) — For HTTP/SSE and Streamable HTTP transports, are CSRF protections (anti-CSRF tokens, Origin/Referer validation, SameSite cookies) in place?
+  - Best practice (how to implement):
+    - Enable anti-CSRF controls on all HTTP/SSE-exposed interfaces.
+    - Validate the 'Origin' or 'Referer' header against a strict allow-list at the load balancer or application layer.
+    - Use SameSite=Strict cookies for session state.
+  - Expected risk (if not complied):
+    - Silent execution of harmful actions via a manipulated or deceived user's browser.
+    - Submission of malicious requests exploiting the victim's active session.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **5.4** (score 2) — Are CORS policies strictly configured to an explicit allow-list of enterprise origins, with no wildcard (*) and no Access-Control-Allow-Credentials with wildcard in any environment?
+  - Best practice (how to implement):
+    - Restrict CORS policies to prevent data leakage to unauthorized domains.
+    - Configure the reverse proxy to return 'Access-Control-Allow-Origin' only for validated enterprise domains.
+    - Forbid wildcard CORS in any environment exposed to the internet.
+  - Expected risk (if not complied):
+    - Unauthorized harvesting of confidential data by scripts hosted on non-affiliated web domains.
+    - Bypass of browser-native protection mechanisms.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+
+### 6. Action Security
+
+- **6.1** (score 4) — Are inputs and outputs validated and sanitized to prevent tool-parameter injection, and classical code injection (SQL, command, path traversal, SSRF)?
+  - Best practice (how to implement):
+    - Apply strict allow-lists on all inputs.
+    - Sanitize file path parameters and use context-appropriate output encoding (SQL, shell, HTML).
+    - Use parameterized queries or an ORM to prevent SQL injection.
+  - Expected risk (if not complied):
+    - Unrestricted execution of arbitrary system commands on the hosting infrastructure.
+    - Critical database compromise or unauthorized access to restricted filesystem directories.
+  - Deployment pattern: Local workstation | Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **6.2** (score 4) — Are critical or irreversible MCP tool actions (financial, contractual, destructive, mass-mutation) subject to non-bypassable Human-in-the-Loop (HITL) confirmation with full context shown to the approver?
+  - Best practice (how to implement):
+    - Enforce HITL validation that cannot be disabled by an unprivileged user (destructive hint present in the tool decoration)
+    - Explicitely check the tools to verify consistency with [the organisation] risk based evaluation (risk appetite may defer from editor's proposition)
+    - Request approval via server-side Elicitation for any critical or irreversible action.
+    - Display the full tool call, parameters, and downstream effect to the approver.
+  - Expected risk (if not complied):
+    - Unexpected triggering of destructive actions (deletion, mass mutation) from an erroneous AI decision.
+    - Complete inability to halt a damaging sequence initiated without user awareness.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **6.3** (score 2) — Are resource limits enforced (token budget, payload size, request rate, tool-call recursion depth, agent loop bound) to prevent denial-of-service and denial-of-wallet?
+  - Best practice (how to implement):
+    - Apply strict quotas (token bucket) on payload sizes and token budgets at the API Gateway.
+    - Limit tool-call recursion depth and agent loop iterations in application code.
+    - Alert on per-tenant budget overruns in real time.
+  - Expected risk (if not complied):
+    - General service disruption and outage caused by deliberate saturation of compute or network capacity.
+    - Uncontrolled explosion of cloud service billing under relentless API call loops.
+  - Deployment pattern: Shared / multi-tenant platform | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+
+### 7. Secrets & Identities
+
+- **7.1** (score 3) — Are all secrets (API keys, tokens, certificates, DB credentials) stored in a centralized cyber validated secrets vault? Never in code, config files, or environment variables baked into images?
+  - Best practice (how to implement):
+    - Deliver API keys and secrets via encrypted channels exclusively to attested MCP clients.
+    - Categorically prohibit hardcoded credentials in source code, configuration files, or environment variables.
+    - Inject secrets at runtime from the vault using short-lived tokens.
+  - Expected risk (if not complied):
+    - Immediate exfiltration of master keys during a breach occurring in a routine log file.
+    - Cascading failure of all dependent third-party systems relying on the exposed credentials.
+  - Deployment pattern: Enterprise-hosted server
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source
+
+### 8. Monitoring & Audit
+
+- **8.1** (score 3) — Are all actions fully logged with the minimum required fields, with sensitive data redacted: timestamp, human user ID, agent ID, client ID, tool name, parameters, response summary, decision (allowed/denied), and correlation ID?
+  - Best practice (how to implement):
+    - Create structured logs covering all actions and authorization decisions.
+    - Integrate OpenTelemetry to provide end-to-end traceability of agent decisions and tool calls.
+    - Capture both request and response metadata with consistent schemas.
+  - Expected risk (if not complied):
+    - Inability to reconstruct an incident timeline.
+    - Direct non-compliance finding during audits verifying the organization's ability to preserve log integrity.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **8.2** (score 2) — Are MCP audit logs centralized in the enterprise SIEM with normalized schemas and full correlation, while ensuring integrity protection and tamper evidence throughout the collection pipeline?
+  - Best practice (how to implement):
+    - Route all log streams to the enterprise SIEM via a log agent (Fluentd, Logstash, OTel collector).
+    - Use MCP gateways to centralize logging of all model interactions.
+    - Normalize logs to a common schema (e.g., OCSF, ECS).
+  - Expected risk (if not complied):
+    - Investigation fragmentation due to inability to correlate related security incidents.
+    - Detection gaps between MCP-layer and downstream-system events.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **8.3** (score 2) — Is real-time alerting in place for MCP-specific anomalies (unusual tool-call sequences, output policy violations, abnormal egress, repeated authorization failures)?
+  - Best practice (how to implement):
+    - Create correlation rules in the SIEM for abnormal request volumes or repeated 403 errors.
+    - Implement detection for Shadow IT deployments and covert agent activity.
+    - Add MCP-specific detections for injection signatures and tool-call anomalies.
+  - Expected risk (if not complied):
+    - Delayed awareness of a slow-moving data exfiltration operating below standard thresholds.
+    - Silent attacker consolidation within the system without triggering any SOC response.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
+- **8.4** (score 2) — Is access to raw logs and the SIEM gated by RBAC with strict separation of duties (security analysts ≠ MCP operators) and approval workflows for high-sensitivity queries?
+  - Best practice (how to implement):
+    - Apply RBAC on the SIEM/log platform: only authorized analysts query raw logs.
+    - Enforce separation of duties between MCP operators and log auditors.
+    - Require approval and audit trail for queries touching highly sensitive fields.
+  - Expected risk (if not complied):
+    - Unauthorized personnel reading sensitive operational or personal data from audit trails.
+    - Insider threat using log access to cover tracks or exfiltrate intelligence.
+  - Deployment pattern: Enterprise-hosted server | Vendor-hosted SaaS
+  - Server provenance / trust label: Built internally | Provided by a vendor | Adopted from open source | Unverified origin
