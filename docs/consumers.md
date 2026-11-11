@@ -112,7 +112,8 @@ Every tool call and every gated order write now leaves one redacted JSON line in
   constructors never configure, so a `Config` built in a test cannot repoint the record.
 - **Name yourself:** `with audit.context(client="your-app 1.2", agent="<model id>"):` around the
   code that drives the toolkit or the client — the `client` and `agent` fields read `unknown`
-  otherwise. The MCP server fills `client` from the initialize handshake by itself.
+  otherwise. The MCP server fills `client` from the initialize handshake by itself, and the
+  gateway's command line records its own session writes as `ibkr_core_mcp.gateway`, `agent` `none`.
 - **Nothing else.** `ClaudeToolkit.execute` records every call; the seven gated writes record
   themselves with the gates' own outcome (`sent`, `denied`, `declined`, `timed_out`, `refused`,
   `error`). A host that already keeps its own transcript or decision store keeps it; this is the

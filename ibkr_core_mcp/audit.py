@@ -27,7 +27,8 @@ directory, one `.1` rotation at 20 MB. The default is `~/.ibkr_core/audit.jsonl`
 `Config.audit_log_path` (env `IBKR_AUDIT_LOG`) to `configure()` once at start — constructors do
 not, so a `Config` built by hand in a test cannot repoint the record at the operator's directory.
 A host names itself with `context(client=…, agent=…)`; the MCP server sets `client` from the
-initialize handshake. Records made inside one `call()` share its id, so a gate's record inside a
+initialize handshake, and the gateway's command line names itself `ibkr_core_mcp.gateway` with
+`agent` `none`. Records made inside one `call()` share its id, so a gate's record inside a
 tool call correlates with the call.
 """
 

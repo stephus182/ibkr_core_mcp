@@ -10,6 +10,7 @@ read-only commands, their tests moved here with the module names changed. `up`, 
 from __future__ import annotations
 
 import ast
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ibkr_core_mcp import audit
 from ibkr_core_mcp.gateway import __main__ as cli
 from ibkr_core_mcp.gateway.__main__ import main
 from ibkr_core_mcp.gateway.preflight import EXIT_FREE, EXIT_READY, EXIT_REFUSED, GatewayState, LoginEvent
@@ -429,3 +431,56 @@ def test_ctrl_c_stops_quietly_with_the_shells_interrupt_code(command, capsys):
         assert main([command]) == 130
     captured = capsys.readouterr()
     assert "Stopped." in captured.err and "Traceback" not in captured.err + captured.out
+
+
+# ── the audit record names the command line (MCP security checklist 8.1) ────────────────────
+
+
+def _audit_records(tmp_path) -> list[dict[str, object]]:
+    path = tmp_path / "audit.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_a_session_write_made_from_the_command_line_names_the_command_line(tmp_path):
+    """Seen 2026-11-09 17:21 EST on the operator's gateway: a refused `reset` recorded `client` and
+    `agent` as `unknown`, so the record could not say the write came from this command line. The
+    write here is the real `release_session`, its POST stood in; the record made after `main`
+    returns shows the names end with the command — a host importing `main` is not renamed by it."""
+    answer = MagicMock(status_code=200, text='{"status":true}')
+    answer.json.return_value = {"status": True}
+    with (
+        patch("ibkr_core_mcp.gateway.session.requests.post", return_value=answer),
+        patch(f"{_MOD}.read_state", return_value=_FREE),
+        patch(f"{_MOD}.read_login_events", return_value=([], "")),
+    ):
+        assert main(["preflight", "--release"]) == EXIT_FREE
+    audit.record("session_write", actor="operator", decision="probe", action="after the command")
+
+    during, after = _audit_records(tmp_path)
+    assert during["action"] == "logout" and during["decision"] == "released"
+    assert (during["client"], during["agent"]) == ("ibkr_core_mcp.gateway", "none")
+    assert (after["client"], after["agent"]) == ("unknown", "unknown")
+
+
+@pytest.mark.parametrize("command", [["up"], ["up", "--allow-restart"], ["reset"], ["reset", "--force"]])
+def test_every_command_that_reaches_the_owner_runs_under_the_command_lines_name(command, tmp_path):
+    """`up` and `reset` hand the session to the owner, whose restart and refusal record themselves;
+    the stand-in owner records at the moment the real one would."""
+
+    def owner_writes(*_args: object, **_kwargs: object) -> SessionState:
+        audit.record("session_write", actor="operator", decision="probe", action="restart")
+        return _state(SessionPhase.FREE)
+
+    session = MagicMock()
+    session.establish.side_effect = owner_writes
+    session.recover.side_effect = owner_writes
+    with (
+        patch(f"{_MOD}.read_state", return_value=_FREE),
+        patch(f"{_MOD}.read_login_events", return_value=([], "")),
+        patch(f"{_MOD}.get_session", return_value=session),
+        patch(f"{_MOD}.GatewayManager"),
+    ):
+        main(command)
+
+    (record,) = _audit_records(tmp_path)
+    assert (record["client"], record["agent"]) == ("ibkr_core_mcp.gateway", "none")

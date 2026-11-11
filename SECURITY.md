@@ -891,7 +891,7 @@ log would carry model-supplied URLs and paths into a channel the redaction did n
 |---|---|
 | `ts`, `id` | UTC time; a correlation id — every record made inside one `audit.call()` shares it, so a tool call and the writes it leads to correlate |
 | `kind`, `actor` | `tool_call` (`actor: model`), `order_write` (`actor: operator` — the human at the gates), `session_write` (register F45 step 2) |
-| `client`, `agent` | Set by the host through `audit.context(client=…, agent=…)`; the MCP server fills `client` from the initialize handshake's `clientInfo`; `unknown` otherwise |
+| `client`, `agent` | Set by the host through `audit.context(client=…, agent=…)`; the MCP server fills `client` from the initialize handshake's `clientInfo`; the gateway's command line (`python -m ibkr_core_mcp.gateway`) names itself `ibkr_core_mcp.gateway` with `agent` `none`; `unknown` otherwise |
 | `tool` / `action` | The tool's name; a write's gated method (`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `_resolve_one_reply`) |
 | `params` | A tool's inputs, or a write's arguments summarised (an order's recognisable fields and the names of its other keys; a list as its length) — **every string redacted** |
 | `decision` | `executed`, `unknown_tool`; for a write the gates' own outcome: `sent`, `denied` (Gate 1), `declined` / `timed_out` (Gate 2 and a reply answered no), `refused` (before any gate), `error` |

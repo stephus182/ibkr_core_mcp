@@ -46,7 +46,9 @@ the assertion is released on the way out.
 `--env-file` is the path `Config.from_env` reads (a host's `.env`); the default is the loader's
 own search. A gateway URL that is not loopback is printed and exits 1 **before any request**.
 Nothing here prints the IBKR user id; the username appears only in a BORROWED verdict, where
-it says whose session the gateway is holding. Every line is flushed: under launchd or a
+it says whose session the gateway is holding. A session write made from here — `--release`'s
+logout, a restart or its refusal — is recorded in the audit log with `client`
+`ibkr_core_mcp.gateway` and `agent` `none`. Every line is flushed: under launchd or a
 redirected shell stdout is block-buffered, and a command silent for its whole wait is
 indistinguishable from a hang.
 """
@@ -59,6 +61,7 @@ import sys
 from collections.abc import Sequence
 from types import FrameType
 
+from ibkr_core_mcp import audit
 from ibkr_core_mcp.exceptions import ConfigError
 from ibkr_core_mcp.gateway.manager import _RESTART_REFUSED_CODES, GatewayManager, KeepAwake, read_login_events
 from ibkr_core_mcp.gateway.preflight import (
@@ -75,6 +78,14 @@ from ibkr_core_mcp.gateway.preflight import (
 )
 from ibkr_core_mcp.gateway.session import KEEPALIVE_INTERVAL, SessionPhase, get_session, keepalive_loop, release_session
 from ibkr_core_mcp.redaction import redact_error
+
+_AUDIT_CLIENT = "ibkr_core_mcp.gateway"
+"""Who the audit record says made a session write from here: this command line, by its module
+name. Until 2026-11-11 the record read `unknown` (seen 2026-11-09 on a refused `reset`)."""
+
+_AUDIT_AGENT = "none"
+"""No agent acts on a command line — an operator typed it. `unknown`, the record's default, would
+say it could not be told."""
 
 
 def _say(line: str = "", *, err: bool = False) -> None:
@@ -320,7 +331,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _say(redact_error(exc), err=True)
         return 1
     try:
-        result: int = args.run(url, args)
+        with audit.context(client=_AUDIT_CLIENT, agent=_AUDIT_AGENT):
+            result: int = args.run(url, args)
     except KeyboardInterrupt:
         # Ctrl-C: how `keepalive` is stopped by hand and how `up`'s wait is given up. The cleanup
         # already ran in the loop's and the owner's `finally`; a traceback would only look broken.

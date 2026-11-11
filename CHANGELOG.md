@@ -427,6 +427,19 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **A session write made from the gateway's command line names it in the audit record
+  (2026-11-11; a follow-up to register F45).** `python -m ibkr_core_mcp.gateway …` now runs its
+  subcommand inside `audit.context(client="ibkr_core_mcp.gateway", agent="none")`, so
+  `--release`'s logout and a restart or its refusal from `reset` / `up --allow-restart` say where
+  they came from. Until now the record read `client: unknown, agent: unknown` — seen 2026-11-09
+  on the operator's gateway, on a refused `reset`. `none`, not `unknown`: no agent acts on a
+  command line, an operator typed it. The names end with the command (a record made after
+  `main()` returns reads `unknown` again), and `GatewayManager.startup()` and a host calling
+  `establish` are still the host's to name. Tests: the real `release_session` through
+  `preflight --release` with its POST stood in, and `up` / `reset` with an owner that records;
+  five mutations each red (the context removed; the agent or the client left out; the names
+  never taken back; a client naming the consumer, which the existing consumer-name guard also
+  refuses). Not seen live.
 - **`GatewayManager.startup()` is the owner's sequence: `get_session().establish(self,
   url=…, allow_restart=False)`, True when the session is LIVE (register F45, step 2, commit
   10/13).** The command line's `up`, a host's button and this method now share one sequence and
