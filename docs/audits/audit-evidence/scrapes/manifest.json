@@ -101,7 +101,7 @@
     "method": "firecrawl",
     "status": "ok",
     "bytes": 20398,
-    "note": "OWASP GenAI Security Project, 'A Practical Guide for Secure MCP Server Development' v1.0 (February 2026), complete: title page, CC BY-SA 4.0 licence, TOC, all 8 sections, minimum-bar checklist, acknowledgements, sponsors, supporters. Licensed CC BY-SA 4.0 \u2014 kept verbatim, licence block included. Saved as owasp-secure-mcp-server-development-v1.md"
+    "note": "OWASP GenAI Security Project, 'A Practical Guide for Secure MCP Server Development' v1.0 (February 2026), complete: title page, CC BY-SA 4.0 licence, TOC, all 8 sections, minimum-bar checklist, acknowledgements, sponsors, supporters. Licensed CC BY-SA 4.0 — kept verbatim, licence block included. Saved as owasp-secure-mcp-server-development-v1.md"
   },
   {
     "url": "https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices",
@@ -238,5 +238,85 @@
     "status": "ok",
     "bytes": 33792,
     "note": "StockCharts' own worked-example spreadsheet, linked from the page above. Binary not committed; its columns are transcribed verbatim in tests/test_indicators_worked_examples.py, which is the durable evidence."
+  },
+  {
+    "url": "https://policies.google.com/technologies/cookies?hl=en-US",
+    "retrieved_at": "2026-11-11T22:18:36Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 19481,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). Google's own description of the NID cookie; keyless `firecrawl scrape`. Not committed; sha256 571fabe1c8a8105c71c76f247345df085e92c13b12726d00c77a573a48b7d3dd."
+  },
+  {
+    "url": "https://www.google.com/chrome/privacy/whitepaper.html",
+    "retrieved_at": "2026-11-11T22:18:36Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 8515,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). The privacy whitepaper's URL now serves the Help page 'Understand privacy in Chrome' (support.google.com/chrome/answer/14225066), which links the four pages below. Not committed; sha256 52d378b432d360d63016a3047691dcda237faafca57ed5b399482023fa13336f."
+  },
+  {
+    "url": "https://support.google.com/chrome/answer/13730681?hl=en",
+    "retrieved_at": "2026-11-11T22:19:12Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 6246,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). 'How Chrome keeps your URL & search data private' — the background preconnect to the default search engine; `--only-main-content`. Not committed; sha256 bc1f075161d302d350e835648c95bbce9bc658ef607ee17699528645e0f86ba9."
+  },
+  {
+    "url": "https://support.google.com/chrome/answer/13844634?hl=en",
+    "retrieved_at": "2026-11-11T22:19:12Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 9357,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). 'How Chrome Safe Browsing keeps your browsing data private'; `--only-main-content`. Not committed; sha256 5c58d2acf5ff672417c55f8eeffdbcc416f2c3de4adcab6a596be91540855546."
+  },
+  {
+    "url": "https://support.google.com/chrome/answer/14697318?hl=en",
+    "retrieved_at": "2026-11-11T22:19:12Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 5042,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). 'How your data stays safe when you install and update Chrome'; `--only-main-content`. Not committed; sha256 d73aeb87808c192054081a075281a2cec28faea998e4db34931abb943a8af940."
+  },
+  {
+    "url": "https://support.google.com/chrome/answer/14746339?hl=en",
+    "retrieved_at": "2026-11-11T22:19:12Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 10808,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). 'How Chrome keeps your usage statistics and crash reports private'; `--only-main-content`. Not committed; sha256 c3475f59d2f40e1172c5f4fe091abb67c9b71ab84f3899efcaa36c6381284e66."
+  },
+  {
+    "url": "https://raw.githubusercontent.com/GoogleChrome/chrome-launcher/main/docs/chrome-flags-for-tools.md",
+    "retrieved_at": "2026-11-11T22:18:36Z",
+    "method": "firecrawl",
+    "status": "ok",
+    "bytes": 22416,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). The Chrome team's reference of command-line switches, § Background networking. Not committed; sha256 e8de2c182ffe036b647ad862694fefba9c8c4420814876baaca7e47ca77f3832."
+  },
+  {
+    "url": "https://policies.google.com/technologies/this-page-does-not-exist-control",
+    "retrieved_at": "2026-11-11T22:18:36Z",
+    "method": "firecrawl",
+    "status": "failed",
+    "bytes": 98,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). A fabricated URL scraped in the same batch as the control: '404. That's an error.' — the proof that a real page and a missing one read differently. Not committed; sha256 01370a32169d169f8dab5beba427f67591ddd77021569e81b8399901b4dfe4dd."
+  },
+  {
+    "url": "https://raw.githubusercontent.com/chromium/chromium/main/chrome/browser/process_singleton_posix.cc",
+    "retrieved_at": "2026-11-11T21:23:00Z",
+    "method": "curl",
+    "status": "ok",
+    "bytes": 42539,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). Chromium's profile lock on macOS and Linux: the SingletonLock symlink, the orphaned-lock rule, the kill after retries. HTTP 200; a fabricated sibling path answered 404 in the same batch. Not committed; sha256 24b462dd5926703103ff881757749dd47d2e89941604c4e9669c5fb0372a88d4."
+  },
+  {
+    "url": "https://raw.githubusercontent.com/chromium/chromium/main/chrome/browser/process_singleton_win.cc",
+    "retrieved_at": "2026-11-11T21:23:00Z",
+    "method": "curl",
+    "status": "ok",
+    "bytes": 19045,
+    "note": "Login-window profile, SECURITY.md § The login window's profile (2026-11-11). Chromium's profile lock on Windows: `lockfile`, opened FILE_FLAG_DELETE_ON_CLOSE. HTTP 200. Not committed; sha256 47be7b2d75e3672f6fbf54f8466a5a4748031f51dfc4007d38d90dfb5c167dcc."
   }
 ]

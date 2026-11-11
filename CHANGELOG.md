@@ -1033,6 +1033,22 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   delete.
 
 ### Security
+- **The login window's Chrome profile is documented as a store at rest, with what its Chrome
+  sends to Google (2026-11-11; documentation only, no code).** `SECURITY.md` gains § The login
+  window's profile: what `~/.ibkr_core/login-chrome` holds after a login (the gateway's seven
+  `localhost` cookies, encrypted by Chrome, `0600` in a `0700` profile whose modes are Chrome's
+  and not enforced here; no saved password, autofill entry or card; a three-URL history), the
+  singleton lock Chrome leaves when the owner closes the window (no credential in it; Chromium
+  removes an orphaned lock at the next launch — cleaning it up was judged overkill and is not
+  built), and Google's own account of the traffic that Chrome makes by itself (the `NID` cookie,
+  the search-engine preconnect, Safe Browsing, the updater, usage statistics and crash reports),
+  with the switches that exist and the decision not to pass any. Not determined, and said so:
+  which request sets `NID`, and whether crash reports are enabled in that profile. The OWASP
+  decision gains a dated addendum re-answering §1's lifecycle row (NO-D → PARTIAL: "nothing is
+  cached per session" stopped being true when the login window got a profile of its own); the
+  MCP checklist a follow-up with a line under 3.2, 4.3 and 7.1; `docs/security-architecture.md`
+  a decision-log row and a known limit. Sources retrieved with Firecrawl beside a fabricated
+  control, recorded with their SHA-256 in the evidence manifest.
 - **The gateway's CORS origin is its own, not IBKR's wildcard (MCP security checklist 5.4,
   2026-11-09).** `gateway/conf.yaml` `cors.origin.allowed` `"*"` → `"https://localhost:5055"`;
   `allowCredentials` stays `false`. Nothing legitimate is cross-origin — the login page is the

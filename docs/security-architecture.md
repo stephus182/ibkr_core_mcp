@@ -646,6 +646,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-11-09 | A restart is guarded inside `GatewayManager.start()`: a LIVE, REFUSED or VALIDATING session raises `RestartRefusedError` before any Docker command; `force=True` overrides (condition F) | A restart ends the session the container holds; the consumer's reset script carried the rule in bash where only its own test could hold it; inside `start()` no route to a restart can skip it | A reading a restart could help that the guard refuses (none known; the rule's five cases are the test) |
 | 2026-11-09 | The suspend lock is 0600 in a 0700 directory, a pid below 1 is malformed, and the liveness check is platform-bound — `os.kill(pid, 0)` on POSIX, `OpenProcess` on Windows (condition E) | `os.kill(0, 0)` succeeds, so a lock saying `pid: 0` would have suspended every keepalive forever (probes M3/M4); on Windows `os.kill` with any signal but the console events terminates the process, so the consumer's check moved as it was would have killed the lock's owner | A platform without either call |
 | 2026-11-09 | `startup()` opens the page on a login IBKR refused, after naming it; no page on one IBKR is still validating | The owner's rule (operator, 2026-10-12): the remedy is a website login then one gateway login, and withholding the page would deadlock it; step 1's gate had refused the page there. The owner had no rule for VALIDATING and step 1's protection would have gone with the body it guarded, so the owner gained that one branch | The operator revisiting the 2026-10-12 rule on the real log |
+| 2026-11-11 | The login window's leftover Chrome lock is not cleaned up, and the window's Chrome gets no switch against its background traffic to Google | The lock holds no credential, inside `0700` directories, and Chromium removes an orphaned one at the next launch; the switch that silences the traffic also turns off the Safe Browsing service on the window where the credentials are typed, and nothing is added to that window without a login seen through it (`SECURITY.md` § The login window's profile) | A network capture of a login shows more than Chrome's documented signed-out traffic; crash reporting is found enabled in that profile; a second OS user shares the machine |
 
 ---
 
@@ -687,6 +688,12 @@ Dated, so a future reader can tell a decision from a default.
   each resolve names independently of Chromium's or httpx's resolver; a TTL-0 rebinding name
   that answers public to the guard and private to the fetcher is still theoretically possible.
   DNS pinning (resolve once, dial the classified address) is the next step if it ever matters.
+- **The login window's profile is a store at rest, and its Chrome talks to Google.**
+  `~/.ibkr_core/login-chrome` keeps the gateway's `localhost` cookies (encrypted by Chrome, `0600`
+  in a `0700` profile — modes that are Chrome's, not enforced here), a three-URL history and
+  Chrome's lock after a close; the Chrome that runs on it contacts Google by itself at launch.
+  Not determined: which request sets Google's `NID` cookie, and whether crash reports are
+  enabled in that profile (`SECURITY.md` § The login window's profile, 2026-11-11).
 
 ---
 

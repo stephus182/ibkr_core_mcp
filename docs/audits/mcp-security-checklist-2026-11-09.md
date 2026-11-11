@@ -147,3 +147,20 @@ commit on `release/2.2.0`:
 | 2.2 SAST, DAST, SCA, secrets, container scanning | PARTIAL | **PARTIAL → image scan added** | `ci.yml` `gateway-image-scan`: `trivy` over the built gateway image, CRITICAL + HIGH, informational on its first run, then blocking on CRITICAL. DAST stays N/A (nothing exposed by default) |
 | 7.1 Secrets in a vault | PARTIAL | **YES** | `ibkr_core_mcp.secret_store` over `keyring`: the OS keychain (macOS Keychain, Windows Credential Locker, Linux Secret Service) read by `Config.from_env` between the environment and the `.env` file; the operator lifted the 2026-10-16 deferral the same day ("7.1 yes"). A command line that never prints a value (`set` / `list` / `import-env` / `delete`); door 7 in the test suite; five mutations red. The Drive OAuth token and the SSE token stay 0600 files the package writes itself; the `.env` route stays as the fallback for a machine without a keychain |
 | 5.4 Gateway CORS origin | PARTIAL | **YES** | `gateway/conf.yaml` `cors.origin.allowed` `"*"` → `"https://localhost:5055"`, `allowCredentials` stays `false`; held in source by `test_documented_controls.py` (no wildcard, an https loopback origin, SECURITY.md quoting the same value). IBKR documents the key, not its semantics. **The first pass above was wrong to call the wildcard "mitigated by the credentials flag"** — measured 12:52 EST on the live gateway, before the rebuild: a foreign origin's preflight was approved (`Access-Control-Allow-Origin: *`, `POST,GET,OPTIONS,DELETE,PUT`), and a request with no cookie and that origin was served on the authenticated session (`/tickle` `authenticated = True`). The session is the gateway's, not a cookie's. After the rebuild, measured 13:07 EST on the rebuilt image (built 2026-11-09 18:03 UTC) after a fresh login through the gateway's own page, which authenticated: the foreign origin's preflight **and** its plain `GET` are refused by the gateway itself, `403 CORS Rejected - Invalid origin`, so such a request never reaches the session; the gateway's own origin is approved (`204`, `Access-Control-Allow-Origin: https://localhost:5055`); a request with no `Origin` — how every client of this package calls — is served (`200`). |
+
+## Follow-up 2026-11-11 — the login window's profile, read against three items
+
+An addition; the tables above are left as written. The login window's Chrome profile
+(`~/.ibkr_core/login-chrome`, register F44) was read on 2026-11-11 — what it keeps at rest, the
+lock Chrome leaves after a close, and what that Chrome sends to Google (`SECURITY.md` § The login
+window's profile; the sources in `audit-evidence/scrapes/manifest.json`). No answer changes;
+three gain a line:
+
+| Item | Answer | Added |
+|---|---|---|
+| 3.2 Network segmentation, egress allow-list | PARTIAL, unchanged | One more egress, undeclared until now: the login window's Chrome contacts Google by itself at launch (a `NID` cookie created in the launch second; components fetched into the profile). It is Chrome's documented signed-out traffic; which request sets the cookie, and whether crash reports are enabled in that profile, were not determined. No switch is passed against it, by decision |
+| 4.3 Short-lived, replay-protected tokens | PARTIAL, unchanged | The gateway's login pages leave cookies in that profile: four session cookies still on disk after the window is closed, and three that are long-lived by IBKR's choice (`SBID` 400 days, `device.info` 394, `TABID` 1). The gateway serves data reads without any of them (register F46) |
+| 7.1 Secrets in a vault | YES, unchanged | The profile is a second place session material rests, outside the keychain: cookie values encrypted by Chrome, files `0600` in a `0700` profile — modes that are Chrome's, not set or repaired by this package. No password, autofill entry or card is saved in it (0 / 0 / 0, measured) |
+
+3.4 (minimal interface, no unused listener) is unaffected: the socket Chrome leaves behind has
+nothing listening on it.
