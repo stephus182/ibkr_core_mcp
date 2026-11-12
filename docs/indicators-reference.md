@@ -360,9 +360,10 @@ deviation of the source whatever the basis, on the chart as here. The one differ
 history it was computed over. Measured on the same bar with a longer read: EMA 200 hl2 over the
 last 479 bars 7,759.90; over 700, 7,759.72; over 1,000, 7,759.78; over 1,500 or more, 7,759.77
 (the first bar's weight is 0.83 % after 479 bars, 0.09 % after 700, 0.005 % after 1,000). The
-0.03 that remains against TradingView at full history is the two series' difference before the
-September roll — ES1! carries ESU6's prices there, ESZ6 its own back-month prints — at the weights
-those bars still have. The SMA is the same on every history length. **Rule of thumb for an EMA
+0.03 that remains against TradingView at full history is attributed to the two series' difference
+before the September roll — ES1! carries ESU6's prices there, ESZ6 its own back-month prints — at the
+weights those bars still have. That attribution was arithmetic in 2026-10. On the contract itself the
+two agreed to the cent on 2026-11-12 (below). The SMA is the same on every history length. **Rule of thumb for an EMA
 or SMMA (RMA) line: fetch at least five times the length in bars for cent-level agreement with a
 chart that has years of history.** The chart's third band pair was at StdDev 3 (the operator's
 setting); this package's 2.5 run gave 7,834.19 / 7,689.17, i.e. ± 2.5 × 29.00 about the same
@@ -374,11 +375,17 @@ four seconds after it ends. `fetch_market_data` keeps a bar only once its period
 minute before the read, so every bar this tool computes on is complete and "last close" is a
 completed bar's close (`tools-reference.md` § fetch_market_data).
 
-**Not established**, as of 2026-10-06:
-
-- **The EMA basis against a chart with the same history.** The 0.03 residual above is attributed
-  to the pre-roll series difference by arithmetic on weights, not measured on a chart of ESZ6's
-  own bars.
+**Measured 2026-11-12 — the EMA against TradingView on the contract itself.** TradingView Desktop on
+**ESZ2026** 1h (not `ES1!`): Moving Average Exponential, Length 200, Source (H + L)/2, Offset 0,
+Smoothing None. Its legend on the bar stamped 2026-11-12 13:00 ET (12:00 on the chart's Chicago clock), from
+the operator's screenshot: O 7,654.50 H 7,655.25 L 7,627.00 C 7,634.50, identical to IBKR's bar, and
+**EMA 200 hl2 7,590.91**. This package's `EMA 200 hl2` on ESZ6 1h, all hours, read **7590.91 (over 3355
+bars)**. Plain arithmetic on one raw history read gave 7590.9078 over 999 bars. **Equal to the cent, on
+the same bar with the same prices.** So the 0.03 of
+2026-10-06 does not appear on the contract itself, and the pre-roll explanation above is the one left
+standing (`ES1!` was not re-read). The same day, the same EMA read 7590.25 over 479 bars, 0.66 from its
+full-history value: the rule of thumb above, measured again. Record: claudia_ui
+`docs/plans/probes/2026-11-12-f4-ema-esz6/` (git-ignored).
 
 ---
 
