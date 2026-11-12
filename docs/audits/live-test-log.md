@@ -119,13 +119,21 @@ from every surface — so the warning cannot outlive the block.
 | C3 | Was any gate or write reached, and did the book change? | **No gate, no write.** The order book read identically before and after. |
 | C4 | (Set-up) The operator had also placed a CME future, out of scope. Cancelled first through `cancel_order` with `manual_indicator=True`? | **YES.** `{"msg": "Request was submitted", "order_id": <int>, "conid": -1, "account": null}`, read back `Cancelled`. That left exactly two working orders, both stocks: one placed through this package, one placed on IBKR Mobile. |
 | C5 | Does IBKR accept `DELETE …/order/-1`? | **YES.** HTTP 200, `{"msg": "Request was submitted", "order_id": null, "conid": -1, "account": null}`. Note `order_id` `null`, not `-1`. |
-| C6 | Does it cancel **every** open order, whoever placed it? | **YES.** Three seconds later both orders read `Cancelled`, each with `cannot_cancel_order` / `order_not_editable` `true`. The other three rows (all already `Cancelled`) were unchanged and no row appeared. An independent read of the book 48 s later agreed: no working order. |
+| C6 | Does it cancel **every** open order, whoever placed it? | **YES.** Three seconds later both orders read `Cancelled`, each with `cannot_cancel_order` / `order_not_editable` `true`. The other three rows (all already `Cancelled`) were unchanged and no row appeared. A second read of the book 48 s later, a separate process through the same API, agreed: no working order. |
 
 **So IBKR's page is right:** `-1` cancels every open order on the account, across origins, in one request.
 That is what the guard keeps out. The unit test that pins it,
 `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate`, is red against a rule loosened to admit a
 sign in the code and SECURITY.md's quote together, a change the rest of the suite passed (2,723 passed,
 2026-11-12). Not tested: `-1` with a futures order working, which would need the CME tag.
+
+**Witnessed out of band the same day.** Every read above went through the IBKR API, the system under test.
+The operator then closed the gateway and looked at IBKR Mobile's order list at 13:44 EST (screenshots
+of the Orders panel on each instrument's quote page, kept outside this repository; no account number
+on them). The cancel-all's two orders ("Buy 100 F Limit 10.00, GTC" and "Buy 1 AAPL Limit 175.00, GTC") and C4's
+future ("Buy 1 ES Dec18'26 Limit 7100.00, GTC") each show Mobile's red ✕ status mark and "Filled: -- @ --":
+not working, never filled. The panel does not print the word "Cancelled"; the ✕ is read as Mobile's
+cancelled mark, and it agrees with the API's `Cancelled` on every order.
 
 ---
 
@@ -156,8 +164,13 @@ sign in the code and SECURITY.md's quote together, a change the rest of the suit
   `clientId` notes and the modify-reply docstring are corrected. Two tests pin it, each red against
   the old text. `docs/ibkr-api-behaviors-reference.md` § An order placed on IBKR Mobile can be
   modified and cancelled through this API.
-- **Not covered:** an order placed in TWS; IBKR Mobile's own order list as an out-of-band witness
-  (the operator's look, recorded in claudia_ui's tracker).
+- **Witnessed out of band the same day:** IBKR Mobile's order list at 13:44 EST (the operator's
+  screenshots, kept outside this repository; no account number on them). It shows
+  "Buy 1 ES Dec18'26 Limit 6990.00, GTC" and "Buy 1 F Limit 9.90, GTC", each with Mobile's red ✕ status mark and "Filled: -- @ --". **Both orders
+  carry the limit the API modify set**, not the one placed on the phone, so the modifies landed at IBKR,
+  and neither order is working. The word "Cancelled" is not printed on that panel; the ✕ is read as
+  Mobile's cancelled mark, agreeing with the API's `Cancelled`.
+- **Not covered:** an order placed in TWS.
 
 ---
 

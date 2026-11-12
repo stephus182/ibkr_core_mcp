@@ -181,7 +181,9 @@ placed two orders on IBKR Mobile, far from the market: a stock limit (F) and a C
 Each was then **modified** (the limit moved further away) and **cancelled** through
 `modify_order_and_confirm` and `cancel_order`, one Touch ID and one Gate 2 dialog per write. IBKR
 accepted all four writes (`PreSubmitted` on each modify; `"Request was submitted"` on each cancel),
-and its order list read each order back: the new limit, then `Cancelled`.
+and its order list read each order back: the new limit, then `Cancelled`. Out of band, IBKR Mobile's
+own order list showed both orders at the limit the API modify set, not working and never filled (the
+operator's screenshots).
 
 | What was read | Order placed on IBKR Mobile | Order placed through this package |
 |---|---|---|
@@ -231,8 +233,9 @@ page says "Submitting '-1' will cancel all open orders". The test:
 - **IBKR answered** HTTP 200 `{"msg": "Request was submitted", "order_id": null, "conid": -1, "account":
   null}`. A single cancel answers with the order's id as an int; this one carries **`null`**.
 - **Three seconds later both orders read `Cancelled`,** with `cannot_cancel_order` / `order_not_editable`
-  `true`. The rows already cancelled were unchanged and no row appeared. An independent read 48 s later
-  found no working order.
+  `true`. The rows already cancelled were unchanged and no row appeared. A second read through the API
+  48 s later found no working order. Out of band, IBKR Mobile's order list showed both orders not working
+  and never filled (the ✕ status mark, "Filled: -- @ --"; the operator's screenshots).
 
 So the page is right, across both origins, in one request. **This package never sends it:** `cancel_order`
 refuses any id that is not a non-negative integer before Gate 1, and
