@@ -1,6 +1,6 @@
 # Test Coverage — ibkr_core_mcp
 
-**2,725 unit tests · 103 integration tests (2,828 total) · 92% line coverage (non-integration)** — counts and the total coverage taken 2026-11-12 on `release/2.2.0` with the commands below (the two tests of register F47's fix and the two of F51's added); the per-module figures further down were not re-measured that day (last measured 2026-11-07, and the package has changed since). The history of this figure is in `git log` and the CHANGELOG, not here.
+**2,726 unit tests · 103 integration tests (2,829 total) · 92% line coverage (non-integration)** — counts and the total coverage taken 2026-11-12 on `release/2.2.0` with the commands below (the two tests of register F47's fix, the two of F51's and F4's continuous-contract line added); the per-module figures further down were not re-measured that day (last measured 2026-11-07, and the package has changed since). The history of this figure is in `git log` and the CHANGELOG, not here.
 
 > **These numbers were 30% wrong for eight days.** The file read 1,008 / 93 / 1,101 / 85% from
 > 2026-09-08 while the tree had grown to 1,459 unit tests across 26 commits, and **12 of 28

@@ -763,19 +763,26 @@ setting's definition, default and official page: [`indicators-reference.md`](ind
 | `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 | `source` | string | — | Price source of the moving averages and the Bollinger bands — TradingView's *Source*. One of `open`, `high`, `low`, `close`, `hl2` = (high + low)/2, `hlc3` = (high + low + close)/3, `ohlc4` = (open + high + low + close)/4, `hlcc4` = (high + low + close + close)/4. **Default `hl2`**, stated on the result (TradingView's own default is `close`) |
 | `oscillator_source` | string | — | Price source of RSI and MACD, the same eight names. **Default `close`** — the price both are defined on, and TradingView's default |
-| `ma_type` | string | — | Type of the moving averages and of the bands' basis (TradingView's *Basis MA Type*): `SMA`, `EMA`, `SMMA (RMA)`, `WMA`, `VWMA`. On the bands it moves the basis line only; the deviation stays the population standard deviation of the source. **Default `SMA`**. An `EMA` or `SMMA (RMA)` line adds `(over N bars)`: a recursive average's value depends on how much history it was computed over (EMA 200 hl2: 7,759.90 over 479 bars, 7,759.77 over 1,500; TradingView 7,759.80 over years — witnessed 2026-10-06) |
+| `ma_type` | string | — | Type of the moving averages and of the bands' basis (TradingView's *Basis MA Type*): `SMA`, `EMA`, `SMMA (RMA)`, `WMA`, `VWMA`. On the bands it moves the basis line only; the deviation stays the population standard deviation of the source. **Default `SMA`**. An `EMA` or `SMMA (RMA)` line adds `(over N bars)`: a recursive average's value depends on how much history it was computed over (EMA 200 hl2: 7,759.90 over 479 bars, 7,759.77 over 1,500; TradingView's `ES1!` 7,759.80 over years — witnessed 2026-10-06; on ESZ2026's own chart, equal to the cent, 2026-11-12) |
 | `ma_periods` | integer[] | — | Lengths of the moving averages to report, in bars, e.g. `[25, 50, 100, 200]`. **None by default** — no average line |
 | `band_period` | integer | — | Bollinger bands *Length*. **Default `20`** |
 | `band_stds` | number[] | — | Bollinger bands *StdDev* — one band pair per value, e.g. `[1, 2, 2.5]`. **Default `[2]`** |
 | `offset` | integer | — | TradingView's *Offset* for the averages and bands, in bars. The values are unchanged: a positive offset draws the line to the right, so the last bar shows the value computed that many bars earlier; a negative one draws it to the left, and nothing sits on the last bar. **Default `0`** |
 
-**Output.** One line telling the model how to report what follows (register F40, 2026-10-20:
-live, the model had dropped an EMA's `(over N bars)` and called it "rising"), three lines of
-configuration, each setting marked `(by default)` or `(as given)`, then one line per value:
+**Output.** Two notes come first:
+
+- **How to report what follows** (register F40, 2026-10-20: live, the model had dropped an EMA's
+  `(over N bars)` and called it "rising").
+- **How a continuous chart differs from the contract computed here** (register F4, 2026-11-12, wording
+  approved by the operator; `docs/indicators-reference.md` § 12 has the measurements).
+
+Then three lines of configuration, each setting marked `(by default)` or `(as given)`, then one line per
+value:
 
 ```text
 Indicators for ESZ6 1h, all trading hours (as given) (last bar stamped 2026-10-01 18:00 ET (its session open)):
   Quote each line as printed, '(over N bars)' included — the bar count is part of the value; no line carries a slope, trend or direction.
+  A future contract is computed on its own contract's prices. A continuous chart (TradingView's ES1!, for example) joins contracts, so its bars before a contract switch are the earlier contract's, back-adjusted only if that chart setting is on. A line that reaches back across a switch can therefore read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only while their window spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that shrinks with every bar after it. To compare, use the chart of the contract itself.
   Averages and bands — source: hl2 = (high + low)/2 (by default); type: SMA (by default); offset: 0 (by default)
   Bands — length: 200 (as given); StdDev: 1, 2.5 (as given)
   RSI and MACD — source: close (by default)

@@ -427,6 +427,29 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **`add_indicators`' result says how a continuous chart differs from the contract it computes on
+  (register F4, 2026-11-12; the operator's wording, approved verbatim).**
+  - **What changed:** under the first note, every result now reads: "A future contract is computed on its
+    own contract's prices. A continuous chart (TradingView's ES1!, for example) joins contracts, so its
+    bars before a contract switch are the earlier contract's, back-adjusted only if that chart setting is
+    on. A line that reaches back across a switch can therefore read differently: window lines (SMA, WMA,
+    VWMA, the bands' width, Stoch, %R) only while their window spans the switch, and recursive lines (EMA,
+    SMMA, RSI, MACD, ATR) by an amount that shrinks with every bar after it. To compare, use the chart of
+    the contract itself."
+  - **Measured the same day, against TradingView:**
+    - on ESZ2026's own chart, the EMA 200 hl2 equalled this package's to the cent, same bar, identical
+      O/H/L/C;
+    - so did ES1!'s, about two months after its 2026-09-15 switch;
+    - on 2026-10-06, about three weeks after the switch, ES1! read 0.03 away;
+    - TradingView's back-adjustment is off by default.
+  - **Test:** `test_add_indicators_says_how_a_continuous_chart_differs_from_the_contract` pins the wording,
+    red before the change and red against a one-word mutant.
+  - **Corrected on the way:**
+    - the tool's description now lists the recursive lines as EMA, SMMA, RSI, MACD and ATR (it read "EMA,
+      RSI and MACD");
+    - `docs/indicators-reference.md` no longer says the history "never matters" for RSI and MACD once their
+      minimum bars are there. At those minimums the starting value still carries much of the result, and
+      the reference now gives the arithmetic.
 - **A session write made from the gateway's command line names it in the audit record
   (2026-11-11; a follow-up to register F45).** `python -m ibkr_core_mcp.gateway …` now runs its
   subcommand inside `audit.context(client="ibkr_core_mcp.gateway", agent="none")`, so

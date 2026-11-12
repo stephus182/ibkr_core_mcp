@@ -1496,7 +1496,7 @@ def test_a_recursive_average_states_how_many_bars_it_was_computed_over(
     toolkit, ma_type, average_line, basis_line, over
 ):
     """Witnessed 2026-10-06: the same EMA 200 hl2 read 7,759.90 over 479 bars and 7,759.77 over
-    1,500 — TradingView's chart, with years of history, showed 7,759.80 — while the SMA was the
+    1,500 — TradingView's ES1! chart, with years of history, showed 7,759.80 — while the SMA was the
     same on every history length. An EMA or SMMA value depends on how much history it was
     computed over, so its line says so (operator: "as text, not charting"); an SMA's does not."""
     toolkit._cache.check.return_value = True
@@ -1518,6 +1518,33 @@ def test_a_recursive_average_states_how_many_bars_it_was_computed_over(
     assert note.startswith("Quote each line as printed"), text
     assert "'(over N bars)'" in note and "part of the value" in note, text
     assert "no line carries a slope, trend or direction" in note, text
+
+
+_CONTINUOUS_CONTRACT_LINE = (
+    "A future contract is computed on its own contract's prices. A continuous chart (TradingView's ES1!, "
+    "for example) joins contracts, so its bars before a contract switch are the earlier contract's, "
+    "back-adjusted only if that chart setting is on. A line that reaches back across a switch can therefore "
+    "read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only while their window "
+    "spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that shrinks with every "
+    "bar after it. To compare, use the chart of the contract itself."
+)
+
+
+def test_add_indicators_says_how_a_continuous_chart_differs_from_the_contract(toolkit):
+    """Regression caught: the result stops warning that a continuous chart (ES1!) can read differently
+    from the contract this tool computes on, or the operator-approved wording drifts.
+
+    Measured 2026-11-12 (register F4): TradingView's EMA 200 hl2 on ESZ2026 equalled this tool's to the
+    cent, and so did ES1!'s about two months after its 2026-09-15 switch; on 2026-10-06, about three weeks
+    after it, ES1! read 0.03 away. TradingView's back-adjustment is off by default. The wording was
+    approved by the operator on 2026-11-12 and is pinned here verbatim, so a change to it is deliberate."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "ma_type": "EMA", "ma_periods": [3]})
+
+    assert_tool_succeeded(text)
+    assert text.splitlines()[2].strip() == _CONTINUOUS_CONTRACT_LINE, text
 
 
 def test_add_indicators_never_prints_nan_and_says_how_many_bars_it_needs(toolkit):

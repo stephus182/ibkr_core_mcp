@@ -290,9 +290,26 @@ _INDICATOR_REPORT_NOTE = (
     "no line carries a slope, trend or direction."
 )
 
+# Every line here is computed on one contract's own bars; a chart a user compares it with may be a
+# continuous series. Measured 2026-11-12 (register F4): TradingView's EMA 200 hl2 on ESZ2026 1h equalled
+# this tool's to the cent, and so did ES1!'s about two months after its 2026-09-15 contract switch;
+# on 2026-10-06, about three weeks after it, ES1! read 0.03 away. TradingView's back-adjustment is off by
+# default (its support article 43000685266). Wording approved by the operator, 2026-11-12, verbatim.
+_CONTINUOUS_CONTRACT_NOTE = (
+    "  A future contract is computed on its own contract's prices. A continuous chart (TradingView's ES1!, "
+    "for example) joins contracts, so its bars before a contract switch are the earlier contract's, "
+    "back-adjusted only if that chart setting is on. A line that reaches back across a switch can therefore "
+    "read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only while their window "
+    "spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that shrinks with every "
+    "bar after it. To compare, use the chart of the contract itself."
+)
+
 
 def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, timeframe: str, outside_rth: bool) -> str:
-    """add_indicators' result: the settings, then one line per value in TradingView's labels.
+    """add_indicators' result: two notes, the settings, then one line per value in TradingView's labels.
+
+    The notes: how to report the lines (`_INDICATOR_REPORT_NOTE`), and how a continuous chart
+    differs from the one contract computed here (`_CONTINUOUS_CONTRACT_NOTE`).
 
     The averages and bands are labelled as TradingView's chart legend labels them — `SMA 200
     hl2`, `BB 200 SMA hl2 2.5` (type, length, source, StdDev) — so a line here can be held
@@ -305,13 +322,14 @@ def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, time
     left = f"nothing is drawn on the last bar — the line ends {-s.offset} bar(s) earlier"
     reach = max(s.offset, 0)  # the bars a line moved right needs beyond its own length
     # An EMA or SMMA is recursive: its value depends on how much history it was computed over
-    # (witnessed 2026-10-06: EMA 200 hl2 7,759.90 over 479 bars, 7,759.77 over 1,500, TradingView
-    # 7,759.80 over years), so its line says so. A simple average depends on its last N bars only.
+    # (witnessed 2026-10-06: EMA 200 hl2 7,759.90 over 479 bars, 7,759.77 over 1,500, TradingView's
+    # ES1! 7,759.80 over years; on ESZ2026's own chart, equal to the cent, 2026-11-12), so its line
+    # says so. A simple average depends on its last N bars only.
     over = f" (over {bars} bars)" if s.ma_type in ("EMA", "SMMA (RMA)") else ""
     # Live 2026-10-08 (register F40): the model dropped the clause and called an EMA "rising".
     # The result says what its lines are and are not, in the result itself, so the rule reaches
     # the model on every call and travels with the tool to any host.
-    lines = [header, _INDICATOR_REPORT_NOTE, *s.stated]
+    lines = [header, _INDICATOR_REPORT_NOTE, _CONTINUOUS_CONTRACT_NOTE, *s.stated]
 
     if not s.ma_periods:
         lines.append("  Averages: none requested — give ma_periods, e.g. [25, 50, 100, 200]")
@@ -1004,8 +1022,8 @@ TOOL_DEFINITIONS = [
             "printed as '(by default)': the averages and bands read hl2 = (high + low)/2 by "
             "default, RSI and MACD read close. Say which source a figure is on when you quote it. "
             "Fetch a period longer than your longest length: an average needs its full length in "
-            "bars (a 200-bar average on 126 bars prints 'n/a' with both counts), and EMA, RSI and "
-            "MACD are less exact near the start of the data — nothing is fetched behind the "
+            "bars (a 200-bar average on 126 bars prints 'n/a' with both counts), and EMA, SMMA, RSI, "
+            "MACD and ATR are less exact near the start of the data — nothing is fetched behind the "
             "scenes. Not offered: MACD's two MA types, RSI's smoothing and divergence, and a "
             "timeframe other than the cached bars'. Report each line as printed, '(over N bars)' "
             "included: the bar count is part of the value of an EMA or SMMA, which depends on how "

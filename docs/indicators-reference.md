@@ -101,10 +101,16 @@ here is `ma_periods` plus the band settings.
 **An `EMA` or `SMMA (RMA)` line states how many bars it was computed over** — `EMA 200 hl2:
 7759.90 (over 479 bars)`, and the same on a band line whose basis is one of those — because a
 recursive average's value depends on its history: the same EMA 200 hl2 on the same bar read
-7,759.90 over 479 bars and 7,759.77 over 1,500, while TradingView's chart, with years of history,
-showed 7,759.80 (§12). An `SMA`, `WMA` or `VWMA` depends on its last `length` bars only, so its
-line says nothing of the kind; RSI's and MACD's lengths are short enough that the history never
-matters once their minimum bars are there. Text only, no chart work (operator, 2026-10-06).
+7,759.90 over 479 bars and 7,759.77 over 1,500, while TradingView's `ES1!` chart, with years of
+history, showed 7,759.80 (§12; on the contract's own chart the two agreed to the cent on 2026-11-12). An
+`SMA`, `WMA` or `VWMA` depends on its last `length` bars only, so its line says nothing of the kind.
+RSI, MACD and ATR are recursive too, but their lengths are short, so their history matters only near
+the start of the data. At the minimum bars this tool prints them from (RSI 15, MACD 34, ATR 14), the
+starting value still carries much of the result: MACD's slow EMA about 7.9 % at 34 bars, and RSI's
+and ATR's Wilder averages all of it at their first value. It falls under 0.1 % after about 90 bars
+(arithmetic, 2026-11-12; until then this read "the history never matters once their minimum bars are
+there", which was not true at those minimums). That is why the tool says they are less exact near the
+start of the data. Text only, no chart work (operator, 2026-10-06).
 
 All five: [Pine v6 reference](https://www.tradingview.com/pine-script-reference/v6/), `ta.sma`,
 `ta.ema`, `ta.rma`, `ta.wma`, `ta.vwma`, each with its "same on pine" source.
@@ -241,7 +247,7 @@ and this tool has what `fetch_market_data` cached.
 defines an EMA from the first bar, so a 200-bar EMA on 126 bars is a number — one still
 dominated by where the data happened to start, and not one to act on. It reads `n/a` here.
 
-**Recursive averages near the start of the data.** EMA, RSI and MACD carry their starting point
+**Recursive averages near the start of the data.** EMA, SMMA, RSI, MACD and ATR carry their starting point
 forward and settle as bars accumulate (ChartSchool calculates "back at least 250 periods" for
 this reason). The rule, stated in the tool's description rather than hidden in a second fetch:
 *ask for a period longer than your longest length*. After a six-month daily window the starting
@@ -361,7 +367,8 @@ history it was computed over. Measured on the same bar with a longer read: EMA 2
 last 479 bars 7,759.90; over 700, 7,759.72; over 1,000, 7,759.78; over 1,500 or more, 7,759.77
 (the first bar's weight is 0.83 % after 479 bars, 0.09 % after 700, 0.005 % after 1,000). The
 0.03 that remains against TradingView at full history is attributed to the two series' difference
-before the September roll — ES1! carries ESU6's prices there, ESZ6 its own back-month prints — at the
+before the contract switch. ES1! carries the September contract's prices there, raw or back-adjusted
+(the chart setting in use on 2026-10-06 is not known), and ESZ6 its own back-month prints, at the
 weights those bars still have. That attribution was arithmetic in 2026-10. On the contract itself the
 two agreed to the cent on 2026-11-12 (below). The SMA is the same on every history length. **Rule of thumb for an EMA
 or SMMA (RMA) line: fetch at least five times the length in bars for cent-level agreement with a
@@ -382,9 +389,29 @@ the operator's screenshot: O 7,654.50 H 7,655.25 L 7,627.00 C 7,634.50, identica
 **EMA 200 hl2 7,590.91**. This package's `EMA 200 hl2` on ESZ6 1h, all hours, read **7590.91 (over 3355
 bars)**. Plain arithmetic on one raw history read gave 7590.9078 over 999 bars. **Equal to the cent, on
 the same bar with the same prices.** So the 0.03 of
-2026-10-06 does not appear on the contract itself, and the pre-roll explanation above is the one left
-standing (`ES1!` was not re-read). The same day, the same EMA read 7590.25 over 479 bars, 0.66 from its
-full-history value: the rule of thumb above, measured again. Record: claudia_ui
+2026-10-06 does not appear on the contract itself, and the pre-switch explanation above is the one left
+standing. The same day, the same EMA read 7590.25 over 479 bars, 0.66 from its full-history value: the
+rule of thumb above, measured again.
+
+**`ES1!` itself, re-read the same day.** TradingView's contract-switch card on `ES1!` reads "Tue 15 Sep
+'26, from ESU2026 to ESZ2026", three days before the September expiry, not at it. Back-adjustment was off,
+TradingView's default ("By default, back-adjustment is disabled", support article 43000685266); "Adjust
+for contract changes" was unchecked in the chart's settings. On the same 13:00 ET bar, `ES1!` read **EMA
+200 hl2 7,590.91** with the same O/H/L/C, **equal to the cent** to ESZ2026's chart and to this package.
+About 986 bars after the switch, the pre-switch bars carry about 0.005 % of an EMA 200's weight. On
+2026-10-06, about 344 bars after it, they carried about 3.2 %, so each point of pre-switch difference moved
+the EMA about 0.032 (arithmetic; bar counts estimated at 23 per session). The 0.03 seen then fits a
+pre-switch difference of about one point, which fits back-adjusted prices better than raw ones. That is an
+inference; the setting used then is not known.
+
+**What the result says about it (2026-11-12, operator-approved wording).** Every `add_indicators` result
+now carries, under its first note: "A future contract is computed on its own contract's prices. A
+continuous chart (TradingView's ES1!, for example) joins contracts, so its bars before a contract switch
+are the earlier contract's, back-adjusted only if that chart setting is on. A line that reaches back across
+a switch can therefore read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only
+while their window spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that
+shrinks with every bar after it. To compare, use the chart of the contract itself."
+`test_add_indicators_says_how_a_continuous_chart_differs_from_the_contract` pins it. Record: claudia_ui
 `docs/plans/probes/2026-11-12-f4-ema-esz6/` (git-ignored).
 
 ---
