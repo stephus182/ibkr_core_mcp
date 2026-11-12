@@ -878,6 +878,30 @@ def test_validate_order_id_accepts_valid_id(client):
     client.get_order_status("987654321")  # must not raise ConfigError
 
 
+# Register F51 (2026-11-12). IBKR's Cancel Order page: "Submitting '-1' will cancel all open orders",
+# measured true the same day: one DELETE of -1 cancelled both working orders, one placed through this package
+# and one placed on IBKR Mobile (docs/ibkr-api-behaviors-reference.md). IBKR
+# also returns order_id "-1" itself, for a bracket child it failed to place
+# (test_pairing_keeps_IBKRS_WORDS_for_a_refused_leg_the_M9_shape), so the value can come straight out of an
+# IBKR response. Only the numeric rule keeps it from the DELETE. On 2026-11-12, loosening that rule to admit
+# a sign, in the code and in SECURITY.md's quote together, passed the whole suite (2,723 passed).
+@pytest.mark.parametrize("cancel_all_id", ["-1", -1])
+def test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate(client, cancel_all_id):
+    """Regression caught: a numeric rule that admits a sign, so that one cancel of `-1` removes every open
+    order on the account behind one Touch ID and a dialog that names order "-1"."""
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=AssertionError("Gate 1 reached")) as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=AssertionError("Gate 2 reached")),
+        _patch.object(client._session, "delete") as mock_del,
+        pytest.raises(ConfigError, match=r"[Ii]nvalid"),
+    ):
+        client.cancel_order("U1234567", cancel_all_id, manual_indicator=True)
+    mock_tid.assert_not_called()
+    mock_del.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "bad_reply_id",
     [

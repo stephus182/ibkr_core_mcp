@@ -964,8 +964,14 @@ same way); a bracket needs its own method that shows both legs on Gate 2. Docume
 Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
         https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
 
-### `modify_order(account_id, order_id, order) -> dict`
-Modify an existing order after both security gates pass.
+### `modify_order(account_id, order_id, order, *, authorization=None) -> list[dict] | dict`
+Modify an existing order after both security gates pass. `order` is the **whole** order with the
+fields to change, not a diff — IBKR: "The body content of the modify order endpoint will follow the
+same structure as the standard /iserver/account/{accountId}/orders endpoint. The content should
+mirror the content of the original order." A futures modify carries `manualIndicator`, which IBKR
+requires "regardless of original submission". Measured 2026-11-12: whole bodies were accepted for
+orders placed on IBKR Mobile, a stock and a CME future (`docs/ibkr-api-behaviors-reference.md`
+§ An order placed on IBKR Mobile can be modified and cancelled through this API).
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -984,6 +990,24 @@ bool is refused before any gate. `extOperator` is never sent. IBKR accepts both 
 seventeen futures cancels, 2026-07-28 to 09-24; tagged: 2026-10-01, the query string witnessed in
 the gateway's request log) and answers both with the same body, so only the method's log line
 — `cancel:<id> manualIndicator=true` — records which was sent.
+
+The answer is `{"msg": "Request was submitted", "order_id": <int>, "conid": -1, "account": null}`
+on every cancel measured, a stock and a future on 2026-11-12 included. IBKR's page defines `conid`
+`-1` and `account` `null` as "for orders that were immediately cancelled on request".
+
+**An order id of `-1` is refused here, before Gate 1.** IBKR's page: "Submitting '-1' will cancel
+all open orders", and IBKR itself returns `order_id` `"-1"` for a bracket child it failed to place
+(measured; `tests/test_client.py`). `_validate_order_id` admits non-negative integers only, so the
+id never reaches the `DELETE`. `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate` pins it
+(register F51). Checked against a live session on 2026-11-12: `"-1"` and `-1` both raised `ConfigError`,
+no gate was reached, and the order book read the same before and after.
+
+**IBKR's claim was measured the same day, and it is true.** A probe sent one `DELETE …/order/-1`,
+deliberately around this guard, on the operator's word. It ran behind Touch ID and the cancel dialog, with
+only two stock test orders working, untagged. IBKR answered HTTP 200 `{"msg": "Request was submitted",
+"order_id": null, "conid": -1, "account": null}`, and three seconds later **both** orders read `Cancelled`:
+one placed through this package and one placed on IBKR Mobile. Nothing else in the book changed
+(`docs/audits/live-test-log.md`, run 2026-11-12 (second)).
 **Endpoint:** `DELETE /iserver/account/{accountId}/order/{orderId}[?manualIndicator=true|false]`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/cancel-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -997,7 +1021,7 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/plac
 
 ---
 
-### `place_order_and_confirm(account_id, order) -> list[dict]` — recommended entry point
+### `place_order_and_confirm(account_id, order, *, reply_log=None) -> list[dict]` — recommended entry point
 Places an order and resolves its **full reply chain**, looping Gate 1 + Gate 2 + the confirm
 POST for each reply until a terminal response, showing the human the actual IBKR warning text
 at every step (not just a bare `reply_id`). Calls `place_order()` for the initial submission —
@@ -1015,7 +1039,7 @@ IBKR's side. This is a deliberate behavior difference, not a bug.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
          https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
 
-### `modify_order_and_confirm(account_id, order_id, order) -> dict` — recommended entry point
+### `modify_order_and_confirm(account_id, order_id, order, *, reply_log=None) -> dict` — recommended entry point
 Same loop/display/decline semantics as `place_order_and_confirm()`, applied to `modify_order()`
 instead.
 
@@ -1031,9 +1055,12 @@ had never been applied to — and `modify_order()`'s annotation is the union IBK
 sends rather than a `dict` that let mypy believe the narrowing was sound.
 
 This method was added proactively to close the same never-loops-replies gap that `place_order()`
-had before `place_order_and_confirm()` was added, but the gap has **not been live-verified for
-`modify_order` specifically** as of 2026-07-06 — only the `place_order` 3-reply chain has been
-confirmed live.
+had before `place_order_and_confirm()` was added. Until 2026-11-12 this paragraph said the chain
+had "not been live-verified for `modify_order` specifically". **It ran live on 2026-11-12:** a
+modify of an ES order placed on IBKR Mobile drew the account's Total Value Limit precaution, which
+was shown in its own dialog, confirmed, and resolved under the one Touch ID, IBKR answering
+`{"order_id": "<id>", "order_status": "PreSubmitted", "encrypt_message": "1"}`
+(`docs/audits/live-test-log.md`, run 2026-11-12, O1).
 
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`, then `POST /iserver/reply/{replyId}` per chained reply
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order

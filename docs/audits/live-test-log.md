@@ -102,6 +102,33 @@ from every surface — so the warning cannot outlive the block.
 
 ---
 
+<a id="run-2026-11-12-2"></a>
+## Run: 2026-11-12 (second) — IBKR's cancel-all order id `-1`: refused here before any gate, and IBKR's claim measured true (register F51)
+
+| Field | Value |
+|---|---|
+| Purpose | IBKR's Cancel Order page: "Submitting '-1' will cancel all open orders". Check that `cancel_order` refuses that id on the real code path, against a live session, before any gate. |
+| Branch | `release/2.2.0` at `db4dc25` plus the uncommitted F51 test; pre-flight `[OK] Session is LIVE` before the run |
+| Method | Scripted, not a pytest run, in two parts. **C1–C3:** the order book read, `cancel_order(account, "-1")` and `cancel_order(account, -1)` with `manual_indicator=True`, the book read again. Gate 1, Gate 2 and the session's `delete`/`post` were patched to raise if reached, so no fingerprint, dialog or write was possible even had the validator failed. **C4–C6, on the operator's word ("I give you a green light to test it"):** IBKR's own claim. The script aborted before any gate unless the working orders were exactly the pinned test orders, then ran Touch ID, then the core's cancel dialog, then ONE raw `DELETE …/order/-1` sent around this package's guard, with no retry. |
+| Cost | **Zero.** C1–C3 attempted no write. C4–C6 cancelled three test orders the operator had placed far from the market (7–51 % below the last price); nothing filled. |
+
+| # | Question | Result |
+|---|---|---|
+| C1 | Is `"-1"` refused before any gate? | **YES.** `ConfigError`: "Invalid order_id/alert_id '-1': must be a non-negative integer." |
+| C2 | Is the integer `-1` refused the same way? | **YES.** The same `ConfigError`. |
+| C3 | Was any gate or write reached, and did the book change? | **No gate, no write.** The order book read identically before and after. |
+| C4 | (Set-up) The operator had also placed a CME future, out of scope. Cancelled first through `cancel_order` with `manual_indicator=True`? | **YES.** `{"msg": "Request was submitted", "order_id": <int>, "conid": -1, "account": null}`, read back `Cancelled`. That left exactly two working orders, both stocks: one placed through this package, one placed on IBKR Mobile. |
+| C5 | Does IBKR accept `DELETE …/order/-1`? | **YES.** HTTP 200, `{"msg": "Request was submitted", "order_id": null, "conid": -1, "account": null}`. Note `order_id` `null`, not `-1`. |
+| C6 | Does it cancel **every** open order, whoever placed it? | **YES.** Three seconds later both orders read `Cancelled`, each with `cannot_cancel_order` / `order_not_editable` `true`. The other three rows (all already `Cancelled`) were unchanged and no row appeared. An independent read of the book 48 s later agreed: no working order. |
+
+**So IBKR's page is right:** `-1` cancels every open order on the account, across origins, in one request.
+That is what the guard keeps out. The unit test that pins it,
+`test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate`, is red against a rule loosened to admit a
+sign in the code and SECURITY.md's quote together, a change the rest of the suite passed (2,723 passed,
+2026-11-12). Not tested: `-1` with a futures order working, which would need the CME tag.
+
+---
+
 <a id="run-2026-11-12-1"></a>
 ## Run: 2026-11-12 — orders placed on IBKR Mobile, modified and cancelled through the API (register F47)
 
@@ -110,7 +137,7 @@ from every surface — so the warning cannot outlive the block.
 | Purpose | Test a claim the `get_live_orders` description had made since 2026-06-25 with no source and no measurement: "orders placed via mobile or TWS CANNOT be modified or cancelled by the API". |
 | Branch | `release/2.2.0` at `511111e`; the gateway logged in through `python -m ibkr_core_mcp.gateway up`, pre-flight `[OK] Session is LIVE` before the first read |
 | Method | Scripted, not a pytest run. A read-only probe (`get_orders_raw`, `get_order_status`) ran before the first write and after each one. The four writes were run by the operator from a Terminal, through `modify_order_and_confirm` and `cancel_order`, each behind Touch ID and Gate 2. The scripts are in claudia_ui's local probe folder. |
-| Cost | **Zero.** Two orders placed by the operator on IBKR Mobile, a stock limit (F) and a CME future limit (ES), both GTC buys about 17 % and 8 % below the last price read just before. Nothing filled; both ended `Cancelled`. A third, pre-existing working order was left untouched. |
+| Cost | **Zero.** Two orders placed by the operator on IBKR Mobile, a stock limit (F) and a CME future limit (ES), both GTC buys about 17 % and 8 % below the last price read just before. Nothing filled; both ended `Cancelled`. A third, pre-existing working order, placed through this package, was left untouched by the writes and moved later on IBKR Mobile by the operator (O6). |
 
 **No order ids, account number or balances below — this repository is public.**
 
@@ -121,6 +148,7 @@ from every surface — so the warning cannot outlive the block.
 | O3 | A **modify** of a STK order placed on IBKR Mobile? | **YES.** Read back at the new limit; no precaution. |
 | O4 | A **cancel** of that STK order? | **YES.** Read back `Cancelled`. |
 | O5 | What do the origin fields read? | `clientId` **absent** on every row, this package's own included; `order_ref` absent on the Mobile orders. `cannot_cancel_order` / `order_not_editable` read `false` while working and `true` once cancelled. |
+| O6 | The reverse: does an order placed **through this package** keep its reference when it is modified **on IBKR Mobile**? | **YES.** Later the same day, with the gateway stopped, the operator moved the third order's limit on IBKR Mobile (a stock buy, GTC). After the next login, read back through the API at `db4dc25`: the same order id, the new limit, `order_ref` still `CLAUDIA-…`, `_own_origin` → `ClaudIA-staged`, both flags `false`; the limit 51 % below the last price. |
 
 **What it changed:**
 - **The claim was false, and it is gone.** The description now sends the model to

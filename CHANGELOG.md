@@ -1056,6 +1056,21 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   delete.
 
 ### Security
+- **A test now names IBKR's cancel-all order id, `-1` (register F51, 2026-11-12).**
+  - **The risk:** IBKR's Cancel Order page says "Submitting '-1' will cancel all open orders". IBKR also
+    returns `order_id` `"-1"` itself, for a bracket child it failed to place, so a caller can read the
+    value straight out of a response.
+  - **What stopped it:** `cancel_order` already refused it before Gate 1, but only as a side effect of
+    the path-traversal rule (`^[0-9]+$`). Loosening that rule to admit a sign, in the code and in
+    SECURITY.md's quote together, passed the whole suite (2,723 passed).
+  - **What changed:** `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate` (`"-1"` and `-1`)
+    asserts a `ConfigError` with no gate reached and no `DELETE` sent. It is red against that mutant
+    ("Gate 1 reached"). `_validate_order_id`'s docstring names the reason. No behaviour changed.
+  - **Live, the same day:** the guard refused `"-1"` and `-1` on a live session with no gate reached.
+    IBKR's claim was then measured on the operator's word with one `DELETE …/order/-1` (sent around the
+    guard, behind both gates, two stock test orders working). It answered `{"msg": "Request was
+    submitted", "order_id": null, "conid": -1, "account": null}` and cancelled **both**: one placed through
+    this package, one on IBKR Mobile (`docs/ibkr-api-behaviors-reference.md`).
 - **The MCP security checklist's own text is in the repository, in full; the spreadsheet stays out
   (2026-11-11; documentation only).** `docs/audits/mcp-security-checklist-2026-11-09.md` gains an
   appendix generated from the operator's sheet, cell for cell — the four framing questions and

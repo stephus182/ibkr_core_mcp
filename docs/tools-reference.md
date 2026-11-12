@@ -187,7 +187,9 @@ IBKR's `/pa/transactions` endpoint takes a resolved conid, not a period — `sym
 ### `get_live_orders`
 Working orders — Submitted, PreSubmitted, PendingSubmit, ApiPending, PendingCancel.
 Also returns `Inactive` orders (exist on IBKR but stalled, e.g. failed risk check).
-Filled and Cancelled orders are excluded; use `get_trades` for executions.
+Filled, Cancelled, ApiCancelled and Expired orders are excluded, as is a row with no status
+(`IBKRClient._TERMINAL_STATUSES`); use `get_trades` for executions. IBKR's raw list keeps them:
+two orders cancelled at 10:20–10:22 EST on 2026-11-12 still read `Cancelled` there at 11:59 EST.
 
 Uses the IBKR two-call pattern internally: first call instantiates the subscription, second retrieves data.
 Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -205,7 +207,9 @@ cancelled. Those flags are IBKR's answer for a given order, and the description 
 them. Until that day the description said such orders "CANNOT be modified or cancelled by the API"
 and the label ended "read-only via API", a TWS API rule carried over without a source (register F47;
 `docs/audits/live-test-log.md`, run 2026-11-12). `clientId` is not a Live Orders field and no row
-carried it that day, so in practice the `CLAUDIA-` reference decides. A bracket child carries no reference of its own (IBKR puts
+carried it that day, so in practice the `CLAUDIA-` reference decides. It survives a modify made
+elsewhere: an order staged through this package, its limit then moved on IBKR Mobile, read back
+with the same id and the same reference (the same day, O6). A bracket child carries no reference of its own (IBKR puts
 `order_ref` on the parent only, `parentId` on the child — measured 2026-10-18), so its origin is its
 parent's, read through `parentId` from the same response, and the line reads `(attached child of
 order N; …)`; a child whose parent is not in the list reads "origin not determinable from this

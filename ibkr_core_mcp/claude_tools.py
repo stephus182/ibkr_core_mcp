@@ -2037,7 +2037,9 @@ def _own_origin(o: Any, external: str) -> str:
     """An order's origin from its own row: a `CLAUDIA-` reference is definitive; a non-zero
     clientId is another API client; anything else is external.
 
-    In practice the reference decides. `clientId` is not a Live Orders field — IBKR's page and its
+    In practice the reference decides, and a modify made elsewhere keeps it: a ClaudIA order whose
+    limit was moved on IBKR Mobile read back with its `CLAUDIA-` reference and its id (2026-11-12).
+    `clientId` is not a Live Orders field — IBKR's page and its
     OpenAPI spec list none; it is the TWS API's connection id — and on 2026-11-12 no row carried
     it: two orders placed on IBKR Mobile and one staged through this package (register F47).
     2026-07-10 had recorded `clientId=0` on both Client Portal API and mobile orders. The branch
@@ -3370,7 +3372,7 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return working orders (all statuses except Filled/Cancelled/Expired) across all instrument types.
+        """Return working orders (all statuses except Filled/Cancelled/ApiCancelled/Expired) across all instrument types.
 
         Origin is determined from the order_ref prefix ('CLAUDIA-' = ClaudIA-staged) rather
         than clientId, which this endpoint does not document and did not send on any row on

@@ -23,7 +23,7 @@ order = {
     "ticker":    "AAPL",
     "side":      "BUY",
     "quantity":  10,
-    "orderType": "LIMIT",
+    "orderType": "LMT",
     "price":     182.50,
     "tif":       "DAY",
 }
@@ -86,12 +86,13 @@ order placed in Q3 returned "will be automatically canceled at 20261231 16:00:00
 EST" (end of Q4), matching IBKR's documented convention exactly. Source:
 https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/
 
-**Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does (not yet live-verified to require chained replies, but shares `modify_order`'s response shape); cancel has no reply chain:**
+**Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does; cancel has no reply chain.** Live 2026-11-12: a modify drew IBKR's Total Value Limit precaution, shown in its own dialog and answered under the one Touch ID (`docs/audits/live-test-log.md`, run 2026-11-12). Send the **whole order** with the one field changed — IBKR: "The content should mirror the content of the original order" ([Modify Order](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order)):
 ```python
 order_id = result[0]["order_id"]  # from a previously placed order, e.g. result above
 
 try:
-    client.modify_order_and_confirm(account_id, order_id, {"price": 180.00, "tif": "DAY"})
+    # The order placed above, with only the price changed.
+    client.modify_order_and_confirm(account_id, order_id, {**order, "price": 180.00})
 except HumanAuthError as e:
     print(f"Modification not sent: {e}")
 

@@ -568,6 +568,12 @@ def _validate_order_id(order_id: str) -> None:
     and alert_id (IBKR reuses the same numeric ID namespace for both — see
     docs/audits/security-audit-2026-07-11.md H-2). The rule is `_require_numeric`'s,
     shared with conids, page indices and notification IDs (SEC-R7).
+
+    It also keeps out IBKR's cancel-all id. IBKR's Cancel Order page: "Submitting '-1' will
+    cancel all open orders", measured true on 2026-11-12: one DELETE of `-1` cancelled every
+    working order, one placed through this package and one placed on IBKR Mobile. And IBKR
+    itself returns order_id "-1" for a bracket child it failed to place. So the rule must never
+    admit a sign (register F51; `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate`).
     """
     _require_numeric(order_id, "order_id/alert_id")
 

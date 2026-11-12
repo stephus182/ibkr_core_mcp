@@ -189,6 +189,7 @@ and its order list read each order back: the new limit, then `Cancelled`.
 | `clientId` on `/iserver/account/orders` | **absent** | **absent** |
 | `cannot_cancel_order` / `order_not_editable` on `/iserver/account/order/status/{id}`, working | `false` / `false` | `false` / `false` |
 | the same, after the cancel | `true` / `true` | — (not cancelled) |
+| after a modify made **on IBKR Mobile** | — | the same order id; `order_ref` still `CLAUDIA-…`; flags `false` / `false` |
 
 - **The origin does not limit what this API can change** — at least for an order placed on IBKR
   Mobile. TWS was not in the run. The rule that an API client manages only its own orders is the
@@ -204,7 +205,41 @@ and its order list read each order back: the new limit, then `Cancelled`.
   which was answered in its own dialog. A 2026-09-21 modify of an order placed through this API,
   its precaution already answered at placement, raised none. This is the difference observed, not a
   rule.
-- **A futures cancel carried `manualIndicator=true`** (CME Rule 536-B), accepted.
+- **A futures cancel carried `manualIndicator=true`** (CME Rule 536-B), accepted. So did the
+  futures modify, as IBKR's Modify Order page requires "regardless of original submission".
+- **What IBKR answered.** Each modify returned `{"order_id": "<id>", "order_status": "PreSubmitted",
+  "encrypt_message": "1"}`. The id was a **string**, the same id, and there was **no
+  `local_order_id`**: these orders carry no `cOID`. A modify of an order placed through this
+  package echoed it as `local_order_id` (claudia_ui, 2026-09-10). Each cancel returned
+  `{"msg": "Request was submitted", "order_id": <int>, "conid": -1, "account": null}`, the id an
+  **int**. IBKR's Cancel Order page defines `conid` `-1` and `account` `null` as "for orders that
+  were immediately cancelled on request".
+- **The reverse holds too.** Later the same day the operator moved, on IBKR Mobile, the limit of the
+  order placed through this package. Read back through the API, it had the same order id and still
+  carried its `order_ref`, so `_own_origin` still labels it ClaudIA-staged. For these two origins,
+  each side changed the other's orders, and every order kept its id.
+
+## `DELETE …/order/-1` cancels every open order, whoever placed it
+
+**Measured 2026-11-12** (the operator's account, on the operator's word, register F51). IBKR's Cancel Order
+page says "Submitting '-1' will cancel all open orders". The test:
+
+- **Set-up:** exactly two orders working, both stocks far from the market. One was placed through this
+  package (with a `CLAUDIA-` reference) and one on IBKR Mobile.
+- **The request:** one `DELETE /iserver/account/{acct}/order/-1`, untagged, behind Touch ID and the cancel
+  dialog. It was sent around this package's own guard, since `cancel_order` refuses `-1`.
+- **IBKR answered** HTTP 200 `{"msg": "Request was submitted", "order_id": null, "conid": -1, "account":
+  null}`. A single cancel answers with the order's id as an int; this one carries **`null`**.
+- **Three seconds later both orders read `Cancelled`,** with `cannot_cancel_order` / `order_not_editable`
+  `true`. The rows already cancelled were unchanged and no row appeared. An independent read 48 s later
+  found no working order.
+
+So the page is right, across both origins, in one request. **This package never sends it:** `cancel_order`
+refuses any id that is not a non-negative integer before Gate 1, and
+`test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate` pins that. IBKR itself returns `order_id`
+`"-1"` for a bracket child it failed to place, which is why the guard matters. Not tested: `-1` with a
+futures order working, which IBKR requires to carry `manualIndicator`. Record:
+`docs/audits/live-test-log.md`, run 2026-11-12 (second).
 
 ## Order status carries prices IBKR does not document
 
