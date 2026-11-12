@@ -3542,11 +3542,16 @@ class IBKRClient:
 
         Live 2026-09-21: a parent-price modify was accepted with **no reply chain at all** —
         the place of the same order raised the account's value-limit precaution, and the modify
-        to a slightly lower price, still over that same limit, raised none. So IBKR does
-        not re-raise that precaution on modify, and **the modify reply chain remains
-        un-exercised live**; only the place_order 3-reply chain has been (see
-        place_order_and_confirm()'s docstring). The fix above rests on IBKR's documented shape
-        plus an offline reproduction, not on a live precaution.
+        to a slightly lower price, still over that same limit, raised none.
+
+        **Live 2026-11-12: the modify reply chain ran for the first time.** A modify of an ES
+        order placed on IBKR Mobile (BUY 1 LMT 7000 → 6990, GTC) drew the account's Total Value
+        Limit precaution ("value estimate of 349,500 USD exceeds the Total Value Limit of 100,000
+        USD"); it was shown in its own dialog, confirmed, and the chain resolved under the one
+        Touch ID with IBKR answering `PreSubmitted` — the order read back at 6990 (register F47).
+        So IBKR does raise that precaution on a modify, and did not on 2026-09-21 — the first
+        order had been placed through this API, its precaution answered at placement; the second
+        on IBKR Mobile. That is the difference observed, not a rule established.
 
         Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
 

@@ -102,7 +102,37 @@ from every surface — so the warning cannot outlive the block.
 
 ---
 
-<a id="run-2026-09-21-1"></a>
+<a id="run-2026-11-12-1"></a>
+## Run: 2026-11-12 — orders placed on IBKR Mobile, modified and cancelled through the API (register F47)
+
+| Field | Value |
+|---|---|
+| Purpose | Test a claim the `get_live_orders` description had made since 2026-06-25 with no source and no measurement: "orders placed via mobile or TWS CANNOT be modified or cancelled by the API". |
+| Branch | `release/2.2.0` at `511111e`; the gateway logged in through `python -m ibkr_core_mcp.gateway up`, pre-flight `[OK] Session is LIVE` before the first read |
+| Method | Scripted, not a pytest run. A read-only probe (`get_orders_raw`, `get_order_status`) ran before the first write and after each one. The four writes were run by the operator from a Terminal, through `modify_order_and_confirm` and `cancel_order`, each behind Touch ID and Gate 2. The scripts are in claudia_ui's local probe folder. |
+| Cost | **Zero.** Two orders placed by the operator on IBKR Mobile, a stock limit (F) and a CME future limit (ES), both GTC buys about 17 % and 8 % below the last price read just before. Nothing filled; both ended `Cancelled`. A third, pre-existing working order was left untouched. |
+
+**No order ids, account number or balances below — this repository is public.**
+
+| # | Question | Result |
+|---|---|---|
+| O1 | Does IBKR accept a **modify** of a FUT order placed on IBKR Mobile? | **YES.** The limit moved further from the market; `PreSubmitted`, then read back at the new limit. The **modify reply chain ran live for the first time**: IBKR's Total Value Limit precaution was shown in its own dialog, confirmed, and resolved under the one Touch ID. |
+| O2 | A **cancel** of that FUT order, with `manualIndicator=true`? | **YES.** "Request was submitted", read back `Cancelled`. |
+| O3 | A **modify** of a STK order placed on IBKR Mobile? | **YES.** Read back at the new limit; no precaution. |
+| O4 | A **cancel** of that STK order? | **YES.** Read back `Cancelled`. |
+| O5 | What do the origin fields read? | `clientId` **absent** on every row, this package's own included; `order_ref` absent on the Mobile orders. `cannot_cancel_order` / `order_not_editable` read `false` while working and `true` once cancelled. |
+
+**What it changed:**
+- **The claim was false, and it is gone.** The description now sends the model to
+  `get_order_status`'s two flags; the external label no longer says "read-only via API"; two
+  `clientId` notes and the modify-reply docstring are corrected. Two tests pin it, each red against
+  the old text. `docs/ibkr-api-behaviors-reference.md` § An order placed on IBKR Mobile can be
+  modified and cancelled through this API.
+- **Not covered:** an order placed in TWS; IBKR Mobile's own order list as an out-of-band witness
+  (the operator's look, recorded in claudia_ui's tracker).
+
+---
+
 ## Run: 2026-09-22 (second) — the four remaining gaps, at zero cost
 
 | Field | Value |
@@ -194,6 +224,7 @@ boolean. Retention on a working order remains open.
 
 ---
 
+<a id="run-2026-09-21-1"></a>
 ## Run: 2026-09-21 — full suite before the `2.1.0` bracket release; `get_bracket_preview` live-proven for the first time
 
 | Field | Value |

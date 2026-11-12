@@ -749,6 +749,29 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **`get_live_orders` no longer tells the model that an order placed on IBKR Mobile or TWS cannot be
+  modified or cancelled through the API — measured false (register F47, live 2026-11-12).**
+  - **What it said:** since 2026-06-25 the description said "orders placed via mobile or TWS
+    CANNOT be modified or cancelled by the API" and told the model to send the user to the phone.
+    Every external row ended "read-only via API". Neither had a source; it is the TWS API's rule (a
+    socket client manages its own orders) carried over to the Web API, which documents no such
+    limit.
+  - **What IBKR did on 2026-11-12:** it accepted a modify and a cancel, through this package's
+    gated writes, of a stock order and a CME future order placed on IBKR Mobile, each read back
+    from IBKR's order list. Its per-order `cannot_cancel_order` / `order_not_editable` read `false`
+    while the orders worked and `true` once cancelled.
+  - **What changed:** the description now sends the model to those two flags on `get_order_status`
+    and forbids inferring "cannot be changed" from the origin. The external label reads
+    `EXTERNAL (mobile/TWS/web portal)`.
+  - **Two notes corrected:** `clientId` is not a Live Orders field, and no row carried it that day
+    (the 2026-07-10 note recorded `0`). `modify_order_and_confirm`'s "the modify reply chain remains
+    un-exercised live" is wrong now: a modify drew IBKR's Total Value Limit precaution, which was
+    answered in its dialog and resolved under one Touch ID.
+  - **Tests:** `test_get_live_orders_sends_the_model_to_ibkrs_per_order_flags_not_to_origin` and
+    `test_get_live_orders_labels_an_order_placed_elsewhere_by_origin_only`, each red against the old
+    text; three mutants each red.
+  - **References:** `docs/audits/live-test-log.md` (run 2026-11-12) and
+    `docs/ibkr-api-behaviors-reference.md` (a new section). An order placed in TWS was not tested.
 - **The `bar` description and the second-bar refusal name who refuses and who returns (register
   F39, seen live 2026-10-08).** "Second bars (1S) are refused with the reason: IBKR stamps them 60
   seconds apart" — passive, no subject — let the model tell the user "IBKR refuses them" without

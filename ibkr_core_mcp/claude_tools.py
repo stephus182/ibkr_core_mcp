@@ -801,10 +801,13 @@ TOOL_DEFINITIONS = [
             "Get ALL non-terminal orders for the account regardless of origin — "
             "includes orders placed via IBKR mobile, TWS, web portal, or ClaudIA staging. "
             "Uses the account-scoped endpoint which returns every working order on the account. "
-            "IMPORTANT: orders placed via mobile or TWS CANNOT be modified or cancelled by the API. "
-            "When reporting such orders, explicitly state: 'I can see this order but cannot modify "
-            "or cancel it — use IBKR mobile or TWS to manage it.' Never skip or silently omit "
-            "externally-placed orders. Always flag their origin when it differs from ClaudIA staging. "
+            "An order's origin says where it was placed, not whether it can be changed: orders "
+            "placed on IBKR Mobile were modified and cancelled through this API (measured "
+            "2026-11-12). Whether a given order can be cancelled or modified is IBKR's own answer, "
+            "per order: get_order_status's cannot_cancel_order and order_not_editable flags — read "
+            "them before telling the user an order cannot be changed, and never infer it from the "
+            "origin. Never skip or silently omit externally-placed orders. Always flag their origin "
+            "when it differs from ClaudIA staging. "
             "A bracket child carries no reference of its own: its origin is its parent's, read "
             "through parentId, and its line says 'attached child of order N'; a child whose parent "
             "is not in the list reads 'origin not determinable' — then get_order_status's "
@@ -2017,7 +2020,11 @@ def _iso_date(yyyymmdd: Any) -> str | None:
     return f"{text[:4]}-{text[4:6]}-{text[6:]}"
 
 
-_EXTERNAL_LIVE = "EXTERNAL (mobile/TWS/web portal) — read-only via API"
+# Where the order was placed, and nothing more. Until 2026-11-12 it ended "— read-only via API",
+# which IBKR disproved that day: two orders placed on IBKR Mobile (ES, F) were each modified and
+# cancelled through this package's gated writes (register F47). `get_order_status`'s
+# `cannot_cancel_order` / `order_not_editable` are IBKR's answer for a given order.
+_EXTERNAL_LIVE = "EXTERNAL (mobile/TWS/web portal)"
 
 
 def _order_reference(o: Any) -> str:
@@ -2028,8 +2035,14 @@ def _order_reference(o: Any) -> str:
 
 def _own_origin(o: Any, external: str) -> str:
     """An order's origin from its own row: a `CLAUDIA-` reference is definitive; a non-zero
-    clientId is another API client; anything else is external. clientId alone is unreliable —
-    both Client Portal API and mobile orders show clientId=0 (2026-07-10)."""
+    clientId is another API client; anything else is external.
+
+    In practice the reference decides. `clientId` is not a Live Orders field — IBKR's page and its
+    OpenAPI spec list none; it is the TWS API's connection id — and on 2026-11-12 no row carried
+    it: two orders placed on IBKR Mobile and one staged through this package (register F47).
+    2026-07-10 had recorded `clientId=0` on both Client Portal API and mobile orders. The branch
+    stays for a row that does carry one. The origin decides nothing about what can be changed:
+    `get_order_status`'s `cannot_cancel_order` / `order_not_editable` do."""
     if _order_reference(o).startswith("CLAUDIA-"):
         return "ClaudIA-staged"
     client_id = o.get("clientId")
@@ -3360,7 +3373,9 @@ class ClaudeToolkit:
         """Return working orders (all statuses except Filled/Cancelled/Expired) across all instrument types.
 
         Origin is determined from the order_ref prefix ('CLAUDIA-' = ClaudIA-staged) rather
-        than clientId, which is unreliable — both CP API and mobile orders can show clientId=0.
+        than clientId, which this endpoint does not document and did not send on any row on
+        2026-11-12 (`_own_origin`). Origin is where an order was placed, not whether it can
+        be changed — IBKR's per-order flags on `get_order_status` answer that (register F47).
         order_ref is IBKR's real Live Orders field (snake_case); orderRef/cOID/clientOrderId
         are kept as fallbacks only (see claudia_ui's docs/project-status.md Known Gaps in that repo, found 2026-07-10).
         """

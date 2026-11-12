@@ -197,7 +197,15 @@ Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify
 **Output:** Text list of working orders — one line per order with `orderId`, `ticker`, `side`,
 quantity, price, `status`, IBKR's own description of the order (`orderDesc`, which states the
 time in force in words — "…, Day"), `outsideRTH`, and origin (`ClaudIA-staged`,
-`API (clientId=...)`, or `EXTERNAL`). A bracket child carries no reference of its own (IBKR puts
+`API (clientId=...)`, or `EXTERNAL`). **Origin is where an order was placed, not whether it can be
+changed:** on 2026-11-12 an ES and an F order placed on IBKR Mobile were each modified and cancelled
+through this package's gated writes, and IBKR's per-order `cannot_cancel_order` /
+`order_not_editable` (on `get_order_status`) read `false` while they worked and `true` once
+cancelled. Those flags are IBKR's answer for a given order, and the description sends the model to
+them. Until that day the description said such orders "CANNOT be modified or cancelled by the API"
+and the label ended "read-only via API", a TWS API rule carried over without a source (register F47;
+`docs/audits/live-test-log.md`, run 2026-11-12). `clientId` is not a Live Orders field and no row
+carried it that day, so in practice the `CLAUDIA-` reference decides. A bracket child carries no reference of its own (IBKR puts
 `order_ref` on the parent only, `parentId` on the child — measured 2026-10-18), so its origin is its
 parent's, read through `parentId` from the same response, and the line reads `(attached child of
 order N; …)`; a child whose parent is not in the list reads "origin not determinable from this

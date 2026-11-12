@@ -501,6 +501,37 @@ def test_execute_get_live_orders_still_falls_back_to_external_without_order_ref(
     assert "EXTERNAL" in text
 
 
+# Where an order was placed does not decide whether this API can change it. Measured 2026-11-12
+# (register F47): IBKR accepted a modify and a cancel, through this package's gated writes, of an
+# ES and an F order placed on IBKR Mobile, and its order-status flags `cannot_cancel_order` /
+# `order_not_editable` read false while each order worked and true once it was cancelled. Until
+# then the description told the model such orders "CANNOT be modified or cancelled by the API" and
+# each row said "read-only via API" — the TWS API's rule (a socket client manages its own orders)
+# carried over to this API without a source, so the model sent its user to the phone for nothing.
+
+
+def test_get_live_orders_sends_the_model_to_ibkrs_per_order_flags_not_to_origin(toolkit):
+    """Regression caught: the disproven sentence back in the description, or the description no
+    longer naming IBKR's own per-order answer."""
+    description = next(t["description"] for t in toolkit.tools if t["name"] == "get_live_orders")
+    assert "get_order_status" in description
+    assert "cannot_cancel_order" in description and "order_not_editable" in description
+    assert "CANNOT be modified or cancelled" not in description
+
+
+def test_get_live_orders_labels_an_order_placed_elsewhere_by_origin_only(toolkit):
+    """Regression caught: a row's label claiming an order placed elsewhere cannot be changed.
+    The row has the fields of the IBKR Mobile order read 2026-11-12 (its id replaced: this repository
+    is public): no `order_ref`, no `clientId`."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 47, "ticker": "F", "side": "BUY", "totalSize": 1, "price": "10.00", "status": "Submitted"},
+    ]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    line = next(ln for ln in text.splitlines() if "orderId=47" in ln)
+    assert "EXTERNAL" in line
+    assert "read-only" not in line
+
+
 # A bracket child carries no reference of its own: IBKR puts `order_ref` on the parent only
 # and `parentId` on the child (measured 2026-10-18 on Ford, three children). Until 2026-10-19
 # both tools labelled such a child EXTERNAL "read-only via API", and a model told the user a
@@ -543,7 +574,8 @@ def test_get_live_orders_a_bracket_child_inherits_its_parents_origin(toolkit):
 def test_get_live_orders_a_child_whose_parent_is_absent_is_not_called_external(toolkit):
     """A child whose parent has left the list (filled, cancelled) is not read-only by any rule
     this row can see: say the origin is not determinable here and name the parent, never
-    EXTERNAL — that label tells the model to refuse a cancel."""
+    EXTERNAL — a label that read "read-only via API" until 2026-11-12, and the model refused a
+    cancel on it (claudia_ui #36). Its origin is unknown here, not external."""
     toolkit._client.get_live_orders.return_value = [_BRACKET_CHILD]
     text, _fig = toolkit.execute("get_live_orders", {})
     assert "attached child of order 11" in text

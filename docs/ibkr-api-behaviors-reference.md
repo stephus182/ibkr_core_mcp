@@ -174,6 +174,38 @@ account lacks permission", and the alert write tools should say so rather than s
 an opaque gateway error.
 
 
+## An order placed on IBKR Mobile can be modified and cancelled through this API
+
+**Measured 2026-11-12** (the operator's account, gateway authenticated, register F47). The operator
+placed two orders on IBKR Mobile, far from the market: a stock limit (F) and a CME future limit (ES).
+Each was then **modified** (the limit moved further away) and **cancelled** through
+`modify_order_and_confirm` and `cancel_order`, one Touch ID and one Gate 2 dialog per write. IBKR
+accepted all four writes (`PreSubmitted` on each modify; `"Request was submitted"` on each cancel),
+and its order list read each order back: the new limit, then `Cancelled`.
+
+| What was read | Order placed on IBKR Mobile | Order placed through this package |
+|---|---|---|
+| `order_ref` on `/iserver/account/orders` | absent | `CLAUDIA-…` (the `cOID`) |
+| `clientId` on `/iserver/account/orders` | **absent** | **absent** |
+| `cannot_cancel_order` / `order_not_editable` on `/iserver/account/order/status/{id}`, working | `false` / `false` | `false` / `false` |
+| the same, after the cancel | `true` / `true` | — (not cancelled) |
+
+- **The origin does not limit what this API can change** — at least for an order placed on IBKR
+  Mobile. TWS was not in the run. The rule that an API client manages only its own orders is the
+  **TWS API's**: a socket client cancels "if it was placed by you … the client ID should be the
+  same", and an order made in TWS must be bound under client ID 0 (the IBridgePy article on IBKR
+  Campus; IBKR's "ClientId 0 and the Master Client ID"). IBKR documents no such limit for the Web
+  API.
+- **`cannot_cancel_order` / `order_not_editable` follow the order's state**, `false` while it works
+  and `true` once it is terminal. They are IBKR's per-order answer. Neither IBKR's Live Orders page
+  nor its OpenAPI spec (v2.40.0) lists `clientId`, which is the TWS API's connection id.
+  (2026-07-10 had recorded `clientId=0` on rows; on 2026-11-12 no row carried the key.)
+- **A modify can raise a precaution:** the ES modify drew the account's Total Value Limit question,
+  which was answered in its own dialog. A 2026-09-21 modify of an order placed through this API,
+  its precaution already answered at placement, raised none. This is the difference observed, not a
+  rule.
+- **A futures cancel carried `manualIndicator=true`** (CME Rule 536-B), accepted.
+
 ## Order status carries prices IBKR does not document
 
 `GET /iserver/account/order/status/{orderId}` returns `limit_price` on a limit order and
