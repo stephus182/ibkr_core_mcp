@@ -738,3 +738,29 @@ def test_every_documented_client_method_actually_exists_on_IBKRClient():
     assert not offenders, "documented `client.` calls that IBKRClient does not have: " + "; ".join(
         f"client.{n}() in {sorted(f)}" for n, f in sorted(offenders.items())
     )
+
+
+# ---------------------------------------------------------------------------
+# The weekly canary: the test job runs on the schedule, not only on a push
+# ---------------------------------------------------------------------------
+# The base dependencies float upward on purpose, and until 2026-11-12 the only job that ran on
+# the weekly schedule was the dependency audit: the test job carried
+# `if: github.event_name != 'schedule'`. So a release of a dependency that broke the code was
+# seen at the next push to `main` and not before — and between 2026-09-22 and 2026-11-12 there
+# was none. pandas 3.1.1 broke a documented backtest strategy in that window and the first run
+# to show it was a draft pull request opened by hand (run 43322834049).
+
+
+def _ci_job(name):
+    ci = (_REPO / ".github" / "workflows" / "ci.yml").read_text()
+    block = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)", ci, re.M | re.S)
+    assert block, f"ci.yml no longer has a `{name}` job; update or remove this guard"
+    return block.group(1)
+
+
+def test_the_ci_test_job_runs_on_the_weekly_schedule_too():
+    ci = (_REPO / ".github" / "workflows" / "ci.yml").read_text()
+    assert re.search(r"^  schedule:\n(?:\s*#.*\n)*\s*- cron:", ci, re.M), "ci.yml has no scheduled trigger"
+    excluded = [line.strip() for line in _ci_job("test").splitlines() if re.match(r"\s*if:.*schedule", line)]
+    assert not excluded, f"the test job is switched off on the schedule: {excluded}"
+    assert "pytest" in _ci_job("test"), "the block read is not the test job — this guard is measuring nothing"

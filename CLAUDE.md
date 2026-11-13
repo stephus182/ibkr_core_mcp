@@ -41,6 +41,33 @@ script until the package was reinstalled. If a script outside the repo cannot im
 that exists, check `site-packages/__editable___*_finder.py`'s `MAPPING`, reinstall, and delete
 the stale `build/` tree.
 
+**A `.venv` ages; CI's environment does not.** The base dependencies float upward on purpose and
+CI resolves them fresh on every run, while a venv keeps what it had the day it was built. On
+2026-11-12 the release worktree's venv differed from CI's install in **56 of 115 packages** —
+pandas 3.0.6 against 3.1.1, RestrictedPython 8.5 against 9.0, and the gate tools themselves
+(ruff, mypy, pytest). Four green local gates were therefore green on other versions than CI's,
+and the first CI run on the branch (run 43322834049) was red twice over: a backtest test that
+only the newer pandas exposed, and a suite-wide alarm that only the newer pytest tripped.
+Nothing had compared the two environments.
+
+`python scripts/check_env_drift.py` does: it asks pip for a fresh resolve of `.[dev,server]`
+(`pip install --dry-run --ignore-installed --report`, installing nothing) and compares it with
+this environment, package by package. Exit 0 is no drift, 1 is drift with the `pip install` line
+that aligns it, and 2 is *could not check* — never read 2 as 0. It needs the network, so it is
+not one of the four gates and not in the pre-push hook. Run it:
+
+- when you start work in a venv you did not build this week;
+- before you treat a local green as evidence about CI, and when a CI failure does not reproduce
+  here — compare first, the comparison found that day's cause in minutes;
+- before a release (§ Publishing, step 3).
+
+Comparing with a CI log is not a substitute. CI runs on Linux and never installs the macOS-only
+`pyobjc` packages behind both order gates; that evening they were a major version behind
+(12.2.2 against 13.0), and only this check, run on a Mac, showed it. **After aligning a `pyobjc`
+package the gates have to be seen working by a person** — a Touch ID prompt, and a click on each
+button of a Gate 2 dialog — because the unit suite cannot reach either, by design. Pandas and
+the rest are pip packages inside the venv; Homebrew supplies the interpreter only.
+
 **Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`) — invoke the
 versioned binary (`python3.11 -m venv`), not bare `python3`, since Homebrew may resolve that
 to a newer, unsupported interpreter.
@@ -134,6 +161,16 @@ not a substitute for running the line yourself while you still have work to fix.
 shape is already recorded above for CI: run 34082479743 failed at `ruff format --check` and
 that red step hid two real `mypy` errors CI never reached.
 
+**The test job also runs every week, with no push** (since 2026-11-12). `ci.yml`'s schedule ran
+the dependency audit alone until then — the test job carried `if: github.event_name !=
+'schedule'` — so a dependency release that broke the code was seen at the next push to `main`
+and not before, and between 2026-09-22 and 2026-11-12 there was none.
+`test_the_ci_test_job_runs_on_the_weekly_schedule_too` holds it. Two limits: a schedule runs on
+the default branch only, so it watches `main`, not a release branch; and GitHub pauses a
+schedule after 60 days without repository activity. A red weekly run with no commit behind it
+means a dependency moved: read the job's `Successfully installed` line against
+`scripts/check_env_drift.py` here (Dev Setup).
+
 **Two more gates run in CI only** (they need the network): `pip-audit` over a **fresh resolve**
 of `.[dev,server,scraper]` — requirements mode, `pip install --dry-run` in a throwaway venv,
 installing nothing — weekly as well as per push, with ignores only from
@@ -189,7 +226,8 @@ anywhere). Per version:
    and the doc pins do not use. `test_pyproject_version_is_already_pep440_canonical` refuses it
    in the four gates, before a tag exists.
    Source: https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization
-3. Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
+3. `python scripts/check_env_drift.py` exits 0 (Dev Setup: gates run on a stale venv prove less
+   than they say). Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
    --exit-status` (no pipe) green.
 4. `git tag -l --sort=-v:refname | head -1` (never reuse a tag); `git tag vX.Y.Z && git push origin vX.Y.Z`.
 5. Optional rehearsal (needs a separate TestPyPI account with its own pending publisher, environment `testpypi`): Actions → *Publish to PyPI* → *Run workflow* on `main` → uploads to TestPyPI only;

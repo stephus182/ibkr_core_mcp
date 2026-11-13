@@ -547,7 +547,7 @@ same set, so an MCP client that gates confirmation prompts on those hints sees t
 | ruff check (incl. `S`) | Known-bad calls: `shell=True`, `verify=False` without a reason, `assert`, weak hashes | Architecture; anything list-form | yes |
 | ruff format | — | — | yes |
 | mypy strict | Type errors, unstubbed dependencies | Everything typed correctly and wrong | yes |
-| pytest unit, including `tests/security/` | Behaviour, and the thirteen invariants above (structural and canary) | Anything without a test | yes |
+| pytest unit, including `tests/security/` — per push, and weekly with the rest of the test job since 2026-11-12, so a dependency release that breaks the code is seen without a commit | Behaviour, and the thirteen invariants above (structural and canary) | Anything without a test | yes |
 | **pip-audit** (`dependency-audit` job) | A known-vulnerable version in the **resolved** tree, `[dev,server,scraper]`, fresh resolution in requirements mode (`pip install --dry-run --report`, nothing installed), per push and weekly | Unknown vulnerabilities | yes for fixable; no-fix findings go in `security/pip-audit-ignores.txt` with a reason and a re-check date |
 | **gitleaks** (`secret-scan` job) | A committed secret in the pushed range | History before the scan started (run `gitleaks git --redact` locally) | yes |
 | **SBOM** (`sbom` job, 2026-11-09) | Nothing by itself — it records what a user installs (`.[server,scraper]` resolved on the runner, CycloneDX 1.6) per push and per week, so an advisory is answered from the artifact | A vulnerability nobody has published; the operator's own environment, which may differ from the runner's resolve | no — an artifact |

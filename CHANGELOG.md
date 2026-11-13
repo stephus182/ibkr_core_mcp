@@ -32,6 +32,22 @@ audit record for every session write; then the documents. The entries live in th
 below. The consumer's half — importing the owner, deleting its own copies — waits for the pin.
 
 ### Added
+- **`scripts/check_env_drift.py` — is this environment what a fresh install would give?
+  (2026-11-12, development tooling; nothing in the installed package changes.)**
+  - **Why:** the base dependencies float on purpose and CI resolves them fresh, while a `.venv`
+    keeps what it had the day it was built, and nothing compared the two. On 2026-11-12 the
+    release worktree's venv differed from CI's install in 56 of 115 packages, the gate tools
+    among them, and the first CI run on the branch (run 43322834049) was red where this machine
+    was green.
+  - **What it does:** reads the dependencies and the named extras from `pyproject.toml`, asks pip
+    for a fresh resolve (`pip install --dry-run --ignore-installed --report`, nothing installed,
+    the project never built) and compares it with this environment. Exit 0 no drift, 1 drift
+    with the line that aligns it, 2 could not check — and 2 is never reported as "no drift".
+  - **What CI cannot do in its place:** see the macOS-only `pyobjc` packages behind both order
+    gates. A Linux runner never installs them; that evening they were at 12.2.2 against 13.0.
+  - **Tests:** ten, none touching the network; the report they read is three entries of a real
+    pip report, sliced to the fields the script reads. When to run it: `CLAUDE.md` § Dev Setup.
+  - Source: https://pip.pypa.io/en/stable/reference/installation-report/
 - **Every session write leaves an audit record (MCP security checklist 8.1; register F45, step 2 —
   the `session_write` kind the audit entry below promised).** `gateway.session.release_session`
   (`action: logout` — `released` / `not_released` / `error`), `attempt_soft_recovery`
@@ -427,6 +443,15 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **CI's test job runs on the weekly schedule too, not only on a push (2026-11-12).** The
+  schedule ran the dependency audit alone: the test job carried `if: github.event_name !=
+  'schedule'`. So a dependency release that broke the code was seen at the next push to `main` —
+  and between 2026-09-22 and 2026-11-12 there was none, while pandas 3.1.1 broke a documented
+  backtest strategy and pytest 9.2.0 began tripping the suite's own human-gate alarm. The
+  condition is removed and `test_the_ci_test_job_runs_on_the_weekly_schedule_too` holds it (red
+  before the change). A schedule runs on the default branch only, and GitHub pauses it after 60
+  days without repository activity. The two defects it would have shown are **not fixed by this
+  entry**.
 - **`add_indicators`' result says how a continuous chart differs from the contract it computes on
   (register F4, 2026-11-12; the operator's wording, approved verbatim).**
   - **What changed:** under the first note, every result now reads: "A future contract is computed on its

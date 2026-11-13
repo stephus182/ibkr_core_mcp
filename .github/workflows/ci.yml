@@ -9,14 +9,17 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly dependency audit. The base dependencies float upward on purpose, so the
-    # resolved tree can acquire a known vulnerability without a single commit landing.
+    # Weekly, on the default branch. The base dependencies float upward on purpose, so
+    # without a single commit landing the resolved tree can acquire a known vulnerability
+    # (the dependency audit) or a release that breaks the code (the test job). The test job
+    # was excluded from this run until 2026-11-12, and pandas 3.1.1 broke a documented
+    # backtest strategy unseen for the weeks no push to `main` happened (run 43322834049).
+    # GitHub pauses a schedule after 60 days without repository activity.
     - cron: "0 6 * * 1"
 
 jobs:
   test:
     name: Python ${{ matrix.python-version }}
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read
