@@ -772,6 +772,28 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **The Gate 2 dialogs no longer print price × quantity as an option's total (found 2026-11-12,
+  while the README's order paragraph was being checked against the code).**
+  - **What it printed:** for ten option contracts at 2.50 USD, `Total (est.): 25.00 USD`. IBKR's
+    own worked example of `/iserver/secdef/info` is an AAPL put with `"secType": "OPT"` and
+    `"multiplier": "100"`, so the figure was 100 times too small, on the last screen before the
+    write. Futures and futures options have been refused since 2026-09-21; `OPT` was not in the
+    list. Measured on the dialog's row builder, with no gateway. No option order has been placed
+    live through this package.
+  - **What changed:** `order_confirm.MULTIPLIER_ASSET_CLASSES` (`FUT`, `FOP`, `OPT`) is the one
+    list. An order whose `secType` names one of them, in any of IBKR's spellings, and carries no
+    `_multiplier` shows `— (contract multiplier unknown; not price × quantity)`. With `_multiplier`
+    the total is price × quantity × multiplier, as before. The cancel dialog and the attach
+    dialog, both built from an order-status read, set the same flag for an option;
+    `manualIndicator` (CME Rule 536-B) stays on futures and futures options only.
+  - **Not established:** that the order-status endpoint spells an option's `sec_type` as `OPT` —
+    IBKR's page types the field as a string and shows `STK` only. If it is spelled otherwise those
+    two dialogs behave as they did. A body with no `secType` and no multiplier key still prints
+    price × quantity, as it must for a stock. Warrants, bonds and every other class are not in
+    the list and nothing is claimed for them.
+  - **Tests:** six red before the change; three mutants red after it (`OPT` dropped from the
+    list, every option refused whatever its multiplier, 536-B widened to options).
+  - Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
 - **`get_live_orders` no longer tells the model that an order placed on IBKR Mobile or TWS cannot be
   modified or cancelled through the API — measured false (register F47, live 2026-11-12).**
   - **What it said:** since 2026-06-25 the description said "orders placed via mobile or TWS

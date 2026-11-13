@@ -2131,6 +2131,44 @@ def test_a_stock_order_without_multiplier_keys_STILL_prints_its_total():
     assert "1,500.00" in total, total
 
 
+# An option is the third class whose total is not price x quantity. IBKR's own worked example
+# of `/iserver/secdef/info` is an AAPL put carrying `"secType": "OPT"` and `"multiplier": "100"`,
+# so ten contracts at 2.50 cost 2,500 — and this dialog printed `Total (est.): 25.00 USD` for
+# them, a figure 100x too small on the last screen before the write (measured 2026-11-12 on the
+# row builder itself, no gateway). FUT and FOP were refused since 2026-09-21; OPT was simply
+# not in the list. No option order has been placed live through this package as of that date,
+# which is how the gap stayed unseen.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+_OPTION_SEC_TYPES = ["OPT", "667629330:OPT", "667629330@OPT", "opt"]
+
+
+def _option_order(**over: object) -> dict[str, object]:
+    return {
+        "ticker": "AAPL",
+        "side": "BUY",
+        "quantity": 10,
+        "orderType": "LMT",
+        "price": 2.50,
+        "tif": "DAY",
+        "_currency": "USD",
+    } | over
+
+
+@pytest.mark.parametrize("sec_type", _OPTION_SEC_TYPES)
+def test_an_option_order_never_prints_price_times_quantity_as_its_total(sec_type):
+    """Without the multiplier the dialog says so, for every spelling of `secType` IBKR uses."""
+    total = _total_row(_option_order(secType=sec_type))
+    assert "25.00" not in total, f"printed a 100x-wrong total as fact for {sec_type!r}: {total!r}"
+    assert "multiplier unknown" in total
+
+
+def test_an_option_order_WITH_its_multiplier_prints_the_multiplied_total():
+    """The discriminating half: the refusal is for an UNKNOWN multiplier, not for options. A
+    caller that supplies the contract's multiplier gets the real figure, in its currency."""
+    total = _total_row(_option_order(secType="667629330:OPT", _multiplier=100))
+    assert "2,500.00 USD" in total, total
+
+
 def test_cancel_dialog_without_detail_NAMES_the_gap_instead_of_hiding_it():
     """Reproduced live 2026-09-21: a detail-less cancel rendered Order ID + Account and nothing
     else, so the human authorised the cancellation of an order id they could not verify. An

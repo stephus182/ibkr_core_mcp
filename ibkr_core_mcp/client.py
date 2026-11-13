@@ -120,6 +120,7 @@ from ibkr_core_mcp.models import (
     parse_one,
 )
 from ibkr_core_mcp.order_confirm import (
+    MULTIPLIER_ASSET_CLASSES,
     child_tif_defect,
     confirm_bracket_dialog,
     confirm_cancel_dialog,
@@ -928,8 +929,10 @@ def _parent_from_status(order_id: str, status: Mapping[str, Any]) -> dict[str, A
     for key, field in (("_companyName", "company_name"), ("_currency", "currency")):
         if status.get(field):
             parent[key] = status[field]
-    if str(status.get("sec_type") or "").strip().upper() in ("FUT", "FOP"):
+    asset_class = str(status.get("sec_type") or "").strip().upper()
+    if asset_class in ("FUT", "FOP"):  # CME Rule 536-B: futures and futures options only
         parent["manualIndicator"] = True
+    if asset_class in MULTIPLIER_ASSET_CLASSES:  # a status read carries no multiplier
         parent["_multiplier_unknown"] = True
     return parent
 
@@ -3006,9 +3009,12 @@ class IBKRClient:
         documented "no cached information" answer is not established — register F36).
         Returning None lets the dialog state the gap instead of pretending it does not exist.
 
-        `_multiplier_unknown` is set for FUT/FOP because an order-status read never carries
-        the contract multiplier, and price x quantity on a future is not an estimate — it is
-        the notional divided by the multiplier.
+        `_multiplier_unknown` is set for FUT/FOP/OPT because an order-status read never carries
+        the contract multiplier, and price x quantity on a future or an option is not an
+        estimate — it is the notional divided by the multiplier. `"FUT"` is the spelling
+        measured live on this endpoint; `"OPT"` is IBKR's on the contract endpoints and is
+        assumed here, no option order having been placed live through this package
+        (2026-11-12).
 
         **`limit_price` and `stop_price` are read although IBKR documents neither.** They are
         absent from both the field list and the example response object on the order-status
@@ -3052,7 +3058,7 @@ class IBKRClient:
         price = status.get("limit_price") or status.get("stop_price")
         if price not in (None, ""):
             details["price"] = price
-        if str(status.get("sec_type") or "").upper() in ("FUT", "FOP"):
+        if str(status.get("sec_type") or "").strip().upper() in MULTIPLIER_ASSET_CLASSES:
             details["_multiplier_unknown"] = True
         # A6 — cancelling one leg of an OCA group cancels the whole group. The endpoint
         # returns the membership and this method dropped it, which is the same shape as the

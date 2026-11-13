@@ -10,6 +10,23 @@
 
 ## Changes consumers should know about
 
+### Unreleased — an option order's dialog shows no total unless the host supplies `_multiplier`
+
+**What a host sees.** A Gate 2 dialog for an order whose `secType` names an option (`OPT`,
+`667629330:OPT`, `667629330@OPT`) printed `Total (est.)` as price × quantity: `25.00 USD` for ten
+contracts at 2.50, which cost 2,500. It now reads `— (contract multiplier unknown; not price ×
+quantity)`, the line a future has shown since 2026-09-21.
+
+**What a host that stages option orders does.** Pass the contract's multiplier as the display key
+`_multiplier`, as for a future — IBKR returns it on `/iserver/secdef/info` (`get_secdef_info`), and
+its own example there is an AAPL put with `"multiplier": "100"`. The total is then price × quantity
+× multiplier. Display keys are stripped before the wire, as before.
+
+**What does not change.** A body with no `secType` and no multiplier key — how ClaudIA sends a
+stock — still prints price × quantity. `manualIndicator` is still set for futures and futures
+options only. No option order has been placed live through this package (2026-11-12); this is the
+dialog's arithmetic, measured without a gateway.
+
 ### Unreleased — the gateway session has one owner in the package: `get_session()`, `up` / `reset` / `keepalive`, `startup()` through the owner (register F45, step 2)
 
 **What a host imports.** `from ibkr_core_mcp.gateway import get_session, GatewayManager` —

@@ -3794,6 +3794,57 @@ def test_cancel_detail_fetch_marks_a_FUTURE_multiplier_unknown(client):
     assert seen["det"]["_multiplier_unknown"] is True
 
 
+# The same rule for an option, on the two dialogs built from an order-status READ rather than
+# from the caller's body. IBKR's `/iserver/secdef/info` example is an AAPL put with
+# `"multiplier": "100"`, and a status read carries no multiplier for it either.
+# NOT MEASURED: that the status endpoint spells an option's `sec_type` as `"OPT"`. IBKR's
+# order-status page types the field as a string and shows `"STK"` only, and no option order has
+# been placed live through this package (2026-11-12). `"FUT"` is measured; `"OPT"` is IBKR's
+# spelling on the contract endpoints and is assumed here. If the status spells it otherwise
+# these two dialogs fall back to today's behaviour — they get no worse.
+# Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+#          https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
+_OPTION_STATUS: dict[str, Any] = {
+    "symbol": "AAPL",
+    "side": "B",
+    "total_size": "10.0",
+    "size": "10.0",
+    "order_type": "LIMIT",
+    "limit_price": "2.50",
+    "tif": "DAY",
+    "currency": "USD",
+    "sec_type": "OPT",
+    "order_status": "Submitted",
+    "conid": "667629330",
+}
+
+
+def test_the_cancel_dialog_never_prints_price_times_quantity_for_an_OPTION(client):
+    """Driven through the real reader and the real dialog: ten contracts at 2.50 are 2,500,
+    and the cancel dialog may not call them 25.00."""
+    from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
+
+    with _patch.object(client, "get_order_status", return_value=dict(_OPTION_STATUS)):
+        details = client._cancel_dialog_details("1")
+    with _patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_cancel_dialog("1", "U1234567", details)
+    total = str(mock_show.call_args.kwargs["details"].get("Total (est.)"))
+    assert "25.00" not in total, f"printed a 100x-wrong total as fact: {total!r}"
+    assert "multiplier unknown" in total
+
+
+def test_an_attach_to_an_OPTION_parent_marks_the_multiplier_unknown_and_claims_no_536B():
+    """The attach dialog's parent is built from the same status read. It needs the multiplier
+    flag — and must NOT gain `manualIndicator`, which is CME Rule 536-B and is sent for
+    futures and futures options only. Widening one test of `sec_type` would have put it on
+    the wire for an equity option."""
+    from ibkr_core_mcp.client import _parent_from_status
+
+    parent = _parent_from_status("1", dict(_OPTION_STATUS))
+    assert parent.get("_multiplier_unknown") is True
+    assert "manualIndicator" not in parent
+
+
 def test_a_failed_detail_read_does_NOT_block_the_cancel(client):
     """Display is not permission. `/iserver/account/order/status` is rate-limited — measured
     HTTP 503 live on 2026-09-21 — and a cancel must not become impossible because a display

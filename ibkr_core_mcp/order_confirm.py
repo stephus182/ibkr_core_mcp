@@ -115,6 +115,16 @@ def _asset_class(sec_type: Any) -> str:
     return re.split(r"[:@]", str(sec_type or "").strip().upper())[-1]
 
 
+# The asset classes whose money figure is price x quantity x a CONTRACT MULTIPLIER, so that
+# price x quantity alone is not an estimate of anything. FUT and FOP since 2026-09-21. OPT
+# joined 2026-11-12: IBKR's own worked example of `/iserver/secdef/info` is an AAPL put with
+# `"secType": "OPT"` and `"multiplier": "100"`, and the dialog printed `Total (est.): 25.00 USD`
+# for ten contracts at 2.50 — 2,500 in fact. The list is the classes IBKR's pages were read
+# for, not every class with a multiplier: a warrant or a bond is not in it and is not claimed.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+MULTIPLIER_ASSET_CLASSES = frozenset({"FUT", "FOP", "OPT"})
+
+
 # Body keys `_order_rows` already reads into a typed row, in every spelling it accepts. A key
 # here is not "missing" from the screen — it IS the screen, under a human label.
 _CONSUMED_BODY_KEYS = frozenset(
@@ -295,9 +305,13 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
         price_str = "MARKET"
     else:
         price_str = "— (no price sent)"
+    # An option needs its multiplier for the total exactly as a future does, but it is not
+    # folded into `is_future`: that flag also takes the currency off the Price row, which is
+    # the futures rule about index points and says nothing about an option's premium.
+    needs_multiplier = is_future or _asset_class(order.get("secType")) in MULTIPLIER_ASSET_CLASSES
     try:
-        if order.get("_multiplier_unknown") or (is_future and multiplier is None):
-            # A futures order whose multiplier the caller could not learn. price × qty here
+        if order.get("_multiplier_unknown") or (needs_multiplier and multiplier is None):
+            # An order whose multiplier the caller could not learn. price × qty here
             # is not an estimate, it is wrong by the multiplier — live 2026-09-04 it printed
             # 7,735.00 for one ES contract standing for 386,750 USD. Say so instead.
             total_str = "— (contract multiplier unknown; not price × quantity)"
