@@ -40,8 +40,12 @@ def drive_cache(cache):
 
 
 def test_cache_key_format(cache):
-    key = cache._cache_key("aapl", "1d", "1Y", "2026-05-22")
-    assert key == "AAPL_1D_1Y_2026-05-22"
+    """The key names the hours the bars cover, both ways (step 2, 2026-10-03): a regular-hours
+    and an all-hours series of the same contract are different data — IBKR's daily stock bar
+    changed on 20 of 20 days with the flag — and must never share an entry. No suffix means a
+    key written before 2.2.0, which this format cannot reach."""
+    assert cache._cache_key("aapl", "1d", "1Y", "2026-05-22") == "AAPL_1D_1Y_2026-05-22_RTH"
+    assert cache._cache_key("esz6", "1d", "6m", "2026-10-03", outside_rth=True) == "ESZ6_1D_6M_2026-10-03_ALL"
 
 
 def test_check_returns_false_on_miss(cache):
@@ -52,7 +56,7 @@ def test_check_returns_false_on_miss(cache):
 
 def test_check_returns_true_on_hit(cache):
     cache._manifest = {
-        "AAPL_1D_1Y_2026-05-22": {
+        "AAPL_1D_1Y_2026-05-22_RTH": {
             "end": "2026-05-22",
             "rows": 252,
         }
@@ -64,7 +68,7 @@ def test_check_returns_true_on_hit(cache):
 def test_check_stale_today_end(cache):
     two_days_ago = str(date.today() - timedelta(days=2))
     cache._manifest = {
-        f"AAPL_1D_1Y_{date.today()}": {
+        f"AAPL_1D_1Y_{date.today()}_RTH": {
             "end": two_days_ago,
             "rows": 252,
         }
@@ -76,8 +80,8 @@ def test_check_stale_today_end(cache):
 
 def test_list_cached_returns_keys(cache):
     cache._manifest = {
-        "AAPL_1D_1Y_2026-05-22": {"symbol": "AAPL", "rows": 252},
-        "TSLA_1D_6M_2026-05-22": {"symbol": "TSLA", "rows": 126},
+        "AAPL_1D_1Y_2026-05-22_RTH": {"symbol": "AAPL", "rows": 252},
+        "TSLA_1D_6M_2026-05-22_RTH": {"symbol": "TSLA", "rows": 126},
     }
     cache._manifest_loaded_at = float("inf")
     entries = cache.list_cached()
@@ -117,7 +121,7 @@ def test_token_file_created_with_restricted_permissions(tmp_path):
     with (
         patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds),
         patch("ibkr_core_mcp.gdrive_auth.Request"),
-        patch("ibkr_core_mcp.cache.build") as mock_build,
+        patch("ibkr_core_mcp.cache.build_drive_service") as mock_build,
     ):
         mock_build.return_value = MagicMock()
         cache._get_service()
@@ -179,7 +183,7 @@ def test_get_service_raises_on_empty_folder_id(tmp_path):
 
     with (
         patch("ibkr_core_mcp.gdrive_auth.Credentials.from_authorized_user_file", return_value=fake_creds),
-        patch("ibkr_core_mcp.cache.build") as mock_build,
+        patch("ibkr_core_mcp.cache.build_drive_service") as mock_build,
     ):
         mock_build.return_value = MagicMock()
         with pytest.raises(CacheError, match="GOOGLE_DRIVE_FOLDER_ID"):
@@ -318,11 +322,45 @@ def test_save_updates_manifest_entry(drive_cache):
     df = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
     drive_cache.save(df, "AAPL", "1D", "1Y", "2026-05-22")
 
-    entry = drive_cache._manifest.get("AAPL_1D_1Y_2026-05-22")
+    entry = drive_cache._manifest.get("AAPL_1D_1Y_2026-05-22_RTH")
     assert entry is not None
     assert entry["symbol"] == "AAPL"
     assert entry["rows"] == 3
     assert entry["end"] == "2026-05-22"
+
+
+def test_save_records_which_listing_the_bars_came_from_and_entry_reads_it_back(drive_cache):
+    """The key is the ticker, and a ticker is not a listing: IGV's Mexican bars in MXN were
+    served under the same key as the US ETF's. From 2.2.0 `save` keeps the listing the bars
+    were fetched from beside the entry, and `entry()` is the one read of it, so a hit can
+    name what it serves. An entry saved before carries none, and `entry()` says so with
+    the plain row rather than inventing one."""
+    svc = drive_cache._service
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "new-id"}
+    listing = {"conid": 12658199, "name": "ISHARES EXPANDED TECH-SOFTWA", "exchange": "BATS", "currency": "USD"}
+    drive_cache._manifest["IGV_1D_6M_2026-05-21_RTH"] = {"symbol": "IGV", "rows": 126, "end": "2026-05-21"}
+
+    drive_cache.save(pd.DataFrame({"close": [1.0]}), "IGV", "1D", "6m", "2026-05-22", listing=listing)
+
+    assert drive_cache.entry("igv", "1d", "6M", "2026-05-22")["listing"] == listing
+    assert "listing" not in drive_cache.entry("IGV", "1D", "6m", "2026-05-21")
+    assert drive_cache.entry("IGV", "1D", "6m", "2026-05-20") is None
+
+
+def test_the_hours_are_recorded_on_the_row_and_tell_two_series_of_one_contract_apart(drive_cache):
+    """Step 2 (2026-10-03): `outside_rth` is a key part and a manifest field. Saving ESZ6's
+    all-hours series writes nothing under its regular-hours key, and the row says which it is."""
+    svc = drive_cache._service
+    svc.files().list().execute.return_value = {"files": []}
+    svc.files().create().execute.return_value = {"id": "new-id"}
+
+    drive_cache.save(pd.DataFrame({"close": [1.0]}), "ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+
+    assert drive_cache.entry("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)["outside_rth"] is True
+    assert drive_cache.entry("ESZ6", "1D", "6m", "2026-10-03") is None
+    assert drive_cache.check("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True) is True
+    assert drive_cache.check("ESZ6", "1D", "6m", "2026-10-03") is False
 
 
 # ── Drive API call paths: delete() ───────────────────────────────────────────
@@ -365,7 +403,7 @@ def test_delete_no_drive_call_when_file_not_found(drive_cache):
 def test_delete_removes_manifest_entry(drive_cache):
     """delete() removes the key from the in-memory manifest."""
     svc = drive_cache._service
-    drive_cache._manifest["AAPL_1D_1Y_2026-05-22"] = {"symbol": "AAPL", "rows": 252, "end": "2026-05-22"}
+    drive_cache._manifest["AAPL_1D_1Y_2026-05-22_RTH"] = {"symbol": "AAPL", "rows": 252, "end": "2026-05-22"}
     svc.files().list().execute.side_effect = [
         {"files": [{"id": "parquet-id"}]},
         {"files": []},
@@ -374,7 +412,7 @@ def test_delete_removes_manifest_entry(drive_cache):
 
     drive_cache.delete("AAPL", "1D", "1Y", "2026-05-22")
 
-    assert "AAPL_1D_1Y_2026-05-22" not in drive_cache._manifest
+    assert "AAPL_1D_1Y_2026-05-22_RTH" not in drive_cache._manifest
 
 
 def test_delete_no_error_when_file_not_found(drive_cache):
@@ -388,3 +426,182 @@ def test_delete_no_error_when_file_not_found(drive_cache):
 
     # Must not raise
     drive_cache.delete("TSLA", "1H", "3M", "2026-01-15")
+
+
+# ── upload_account_sqlite — the store's Drive backup (register F31) ─────────────
+#
+# Until 2026-10-01 nothing in this suite ran the method: every caller's test replaced it
+# with a mock. The first four tests pin what it already did — the snapshot holds rows still
+# in the WAL, and is removed on success and on failure. The rest are the sweep: a process
+# that dies mid-upload cannot run the `finally` that removes its snapshot, so the next upload
+# removes the ones an earlier process left (claudia_ui gap #90 found six of its own twin's).
+
+_LONG_AGO = 1_577_836_800.0  # 2020-01-01T00:00:00Z — before any process that runs this suite
+_STRANDED = ("tmpab12cd34.upload.tmp", "tmpab12cd34.upload.tmp-journal", "tmpzz99yy88.upload.tmp-wal")
+
+
+def _a_store(path):
+    """A real WAL-mode database with one row still in the WAL; returns the open connection,
+    which the caller closes — while it is open, the row is in `-wal`, not the main file."""
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (v TEXT)")
+    conn.execute("INSERT INTO t VALUES ('only-in-the-wal')")
+    conn.commit()
+    return conn
+
+
+def _plant(directory, names, mtime=_LONG_AGO):
+    """Write a small file per name, stamped `mtime` (default: long before this process)."""
+    import os
+
+    for name in names:
+        path = directory / name
+        path.write_bytes(b"private copy")
+        os.utime(path, (mtime, mtime))
+
+
+def test_the_store_upload_sends_a_snapshot_holding_rows_still_in_the_wal(cache, tmp_path):
+    """The reason the method exists: a raw read of the main file would miss this row."""
+    import sqlite3
+
+    store = tmp_path / "store.db"
+    conn = _a_store(store)
+    sent: dict[str, object] = {}
+    try:
+        with patch.object(
+            cache,
+            "upload_account_file_bytes",
+            side_effect=lambda data, name, mimetype=None: sent.update(data=data, name=name),
+        ):
+            cache.upload_account_sqlite(store, "store.db")
+    finally:
+        conn.close()
+
+    copy = tmp_path / "what_drive_got.db"
+    data = sent["data"]
+    assert isinstance(data, bytes)
+    copy.write_bytes(data)
+    assert sqlite3.connect(str(copy)).execute("SELECT v FROM t").fetchall() == [("only-in-the-wal",)]
+    assert sent["name"] == "store.db"
+
+
+def test_the_store_upload_removes_its_snapshot_when_drive_fails(cache, tmp_path):
+    """The failure is the caller's to handle (`fetch_trades` reports it); the snapshot still goes."""
+    store = tmp_path / "store.db"
+    conn = _a_store(store)
+    try:
+        with (
+            patch.object(cache, "upload_account_file_bytes", side_effect=RuntimeError("drive is down")),
+            pytest.raises(RuntimeError, match="drive is down"),
+        ):
+            cache.upload_account_sqlite(store, "store.db")
+        assert not list(tmp_path.glob("*.upload.tmp"))
+    finally:
+        conn.close()
+
+
+def test_the_store_upload_removes_the_snapshots_an_earlier_process_left(cache, tmp_path, caplog):
+    """Every stranded snapshot and SQLite sidecar goes, the store stays, and the log names them."""
+    import logging
+
+    store = tmp_path / "store.db"
+    conn = _a_store(store)
+    _plant(tmp_path, _STRANDED)
+    try:
+        with (
+            patch.object(cache, "upload_account_file_bytes"),
+            caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.cache"),
+        ):
+            cache.upload_account_sqlite(store, "store.db")
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["store.db", "store.db-shm", "store.db-wal"]
+        assert conn.execute("SELECT v FROM t").fetchall() == [("only-in-the-wal",)]
+    finally:
+        conn.close()
+    assert "Removed 3 leftover snapshot file(s)" in caplog.text
+    assert all(name in caplog.text for name in _STRANDED)
+
+
+def test_a_snapshot_newer_than_this_process_is_left_alone(cache, tmp_path):
+    """Written since this process started, it may be another thread's upload in flight — a
+    pull can be started by the host's startup and by the model at once."""
+    import time
+
+    store = tmp_path / "store.db"
+    conn = _a_store(store)
+    _plant(tmp_path, ["tmpinflight.upload.tmp"], mtime=time.time())
+    try:
+        with patch.object(cache, "upload_account_file_bytes"):
+            cache.upload_account_sqlite(store, "store.db")
+        assert (tmp_path / "tmpinflight.upload.tmp").exists()
+    finally:
+        conn.close()
+
+
+def test_only_the_snapshots_this_method_writes_are_swept(cache, tmp_path, caplog):
+    """The store's own live WAL above all — it holds committed rows — and every other old
+    file: the validation sidecar, a download's temp, a backup, a directory, a subdirectory."""
+    import logging
+    import os
+
+    store = tmp_path / "store.db"
+    conn = _a_store(store)
+    for own in ("store.db", "store.db-wal", "store.db-shm"):
+        os.utime(tmp_path / own, (_LONG_AGO, _LONG_AGO))
+    others = [
+        "store.db.validation.json",
+        "token.json",
+        "tmp.upload.tmp",
+        "tmpab12cd34.upload.tmp.bak",
+        "mytmpab12cd34.upload.tmp",
+        "tmpab12cd34.upload.tmp-other",
+        "tmpab12cd34.db.tmp",
+    ]
+    _plant(tmp_path, others)
+    (tmp_path / "tmpdirectory.upload.tmp").mkdir()
+    os.utime(tmp_path / "tmpdirectory.upload.tmp", (_LONG_AGO, _LONG_AGO))  # old, so age alone cannot spare it
+    (tmp_path / "backups").mkdir()
+    _plant(tmp_path / "backups", ["tmpab12cd34.upload.tmp"])
+    try:
+        with (
+            patch.object(cache, "upload_account_file_bytes"),
+            caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.cache"),
+        ):
+            cache.upload_account_sqlite(store, "store.db")
+        assert "Could not remove" not in caplog.text, "a directory is not a snapshot to remove"
+        assert {p.name for p in tmp_path.iterdir()} == {
+            "store.db",
+            "store.db-wal",
+            "store.db-shm",
+            *others,
+            "tmpdirectory.upload.tmp",
+            "backups",
+        }
+        assert (tmp_path / "backups" / "tmpab12cd34.upload.tmp").exists()
+        assert conn.execute("SELECT v FROM t").fetchall() == [("only-in-the-wal",)]
+    finally:
+        conn.close()
+
+
+def test_the_sweep_recognises_the_name_a_real_upload_writes(cache, tmp_path):
+    """One definition for writing and sweeping: the name a real snapshot gets, stranded with a
+    sidecar, is what the next upload removes."""
+    store = tmp_path / "store.db"
+    conn = _a_store(store)
+    seen: list[str] = []
+    try:
+        with patch.object(
+            cache,
+            "upload_account_file_bytes",
+            side_effect=lambda *a, **k: seen.extend(p.name for p in tmp_path.glob("*.upload.tmp")),
+        ):
+            cache.upload_account_sqlite(store, "store.db")
+        assert len(seen) == 1, "the snapshot exists while Drive is being sent it"
+        _plant(tmp_path, [seen[0], seen[0] + "-journal"])
+        with patch.object(cache, "upload_account_file_bytes"):
+            cache.upload_account_sqlite(store, "store.db")
+        assert not (tmp_path / seen[0]).exists() and not (tmp_path / (seen[0] + "-journal")).exists()
+    finally:
+        conn.close()

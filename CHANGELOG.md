@@ -7,6 +7,1270 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+**Register F45, step 1 (2026-11-09) — the gateway session owner begins its move into this
+package, reads only.** Seven commits, each with the four gates green: door 6 in the test
+suite (no unit test starts `docker`, `open` or `caffeinate`), one loopback pin for every
+certificate-exempt call held by test, `gateway/preflight.py` (the readings and the verdict rule),
+`gateway/manager.read_login_events` (the gateway's own log, in-container, constants only),
+invariant 13 (the model layer never reaches the gateway package), the command line
+(`python -m ibkr_core_mcp.gateway preflight | diagnose`) and `startup()`'s gate, then the
+documents. The entries live in their sections below — *Added* (the module, the log read, the
+command line), *Changed* (`startup()`), *Security* (door 6, the pin, invariant 13). No session
+write entered the package in step 1; step 2 brings the owner (`gateway/session.py`), the reset
+guard inside `start()`, `up`, `reset`, `keepalive`, and the two deprecations. Design and review:
+the consumer's `docs/plans/2026-11-09-f45-*` (local).
+
+**Register F45, step 2 (2026-11-09) — the owner.** Seven more commits, each with the four gates
+green and every guard proven by mutation: `gateway/session.py` with its 56 moved tests (the
+lock private, a pid below 1 malformed, the liveness check platform-bound; `COMPETE: Final =
+False`); the restart guard inside `start()` (`RestartRefusedError`, `restart_refusal`); `startup()`
+through the owner, `up`, `reset`, `preflight --release`; the package's own keepalive (`KeepAwake`,
+`keepalive_loop`, `keepalive`); the deprecations on `IBKRClient.logout` / `reauthenticate`; an
+audit record for every session write; then the documents. The entries live in their sections
+below. The consumer's half — importing the owner, deleting its own copies — waits for the pin.
+
+### Added
+- **`scripts/check_env_drift.py` — is this environment what a fresh install would give?
+  (2026-11-12, development tooling; nothing in the installed package changes.)**
+  - **Why:** the base dependencies float on purpose and CI resolves them fresh, while a `.venv`
+    keeps what it had the day it was built, and nothing compared the two. On 2026-11-12 the
+    release worktree's venv differed from CI's install in 56 of 115 packages, the gate tools
+    among them, and the first CI run on the branch (run 43322834049) was red where this machine
+    was green.
+  - **What it does:** reads the dependencies and the named extras from `pyproject.toml`, asks pip
+    for a fresh resolve (`pip install --dry-run --ignore-installed --report`, nothing installed,
+    the project never built) and compares it with this environment. Exit 0 no drift, 1 drift
+    with the line that aligns it, 2 could not check — and 2 is never reported as "no drift".
+  - **What CI cannot do in its place:** see the macOS-only `pyobjc` packages behind both order
+    gates. A Linux runner never installs them; that evening they were at 12.2.2 against 13.0.
+  - **Tests:** ten, none touching the network; the report they read is three entries of a real
+    pip report, sliced to the fields the script reads. When to run it: `CLAUDE.md` § Dev Setup.
+  - Source: https://pip.pypa.io/en/stable/reference/installation-report/
+- **Every session write leaves an audit record (MCP security checklist 8.1; register F45, step 2 —
+  the `session_write` kind the audit entry below promised).** `gateway.session.release_session`
+  (`action: logout` — `released` / `not_released` / `error`), `attempt_soft_recovery`
+  (`action: ssodh_init`, `actor: owner` — `recovered` / `not_recovered` / `error`) and the
+  owner's `_recover` (`action: restart`, `params: {force}` — `restarted`, or `refused` with the
+  guard's code as `outcome`). A failed write records the exception's type, never its text. Held
+  in source by `test_gateway_boundary.py::test_every_session_write_records_an_audit_entry`.
+- **`python -m ibkr_core_mcp.gateway keepalive [--print-url] [--interval S]`, the package's own
+  host-side tickler (register F45, step 2, commit 11/13).** `gateway.session.keepalive_loop`:
+  `GET /tickle` every 55 s (IBKR's ~1 per minute), a line only on a state change (under launchd
+  the loop runs for months), and the suspend lock honoured — an active lock means `SUSPENDED`
+  and no request, since IBKR renews a session on any request and this is the one renewer a
+  login or a recovery cannot silence in-process. `gateway.manager.KeepAwake` holds a
+  `caffeinate -i` assertion on OK and releases it on WARN, so a 24/7 install does not keep the
+  Mac awake for a gateway that is not up; one child at a time, terminated and waited for, `PATH`
+  alone in its environment, a no-op said once at DEBUG where there is no `caffeinate`. The
+  command installs a SIGTERM handler that raises `SystemExit`, so `launchctl bootout` reaches the
+  `finally` that releases the assertion; every line is flushed. `--print-url` prints what it
+  would tickle and contacts nothing; the URL comes through the one loader (`--env-file`), so the
+  consumer's grep-and-sed reader of one `.env` line is replaced by python-dotenv's own grammar.
+  A URL that is not loopback exits 1 before any request. Behaviour identical to the consumer's
+  bash script, which it replaces, with its tests as Python.
+- **`python -m ibkr_core_mcp.gateway up | reset`, and `preflight --release` (register F45, step
+  2, commit 10/13).** `up [--wait-timeout S] [--allow-restart]` is the owner's whole sequence,
+  rendered — exit 0 LIVE, 1 DOWN, 3 for everything that blocks a login, so "opened the page and
+  it was never completed" cannot look like success; there is no `--no-wait`, because opening the
+  page suspends every tickler and a suspension has to be bounded by whoever declared it. `reset
+  [--force]` prints the verdict, asks the owner to clear the session by restarting the
+  container, prints the verdict again and, on FREE, says to log in now at the gateway's own
+  URL; the guard inside `start()` is what refuses a LIVE, REFUSED or VALIDATING session, and the
+  command only prints its reason and exits 1. `preflight --release` posts `/logout` first — the
+  one opt-in logout in the package, never without the flag, and possibly ending an IBKR Mobile
+  session too (its scope is undocumented) — then re-reads. The command line constructs a
+  `GatewayManager` and hands it to the owner; it drives none (`test_gateway_boundary.py`). The
+  consumer's three launcher tests moved with the module names changed.
+- **`ibkr_core_mcp.gateway.session` — the gateway session's one owner (register F45, step 2,
+  commit 8/13).** Moved from the consumer with its 56 tests as the specification:
+  `SessionPhase` (nine states), `SessionState`, `classify` / `observe` / `declare` /
+  `describe`, `GatewaySession` (the holder, `read_now`, `establish`, `recover`, the 60 s poll
+  with the one soft-recovery write), `SuspendLock`, `release_session`, `attempt_soft_recovery`,
+  `get_session()`; `confirm_session` is `preflight`'s. Exported from `ibkr_core_mcp.gateway`.
+  What changed in the move: the owner reads the gateway's own log itself (`_establish`'s
+  `read_login` defaults to `manager.read_login_events`); the lock is written 0600 in a 0700
+  directory and a lock naming a pid below 1 is malformed, never active, with the liveness check
+  platform-bound (`os.kill(pid, 0)` on POSIX; `OpenProcess` on Windows, where `os.kill` would
+  terminate the lock's owner) — condition E; `compete` is `COMPETE: Final = False`, spelled
+  once and held in source — condition F; `release_session` and `attempt_soft_recovery` pin
+  their URL before sending (C) and every exception rendered passes `redact_error` (G),
+  including the lock's release warning. The two session writes are allowed in this module and
+  `client.py`'s two deprecated methods only (`test_gateway_boundary.py`); the login page is
+  opened from `manager.py` and this module only.
+- **`ibkr_core_mcp.secret_store` — secrets at rest in the OS keychain, read before the `.env`
+  file (MCP security checklist 7.1; the operator's 2026-10-16 deferral lifted 2026-11-09).**
+  `keyring>=25` is a new base dependency. `Config.from_env` resolves a secret in one order — the
+  environment the user set, the OS keychain (service `ibkr_core_mcp`, the variable name as the
+  account), the `.env` file — for `SECRET_NAMES` and every name a host passes; `config.py` stays
+  the one reader of the environment and `load_env_file` the one reader of files, and neither
+  store is ever written back to the environment. A keychain that cannot be used reads as absent,
+  with one DEBUG line. The command line never prints a value: `set NAME` (typed with `getpass`),
+  `list [--env-file PATH]` (where each is held), `import-env PATH` (stores the file's secrets and
+  names the lines to remove), `delete NAME`; `--names` for a host's own. Door 7 in the test
+  suite: `pytest_configure` sets `keyring`'s null backend, and `keyring` is imported in
+  `secret_store.py` alone (`test_no_live_io.py`). Tests in `tests/test_secret_store.py` plus the
+  door; five mutations red one at a time (file before keychain; a stored value over the
+  environment; a keychain failure propagating; the door removed; a second importer). See
+  `docs/consumers.md`.
+- **`ibkr_core_mcp.audit` — one redacted record per tool call and per gated order write (MCP
+  security checklist 8.1; `docs/audits/mcp-security-checklist-2026-11-09.md`).** A JSON line
+  appended to `~/.ibkr_core/audit.jsonl` (`Config.audit_log_path`, env `IBKR_AUDIT_LOG`; a host
+  calls `audit.configure(path)` once — the MCP server's `main()` does) with `ts`, a correlation
+  `id` (shared by every record inside one `audit.call()`), `kind`, `actor`, `client` and `agent`
+  (a host's names through `audit.context(...)`; the MCP server fills `client` from the
+  initialize handshake), the tool or the gated action, the parameters **redacted** — every
+  string through the new `redaction.redact_text` (the same patterns as `redact_error`), account
+  ids masked, values capped at 200 characters, nesting at three levels — the decision
+  (`executed`, `unknown_tool`; for a write the gates' own outcome: `sent`, `denied`, `declined`,
+  `timed_out`, `refused`, `error`), the exception's type as `outcome`, a result's **length** as
+  `summary` and the duration. Never a response body, never a secret, never the home directory
+  in clear. Written from `ClaudeToolkit.execute` (every call), `mcp_server._dispatch` (the two
+  server-local tools) and `client._audited_write` on all seven `GATED_OWNERS`, held there by
+  `test_every_gated_write_records_an_audit_entry`. Fail-open: one redacted warning per path,
+  never an exception into the recorded path; the file is 0600 in a 0700 directory, one `.1`
+  rotation at 20 MB. Supersedes the 2026-09-14 decision not to keep one, whose objection —
+  unredacted parameters — this answers. Tests: 24 (fields, redaction, permissions, rotation,
+  correlation, context, fail-open, the tool-call and order-write records); two mutations red
+  (the decorator dropped from one write; the redaction dropped). `test_tool_input_validation`'s
+  routed-names probe follows `_dispatch`'s helper, where the two local tools now live. See
+  `docs/consumers.md`.
+- **`ibkr_core_mcp.gateway.preflight` — the gateway session's readings and the rule that turns
+  one into a verdict, read-only (register F45, step 1).** Moved from the consumer that wrote them,
+  with their tests as the specification of the move: `GatewayState`, `read_state` (two GETs,
+  `/tickle` and `/sso/validate`, never a write), `confirm_session` (`GET /portfolio/accounts`:
+  the proof a session serves data, and IBKR's documented prerequisite for the portfolio
+  endpoints), `verdict` with the seven `EXIT_*` codes (READY, UNREACHABLE, FREE, CONTESTED,
+  BORROWED, and REFUSED / VALIDATING from the gateway's own log), `LOGIN_PHRASES`,
+  `LoginEvent`, `login_events` (the log cut to time, event and code — the username, cookies
+  and device ids it carries stop there), `last_login`, `refine_with_log`, and
+  `gateway_api_url(env_file=None)` — the URL through `Config.from_env`, pinned to loopback.
+  Three things changed on the way: every request is preceded by `require_loopback_url`
+  (condition C); every exception that becomes a reading passes `redact_error` (condition G —
+  a `requests` error carries its URL); and every string names this package's commands and
+  documents, never a consumer's — the BORROWED guidance now ends with
+  `python -m ibkr_core_mcp.gateway reset`, the restart that cleared a borrowed session on
+  2026-08-05, where it named a `--release` that did not; the REFUSED and VALIDATING guidance
+  point at `docs/gateway-auth-reference.md`. `tests/security/test_gateway_boundary.py` holds
+  that no string literal under `ibkr_core_mcp/gateway/` names the consumer or its commands,
+  and two docstrings in `manager.py` and `__init__.py` that did were rewritten. Nothing is
+  exported from the package root yet; the command line arrives with step 1's sixth commit.
+- **`ibkr_core_mcp.gateway.manager.read_login_events(timeout=15.0)` — the gateway's own log,
+  read in-container, reduced to time, event and code (register F45, step 1, condition D).**
+  Moved from the consumer with its tests; one change: **no container parameter** — the
+  command is `docker exec <GatewayManager.CONTAINER_NAME> grep -rHF --include=gw.[0-9]*.log
+  -e <phrase>… <GATEWAY_LOG_DIR>`, constants and the six fixed phrases only, so nothing a caller
+  passes can reach `docker exec` (a value beginning with `-` is read as an option). The
+  environment is `PATH`, `HOME` and `DOCKER_*` and nothing else of the host's; the exit rule is
+  the measured one (0 → parse; 1 with empty stderr → no login recorded; else unreadable, the
+  first line of stderr the reason); an `OSError` passes `redact_error`. Returns `(events, "")`
+  or `(None, reason)`, never raises. `GATEWAY_LOG_DIR` and `_docker_env` move with it. The
+  manager's six existing exception log lines pass `redact_error` too, and
+  `test_error_redaction.py`'s raw-interpolation probe now covers `gateway/manager.py`.
+- **`python -m ibkr_core_mcp.gateway preflight | diagnose [--env-file PATH]` — the operator's
+  command line over the gateway session (register F45, step 1).** `preflight` prints the verdict
+  block — `[WORD] headline`, the guidance, the flags of a reachable reading — refined by the
+  gateway's own log after a FREE reading, and exits with the verdict's code (0 READY, 1 DOWN,
+  2 FREE, 3 BUSY, 4 BORROWED, 5 REFUSED, 6 VALIDATING); `diagnose` prints the headline, the
+  guidance, the flags and the login timeline (time, event and code per line, from the newest
+  login) and exits 0 on READY or FREE, else 3. `--env-file` is the `.env` a host keeps
+  elsewhere, read through `Config.from_env`; a non-loopback gateway URL is printed and exits 1
+  before any request. The user id is never printed and the username only in a BORROWED
+  verdict; every line is flushed; the module imports no `subprocess` (the one spawn stays in
+  the manager). The consumer's `preflight` and `diagnose` commands, word for word, with the
+  module names changed.
+- **`ContractRules` carries IBKR's per-contract fractional rule: `fractional_order_types`
+  (`fraqTypes`) and `fractional_digits` (`fraqInt`) (register F27; claudia_ui #18).** IBKR: "permitted
+  order types for use with fractional trading" and "decimal places for fractional order size"
+  (archived reference, `docs/audits/audit-evidence/scrapes/cpapi-v1.md`). Measured 2026-09-28 on
+  IDEALPRO: EUR.USD and EUR.CHF list all nine order types with 2 decimals, CHF.USD `[]` with 0 — the
+  rule is per contract, never per asset class — and the entries are IBKR's lowercase order-type
+  NAMES, not the order body's codes (2026-10-06). Neither had a typed field until now — the raw
+  mapping (`rules["fraqTypes"]`) always served them; the attributes and their defaults are new. The
+  defaults (`[]`, `0`) read as "no fractions", so a reply without them fails closed. The rules do not
+  reflect the account's own permission (AAPL lists eight types while this account's whatif says it
+  "doesn't have permission to trade fractional shares") — a consumer still needs IBKR's answer.
+- **The Gate 2 dialog has a default icon of its own: a generic exchange glyph
+  (`ibkr_core_mcp/assets/exchange-icon.png`, with its SVG source beside it; claudia_ui gap
+  #111, operator 2026-11-07: "generic and simple", a PNG that works on Windows too).** Solid
+  black on a transparent 1024-px canvas, drawn as a *template* image, so AppKit tints it to the
+  label colour in light and dark mode from the one file; a host's own icon
+  (`order_confirm.set_dialog_icon`) is drawn as it is and keeps its colours; a file AppKit cannot
+  read falls to the next, the application's icon last — an icon is never a reason to fail a
+  confirmation. The glyph is looked for beside the module's **real** file
+  (`_order_dialog._default_icon`, `Path(__file__).resolve()`): the first live dialog after it
+  was added drew the application's icon, because a strict editable install runs the script
+  through a symlink farm snapshotted at install time and the new `assets/` directory was not in
+  the farm — a test through a real symlink holds it, and the wheel probe (`scripts/verify_wheel.py`
+  `DATA_FILES`, `[tool.setuptools.package-data]` `assets/*`) ships both files. Seen live with
+  the glyph on 2026-11-07.
+- **A bracket child's TIF longer than the parent's is refused before any gate (claudia_ui
+  gap #36, operator rule 2026-10-18).** IBKR's rule, TWS guide › Using the Orders Panel: "You
+  must set the TIF for a child order equal to or shorter than that of the parent. Otherwise, the
+  TIF of the parent order will override that of the child order" — so a GTC exit on a DAY parent
+  would reach IBKR as DAY after the human approved GTC. `order_confirm.child_tif_defect` ranks
+  IOC < OPG < DAY < GTC from the guide's own Times in Force; `_bracket_tickets` raises
+  `ValueError` on it for the place, attach and preview paths alike, and `confirm_bracket_dialog`
+  repeats it as `HumanAuthError`, the pattern of the link, side, contract and H1 rules. Only a
+  stated pair is compared: a child with no TIF takes the parent's, and an unranked TIF (GTD,
+  FOK) is shown on both legs' rows, not compared. The cancel dialog's `⚠ Linked orders` row
+  now cites the same guide (Order Types › One-Cancels-All) for the OCA cancel rule it carried
+  as measured only: a member the client cancels takes the rest of the group, one the system
+  rejects or cancels does not; the field names stay undocumented
+  (`docs/ibkr-api-behaviors-reference.md`).
+- **`attach_order_and_confirm` — one child attached to an order already working at IBKR
+  (claudia_ui gap #36, design 2026-10-17 § 1).** IBKR's sequential bracket form, built as
+  exactly that: the parent is read from IBKR (`get_order_status`) **before Gate 1** and refused
+  unless working, so no fingerprint is spent on a filled or cancelled order; the child is
+  completed from IBKR's record — the parent's contract and size, the opposite side, the
+  parent's TIF unless the child states one — never from the caller, whose conid, side and
+  quantity are overridden; the bracket rules (`_bracket_tickets`: link, opposite side, same
+  contract, child ≤ parent) run unchanged with `parentId` = IBKR's own order id; one Touch ID
+  with the new scope kind `attach`, bound to the ticket **and** the parent's id, so an
+  authorization earned for one parent never covers a child of another; `confirm_bracket_dialog`
+  as Gate 2; one ticket posted through the array endpoint and the reply chain the bracket
+  uses. **One child per write** — two children on a working order are two calls. A response
+  that does not report the link is logged at ERROR and returned intact, never reported as
+  success. `attached_entry(parent_order_id, entries)` — module-level, pure, exported beside
+  `pair_bracket_response` — finds the child by the `parent_order_id` IBKR echoes, never by
+  position. In every class-level control from day one: `GATED_OWNERS`, the documented-controls
+  inventory, the denied-gate cases, the document enumerations; `get_order_status` is the second
+  named pre-gate exemption of the transitive probe, beside `_ensure_accounts_initialized`.
+  **Measured live 2026-10-18 on Ford** (a parent, three attached children, the parent cancel;
+  then two children in one request as a probe): every response carried `parent_order_id`;
+  each child's status read `parent_order_id` = `oca_group_id` = the parent's id, type
+  `ReduceOnFillNonBlock`; the live-orders feed row of a child carries `parentId` (int) and
+  `ocaGroupId` (int) equal to the parent's `orderId`. Three things the session corrected the
+  same day: `children_order_ids` is **semicolon**-separated (a comma split counted two children
+  as one); the authorization's label names the CHILD it sends — `SELL 1 F (attached to order …)`
+  — never the parent, so the reply dialogs are titled for the order being sent; the parent's
+  rows carry the company name and currency the status read reports. Tests: nine, six mutations
+  red. The `get_order_status` tool already hands the model the whole status, links included;
+  a test now holds it to that, so a typed reader that kept only documented keys would go red.
+  See `docs/consumers.md`.
+- **The bracket dialog names a parent already working at IBKR, and warns in red on a multi-lot
+  parent without all-or-none (claudia_ui gap #36, operator 2026-10-17).** `Parent — At IBKR`
+  (`order <id> · <state> · <n> attached`) when the parent carries `_working_at_ibkr`, which only
+  the attach write sets; `⚠ Partial fill` — "Quantity N: a partial fill of the parent leaves
+  each held child at N. Nothing here corrects that." — keyed on the attribute and the quantity,
+  never on the instrument: IBKR offers all-or-none on stocks, ETFs, options, bonds and EFPs and
+  never on futures (refused on CME, NYMEX and COMEX, measured 2026-09-21 and 2026-10-17), so a
+  parent carrying `allOrNone: true` cannot partially fill and a parent of 1 cannot either. Every
+  dialog row whose key starts with `⚠` now renders label and value bold in the banner's red —
+  the cancel dialog's `⚠ Linked orders` and `⚠ Attached orders` rows included. On an attach
+  the title reads `LIVE ATTACHED ORDER CONFIRMATION`, the Action row and the banner are the
+  **child's** side — the order being sent — and the disclaimer says the parent is already
+  working and not sent again (live 2026-10-18 the reused bracket wording read "The parent order
+  is sent to Interactive Brokers now" under a green BUY banner while a SELL stop was sent).
+  Tests: four; five mutations red.
+- **`ConfirmationDeclinedError` — a declined Gate 2 dialog has its own type (register F6).** A
+  subclass of `HumanAuthError`, exported, raised by all three renderers when the abandon button
+  is pressed, with the dialog's own sentence for what the click leaves in place. See *Changed*.
+- **`ReplyNotConfirmedError` — a reply IBKR was answered no to says what happened and why
+  (register F34).** A subclass of `HumanAuthError`, exported, raised by the reply chain of
+  `place_order_and_confirm`, `modify_order_and_confirm` and the bracket. See *Changed*.
+- **`set_dialog_icon(path)` — a host's own mark on the Gate 2 dialogs.** Exported from the
+  package; `None` clears it. The package ships no icon and no broker's logo: without one the
+  dialog shows the system's default. The dialog reads the file when it opens; one that cannot
+  be read leaves the default and never fails a confirmation. AppKit only; the icon keeps the
+  system's size and position.
+- **`ClaudeToolkit.store` and `ClaudeToolkit.config` — public, read-only, beside `client`
+  (register F29; claudia_ui gap #87).** A host read the private `_store` and `_config` because
+  there was nothing else to read; a private name carries no compatibility promise, and a host
+  whose tests use `MagicMock` toolkits would have learned of a rename at startup. Each returns
+  the collaborator the toolkit was built with. **The Drive cache is deliberately not exposed**
+  (the operator's decision): an accessor would hand a consumer the whole Drive client — uploads,
+  the store's backup, deletes — where the one consumer that touches it reads cached bars. The
+  public surface is now exactly `client`, `store`, `config`, `tools`, `execute`, and a test
+  holds it to that set. Tests: eleven; seven mutations red. See `docs/consumers.md`.
+- **`flex_sync.last_pull(path)` and `PullOutcome` — what the last Flex pull did, typed (register
+  F30; claudia_ui gap #86).** `sync_flex_trades` already writes one `session_log` row per pull:
+  what was fetched, whether the archive took the statement, what became of the Drive backup,
+  whether the dataset validates. A consumer could learn that the archive had refused a
+  statement — or, since this release, that the backup had failed — only by finding "⚠" in the
+  tool's text, and showed that text under a tick. `last_pull` reads the row back: `at`,
+  `trades_fetched`, `archive_ok`, `archive_reason`, `backup`, `valid`, and `problems` — the names
+  of what is known to have gone wrong, in a fixed order. A field the pull did not record is
+  `None`: unknown, not a problem and not a success. A value of the wrong type is never coerced
+  (the string "false" is truthy), so a malformed row is `None` with a warning. Never raises;
+  opens the store read-only; the account the row names is not carried. Tests: thirty, one of
+  them joining the writer and the reader through the real store, so a renamed key on either
+  side is red; twenty-three mutations red after — the first run found that nothing pinned the
+  archive key's name. See `docs/consumers.md`.
+- **`IBKRClient.cancel_order(..., *, manual_indicator=None)` — the CME Rule 536-B tag on a
+  futures cancel (claudia_ui gap #7).** IBKR's Cancel Order page lists `manualIndicator` as a
+  query parameter "required when trading Futures and Futures Options contracts to remain in
+  compliance with CME Group Rule 536-B" and says "the cancellation must also include the
+  manualIndicator tag"; the place and modify bodies already carried it, the cancel was a bare
+  `DELETE`. `True` sends `?manualIndicator=true`, `False` `?manualIndicator=false`, `None` — the
+  default — the bare request as before, so no existing caller changes. The caller states it, as
+  on place and modify; a value that is not a bool is refused with `OrderValidationError` before
+  any gate (the string `"false"` is truthy); `extOperator` is never sent; an INFO line records
+  what each cancel carried. Measured 2026-10-01 through both gates on a resting ES limit order:
+  accepted, read back `Cancelled`, the query string in the gateway's own request log — and the
+  response body identical to a bare cancel's, which is why the log line exists. Tests: fourteen,
+  twelve red first; thirteen mutations red after. See `docs/consumers.md`.
+- **`ibkr_core_mcp.flex_dataset` — a typed, read-only API over the Flex dataset (claudia_ui's
+  Flex boundary, decided 2026-09-29: this package answers questions about the account; a host
+  decides when to ask and how to show the answer).** `FlexDataset.open(path)` answers realised
+  P&L over a window (`realised_window`), the daily curve (`realised_series`), closed-lot
+  win/loss counts (`round_trip_stats`), per-asset-class performance (`realised_by_type`), how
+  far the statements reach (`coverage`), which executions a statement already holds
+  (`settled_execution_ids`), every statement execution of given contracts
+  (`contract_executions`) or filtered by symbol and trade date (`executions`), and the
+  statements' tradeIDs (`trade_ids`). Answers are frozen dataclasses (`RealisedWindow`,
+  `RealisedPoint`, `RoundTripStats`, `TypeBreakdown`, `FlexCoverage`, `FlexExecution`), never
+  rows. Every connection is opened read-only through `open_read_only`, which builds the SQLite
+  URI with `Path.as_uri()`, refuses a path holding a NUL (`as_uri()` writes it `%00`, where
+  SQLite ends the path and opens the prefix), and opens the path as `SQLiteStore` does —
+  `~` is not expanded; `Config.from_env` already did. Its errors are `UNOPENABLE`, and
+  `FlexDataset.open` turns each into `StoreError`, because a figure that cannot be read is not
+  a zero. The queries are the ones claudia_ui's dashboard ran on these
+  tables, moved here and proven equal on a real account's store — every day, week, month and
+  year of its history, to the cent — with IBKR's annual statements agreeing 6/6 years.
+  `FlexDataset` is exported from the package root.
+- **`ibkr_core_mcp.flex_sync` — the dataset's state, relocated from claudia_ui:**
+  `validate_dataset` (file integrity, `execution_key` unique and present, the realised identity
+  `Trade == Lot + WashSale`), `dataset_fingerprint`, `last_import`, `statement_through`,
+  `pull_due`, and `newest_statement_day` re-exported. None of them raises: an unreadable store
+  — a missing file, a value that is no path, a NUL — is a failed validity, an unknown
+  fingerprint, an unknown statement date; a `flex_import_log` count that is not an integer is
+  an unknown last import, not an `int()` error (claudia_ui gap #89). claudia_ui's
+  `validate_dataset_daily` (a verdict kept for the day in a `.validation.json` file beside the
+  store) is **not** carried over: the checks take a quarter of a second on a real store, so a
+  host runs `validate_dataset` at each start (operator, 2026-10-02).
+- **`FlexQueryClient.last_backup_result` (`FlexBackupResult`: `uploaded`, `unchanged`, `failed`,
+  `not-configured`).** `fetch_trades` backs `store.db` up to Drive `account_data/` after any
+  pull that changed the dataset — the fingerprint is taken before the pull writes — so a pull
+  started by the model, the MCP server or a script no longer leaves Drive's copy a version
+  behind (claudia_ui made the backup after its own startup pull only; found 2026-08-05). With
+  no Drive folder configured nothing is attempted: asking Drive anyway would start the OAuth
+  flow on every pull.
+
+- **`get_market_calendar_context` says when an exchange closes early today —
+  `early_closes_today` (register F18).** `{code: {"close": "HH:MM", "tz": zone}}` for each
+  exchange whose session today is a half day, in its own time; empty on an ordinary day, `None`
+  on the failure marker. The calendar library already held the half days; the context did not
+  carry them. Checked against eight exchanges' own pages on 2026-10-02 (the date agreed on 17
+  of 17 checks; `scripts/calendar_half_days.py` lists what to compare, and records the result).
+  CME is flagged, never timed: `futures["holiday_schedule_today"]`, with the note pointing at
+  CME's holiday calendar — its hours differ by product group. `pandas_market_calendars` was
+  measured for this and not adopted: its product calendars disagreed with CME's own page on
+  Good Friday 2027 and on four of six closing times for 2026-11-27.
+- **`fetch_market_data` says what it fetched, and the cache remembers it (market-data step 1,
+  2026-10-02).** The cache key is the ticker, and a ticker is not a listing: IGV's Mexican bars
+  in MXN were once served as IGV, with nothing on the result to show it, and served again from
+  the cache until someone flushed it. The result now names the listing the resolver chose —
+  IBKR's name, exchange, currency and conid, fields `/trsrv/stocks` and `/iserver/secdef/info`
+  already returned to it, so no new read — and states the end date it used, `(as given)` or
+  `(today, by default)`, since the indicator and backtest tools require that exact value.
+  `GDriveCache.save(..., listing=)` keeps the listing on the manifest row and the new
+  `GDriveCache.entry()` reads it back, so a cache hit names its listing too; a row saved before
+  reads "listing not recorded for this entry". `list_cache` prints it after each entry that has
+  one. The tool's description now says STK only — a futures root such as `ES` resolves to the
+  stock with that ticker. **The cache miss on `add_indicators`, `run_backtest` and
+  `get_analytics` lists the symbol's cached windows** and, with none, names the fetch's end
+  default; "fetch it first" alone had sent the model back to repeat a fetch it had just made
+  under another end date. `_Resolved` gains `name` and `exchange` (None = not read, never a
+  default) and `listing()` / `describe()`.
+- **`fetch_market_data` serves futures, pins one contract, and the hours are explicit and
+  keyed (market-data step 2, operator decisions 2026-10-03).** `sec_type` in IB's own codes —
+  `STK` (default, stated) or `FUT`, the enum listing only what the tool serves; `conid` pins
+  one futures contract, expired ones included (the result says `expired <date>`). A root
+  resolves to the front-month contract by the rule every tool uses (#58/#71) and the bars are
+  that contract's own, thin before it was the front month; **no continuous series** (IBKR: TWS
+  API only). **One contract, one key:** a future is cached under its own symbol (`ESZ6`), so
+  ESU6 and ESZ6 never share an entry and a roll produces a new key by itself; a contract IBKR
+  cannot describe is not fetched. **`outside_rth`** (`true`/`false`) on the fetch, the three
+  cache readers, `check_cache` and `delete_cache`, default by type on the fetch — `STK` false,
+  `FUT` true — and false on the readers, stated on every result; **it is part of the cache key**
+  (`…_RTH` / `…_ALL`, both written): IBKR's daily stock bar changed on 20 of 20 days with the
+  flag, so the two series are different data (probe 2026-10-03,
+  `claudia_ui/docs/plans/2026-10-03-outside-rth-probe/`). The operator flushed the pre-2.2.0
+  cache the same day; a row without the hours field is listed as legacy. **Stamps are IBKR's
+  and are kept:** an all-hours futures bar is stamped at its session open (18:00 ET the evening
+  before — Thursday 18:00 is Friday's session; a CME holiday session is one bar), so such a
+  series prints its stamps as opens in ET with that rule, `add_indicators` says "last bar
+  stamped … (its session open)", and nothing computes a session date (a calendar library dates
+  the holiday bar wrong). `GDriveCache.check/load/save/entry/delete` take `outside_rth=`;
+  `_Resolved` gains `root` and `local_symbol`; `_futures_identity` keeps the exchange. Live
+  2026-10-03 through the real cache and gateway: ES → ESZ6, CL → CLX6 (NYMEX, both stamp rules
+  the same), ESU6 by conid "expired 2026-09-18", the bare `ES` named Eversource, the readers'
+  hours and misses. Witnessed on TradingView's ETH charts by the operator: the Friday bars of
+  ES and CL equal IBKR's Thursday-18:00-stamped bars, four prices each; CL's volume differs
+  (−26%) because IBKR's historical volume is filtered (no blocks, combos or derivative-priced
+  trades) while CME's reported volume includes ClearPort, blocks and EFRP legs — stated in the
+  tool description and documented under Volume in the tools reference. **New
+  `docs/market-data-conventions.md`:** what a bar is, by asset class (STK, FUT) and source
+  (IBKR, the exchange / the SIPs, TradingView) — stamps, hours, volume, keys, expiry — every
+  convention with its dated proof and every official page linked.
+- **Indicators take TradingView's settings, under TradingView's names, and print them on every
+  line (market-data step 4, operator decisions 2026-10-05; register F4).** `add_indicators`
+  computed everything on `close` at fixed lengths and no setting reached the model; a framework
+  of averages and bands on (high + low)/2 could not be asked for at all. It now takes seven
+  optional inputs, each one TradingView's own: **`source`** for the moving averages and the
+  Bollinger bands — Pine's eight, `open` `high` `low` `close` `hl2` `hlc3` `ohlc4` `hlcc4`;
+  **`oscillator_source`** for RSI and MACD; **`ma_type`** — `SMA`, `EMA`, `SMMA (RMA)`, `WMA`,
+  `VWMA`, the type of the averages and the bands' *Basis MA Type*; **`ma_periods`** (a list);
+  **`band_period`** and **`band_stds`** (a list — one band pair each, `[1, 2, 2.5]`); and
+  **`offset`**. The result opens with the configuration, every setting marked `(by default)` or
+  `(as given)`, and labels the averages and bands as TradingView's chart legend does — `SMA 200
+  hl2`, `BB 200 SMA hl2 2.5` — followed by where the last bar's close sits against the bands'
+  basis: `last close 15.00 = SMA 3 hl2 + 1.84 StdDev (1 StdDev = 1.63: population standard
+  deviation of hl2 over 3 bars)`. **Defaults (the operator's decision): the averages and bands
+  read `hl2`, stated; RSI and MACD read `close`, the price both are defined on.** A source or
+  type outside TradingView's lists is refused with the list, never computed on `close` under
+  the name that was asked for. **A line never prints `nan`:** too few bars reads `n/a — 126
+  bars in the window, 200 needed; fetch a longer period`, an undefined value says so, and
+  nothing is fetched behind the scenes — the description tells the model to ask for a period
+  longer than its longest length. The bands' basis and deviation share one source (`ta.bb`);
+  `ma_type` on the bands moves the basis line only, as TradingView's help text says, which John
+  Bollinger's own rule 13 disagrees with — documented, and not yet held against a chart with a
+  non-SMA basis. Offset reports what TradingView draws on the last bar. In
+  `ibkr_core_mcp.indicators`: `SOURCES`, `MA_TYPES`, `price_source`, `moving_average`, and a
+  `source` argument on `sma`, `ema`, `rsi`, `macd` and `bollinger_bands` (which also takes
+  `ma_type`) — **every one defaulting to `close`, so existing callers are unchanged**. Not
+  offered: MACD's MA types, RSI's smoothing and divergence, another timeframe. **New
+  `docs/indicators-reference.md`:** every setting with its TradingView name, its default and
+  whose default it is, each definition in its source's own words, the `n/a` rules, what is not
+  offered, what is not yet established, and every official page. Tests: eleven, the figures
+  worked by hand from Pine's definitions; 32 mutations red.
+- **`LoginWindow` — the login window's handle (register F44; claudia_ui gap #102).** Exported from
+  `ibkr_core_mcp.gateway`. `close()` ends the window's Chrome and returns whether it was its own to
+  close: `False` when that process had already exited by itself — the operator quit it, or the launch
+  was handed to a Chrome already running on the login profile (measured 2026-10-13: that second launch
+  exits rc 0 and the running instance opens the window, out of the handle's reach).
+
+### Changed
+- **CI's test job runs on the weekly schedule too, not only on a push (2026-11-12).** The
+  schedule ran the dependency audit alone: the test job carried `if: github.event_name !=
+  'schedule'`. So a dependency release that broke the code was seen at the next push to `main` —
+  and between 2026-09-22 and 2026-11-12 there was none, while pandas 3.1.1 broke a documented
+  backtest strategy and pytest 9.2.0 began tripping the suite's own human-gate alarm. The
+  condition is removed and `test_the_ci_test_job_runs_on_the_weekly_schedule_too` holds it (red
+  before the change). A schedule runs on the default branch only, and GitHub pauses it after 60
+  days without repository activity. The two defects it would have shown are **not fixed by this
+  entry**.
+- **`add_indicators`' result says how a continuous chart differs from the contract it computes on
+  (register F4, 2026-11-12; the operator's wording, approved verbatim).**
+  - **What changed:** under the first note, every result now reads: "A future contract is computed on its
+    own contract's prices. A continuous chart (TradingView's ES1!, for example) joins contracts, so its
+    bars before a contract switch are the earlier contract's, back-adjusted only if that chart setting is
+    on. A line that reaches back across a switch can therefore read differently: window lines (SMA, WMA,
+    VWMA, the bands' width, Stoch, %R) only while their window spans the switch, and recursive lines (EMA,
+    SMMA, RSI, MACD, ATR) by an amount that shrinks with every bar after it. To compare, use the chart of
+    the contract itself."
+  - **Measured the same day, against TradingView:**
+    - on ESZ2026's own chart, the EMA 200 hl2 equalled this package's to the cent, same bar, identical
+      O/H/L/C;
+    - so did ES1!'s, about two months after its 2026-09-15 switch;
+    - on 2026-10-06, about three weeks after the switch, ES1! read 0.03 away;
+    - TradingView's back-adjustment is off by default.
+  - **Test:** `test_add_indicators_says_how_a_continuous_chart_differs_from_the_contract` pins the wording,
+    red before the change and red against a one-word mutant.
+  - **Corrected on the way:**
+    - the tool's description now lists the recursive lines as EMA, SMMA, RSI, MACD and ATR (it read "EMA,
+      RSI and MACD");
+    - `docs/indicators-reference.md` no longer says the history "never matters" for RSI and MACD once their
+      minimum bars are there. At those minimums the starting value still carries much of the result, and
+      the reference now gives the arithmetic.
+- **A session write made from the gateway's command line names it in the audit record
+  (2026-11-11; a follow-up to register F45).** `python -m ibkr_core_mcp.gateway …` now runs its
+  subcommand inside `audit.context(client="ibkr_core_mcp.gateway", agent="none")`, so
+  `--release`'s logout and a restart or its refusal from `reset` / `up --allow-restart` say where
+  they came from. Until now the record read `client: unknown, agent: unknown` — seen 2026-11-09
+  on the operator's gateway, on a refused `reset`. `none`, not `unknown`: no agent acts on a
+  command line, an operator typed it. The names end with the command (a record made after
+  `main()` returns reads `unknown` again), and `GatewayManager.startup()` and a host calling
+  `establish` are still the host's to name. Tests: the real `release_session` through
+  `preflight --release` with its POST stood in, and `up` / `reset` with an owner that records;
+  five mutations each red (the context removed; the agent or the client left out; the names
+  never taken back; a client naming the consumer, which the existing consumer-name guard also
+  refuses). Not seen live.
+- **`GatewayManager.startup()` is the owner's sequence: `get_session().establish(self,
+  url=…, allow_restart=False)`, True when the session is LIVE (register F45, step 2, commit
+  10/13).** The command line's `up`, a host's button and this method now share one sequence and
+  cannot drift. Gone with the old body: the two `input()` prompts (the owner polls until
+  authenticated, connected and confirmed against a data endpoint, or its 300 s timeout) and
+  step 1's gate inside the method. What that gate held is held by the owner's rules, with two
+  differences a consumer should know: a login IBKR **refused** is named before the page opens
+  and the page still opens — the operator's rule of 2026-10-12 (the remedy is a website login,
+  then one gateway login; withholding the page would deadlock it), which step 1's gate had
+  overridden; and a login IBKR is still **validating** gets no second page — the owner's one
+  addition in the move, since its rule had no case for it and step 1's protection would have
+  gone with the body it guarded (`test_a_login_ibkr_is_still_answering_gets_no_second_page`).
+  A LIVE session is left alone; CONTESTED and BORROWED are reported and never resolved from
+  here; a gateway that does not answer gets no page. The F44 window handling is the owner's:
+  closed at the first authenticated-and-connected reading, left open and said otherwise.
+- **`GatewayManager.start()` and `restart()` are guarded: a LIVE, REFUSED or VALIDATING
+  session raises `RestartRefusedError` before any Docker command (register F45, step 2,
+  commit 9/13; condition F).** A restart gives the gateway a fresh Java process and so ends
+  whatever session the container holds. The guard is the consumer's reset rule as a function,
+  `gateway.manager.restart_refusal(api_url) -> (code, reason) | None`: read the session; a
+  gateway that does not answer has nothing to protect (None — `startup()`'s own path to
+  `start()`); FREE is refined by the gateway's log; READY, REFUSED and VALIDATING refuse with
+  the verdict's code and its headline and guidance (a working session must not be ended for
+  nothing — a needless re-login is what escalates into the IB Key challenge; a restart did not
+  clear IBKR's refusal on 2026-10-08; a login IBKR is still answering would be cut off); FREE,
+  BORROWED and CONTESTED go ahead. `start(force=True)` / `restart(force=True)` skip it. The
+  owner's `recover(..., force=False)` turns a refusal into a reading — the phase from the wire,
+  the refusal as `detail` — and `establish()` never forces. `RestartRefusedError(GatewayError)`
+  carries `.code` and `.reason`. Tests: the reset rule's cases on `start()`, the refusal
+  function over eight readings, the owner's handling; five mutations red one at a time.
+- **`GatewayManager.startup()` reads the session before opening any login page, and opens none
+  on a reading that must not be logged into (register F45, step 1).** After `wait_for_gateway`
+  it runs the pre-flight's rule — `preflight.read_state`, `verdict`, the gateway's own log after a
+  FREE reading — and acts on the verdict: READY returns `True` at once; CONTESTED, BORROWED,
+  REFUSED, VALIDATING, and a gateway that stopped answering between the wait and the read, print
+  `[WORD] headline`, the guidance and "No login page opened." and return `False`; only FREE goes
+  on to the login window as before. `is_authenticated` cannot tell those four from "nobody has
+  logged in", and on three of them a login is the wrong move (the IB Key escalation, the
+  tug-of-war, a refusal that needs a website login first). The log is read only after a FREE
+  reading. See `docs/consumers.md`.
+- **`GatewayManager.start()` restarts a current container in place instead of removing it, and
+  `restart()` is `start()` (register F43; claudia_ui gap #93).** Every start removed the
+  container and ran a new one, and the gateway's own log — kept in the container, the one place a
+  login IBKR refused shows — went with it. A container that runs the image the tag names now and
+  was made with the manager's own run options, recorded on it as the label
+  `ibkr-core-mcp.run-options`, is `docker restart`ed instead: a stopped one starts, a running one
+  gets a new Java process, so the session is as clean as before and the container's files are
+  kept. Any other container — another image, other options, not this label — is removed and run
+  anew as before, and so is one Docker will not restart. That is Docker Compose's rule: it recreates a
+  container when "the service's configuration or image was changed after the container's
+  creation" (https://docs.docker.com/reference/cli/docker/compose/up/). The label, not the port
+  alone, because a container keeps the options it was made with: the `TICKLE_*` variables removed
+  on 2026-08-07 would have stayed in a reused container. Measured 2026-11-07 on a throwaway
+  container: `docker restart` started a stopped one and gave a running one a new pid, and a file
+  written inside survived both. Containers made before this release do not carry this label, so the
+  first start after upgrading recreates the container once. Seen live on the gateway's own container
+  the same day, with no login: recreated once, then a stop and a start restarted it in place, its
+  log kept and appended to.
+- **`preview_order` previews a fractional quantity as given (register F37; claudia_ui #18).** The
+  tool cast `quantity` to `int` and its schema typed it `integer`, so a 1000.5 ticket was previewed
+  as 1000 and the preview did not describe the order about to be proposed. IBKR's whatif takes
+  `quantity` as a float ("the total number of shares traded", archived reference) and accepts a
+  fraction where the contract's rules permit it (measured 2026-10-06: EUR.USD SELL 1000.5 priced
+  with IBKR's own arithmetic on the fraction; CHF.USD 1000.5 → IBKR's own HTTP 500). The schema is
+  `number` and says a fraction is previewed as given; a whole number — `10` or JSON's `10.0` — still
+  goes out as the int `10`, as every preview was sent until now, and the headline states the
+  quantity priced (`SELL 1000.5 EUR.USD`); zero and negatives are refused as before ("a positive
+  number"). ClaudIA's side (fractional proposals) was built and live-verified on FX 2026-10-06.
+- **The Gate 2 dialog is the core's own modal window, one layout at every height (claudia_ui
+  gap #111; operator 2026-11-06: "buttons CENTERED, same order blue-red AND side by side …
+  always the same and expected").** `_order_dialog.py` drew an `NSAlert` until now, and NSAlert
+  chooses among three layouts by its content's height and its labels' width (measured
+  off-screen 2026-11-06, macOS 27 / PyObjC 12.2.2): the same bracket dialog came out with its
+  buttons side by side at the bottom right one time and stacked and centred the next, and the
+  swap that put the validating button first ran on one of the three. `_build_dialog` now lays
+  out a titled `NSWindow` with no close, minimise or zoom button — the icon, the title, the
+  typed rows, the disclaimer, the banner, and ONE row of two equal 150 × 32 pt buttons 12 pt
+  apart, centred, the validating button blue on the LEFT and the abandon button red on the
+  RIGHT — and `_run_alert` runs it with `runModalForWindow_` at `NSModalPanelWindowLevel`.
+  Each button's target is a plain Python `_Decision` whose two methods stop the loop with 1000
+  and 1001, the codes `outcome_token` already read, so the three stdout tokens, the JSON
+  payload, the timer in `NSModalPanelRunLoopMode`, `order_confirm.py`, the AppleScript
+  fallback and every caller are unchanged; Escape stays the abandon button's and Return is
+  nobody's. The tests find each button by its TITLE and hold the frames (blue left of red,
+  equal, 12 apart, centred in the window), the same frames at a 100-pt and a 2,000-pt body,
+  the mask and level, the click → code → token chain and the icon fallback; ten mutants each
+  killed by its own test; the three dialogs drawn off-screen from the shipped code. Sources:
+  Apple, `runModal(for:)` — "returns the argument passed to stopModal(withCode:)", centres the
+  window and makes it key itself, fires only the modal loop's timers; `NSButton.keyEquivalent`
+  — none by default. **The validating button also refuses keyboard focus**
+  (`refusesFirstResponder`): with Full Keyboard Access on, Space presses the focused button, and
+  "explicit mouse click on the confirm button" (SECURITY.md § Gate 2; OWASP Transaction
+  Authorization § 1.1, What You See Is What You Sign) must hold for the keyboard too — the
+  abandon button may take focus, so Space can at most abandon (review finding, operator
+  2026-11-07). **What keeps the button target alive** is PyObjC's outer autorelease pool, not
+  the Python reference (`NSControl.target` is weak and points at the proxy; measured:
+  `objc.recycleAutoreleasePool()` makes a target None, nothing in this one-shot script recycles
+  it, and the live loop kept the target through a 49-second dialog; were it ever gone, a click
+  would do nothing and the dialog would end TIMED_OUT, never CONFIRMED). Seen live 2026-11-07
+  from ClaudIA: the place dialog three times, the cancel dialog, the bracket dialog — the one
+  layout at every height, each ended with the red button; a dialog left alone timed out at 60 s
+  (claudia_ui Live Test Log).
+- **`add_indicators` tells the model how to report its lines (register F40, claudia_ui gap
+  #95).** Live 2026-10-08 the tool returned `EMA 20 hl2: 332.05 (over 123 bars)` and the reply read
+  `EMA 20 (hl2): 332.05`, "rising": the clause agreed on 2026-10-06 — the number of bars a
+  recursive average was computed over, which is part of its value — was dropped, and a slope the
+  result does not carry was added. The fix is in the tool's own text, not a host's prompt
+  (operator 2026-10-08; Anthropic ranks the tool definition above prompt rules for how a model
+  uses a result, https://www.anthropic.com/engineering/writing-tools-for-agents): the description
+  now says to report each line as printed, `'(over N bars)'` included, and that no line carries a
+  slope, trend or direction; and the result's own first body line repeats it on every call —
+  `Quote each line as printed, '(over N bars)' included — the bar count is part of the value; no
+  line carries a slope, trend or direction.` Verified on the live path by the host
+  (claudia_ui's live list): the reply quotes the clause and adds no direction — left to that run.
+- **The bracket dialog is three sections, each titled once (operator design 2026-10-19, after
+  the first live bracket).** `Parent`, `Profit taker`, `Stop loss` — a blank line, the title once in
+  bold, the leg's rows indented beneath it — instead of `Parent — Symbol`, `Stop loss — TIF` on every
+  row; `Account` and the banner's `Action` stay above the sections, and the Parent section keeps the
+  parent's own Action, which an attach dialog had shown nowhere (its top-level Action is the child's).
+  A section is a dict value in `details`, drawn the same way by all three renderers
+  (`_detail_lines` for osascript and tkinter, `_order_dialog._run_alert` in AppKit); a `⚠` row inside
+  a section is red and bold like a top-level one. `At IBKR` and `Notional (est.)` are Parent rows;
+  each child section opens with `Held by IBKR: until the parent fills`. **The `Children together`
+  paragraph is withdrawn** ("too long text is NOT explicit and loses impact"): the one thing it had
+  to say, the partial-fill risk, is the red `⚠ Partial fill` row, now one sentence — `Parent N lots
+  without All-or-None: it can fill in part, and IBKR does not document what becomes of the N-lot
+  children.` — shown exactly when the risk exists. Review item 2026-09-08 (the aggregate reading)
+  is superseded by this.
+- **`_resolve_reply_chain` extracted from `place_bracket_and_confirm` (2026-10-17).** The walk
+  over every index of a multi-ticket reply chain is one private method, shared by the bracket
+  and the attach writes. No behaviour change: the existing `test_place_bracket_*` tests pin it —
+  a reply on the second ticket, a terminal leg kept while another still replies, a re-sent
+  reply id refused, replies answered in index order back-to-back.
+- **The indicators are witnessed against a TradingView chart (2026-10-06).** The operator's
+  screenshots of ES1! 1h on the bar that opened 2026-10-05 16:00 ET against `add_indicators` on
+  ESZ6: SMA 25 / 50 / 100 / 200 hl2 and the three `BB 200 SMA hl2` pairs (StdDev 1, 2, 3) agree
+  to the cent, ten of ten figures; with Basis MA Type = EMA the band half-widths are unchanged to
+  the cent — so the deviation does not follow the basis type, as `indicators-reference.md` §4
+  read TradingView's help text — and the EMA basis is 0.10 apart (7,759.80 against 7,759.90),
+  which is the EMA's dependence on its history: computed over 479 bars here, the whole chart
+  there; measured over 1,000 or more bars it is within 0.03, the pre-roll difference between
+  ES1! and ESZ6's own bars. §12 of the reference carries the table, the measurement and a rule
+  of thumb (fetch at least five times an EMA's length for cent-level agreement); the one item
+  left not established is the EMA basis against a chart with identical history. **Built on the
+  operator's yes ("as text, not charting"): an `EMA` or `SMMA (RMA)` line, and a band line
+  whose basis is one, adds `(over N bars)` — `EMA 200 hl2: 7759.90 (over 479 bars)` — the one
+  piece of information that explains such a gap; SMA, WMA and VWMA lines are unchanged, as are
+  RSI and MACD. Tests: the three types on the worked frame; two mutants red.**
+- **A bar size outside IBKR's step table is refused before any request, second bars with
+  their own reason (register F22).** `get_market_history`, `get_market_history_paginated` and
+  `fetch_market_data` refuse `bar` values that are not one of the fifteen sizes IBKR's step
+  table offers (`_bar_problem`), the way a period outside the grammar has been refused since
+  `1165894`: IBKR answers a size it does not know with a size of its own. Second bars are the
+  named case: `bar=1S` is real at IBKR (re-measured 2026-10-05 — 300 genuine one-second bars
+  for five minutes, `barLength: 1`) but their `t` is 60 seconds apart, the last of them reading
+  18:53:59 ET for a true 13:59:58; until now the client lowercased it to `1s`, which IBKR
+  answers with HTTP 500, three attempts and an unhelpful error. The operator's decision: no
+  stamp is ever changed in this package, so this package refuses second bars with that reason and the
+  list of sizes offered, and remain a question for the study database's own design. The paging
+  loop also sends `bar` lowercased now, as the single call has since 2026-07-06. Tests: four
+  bars × two methods at the client, the tool's refusal (nothing resolved, read or cached), the
+  lowercased loop; mutants red (seconds branch removed, single call unchecked).
+- **`fetch_market_data` never keeps a half candle: a bar is stored only once its period has
+  ended for a minute before the read, and every result says when IBKR was read (market-data
+  step 5, operator 2026-10-05).** Measured that evening on the live gateway: an un-anchored
+  history request's newest bar is the one IBKR is still writing (ES 1h at 18:04 ET: the 18:00
+  bar, close 7,833.75 → 7,834.75 and volume 1,263 → 1,380 between two reads a minute apart;
+  a 1-minute bar appears about 6 s into its minute), and IBKR publishes a bar's last trades one
+  to four seconds after the bar ends (eight bars watched: short of its last trades at +0.5 s in
+  three of five, final from +1.5 s in five of five, once still short at +3.5 s; nothing moved
+  later, and an anchored re-read agreed with every final value). Until now the fetch stored
+  that newest bar under today's key, a hit later the same day served it as it stood with no
+  word on when it was read, and `add_indicators` reported its price as "last close". The
+  operator's rule: "Do NOT attempt to make half candles" — a hard-coded delay, acknowledged;
+  "accuracy and precision is number one priority, speed is not"; the tool is for analysis and
+  backtesting, the live chart is TradingView's. So `_SETTLE_SECONDS = 60` (fifteen times the
+  longest lag seen): at the fetch, a bar whose period — the requested bar size — had not ended
+  a full minute before the read is not kept, the result names it (`Not kept: the bar stamped
+  2026-10-05 18:00 ET — a bar counts once its period has ended for a minute before the read.`),
+  a fetch whose every bar is still open saves nothing and says so, and the cache therefore
+  holds completed bars only — `add_indicators`, `run_backtest` and `get_analytics` inherit the
+  rule without a line of their own. A daily bar is kept from the next morning. Every fetch
+  result carries `read from IBKR 2026-10-05 17:28 ET`; a cache hit carries it from the
+  manifest's `cached_at` (`read time not recorded for this entry` on older rows). Tests: the
+  rule at −30 min, +30 s and +60 s, the all-open fetch, the hit's read time; three mutants red
+  (margin 0, strict boundary, bar length dropped). Entries saved before 2.2.0 may end with a
+  bar that was open at their read; the cache is flushed at the pin move. Docs:
+  `tools-reference.md`, `market-data-conventions.md`, `indicators-reference.md` (the "last bar
+  in progress" item moves from not established to handled), `ibkr-api-behaviors-reference.md`.
+- **Time in force is documented in one place, and two comments that misstated IBKR are
+  corrected (register F11, F15).** New section in `docs/order-management-examples.md`: the
+  three places IBKR states TIF values and how they disagree — the order body's enum (`DAY`,
+  `IOC`, `GTC`, `OPG`, `PAX`), the overnight page (`OVT`, `OND`), and each contract's own rules
+  (which also return `GTD`); what a stock and a future returned (2026-09-24); how a TIF reads
+  back (`DAY` on the status endpoint, `CLOSE` on the live-orders one); what each surface of this
+  package does — the client sends a body's `tif` as given, `preview_order` offers four values
+  and cannot preview `GTD` / `OVT` / `OND`; auction orders; and what is not established (`PAX`,
+  `MOC` / `LOC` on place, a `GTD` order's expiry). `preview_order`'s code said its four values
+  were "IBKR's place-order enum" citing a page that carries no TIF list, and that `MOC` / `LOC`
+  "are not in the documented type list" — IBKR's enum has five values, on another page, and
+  `MOC` / `LOC` are documented for the Web API on IBKR's order-type pages. No behaviour changed.
+- **The indicator study `generate_pinescript` writes lets the chart choose each price
+  source.** Every call had `close` written into it, so a study on (high + low)/2 meant editing
+  the script. Each indicator that takes a source — RSI, MACD, the bands, EMA, SMA — declares
+  it as a TradingView input, `input.source(close, "… Source")`: the default is unchanged, and
+  any source is one choice in the script's settings, per indicator (operator, 2026-10-05:
+  keep the default, as long as hl2 is easy to specify). The tool still takes no lengths or
+  sources; the strategy script generated from a backtest is unchanged. Not compiled in
+  TradingView by this change — the syntax is the one in TradingView's v5 manual.
+- **`add_indicators`' output with no settings given is not what it was.** The Bollinger bands
+  are computed on `hl2` (they were on `close`), and are labelled `BB 20 SMA hl2 2: basis /
+  upper / lower` where the line read `BB Upper/Mid/Low`; RSI and MACD name their source
+  (`RSI(14) close`); the configuration is printed above the values; a value that does not exist
+  reads `n/a` with the reason where it read `nan`. `source="close"` restores the previous bands.
+- **The Gate 2 dialogs, reviewed with the operator on the rendered dialogs, one at a time
+  (register F6; claudia_ui gap #67).**
+  - *One colour rule:* on every dialog the button that validates is solid blue and the button
+    that discards is solid red, each with a white title; the banner says what the action is. All
+    buttons were neutral grey. The fill is the button's own layer, not `bezelColor`: AppKit
+    draws a tinted bezel only while the window is active, and a dialog that opened while the
+    operator was typing elsewhere showed white titles on grey. The red is the banner's, by one
+    constant; `hasDestructiveAction` (pale pink, red text) was shown and rejected.
+  - *The cancel dialog's buttons are `VALIDATE` and `DISCARD`* (were `CANCEL ORDER` and
+    `KEEP ORDER`), and the validating button comes first whichever way the system lays the row
+    out — side by side it used to come second. Moved, not re-added: the button that reports
+    CONFIRMED is unchanged. **A consumer naming the Gate 2 cancel button must update.**
+  - *An abandon says what it leaves:* "Not sent — nothing reached IBKR." (place, bracket), "Left
+    unchanged — the order is as it was." (modify), "Kept — the order is still working."
+    (cancel), "Not confirmed — the order was not placed." (reply), raised as
+    `ConfirmationDeclinedError`. It was `HumanAuthError("Order cancelled by user")` on every
+    dialog, the cancel dialog's `KEEP ORDER` included. **A consumer that matched those words
+    must match the type.**
+  - *The reply dialog reads `CONFIRM` / `CANCEL`* (were `CONFIRM REPLY` / `DO NOT REPLY`;
+    register F35, reviewed on the rendered dialog for a new order and for a modify), and its
+    sentence says what each button does for the write the question belongs to: "CONFIRM sends
+    the order. CANCEL: the order is not placed.", or, on a modify, "CONFIRM applies the change.
+    CANCEL: the order stays as it was." — with "Not confirmed — the order is as it was." as
+    that case's abandon sentence. `confirm_reply_dialog` takes `modifies=`; the reply chain
+    passes it from the write's authorization (`OrderWriteAuthorization.kind`).
+  - The banner text is centred; the banner for an unstated side is a caution yellow
+    (0.90, 0.72, 0.00), the amber before it "not a good color" on screen.
+  - Each dialog must state its abandon sentence: the shared renderer has no default for it.
+    The colours are one rule for every dialog, not a setting.
+- **A reply that was not confirmed says what happened and why (register F34).** The reply chain
+  raised `HumanAuthError("User declined IBKR order reply")` whenever the reply dialog did not
+  end in a confirmation — a decline, a dialog nobody answered, and a dialog that failed alike.
+  It now raises `ReplyNotConfirmedError`, still after answering IBKR no: "IBKR asked for a
+  confirmation before accepting the request, and it was declined at the dialog — IBKR was
+  answered no. IBKR's question: "…"", or "…and nobody answered the dialog in time…", or "…and
+  the dialog could not be completed (…)…". The question is IBKR's text as the dialog showed it,
+  on one line; `__cause__` is the dialog's own error. Deliberately not either Gate 2 type and
+  never "nothing was sent": the write had been posted when IBKR asked. **A consumer that matched
+  the words "declined IBKR order reply" must match the type.**
+- **`get_trades(source='store')` reads the Flex dataset (register F20, claudia_ui gap #74).** It
+  summed `realized_pnl` from the legacy `trades` table, which holds a fill captured live and
+  its statement row under two ids and no realised figure for rows imported before 2026-05-26,
+  so its total disagreed with the rule reconciled against IBKR's annual statements. It now
+  lists `FlexDataset.executions` — the statement executions, each once — and its total is
+  `realised_window`'s for the same dates, to the cent. The header names the statement's own
+  `toDate`; the end date is inclusive (the legacy reader compared a date with a timestamp and
+  dropped the end day); the symbol is IBKR's statement symbol, matched without regard to the
+  case of its ASCII letters (a future's is its contract symbol, `ESU6`); fills since the last
+  statement are named as absent — `source='live'` has them.
+- **`verify_flex_import` compares the XML's tradeIDs with the Flex dataset's
+  (`FlexDataset.trade_ids`)**, not the legacy table's. On a real store the two sets were equal;
+  the legacy table's other ids were live-captured duplicates.
+- **`ibkr://trades/recent` lists the 100 newest statement executions (T+1)** in the key set it
+  has always served (`execution_id` is the tradeID, `size` signed, `commission` a positive
+  cost), plus `trade_date`; each execution appears once.
+- **`get_trade_date_coverage` counts the Flex dataset** — statement rows by IBKR's trade date,
+  live placeholders by their fill date — instead of the legacy table. `total_trades` is now a
+  count of executions, not rows (1,255 against 1,388 on a real store), and a gap that began
+  with an FX fill on a Friday evening now begins on that fill's trade date, the Monday.
+- **`sync_flex_trades` reports the Drive backup and re-validates the dataset after every pull,
+  whoever started it:** "store.db backed up to Drive account_data/.", "store.db unchanged by
+  this pull — Drive backup left as is.", or "⚠ store.db Drive backup failed: <reason>", and a
+  warning line when the dataset fails validation.
+- **The MCP server's `--stream` loop records each execution in the Flex dataset as a
+  placeholder**, as `get_trades(source='live')` has since 2026-08-04, so the activity report
+  sees the fill and its statement lands on the same row.
+- **`GatewayManager.open_login_page()` opens the login in a small Chrome window of its own and returns
+  its `LoginWindow` (register F44; claudia_ui gap #102)** — its own profile `~/.ibkr_core/login-chrome`,
+  app mode, 540×680, the gateway's login frame (operator: "smaller but still perfectly good"). The launch
+  is list form, no shell, in a process session of its own, and Chrome receives only named environment
+  variables (`PATH`, `HOME`, and those Windows and Linux need for a window), so a host's secrets stay in
+  the host. No Chrome, or one that will not start → the default browser's tab, as before, and `None`.
+  `startup()` closes the window once the session is verified; a failed login leaves it open. Nothing
+  keeps a window on top — no browser or Chrome switch can. Measured 2026-10-13 against the live gateway:
+  two logins through the window, each closed through its handle with no Chrome left behind; the
+  gateway's certificate warning shown in a fresh profile and not again at the second login, six hours
+  later; and `/portfolio/accounts` and `/iserver/accounts` answered with no cookie at all (12 reads, two
+  sessions), so a login in the window's own profile takes nothing from a client that sends no cookie.
+  Not measured: what a stale default-profile cookie does, for a client able to read Chrome's cookie
+  file — on the Mac measured, `BrowserCookieAuth` was refused that file ("Operation not permitted") and
+  sent none.
+
+### Deprecated
+- **`IBKRClient.logout()` and `IBKRClient.reauthenticate()` — removed in 3.0 (register F45,
+  step 2, commit 12/13).** Each emits a `DeprecationWarning` naming the gateway session's one
+  owner, `ibkr_core_mcp.gateway.session`, and still sends its request. The replacements: `python
+  -m ibkr_core_mcp.gateway preflight --release` / `release_session(url)` for the one opt-in
+  logout; `reset` / `recover()` for a session a restart can clear; nothing for a soft timeout,
+  which the owner's poll recovers. `test_gateway_boundary.py` keeps both in the owner set until
+  3.0. See `docs/consumers.md`.
+- **`SQLiteStore.get_trades` and `SQLiteStore.get_all_execution_ids`.** They read the legacy
+  `trades` table, which no reader in this package uses any more; use `FlexDataset.executions`
+  and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
+
+### Fixed
+- **The Gate 2 dialogs no longer print price × quantity as an option's total (found 2026-11-12,
+  while the README's order paragraph was being checked against the code).**
+  - **What it printed:** for ten option contracts at 2.50 USD, `Total (est.): 25.00 USD`. IBKR's
+    own worked example of `/iserver/secdef/info` is an AAPL put with `"secType": "OPT"` and
+    `"multiplier": "100"`, so the figure was 100 times too small, on the last screen before the
+    write. Futures and futures options have been refused since 2026-09-21; `OPT` was not in the
+    list. Measured on the dialog's row builder, with no gateway. No option order has been placed
+    live through this package.
+  - **What changed:** `order_confirm.MULTIPLIER_ASSET_CLASSES` (`FUT`, `FOP`, `OPT`) is the one
+    list. An order whose `secType` names one of them, in any of IBKR's spellings, and carries no
+    `_multiplier` shows `— (contract multiplier unknown; not price × quantity)`. With `_multiplier`
+    the total is price × quantity × multiplier, as before. The cancel dialog and the attach
+    dialog, both built from an order-status read, set the same flag for an option;
+    `manualIndicator` (CME Rule 536-B) stays on futures and futures options only.
+  - **Not established:** that the order-status endpoint spells an option's `sec_type` as `OPT` —
+    IBKR's page types the field as a string and shows `STK` only. If it is spelled otherwise those
+    two dialogs behave as they did. A body with no `secType` and no multiplier key still prints
+    price × quantity, as it must for a stock. Warrants, bonds and every other class are not in
+    the list and nothing is claimed for them.
+  - **Tests:** six red before the change; three mutants red after it (`OPT` dropped from the
+    list, every option refused whatever its multiplier, 536-B widened to options).
+  - Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+- **`get_live_orders` no longer tells the model that an order placed on IBKR Mobile or TWS cannot be
+  modified or cancelled through the API — measured false (register F47, live 2026-11-12).**
+  - **What it said:** since 2026-06-25 the description said "orders placed via mobile or TWS
+    CANNOT be modified or cancelled by the API" and told the model to send the user to the phone.
+    Every external row ended "read-only via API". Neither had a source; it is the TWS API's rule (a
+    socket client manages its own orders) carried over to the Web API, which documents no such
+    limit.
+  - **What IBKR did on 2026-11-12:** it accepted a modify and a cancel, through this package's
+    gated writes, of a stock order and a CME future order placed on IBKR Mobile, each read back
+    from IBKR's order list. Its per-order `cannot_cancel_order` / `order_not_editable` read `false`
+    while the orders worked and `true` once cancelled.
+  - **What changed:** the description now sends the model to those two flags on `get_order_status`
+    and forbids inferring "cannot be changed" from the origin. The external label reads
+    `EXTERNAL (mobile/TWS/web portal)`.
+  - **Two notes corrected:** `clientId` is not a Live Orders field, and no row carried it that day
+    (the 2026-07-10 note recorded `0`). `modify_order_and_confirm`'s "the modify reply chain remains
+    un-exercised live" is wrong now: a modify drew IBKR's Total Value Limit precaution, which was
+    answered in its dialog and resolved under one Touch ID.
+  - **Tests:** `test_get_live_orders_sends_the_model_to_ibkrs_per_order_flags_not_to_origin` and
+    `test_get_live_orders_labels_an_order_placed_elsewhere_by_origin_only`, each red against the old
+    text; three mutants each red.
+  - **References:** `docs/audits/live-test-log.md` (run 2026-11-12) and
+    `docs/ibkr-api-behaviors-reference.md` (a new section). An order placed in TWS was not tested.
+- **The `bar` description and the second-bar refusal name who refuses and who returns (register
+  F39, seen live 2026-10-08).** "Second bars (1S) are refused with the reason: IBKR stamps them 60
+  seconds apart" — passive, no subject — let the model tell the user "IBKR refuses them" without
+  calling the tool. IBKR does return `bar=1S`; this package refuses it because the stamps are 60
+  seconds apart and no stamp is changed here. Both texts now say exactly that: "This tool refuses
+  second bars (1S): IBKR does return them, but stamps them 60 seconds apart, and no stamp is
+  changed here" and "this package does not offer second bars — IBKR does return them, but with
+  stamps 60 seconds apart (…), and this package never changes a stamp". Behaviour unchanged.
+- **`get_live_orders` and `diagnose_orders` called a bracket child EXTERNAL, "read-only via
+  API" (claudia_ui #36 live acceptance, 2026-10-19).** IBKR puts `order_ref` on the parent only
+  and `parentId` on the child (measured 2026-10-18), so a ClaudIA-staged child had no reference of
+  its own and fell through to the external label — and the model, following its instructions,
+  told the user a ClaudIA-staged stop loss could not be cancelled. One rule now, `_order_origin`,
+  for both views: a child's origin is its parent's, read through `parentId` from the same
+  response, its line saying `(attached child of order N; IBKR puts the reference on the parent
+  only)`; a child whose parent is not in the list reads "origin not determinable from this row"
+  and points at `get_order_status`'s `cannot_cancel_order`, never EXTERNAL. The two views had
+  also tested `clientId` differently (`"0"` was another API client in one, external in the
+  other); the stricter test is the one kept. The tool description says so.
+- **`get_market_history_paginated` lost one bar at every page seam cut inside a session
+  (register F23).** IBKR ends an anchored history window *before* the anchor — two bars
+  before it on intraday bars, one on daily and weekly bars (measured 2026-10-05 against the
+  live gateway: `1min` anchor 14:00:00 → newest bar 13:58; `1h` 14:00 → 12:00; `1d` any
+  time on Friday → Thursday; `1w` a bar's own stamp → the bar before). The loop anchored each
+  next page ON the oldest bar it held, so the bar just before that one was never requested.
+  Only a page cut by the 1000-point cap inside a session has such a bar: 1-minute bars on a
+  future (1,380 a session). ESZ6 `5d`/`1min` came back as 7 pages and 5,137 bars with 3
+  missing — 00:19 ET on three days — and each of the three, asked for alone, exists at IBKR
+  with volume. Stocks lose nothing (960 extended-hours bars a day, so every page ends at the
+  04:00 ET open and the unrequested bar lies in the closure); nor do hourly or daily bars,
+  whose pages IBKR ends at a session's first bar (SPY `5y`/`1d`, ESZ6 `6m`/`1h`, measured).
+  Now the next page is anchored one bar after the oldest bar held (`_BAR_SECONDS`): on
+  intraday bars the window then ends exactly on the bar that was lost, with the same number
+  of requests; on daily bars it ends on the oldest bar itself, a repeat the de-duplication
+  removes. The alternative — two bars later, so consecutive pages share a bar — was measured
+  too and costs one extra request at every session boundary, where IBKR then answers with a
+  single bar. The unit double for the endpoint ended its window ON the anchor until this
+  fix, which is how the no-gap test stayed green; it now ends it where IBKR does, and that
+  test, the anchor test and a new live test on the front ES contract (one anchored request
+  straddling each seam, its bars all in the paged result; red on the old code, naming the
+  04:19 UTC bar) go red on the old anchoring. The stop for a window that does not move back
+  gained its own test: a mutant deleting it survived the whole paging suite. Measurements:
+  `claudia_ui/docs/plans/2026-10-05-history-seams-probe/` (git-ignored).
+- **189 documentation links point at a host that answers, and ten of them at pages that
+  exist.** IBKR serves its Web API documentation on two hosts with the same paths; on
+  2026-10-05 `ibkrcampus.com/docs/…` answered HTTP 403 with a Cloudflare error 1000 on every
+  page tried while `www.interactivebrokers.com/docs/…` served them. Every link in the
+  package's docstrings, the living docs and the tests that used the first host now uses the
+  second, by path — each of the 84 target pages checked by its `.md` variant, against IBKR's
+  `llms.txt`, and beside a fabricated control. **Ten `Source:` lines in `models.py` named
+  pages that had never existed** (`contract/contract-rules` for `contract/search-contract-rules`,
+  `session/auth-status` for `session/authentication-status`, and eight more); they are
+  corrected from the index and each replacement confirmed to name the model's endpoint. The
+  documentation MCP server the docs mentioned is unavailable on both hosts and is marked so.
+  Every other documentation link in the living files was fetched as well (344 URLs): all
+  resolve. Released CHANGELOG sections and `docs/audits/` keep the URLs they were written
+  with.
+- **`add_indicators` no longer prints a VWAP for an all-hours series.** The VWAP restarts on
+  the UTC day, which a regular US or European session sits inside and an all-hours one does
+  not: a CME session opens at 18:00 New York and crosses midnight UTC (measured 2026-09-17 on
+  ES minute bars — the figure restarted mid-session), and a US stock's post-market runs past
+  midnight UTC while New York is on standard time. The code's own comment said this could not
+  arise because "`fetch_market_data` never asks for `outsideRth`"; since this release it does,
+  for every future by default. An all-hours series reads `n/a` with the reason; the tool does
+  not guess a session (`indicators.vwap` still takes `tz` and `session_open`).
+- **A period IBKR does not know is refused instead of sent.** `fetch_market_data` with
+  `period="ytd"` — sent twice by the model — reached the endpoint as written; IBKR does not
+  reject a period outside its grammar, it answers with a window of its own (measured
+  2026-07-06 for an uppercase unit), and the result and the cache key both said `ytd`. The
+  tool refuses with the grammar before anything is resolved, read or cached, and
+  `IBKRClient.get_market_history` / `get_market_history_paginated` raise `ValueError` before
+  any request (the paginated method used to hand an unparseable period to the single call).
+  The shape is checked — a whole number of at least one and a unit — not the per-request
+  ranges, which the paginated method reaches past by design.
+- **The README's quick start and the order walkthrough no longer take the first match of
+  `search_contract`.** Both examples did `contracts[0]["conid"]` — the second to build an
+  order body — the pick every read path left behind in 2026-08 because the endpoint has no
+  `isUS` flag and no documented order (for IGV the first match is the Mexican listing, in
+  MXN). They resolve through `get_stocks` and `isUS` and stop when the listing is not unique;
+  three sentences that pointed a reader at `search_contract` for a conid say the same, and a
+  docs test fails any tracked example that indexes its result.
+- **`indicators.sma` returns the Series its docstring promised.** It said "a Series named
+  'sma_{period}'" and returned one named `close`. It is named for what it is — type, length,
+  source: `sma_200_hl2`.
+- **`preview_order` previews the time in force it is asked for, and states it (register F7).**
+  Every what-if was sent with `tif: "DAY"` and the output said nothing, so a GTC order was
+  previewed as a different order than the one proposed. The tool takes `tif` (`DAY`, `GTC`,
+  `IOC`, `OPG` — IBKR's place-order enum; anything else is refused before the request), sends
+  it, names it in the headline (`Order Preview: BUY 1 ES (STP, GTC)`) and on a `Time in force`
+  line. With none given the preview is for a DAY order and says "none was given, so this
+  preview is for a DAY order".
+- **`preview_order` names the contract it priced, with its conid (claudia_ui gap #96).** The
+  tool resolved a contract — for a futures root, the front month — and printed only the symbol it
+  was asked for, so a model that previewed `MES` and then proposed had no conid to give: live
+  2026-10-08, the one futures proposal in 38 that lacked one, and the one whose session no result
+  had shown it. A `Contract` line under the headline now names the listing in the form the
+  market-data tools use (`_Resolved.describe()`; a future through `_futures_listing`); a future
+  IBKR cannot describe reads `name unknown, exchange unknown, USD, conid <n>`, never a guess, and
+  the preview still runs. The tool's description says so. Anthropic: an agent needs a technical
+  identifier "if only to trigger downstream tool calls"
+  (https://www.anthropic.com/engineering/writing-tools-for-agents).
+- **`get_live_orders` no longer tells the model a DAY order is `TIF=CLOSE` (register F8).** The
+  order row's `timeInForce` reads `CLOSE` for a DAY order — a value in no IBKR enum, measured on
+  stocks (2026-09-24) and on a future (2026-10-02) — and the tool printed it as the TIF, which
+  reads as an at-the-close order. Each line now quotes IBKR's own description of the order
+  (`orderDesc`, "Buy 1 ES Dec18'26 Stop 8200.00, Day"); the raw field appears under its own name
+  only when the row has no description. Nothing is translated. (`CLOSE` there never meant an
+  order for the closing auction: the measured orders were plain DAY orders.)
+- **Gate 2 no longer shows `DAY` for a time in force that was not sent (register F10).** A body
+  without `tif` rendered `TIF: DAY` on the last screen before the write; it reads
+  `— (not sent)`, as an absent order type already did.
+- **A 503 is no longer reported as "Rate limit exceeded", and IBKR's own message is kept
+  (register F36).** `with_retry` raised `IBKRRateLimitError("Rate limit exceeded after 3 retries
+  (HTTP 503)")` for every 503. Found live: the status read of an order IBKR listed as `Inactive`
+  answered 503 `{"error": "Order … is not found"}` — the answer IBKR documents for an order it
+  holds no cached information about — and a host logged a rate limit once a minute per order.
+  The message now reads "IBKR answered HTTP 503 on all N attempts — not a pacing violation",
+  followed by IBKR's sentence when the body carried one, or by "the gateway may be unavailable"
+  when it did not; `IBKRRateLimitError.detail` holds that sentence ("" when none), and the tool
+  error the model reads quotes it instead of telling it to check the gateway container. The
+  type is unchanged. **A 503 carrying IBKR's sentence is not retried** (measured live the same
+  day: the read of an order IBKR did not hold took 28 s to fail — three paced retries of an
+  answer that cannot change): it is raised on the first attempt and its message reads "IBKR
+  answered HTTP 503 — not a pacing violation, not retried." A bodyless 503 keeps the three
+  retries, since it may be the gateway down for a moment.
+- **Every Drive request has its own connection (register F17).** `GDriveCache` and the web
+  scraper's Drive client each built one shared connection; httplib2 is not thread-safe, and a
+  host calling them from worker threads could crash the process (claudia_ui's own client did,
+  2026-09-23). Both now build through `gdrive_auth.build_drive_service`, Google's documented
+  one-`Http`-per-request pattern.
+- **The store's Drive backup no longer leaves a copy of the trade store behind when the process
+  dies mid-upload (register F31; claudia_ui gap #90 found six of its own twin's).**
+  `GDriveCache.upload_account_sqlite` writes a full snapshot of the database beside it and
+  removes it in a `finally`, which a killed or crashed process cannot run — and since this
+  release the upload runs inside every pull that changes the dataset. Each upload now first
+  removes the snapshots an earlier process left: its own names only (and a SQLite `-journal`,
+  `-wal` or `-shm` beside one), regular files only, and only those older than the running
+  process, since a newer one may be another thread's upload in flight. It never raises — a file
+  that cannot be removed is logged and the backup is still made — and one WARNING names what
+  went. Tests: twelve, the first to run the method at all (every caller's test replaced it):
+  four pin what it already did — the snapshot holds rows still in the WAL, and is removed on
+  success and on failure — and the sweep's were red first; sixteen mutations red after.
+- **`scripts/rebuild_flex_dataset.py` and `scripts/audit_flex_dataset.py` opened the store with a
+  hand-formatted `file:{path}?mode=ro`.** SQLite reads a URI's query after the first `?`, its
+  fragment after `#`, and decodes `%HH` escapes (https://www.sqlite.org/uri.html § 3.1–3.2),
+  so over a path holding any of the three the check that stops a rebuild destroying live fills
+  opened — and created — a different, empty file, counted no live row, and let the rebuild drop
+  the real tables (measured 2026-09-30). Both now open through `flex_dataset.open_read_only`,
+  and a structural test forbids a hand-built `mode=` URI anywhere else in the package or its
+  scripts.
+- **A bare futures root no longer resolves to an expired NYMEX contract after each monthly roll
+  (claudia_ui gap #71, register F16).** `_last_trade_key` — the one rule behind `get_futures`'
+  `front_month` flag, its ordering, and the FUT branch of `_resolve_snapshot_conid` that
+  `get_market_snapshot` and `preview_order` take — read `ltd` first, falling back to
+  `expirationDate`, a rule generalised from ES alone (Dec-26: `expirationDate` 20261218, `ltd`
+  20261217). For CL, IBKR's `ltd` is the first day of the contract month, after trading has
+  stopped: CLV6 reported `expirationDate` 20260922 and `ltd` 20261001, so on 2026-09-24 a bare
+  `CL` resolved to the expired October contract, its quote a prior close with no bid or ask
+  (measured live in claudia_ui, whose model caught it before any code did) — and it stayed the
+  front month for as long as IBKR still listed it: two days after expiry it did, by day seven
+  (2026-09-29) it no longer did; `ltd` alone would have allowed nine. The key is now the
+  **earlier** of the two dates — right for ES, CL, NG and DX as measured that day, and unable by
+  construction to keep a contract past either date. IBKR's definitions (`ltd` "Last trade date
+  of the future contract", `expirationDate` "Expiration date of the specific future contract")
+  were read 2026-09-28. Tests: the rule table-driven over seven shapes, the CL shape through
+  `get_futures` and through the resolver, and the ordering mirror where `expirationDate` is the
+  earlier field — four red before, `max` for `min` red after. claudia_ui carries the same rule
+  in `order_flow._last_trade_key` until its pin moves here; `docs/tools-reference.md` says so.
+- **`IBKRWebSocket.connect()` completes IBKR's handshake before it returns, so a topic
+  subscribed the moment it returns is delivered (claudia_ui gap #68, register F5).** IBKR drops
+  a topic sent before its `sts` frame — the unsolicited "Authentication Status" it sends "when
+  initially connecting" — and says nothing: the socket stays open, heartbeats flow, no frame
+  ever answers. Measured live 2026-09-24 from claudia_ui: `str+{"realtimeUpdatesOnly": false,
+  "days": 1}` sent the instant `connect()` returned produced **zero** frames, twice (with and
+  without a cookie); the same subscription sent after `sts authenticated: true` produced 37
+  executions carrying the exact ids the REST trades endpoint returned. Every consumer of this
+  class subscribed the instant `connect()` returned — the MCP server's `--stream` loop, the
+  README example, claudia_ui's execution listener — so claudia_ui's automatic fill report had
+  never delivered once in production, invisible because `_parse_message` dropped `sts` and
+  every other unlisted topic in silence. `connect()` now reads frames until `sts` reports
+  `authenticated: true` — frames read on the way are queued for `listen()`, so nothing is lost
+  — and raises `StreamingError`, the socket closed first, after `auth_timeout` seconds without
+  one (10 by default; one deadline over the whole wait, a heartbeat does not reset it) or on an
+  `sts` reporting the brokerage session as not authenticated, since `str`, `smd` and `act` all
+  need one (IBKR, ws/introduction). Folded into `connect()` rather than added as a method a
+  caller must remember to call: the early subscribe is now impossible, not merely avoidable. A
+  frame with no parser is logged at DEBUG by topic only (`system` carries the username, `act`
+  the session id) and an `sts` reporting unauthenticated mid-stream — "for example those
+  resulting from competing sessions" — at WARNING. Tests drive `connect()` against a socket
+  double that drops any send before it has delivered `sts`, the gateway's own rule; a double
+  that delivered regardless of ordering is how the consumer's listener tests stayed green for
+  three weeks. Eight mutations red (the wait removed, the buffer dropped or never cleared, a
+  per-frame timeout, the warning demoted, the payload logged, the socket left open, the flag
+  read as key presence). The constructor's docstring now names IBKR's documented cookie form,
+  `api=<session>` from `POST /tickle`; the gateway authenticated the socket with and without
+  it that day, so no code changed there. Sources: IBKR
+  ws/unsolicited-messages/authentication-status, ws/connection-guide/send-a-websocket-topic
+  (IBKR's example sleeps 3 s before its first topic), ws/introduction. `docs/consumers.md`
+  carries what a caller should expect from the changed `connect()`.
+- **`get_trade_date_coverage`'s `stale` flag no longer calls a store two trading days old
+  current, and the empty store returns the full key set (claudia_ui gap #72, register F19;
+  register F1).** The flag compared the newest settled *trade* date with the NYSE session before
+  the last one: on day D a store through D-2 read `stale: False` all day — measured 2026-09-24
+  at 13:01Z and 16:33Z with the store through 09-22 — and the consumer that trusted it pulled
+  nothing for a day; a weekday with no fills read as behind although its statement was held. It
+  now applies the operator's one sentence (claudia_ui, 2026-09-28): **a store is current when it
+  holds the statement for the weekday before today (ET)**. "Holds" is IBKR's own `toDate` from
+  the Flex archive (`flex_change_in_nav`, one row per statement; the settled `flex_trade` rows
+  as fallback) — never a trade date. "The weekday before today" is the new
+  `store.newest_statement_day(now)`, public so a consumer can stop carrying its own copy: no
+  clock time — IBKR publishes the day's inclusion cutoffs ("generally 5:15 PM EST" commodities,
+  "8:20 PM EST" securities, Client Portal statements guide, scraped 2026-09-29) and no retrieval
+  time — and no exchange calendar, because statement days are weekdays, holidays included (29
+  statements' `toDate` measured 2026-06-26 → 09-28; the Monday 07-06 pull came back through
+  Friday 07-03). The dict gains `statement_through` and `newest_statement_day`, loses
+  `last_trading_day` (the NYSE date the old rule needed), counts both day figures on the ET date
+  of `now`, and `get_trade_date_coverage(now=...)` takes the instant, aware. The empty path
+  returns every key with `stale: True` — it used to return four, so a consumer's
+  `cov.get("stale")` could not tell "no verdict" from "current", which is how claudia_ui's
+  first-ever Flex sync was skipped (F1; fixed consumer-side 2026-09-23, at the source now).
+  `check_flex_coverage`'s note reads `⚠ DATA STALE (statement through 2026-09-22; the newest
+  that can exist is through 2026-09-23)` — the verdict's own evidence, in the words claudia_ui's
+  startup line uses. `FlexQueryClient`'s "IBKR does not publish a specific cutoff time" is
+  corrected to what IBKR publishes and what it does not. Tests: the day rule over eight instants
+  (a weekday evening whose UTC date is already tomorrow, the weekend, Monday, the measured
+  holiday), the D-1 and D-2 verdicts at three hours, Friday's statement through the weekend and
+  Monday, the no-fill weekday that only the `toDate` gets right, the fallback without the NAV
+  table, a legacy-only store, the empty store's key set, the ET day count; the four tests that
+  pinned the NYSE rule went with it. Nine mutations red: `<` for `<=`, the weekend step removed,
+  the UTC date, the naive check removed, the trade date read instead of `toDate`, the fallback
+  removed, a missing statement read as current, day counts on the local clock, the formatter
+  dropping the expected day. `docs/flex-query-reference.md` § When a day's statement exists and
+  `docs/ibkr-api-behaviors-reference.md` carry the measurement and the sources.
+- **A Gate 2 timeout is its own outcome — `ConfirmationTimeoutError` — and is worded by what it
+  leaves, never as a cancellation (claudia_ui gap #67, register F21).** The dialog's auto-dismiss
+  raised the abandon button's `HumanAuthError("Order cancelled by user")` on all three renderers,
+  so a consumer could not tell a declined dialog from one nobody answered — and on 2026-09-25 told
+  its user "Order was cancelled at the confirmation dialog" for a CANCEL ORDER dialog the timeout
+  had **kept** (the order was still there to cancel a minute later). Now `_order_dialog.py`
+  prints a third word, `TIMED_OUT`, beside `CONFIRMED` and `CANCELLED` — `order_confirm` imports
+  the three from the script, so the reader cannot drift from the writer — and every renderer (the
+  AppKit subprocess, its process overrun, the osascript `gave up`, the tkinter countdown) raises
+  `ConfirmationTimeoutError`, a subclass of `HumanAuthError` exported from the package, whose
+  message is "Confirmation dialog timed out after 60 s with no decision — nothing was sent to
+  IBKR; the order is as it was" (operator rule, claudia_ui 2026-09-24: a timeout is described by
+  what it leaves). Existing `except HumanAuthError` handlers keep catching it; the dispatch still
+  never retries a timeout through the osascript fallback. The abandon button's own message is
+  unchanged — its rewording per dialog and the button colours are register F6, decided with the
+  operator. **The live re-read caught a defect eight green tests and eight red mutations could
+  not:** the first build keyed the timeout on `runModal()` returning −1000, the value a comment in
+  the script had asserted for `NSModalResponseAbort`, and the real dialog printed CANCELLED after
+  its timer. A probe printing the raw response measured **−1001** (−1000 is
+  `NSModalResponseStop`); Apple documents the constant by name only ("Modal session was broken
+  with abortModal()", scraped via Firecrawl). The script now records that its own timer fired and
+  decides `TIMED_OUT` from that fact first, with the measured value as the second signal; three
+  more mutations red (flag and code both removed, flag ignored, −1000 restored); the real dialog
+  then printed TIMED_OUT. README, SECURITY.md and `docs/security-architecture.md` no longer call
+  the timeout an "auto-cancel"; `docs/consumers.md` says what a caller should catch.
+- **`get_market_calendar_context` says who holds a session today, per exchange —
+  `sessions_today` (claudia_ui gap #78, register F24).** `is_trading_day` is the primary
+  exchange's flag (NYSE by default) and `holidays_by_exchange` is built from weekdays, so a
+  consumer asking "who is open today?" on a Saturday found nobody in any holiday list and read
+  every exchange as open — claudia_ui's startup briefing printed "All tracked exchanges open
+  today" on Saturday 2026-09-26 and had to carry a weekday rule of its own to stop it. The
+  calendars were already loaded; the answer was not in the dict. Now every exchange's own
+  calendar answers `is_session(today)` in the loop that builds its holiday list, the two
+  assigned together so a failure on either leaves the exchange out of both maps: a Saturday is
+  `False` everywhere, a Friday is `False` for Tadawul (Sun–Thu), a NYSE holiday says nothing
+  about CME or London. On the failure marker the key is `None` — unknown, never an empty map
+  that reads as "nobody open". New optional `today=` (a `date`): the verdicts for that day; the
+  process cache keys on it; `last_trading_day` / `next_trading_day` are then relative to that
+  day's midnight UTC. Operator rule (claudia_ui 2026-09-26): the regular weekly schedule decides
+  first, holidays only subtract, no exchange opens on its weekend — which is what a calendar's
+  session set encodes. Tests compute their dates — the next Saturday, the next Friday, the next
+  NYSE holiday read from the calendar itself — rather than pin one: one verdict per exchange
+  keyed like the holidays, the primary's equal to `is_trading_day`, nobody open on a Saturday,
+  Tadawul closed on a Friday while the others follow their holiday lists, a NYSE holiday decided
+  per exchange, the failure marker's `None`. Seven mutations red (a weekday rule for the
+  calendar, everyone open, the primary's verdict copied to all, the key missing or an empty map
+  on failure, the cache or the seam ignoring the day asked about). README and
+  `docs/api-usage-examples.md` print the key; `docs/consumers.md` says what a consumer can now
+  delete.
+
+### Security
+- **A test now names IBKR's cancel-all order id, `-1` (register F51, 2026-11-12).**
+  - **The risk:** IBKR's Cancel Order page says "Submitting '-1' will cancel all open orders". IBKR also
+    returns `order_id` `"-1"` itself, for a bracket child it failed to place, so a caller can read the
+    value straight out of a response.
+  - **What stopped it:** `cancel_order` already refused it before Gate 1, but only as a side effect of
+    the path-traversal rule (`^[0-9]+$`). Loosening that rule to admit a sign, in the code and in
+    SECURITY.md's quote together, passed the whole suite (2,723 passed).
+  - **What changed:** `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate` (`"-1"` and `-1`)
+    asserts a `ConfigError` with no gate reached and no `DELETE` sent. It is red against that mutant
+    ("Gate 1 reached"). `_validate_order_id`'s docstring names the reason. No behaviour changed.
+  - **Live, the same day:** the guard refused `"-1"` and `-1` on a live session with no gate reached.
+    IBKR's claim was then measured on the operator's word with one `DELETE …/order/-1` (sent around the
+    guard, behind both gates, two stock test orders working). It answered `{"msg": "Request was
+    submitted", "order_id": null, "conid": -1, "account": null}` and cancelled **both**: one placed through
+    this package, one on IBKR Mobile (`docs/ibkr-api-behaviors-reference.md`).
+- **The MCP security checklist's own text is in the repository, in full; the spreadsheet stays out
+  (2026-11-11; documentation only).** `docs/audits/mcp-security-checklist-2026-11-09.md` gains an
+  appendix generated from the operator's sheet, cell for cell — the four framing questions and
+  the 29 items with their best practice, expected risk, deployment pattern, provenance and
+  score — where the document had carried condensed questions and summarised columns. The item
+  IDs are restored from each row's section and position (the file stores them as dates) and
+  checked against those dates; the scores agree with the document's for all 29 items; where
+  one item's wording names an organisation the appendix reads "the project's", the checklist
+  being generic. `security/*.xlsx` and an office
+  suite's lock file beside it are ignored. `docs/security-architecture.md` § 11 points at it.
+- **The login window's Chrome profile is documented as a store at rest, with what its Chrome
+  sends to Google (2026-11-11; documentation only, no code).** `SECURITY.md` gains § The login
+  window's profile: what `~/.ibkr_core/login-chrome` holds after a login (the gateway's seven
+  `localhost` cookies, encrypted by Chrome, `0600` in a `0700` profile whose modes are Chrome's
+  and not enforced here; no saved password, autofill entry or card; a three-URL history), the
+  singleton lock Chrome leaves when the owner closes the window (no credential in it; Chromium
+  removes an orphaned lock at the next launch — cleaning it up was judged overkill and is not
+  built), and Google's own account of the traffic that Chrome makes by itself (the `NID` cookie,
+  the search-engine preconnect, Safe Browsing, the updater, usage statistics and crash reports),
+  with the switches that exist and the decision not to pass any. Not determined, and said so:
+  which request sets `NID`, and whether crash reports are enabled in that profile. The OWASP
+  decision gains a dated addendum re-answering §1's lifecycle row (NO-D → PARTIAL: "nothing is
+  cached per session" stopped being true when the login window got a profile of its own); the
+  MCP checklist a follow-up with a line under 3.2, 4.3 and 7.1; `docs/security-architecture.md`
+  a decision-log row and a known limit. Sources retrieved with Firecrawl beside a fabricated
+  control, recorded with their SHA-256 in the evidence manifest.
+- **The gateway's CORS origin is its own, not IBKR's wildcard (MCP security checklist 5.4,
+  2026-11-09).** `gateway/conf.yaml` `cors.origin.allowed` `"*"` → `"https://localhost:5055"`;
+  `allowCredentials` stays `false`. Nothing legitimate is cross-origin — the login page is the
+  gateway's own origin and every client here is a process without an `Origin` header. Held in
+  source by `test_documented_controls.py` (no wildcard, an https loopback origin, `SECURITY.md`
+  quoting the same value). The image must be rebuilt: `docker rmi -f ibkr-core-gateway`, then
+  `startup()`. **The wildcard was not mitigated**, as `SECURITY.md` had said: measured 2026-11-09
+  before the rebuild, a foreign origin's preflight was approved for `POST`/`DELETE`/`PUT` with
+  `Content-Type`, and a request with no cookie and that origin was served on the authenticated
+  session — the session is the gateway process's, so `allowCredentials: false` protected nothing.
+  After the rebuild (measured 13:07 EST, fresh login authenticated): the foreign origin's
+  preflight and its plain `GET` are refused by the gateway itself, `403 CORS Rejected - Invalid
+  origin`; the gateway's own origin is approved; a request with no `Origin`, as every client
+  here sends, is served.
+- **Door 7: no unit test can reach the operator's keychain (2026-11-09).** `pytest_configure`
+  sets `keyring`'s null backend for the whole run, before any test imports `secret_store`; a test
+  of the store sets an in-memory stand-in for its own duration; `test_no_live_io.py` holds that
+  the backend under pytest is null and that `keyring` has one importer. Mutation: the door
+  removed → red.
+- **CI publishes an SBOM and scans the gateway image; the release attestations are verified
+  (MCP security checklist 1.2, 1.3, 2.2 — 2026-11-09).** `ci.yml` gains `sbom` — a CycloneDX 1.6
+  JSON of what a user installs (`.[server,scraper]` resolved on the runner, the package itself
+  included), an artifact per push and per week — and `gateway-image-scan` — the gateway image
+  built from `ibkr_core_mcp/gateway/` as `GatewayManager` builds it, scanned by `trivy` for
+  CRITICAL and HIGH findings in its OS packages and Java libraries, unfixed ignored;
+  **informational until its first run has been seen**, then blocking on CRITICAL. PEP 740:
+  `pypi-attestations verify pypi --repository https://github.com/stephus182/ibkr_core_mcp` answered
+  `OK` for the 2.1.0 wheel and sdist, and `docs/consumers.md` gives a consumer the recipe to
+  verify the release it pins. Dependencies stay floors, not hashes (the 2026-09-13 decision; the
+  attestation covers the integrity gap a lock would).
+- **`IBKRWebSocket.connect` pins TLS 1.2 as the minimum on its own context (MCP security
+  checklist 5.1, 2026-11-09).** The one `SSLContext` the package builds now says
+  `minimum_version = TLSVersion.TLSv1_2` itself, held in source by `test_tls_policy.py`; the
+  interpreter's default was already TLS 1.2 when measured (Python 3.11.18, OpenSSL 3.5.9), so
+  the change makes the floor the package's statement rather than the host's OpenSSL
+  configuration. Every other connection is `requests` over urllib3 ≥ 2.2.2, whose documented
+  default minimum is TLS 1.2 (`SECURITY.md` § TLS Policy).
+- **Invariant 13 — the model layer never reaches the gateway package (register F45, condition
+  A).** `tests/security/test_gateway_boundary.py` holds that `claude_tools.py` and
+  `mcp_server.py` import nothing from `ibkr_core_mcp.gateway` (either statement form, any
+  depth) and name no session write — `logout`, `reauthenticate`, `release_session`,
+  `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`, `get_session`,
+  `read_login_events`, `KeepAwake`, `restart_refusal`; that the three session endpoints
+  (`ssodh/init`, `/logout`, `reauthenticate`) are *called* only in the owner set
+  (`IBKRClient.logout` and `reauthenticate` until step 2); and that a `GatewayManager` is
+  *driven* (`start`, `restart`, `stop`, `startup`) and the login page opened only inside the
+  gateway package — a host constructs a manager and hands it to the owner. The two owner-set
+  checks are the consumer's AST tests, ported. Why: the review's probe M1 — a READ_ONLY handler
+  importing `GatewayManager` under `if False:` and calling `.restart()` — passed the whole
+  security suite on 2026-11-08, and M2 showed a handler that declared `ACCOUNT_STATE` could call
+  `logout`; the tree was clean, nothing held it so. Proven by applying M1 to `_get_positions`:
+  three checks red, nothing else.
+- **Every function that disables certificate verification pins its URL to loopback first, through
+  one helper, and the set of such functions is held by test (register F45, condition C).**
+  `config.LOOPBACK_HOSTS`, `config.is_loopback_url(url)` and `config.require_loopback_url(url)`
+  (returns the URL; raises `ConfigError` naming the host, never the URL) replace the two inline
+  tuples of `IBKRClient.__init__` and `IBKRWebSocket.connect`, and the manager's two polls —
+  `is_gateway_reachable`, `is_authenticated` — pin before their `verify=False` for the first
+  time. `SECURITY.md` had said "exactly three code paths … every one pinned to loopback" since
+  2026-07 and nothing held either half (F45 security review, probe M6).
+  `tests/security/test_tls_policy.py` now holds both: an AST scan over the package finds every
+  function with a `verify=False` keyword, a `.verify = False`, a `check_hostname = False` or a
+  `verify_mode = ssl.CERT_NONE`, requires the set to equal a declared allowlist, and requires the
+  first call to a pin helper to sit on a line before the first disabling line in each. The
+  client's and the socket's errors and messages are unchanged (`ConfigError`, `StreamingError`).
+- **No unit test can start `docker`, `open` or `caffeinate` (register F45, door 6 — the first
+  commit of the gateway session owner's move into the core).** An audit hook in
+  `tests/conftest.py`, armed from `pytest_configure`, refuses a child process by the name of what
+  would run — each word's last path component — with a `BaseException` that `except Exception`
+  cannot swallow and a record that turns the run red at its end; integration tests alone are
+  exempt, from setup to teardown, because the live gateway test reads the gateway's own log
+  through `docker exec` by design. Why now: the gateway package is about to hold the session
+  owner, whose recovery path restarts the container holding the live IBKR session, and every
+  manager test patched the spawn by name — a test that patched one call and not another, or a
+  mutant that moved the call, could have restarted the operator's live gateway from a unit run
+  (register F32's class, on the machine instead of the screen). Inventoried first, with a
+  recording hook over one full run: 16 starts, all `git`, `python3.11` or `ruff` — and one
+  `security find-generic-password … "Chrome Safe Storage"`: a unit test building
+  `IBKRClient(cfg)` with the default `BrowserCookieAuth`, so browser_cookie3 asked the operator's
+  keychain for Chrome's cookie-encryption password on every run. **That test now passes
+  `auth=NoAuth()`** as every other client in the suite does (OWASP least privilege; invariant 7),
+  and the start is gone (measured after: 16 starts, none `security`).
+  `tests/security/test_no_desktop_reached.py`: eight tests, every one safe on a broken guard.
+- **A secret read from `.env` never enters the process environment (register F48; claudia_ui
+  gaps #100/#103; CWE-526).** `Config.from_env()` and `crawl4ai_profiles_dir_from_env()` ran
+  `load_dotenv(override=False)`, which copied the whole file — `IBKR_FLEX_TOKEN` and
+  `FIRECRAWL_API_KEY` included — into this process's environment, and so into every child it
+  starts: the Gate 2 dialog, `osascript`, the docker CLI, none of which needs a token. One
+  loader, `load_env_file`, now reads the file with `dotenv_values`: a setting is exported where
+  the environment does not already hold it (unchanged), a secret comes back as a
+  `pydantic.SecretStr` in `EnvFile.secrets` and is written nowhere. **`Config.flex_token` and
+  `Config.firecrawl_api_key` are `SecretStr`** (a plain string given to the constructor is
+  coerced at runtime; typed code passes a `SecretStr`; a consumer that reads the value calls
+  `.get_secret_value()`; truthiness is unchanged). On POSIX a `.env` accessible to group or
+  others (any bit of `0o077`) has its secrets **refused**, with `chmod 600 <path>` in the
+  message and the settings still loaded, as OpenSSH ignores a key file that is accessible by
+  others; that warning is the fifth `collapse_home` surface. A secret the user set in the real
+  environment is still read — the MCP server's and README's contract — and never written
+  back. Exported: `load_env_file`, `EnvFile`, `SECRET_NAMES`. `scripts/fetch_flex_archive.py`,
+  `scripts/audit/count_tool_tokens.py` and `scripts/audit/sortino_calmar_worked_example.py`
+  read the file the same way; no `load_dotenv` remains in the package or `scripts/`
+  (`test_the_package_and_scripts_read_env_through_the_one_loader`). Encryption at rest is a
+  stated limit, not built. Design: claudia_ui `docs/plans/2026-10-16-secrets-out-of-environment-design.md`.
+
 ## [2.1.0] — 2026-09-22
 
 ### Fixed

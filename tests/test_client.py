@@ -7,7 +7,15 @@ from unittest.mock import patch as _patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError
+from ibkr_core_mcp.exceptions import (
+    ConfigError,
+    ConfirmationDeclinedError,
+    ConfirmationTimeoutError,
+    HumanAuthError,
+    IBKRAPIError,
+    OrderValidationError,
+    ReplyNotConfirmedError,
+)
 from tests.security.structural import annotation_names_a_model, response_model_names
 
 # The `client` fixture lives in tests/conftest.py (shared with tests/security/).
@@ -426,6 +434,7 @@ def test_place_order_and_confirm_one_reply(client):
         "Order price is outside of the Price Band.",
         None,
         order_label="BUY 10 AAPL",
+        modifies=False,
     )
     confirm_call = mock_post.call_args_list[1]
     assert confirm_call[0][0] == f"{client._base}/iserver/reply/11111111-1111-4111-8111-111111111111"
@@ -470,15 +479,21 @@ def test_place_order_and_confirm_three_chained_replies(client):
             "Price is outside of the Price Band.",
             None,
             order_label="BUY 10 AAPL",
+            modifies=False,
         ),
         call(
-            "22222222-2222-4222-8222-222222222222", "No market data for this contract.", None, order_label="BUY 10 AAPL"
+            "22222222-2222-4222-8222-222222222222",
+            "No market data for this contract.",
+            None,
+            order_label="BUY 10 AAPL",
+            modifies=False,
         ),
         call(
             "33333333-3333-4333-8333-333333333333",
             "This order requires a mandatory cap price.",
             None,
             order_label="BUY 10 AAPL",
+            modifies=False,
         ),
     ]
     urls = [c[0][0] for c in mock_post.call_args_list]
@@ -511,7 +526,7 @@ def test_place_order_and_confirm_passes_message_options(client):
         ]
         client.place_order_and_confirm("U1234567", order)
     mock_reply_dlg.assert_called_once_with(
-        "11111111-1111-4111-8111-111111111111", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL"
+        "11111111-1111-4111-8111-111111111111", "Confirm?", ["Yes", "No"], order_label="BUY 10 AAPL", modifies=False
     )
 
 
@@ -577,12 +592,14 @@ def test_modify_order_and_confirm_chained_replies(client):
             "Price band warning.",
             None,
             order_label="? ? UNKNOWN (order 1234567890)",
+            modifies=True,
         ),
         call(
             "22222222-2222-4222-8222-222222222222",
             "No market data.",
             None,
             order_label="? ? UNKNOWN (order 1234567890)",
+            modifies=True,
         ),
     ]
 
@@ -861,6 +878,30 @@ def test_validate_order_id_accepts_valid_id(client):
     client.get_order_status("987654321")  # must not raise ConfigError
 
 
+# Register F51 (2026-11-12). IBKR's Cancel Order page: "Submitting '-1' will cancel all open orders",
+# measured true the same day: one DELETE of -1 cancelled both working orders, one placed through this package
+# and one placed on IBKR Mobile (docs/ibkr-api-behaviors-reference.md). IBKR
+# also returns order_id "-1" itself, for a bracket child it failed to place
+# (test_pairing_keeps_IBKRS_WORDS_for_a_refused_leg_the_M9_shape), so the value can come straight out of an
+# IBKR response. Only the numeric rule keeps it from the DELETE. On 2026-11-12, loosening that rule to admit
+# a sign, in the code and in SECURITY.md's quote together, passed the whole suite (2,723 passed).
+@pytest.mark.parametrize("cancel_all_id", ["-1", -1])
+def test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate(client, cancel_all_id):
+    """Regression caught: a numeric rule that admits a sign, so that one cancel of `-1` removes every open
+    order on the account behind one Touch ID and a dialog that names order "-1"."""
+    from ibkr_core_mcp.exceptions import ConfigError
+
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=AssertionError("Gate 1 reached")) as mock_tid,
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog", side_effect=AssertionError("Gate 2 reached")),
+        _patch.object(client._session, "delete") as mock_del,
+        pytest.raises(ConfigError, match=r"[Ii]nvalid"),
+    ):
+        client.cancel_order("U1234567", cancel_all_id, manual_indicator=True)
+    mock_tid.assert_not_called()
+    mock_del.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "bad_reply_id",
     [
@@ -941,7 +982,7 @@ def test_get_futures_handles_dict_response(client):
 def test_get_currency_pairs_handles_dict_response(client):
     """IBKR /iserver/currency/pairs returns {"USD": [{symbol, conid, ccyPair}]}.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
     """
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -1203,6 +1244,47 @@ def test_get_trades_empty_after_retry_returns_empty(client):
 # ── get_market_history — period/bar case normalization (verified live 2026-07-06) ──
 
 
+@pytest.mark.parametrize("method", ["get_market_history", "get_market_history_paginated"])
+@pytest.mark.parametrize("period", ["ytd", "6 months", "0d", ""])
+def test_a_period_outside_ibkrs_grammar_is_refused_before_any_request(client, method, period):
+    """IBKR does not reject a period it does not know: it answers with a window of its own
+    (`period="6M"` returned four months of dailies, 2026-07-06), and nothing in the response
+    says so. `ytd` reached the endpoint twice from the model. Refused here, with the grammar,
+    before a request is made — the paginated method used to hand it to the single call."""
+    with patch.object(client._session, "get") as mock_get, pytest.raises(ValueError, match="min, h, d, w, m"):
+        getattr(client, method)(265598, period=period, bar="1d")
+    mock_get.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["get_market_history", "get_market_history_paginated"])
+@pytest.mark.parametrize(
+    ("bar", "reason"),
+    [
+        ("1S", "stamps 60 seconds apart"),
+        ("1s", "stamps 60 seconds apart"),
+        ("7min", "1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m"),
+        ("", "1min, 2min"),
+    ],
+)
+def test_a_bar_outside_ibkrs_step_table_is_refused_before_any_request(client, method, bar, reason):
+    """Second bars are real at IBKR (`bar=1S`: 300 bars for five minutes) but stamped 60 s
+    apart — the last of them reads 18:53:59 ET for a true 13:59:58 — and this package never
+    changes a stamp (operator, 2026-10-05), so they are refused with that reason rather than
+    lowercased into IBKR's HTTP 500 (register F22). Any other size outside the step table is
+    refused with the table; IBKR substitutes a size of its own for one it does not know."""
+    with patch.object(client._session, "get") as mock_get, pytest.raises(ValueError, match=reason):
+        getattr(client, method)(265598, period="1d", bar=bar)
+    mock_get.assert_not_called()
+
+
+def test_paged_requests_send_the_bar_lowercased(client):
+    """The single call lowercased `bar` since 2026-07-06; the paging loop sent it as given."""
+    fake, calls = _capped_get(bar_seconds=3600)
+    with patch.object(client, "_get", side_effect=fake):
+        client.get_market_history_paginated(265598, period="6m", bar="1H")
+    assert len(calls) > 1 and all(c["bar"] == "1h" for c in calls), [c["bar"] for c in calls]
+
+
 def test_get_market_history_normalizes_period_and_bar_case(client):
     """Live-verified 2026-07-06: IBKR treats period='6M' as unrecognized and silently
     returns a ~84-bar default (4 months), while '6m' returns the true 6 months.
@@ -1217,7 +1299,7 @@ def test_get_market_history_normalizes_period_and_bar_case(client):
 
 # ---------------------------------------------------------------------------
 # get_option_strikes / get_option_chain — documented secdef flow
-# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id.md
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id
 # ---------------------------------------------------------------------------
 
 
@@ -1402,17 +1484,18 @@ def test_paged_newest_chunk_omits_starttime_so_it_reaches_today(client):
     assert "direction" not in calls[0]
 
 
-def test_paged_chunks_anchor_on_delivered_data_not_on_requested_width(client):
-    """Each anchor must be where the previous response actually ended, not where it was
-    asked to end.
+def test_paged_chunks_anchor_one_bar_after_the_oldest_bar_delivered(client):
+    """Each anchor must be one bar after the oldest bar the previous response actually
+    held — not where that response was asked to end, and not on the oldest bar itself.
 
-    This replaces a test that asserted anchors sat at cumulative *requested* day offsets.
-    That held only while every chunk returned everything it asked for — exactly the
-    assumption the 1000-point cap breaks. The property that matters is unchanged (windows
-    abut, no hole between them); only the thing it is measured against has moved from the
-    request to the response.
+    The request width is the wrong reference because a chunk that hits the 1000-point cap
+    returns less than it asked for. The oldest bar itself is the wrong anchor because IBKR
+    ends an anchored window BEFORE the anchor (two bars before on intraday bars, one on
+    daily and weekly — measured 2026-10-05), so anchoring on it never requested the bar
+    just before it: one 1-minute bar lost at every mid-session seam (register F23). One bar
+    later, the window ends exactly on that bar; anywhere later wastes an overlap.
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     calls = _paged_calls(client, "5y", "1d")
     assert len(calls) > 1, "5y/1d must paginate, or this test proves nothing"
@@ -1423,13 +1506,42 @@ def test_paged_chunks_anchor_on_delivered_data_not_on_requested_width(client):
         if i:
             anchor = datetime.strptime(params["startTime"], "%Y%m%d-%H:%M:%S")
             assert prev_oldest is not None
-            drift = abs((anchor - prev_oldest).total_seconds())
-            assert drift < 120, (
-                f"chunk {i} anchored {drift / 86400:.2f}d away from the oldest bar "
-                f"chunk {i - 1} returned — that difference is missing data"
+            assert anchor == prev_oldest + timedelta(days=1), (
+                f"chunk {i} anchored at {anchor}, not one bar after the oldest bar chunk {i - 1} "
+                f"returned ({prev_oldest}): earlier loses that bar, later repeats bars"
             )
         resp = fake("/iserver/marketdata/history", params)
         prev_oldest = datetime.utcfromtimestamp(min(b["t"] for b in resp["data"]) / 1000)
+
+
+def test_paged_stops_after_one_window_that_does_not_move_back(client):
+    """A response whose oldest bar is no older than the previous one is the end of the data,
+    not a reason to ask again.
+
+    Without this stop the loop would send the same anchored request until the 120-chunk
+    guard — 118 identical requests against a live gateway whose history endpoint delays
+    callers past ~50 requests a minute (measured 2026-10-05). The stop had no test of its
+    own; a mutant deleting it survived the whole paging suite.
+    """
+    import calendar
+    from datetime import datetime, timedelta
+
+    calls: list[dict[str, Any]] = []
+    now = datetime.utcnow().replace(second=0, microsecond=0)
+    window = [
+        {"t": calendar.timegm((now - timedelta(minutes=i)).timetuple()) * 1000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+        for i in range(1, 11)
+    ]
+
+    def same_window_every_time(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append(params or {})
+        return {"data": window}
+
+    with patch.object(client, "_get", side_effect=same_window_every_time):
+        out = client.get_market_history_paginated(265598, period="30d", bar="1min")
+
+    assert len(calls) == 2, f"{len(calls)} requests for a window that never moved back"
+    assert len(out.get("data", [])) == 10
 
 
 def test_paged_keeps_walking_past_a_window_IBKR_has_no_data_for(client):
@@ -1599,7 +1711,7 @@ def test_paged_single_chunk_requests_are_not_paginated(client):
 # get_live_orders: an unrecognisable response is not "you have no orders"
 # ============================================================================
 # The documented response is {"orders": [...], "snapshot": bool}:
-# https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
 # Anything else used to `return []`, answering a safety-relevant question -- "do I
 # have working orders?" -- with a confident no. get_orders_raw exists precisely
 # because this shape can surprise, which is the tell that it was known to.
@@ -1785,13 +1897,82 @@ def test_place_order_and_confirm_logs_a_declined_reply_as_not_confirmed(client):
             _make_ok_response([{"id": "22222222-2222-4222-8222-222222222222", "message": ["second"]}]),
             _make_ok_response({"confirmed": False}),
         ]
-        with pytest.raises(HumanAuthError):
+        with pytest.raises(ReplyNotConfirmedError):
             client.place_order_and_confirm("U1234567", order, reply_log=reply_log)
     assert [(r["reply_id"], r["confirmed"]) for r in reply_log] == [
         ("11111111-1111-4111-8111-111111111111", True),
         ("22222222-2222-4222-8222-222222222222", False),
     ]
     assert mock_post.call_args_list[2].kwargs.get("json") == {"confirmed": False}
+
+
+# ---------------------------------------------------------------------------
+# Register F34 (2026-10-01): a reply that was not confirmed says what happened and why
+# ---------------------------------------------------------------------------
+
+_REPLY_ID = "11111111-1111-4111-8111-111111111111"
+_REPLY_ENTRY: dict[str, Any] = {
+    "id": _REPLY_ID,
+    "message": ["You are about to submit a stop order.<br/>Please be aware of the&nbsp;risks.", "Are you sure?"],
+}
+_ASKED_AND = "IBKR asked for a confirmation before accepting the request, and "
+_ANSWERED_NO = " — IBKR was answered no."
+_THE_QUESTION = ' IBKR\'s question: "You are about to submit a stop order. Please be aware of the risks. Are you sure?"'
+
+
+def _resolve_a_reply_the_dialog_refuses(
+    client: Any, refusal: HumanAuthError, entry: dict[str, Any] | None = None
+) -> tuple[ReplyNotConfirmedError, MagicMock]:
+    """Run one reply whose dialog ends in `refusal`; hand back the error raised and the POSTs."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_reply_dialog", side_effect=refusal),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response({"confirmed": False})
+        with pytest.raises(ReplyNotConfirmedError) as caught:
+            client._resolve_one_reply(dict(_REPLY_ENTRY if entry is None else entry))
+    return caught.value, mock_post
+
+
+def test_a_declined_reply_says_what_ibkr_asked_and_that_it_was_declined(client):
+    """What happened, why, and the question itself on one line — tags, entities and line
+    breaks cleaned as the dialog showed it — so the sentence can be shown as it is."""
+    declined = ConfirmationDeclinedError("Not confirmed — the order was not placed.")
+
+    error, posts = _resolve_a_reply_the_dialog_refuses(client, declined)
+
+    assert str(error) == _ASKED_AND + "it was declined at the dialog" + _ANSWERED_NO + _THE_QUESTION
+    assert error.__cause__ is declined
+    posts.assert_called_once()
+    assert posts.call_args.kwargs.get("json") == {"confirmed": False}
+
+
+def test_a_reply_nobody_answered_is_not_reported_as_declined(client):
+    """The defect: a dialog left to dismiss itself read "User declined IBKR order reply". And
+    the Gate 2 timeout's own words do not fit either — a no WAS sent to IBKR."""
+    timed_out = ConfirmationTimeoutError(
+        "Confirmation dialog timed out after 60 s with no decision — nothing was sent to IBKR; the order is as it was"
+    )
+
+    error, posts = _resolve_a_reply_the_dialog_refuses(client, timed_out)
+
+    assert str(error) == _ASKED_AND + "nobody answered the dialog in time" + _ANSWERED_NO + _THE_QUESTION
+    assert "declined" not in str(error)
+    assert "nothing was sent" not in str(error)
+    assert error.__cause__ is timed_out
+    assert posts.call_args.kwargs.get("json") == {"confirmed": False}
+
+
+def test_reply_not_confirmed_is_its_own_public_type():
+    """A `HumanAuthError`, so every existing handler still catches it; neither Gate 2 type, so
+    a consumer's rows for a declined or timed-out DIALOG cannot claim it."""
+    import ibkr_core_mcp
+
+    assert issubclass(ReplyNotConfirmedError, HumanAuthError)
+    assert not issubclass(ReplyNotConfirmedError, (ConfirmationDeclinedError, ConfirmationTimeoutError))
+    assert ibkr_core_mcp.ReplyNotConfirmedError is ReplyNotConfirmedError
+    assert "ReplyNotConfirmedError" in ibkr_core_mcp.__all__
 
 
 def test_place_order_and_confirm_without_a_log_is_unchanged(client):
@@ -2107,7 +2288,7 @@ def test_cancel_order_logs_its_gate1_grant(client, caplog):
 # ============================================================================
 #
 # The endpoint returns at most 1000 data points per request (officially documented:
-# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
 # "This endpoint provides a maximum of 1000 data points"). It does NOT error when a
 # window would exceed that — it silently returns the newest 1000 and drops the rest.
 #
@@ -2157,8 +2338,15 @@ def _capped_get(bar_seconds: int, max_points: int = 1000, bars_per_day: float = 
         days = days / 24.0 if unit == "h" else days
         start = end - timedelta(days=days)
         step = timedelta(seconds=bar_seconds)
+        # IBKR ends an anchored window BEFORE the anchor: two bars before it for intraday
+        # bars, one for daily and weekly bars (measured 2026-10-05 — 1min: anchor 14:00:00
+        # → newest 13:58; 1h: 14:00 → 12:00; 1S: 14:00:00 → 13:59:58; 1d: any time on Friday
+        # → Thursday; 1w: a bar's own stamp → the bar before). Until that day this double
+        # ended ON the anchor, which is how a bar lost at every mid-session seam stayed
+        # green here (register F23).
+        newest = end - step * (2 if bar_seconds < 86400 else 1) if params.get("startTime") else end
         stamps: list[datetime] = []
-        t = end
+        t = newest
         while t > start and len(stamps) < 10 * max_points:
             stamps.append(t)
             t -= step
@@ -2227,7 +2415,7 @@ def test_chunk_width_never_exceeds_ibkrs_permitted_period_for_that_bar():
     size is not guaranteed to be the one asked for.
 
     Source, scraped 2026-09-15:
-    https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
     """
     from ibkr_core_mcp.client import _MAX_PERIOD_DAYS_FOR_BAR, _chunk_days_for_bar
 
@@ -2567,7 +2755,7 @@ def test_place_order_surfaces_ibkrs_rejection_object_instead_of_an_empty_list(cl
     is applied by `place_order_and_confirm` one layer OUTSIDE `place_order`, so the dict
     was destroyed before the defence ever saw it.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
     """
     rejection = {
         "error": "We cannot accept an order at the limit price you selected. "
@@ -2732,6 +2920,7 @@ def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
     import pathlib
     from datetime import datetime, timedelta
 
+    from ibkr_core_mcp.auth import NoAuth
     from ibkr_core_mcp.client import IBKRClient
     from ibkr_core_mcp.config import Config
 
@@ -2742,7 +2931,11 @@ def test_paginated_history_removes_bars_repeated_across_a_chunk_seam():
         gdrive_token_file=pathlib.Path("/tmp/t.json"),
         gdrive_credentials_file=pathlib.Path("/tmp/c.json"),
     )
-    c = IBKRClient(cfg)
+    # `NoAuth()`, as every other client in the suite: the default `BrowserCookieAuth()` reads
+    # the operator's keychain on macOS (`security find-generic-password … "Chrome Safe Storage"`
+    # through browser_cookie3) — a real credential read from a unit test, found by the door-6
+    # inventory of 2026-11-09 (register F45). This test patches the HTTP and needs no cookie.
+    c = IBKRClient(cfg, auth=NoAuth())
 
     def ms(dt):
         return calendar.timegm(dt.timetuple()) * 1000
@@ -3277,7 +3470,7 @@ def test_the_dialogs_inherited_keys_never_reach_the_wire(client):
     # The screen DID inherit — otherwise this test would pass by the dialog doing nothing.
     # Before `ticker` joined the inherited set this row read `UNKNOWN (conid 649180671)`.
     details = mock_show.call_args.kwargs["details"]
-    assert details["Profit taker — Symbol"] == "ES — ESU6 · SEP26", details
+    assert details["Profit taker"]["Symbol"] == "ES — ESU6 · SEP26", details
 
     # The wire did NOT.
     posted = mock_post.call_args.kwargs["json"]["orders"]
@@ -3599,6 +3792,57 @@ def test_cancel_detail_fetch_marks_a_FUTURE_multiplier_unknown(client):
         mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
         client.cancel_order("U1234567", "9876543210")
     assert seen["det"]["_multiplier_unknown"] is True
+
+
+# The same rule for an option, on the two dialogs built from an order-status READ rather than
+# from the caller's body. IBKR's `/iserver/secdef/info` example is an AAPL put with
+# `"multiplier": "100"`, and a status read carries no multiplier for it either.
+# NOT MEASURED: that the status endpoint spells an option's `sec_type` as `"OPT"`. IBKR's
+# order-status page types the field as a string and shows `"STK"` only, and no option order has
+# been placed live through this package (2026-11-12). `"FUT"` is measured; `"OPT"` is IBKR's
+# spelling on the contract endpoints and is assumed here. If the status spells it otherwise
+# these two dialogs fall back to today's behaviour — they get no worse.
+# Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+#          https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
+_OPTION_STATUS: dict[str, Any] = {
+    "symbol": "AAPL",
+    "side": "B",
+    "total_size": "10.0",
+    "size": "10.0",
+    "order_type": "LIMIT",
+    "limit_price": "2.50",
+    "tif": "DAY",
+    "currency": "USD",
+    "sec_type": "OPT",
+    "order_status": "Submitted",
+    "conid": "667629330",
+}
+
+
+def test_the_cancel_dialog_never_prints_price_times_quantity_for_an_OPTION(client):
+    """Driven through the real reader and the real dialog: ten contracts at 2.50 are 2,500,
+    and the cancel dialog may not call them 25.00."""
+    from ibkr_core_mcp.order_confirm import confirm_cancel_dialog
+
+    with _patch.object(client, "get_order_status", return_value=dict(_OPTION_STATUS)):
+        details = client._cancel_dialog_details("1")
+    with _patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
+        confirm_cancel_dialog("1", "U1234567", details)
+    total = str(mock_show.call_args.kwargs["details"].get("Total (est.)"))
+    assert "25.00" not in total, f"printed a 100x-wrong total as fact: {total!r}"
+    assert "multiplier unknown" in total
+
+
+def test_an_attach_to_an_OPTION_parent_marks_the_multiplier_unknown_and_claims_no_536B():
+    """The attach dialog's parent is built from the same status read. It needs the multiplier
+    flag — and must NOT gain `manualIndicator`, which is CME Rule 536-B and is sent for
+    futures and futures options only. Widening one test of `sec_type` would have put it on
+    the wire for an equity option."""
+    from ibkr_core_mcp.client import _parent_from_status
+
+    parent = _parent_from_status("1", dict(_OPTION_STATUS))
+    assert parent.get("_multiplier_unknown") is True
+    assert "manualIndicator" not in parent
 
 
 def test_a_failed_detail_read_does_NOT_block_the_cancel(client):
@@ -4122,9 +4366,10 @@ def test_cancelling_a_bracket_child_warns_that_the_linked_legs_go_too(client):
     # the parent stayed working, leaving a position that would open with no protection.
     assert "SIBLING" in warning
     assert "parent stayed working" in warning
-    # Dated and hedged: IBKR documents none of these fields, so it is an observation.
+    # Dated, and sourced since 2026-10-18: the TWS guide documents the group rule (a member the
+    # client cancels takes the group; one the system cancels does not); the fields stay unnamed.
     assert "2026-09-22" in warning
-    assert "documents none of this" in warning
+    assert "TWS guide documents the group rule" in warning and "on no page" in warning
 
 
 def test_cancelling_a_bracket_PARENT_warns_from_its_own_field_not_from_an_absent_one(client):
@@ -4259,6 +4504,49 @@ def test_bracket_tickets_ACCEPTS_the_normal_opposite_side_pair_in_IBKRS_OWN_CASI
         [dict(children[0], side="Sell")],
     )
     assert [t["side"] for t in tickets] == ["Buy", "Sell"], "the casing the caller sent must reach IBKR unchanged"
+
+
+# --- the child's TIF: equal to or shorter than the parent's (IBKR's rule, 2026-10-18) ------
+# TWS guide, Using the Orders Panel: "You must set the TIF for a child order equal to or shorter
+# than that of the parent. Otherwise, the TIF of the parent order will override that of the
+# child order." Refused before any gate rather than rewritten by IBKR after Gate 2.
+
+
+def test_bracket_tickets_refuses_a_child_tif_longer_than_the_parents(client):
+    """A GTC child on a DAY parent: IBKR would send it as DAY after the human approved GTC."""
+    parent, children = _bracket_pair()
+    with pytest.raises(ValueError, match="TIF"):
+        client._bracket_tickets(dict(parent, tif="DAY"), [dict(children[0], tif="GTC")])
+
+
+@pytest.mark.parametrize(
+    "parent_tif, child_tif",
+    [("GTC", "GTC"), ("GTC", "DAY"), ("DAY", "IOC"), ("DAY", "opg"), ("GTC", None)],
+)
+def test_bracket_tickets_accepts_a_child_tif_equal_shorter_or_absent(client, parent_tif, child_tif):
+    """The discriminating half: a ceiling, not an equality — equal and shorter pass, the caller's
+    casing is kept, and an absent child TIF (derived from the parent downstream) is no violation."""
+    parent, children = _bracket_pair()
+    child = (
+        dict(children[0], tif=child_tif)
+        if child_tif is not None
+        else {k: v for k, v in children[0].items() if k != "tif"}
+    )
+    tickets = client._bracket_tickets(dict(parent, tif=parent_tif), [child])
+    assert tickets[1].get("tif") == child_tif
+
+
+def test_place_bracket_refuses_a_longer_child_tif_before_touch_id(client):
+    """The refusal costs no fingerprint and no POST, like the side and contract rules."""
+    parent, children = _bracket_pair()
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as mock_tid,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="TIF"),
+    ):
+        client.place_bracket_and_confirm("U1234567", dict(parent, tif="DAY"), [dict(children[0], tif="GTC")])
+    mock_tid.assert_not_called()
+    mock_post.assert_not_called()
 
 
 # --- pair_bracket_response: which entry belongs to which ticket ---------------------------
@@ -4526,3 +4814,299 @@ def test_every_public_name_in_client_py_is_exported_from_the_package():
     )
     for name in public:
         assert hasattr(ibkr_core_mcp, name), f"__all__ names {name!r} but it does not resolve"
+
+
+# ── cancel_order's manualIndicator — CME Rule 536-B on the cancel (claudia_ui gap #7) ──
+#
+# IBKR's Cancel Order page lists `manualIndicator` as a query parameter "required when trading
+# Futures and Futures Options contracts to remain in compliance with CME Group Rule 536-B", and
+# says "Regardless of original submission, the cancellation must also include the
+# manualIndicator tag". The caller states it, as it does on place and modify; the core sends
+# exactly what it was told, and nothing when it was told nothing.
+
+
+@contextmanager
+def _cancel_through_open_gates(client):
+    """Both gates pass and the DELETE answers; yields the DELETE mock."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog"),
+        _patch.object(client._session, "delete") as mock_del,
+    ):
+        mock_del.return_value = _make_ok_response({"msg": "Request was submitted"})
+        yield mock_del
+
+
+def _query(mock_del):
+    """The query parameters of the one DELETE that was sent; None when it carried none."""
+    mock_del.assert_called_once()
+    return mock_del.call_args.kwargs.get("params")
+
+
+def test_a_cancel_told_nothing_stays_the_bare_DELETE(client):
+    """The default is the request five live futures cancels were accepted with: no query."""
+    with _cancel_through_open_gates(client) as mock_del:
+        client.cancel_order("U1234567", "9876543210", order_details={"ticker": "AAPL"})
+    assert _query(mock_del) is None
+    assert mock_del.call_args.args == ("https://localhost:5055/v1/api/iserver/account/U1234567/order/9876543210",)
+
+
+@pytest.mark.parametrize(("stated", "sent"), [(True, "true"), (False, "false")], ids=["manual", "automated"])
+def test_a_cancel_carries_the_manual_indicator_the_caller_states(client, stated, sent):
+    """IBKR's own spelling — `?manualIndicator=true` — never Python's `True`."""
+    with _cancel_through_open_gates(client) as mock_del:
+        client.cancel_order("U1234567", "9876543210", order_details={"ticker": "ESZ6"}, manual_indicator=stated)
+    assert _query(mock_del) == {"manualIndicator": sent}
+
+
+@pytest.mark.parametrize("not_a_bool", ["false", "true", 1, 0, "yes"], ids=repr)
+def test_a_manual_indicator_that_is_not_a_bool_is_refused_before_any_gate(client, not_a_bool):
+    """A compliance tag is stated, never coerced: the string "false" is truthy, and would have
+    been sent as `true`. Refused before Touch ID, so nothing is asked of the human and nothing
+    reaches IBKR."""
+    with (
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch_id,
+        _patch("ibkr_core_mcp.client.confirm_cancel_dialog") as dialog,
+        _patch.object(client._session, "delete") as mock_del,
+        pytest.raises(OrderValidationError, match="manual_indicator"),
+    ):
+        client.cancel_order("U1234567", "9876543210", manual_indicator=not_a_bool)
+    touch_id.assert_not_called()
+    dialog.assert_not_called()
+    mock_del.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Attach — ONE child to an order already working at IBKR (claudia_ui gap #36, design 2026-10-17)
+# ---------------------------------------------------------------------------
+
+
+def _working_parent_status(**over: Any) -> dict[str, Any]:
+    """A parent as IBKR's order-status read reports it (field names measured 2026-09-22;
+    `total_size` and the prices arrive as strings, `children_order_ids` is a string)."""
+    status: dict[str, Any] = {
+        "order_id": "123",
+        "order_status": "Submitted",
+        "conid": 265598,
+        "side": "B",
+        "total_size": "2",
+        "order_type": "LIMIT",
+        "limit_price": "150.0",
+        "tif": "GTC",
+        "symbol": "AAPL",
+        "sec_type": "STK",
+        "children_order_ids": "",
+    }
+    status.update(over)
+    return status
+
+
+def test_attach_refuses_a_parent_that_is_not_working_before_any_gate(client):
+    """A filled, cancelled or inactive order cannot take a child; refused before Touch ID."""
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status(order_status="Filled")),
+        _patch("ibkr_core_mcp.client.require_touch_id") as touch,
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as dialog,
+        _patch.object(client._session, "post") as mock_post,
+        pytest.raises(ValueError, match="not working"),
+    ):
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "STP", "price": 140.0})
+    touch.assert_not_called()
+    dialog.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_attach_derives_contract_side_size_and_tif_from_ibkr_not_from_the_caller(client):
+    """The caller's conid, side and quantity are overridden by the parent as IBKR holds it;
+    an absent child TIF is the parent's, written as a literal."""
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm(
+            "U1234567", "123", {"conid": 1, "side": "BUY", "quantity": 9, "orderType": "STP", "price": 140.0}
+        )
+    mock_post.assert_called_once()
+    assert mock_post.call_args[0][0] == f"{client._base}/iserver/account/U1234567/orders"
+    (ticket,) = mock_post.call_args.kwargs["json"]["orders"]
+    assert (ticket["conid"], ticket["side"], ticket["quantity"], ticket["tif"]) == (265598, "SELL", 2, "GTC")
+    assert ticket["parentId"] == "123" and "cOID" not in ticket and ticket["acctId"] == "U1234567"
+    assert "ticker" not in ticket, "the contract on the wire is the conid"
+    assert all(not k.startswith("_") for k in ticket), "display-only keys reached IBKR"
+
+
+def test_attach_runs_touch_id_once_then_the_bracket_dialog_then_posts_one_ticket(client):
+    """One Touch ID, the BRACKET dialog (never the single-order one), one POST."""
+    seq: list[str] = []
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client.require_touch_id", side_effect=lambda r: seq.append("touch")),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog", side_effect=lambda *a: seq.append("dialog")),
+        _patch("ibkr_core_mcp.client.confirm_order_dialog", side_effect=lambda *a: seq.append("SINGLE-DIALOG")),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+
+        def _record_post(*_a: Any, **_k: Any) -> Any:
+            seq.append("post")
+            return _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+
+        mock_post.side_effect = _record_post
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    assert seq == ["touch", "dialog", "post"]
+
+
+def test_attach_shows_the_parent_as_working_at_ibkr_on_the_dialog(client):
+    """The dialog's parent row says the parent is IBKR's, its state, and what it already carries.
+    `children_order_ids` is SEMICOLON-separated (measured 2026-10-18 with two children); a
+    comma-split counted two children as one."""
+    with (
+        _patch.object(
+            client,
+            "get_order_status",
+            return_value=_working_parent_status(children_order_ids="130;131", company_name="APPLE INC", currency="USD"),
+        ),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog") as dialog,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    parent = dialog.call_args.args[0]
+    assert parent["_working_at_ibkr"] == "order 123 · Submitted · 2 attached"
+    # The company name and currency the cancel dialog derives from the same read (live
+    # 2026-10-18 the parent's rows showed `F` and `7.39` with no name and no currency).
+    assert (parent["_companyName"], parent["_currency"]) == ("APPLE INC", "USD")
+
+
+def test_attach_gate_1_scope_names_the_kind_and_the_parent(client):
+    """An authorization earned for an attach to one parent never covers a child of another,
+    nor a bracket placed at entry: the kind and the parent's id are both in the scope."""
+    scopes: list[str] = []
+
+    def _grant(reason: str, scope: str, label: str) -> object:
+        scopes.append(scope)
+        return object()
+
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client._authorize_order_write", side_effect=_grant),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    assert scopes[0].startswith("attach:U1234567:123:")
+
+
+def test_attach_names_the_child_it_sends_on_gate_1_and_the_reply_dialogs(client):
+    """The label every reply dialog of this write carries names the CHILD being sent, never the
+    parent: a SELL stop attached to a BUY parent is "SELL 2 AAPL (attached to order 123)".
+    Live 2026-10-18 the reply dialog for a SELL stop was titled with the parent's "BUY 1 F"."""
+    seen: dict[str, str] = {}
+
+    def _grant(reason: str, scope: str, label: str) -> object:
+        seen.update(reason=reason, label=label)
+        return object()
+
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client._authorize_order_write", side_effect=_grant),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124", "parent_order_id": "123"}])
+        client.attach_order_and_confirm("U1234567", "123", {"orderType": "STP", "price": 140.0})
+    assert seen["label"] == "SELL 2 AAPL (attached to order 123)"
+    assert seen["reason"] == "attach SELL 2 AAPL to IBKR order 123 (BUY 2 AAPL)"
+
+
+def test_attach_logs_a_response_that_does_not_report_the_link(client, caplog):
+    """The one post-send check: the response entry's `parent_order_id` equals the parent, else
+    the result is logged at ERROR and returned intact — never raised over (the order is placed
+    by now) and never treated as success."""
+    import logging
+
+    with (
+        _patch.object(client, "get_order_status", return_value=_working_parent_status()),
+        _patch("ibkr_core_mcp.client.require_touch_id"),
+        _patch("ibkr_core_mcp.client.confirm_bracket_dialog"),
+        _patch.object(client._session, "post") as mock_post,
+        caplog.at_level(logging.ERROR, logger="ibkr_core_mcp.client"),
+    ):
+        mock_post.return_value = _make_ok_response([{"order_id": "124"}])
+        terminal = client.attach_order_and_confirm("U1234567", "123", {"orderType": "LMT", "price": 170.0})
+    assert terminal == [{"order_id": "124"}]
+    assert "not report the order attached to 123" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        ([{"order_id": "9"}, {"order_id": "124", "parent_order_id": "123"}], "124"),
+        ([{"order_id": "124", "parent_order_id": 123}], "124"),
+        ([{"order_id": "124"}], None),
+    ],
+    ids=["second-entry", "numeric-link", "no-link"],
+)
+def test_attached_entry_finds_the_child_by_its_parent_link_whatever_the_order(entries, expected):
+    """IBKR's response order is arbitrary (measured 2026-09-21/22): the link is found by the
+    `parent_order_id` IBKR echoes, never by position."""
+    from ibkr_core_mcp import attached_entry
+
+    found = attached_entry("123", entries)
+    assert (found or {}).get("order_id") == expected
+
+
+def test_the_second_bar_refusal_names_who_refuses_and_who_returns():
+    """Register F39: the refusal text, like the tool description, says that IBKR DOES return
+    second bars and that this package is the one refusing them — never a passive "are refused"
+    a model could pin on IBKR."""
+    from ibkr_core_mcp.client import _bar_problem
+
+    problem = _bar_problem("1S")
+    assert problem is not None
+    assert "this package does not offer second bars" in problem, problem
+    assert "IBKR does return them" in problem, problem
+    assert "stamps 60 seconds apart" in problem, problem
+    assert "are not offered" not in problem and "are refused" not in problem, problem
+
+
+def test_whole_or_fraction_shapes_a_quantity_as_ibkr_should_see_it():
+    """One rule for the attach parent and the preview (register F37; review 2026-11-07): a whole
+    number is an int whether it arrived as `10`, `10.0` or `"10"`; a fraction stays itself; an int
+    never rounds through float; finiteness is the caller's refusal, not this function's."""
+    from ibkr_core_mcp.client import _whole_or_fraction
+
+    assert _whole_or_fraction(10) == 10 and isinstance(_whole_or_fraction(10), int)
+    assert _whole_or_fraction(10.0) == 10 and isinstance(_whole_or_fraction(10.0), int)
+    assert _whole_or_fraction("10") == 10 and isinstance(_whole_or_fraction("10"), int)
+    assert _whole_or_fraction(1000.5) == 1000.5
+    assert _whole_or_fraction("10.5") == 10.5
+    assert _whole_or_fraction(2**53 + 1) == 2**53 + 1, "an int must not round through float"
+    assert _whole_or_fraction(True) == 1, "a bool was always the number 1 here (int(True)); unchanged"
+
+
+# ── The two session writes a client could make are deprecated: the owner is the one path (F45) ──
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [("logout", "/logout"), ("reauthenticate", "/iserver/reauthenticate")],
+)
+def test_logout_and_reauthenticate_warn_of_their_deprecation_and_still_post(client, method, endpoint):
+    """Register F45, step 2: the gateway session has one owner (`ibkr_core_mcp.gateway.session`),
+    and a client method that ends or re-establishes the session is a second authority over it.
+    Both methods stay until 3.0 and still send — a host that calls them is warned, not broken —
+    and the warning names where the session writes live now."""
+    with (
+        pytest.warns(DeprecationWarning, match="ibkr_core_mcp.gateway.session") as warned,
+        _patch.object(client._session, "post") as mock_post,
+    ):
+        mock_post.return_value = _make_ok_response({"status": True})
+        getattr(client, method)()
+    mock_post.assert_called_once()
+    assert mock_post.call_args.args[0].endswith(endpoint)
+    assert len(warned) == 1 and "3.0" in str(warned[0].message)

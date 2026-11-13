@@ -34,7 +34,17 @@
 > |---|---|
 > | Clean markdown of any page | append `.md` to the page URL |
 > | Full documentation index (469 pages, measured 2026-08-07) | https://www.interactivebrokers.com/docs/web-api/llms.txt |
-> | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server |
+> | MCP server (Claude Code, Cursor, …) | https://ibkrcampus.com/docs/web-api/_mcp/server — **not available on 2026-10-05**: that host answered HTTP 403 with a Cloudflare error 1000 on every page, and the same path on `www.interactivebrokers.com` answers `{"error":"MCP is disabled for this docs site"}`. Use `.md` and `llms.txt` on `www.interactivebrokers.com` |
+>
+> **Which host to cite (2026-10-05).** The site is served on two hosts, `www.interactivebrokers.com/docs/…` and
+> `ibkrcampus.com/docs/…`, with the same paths; IBKR's own `llms.txt` lists its pages on the second. On 2026-10-05
+> `ibkrcampus.com/docs/…` answered HTTP 403 with a Cloudflare error 1000 ("DNS points to prohibited IP") for every page
+> tried, while `www.interactivebrokers.com/docs/…` served them. **Cite `www.interactivebrokers.com/docs/…`.** The 189
+> links in this repository that used the other host were repointed that day, by path — each target checked by its `.md`
+> variant, against `llms.txt`, and beside a fabricated control — and ten of them turned out to carry page names that
+> never existed (`contract/contract-rules` for `contract/search-contract-rules`, and nine more in `models.py`); they
+> were corrected from the index and each replacement confirmed to name its endpoint. Whether the first host returns is
+> not known. Released sections of the CHANGELOG and `docs/audits/` keep the URLs they were written with.
 >
 > `FirecrawlClient.crawl()` used to return 0 pages on `interactivebrokers.com` — that method was
 > removed on 2026-07-30 with the rest of the crawl ladder, and `crawl_site` (the local browser)
@@ -97,6 +107,7 @@ old-prefix URL fails even for a page that genuinely exists.
 | **Configure Flex with AI** (natural-language Flex Query builder, last updated 2026-05-07) | https://www.ibkrguides.com/clientportal/configure-flex-with-ai.htm |
 | **Flex Queries — landing page** (navigation index only: Run/Create/Edit Flex Query links, delivery settings, 4-year retention note — live-fetched 2026-07-14; kept as a general Flex-Queries pointer, no longer cited as the source for the "all trade origins" claim below; institutional equivalent at `orgportal/performanceandstatements/flex.htm` if this package ever needs to support orgportal accounts) | https://www.ibkrguides.com/clientportal/performanceandstatements/flex.htm |
 | **Activity Statements** (account-level reports, not per-platform logs — backs `flex_query.py`'s "What Flex covers" claim) | https://www.interactivebrokers.com/campus/glossary-terms/activity-statements/ |
+| **Statement cutoff times** (what a day's statement *includes*: commodities 5:15 PM EST, securities 8:20 PM EST, IB-JP ~6:00 AM ET; no retrieval time is published — `store.newest_statement_day` rests on this page plus the measured `toDate`s) | https://www.ibkrguides.com/clientportal/performanceandstatements/statements.htm |
 
 **Citation fix (2026-07-14):** `flex_query.py`'s "## What Flex covers" docstring (and two copies
 of the same claim in `claude_tools.py`) previously cited the orgportal landing page above as
@@ -116,6 +127,10 @@ note in `client.py`), not re-presented as independently sourced from the glossar
 | **WebSocket API reference** (connection, subscriptions, message format — also covers market-data `smd`/`umd` subscriptions, which IBKR does not document under a separate anchor) | https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction |
 | **Trades subscription** (`str`/`utr`, execution fields) | https://www.interactivebrokers.com/docs/web-api/v1/ws/order-position-operations/request-trades-data |
 | **P&L subscription** (`spl`/`upl`, account P&L fields) | https://www.interactivebrokers.com/docs/web-api/v1/ws/order-position-operations/request-profit-loss |
+| **Authentication status** (`sts`, unsolicited — "when initially connecting" and on every change; `connect()` returns only after it reports `authenticated: true`) | https://www.interactivebrokers.com/docs/web-api/v1/ws/unsolicited-messages/authentication-status |
+| **System connection messages** (`system`: the username on connect, then a heartbeat every 10 s) | https://www.interactivebrokers.com/docs/web-api/v1/ws/unsolicited-messages/system-connection-messages |
+| **Send a topic** (IBKR's own example sleeps 3 s after the open before its first topic) | https://www.interactivebrokers.com/docs/web-api/v1/ws/connection-guide/send-a-websocket-topic |
+| **Which topics need a brokerage session** (`str`, `smd`, `act`, `sts` do; `spl`, `system` do not) | https://www.interactivebrokers.com/docs/web-api/v1/ws/introduction |
 
 **Google Drive API v3** (`cache.py`)
 

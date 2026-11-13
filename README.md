@@ -56,7 +56,7 @@ no bypass, and the boundary is held by tests.
 
 ### macOS — required for order execution
 
-Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
+Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`) are gated by Touch ID. This gate is enforced inside the library and **cannot be bypassed**. It requires:
 
 | Requirement | Minimum |
 |---|---|
@@ -122,7 +122,7 @@ pip install -e ".[dev,server]"
 from ibkr_core_mcp.gateway import GatewayManager
 
 gm = GatewayManager()
-gm.startup()   # interactive: starts container → opens browser → waits for auth
+gm.startup()   # interactive: starts container → opens the login window → waits for auth
 ```
 
 Or use the programmatic API (for non-interactive environments, e.g. a web UI or a batch job):
@@ -131,21 +131,26 @@ Or use the programmatic API (for non-interactive environments, e.g. a web UI or 
 gm = GatewayManager()
 gm.start()                   # build image (first run) + docker run
 gm.wait_for_gateway()        # wait up to 120 s for Java process
-gm.open_login_page()         # open https://localhost:5055 in browser
+window = gm.open_login_page()  # a small Chrome window of its own (a tab if no Chrome)
 # … user logs in …
-gm.wait_for_auth(timeout=300)  # poll until authenticated
+if gm.wait_for_auth(timeout=300) and window is not None:  # poll until authenticated
+    window.close()             # the login's job is done; a failed one stays open
 ```
 
 `startup()` steps on first run:
 1. Launch Docker Desktop (macOS) if not running
 2. Build the gateway image (~60 MB IBKR zip, cached afterwards)
 3. Start the container on port 5055
-4. Open `https://localhost:5055` in your browser
+4. Open the login (`https://localhost:5055`) in a small Chrome window of its own — its own profile,
+   540×680; a browser tab if there is no Chrome
 5. You log in with your IBKR credentials + 2FA
-6. Verify the session is active
+6. Verify the session is active, then close the login window (a failed login leaves it open)
 
 Log in at `https://localhost:5055` **in Chrome** — the default auth reads Chrome's cookie store for
-`localhost`. To use another browser set `IBKR_AUTH_BROWSER` to one of `chrome`, `chromium`, `firefox`,
+`localhost`. (`open_login_page()` opens the login in a Chrome profile of its own, and on 2026-10-13 the
+gateway answered data reads with no cookie at all; on macOS the default auth can also be refused
+Chrome's cookie file, and then warns and continues without one.) To use another browser set
+`IBKR_AUTH_BROWSER` to one of `chrome`, `chromium`, `firefox`,
 `safari`, `edge` (any other name is refused). The gateway session expires when idle: call
 `client.tickle()` about once a minute from your process (no keepalive loop ships with the package;
 `docs/gateway-auth-reference.md` § Keeping the session alive shows the launchd daemon ClaudIA uses).
@@ -166,10 +171,15 @@ account_id = accounts[0]["accountId"]
 summary   = client.get_account_summary(account_id)
 positions = client.get_positions(account_id)
 
-# Market data requires a contract ID (conid), not a symbol string
-contracts = client.search_contract("AAPL")
-conid     = contracts[0]["conid"]
-bars      = client.get_market_history(conid, period="1Y", bar="1d")
+# Market data requires a contract ID (conid), not a symbol string — and a ticker is not a
+# listing. Resolve a stock through /trsrv/stocks and its `isUS` flag, and stop when it is not
+# unique: the first match of a symbol search is in no documented order (for IGV it is the
+# Mexican listing, in MXN).
+us = [c for r in client.get_stocks(["AAPL"]) for c in r["contracts"] if c.get("isUS")]
+if len(us) != 1:
+    raise SystemExit(f"AAPL: {len(us)} US listings — name the exchange rather than pick one")
+conid = int(us[0]["conid"])
+bars  = client.get_market_history(conid, period="1y", bar="1d")
 ```
 
 **Rate limits: IBKR counts per IP, this package paces per process.** `IBKRClient` spaces its own
@@ -230,7 +240,7 @@ See [docs/tools-reference.md](https://github.com/stephus182/ibkr_core_mcp/blob/m
 | `sync_flex_archive` | Re-sync full Flex archive from GDrive parquet |
 | `check_flex_coverage` | Activity distribution report — trade-date coverage across stored history (not an integrity check) |
 | `import_flex_file` | Import a locally downloaded Flex XML file into SQLite |
-| `verify_flex_import` | Import integrity check — cross-checks XML tradeIDs on Drive against SQLite; uses manifest to skip re-verifying unchanged files |
+| `verify_flex_import` | Import integrity check — cross-checks XML tradeIDs on Drive against the Flex dataset; uses manifest to skip re-verifying unchanged files |
 | `get_live_orders` | Working orders (Submitted, PreSubmitted, Inactive, …) |
 | `get_order_status` | Status of a specific order by ID |
 | `diagnose_orders` | Diagnose order issues — checks session, permissions, account |
@@ -252,7 +262,7 @@ See [docs/tools-reference.md](https://github.com/stephus182/ibkr_core_mcp/blob/m
 | `delete_alert` | Delete an IBKR price alert |
 | `activate_alert` | Enable or disable an IBKR price alert |
 | `get_watchlists` | List IBKR watchlists and their contents |
-| `add_indicators` | Compute RSI, MACD, Bollinger, ATR, VWAP, … |
+| `add_indicators` | Moving averages and Bollinger bands with TradingView's settings (source, type, length, StdDev, offset), RSI, MACD, ATR, VWAP, … — every setting printed on the result |
 | `run_backtest` | Sandboxed RestrictedPython strategy backtester |
 | `generate_pinescript` | Generate PineScript v5 strategy/indicator |
 | `get_analytics` | Sharpe, Sortino, Calmar, CAGR, max drawdown |
@@ -294,13 +304,19 @@ ws = IBKRWebSocket(gateway_url="https://localhost:5055", session_cookie="")
 
 async def main():
     await ws.connect()
-    conid = 265598  # AAPL — use search_contract() to find conids
+    conid = 265598  # AAPL — resolved as in "Query IBKR" above (get_stocks and its isUS flag)
     await ws.subscribe(conid)
     async for quote in ws.listen():
         print(quote.symbol, quote.last, quote.bid, quote.ask)
 
 asyncio.run(main())
 ```
+
+`connect()` returns only once IBKR's `sts` frame has reported the socket authenticated: the
+gateway silently drops a topic sent before that frame (measured 2026-09-24 — zero frames before
+it, 37 after), so subscribing straight after `connect()` is correct and needs no sleep. It raises
+`StreamingError` after 10 s without an `sts`, or when `sts` reports the brokerage session as not
+authenticated; the socket is closed before the error is raised.
 
 **Price alerts: the local engine works; creating IBKR's native alerts does not, and it is not this
 package's defect.** `SQLiteStore.add_alert` + `AlertManager` (and the MCP server's `add_price_alert`
@@ -423,9 +439,9 @@ Copy `.env.example` to `.env` if you want to override any default — nothing is
 | `GDRIVE_CACHE_FOLDER_ID` | optional | Explicit Drive folder for Parquet cache. If unset, auto-created as `market_data/` inside `GOOGLE_DRIVE_FOLDER_ID` |
 | `GDRIVE_TOKEN_FILE` | for GDrive | OAuth2 token path |
 | `GDRIVE_CREDENTIALS_FILE` | for GDrive | OAuth2 credentials path |
-| `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token |
+| `IBKR_FLEX_TOKEN` | for Flex sync | Flex Web Service token — a secret: read from the OS keychain (`python -m ibkr_core_mcp.secret_store set <NAME>`) or from `.env` into the `Config` as a `SecretStr`, never placed in the environment |
 | `IBKR_FLEX_QUERY_ID` | for Flex sync | Flex query ID |
-| `FIRECRAWL_API_KEY` | for whole-web search only | Firecrawl API key. If unset, only `firecrawl_search` returns a "not available" message rather than raising |
+| `FIRECRAWL_API_KEY` | for whole-web search only | Firecrawl API key. If unset, only `firecrawl_search` returns a "not available" message rather than raising — a secret: read from the OS keychain (`python -m ibkr_core_mcp.secret_store set <NAME>`) or from `.env` into the `Config` as a `SecretStr`, never placed in the environment |
 | `GDRIVE_WEB_DOCS_FOLDER_ID` | optional | Explicit Drive folder for scraped docs/search snapshots. If unset, auto-created as `web_docs/` inside `GOOGLE_DRIVE_FOLDER_ID` |
 | `CRAWL4AI_PROFILES_DIR` | optional | Saved Crawl4AI login profiles for paywalled sites (default: `~/.ibkr_core/crawl4ai_profiles`) |
 
@@ -433,7 +449,7 @@ Copy `.env.example` to `.env` if you want to override any default — nothing is
 
 ## Security
 
-**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`: one Touch ID bound to the *whole array*, and one Gate 2 dialog showing every leg, because two dialogs would allow the parent to be sent with the child declined, which is the one state a bracket exists to prevent (see [CLAUDE.md — Security & Fingerprint Authentication](https://github.com/stephus182/ibkr_core_mcp/blob/main/CLAUDE.md#security--fingerprint-authentication)):
+**ibkr_core_mcp does not place orders autonomously.** Order write methods (`place_order`, `place_order_and_confirm`, `modify_order`, `modify_order_and_confirm`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`) on `IBKRClient` are gated by two sequential controls enforced at the innermost call site inside the library. A single IBKR order can require several chained confirmation replies before reaching a terminal state — `place_order_and_confirm`/`modify_order_and_confirm` are the recommended entry points, since they take one Touch ID for the whole chain and show a confirmation dialog for every reply in it. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`: one Touch ID bound to the *whole array*, and one Gate 2 dialog showing every leg, because two dialogs would allow the parent to be sent with the child declined, which is the one state a bracket exists to prevent (see [CLAUDE.md — Security & Fingerprint Authentication](https://github.com/stephus182/ibkr_core_mcp/blob/main/CLAUDE.md#security--fingerprint-authentication)):
 
 ### Gate 1 — Touch ID (macOS LocalAuthentication)
 
@@ -451,9 +467,9 @@ If `pyobjc-framework-LocalAuthentication` is not installed, or if the Mac hardwa
 
 Implemented in `order_confirm.py`.
 
-- Full order details displayed in a modal: on macOS an AppKit dialog run in a subprocess (banner colour-coded by side — green BUY, red SELL, dark red CANCEL, amber when the side is unknown), with an `osascript` fallback; `tkinter` on other platforms
-- 60-second timeout — the dialog auto-cancels unattended
-- **Enter key disabled** — confirmation requires a deliberate mouse click on the button named for the action (SEND TO IBKR, MODIFY ORDER, CANCEL ORDER, CONFIRM REPLY). Return confirms on none of the three renderers, but each refuses it by a different mechanism, and `SECURITY.md` § Gate 2 names them. This bullet ended "the default button is the abandon one" until 2026-09-17, which was the `osascript` fallback's mechanism alone (audit finding SEC-09)
+- Full order details displayed in a modal: on macOS an AppKit dialog run in a subprocess (banner colour-coded by side — green BUY, red SELL, red CANCEL, yellow when the side is unknown; on every dialog the button that validates is blue and the button that discards is red), with an `osascript` fallback; `tkinter` on other platforms
+- 60-second timeout — the dialog dismisses itself unattended and raises `ConfirmationTimeoutError` (a `HumanAuthError`): nothing was sent to IBKR, the order is as it was. Its own outcome since 2026-09-29, not the abandon button's — a consumer had reported an order the timeout kept as cancelled
+- **Enter key disabled** — confirmation requires a deliberate mouse click on the button named for the action (SEND TO IBKR, MODIFY ORDER, VALIDATE on the cancel dialog, CONFIRM on a reply). Return confirms on none of the three renderers, but each refuses it by a different mechanism, and `SECURITY.md` § Gate 2 names them. This bullet ended "the default button is the abandon one" until 2026-09-17, which was the `osascript` fallback's mechanism alone (audit finding SEC-09)
 - The body the dialog shows is the body sent: the order dict is copied before the gates
 
 Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [ClaudIA](https://github.com/stephus182/claudia_ui) can add further gates (e.g. a "Stage this order" button click in its Panel UI) before `place_order`/`place_order_and_confirm` is ever invoked.
@@ -468,7 +484,7 @@ Since the 2026-09-13 security architecture audit, the properties above are enfor
 that read the source, not only by convention (`pytest -m security`, ~10 s, part of every unit
 run and of CI):
 
-- the three order-write endpoints are built only inside the six functions of `GATED_OWNERS` — the five public writes plus the private `_resolve_one_reply` that answers one chained precaution reply — each runs a gate before its first network call, and the tool layer never references an order write;
+- the three order-write endpoints are built only inside the seven functions of `GATED_OWNERS` — the six public writes plus the private `_resolve_one_reply` that answers one chained precaution reply — each runs a gate before its first network call, and the tool layer never references an order write;
 - the whatif preview is the only ungated order path;
 - every tool declares its `capabilities`, none declares `ORDER_EXECUTION`, and a handler that touches an undeclared sink fails;
 - strategy code cannot read or write a file, spawn a process or reach the network (canary tests), and what it may touch is a frozen allowlist;
@@ -502,6 +518,8 @@ cal = SQLiteStore.get_market_calendar_context()
 #   "last_trading_day": "2026-06-23",
 #   "next_trading_day": "2026-06-25",
 #   "primary_exchange": "XNYS",
+#   "sessions_today": {"XNYS": True, "CME": True, "XLON": True, ..., "XSAU": False},  # per exchange, from its own calendar
+#   "early_closes_today": {},   # on a half day: {"XNYS": {"close": "13:00", "tz": "America/New_York"}} — never CME
 #   "holidays_by_exchange": {
 #     "XNYS":  ["2026-01-01", "2026-01-19", "2026-02-16", ...],   # NYSE
 #     "CME":   ["2026-01-01", "2026-07-04", ...],                  # CME Futures
@@ -518,6 +536,8 @@ cal = SQLiteStore.get_market_calendar_context()
 cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"])
 ```
 
+**Half days.** `early_closes_today` names each exchange whose session ends early today, with the closing time in the exchange's own zone. The figures are the calendar library's; each exchange's own page is the witness — `python scripts/calendar_half_days.py` lists the library's half days beside the page to read them against (last compared 2026-10-02, eight exchanges: the date agreed on 17 of 17 checks). **CME is flagged, never timed:** `cal["futures"]["holiday_schedule_today"]` says Globex runs a holiday schedule today; its hours differ by product group and are on [CME's holiday calendar](https://www.cmegroup.com/tools-information/holiday-calendar.html), not here.
+
 **Coverage:** full current year + next year (past and future holidays) — ~10–28 per exchange, negligible payload.
 
 **Default 20 exchanges (full G20 + Eurex):** NYSE (XNYS), CME Futures (CME), LSE London (XLON), Xetra Frankfurt (XETR), Eurex (XEUR), Euronext Paris (XPAR), Borsa Italiana (XMIL), TSE Tokyo (XTKS), HKEX Hong Kong (XHKG), SSE Shanghai (XSHG), BSE Mumbai (XBOM), KRX Seoul (XKRX), ASX Sydney (XASX), TSX Toronto (XTSE), B3 São Paulo (BVMF), BMV Mexico City (XMEX), JSE Johannesburg (XJSE), Tadawul Saudi Arabia (XSAU), IDX Jakarta (XIDX), Borsa Istanbul (XIST). Excludes Russia (XMOS — IBKR suspended most Russian securities since 2022) and Argentina (XBUE — capital controls, very limited IBKR access).
@@ -525,7 +545,7 @@ cal = SQLiteStore.get_market_calendar_context(exchanges=["XNYS", "XKRX", "XBOM"]
 **100+ supported markets** including XNAS (NASDAQ), XPAR (Euronext Paris), XKRX (Korea), XBOM (Bombay), SSE (Shanghai), BVMF (Brazil), and more — [full list](https://github.com/gerrymanoim/exchange_calendars).
 
 **Used for:**
-- **Staleness check** — `get_trade_date_coverage()` uses the NYSE calendar to determine if Flex data is current. `newest == last_trading_day` means fully up to date, regardless of whether today is a weekend or holiday.
+- **Not the Flex staleness check, since 2026-09-29** — `get_trade_date_coverage()` used the NYSE calendar for its `stale` flag and called a two-trading-day-old store current. A Flex statement day is a weekday, holidays included, so the flag now reads IBKR's own `toDate` against the weekday before today (ET) — `ibkr_core_mcp.store.newest_statement_day` — and the exchange calendar has no part in it.
 - **System prompt injection** — ClaudIA receives today's trading status, last/next trading day, and full-year holidays for all 20 exchanges at session start. This lets it reason about order timing, settlement windows, cross-regional volume effects, and upcoming closures proactively — without any API calls or gateway dependency.
 
 **Why not the IBKR API?** The Client Portal API has a per-contract trading schedule endpoint but no standalone market holiday calendar. `exchange_calendars` is lighter, faster, and works offline.
@@ -544,7 +564,7 @@ The cache key is `(date_str, tuple(exchange_codes))` — stored in a module-leve
 
 ## Flex Import Integrity
 
-`verify_flex_import` is a manifest-based integrity check that proves every tradeID in the source XML archives is present in SQLite. It does **not** analyse activity patterns — use `check_flex_coverage` for that.
+`verify_flex_import` is a manifest-based integrity check that proves every tradeID in the source XML archives is present in the Flex dataset (`FlexDataset.trade_ids`). It does **not** analyse activity patterns — use `check_flex_coverage` for that.
 
 ### How it works
 

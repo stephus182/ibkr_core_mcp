@@ -2,24 +2,111 @@
 
 from __future__ import annotations
 
+import inspect
+import json
 import logging
+import os
 import platform
+import subprocess
+from collections.abc import Callable
+from itertools import pairwise
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
-from ibkr_core_mcp.exceptions import GatewayError
-from ibkr_core_mcp.gateway import GatewayManager
+from ibkr_core_mcp.exceptions import GatewayError, RestartRefusedError
+from ibkr_core_mcp.gateway import GatewayManager, LoginWindow
+from ibkr_core_mcp.gateway.manager import (
+    _LOGIN_WINDOW_ENV,
+    GATEWAY_LOG_DIR,
+    KeepAwake,
+    _find_chrome,
+    read_login_events,
+    restart_refusal,
+)
+from ibkr_core_mcp.gateway.preflight import LOGIN_PHRASES, GatewayState, LoginEvent
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _run_result(returncode: int, stdout: str = "") -> SimpleNamespace:
-    return SimpleNamespace(returncode=returncode, stdout=stdout)
+def _run_result(returncode: int, stdout: str = "", stderr: str = "") -> SimpleNamespace:
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+_IMAGE_ID = "sha256:" + "1" * 64
+"""What `docker image inspect --format {{.Id}}` reports for the gateway image in these tests."""
+
+
+def _fake_docker(
+    container: dict[str, object] | None, restart_rc: int = 0
+) -> tuple[Callable[..., SimpleNamespace], list[list[str]]]:
+    """A `subprocess.run` for the docker commands `start()` issues; every argv is recorded.
+
+    `container` is what `docker container inspect` reports (`None`: there is none — rc 1 and
+    `[]`, measured 2026-11-07); the image is present, as `_IMAGE_ID`; `docker restart` answers
+    `restart_rc`; every other command succeeds.
+    """
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(argv)
+        if argv[1:3] == ["container", "inspect"]:
+            return _run_result(1, "[]") if container is None else _run_result(0, json.dumps([container]))
+        if argv[1:3] == ["image", "inspect"]:
+            return _run_result(0, _IMAGE_ID + "\n")
+        if argv[1] == "inspect":  # container_exists()
+            return _run_result(1 if container is None else 0)
+        if argv[1] == "restart":
+            return _run_result(restart_rc, stderr="Error response from daemon" if restart_rc else "")
+        return _run_result(0)
+
+    return run, calls
+
+
+def _container_made_by(gm: GatewayManager) -> dict[str, object]:
+    """What `docker container inspect` reports for the container `gm.start()` runs on a host that
+    has none: the image's id, the label the base image brings (the live container carries
+    Ubuntu's OCI labels, read 2026-11-07) and every label `start()` set, kept byte for byte
+    (measured the same day)."""
+    run, calls = _fake_docker(None)
+    with patch("subprocess.run", side_effect=run):
+        gm.start()
+    argv = next(argv for argv in calls if argv[1] == "run")
+    labels = {"org.opencontainers.image.title": "ubuntu"}
+    for flag, value in pairwise(argv):
+        if flag == "--label":
+            key, _, text = value.partition("=")
+            labels[key] = text
+    return {"Image": _IMAGE_ID, "Config": {"Labels": labels}}
+
+
+def _published_beyond_loopback(made: dict[str, object]) -> dict[str, object]:
+    """`made` with one option changed alone: its recorded publish on every interface, not loopback."""
+    config = made["Config"]
+    assert isinstance(config, dict)
+    labels = {key: text.replace("127.0.0.1:", "0.0.0.0:") for key, text in config["Labels"].items()}
+    assert labels != config["Labels"], "no label records a loopback publish: this case would test nothing"
+    return made | {"Config": {"Labels": labels}}
+
+
+def _verbs(calls: list[list[str]]) -> list[str]:
+    """The docker sub-commands issued, in order, among those that keep or replace a container."""
+    return [argv[1] for argv in calls if argv[1] in {"restart", "stop", "rm", "run"}]
+
+
+@pytest.fixture(autouse=True)
+def _no_gateway_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`start()` reads the session before touching Docker (the restart guard, register F45,
+    condition F). Every test in this module that is not about the guard runs against a gateway
+    that does not answer — nothing to protect — stated here rather than left to pytest-socket's
+    refusal, which the guard would otherwise read as the same thing by accident. A test about
+    the guard or the startup gate patches `read_state` itself, inside, and wins."""
+    monkeypatch.setattr("ibkr_core_mcp.gateway.manager.read_state", lambda url, timeout=5.0: _UNREACHABLE)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +220,7 @@ class TestBuildImage:
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run", side_effect=subprocess.CalledProcessError(125, "docker")),
@@ -147,22 +235,86 @@ class TestBuildImage:
 
 
 class TestStart:
-    def test_stops_existing_container_before_starting(self) -> None:
+    def test_a_current_container_is_restarted_in_place(self) -> None:
+        """Nothing is removed or run anew, so the container's own files — the gateway's log, the
+        one place a refused login shows — are kept (register F43). `docker restart`, not `docker
+        start`: it gives a running container a new process too (measured 2026-11-07), and
+        `start()` ends on a clean, unauthenticated session either way."""
         gm = GatewayManager()
-        with (
-            patch.object(gm, "ensure_docker_running"),
-            patch.object(gm, "container_exists", return_value=True),
-            patch.object(gm, "stop") as mock_stop,
-            patch.object(gm, "image_exists", return_value=True),
-            patch("subprocess.run"),
-        ):
+        run, calls = _fake_docker(_container_made_by(gm))
+        with patch("subprocess.run", side_effect=run):
             gm.start()
-        mock_stop.assert_called_once()
+        assert ["docker", "restart", "ibkr_core_gateway"] in calls
+        assert _verbs(calls) == ["restart"], calls
+
+    @pytest.mark.parametrize(
+        "made",
+        [
+            pytest.param(
+                lambda: _container_made_by(GatewayManager()) | {"Image": "sha256:" + "0" * 64},
+                id="an-older-image",
+            ),
+            pytest.param(lambda: _container_made_by(GatewayManager(port=5056)), id="other-run-options"),
+            pytest.param(
+                lambda: _published_beyond_loopback(_container_made_by(GatewayManager())),
+                id="published-beyond-loopback",
+            ),
+            pytest.param(
+                lambda: {"Image": _IMAGE_ID, "Config": {"Labels": {"org.opencontainers.image.title": "ubuntu"}}},
+                id="not-this-label",
+            ),
+            pytest.param(lambda: {"Image": _IMAGE_ID, "Config": {"Labels": None}}, id="no-labels-at-all"),
+        ],
+    )
+    def test_a_container_that_is_not_current_is_removed_and_run_anew(
+        self, made: Callable[[], dict[str, object]]
+    ) -> None:
+        """Docker Compose's rule: recreate when "the service's configuration or image was changed
+        after the container's creation" (docs.docker.com/reference/cli/docker/compose/up/). The
+        image by id, so a rebuild takes effect; the run options by the label `start()` writes, so
+        a changed port, binding or variable does too. A container without that label — every one
+        made before 2.2.0, or one made by hand — is never taken for current."""
+        gm = GatewayManager()
+        run, calls = _fake_docker(made())
+        with patch("subprocess.run", side_effect=run):
+            gm.start()
+        assert _verbs(calls) == ["stop", "rm", "run"], calls
+
+    def test_the_label_records_every_option_the_container_is_run_with(self) -> None:
+        """One list feeds `docker run` and the label, so nothing reaches the container unrecorded:
+        an option added beside that list would never be compared, and a container made without it
+        would be restarted in place as current."""
+        run, calls = _fake_docker(None)
+        with patch("subprocess.run", side_effect=run):
+            GatewayManager().start()
+        argv = next(argv for argv in calls if argv[1] == "run")
+        label = argv[argv.index("--label") + 1]
+        recorded = label.partition("=")[2]
+        assert argv == [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            "ibkr_core_gateway",
+            "--label",
+            label,
+            *recorded.split(" "),
+            "ibkr-core-gateway",
+        ]
+
+    def test_a_container_docker_will_not_restart_is_removed_and_run_anew(self) -> None:
+        """So reusing a container never leaves the gateway down where recreating it would not."""
+        gm = GatewayManager()
+        run, calls = _fake_docker(_container_made_by(gm), restart_rc=1)
+        with patch("subprocess.run", side_effect=run):
+            gm.start()
+        assert _verbs(calls) == ["restart", "stop", "rm", "run"], calls
 
     def test_builds_image_when_missing(self) -> None:
         gm = GatewayManager()
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=False),
             patch.object(gm, "build_image") as mock_build,
@@ -175,6 +327,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -199,6 +352,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -214,6 +368,7 @@ class TestStart:
         gm = GatewayManager(port=5055)
         with (
             patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "_is_current", return_value=False),
             patch.object(gm, "container_exists", return_value=False),
             patch.object(gm, "image_exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -242,15 +397,14 @@ class TestStop:
 
 
 class TestRestart:
-    def test_calls_stop_then_start(self) -> None:
+    def test_restart_restarts_a_current_container_in_place(self) -> None:
+        """`restart()` is `start()`: a `stop()` first would remove the container — and the log
+        register F43 keeps — for nothing, since `start()` already ends on a fresh process."""
         gm = GatewayManager()
-        with (
-            patch.object(gm, "stop") as mock_stop,
-            patch.object(gm, "start") as mock_start,
-        ):
+        run, calls = _fake_docker(_container_made_by(gm))
+        with patch("subprocess.run", side_effect=run):
             gm.restart()
-        assert mock_stop.call_count == 1
-        assert mock_start.call_count == 1
+        assert _verbs(calls) == ["restart"], calls
 
 
 # ---------------------------------------------------------------------------
@@ -476,3 +630,642 @@ class TestWaitWrappers:
         assert args[0] == gm.is_authenticated  # check function
         assert args[3] == 120  # timeout
         assert args[4] == 3  # poll_interval
+
+
+# ---------------------------------------------------------------------------
+# The login window (register F44)
+# ---------------------------------------------------------------------------
+
+
+class TestFindChrome:
+    """Where Chrome is: a fixed table per platform, then `PATH`; nothing found → `None`."""
+
+    def test_the_macos_app_bundle_when_it_exists(self) -> None:
+        """The install measured on 2026-10-13."""
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch("ibkr_core_mcp.gateway.manager.Path.is_file", return_value=True),
+        ):
+            assert _find_chrome() == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+    def test_a_chrome_on_path_when_no_known_install_exists(self) -> None:
+        """Linux has no fixed install path; the names are looked up on `PATH`."""
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch(
+                "ibkr_core_mcp.gateway.manager.shutil.which",
+                side_effect=lambda name: "/usr/bin/chromium" if name == "chromium" else None,
+            ),
+        ):
+            assert _find_chrome() == "/usr/bin/chromium"
+
+    def test_none_when_no_chrome_is_installed(self) -> None:
+        """The caller falls back to a browser tab."""
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch("ibkr_core_mcp.gateway.manager.Path.is_file", return_value=False),
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value=None),
+        ):
+            assert _find_chrome() is None
+
+
+class TestLoginWindow:
+    """`close()` ends the Chrome process `open_login_page()` started, and says whether it did."""
+
+    def test_close_ends_a_running_window_and_says_so(self) -> None:
+        """The normal close, at authentication."""
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        assert LoginWindow(process).close() is True
+        process.terminate.assert_called_once_with()
+        process.kill.assert_not_called()
+
+    def test_close_touches_nothing_when_the_process_had_already_exited(self) -> None:
+        """Measured 2026-10-13: a launch on a profile already running exits by itself (rc 0) and
+        the running instance opens the window — this handle cannot reach it. Or the operator
+        quit it. Either way there is nothing of ours to end."""
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = 0
+        assert LoginWindow(process).close() is False
+        process.terminate.assert_not_called()
+
+    def test_close_kills_a_window_that_ignores_terminate(self) -> None:
+        """Never left hanging: ten seconds, then a kill."""
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("chrome", 10), 0]
+        assert LoginWindow(process).close() is True
+        process.kill.assert_called_once_with()
+
+
+class TestOpenLoginPage:
+    """The login opens in a small Chrome window of its own; no Chrome → today's browser tab."""
+
+    def test_opens_a_login_window_of_its_own(self) -> None:
+        """The exact launch, list form: own profile, app mode, the measured 540×680."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager._find_chrome", return_value="/opt/chrome"),
+            patch("ibkr_core_mcp.gateway.manager.Path.home", return_value=Path("/Users/someone")),
+            patch("subprocess.Popen") as popen,
+            patch("webbrowser.open") as tab,
+        ):
+            window = GatewayManager(port=5055).open_login_page()
+        assert isinstance(window, LoginWindow)
+        tab.assert_not_called()
+        args, kwargs = popen.call_args
+        assert args[0] == [
+            "/opt/chrome",
+            "--user-data-dir=/Users/someone/.ibkr_core/login-chrome",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--app=https://localhost:5055",
+            "--window-size=540,680",
+        ]
+        assert kwargs["start_new_session"] is True
+        assert "shell" not in kwargs
+
+    def test_the_window_gets_no_secret_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only named variables reach Chrome — a host's API keys stay in the host."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-key")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        with (
+            patch("ibkr_core_mcp.gateway.manager._find_chrome", return_value="/opt/chrome"),
+            patch("subprocess.Popen") as popen,
+            patch("webbrowser.open"),
+        ):
+            GatewayManager().open_login_page()
+        env = popen.call_args.kwargs["env"]
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert set(env) <= set(_LOGIN_WINDOW_ENV)
+
+    @pytest.mark.parametrize(
+        ("chrome", "popen_error"),
+        [(None, None), ("/opt/chrome", OSError("not executable"))],
+        ids=["no-chrome", "chrome-will-not-start"],
+    )
+    def test_falls_back_to_a_browser_tab(self, chrome: str | None, popen_error: Exception | None) -> None:
+        """Today's behaviour, and no handle: there is no window of ours to close."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager._find_chrome", return_value=chrome),
+            patch("subprocess.Popen", side_effect=popen_error),
+            patch("webbrowser.open") as tab,
+        ):
+            assert GatewayManager(port=5055).open_login_page() is None
+        tab.assert_called_once_with("https://localhost:5055")
+
+
+class TestStartupClosesTheLoginWindow:
+    """`startup()` closes the window it opened once the session is authenticated and connected,
+    and only then — the owner's rule (register F44; held in full by the owner's own tests),
+    reached through `startup()` here so the method cannot drift from it."""
+
+    def test_a_verified_session_closes_the_window(self, tmp_path: Path) -> None:
+        window = MagicMock(spec=LoginWindow)
+        window.close.return_value = True
+        result, _, _ = TestStartupThroughTheOwner._startup(_FREE, tmp_path=tmp_path, window=window, then=(_LIVE,))
+        assert result is True
+        assert window.close.call_count == 1
+
+    def test_an_unverified_session_leaves_the_window_open_and_says_so(self, tmp_path: Path) -> None:
+        """A failed login stays on screen (operator 2026-10-13: "Do not auto-close if it fails")."""
+        window = MagicMock(spec=LoginWindow)
+        result, _, lines = TestStartupThroughTheOwner._startup(_FREE, tmp_path=tmp_path, window=window)
+        assert result is False
+        assert window.close.call_count == 0
+        assert any("Close the login window" in line for line in lines), lines
+
+    def test_a_window_that_was_not_ours_to_close_is_named(self, tmp_path: Path) -> None:
+        window = MagicMock(spec=LoginWindow)
+        window.close.return_value = False
+        _, _, lines = TestStartupThroughTheOwner._startup(_FREE, tmp_path=tmp_path, window=window, then=(_LIVE,))
+        assert any("close it yourself" in line.lower() for line in lines), lines
+
+
+# ---------------------------------------------------------------------------
+# The gateway's own log, read in-container (register F45, condition D)
+# ---------------------------------------------------------------------------
+#
+# Moved from the consumer that wrote the read (its `read_login_events` took the container's name
+# as an argument); here the command is built from `GatewayManager.CONTAINER_NAME` and the module's
+# constants only, so no caller can hand `docker exec` a name — or an option — of its own.
+
+_PHRASE_LINE = "/app/api_gateway/logs/gw.2026-10-07.log:17:53:14.123 filler Client login succeeds\n"
+
+
+class TestReadLoginEvents:
+    def test_the_log_read_is_one_shell_free_bounded_command(self) -> None:
+        """List form, never a shell: here not even inside the container, because grep's own
+        `--include` picks the dated files (measured 2026-10-12: the same 93 lines as the shell
+        glob) — and a command that ends on its own, the timeout only a backstop (stopping a
+        `docker exec` client leaves its command running in the container, measured that day)."""
+        with patch("subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            read_login_events()
+
+        phrases = [arg for phrase in LOGIN_PHRASES for arg in ("-e", phrase)]
+        assert run.call_args.args[0] == [
+            "docker",
+            "exec",
+            "ibkr_core_gateway",
+            "grep",
+            "-rHF",
+            "--include=gw.[0-9]*.log",
+            *phrases,
+            "/app/api_gateway/logs",
+        ]
+        assert run.call_args.kwargs["timeout"] > 0
+        assert "shell" not in run.call_args.kwargs
+
+    def test_the_command_is_built_from_constants_and_takes_no_container_argument(self) -> None:
+        """Condition D. The container is the class constant and the directory the module's; the one
+        parameter is the timeout. A `container` parameter would be a value a caller — one day a
+        model-derived one — could hand to `docker exec`, and a value beginning with `-` is read by
+        docker as an option (OS Command Injection cheat sheet: every command injection is also an
+        argument injection)."""
+        assert list(inspect.signature(read_login_events).parameters) == ["timeout"]
+        assert GATEWAY_LOG_DIR == "/app/api_gateway/logs"
+
+    def test_the_docker_cli_gets_path_home_and_docker_variables_only(self) -> None:
+        """The spawn recipe's explicit environment: nothing of the host's — an API key included —
+        reaches the child. Measured 2026-10-12: PATH alone runs `docker exec` here; HOME holds
+        the CLI's configuration, DOCKER_* choose a daemon."""
+        environment = {
+            "PATH": "/usr/bin",
+            "HOME": "/home/operator",
+            "DOCKER_HOST": "unix:///probe.sock",
+            "ANTHROPIC_API_KEY": "sk-not-a-real-key",
+            "IBKR_GATEWAY_URL": "https://localhost:5055/v1/api",
+        }
+        with patch.dict(os.environ, environment, clear=True), patch("subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            read_login_events()
+
+        assert run.call_args.kwargs["env"] == {
+            "PATH": "/usr/bin",
+            "HOME": "/home/operator",
+            "DOCKER_HOST": "unix:///probe.sock",
+        }
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected"),
+        [
+            (
+                MagicMock(returncode=0, stdout=_PHRASE_LINE, stderr=""),
+                ([LoginEvent("2026-10-07 17:53:14", "login", "")], ""),
+            ),
+            (MagicMock(returncode=1, stdout="", stderr=""), ([], "")),
+            (
+                MagicMock(
+                    returncode=1,
+                    stdout="",
+                    stderr="Error response from daemon: No such container: ibkr_core_gateway\n",
+                ),
+                (None, "Error response from daemon: No such container: ibkr_core_gateway"),
+            ),
+            (
+                MagicMock(
+                    returncode=2,
+                    stdout=_PHRASE_LINE,
+                    stderr="grep: /app/api_gateway/logs/x.log: No such file or directory\n",
+                ),
+                (None, "grep: /app/api_gateway/logs/x.log: No such file or directory"),
+            ),
+            (
+                MagicMock(
+                    returncode=0,
+                    stdout="/app/api_gateway/logs/gw.2026-10-07.log:no time giving up\n",
+                    stderr="",
+                ),
+                # Condition G: the format refusal passes `redact_error` too, so its type name leads.
+                (None, "ValueError: gateway log format not recognised: a 'giving up' line has no leading time"),
+            ),
+            (
+                OSError(2, "No such file or directory", "docker"),
+                # Condition G: the OSError's text passes `redact_error` — its type name leads.
+                (None, "docker could not be run: FileNotFoundError: [Errno 2] No such file or directory: 'docker'"),
+            ),
+            (subprocess.TimeoutExpired(["docker"], 15), (None, "docker did not answer within 15 s")),
+        ],
+        ids=[
+            "read",
+            "no-line-matched-is-no-login",
+            "no-such-container-also-exits-1",
+            "a-partial-read-is-not-parsed",
+            "a-line-without-a-time",
+            "no-docker-program",
+            "timed-out",
+        ],
+    )
+    def test_the_log_read_fails_open_with_its_reason(self, outcome: object, expected: object) -> None:
+        """The exit rule, measured 2026-10-12 against the real container: 0 → parse; 1 with an
+        empty stderr → nothing matched; anything else → unreadable, stderr's first line the reason.
+        Exit 1 alone cannot tell "no line matched" from "no such container" — only stderr does —
+        and a partial read prints lines AND exits 2: those lines are never used, since what the
+        missing file held is exactly what would make the verdict answer about an older login."""
+        effect = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
+        with patch("subprocess.run", **effect):
+            assert read_login_events() == expected
+
+
+# ---------------------------------------------------------------------------
+# startup() through the owner (register F45, step 2); the readings below serve the restart guard too
+# ---------------------------------------------------------------------------
+
+_FREE = GatewayState(reachable=True)
+_LIVE = GatewayState(reachable=True, authenticated=True, connected=True)
+_CONTESTED = GatewayState(reachable=True, competing=True)
+_BORROWED = GatewayState(reachable=True, sso_valid=True, client_app="IBKRMOBILE_000.a-000", sso_user="ibkruser")
+_UNREACHABLE = GatewayState(reachable=False, detail="ConnectionError")
+_REFUSED_LOG = [
+    LoginEvent("2026-10-07 18:00:00", "login", ""),
+    LoginEvent("2026-10-07 18:00:01", "validate", "401"),
+    LoginEvent("2026-10-07 18:00:13", "giving up", ""),
+]
+_VALIDATING_LOG = [LoginEvent("2026-10-07 18:00:00", "login", ""), LoginEvent("2026-10-07 18:00:01", "validate", "401")]
+
+
+class TestStartupThroughTheOwner:
+    """`startup()` is `get_session().establish(self, url=…, emit=…, allow_restart=False)` and
+    returns whether the session is LIVE (register F45, step 2): one sequence for the CLI, a
+    host's button and this method, so they cannot drift. Step 1's gate inside `startup()` is
+    gone with the body it guarded; what it held is held here, by the owner's rules — a LIVE
+    session is left alone, CONTESTED and BORROWED get no page, a gateway that does not answer
+    gets no page, a login IBKR is still VALIDATING gets no page (the owner's one addition in the
+    move, since its rule had no case for it), and a REFUSED last login is named before the page
+    opens — the operator's rule of 2026-10-12, which step 1's gate had overridden."""
+
+    @staticmethod
+    def _startup(
+        reading: GatewayState,
+        events: object = ([], ""),
+        confirmations: tuple[bool, ...] = (True,),
+        *,
+        tmp_path: Path,
+        window: MagicMock | None = None,
+        then: tuple[GatewayState, ...] = (),
+    ) -> tuple[bool, MagicMock, list[str]]:
+        """Run `startup()` against stand-ins: `reading` first, `then` the readings that follow
+        (the last repeats), the data half answering `confirmations` in turn."""
+        from ibkr_core_mcp.gateway import session as owner
+
+        gm = GatewayManager()
+        clock = {"t": 0.0}
+        reads = [reading, *then]
+
+        def monotonic() -> float:
+            clock["t"] += 5.0
+            return clock["t"]
+
+        confs = list(confirmations)
+        lines: list[str] = []
+        real_lock = owner.SuspendLock  # captured before the patch below replaces the name
+        lock_dir = tmp_path
+        with (
+            patch.object(gm, "ensure_docker_running"),
+            patch.object(gm, "is_running", return_value=True),
+            patch.object(gm, "wait_for_gateway", return_value=True),
+            patch.object(gm, "open_login_page", return_value=window) as opened,
+            patch(
+                "ibkr_core_mcp.gateway.session.read_state",
+                side_effect=lambda url, timeout=5.0: reads.pop(0) if len(reads) > 1 else reads[0],
+            ),
+            patch(
+                "ibkr_core_mcp.gateway.session.confirm_session",
+                side_effect=lambda url, timeout=10.0: (
+                    (confs.pop(0) if len(confs) > 1 else confs[0]),
+                    "account(s) <redacted>",
+                ),
+            ),
+            patch("ibkr_core_mcp.gateway.session.read_login_events", return_value=events),
+            patch("ibkr_core_mcp.gateway.session.SuspendLock", lambda: real_lock(path=lock_dir / "session.suspend")),
+            patch("ibkr_core_mcp.gateway.session.get_session", return_value=owner.GatewaySession()),
+            patch("ibkr_core_mcp.gateway.session.time.sleep", lambda _s: None),
+            patch("ibkr_core_mcp.gateway.session.time.monotonic", monotonic),
+            patch("builtins.print", lambda *a, **k: lines.append(" ".join(str(x) for x in a))),
+        ):
+            result = gm.startup()
+        return result, opened, lines
+
+    def test_a_live_session_returns_true_and_opens_no_login(self, tmp_path: Path) -> None:
+        result, opened, lines = self._startup(_LIVE, tmp_path=tmp_path)
+        assert result is True
+        opened.assert_not_called()
+        assert any("Already authenticated" in line for line in lines), lines
+
+    def test_an_authenticated_session_whose_data_half_is_dark_is_not_live(self, tmp_path: Path) -> None:
+        result, opened, _ = self._startup(_LIVE, confirmations=(False,), tmp_path=tmp_path)
+        assert result is False
+        opened.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("reading", "events"),
+        [
+            (_CONTESTED, ([], "")),
+            (_BORROWED, ([], "")),
+            (_FREE, (_VALIDATING_LOG, "")),
+            (_UNREACHABLE, ([], "")),
+        ],
+        ids=["contested", "borrowed", "validating", "unreachable-after-the-wait"],
+    )
+    def test_a_session_that_must_not_be_logged_into_returns_false_and_opens_no_login(
+        self, reading: GatewayState, events: object, tmp_path: Path
+    ) -> None:
+        result, opened, _ = self._startup(reading, events, tmp_path=tmp_path)
+        assert result is False
+        opened.assert_not_called()
+
+    def test_a_refused_last_login_is_named_and_the_page_still_opens(self, tmp_path: Path) -> None:
+        """The operator's rule (2026-10-12): the remedy is a website login THEN one gateway login,
+        and withholding the page would deadlock it; the note comes first."""
+        result, opened, lines = self._startup(_FREE, (_REFUSED_LOG, ""), tmp_path=tmp_path)
+        assert result is False
+        opened.assert_called_once()
+        note = next(i for i, line in enumerate(lines) if "IBKR refused the last gateway login" in line)
+        page = next(i for i, line in enumerate(lines) if "Login page opened" in line)
+        assert note < page
+
+    def test_a_free_session_opens_the_login_and_an_unfinished_one_is_not_live(self, tmp_path: Path) -> None:
+        result, opened, lines = self._startup(_FREE, tmp_path=tmp_path)
+        opened.assert_called_once()
+        assert result is False
+        assert not any("Press Enter" in line for line in lines), "the two input() prompts are gone with the body"
+
+    def test_the_log_is_read_only_after_a_free_reading(self, tmp_path: Path) -> None:
+        """The `docker exec` runs only where it can change the answer."""
+        with patch("ibkr_core_mcp.gateway.session.read_login_events") as read:
+            self._startup(_LIVE, tmp_path=tmp_path)
+        read.assert_not_called()
+
+    def test_startup_hands_the_owner_its_own_gateway_url_and_never_a_restart(self) -> None:
+        """A manager on another port reads that port; and `startup()` never asks for a restart —
+        a borrowed session is reported, not cleared, from here."""
+        gm = GatewayManager(port=5056)
+        session = MagicMock()
+        session.establish.return_value = SimpleNamespace(phase="free")
+        with patch("ibkr_core_mcp.gateway.session.get_session", return_value=session):
+            gm.startup()
+        kwargs = session.establish.call_args.kwargs
+        assert session.establish.call_args.args == (gm,)
+        assert kwargs["url"] == "https://localhost:5056/v1/api"
+        assert kwargs["allow_restart"] is False
+        assert callable(kwargs["emit"])
+
+
+# ---------------------------------------------------------------------------
+# The restart guard inside start() — register F45, step 2, condition F
+# ---------------------------------------------------------------------------
+
+
+class TestRestartGuard:
+    """`start()` ends on a fresh Java process, which destroys whatever session the container
+    holds. Before touching Docker it reads the session, and refuses — `RestartRefusedError`,
+    nothing run — where a restart would destroy something or help nothing: a LIVE session (a
+    needless re-login is what escalates into the IB Key challenge), a REFUSED one (a restart did
+    not clear IBKR's refusal on 2026-10-08: started again 15:47:49 UTC, refused again 15:49:37),
+    a VALIDATING one (a restart would cut off a login IBKR is still answering). FREE and
+    BORROWED are what a restart is for; `force=True` overrides every refusal. The rule is the
+    consumer's reset script's, verbatim, with its five cases as this test."""
+
+    @staticmethod
+    def _start(reading: GatewayState, events: object = ([], ""), *, force: bool = False) -> list[list[str]]:
+        gm = GatewayManager()
+        run, calls = _fake_docker(None)
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+            patch.object(gm, "ensure_docker_running"),
+            patch("subprocess.run", side_effect=run),
+        ):
+            gm.start(force=force)
+        return calls
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "code"),
+        [(_LIVE, ([], ""), 0), (_FREE, (_REFUSED_LOG, ""), 5), (_FREE, (_VALIDATING_LOG, ""), 6)],
+        ids=["live", "refused", "validating"],
+    )
+    def test_a_restart_that_would_destroy_or_help_nothing_is_refused_and_nothing_runs(
+        self, reading: GatewayState, events: object, code: int
+    ) -> None:
+        gm = GatewayManager()
+        run, calls = _fake_docker(None)
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+            patch.object(gm, "ensure_docker_running") as docker_up,
+            patch("subprocess.run", side_effect=run),
+            pytest.raises(RestartRefusedError) as refused,
+        ):
+            gm.start()
+        assert refused.value.code == code
+        assert refused.value.reason, "a refusal names its reason"
+        assert isinstance(refused.value, GatewayError)
+        assert calls == [], "a refused restart ran a docker command"
+        docker_up.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "force"),
+        [
+            (_FREE, ([], ""), False),
+            (_BORROWED, ([], ""), False),
+            (_UNREACHABLE, ([], ""), False),
+            (_FREE, (_REFUSED_LOG, ""), True),
+            (_LIVE, ([], ""), True),
+        ],
+        ids=["free", "borrowed", "unreachable", "refused-forced", "live-forced"],
+    )
+    def test_a_restart_that_can_help_or_is_forced_runs(
+        self, reading: GatewayState, events: object, force: bool
+    ) -> None:
+        """A gateway that does not answer has no session to protect — `startup()`'s own path to
+        `start()` is exactly that case."""
+        calls = self._start(reading, events, force=force)
+        assert _verbs(calls) == ["run"], calls
+
+    def test_the_log_is_read_only_after_a_free_reading(self) -> None:
+        gm = GatewayManager()
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=_LIVE),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events") as log_read,
+            patch.object(gm, "ensure_docker_running"),
+            pytest.raises(RestartRefusedError),
+        ):
+            gm.start()
+        log_read.assert_not_called()
+
+    def test_restart_carries_force_through_to_start(self) -> None:
+        gm = GatewayManager()
+        with patch.object(gm, "start") as start:
+            gm.restart(force=True)
+        start.assert_called_once_with(force=True)
+
+    @pytest.mark.parametrize(
+        ("reading", "events", "expected"),
+        [
+            (_UNREACHABLE, ([], ""), None),
+            (_FREE, ([], ""), None),
+            (_FREE, (None, "no such container"), None),
+            (_BORROWED, ([], ""), None),
+            (_CONTESTED, ([], ""), None),
+            (_LIVE, ([], ""), 0),
+            (_FREE, (_REFUSED_LOG, ""), 5),
+            (_FREE, (_VALIDATING_LOG, ""), 6),
+        ],
+        ids=["unreachable", "free", "free-log-unreadable", "borrowed", "contested", "live", "refused", "validating"],
+    )
+    def test_restart_refusal_is_the_reset_rule(
+        self, reading: GatewayState, events: object, expected: int | None
+    ) -> None:
+        """The rule as a function: None where a restart may go ahead, else the verdict's code and
+        its headline with the guidance — what `reset` prints as its reason."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager.read_state", return_value=reading),
+            patch("ibkr_core_mcp.gateway.manager.read_login_events", return_value=events),
+        ):
+            refusal = restart_refusal("https://localhost:5055/v1/api")
+        if expected is None:
+            assert refusal is None
+            return
+        assert refusal is not None
+        code, reason = refusal
+        assert code == expected
+        assert "\n\n" in reason, "the reason is the headline, then the guidance"
+
+
+# ---------------------------------------------------------------------------
+# KeepAwake — the keepalive's sleep assertion (register F45, step 2, commit 11)
+# ---------------------------------------------------------------------------
+
+
+class TestKeepAwake:
+    """`caffeinate -i`, held only while the gateway is reachable and released the moment it is not,
+    so a 24/7 keepalive does not keep the Mac awake for a gateway that is not even up. A spawn
+    site in the one allowed module; door 6 refuses the real command in a unit test, so every
+    test here patches `subprocess.Popen` by name."""
+
+    def test_hold_starts_one_caffeinate_with_path_alone_in_its_environment(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process) as popen,
+            patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "IBKR_FLEX_TOKEN": "not-for-the-child"}, clear=False),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.hold()  # a live child: not spawned again
+        popen.assert_called_once()
+        argv = popen.call_args.args[0]
+        kwargs = popen.call_args.kwargs
+        assert argv == ["/usr/bin/caffeinate", "-i"]
+        assert kwargs["env"] == {"PATH": "/usr/bin:/bin"}
+        assert kwargs["stdin"] is subprocess.DEVNULL and kwargs["stdout"] is subprocess.DEVNULL
+        assert kwargs["stderr"] is subprocess.DEVNULL
+
+    def test_release_terminates_and_waits_so_no_zombie_is_left(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.release()
+            awake.release()  # idempotent
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=10)
+        process.kill.assert_not_called()
+
+    def test_release_kills_a_child_that_ignores_terminate(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("caffeinate", 10), 0]
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.release()
+        process.kill.assert_called_once_with()
+
+    def test_a_dead_child_is_replaced_on_the_next_hold(self) -> None:
+        first, second = MagicMock(spec=subprocess.Popen), MagicMock(spec=subprocess.Popen)
+        first.poll.return_value = 1  # exited by itself
+        second.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", side_effect=[first, second]) as popen,
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.hold()
+        assert popen.call_count == 2
+
+    def test_without_caffeinate_both_are_no_ops_that_log_once_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Linux and Windows: nothing to hold; one DEBUG line, not one per tick."""
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value=None),
+            patch("subprocess.Popen") as popen,
+            caplog.at_level(logging.DEBUG, logger="ibkr_core_mcp.gateway.manager"),
+        ):
+            awake = KeepAwake()
+            awake.hold()
+            awake.hold()
+            awake.release()
+        popen.assert_not_called()
+        notes = [r for r in caplog.records if "caffeinate" in r.getMessage()]
+        assert len(notes) == 1 and notes[0].levelno == logging.DEBUG
+
+    def test_the_context_manager_releases_on_exit(self) -> None:
+        process = MagicMock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        with (
+            patch("ibkr_core_mcp.gateway.manager.shutil.which", return_value="/usr/bin/caffeinate"),
+            patch("subprocess.Popen", return_value=process),
+            KeepAwake() as awake,
+        ):
+            awake.hold()
+        process.terminate.assert_called_once_with()

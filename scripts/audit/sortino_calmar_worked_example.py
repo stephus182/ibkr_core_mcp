@@ -35,7 +35,6 @@ whole-series MAR (owner decision).
 
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
 
 from ibkr_core_mcp import Config, GDriveCache, analytics
 
@@ -56,8 +55,7 @@ def sortino_canonical(returns: pd.Series, target: float = 0.0) -> float:
 
 
 def main() -> None:
-    load_dotenv(ENV_FILE)
-    cache = GDriveCache(Config.from_env())
+    cache = GDriveCache(Config.from_env(dotenv_path=ENV_FILE))
     df = cache.load("AAPL", "1D", "6m", "2026-07-06")
     close = df["close"] if "close" in df.columns else df["c"]
     bh = close.pct_change().dropna()

@@ -174,16 +174,19 @@ async def test_resource_positions_current(toolkit, store):
 
 
 @pytest.mark.asyncio
-async def test_resource_trades_recent(toolkit, store):
+async def test_resource_trades_recent(toolkit, store, mock_config):
+    """The statement executions, newest first — and nothing from the legacy table, where a
+    fill captured live and later delivered by Flex sits twice (register F20)."""
     import json
 
     from ibkr_core_mcp.mcp_server import build_server
+    from tests.flex_fixtures import seed_flex_dataset, statement, trade
 
     store.upsert_trades(
         [
             {
-                "execution_id": "E1",
-                "symbol": "AAPL",
+                "execution_id": "LEGACY",
+                "symbol": "NOPE",
                 "side": "BUY",
                 "size": 10,
                 "price": 180,
@@ -193,10 +196,68 @@ async def test_resource_trades_recent(toolkit, store):
             }
         ]
     )
+    seed_flex_dataset(
+        mock_config,
+        statement(
+            trade(symbol="AAPL", fifoPnlRealized="12.5")
+            + trade(
+                symbol="MSFT",
+                tradeID="700000002",
+                transactionID="800000002",
+                ibExecID="0000aaaa.60000002.01.01",
+                tradeDate="20260602",
+                dateTime="20260602;093001",
+                quantity="-5",
+                buySell="SELL",
+            )
+        ),
+    )
     server = build_server(toolkit, store)
     content = await _read_resource_text(server, "ibkr://trades/recent")
     trades = json.loads(content)
-    assert any(t["symbol"] == "AAPL" for t in trades)
+    assert [t["symbol"] for t in trades] == ["MSFT", "AAPL"]
+    assert (trades[0]["side"], trades[0]["size"]) == ("SELL", -5.0), "a sell is signed, as the statement signs it"
+    # The key set the resource has always served, in its conventions for a statement row:
+    # `execution_id` is IBKR's tradeID, `size` is signed, `commission` a positive cost.
+    assert set(trades[1]) == {
+        "execution_id",
+        "symbol",
+        "side",
+        "size",
+        "price",
+        "time",
+        "commission",
+        "account",
+        "asset_class",
+        "realized_pnl",
+        "trade_date",
+    }
+    assert trades[1] == {
+        "execution_id": "700000001",
+        "symbol": "AAPL",
+        "side": "BUY",
+        "size": 10.0,
+        "price": 100.5,
+        "time": "2026-06-01T09:30:01",
+        "commission": 1.25,
+        "account": "U0000000",
+        "asset_class": "STK",
+        "realized_pnl": 12.5,
+        "trade_date": "2026-06-01",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resource_trades_recent_without_a_dataset_is_an_error_object_not_an_empty_list(toolkit, store):
+    """No Flex dataset is not "no trades"."""
+    import json
+
+    from ibkr_core_mcp.mcp_server import build_server
+
+    store.initialize()
+    server = build_server(toolkit, store)
+    payload = json.loads(await _read_resource_text(server, "ibkr://trades/recent"))
+    assert isinstance(payload, dict) and "error" in payload and payload["resource"] == "ibkr://trades/recent"
 
 
 @pytest.mark.asyncio
@@ -280,6 +341,7 @@ async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
 
     execution = TradeExecution(
         execution_id="E1",
+        conid=265598,
         symbol="AAPL",
         side="B",
         size=10.0,
@@ -310,6 +372,15 @@ async def test_stream_loop_dispatches_execution_pnl_and_quote(toolkit, store):
 
     trades = store.get_trades(symbol="AAPL")
     assert any(t["execution_id"] == "E1" for t in trades)
+    # …and as a placeholder in the Flex dataset, where the activity report and the T+1
+    # statement will find it.
+    with store._connect() as conn:
+        placeholder = conn.execute(
+            "SELECT source, quantity, conid, asset_category FROM flex_trade WHERE execution_key = 'E1'"
+        ).fetchone()
+    assert (placeholder["source"], placeholder["quantity"]) == ("live", 10.0)
+    assert (placeholder["conid"], placeholder["asset_category"]) == (265598, "STK"), "the stream's own contract fields"
+    assert store.get_trade_date_coverage()["newest"] == "2026-07-06"
 
     latest_pnl = store.get_latest_pnl()
     assert latest_pnl is not None

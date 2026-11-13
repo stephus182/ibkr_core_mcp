@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 from .conftest import assert_tool_succeeded
 
@@ -61,7 +62,7 @@ def _make_toolkit():
         sqlite_path=Path("/tmp/store.db"),
         gdrive_token_file=Path("/tmp/token.json"),
         gdrive_credentials_file=Path("/tmp/creds.json"),
-        firecrawl_api_key="fc-test",
+        firecrawl_api_key=SecretStr("fc-test"),
         crawl4ai_profiles_dir=Path("/nonexistent/crawl4ai-profiles-for-tests"),
     )
     toolkit = ClaudeToolkit(
@@ -85,7 +86,7 @@ def test_firecrawl_search_returns_no_key_message_when_key_missing():
         sqlite_path=Path("/tmp/store.db"),
         gdrive_token_file=Path("/tmp/token.json"),
         gdrive_credentials_file=Path("/tmp/creds.json"),
-        firecrawl_api_key="",
+        firecrawl_api_key=SecretStr(""),
     )
     toolkit = ClaudeToolkit(client=MagicMock(), cache=MagicMock(), store=MagicMock(), config=cfg)
     result, fig = toolkit.execute("firecrawl_search", {"query": "test"})
@@ -427,7 +428,7 @@ def test_search_site_needs_no_firecrawl_key():
     """It reads public sitemaps. A missing FIRECRAWL_API_KEY must not disable it —
     that would recreate the coupling this whole refactor removes."""
     toolkit = _make_toolkit()
-    toolkit._config.firecrawl_api_key = ""
+    toolkit._config.firecrawl_api_key = SecretStr("")
     with patch("ibkr_core_mcp.local_browser.search_site_detailed") as mock_search:
         mock_search.return_value = (
             [{"url": "https://docs.x.dev/a", "title": "A", "score": 1.0}],
@@ -496,7 +497,7 @@ def test_crawl_site_needs_no_firecrawl_key():
     """crawl_site replaces firecrawl_crawl precisely so archiving stops depending on a
     paid key. A missing one must not disable it."""
     toolkit = _make_toolkit()
-    toolkit._config.firecrawl_api_key = ""
+    toolkit._config.firecrawl_api_key = SecretStr("")
     toolkit._web_docs = MagicMock()
     toolkit._web_docs.get_cached_crawl.return_value = None
     toolkit._web_docs.save_crawl.return_value = {

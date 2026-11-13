@@ -27,7 +27,7 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 44 tools. See
 | File | Tools / helpers covered | Marker |
 | --- | --- | --- |
 | `test_tool_descriptions.py` | `TOOL_DEFINITIONS` schema shape, tool count, execution-verb scan, description honesty (routing, truncation, currency, challenge pages) | (none — spans all tools) |
-| `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators | `market_data` |
+| `test_market_data.py` | check_cache, list_cache, delete_cache, fetch_market_data, search_contract, get_futures, get_market_snapshot (+ `_resolve_snapshot_conid`), get_contract_info, get_option_chain, run_scanner, get_trading_schedule, add_indicators (+ the shared cache-miss text of add_indicators / run_backtest / get_analytics) | `market_data` |
 | `test_account.py` | get_account_summary, get_positions, get_ledger, get_pnl, get_allocation, get_watchlists, get_notifications | `account` |
 | `test_trades.py` | get_trades, `_parse_live_trades` | `trades` |
 | `test_orders.py` | get_live_orders, diagnose_orders, preview_order, get_order_status | `orders` |
@@ -38,6 +38,7 @@ Domain-organized tests for `ibkr_core_mcp/claude_tools.py`'s 44 tools. See
 | `test_web_scraping.py` | firecrawl_search, search_site, crawl_site, fetch_page, `_validate_public_url` | `web_scraping` |
 | `test_typed_returns.py` | every handler that consumes a typed `IBKRClient` return, driven with models built from the live capture rather than hand-written dicts; the `json.dumps`/`isinstance(…, dict)` guards | (none) |
 | `test_assert_helpers.py` | `conftest.assert_tool_succeeded` / `assert_tool_failed` — the assertion helpers themselves, so a helper that cannot fail is caught | (none) |
+| `test_public_surface.py` | what a consumer may read off a `ClaudeToolkit`: `client`, `store`, `config` (by identity, read-only, documented), no accessor for the Drive cache, and the whole public surface as one exact set | (none) |
 | `../test_web_tools_live.py` | **LIVE** acceptance for firecrawl_search / search_site / crawl_site / fetch_page. Mandatory before any scraper change is called done — see `docs/web-scraper-reference.md` §10 | `integration` |
 | `test_errors.py` | `_safe_error` (parametrized) | `errors` |
 

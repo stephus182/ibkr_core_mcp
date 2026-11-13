@@ -454,3 +454,19 @@ lives in the client. It is a documented known limit.
   the test files — real duplication, pre-dating this pass and not caused by it; out of scope for
   a security recalibration and better done as its own change.
 - SBOM / AIBOM / image signing, SIEM, seccomp/AppArmor, OPA, MCP-Scan, OpenSSF Scorecard — deployment model or platform.
+
+## Addendum 2026-11-11 — §1's lifecycle row, re-answered
+
+An addition, dated; the row above is left as written on 2026-09-14.
+
+§1's row *Strict lifecycle management (flush handles, temp storage, cached tokens on session
+end)* answers NO-D with "Nothing is cached per session". That was true of the package on
+2026-09-14 and stopped being true of the deployment on 2026-10-13, when the login window got a
+Chrome profile of its own (register F44): after a login, `~/.ibkr_core/login-chrome` keeps the
+gateway's `localhost` cookies — four of them session cookies — a short history, and Chrome's
+singleton lock, socket and cookie links (measured 2026-11-11; `SECURITY.md` § The login window's
+profile). Re-answered:
+
+| OWASP item | Relevant? | Existing control | Evidence | Gap? | Action |
+|---|---|---|---|---|---|
+| Strict lifecycle management (flush handles, temp storage, cached tokens on session end) | **PARTIAL** (was NO-D) | The package's own state is still not cached per session: `OrderWriteAuthorization` is frame-local, the suspend lock is released in `finally`, and the login window's process is ended at the first authenticated reading. What stays is the browser's — cookies encrypted by Chrome, `0600` in a `0700` profile under a `0700` parent — and the session they belong to is IBKR's, which expires without activity | `SECURITY.md` § The login window's profile; `tests/test_gateway_session.py` (the lock's release, the window's close) | **accepted residual**: nothing flushes the profile at session end, and its modes are Chrome's, not enforced by the package | **none built** (operator, 2026-11-11: removing the lock links is overkill — Chromium removes an orphaned lock at the next launch). Revisit with a second OS user on the machine |

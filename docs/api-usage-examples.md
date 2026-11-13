@@ -27,24 +27,44 @@ client = IBKRClient(cfg)
 cache  = GDriveCache(cfg)
 
 symbol, timeframe, period, end = "AAPL", "1D", "1Y", "2026-05-22"
+# The hours are a key part (2.2.0): regular trading hours (False) or all hours IBKR has (True) —
+# IBKR's daily stock bar differs between the two on every day measured. A future's all-hours bar
+# is stamped at its session open (18:00 ET the evening before); keep the stamp, read it by that rule.
+hours = {"outside_rth": False}
 
-if cache.check(symbol, timeframe, period, end):
-    df = cache.load(symbol, timeframe, period, end)
+if cache.check(symbol, timeframe, period, end, **hours):
+    df = cache.load(symbol, timeframe, period, end, **hours)
+    row = cache.entry(symbol, timeframe, period, end, **hours)  # the manifest row: rows, cached_at,
+    print(row.get("listing") or "listing not recorded")         # outside_rth, and the listing saved below
 else:
-    contracts = client.search_contract(symbol)
-    conid = contracts[0]["conid"]
-    bars  = client.get_market_history(conid, period=period, bar="1d")
+    # A ticker is not a listing. /trsrv/stocks carries `isUS` per contract; /iserver/secdef/search
+    # does not, and its result order is undocumented — its first match for IGV is the Mexican
+    # listing, in MXN. The toolkit's resolver takes the one US listing and ASKS when it is not
+    # unique (`_resolve_stock_conid`); this example stops instead of guessing.
+    records = client.get_stocks([symbol])
+    us = [(r["name"], c) for r in records for c in r["contracts"] if c.get("isUS")]
+    if len(us) != 1:
+        raise SystemExit(f"{symbol}: {len(us)} US listings — name the exchange rather than pick one")
+    name, contract = us[0]
+    conid = int(contract["conid"])
+    info  = client.get_secdef_info(conid)                   # a LIST live (2026-07-28); the currency is on its row
+    currency = (info[0] if isinstance(info, list) else info).get("currency")
+    bars  = client.get_market_history(conid, period=period, bar="1d", outside_rth=hours["outside_rth"])
     df    = bars_to_dataframe(bars)
-    cache.save(df, symbol, timeframe, period, end)
+    # Keep the listing beside the bars, so a later cache hit can say what it serves (2.2.0).
+    cache.save(df, symbol, timeframe, period, end, **hours,
+               listing={"conid": conid, "name": name, "exchange": contract["exchange"], "currency": currency})
 ```
 
 **Constraints:**
 - Snapshot data may be 15-min delayed depending on market data subscription level
-- Most endpoints require `conid` (contract ID) — use `client.search_contract(symbol)` to resolve
+- Most endpoints require `conid` (contract ID). For a stock, resolve through `client.get_stocks`
+  and its `isUS` flag as above; `client.search_contract(symbol)` returns neither `isUS` nor a
+  currency, and taking its first match is how a US ETF was once priced in pesos
 
 ## Technical Indicators
 
-15 pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
+Pure-function indicators computed on a DataFrame. All return a Series or DataFrame of new columns.
 
 ```python
 from ibkr_core_mcp import indicators
@@ -62,9 +82,19 @@ vwap_all = indicators.vwap(df, anchor=None)   # whole-frame cumulative, opt-in
 vwap_cme = indicators.vwap(df, tz="America/New_York", session_open="18:00")  # a CME session, not the UTC day
 kc_df    = indicators.keltner_channels(df)    # EMA(20) ± 2 × ATR(10) — ATR length is separate
 tr       = indicators.true_range(df)
+
+# A price source and a moving-average type, in TradingView's names (2.2.0)
+sma_200  = indicators.sma(df, 200, source="hl2")                  # Series named "sma_200_hl2"
+bands    = indicators.bollinger_bands(df, 200, 2.5, source="hl2") # basis and deviation both on hl2
+wma_50   = indicators.moving_average(df, 50, "WMA", "hlc3")       # SMA, EMA, SMMA (RMA), WMA, VWMA
+rsi_hl2  = indicators.rsi(df, 14, source="hl2")                   # close unless told otherwise
 ```
 
-Available: `sma`, `ema`, `rsi`, `macd`, `bollinger_bands`, `atr`, `true_range`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`
+Available: `sma`, `ema`, `moving_average`, `price_source`, `rsi`, `macd`, `bollinger_bands`, `atr`, `true_range`, `stochastic`, `williams_r`, `keltner_channels`, `vwap`, `obv`, `volume_sma`, `volume_ratio`, `add_all`; the lists `SOURCES` and `MA_TYPES`
+
+**Every `source` defaults to `close`** — the textbook definition, unchanged. The eight sources,
+the five types, and what each setting corresponds to in TradingView:
+[`indicators-reference.md`](indicators-reference.md).
 
 ### Conventions — which variant each indicator implements
 
@@ -132,10 +162,14 @@ Available metrics: `total_return`, `cagr`, `sharpe`, `sortino`, `calmar`, `max_d
 ctx = SQLiteStore.get_market_calendar_context()            # default: 20 exchanges (G20 + Eurex)
 ctx = SQLiteStore.get_market_calendar_context(["XLON"])     # REPLACES the default — returns XLON only, not default+XLON
 
-# Returns: { "today": "...", "is_trading_day": bool, "last_trading_day": "...",
+ctx = SQLiteStore.get_market_calendar_context(today=some_date)  # the verdicts for another day (aware of nothing but the date)
+
+# Returns: { "today": "...", "is_trading_day": bool (the PRIMARY exchange only), "last_trading_day": "...",
 #            "next_trading_day": "...", "primary_exchange": "XNYS",
+#            "sessions_today": { "XNYS": True, "CME": True, ..., "XSAU": False },  # one verdict per exchange; None on failure
+#            "early_closes_today": { "XNYS": {"close": "13:00", "tz": "America/New_York"} },  # half days only; never CME; None on failure
 #            "holidays_by_exchange": { "XNYS": ["2026-01-01", ...], "CME": [...], ... },
-#            "futures": { "cme_open_nyse_closed": [...], ... } }  # CME/NYSE futures-session overrides
+#            "futures": { "cme_open_nyse_closed": [...], "holiday_schedule_today": bool, ... } }  # hours on a holiday: CME's own page
 # See README.md's "Market Calendar" section for the full 20-exchange default list and a worked example.
 ```
 

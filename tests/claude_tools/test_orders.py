@@ -1,6 +1,9 @@
 import re
+from datetime import timedelta
 
 import pytest
+
+from ibkr_core_mcp.claude_tools import _today_date
 
 from .conftest import assert_tool_failed
 
@@ -217,6 +220,43 @@ def test_preview_order_lmt_includes_price(toolkit):
     assert "Order Preview" in text
 
 
+def _preview_with(toolkit, **extra):
+    """Run a stock limit preview with `extra` inputs; return (text, the order body sent or None)."""
+    toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
+    toolkit._client.search_contract.return_value = [{"conid": 265598}]
+    toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
+    inputs = {"symbol": "AAPL", "action": "BUY", "quantity": 1, "order_type": "LMT", "limit_price": 150.0}
+    text, _ = toolkit.execute("preview_order", {**inputs, **extra})
+    sent = toolkit._client.get_order_preview.call_args
+    return text, (sent[0][1] if sent else None)
+
+
+def test_a_preview_is_for_the_time_in_force_it_was_asked_for_and_says_so(toolkit):
+    """Register F7: every preview was sent as DAY and said nothing about it, so a GTC order was
+    previewed as a different order. Operator, 2026-10-02: it "needs to be specified and
+    understood by user — day or gtc"."""
+    text, sent = _preview_with(toolkit, tif="GTC")
+    assert sent["tif"] == "GTC"
+    assert "(LMT, GTC)" in text.splitlines()[0]
+    assert "Time in force:" in text and "GTC" in text and "DAY" not in text
+
+
+def test_a_preview_with_no_time_in_force_says_it_is_for_a_day_order(toolkit):
+    """The default is stated, never silent: the reader must not take a DAY preview for the
+    order they have in mind."""
+    text, sent = _preview_with(toolkit)
+    assert sent["tif"] == "DAY"
+    assert "(LMT, DAY)" in text.splitlines()[0]
+    assert "none was given" in text and "DAY order" in text
+
+
+def test_a_preview_refuses_a_time_in_force_ibkr_does_not_list_before_the_network(toolkit):
+    """IBKR's place-order enum is DAY, GTC, IOC, OPG; anything else is refused here, by name."""
+    text, sent = _preview_with(toolkit, tif="CLOSE")
+    assert sent is None
+    assert "Invalid tif 'CLOSE'" in text and "DAY, GTC, IOC, OPG" in text
+
+
 def test_preview_order_mkt_no_price(toolkit):
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
@@ -229,7 +269,7 @@ def test_preview_order_mkt_no_price(toolkit):
 def test_preview_order_stp_maps_stop_price_to_price(toolkit):
     """STP orders carry the trigger in `price` — CP API place-order spec:
     "For STP|TRAIL this is the stop price."
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
@@ -252,7 +292,7 @@ def test_preview_order_stp_maps_stop_price_to_price(toolkit):
 def test_preview_order_stop_limit_maps_limit_to_price_and_stop_to_aux(toolkit):
     """STOP_LIMIT requires both: price = limit price, auxPrice = stop price.
     Spec: "You must specify both price and auxPrice for STOP_LIMIT|TRAILLMT orders."
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md"""
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order"""
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.search_contract.return_value = [{"conid": 265598}]
     toolkit._client.get_order_preview.return_value = dict(LIVE_PREVIEW_ACCEPTED)
@@ -461,6 +501,105 @@ def test_execute_get_live_orders_still_falls_back_to_external_without_order_ref(
     assert "EXTERNAL" in text
 
 
+# Where an order was placed does not decide whether this API can change it. Measured 2026-11-12
+# (register F47): IBKR accepted a modify and a cancel, through this package's gated writes, of an
+# ES and an F order placed on IBKR Mobile, and its order-status flags `cannot_cancel_order` /
+# `order_not_editable` read false while each order worked and true once it was cancelled. Until
+# then the description told the model such orders "CANNOT be modified or cancelled by the API" and
+# each row said "read-only via API" — the TWS API's rule (a socket client manages its own orders)
+# carried over to this API without a source, so the model sent its user to the phone for nothing.
+
+
+def test_get_live_orders_sends_the_model_to_ibkrs_per_order_flags_not_to_origin(toolkit):
+    """Regression caught: the disproven sentence back in the description, or the description no
+    longer naming IBKR's own per-order answer."""
+    description = next(t["description"] for t in toolkit.tools if t["name"] == "get_live_orders")
+    assert "get_order_status" in description
+    assert "cannot_cancel_order" in description and "order_not_editable" in description
+    assert "CANNOT be modified or cancelled" not in description
+
+
+def test_get_live_orders_labels_an_order_placed_elsewhere_by_origin_only(toolkit):
+    """Regression caught: a row's label claiming an order placed elsewhere cannot be changed.
+    The row has the fields of the IBKR Mobile order read 2026-11-12 (its id replaced: this repository
+    is public): no `order_ref`, no `clientId`."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 47, "ticker": "F", "side": "BUY", "totalSize": 1, "price": "10.00", "status": "Submitted"},
+    ]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    line = next(ln for ln in text.splitlines() if "orderId=47" in ln)
+    assert "EXTERNAL" in line
+    assert "read-only" not in line
+
+
+# A bracket child carries no reference of its own: IBKR puts `order_ref` on the parent only
+# and `parentId` on the child (measured 2026-10-18 on Ford, three children). Until 2026-10-19
+# both tools labelled such a child EXTERNAL "read-only via API", and a model told the user a
+# ClaudIA-staged stop loss could not be cancelled (claudia_ui #36 live acceptance, step 2).
+
+_BRACKET_PARENT = {
+    "orderId": 11,
+    "ticker": "F",
+    "side": "BUY",
+    "totalSize": 1,
+    "price": "7.46",
+    "status": "PreSubmitted",
+    "clientId": 0,
+    "order_ref": "CLAUDIA-1792374874525",
+}
+_BRACKET_CHILD = {
+    "orderId": 12,
+    "ticker": "F",
+    "side": "SELL",
+    "totalSize": 1,
+    "price": "",
+    "status": "PreSubmitted",
+    "clientId": 0,
+    "parentId": 11,
+    "ocaGroupId": "11",
+}
+
+
+def test_get_live_orders_a_bracket_child_inherits_its_parents_origin(toolkit):
+    """The child's origin is its parent's, read through `parentId` from the same response;
+    the line says it is attached and to which order."""
+    toolkit._client.get_live_orders.return_value = [_BRACKET_CHILD, _BRACKET_PARENT]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    child_line = next(ln for ln in text.splitlines() if "orderId=12" in ln)
+    assert "origin=ClaudIA-staged" in child_line
+    assert "attached child of order 11" in child_line
+    assert "EXTERNAL" not in text
+
+
+def test_get_live_orders_a_child_whose_parent_is_absent_is_not_called_external(toolkit):
+    """A child whose parent has left the list (filled, cancelled) is not read-only by any rule
+    this row can see: say the origin is not determinable here and name the parent, never
+    EXTERNAL — a label that read "read-only via API" until 2026-11-12, and the model refused a
+    cancel on it (claudia_ui #36). Its origin is unknown here, not external."""
+    toolkit._client.get_live_orders.return_value = [_BRACKET_CHILD]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    assert "attached child of order 11" in text
+    assert "not in this list" in text and "not determinable" in text
+    assert "EXTERNAL" not in text
+
+
+def test_get_live_orders_a_child_of_an_external_parent_is_external_too(toolkit):
+    """The discriminating half: inheritance carries the parent's own origin, whichever it is."""
+    parent = {k: v for k, v in _BRACKET_PARENT.items() if k != "order_ref"}
+    toolkit._client.get_live_orders.return_value = [parent, _BRACKET_CHILD]
+    text, _fig = toolkit.execute("get_live_orders", {})
+    child_line = next(ln for ln in text.splitlines() if "orderId=12" in ln)
+    assert "origin=EXTERNAL" in child_line and "attached child of order 11" in child_line
+
+
+def test_diagnose_orders_a_bracket_child_inherits_its_parents_origin(toolkit):
+    """The raw view applies the one origin rule the live view does."""
+    toolkit._client.get_orders_raw.return_value = {"orders": [_BRACKET_CHILD, _BRACKET_PARENT]}
+    text, _fig = toolkit.execute("diagnose_orders", {})
+    child_line = next(ln for ln in text.splitlines() if "orderId=12" in ln)
+    assert "origin=ClaudIA-staged" in child_line and "attached child of order 11" in child_line
+
+
 def test_diagnose_orders_labels_claudia_staged_via_order_ref(toolkit):
     """_diagnose_orders must use the same order_ref-first lookup as _get_live_orders —
     they were inconsistent before this fix (get_live_orders computed an origin label,
@@ -495,6 +634,24 @@ def test_get_order_status_happy_path(toolkit):
     assert "Submitted" in text
     assert "42" in text
     toolkit._client.get_order_status.assert_called_once_with("42")
+
+
+def test_get_order_status_hands_the_model_a_bracket_legs_links(toolkit):
+    """A bracket leg's links — `parent_order_id`, `oca_group_id`, `children_order_ids` — reach
+    the model exactly as IBKR reports them. They are on no IBKR page (measured 2026-09-22 and
+    2026-10-18), so the day this reader is typed into a model that keeps only documented keys,
+    the text would lose them silently; this is the guard (claudia_ui #36, plan A6)."""
+    toolkit._client.get_order_status.return_value = {
+        "order_id": "124",
+        "order_status": "PreSubmitted",
+        "parent_order_id": "123",
+        "oca_group_id": "123",
+        "children_order_ids": "125;126",
+    }
+    text, _fig = toolkit.execute("get_order_status", {"order_id": "124"})
+    for key in ("parent_order_id", "oca_group_id", "children_order_ids"):
+        assert key in text, key
+    assert "125;126" in text
 
 
 def test_get_order_status_error(toolkit):
@@ -586,6 +743,25 @@ def test_execute_get_live_orders_reports_outside_rth_in_three_states(toolkit):
     assert "outsideRTH=not-reported" in lines[3]
 
 
+def test_live_orders_show_ibkrs_description_not_the_rows_time_in_force(toolkit):
+    """Register F8 / F14: the order row reports a DAY order as `timeInForce: "CLOSE"` — a value
+    in no IBKR enum — for a stock (2026-09-24) and for a future (ES stop, 2026-10-02), and the
+    tool printed it as `TIF=CLOSE`, which reads as an at-the-close order. IBKR's own sentence
+    for the order (`orderDesc`) carries the real one, so that is what the model is given; the
+    raw field is shown under its own name only when there is no description."""
+    toolkit._client.get_live_orders.return_value = [
+        {"orderId": 1, "ticker": "ES", "side": "BUY", "totalSize": 1, "price": "", "status": "PreSubmitted",
+         "timeInForce": "CLOSE", "orderDesc": "Buy 1 ES Dec18'26 Stop 8200.00, Day"},
+        {"orderId": 2, "ticker": "AAPL", "side": "BUY", "totalSize": 1, "price": 150.0, "status": "Submitted",
+         "timeInForce": "GTC"},
+    ]  # fmt: skip
+    text, _ = toolkit.execute("get_live_orders", {})
+    first, second = (ln for ln in text.splitlines() if "orderId=" in ln)
+    assert 'IBKR: "Buy 1 ES Dec18\'26 Stop 8200.00, Day"' in first
+    assert "CLOSE" not in first and "TIF=" not in text
+    assert "timeInForce=GTC" in second
+
+
 def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
     """A FUT whatif must carry `manualIndicator` and must NOT carry `extOperator`.
 
@@ -600,7 +776,7 @@ def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
       without -> accepted, full margin impact, `"error": null`
       with    -> HTTP 500 {"error":"Can not contain field # 8089"}
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
     """
     toolkit._client.get_accounts.return_value = [{"accountId": "U1234"}]
     toolkit._client.get_futures.return_value = [{"conid": 515416632, "symbol": "ES", "expirationDate": "20261218"}]
@@ -621,3 +797,109 @@ def test_preview_order_fut_sends_manual_indicator_but_not_ext_operator(toolkit):
     call_order = toolkit._client.get_order_preview.call_args[0][1]
     assert call_order["manualIndicator"] is True
     assert "extOperator" not in call_order
+
+
+_LIVE = _today_date() + timedelta(days=76)
+_FUTURE_INFO = {
+    "local_symbol": "ESZ6",
+    "contract_month": "202612",
+    "maturity_date": _LIVE.strftime("%Y%m%d"),
+    "company_name": "E-mini S&P 500",
+    "multiplier": "50",
+    "exchange": "CME",
+}
+
+
+def _preview_future(toolkit, contract_info):
+    """Preview a bare-root ES whose one live contract IBKR describes as `contract_info`."""
+    live = int(_LIVE.strftime("%Y%m%d"))
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 515416632, "expirationDate": live, "ltd": live}
+    ]
+    toolkit._client.get_secdef_info.return_value = [{"conid": 515416632, "currency": "USD"}]
+    toolkit._client.get_contract_info.return_value = contract_info
+    return _preview(toolkit, LIVE_PREVIEW_ACCEPTED, symbol="ES", sec_type="FUT", order_type="LMT", limit_price=6000.0)
+
+
+@pytest.mark.parametrize(
+    ("run", "line"),
+    [
+        (
+            lambda tk: _preview_future(tk, _FUTURE_INFO),
+            f"E-mini S&P 500 · ESZ6 · DEC26 · expires {_LIVE.isoformat()}, CME, USD, conid 515416632",
+        ),
+        (lambda tk: _preview_future(tk, {}), "name unknown, exchange unknown, USD, conid 515416632"),
+        (lambda tk: _preview(tk, LIVE_PREVIEW_ACCEPTED), "TEST CO, NASDAQ, USD, conid 265598"),
+    ],
+    ids=["future-named", "future-ibkr-cannot-describe", "stock"],
+)
+def test_a_preview_names_the_contract_it_priced_with_its_conid(toolkit, run, line):
+    """The preview resolves a contract and used to print only the symbol it was asked for.
+
+    claudia_ui gap #96, 2026-10-08: a preview of `BUY 1 MES` said `Order Preview: BUY 1 MES
+    (LMT, GTC)` and nothing else about the contract, so the model proposed without a conid — the one FUT proposal
+    in 38 that lacked it, and the one whose session had shown none. Anthropic: an agent needs
+    the technical identifier "if only to trigger downstream tool calls"
+    (https://www.anthropic.com/engineering/writing-tools-for-agents). A future IBKR cannot
+    describe is still named by its conid, never by a guess, and the preview still runs.
+    """
+    assert run(toolkit).splitlines()[1] == f"  {'Contract:':<22}{line}"
+
+
+# ── Fractional quantities reach the whatif as given (register F37; claudia_ui #18) ──────────────
+
+
+def _whatif_body(toolkit):
+    """The order body the tool handed to `get_order_preview`."""
+    return toolkit._client.get_order_preview.call_args.args[1]
+
+
+def test_a_fractional_quantity_is_previewed_as_given_and_the_headline_states_it(toolkit):
+    """IBKR's whatif accepts a fraction where the contract's rules permit it (measured 2026-10-06:
+    EUR.USD SELL 1000.5 previewed with IBKR's own arithmetic on the fraction; CHF.USD 1000.5 →
+    IBKR's own HTTP 500). `int(quantity)` previewed 1000 for a 1000.5 ticket, so the preview did
+    not describe the order about to be proposed. The quantity goes through unchanged and the
+    result says which quantity it priced."""
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, action="SELL", quantity=1000.5)
+
+    assert _whatif_body(toolkit)["quantity"] == 1000.5, _whatif_body(toolkit)
+    assert "SELL 1000.5 AAPL" in text, text
+
+
+def test_a_whole_quantity_stays_a_whole_number_in_the_body_and_the_headline(toolkit):
+    """A whole quantity is still sent as IBKR has always received it — `10`, not `10.0` — so
+    nothing changes for every order the tool previewed until now."""
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=10)
+    body = _whatif_body(toolkit)
+
+    assert body["quantity"] == 10 and isinstance(body["quantity"], int), body
+    assert "BUY 10 AAPL" in text and "10.0" not in text, text
+
+    text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=10.0)  # a JSON number that is whole
+    body = _whatif_body(toolkit)
+    assert body["quantity"] == 10 and isinstance(body["quantity"], int), body
+    assert "BUY 10 AAPL" in text and "10.0" not in text, text
+
+
+def test_a_non_positive_or_non_finite_quantity_is_refused_before_any_call(toolkit):
+    """Zero and negatives as before. Not finite too (review 2026-11-07): `1e400` is valid JSON and
+    `json.loads` gives `inf`; `inf <= 0` is False, so without this guard it would be POSTed as
+    `Infinity` — the one outcome worse than the old `int()`, which raised before any request."""
+    for quantity in (0, -1, -0.5, float("inf"), float("-inf"), float("nan"), 1e400):
+        toolkit._client.get_order_preview.reset_mock()
+        text = _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=quantity)
+        assert "Invalid quantity" in text and "positive" in text, (quantity, text)
+        assert "integer" not in text, "a fraction is a valid quantity now; the refusal must not say otherwise"
+        toolkit._client.get_order_preview.assert_not_called()
+
+
+def test_a_whole_quantity_above_two_to_the_53_stays_exact(toolkit):
+    """Through a float, 2**53 + 1 would round to 2**53; an int stays an int (review 2026-11-07)."""
+    _preview(toolkit, LIVE_PREVIEW_ACCEPTED, quantity=2**53 + 1)
+    assert _whatif_body(toolkit)["quantity"] == 2**53 + 1
+
+
+def test_the_preview_schema_takes_a_number_and_says_a_fraction_is_previewed_as_given(tool_definition):
+    quantity = tool_definition("preview_order")["input_schema"]["properties"]["quantity"]
+    assert quantity["type"] == "number", quantity
+    assert "fraction" in quantity["description"].lower(), quantity

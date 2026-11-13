@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from audit_flex_dataset import run_gate
 
+from ibkr_core_mcp.flex_dataset import open_read_only
 from ibkr_core_mcp.flex_import import FlexImportError, ParsedStatement, parse_statement
 from ibkr_core_mcp.flex_schema import ELEMENTS
 from ibkr_core_mcp.flex_store import create_flex_tables, upsert_flex_rows
@@ -94,7 +95,9 @@ def live_row_count(db_path: Path) -> int:
     """
     if not db_path.exists():
         return 0
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # The package's one read-only opener: a hand-formatted `file:` URI read a path holding
+    # `?`, `#` or `%` as a different file, counted 0 and let the rebuild drop real rows.
+    conn = open_read_only(db_path)
     try:
         return int(conn.execute("SELECT COUNT(*) FROM flex_trade WHERE source='live'").fetchone()[0])
     except sqlite3.DatabaseError:

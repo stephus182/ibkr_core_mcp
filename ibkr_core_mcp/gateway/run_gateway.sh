@@ -22,7 +22,7 @@ echo "Gateway is ready"
 # and nothing inside this container can read it.
 #
 # That mattered because IBKR renews a session on ANY request, not just /tickle
-# (https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md), so a
+# (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server), so a
 # single un-suspendable renewer is enough to defeat a deliberate attempt to clear a
 # session — measured 2026-08-05, when three ticklers kept a borrowed session alive
 # through `POST /logout` all day.

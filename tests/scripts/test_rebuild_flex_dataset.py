@@ -268,3 +268,38 @@ def test_same_from_date_orders_by_when_generated(tmp_path):
     pre = rebuild_flex_dataset.preflight(src)
 
     assert [p.when_generated for p in pre.statements] == ["20250102;120000", "20250105;120000"]
+
+
+# ── the live-row check reads the store it was given, whatever its path ─────────
+
+
+def test_the_live_row_check_reads_the_real_store_when_its_path_holds_uri_metacharacters(annual_archive, tmp_path):
+    """The check that stops a rebuild destroying unreplayable live fills opened its store
+    with a hand-formatted `file:{path}?mode=ro` until 2.2.0. SQLite reads a URI's query
+    after `?`, its fragment after `#`, and decodes `%HH`, so on such a path it opened — and
+    created — a different, empty file, counted no live row, and the rebuild dropped the real
+    tables; with `--no-backup` nothing was left (measured 2026-09-30 on the opener)."""
+    odd = tmp_path / "odd dir #1 ?x %41"
+    odd.mkdir()
+    db = odd / "store.db"
+    SQLiteStore(
+        Config(
+            gateway_url="https://localhost:5055/v1/api",
+            gdrive_folder_id="test-folder-id",
+            sqlite_path=db,
+            gdrive_token_file=tmp_path / "token.json",
+            gdrive_credentials_file=tmp_path / "credentials.json",
+        )
+    ).initialize_flex_tables()
+    _seed_live_row(db)
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    assert rebuild_flex_dataset.live_row_count(db) == 1
+    rc = rebuild_flex_dataset.main(["--src", str(annual_archive), "--db", str(db), "--no-backup"])
+
+    assert rc == 2
+    conn = sqlite3.connect(db)
+    live = conn.execute("SELECT COUNT(*) FROM flex_trade WHERE source='live'").fetchone()[0]
+    conn.close()
+    assert live == 1, "the unenriched live fill was destroyed"
+    assert sorted(p.name for p in tmp_path.iterdir()) == before, "the check opened some other file"

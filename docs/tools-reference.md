@@ -187,7 +187,9 @@ IBKR's `/pa/transactions` endpoint takes a resolved conid, not a period — `sym
 ### `get_live_orders`
 Working orders — Submitted, PreSubmitted, PendingSubmit, ApiPending, PendingCancel.
 Also returns `Inactive` orders (exist on IBKR but stalled, e.g. failed risk check).
-Filled and Cancelled orders are excluded; use `get_trades` for executions.
+Filled, Cancelled, ApiCancelled and Expired orders are excluded, as is a row with no status
+(`IBKRClient._TERMINAL_STATUSES`); use `get_trades` for executions. IBKR's raw list keeps them:
+two orders cancelled at 10:20–10:22 EST on 2026-11-12 still read `Cancelled` there at 11:59 EST.
 
 Uses the IBKR two-call pattern internally: first call instantiates the subscription, second retrieves data.
 Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
@@ -195,8 +197,26 @@ Source: https://www.interactivebrokers.com/campus/trading-lessons/request-modify
 **Inputs:** none
 
 **Output:** Text list of working orders — one line per order with `orderId`, `ticker`, `side`,
-quantity, price, `status`, time-in-force, and origin (`ClaudIA-staged`, `API (clientId=...)`,
-or `EXTERNAL`).
+quantity, price, `status`, IBKR's own description of the order (`orderDesc`, which states the
+time in force in words — "…, Day"), `outsideRTH`, and origin (`ClaudIA-staged`,
+`API (clientId=...)`, or `EXTERNAL`). **Origin is where an order was placed, not whether it can be
+changed:** on 2026-11-12 an ES and an F order placed on IBKR Mobile were each modified and cancelled
+through this package's gated writes, and IBKR's per-order `cannot_cancel_order` /
+`order_not_editable` (on `get_order_status`) read `false` while they worked and `true` once
+cancelled. Those flags are IBKR's answer for a given order, and the description sends the model to
+them. Until that day the description said such orders "CANNOT be modified or cancelled by the API"
+and the label ended "read-only via API", a TWS API rule carried over without a source (register F47;
+`docs/audits/live-test-log.md`, run 2026-11-12). `clientId` is not a Live Orders field and no row
+carried it that day, so in practice the `CLAUDIA-` reference decides. It survives a modify made
+elsewhere: an order staged through this package, its limit then moved on IBKR Mobile, read back
+with the same id and the same reference (the same day, O6). A bracket child carries no reference of its own (IBKR puts
+`order_ref` on the parent only, `parentId` on the child — measured 2026-10-18), so its origin is its
+parent's, read through `parentId` from the same response, and the line reads `(attached child of
+order N; …)`; a child whose parent is not in the list reads "origin not determinable from this
+row" — `get_order_status`'s `cannot_cancel_order` is then the authority (2026-10-19). The row's `timeInForce` is not printed as the TIF: it
+reads `CLOSE` for a DAY order, stock or future (measured 2026-09-24 and 2026-10-02), a value in
+no IBKR enum; without a description it is printed under its own name. `get_order_status`
+returns the typed `tif`.
 
 **Rate limit:** 1 req/5 secs (official).
 
@@ -212,7 +232,8 @@ shape, so you can see whether orders are present but filtered, or genuinely abse
 **Inputs:** none
 
 **Output:** Text list of every order with all fields plus a `[FILTERED by get_live_orders]`
-marker on terminal-status orders — or the raw JSON response verbatim for the edge cases where
+marker on terminal-status orders, the origin by the same rule as `get_live_orders` (a bracket child
+inherits its parent's) — or the raw JSON response verbatim for the edge cases where
 the response isn't a populated list (empty list, or an unexpected non-list shape).
 
 **IBKR endpoint:** `GET /iserver/account/orders`
@@ -240,14 +261,28 @@ Whatif preview — estimated cost, commission, margin impact, and buying power e
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker, e.g. `"AAPL"` |
 | `action` | string | ✅ | `"BUY"` or `"SELL"` |
-| `quantity` | integer | ✅ | Number of shares/contracts |
+| `quantity` | number | ✅ | Number of shares/contracts; a fraction (e.g. `1000.5`) is previewed as given; IBKR accepts or refuses it itself — the contract's rules (`fraqTypes` / `fraqInt`) and the account's fractional permission both apply (register F37, 2026-11-07) |
 | `order_type` | string | — | `"MKT"` (default), `"LMT"`, `"STP"`, `"STOP_LIMIT"`, or `"MIDPRICE"`. Trailing types (`TRAIL`/`TRAILLMT`) are not supported by this tool. |
 | `limit_price` | number | — | Required for `order_type="LMT"`/`"STOP_LIMIT"`; optional price cap for `"MIDPRICE"` |
 | `stop_price` | number | — | Required for `order_type="STP"`/`"STOP_LIMIT"` |
 | `sec_type` | string | — | `"STK"` (default), `"IND"`, `"BOND"`, `"FUT"` (resolves front month), or `"CASH"` (FX pair, e.g. `"EUR.USD"`) |
+| `tif` | string | — | Time in force of the order being previewed: `"DAY"`, `"GTC"`, `"IOC"` or `"OPG"` — four of the five values in IBKR's place-order enum (the fifth, `PAX`, is defined nowhere in IBKR's documentation and is in neither a stock's nor a future's measured rules). `GTD` and the overnight values `OVT` / `OND` are returned per contract by IBKR's contract rules and **cannot be previewed here**. Omitted: the preview is for a DAY order and says so. Full picture: [`order-management-examples.md`](order-management-examples.md) § Time in force |
 
-**Output:** Text summary — `Commission est.`, `Equity with loan`, `Initial margin`,
-`Maintenance margin`, `Buying power effect` (equity change).
+**Output:** Text summary — the headline names the order type and the time in force
+(`Order Preview: BUY 1 ES (STP, GTC)`), then `Contract` — the contract priced, with its conid,
+in the form the market-data tools use (`E-mini S&P 500 · ESZ6 · DEC26 · expires 2026-12-18, CME,
+USD, conid 515416632`; a stock `<name>, <exchange>, <currency>, conid <n>`; a future IBKR cannot
+describe `name unknown, exchange unknown, USD, conid <n>`, never a guess) — then `Time in force`
+(with "none was given, so this preview is for a DAY order" when it was omitted), IBKR's refusal
+first when it refused, `Order value`, `Commission est.`, `Initial margin`, `Maintenance margin`,
+`Equity with loan`, `Position`, and IBKR's warnings. Until 2.2.0 every preview was sent as DAY and
+said nothing about it (register F7), and the output named only the symbol it was asked for, so a
+model that previewed a futures root had no conid to propose with (claudia_ui gap #96). Measured live
+2026-10-02 (BUY 1 ES STP, five what-ifs seconds apart — DAY, DAY, GTC, GTC, DAY): IBKR accepted
+the GTC what-if; order value, commission, position and the four warnings were identical between
+DAY and GTC. The three live account figures (initial margin, maintenance margin, equity with
+loan) moved between two identical DAY previews as well, so they drift with the market and no
+effect of the time in force is established.
 
 **IBKR endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 
@@ -267,6 +302,14 @@ Trade history from IBKR or local SQLite store.
 
 **Output:** Text list of trade executions — one line per trade with time, symbol, asset class,
 side, size, price (plus commission and realized P&L for `source="store"`).
+
+**Note (store, since 2.2.0):** reads the Flex dataset through `FlexDataset.executions` — the
+statement executions, each once, newest first — and its realised total is
+`FlexDataset.realised_window`'s for the same dates, to the cent (register F20: it summed the
+legacy `trades` table until then). The header names the statement's own `toDate`; `end` is
+inclusive; `symbol` is IBKR's statement symbol, matched without regard to the case of its ASCII
+letters (a future's is its contract symbol, `ESU6`, not `ES`). Fills not yet on a statement are
+not listed — `source="live"` has them.
 
 **Note (live):** Returns all trades on the account regardless of order origin (mobile, TWS, API).
 Calls IBKR with `?days=7`, the documented maximum for this endpoint.
@@ -327,13 +370,18 @@ necessarily missing imports — use `verify_flex_import` to distinguish.
 
 **Inputs:** none
 
-**Output:** Coverage summary with date range, trade count, and any gap periods.
+**Output:** Coverage summary with date range, trade count, and any gap periods. The first line
+carries `⚠ DATA STALE (statement through <toDate>; the newest that can exist is through <the
+weekday before today, ET>)` when the store lacks that statement — IBKR's own `toDate`, never a
+trade date, so a weekday with no fills is not "behind" — or `⚠ FLEX DATASET EMPTY` when the Flex
+tables hold no settled row.
 
 ---
 
 ### `verify_flex_import`
 Integrity check — compares source XML archives in Google Drive `account_data/`
-against the local SQLite trades table.
+against the tradeIDs of the local Flex dataset (`FlexDataset.trade_ids`; the legacy `trades`
+table until 2.2.0).
 
 > **Not read-only, though it never touches trade data.** This entry and the tool's own
 > description both said "read-only" until 2026-09-16. The handler writes to the import
@@ -353,17 +401,117 @@ and an aggregate summary. A missing tradeID means that execution was not importe
 ## Market Data
 
 ### `fetch_market_data`
-Fetch OHLCV historical bars. Checks Google Drive Parquet cache first; calls IBKR only on a miss.
-Automatically paginates requests exceeding the 1000 data-point limit using `startTime` chunks.
+Fetch OHLCV historical bars for **one listing or one futures contract**. Checks the Google Drive
+Parquet cache first; calls IBKR only on a miss. Automatically paginates requests exceeding the
+1000 data-point limit using `startTime` chunks. Market-data batch steps 1 and 2 (2026-10-02/03;
+operator decisions recorded in claudia_ui's status file; probe evidence in
+`claudia_ui/docs/plans/2026-10-03-outside-rth-probe/`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker, e.g. `"AAPL"` |
-| `period` | string | ✅ | e.g. `"1Y"`, `"6M"`, `"3M"`, `"1M"`, `"1W"`, `"1D"`. Full range: `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
-| `bar` | string | — | `"1d"` (default), `"1h"`, `"30min"`, `"5min"`, `"1min"` |
-| `end` | string | — | End date `YYYY-MM-DD` (defaults to today) |
+| `symbol` | string | ✅ | Ticker (`"AAPL"`) or futures root (`"ES"`, `"CL"`) |
+| `sec_type` | string | — | **IB's own code**, the enum listing only what this tool serves: `"STK"` (default — stocks and ETFs; a bare `ES` is the stock with that ticker, stated as `STK (by default)`) or `"FUT"`. `IND`/`CASH` resolve already but have no key rule yet; `OPT`/`FOP` are by conid through `get_option_chain`; the handler refuses any other value itself, naming the offer |
+| `conid` | integer | — | `FUT` only: the exact contract to fetch (from `get_futures`, a position or a trade), skipping the front-month rule. An **expired** contract's history is what it is for — the result says `expired <date>`; IBKR served ESU5 12 months after expiry and refused ESM5 at 15 (2026-09-25), the boundary not established. With `STK` it is refused (a stock resolves to its US listing from the ticker) |
+| `period` | string | ✅ | IBKR's grammar — a whole number and a unit: `min`, `h`, `d`, `w`, `m` (months), `y` — e.g. `"1y"`, `"6m"`, `"3m"`, `"30d"`. **Anything else (`"ytd"`, `"6 months"`) is refused before anything is read**: IBKR does not reject such a period, it answers with a window of its own. A long period is assembled from several requests |
+| `bar` | string | — | One of IBKR's step table: `1min`, `2min`, `3min`, `5min`, `10min`, `15min`, `30min`, `1h`, `2h`, `3h`, `4h`, `8h`, `1d` (default), `1w`, `1m`. **Anything else is refused before anything is read** — IBKR substitutes a size of its own for one it does not know. **This tool refuses second bars (`1S`)** (registers F22, F39 — the actor named, 2026-11-07): IBKR does return them, but stamped 60 seconds apart (the last of 300 one-second bars ending 13:59:58 ET is stamped 18:53:59), and no stamp is changed in this package (operator, 2026-10-05); they stay a study-database question |
+| `end` | string | — | End date `YYYY-MM-DD` (defaults to today; the result states which was used — `ending 2026-10-02 (today, by default)` or `ending 2026-09-30 (as given)`) |
+| `outside_rth` | boolean | — | `false` = regular trading hours as IBKR defines them for the contract; `true` = all hours IBKR has. **Default by type: `STK` false, `FUT` true** (the whole electronic session); the result states which — `regular trading hours (by default for STK)`, `all trading hours (as given)` |
 
-**Output:** Summary with row count, date range, and last close.
+**What a future means here (operator, 2026-10-03):** a root resolves to the **front-month
+contract** by the rule every tool uses (the earliest contract still tradeable, gaps #58/#71),
+and the bars are **that contract's own** — before it became the front month they are its prints
+as a back month, thinner (ESZ6: 4,719 contracts on 2026-09-02, 1.4 million a month later, after
+the September roll). There is **no continuous series**: IBKR's own page says Continuous Futures
+"can not be used … In the Web API", and TradingView draws one already.
+
+**One contract, one key.** A future is cached under **its own symbol** (`ESZ6_1D_6M_<end>_ALL`),
+never the root, so ESU6 and ESZ6 never share an entry and a roll produces a new key by itself;
+the result tells the model the exact symbol and hours to pass on: *"Saved to Drive cache under
+ESZ6 (all hours) — use symbol ESZ6 and outside_rth=true with add_indicators / run_backtest /
+get_analytics."* A contract IBKR cannot describe (no local symbol from
+`/iserver/contract/{conid}/info`) is not fetched and not cached — the result says so. A futures
+cache **hit** still resolves the root first (one `/trsrv/futures` read plus the contract info,
+cached per conid), so it needs the gateway; a stock hit does not.
+
+**No half candle — data is delayed by rule (operator, 2026-10-05; step 5).** An un-anchored
+history request's newest bar is the one IBKR is still writing (ES 1h at 18:04 ET: the 18:00 bar,
+close and volume moving between two reads a minute apart), and IBKR publishes a bar's last
+trades one to four seconds after the bar ends (eight bars watched; `ibkr-api-behaviors-reference.md`).
+So **a bar is kept only once its period has ended for a minute before the read** — hard-coded
+(`_SETTLE_SECONDS`), applied at the fetch, so the cache holds completed bars only and
+`add_indicators`, `run_backtest` and `get_analytics` inherit it. The period is the requested bar
+size: a daily bar is kept from the next morning (stocks 09:31 ET, all-hours futures 18:01 ET).
+Every fetch result states the read time and names what was left out — `…: 479 bars stamped at
+their open (ET) 2026-09-06 18:00 → 2026-10-05 16:00; read from IBKR 2026-10-05 17:28 ET.` and,
+during a session, `Not kept: the bar stamped 2026-10-05 18:00 ET — a bar counts once its period
+has ended for a minute before the read.`; a fetch whose every bar is still open saves nothing and
+says so. A **cache hit** states when its bars were read (`…; read from IBKR 2026-10-05 17:28 ET.`,
+from the manifest's `cached_at`; `read time not recorded for this entry` for older rows), because
+the same key answers all day: a refresh is `delete_cache` then `fetch_market_data`. Entries saved
+before 2.2.0 may end with a bar that was still open at their read; the operator flushes the cache
+at the pin move. This tool is for analysis and backtesting, not live charting: the live price is
+`get_market_snapshot`'s, the live chart is TradingView's.
+
+**The hours are part of the key** (`…_RTH` / `…_ALL`, written both ways, never implied): IBKR's
+**daily stock bar changed on 20 of 20 days** with `outsideRth` (AAPL 2026-10-02: `333.26 /
+334.54 / 330.61 / 333.69` regular, `331.05 / 334.54 / 330.16 / 333.60` all hours), so the two
+series are different data and a regular-session daily bar cannot be cut from an all-hours one.
+The operator flushed the pre-2.2.0 cache on 2026-10-03; a row without the hours field is listed
+as `legacy (pre-2.2.0 key, unreachable from 2.2.0)` by `list_cache`.
+
+**Stamps are IBKR's and are kept; the reading rule is stated beside them.** An all-hours
+futures bar is stamped **at its session open** — 18:00 ET the evening before for ES and CL: the
+bar stamped Thursday 18:00 is Friday's session, Sunday's stamp is Monday's session, and a CME
+holiday session is **one bar** (Sunday 2026-09-06's stamp covers through Tuesday 09-08's close;
+no Monday bar in either series). The regular-hours futures bar is stamped 09:30 ET on the
+session's own date, and its close is the same print as the all-hours close (ES 19/19, CL 3/3).
+So an all-hours futures series prints its extent as *"126 bars stamped at their open (ET)
+2026-04-05 18:00 → 2026-10-01 18:00 (a bar is stamped at its session open: the one opening
+Thursday 18:00 is Friday's session)"*, `add_indicators` says *"last bar stamped 2026-10-01 18:00
+ET (its session open)"*, and **nothing computes a session date** from a stamp — a calendar
+library dates the holiday bar wrong (it lists Labor Day as a CME session), and the stamp is the
+source's fact. Stock and regular-hours series print dates as before (both stamps fall on the
+session's own date). Session dates are market-data vocabulary; they are not Flex trade dates.
+
+**Volume — what a bar's `v` is (operator, 2026-10-03; research of 2026-09-23 indexed in
+`claudia_ui/.firecrawl/market-data/SOURCES.md`; the full convention table by asset class and
+source, with every official page, is `docs/market-data-conventions.md`).** IBKR's historical volume is **filtered**: its
+own page says combo legs, block trades and derivative-priced trades are excluded, so it "will
+be lower than an unfiltered historical data feed"
+(https://www.interactivebrokers.com/docs/tws-api/doc/market-data-historical/historical-data-limitations/historical-data-filtering,
+https://interactivebrokers.github.io/tws-api/historical_bars.html). **Futures have no
+consolidated tape; the exchange is the source**, and CME's daily volume is Globex + Open Outcry +
+ClearPort/PNT (https://www.cmegroup.com/market-data/browse-data/exchange-volume.html), with
+block trades "identified in the daily volume reports published by the Exchange" (Rule 526 §A0,
+https://www.cmegroup.com/rulebook/files/cme-group-Rule-526.pdf) and the futures leg of every
+EFRP reported to and cleared by it
+(https://www.cmegroup.com/education/articles-and-reports/understanding-efrp-transactions). So a
+bar's volume here is the screen volume, and an exchange-sourced chart shows more where
+off-screen trade is large. **Witnessed 2026-10-03 on TradingView's ETH charts:** CLX6's Friday
+bar — four prices identical, volume 242,152 here against 327.9K there (−26%; crude carries
+blocks, EFRPs and TAS); ESZ6's — four prices identical and volume 1,762,000 against 1.76M (ES has
+almost no off-screen share). **US stocks and ETFs** have a consolidated tape — the SIPs, CTA
+(Tapes A/B) and UTP (Tape C) — and IBKR's history draws on all exchanges through the SIP-network
+subscriptions, filtered the same way, so it is not the consolidated figure either; a single
+exchange's site is never a consolidated source. Not established: TradingView's own statement
+of what its NYMEX volume includes (not scraped). **Units:** a future's volume is in contracts
+(ES witnessed 1:1); a stock's is IBKR's `%v`, which its page calls "actual volume/100", and the
+core does not convert it — not yet witnessed against the SIP.
+
+**Output:** Summary naming **the listing or contract the bars came from** — IBKR's name,
+exchange, currency and conid (a future as `E-mini S&P 500 · ESZ6 · DEC26 · expires 2026-12-18,
+CME, USD, conid 515416632`), the security type, the end date and the hours used, the row count
+and the extent. The listing is saved on the cache manifest row beside the bars
+(`GDriveCache.save(..., outside_rth=, listing=)`, read back by `GDriveCache.entry()`; a future's
+row also carries `root`), so a cache hit names it too. `list_cache` prints the hours and the
+recorded listing after each entry.
+
+**A cache miss on `add_indicators`, `run_backtest` or `get_analytics`** lists the symbol's cached
+windows, each with its hours and name (`No cached data for ESZ6 1D 6m ending 2026-10-03 (regular
+hours). Cached for ESZ6: ESZ6 1D 6m ending 2026-10-03 (all hours — E-mini S&P 500 · ESZ6 …)`),
+says when the symbol is also the root of cached contracts, points a bare root at the contracts
+cached for it, and with nothing cached names the fetch's defaults. Until 2.2.0 it said only
+"fetch it first", which sent the model back to repeat a fetch it had just made.
 
 **Note:** Max 1000 data points per request — handled automatically by pagination.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/introduction
@@ -494,7 +642,13 @@ Futures contracts for one or more root symbols — expiry months, conids, exchan
 (the qualifier is load-bearing: IBKR keeps returning a contract after its last trade date, so the
 earliest row alone flagged an *expired* one for days after each roll — measured 2026-09-20, ESU6
 `ltd` 20260918 still among 22 ES rows two days later; claudia_ui gap #58. Tradeability is decided
-by `ltd`, which differs from `expirationDate` — ES Dec-26 reports 20261218 and 20261217 — and a row
+by the EARLIER of `ltd` and `expirationDate` — neither alone is the last trade date for every root:
+ES Dec-26 reports `expirationDate` 20261218 / `ltd` 20261217, but NYMEX CL reports `ltd` as the
+first day of the contract month, AFTER trading stopped on its `expirationDate` (CLV6: 20260922 /
+20261001), so `ltd` alone kept an expired CL as the front month after each monthly roll, for as
+long as IBKR still listed it (CLV6: listed two days after expiry, gone by day seven; `ltd` itself
+was nine days after) — claudia_ui
+gap #71, register F16, measured 2026-09-24, fixed in 2.2.0 — and a row
 with no usable date is kept, since an unknown date is not a claim that a contract expired. Expired
 rows are still listed; they are merely never flagged.) (2026-09-10 —
 `/trsrv/futures` itself returns the rows in no date order, Dec 2026 first for ES, and a model once
@@ -533,7 +687,7 @@ carries `clearingCycleEndTime`, `tradingScheduleDate`, `sessions[]` (`openingTim
 > `v1/endpoints/contract/trading-schedule-by-symbol.md` and so **omitted `exchange` and
 > `description`**, which the live gateway does return. IBKR publishes three "trading
 > schedule" pages that disagree; the authoritative one for this endpoint is
-> [`api-reference/trading/trading-contracts/get-trading-schedule.md`](https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule.md),
+> [`api-reference/trading/trading-contracts/get-trading-schedule.md`](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule),
 > whose response object matches the wire in all six keys. See `client.get_trading_schedule`
 > for which page says what.
 
@@ -558,10 +712,11 @@ Check whether a specific dataset is cached in Google Drive.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** `"HIT"` or `"MISS"`.
 
@@ -582,10 +737,11 @@ Delete a specific dataset from the Google Drive cache. Use when stale data needs
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** Confirmation message.
 
@@ -594,24 +750,73 @@ Delete a specific dataset from the Google Drive cache. Use when stale data needs
 ## Analysis
 
 ### `add_indicators`
-Load cached market data and compute all technical indicators.
+Load cached market data and compute technical indicators on its last bar, **with TradingView's
+settings, under TradingView's names, every one printed on the result**. Full reference — each
+setting's definition, default and official page: [`indicators-reference.md`](indicators-reference.md).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
+| `source` | string | — | Price source of the moving averages and the Bollinger bands — TradingView's *Source*. One of `open`, `high`, `low`, `close`, `hl2` = (high + low)/2, `hlc3` = (high + low + close)/3, `ohlc4` = (open + high + low + close)/4, `hlcc4` = (high + low + close + close)/4. **Default `hl2`**, stated on the result (TradingView's own default is `close`) |
+| `oscillator_source` | string | — | Price source of RSI and MACD, the same eight names. **Default `close`** — the price both are defined on, and TradingView's default |
+| `ma_type` | string | — | Type of the moving averages and of the bands' basis (TradingView's *Basis MA Type*): `SMA`, `EMA`, `SMMA (RMA)`, `WMA`, `VWMA`. On the bands it moves the basis line only; the deviation stays the population standard deviation of the source. **Default `SMA`**. An `EMA` or `SMMA (RMA)` line adds `(over N bars)`: a recursive average's value depends on how much history it was computed over (EMA 200 hl2: 7,759.90 over 479 bars, 7,759.77 over 1,500; TradingView's `ES1!` 7,759.80 over years — witnessed 2026-10-06; on ESZ2026's own chart, equal to the cent, 2026-11-12) |
+| `ma_periods` | integer[] | — | Lengths of the moving averages to report, in bars, e.g. `[25, 50, 100, 200]`. **None by default** — no average line |
+| `band_period` | integer | — | Bollinger bands *Length*. **Default `20`** |
+| `band_stds` | number[] | — | Bollinger bands *StdDev* — one band pair per value, e.g. `[1, 2, 2.5]`. **Default `[2]`** |
+| `offset` | integer | — | TradingView's *Offset* for the averages and bands, in bars. The values are unchanged: a positive offset draws the line to the right, so the last bar shows the value computed that many bars earlier; a negative one draws it to the left, and nothing sits on the last bar. **Default `0`** |
 
-**Output:** Current values for: RSI(14), MACD, MACD signal, Bollinger Bands (upper/mid/lower),
-ATR(14), VWAP, Stochastic %K/%D, Williams %R, Volume Ratio.
+**Output.** Two notes come first:
 
-VWAP is reported only for intraday `timeframe` values (`5min`, `1h`, …). It measures a
-single trading session, so on daily or coarser bars it has no meaning and the line reads
-`n/a` with the reason rather than printing a number — see
-`docs/api-usage-examples.md` § Conventions. The session is the UTC day of the bars; this
-tool fetches regular-hours bars only, and a US or European regular session sits inside
-one UTC day, so that boundary is the exchange day for the bars it holds (DATA-R6).
+- **How to report what follows** (register F40, 2026-10-20: live, the model had dropped an EMA's
+  `(over N bars)` and called it "rising").
+- **How a continuous chart differs from the contract computed here** (register F4, 2026-11-12, wording
+  approved by the operator; `docs/indicators-reference.md` § 12 has the measurements).
+
+Then three lines of configuration, each setting marked `(by default)` or `(as given)`, then one line per
+value:
+
+```text
+Indicators for ESZ6 1h, all trading hours (as given) (last bar stamped 2026-10-01 18:00 ET (its session open)):
+  Quote each line as printed, '(over N bars)' included — the bar count is part of the value; no line carries a slope, trend or direction.
+  A future contract is computed on its own contract's prices. A continuous chart (TradingView's ES1!, for example) joins contracts, so its bars before a contract switch are the earlier contract's, back-adjusted only if that chart setting is on. A line that reaches back across a switch can therefore read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only while their window spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that shrinks with every bar after it. To compare, use the chart of the contract itself.
+  Averages and bands — source: hl2 = (high + low)/2 (by default); type: SMA (by default); offset: 0 (by default)
+  Bands — length: 200 (as given); StdDev: 1, 2.5 (as given)
+  RSI and MACD — source: close (by default)
+  SMA 25 hl2: <value>
+  SMA 200 hl2: <value>
+  BB 200 SMA hl2 1: <basis> / <upper> / <lower> (basis / upper / lower)
+  BB 200 SMA hl2 2.5: <basis> / <upper> / <lower> (basis / upper / lower)
+  last close <close> = SMA 200 hl2 + <n> StdDev (1 StdDev = <value>: population standard deviation of hl2 over 200 bars)
+  RSI(14) close: <value>
+  MACD(12,26,9) close: <value>  Signal: <value>
+  ATR(14): <value>
+  VWAP: <value, or the reason there is none>
+  Stoch %K/%D (14,3): <value> / <value>
+  Williams %R (14): <value>
+  Volume Ratio (20): <value>x avg
+```
+
+- **The labels are TradingView's chart-legend labels** — `SMA 200 hl2` (type, length, source),
+  `BB 200 SMA hl2 2.5` (length, basis type, source, StdDev) — so a line is held against the line
+  of the same name on a chart.
+- **`last close … ± n StdDev`** says where the last bar's **close** sits against the bands'
+  basis, in the bands' own deviations. The average and the deviation are the source's.
+- **A line never prints `nan`.** Too few bars reads `n/a — 126 bars in the window, 200 needed;
+  fetch a longer period`; a value the indicator's definition leaves undefined (a flat window
+  under RSI) reads `n/a — undefined on the last bar`. Nothing is fetched behind the scenes:
+  ask for a period longer than the longest length.
+- **A source or type outside TradingView's lists is refused with the list** — never computed on
+  `close` under the name that was asked for.
+- **VWAP** is printed for regular-hours intraday bars only. On daily or coarser bars it has no
+  meaning; on an **all-hours** series the session crosses the UTC day this VWAP restarts on, so
+  none is computed. Both read `n/a` with the reason (see
+  [`indicators-reference.md`](indicators-reference.md) § 7).
+- **Not offered:** MACD's two MA-type inputs, RSI's smoothing and divergence, a timeframe other
+  than the cached bars'.
 
 **Prerequisite:** Data must be cached. Call `fetch_market_data` first if needed.
 
@@ -623,10 +828,11 @@ Execute a Python strategy in a sandboxed `RestrictedPython` environment.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `code` | string | ✅ | Python code. Must set `df['signal'] = 1` (long), `0` (flat), or `-1` (short) |
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 | `strategy_name` | string | — | Human-readable label |
 
 **Output:** Sharpe ratio, Sortino ratio, total return, max drawdown, trade count, win rate.
@@ -644,10 +850,11 @@ Full analytics report on a cached dataset.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `symbol` | string | ✅ | Ticker |
+| `symbol` | string | ✅ | The symbol `fetch_market_data` reported — a ticker (`AAPL`) or, for a future, the contract's own symbol (`ESZ6`), never the root |
 | `timeframe` | string | ✅ | e.g. `"1D"` |
 | `period` | string | ✅ | e.g. `"1Y"` |
 | `end` | string | ✅ | End date `YYYY-MM-DD` |
+| `outside_rth` | boolean | — | The hours the cached series covers, as `fetch_market_data` reported: `false` = regular trading hours (**default**, stated on the result), `true` = all hours. A key part since 2.2.0 |
 
 **Output:** Total return, CAGR, Sharpe, Sortino, Calmar, max drawdown, max drawdown duration
 (bars), bars analyzed.
@@ -666,7 +873,7 @@ Generate a PineScript v5 script for TradingView. Two modes, selected by `source`
 |-----------|------|----------|-------------|
 | `symbol` | string | ✅ | Ticker (used in comments/title) |
 | `source` | string | — | `"indicators"` (default) or `"backtest"` |
-| `indicators` | array[string] | — | For `source="indicators"`: one or more of `"rsi"`, `"macd"`, `"bollinger_bands"`, `"ema"`, `"sma"`, `"atr"` |
+| `indicators` | array[string] | — | For `source="indicators"`: one or more of `"rsi"`, `"macd"`, `"bollinger_bands"`, `"ema"`, `"sma"`, `"atr"`. **Lengths and price sources are TradingView inputs in the generated study, not parameters here**: each indicator opens at its default length (RSI 14, MACD 12/26/9, bands 20 / 2, EMA 20, SMA 20, ATR 14) on `close`, and each one that takes a source declares `input.source(close, "… Source")`, so (H + L)/2 or any other source is one choice in the script's settings on the chart — per indicator, as with TradingView's own |
 | `strategy_name` | string | — | Script title; for `source="backtest"` also filters which stored run to use (default: most recent for the symbol) |
 | `timeframe` | string | — | For `source="backtest"`: cache timeframe of the backtested bars, for chart-timeframe inference (optional) |
 | `period` | string | — | For `source="backtest"`: cache period key (optional) |

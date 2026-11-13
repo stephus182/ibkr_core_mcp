@@ -41,6 +41,7 @@ dependencies = [
     "defusedxml>=0.7",
     "exchange_calendars>=4.5",
     "browser-cookie3>=0.19",
+    "keyring>=25",  # the OS keychain behind load_env_file: secrets at rest (MCP security checklist 7.1, 2026-11-09)
     "pyobjc-framework-LocalAuthentication; sys_platform == 'darwin'",
     "websockets>=12.0",  # backs IBKRWebSocket/AlertManager, exported from __init__.py — core client API, not server-only
 ]
@@ -91,6 +92,7 @@ ibkr_core_mcp = [
     "gateway/Dockerfile",
     "gateway/conf.yaml",
     "gateway/*.sh",
+    "assets/*",
 ]
 
 [tool.pytest.ini_options]
@@ -167,6 +169,8 @@ module = [
     "RestrictedPython.*",
     "googleapiclient",
     "googleapiclient.*",
+    "httplib2",
+    "google_auth_httplib2",
     "google.auth",
     "google.auth.*",
     "google.oauth2",

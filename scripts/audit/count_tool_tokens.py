@@ -25,7 +25,8 @@ from typing import Any
 
 import anthropic
 from anthropic.types import MessageParam
-from dotenv import load_dotenv
+
+from ibkr_core_mcp.config import SECRET_NAMES, load_env_file
 
 CLAUDIA = Path("/Users/steph/Claude_Projects/claudia_ui")
 MSG: list[MessageParam] = [{"role": "user", "content": "hello"}]
@@ -77,9 +78,14 @@ def main() -> None:
     p.add_argument("--extra-tools", help="JSON file with additional tool dicts to include")
     args = p.parse_args()
 
-    load_dotenv(args.env_file)
+    # The core's secret names are kept — replacing them would export the Flex token as a
+    # setting — and the Anthropic key joins them; none enters this process's environment.
+    env = load_env_file(args.env_file, secret_names=(*SECRET_NAMES, "ANTHROPIC_API_KEY"))
+    key = env.secrets.get("ANTHROPIC_API_KEY")
+    if key is None:
+        raise SystemExit(f"ANTHROPIC_API_KEY is not in {args.env_file}" + (f" — {env.refused}" if env.refused else ""))
     model = args.model or os.environ.get("CLAUDIA_MODEL", "claude-opus-4-8")
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=key.get_secret_value())
 
     repo = Path(__file__).resolve().parents[2]
     toolkit_tools = literal_assign(repo / "ibkr_core_mcp" / "claude_tools.py", "TOOL_DEFINITIONS")

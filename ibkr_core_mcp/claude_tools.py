@@ -24,22 +24,34 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import time
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from ibkr_core_mcp import analytics as _analytics
+from ibkr_core_mcp import audit
 from ibkr_core_mcp import indicators as _indicators
 from ibkr_core_mcp import pinescript as _pinescript
 from ibkr_core_mcp.backtest import BacktestResult
 from ibkr_core_mcp.backtest import run_backtest as _run_backtest
 from ibkr_core_mcp.cache import GDriveCache
-from ibkr_core_mcp.client import _ACCOUNT_ID_RE, IBKRClient
+from ibkr_core_mcp.client import (
+    _ACCOUNT_ID_RE,
+    IBKRClient,
+    _bar_problem,
+    _bar_seconds,
+    _period_problem,
+    _whole_or_fraction,
+)
 from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError
+from ibkr_core_mcp.exceptions import BacktestError, IBKRAPIError, IBKRCoreError, StoreError
+from ibkr_core_mcp.flex_dataset import FlexDataset
+from ibkr_core_mcp.flex_sync import statement_through, validate_dataset
 from ibkr_core_mcp.models import Account, IBKRResponse, Trade, json_default
 from ibkr_core_mcp.models import bars_to_dataframe as _bars_to_dataframe
 from ibkr_core_mcp.order_confirm import reply_message_text
@@ -73,10 +85,314 @@ class _Resolved(NamedTuple):
     # to reach the user verbatim, while a failure is a diagnostic that can be summarised
     # alongside other symbols'.
     ambiguous: bool = False
+    # IBKR's name for the issuer and the exchange code of the listing, when the resolver
+    # had them in hand (`/trsrv/stocks` returns both beside the conid). None is "not read",
+    # never a default: a result that names its listing is how a wrong one becomes visible
+    # (market-data step 1, 2026-10-02).
+    name: str | None = None
+    exchange: str | None = None
+    # A future only: the root the contract was asked by (`ES`) and IB's own symbol for the
+    # contract (`ESZ6`), which is the market-data cache key — one contract, one key.
+    root: str | None = None
+    local_symbol: str | None = None
+
+    def listing(self) -> dict[str, Any]:
+        """The resolved listing as the market-data cache records it beside the bars."""
+        listing = {"conid": self.conid, "name": self.name, "exchange": self.exchange, "currency": self.currency}
+        if self.root:
+            listing["root"] = self.root
+        return listing
+
+    def describe(self) -> str:
+        """`<name>, <exchange>, <currency>, conid <n>` — an unread field says so, never blank."""
+        return _describe_listing(self.listing())
+
+
+# The security types fetch_market_data serves, in IB's codes — grown per type, each with its key
+# rule and a live read (operator, 2026-10-03). IND/CASH resolve already but have no key rule.
+_FETCH_SEC_TYPES = ("STK", "FUT")
+
+
+def _hours(inputs: Mapping[str, Any], *, default: bool, why: str) -> tuple[bool, str, str]:
+    """`outside_rth` as asked or defaulted, with the words every result uses for it.
+
+    Returns (outside_rth, "all trading hours (as given)" / "regular trading hours (<why>)",
+    "all hours" / "regular hours"). A default is stated, never silent (operator 2026-10-02):
+    the fetch defaults by security type, the cache readers to regular hours.
+    """
+    given = inputs.get("outside_rth")
+    outside = default if given is None else bool(given)
+    long = ("all" if outside else "regular") + " trading hours" + (f" ({why})" if given is None else " (as given)")
+    return outside, long, "all hours" if outside else "regular hours"
+
+
+def _is_all_hours_future(row: Mapping[str, Any] | None) -> bool:
+    """A manifest row for an all-hours futures series: its stamps are session opens."""
+    if not row:
+        return False
+    return bool(row.get("outside_rth")) and bool((row.get("listing") or {}).get("root"))
+
+
+def _last_bar_text(df: pd.DataFrame, row: Mapping[str, Any] | None) -> str:
+    """`last bar: 2026-10-02` — or, for an all-hours futures series, the stamp as the session
+    open it is, in ET, so Friday's session is not read as a Thursday bar."""
+    if not _is_all_hours_future(row):
+        return f"last bar: {df.index[-1].date()}"
+    stamp = df.index[-1]
+    stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+    return f"last bar stamped {stamp.tz_convert(_ET):%Y-%m-%d %H:%M} ET (its session open)"
+
+
+def _bar_unit(bar: str) -> str:
+    """`1d` → `d`, `5min` → `min`, `1m` → `m` (a month, in IBKR's bar grammar)."""
+    return bar.lower().lstrip("0123456789")
+
+
+def _span_text(df: pd.DataFrame, bar: str, futures_all_hours: bool) -> str:
+    """How a series' extent is printed: dates, or — for an all-hours futures series — IBKR's
+    stamps as session opens in ET with the reading rule, so the bar opening Thursday 18:00 is
+    never read as a Thursday bar. The stamps are not modified (operator, 2026-10-03)."""
+    if not futures_all_hours:
+        return f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
+    opens = df.index.tz_localize("UTC").tz_convert(_ET) if df.index.tz is None else df.index.tz_convert(_ET)
+    text = f"{len(df)} bars stamped at their open (ET) {opens[0]:%Y-%m-%d %H:%M} → {opens[-1]:%Y-%m-%d %H:%M}"
+    if _bar_unit(bar) in ("d", "w", "m"):
+        text += " (a bar is stamped at its session open: the one opening Thursday 18:00 is Friday's session)"
+    return text
+
+
+# What add_indicators computes with when a setting is not given — each printed on the result
+# as "(by default)", never silent. Type, length, StdDev and offset are TradingView's own
+# defaults ("20 days is the default", "2 is the default", "0 is the default", basis SMA:
+# https://www.tradingview.com/support/solutions/43000501840-bollinger-bands-bb/). The source
+# of the averages and bands is the operator's (2026-10-05): hl2, where TradingView's is close.
+# RSI and MACD read close, the price both are defined on (`indicators.rsi`, `indicators.macd`).
+# The functions in `indicators` keep `close` as their own default; this tool always passes one.
+_INDICATOR_DEFAULTS: dict[str, Any] = {
+    "source": "hl2",
+    "oscillator_source": "close",
+    "ma_type": "SMA",
+    "ma_periods": [],
+    "band_period": 20,
+    "band_stds": [2],
+    "offset": 0,
+}
+
+# Pine's wording for the four combined sources, printed beside the name where it is stated.
+_SOURCE_FORMULAS = {
+    "hl2": "(high + low)/2",
+    "hlc3": "(high + low + close)/3",
+    "ohlc4": "(open + high + low + close)/4",
+    "hlcc4": "(high + low + close + close)/4",
+}
+
+
+class _IndicatorSettings(NamedTuple):
+    """What one add_indicators call computes with, and the lines that say so on the result."""
+
+    source: str
+    oscillator_source: str
+    ma_type: str
+    ma_periods: list[int]
+    band_period: int
+    band_stds: list[float]
+    offset: int
+    stated: list[str]
+
+
+def _is_whole(value: Any) -> bool:
+    """A whole number as JSON sends one — `True` is an int in Python and is not a length."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _indicator_settings(inputs: Mapping[str, Any]) -> _IndicatorSettings | str:
+    """The settings add_indicators will compute with, or the sentence that refuses them.
+
+    A source or a type outside TradingView's lists is refused with the list. The schema's
+    `enum` is not enforced server-side, and computing on `close` under the name that was
+    asked for is the silent substitution this tool exists to remove.
+    """
+
+    def setting(key: str) -> tuple[Any, str]:
+        given = inputs.get(key)
+        return (_INDICATOR_DEFAULTS[key], "by default") if given is None else (given, "as given")
+
+    source, source_why = setting("source")
+    oscillator_source, oscillator_why = setting("oscillator_source")
+    ma_type, type_why = setting("ma_type")
+    ma_periods, _ = setting("ma_periods")
+    band_period, length_why = setting("band_period")
+    band_stds, stds_why = setting("band_stds")
+    offset, offset_why = setting("offset")
+
+    refused = "add_indicators: {} Nothing computed."
+    for name, value in (("source", source), ("oscillator_source", oscillator_source)):
+        if value not in _indicators.SOURCES:
+            sources = ", ".join(_indicators.SOURCES)
+            return refused.format(f"{name} {value!r} is not one of TradingView's price sources ({sources}).")
+    if not isinstance(ma_type, str) or ma_type not in _indicators.MA_TYPES:
+        types = ", ".join(_indicators.MA_TYPES)
+        return refused.format(f"ma_type {ma_type!r} is not one of TradingView's moving-average types ({types}).")
+    if not isinstance(ma_periods, list) or not all(_is_whole(n) and n >= 1 for n in ma_periods):
+        return refused.format("ma_periods must be a list of whole numbers of bars, each 1 or more.")
+    if not _is_whole(band_period) or band_period < 1:
+        return refused.format("band_period must be a whole number of bars, 1 or more.")
+    if not isinstance(band_stds, list) or not band_stds:
+        return refused.format("band_stds must be a list of one or more numbers above 0.")
+    if not all(isinstance(x, int | float) and not isinstance(x, bool) and x > 0 for x in band_stds):
+        return refused.format("band_stds must be a list of one or more numbers above 0.")
+    if not _is_whole(offset):
+        return refused.format("offset must be a whole number of bars.")
+
+    def shown(name: str) -> str:
+        return f"{name} = {_SOURCE_FORMULAS[name]}" if name in _SOURCE_FORMULAS else name
+
+    stds = ", ".join(f"{x:g}" for x in band_stds)
+    stated = [
+        f"  Averages and bands — source: {shown(source)} ({source_why}); type: {ma_type} ({type_why}); "
+        f"offset: {offset} ({offset_why})",
+        f"  Bands — length: {band_period} ({length_why}); StdDev: {stds} ({stds_why})",
+        f"  RSI and MACD — source: {shown(oscillator_source)} ({oscillator_why})",
+    ]
+    return _IndicatorSettings(source, oscillator_source, ma_type, ma_periods, band_period, band_stds, offset, stated)
+
+
+def _or_na(rendered: str, values: Sequence[Any], bars: int = 0, needed: int = 0) -> str:
+    """`rendered`, unless a number in it does not exist — then the reason, never `nan`.
+
+    Too few bars names both counts and the remedy: a 200-bar average on a 126-bar window
+    cannot be computed, and the only cure is a longer fetch. `needed` is applied to EMA and
+    MACD as well, which Pine defines from the first bar: a 200-bar EMA on 126 bars is a
+    number, and not one to act on. Enough bars and still no value is a division the
+    indicator's own definition leaves undefined — a flat window under RSI or the Stochastic.
+    """
+    if bars < needed:
+        return f"n/a — {bars} bars in the window, {needed} needed; fetch a longer period"
+    if any(pd.isna(v) for v in values):
+        return "n/a — undefined on the last bar"
+    return rendered
+
+
+def _drawn_on_last_bar(series: pd.Series, offset: int) -> Any:
+    """The value TradingView draws on the last bar when a line is moved by `offset` bars.
+
+    "Changing this number will move the [line] either Forwards or Backwards relative to the
+    current market" (https://www.tradingview.com/support/solutions/43000696841-simple-moving-average/);
+    Pine's `plot`: "Shifts the plot to the left or to the right on the given number of bars".
+    The values are not changed. Moved right by 3, the last bar carries the value computed 3
+    bars earlier; moved left, the line stops short of the last bar and nothing sits on it.
+    """
+    return series.iloc[-1 - offset] if 0 <= offset < len(series) else float("nan")
+
+
+_INDICATOR_REPORT_NOTE = (
+    "  Quote each line as printed, '(over N bars)' included — the bar count is part of the value; "
+    "no line carries a slope, trend or direction."
+)
+
+# Every line here is computed on one contract's own bars; a chart a user compares it with may be a
+# continuous series. Measured 2026-11-12 (register F4): TradingView's EMA 200 hl2 on ESZ2026 1h equalled
+# this tool's to the cent, and so did ES1!'s about two months after its 2026-09-15 contract switch;
+# on 2026-10-06, about three weeks after it, ES1! read 0.03 away. TradingView's back-adjustment is off by
+# default (its support article 43000685266). Wording approved by the operator, 2026-11-12, verbatim.
+_CONTINUOUS_CONTRACT_NOTE = (
+    "  A future contract is computed on its own contract's prices. A continuous chart (TradingView's ES1!, "
+    "for example) joins contracts, so its bars before a contract switch are the earlier contract's, "
+    "back-adjusted only if that chart setting is on. A line that reaches back across a switch can therefore "
+    "read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only while their window "
+    "spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that shrinks with every "
+    "bar after it. To compare, use the chart of the contract itself."
+)
+
+
+def _indicator_report(df: pd.DataFrame, s: _IndicatorSettings, header: str, timeframe: str, outside_rth: bool) -> str:
+    """add_indicators' result: two notes, the settings, then one line per value in TradingView's labels.
+
+    The notes: how to report the lines (`_INDICATOR_REPORT_NOTE`), and how a continuous chart
+    differs from the one contract computed here (`_CONTINUOUS_CONTRACT_NOTE`).
+
+    The averages and bands are labelled as TradingView's chart legend labels them — `SMA 200
+    hl2`, `BB 200 SMA hl2 2.5` (type, length, source, StdDev) — so a line here can be held
+    against the line there. One sentence TradingView has no need of, since it draws the
+    picture: where the last bar's close sits against the bands' basis, in the bands' own
+    standard deviations. It is the close of the bar, and the source's average and deviation.
+    """
+    bars = len(df)
+    shift = f" offset {s.offset}" if s.offset else ""
+    left = f"nothing is drawn on the last bar — the line ends {-s.offset} bar(s) earlier"
+    reach = max(s.offset, 0)  # the bars a line moved right needs beyond its own length
+    # An EMA or SMMA is recursive: its value depends on how much history it was computed over
+    # (witnessed 2026-10-06: EMA 200 hl2 7,759.90 over 479 bars, 7,759.77 over 1,500, TradingView's
+    # ES1! 7,759.80 over years; on ESZ2026's own chart, equal to the cent, 2026-11-12), so its line
+    # says so. A simple average depends on its last N bars only.
+    over = f" (over {bars} bars)" if s.ma_type in ("EMA", "SMMA (RMA)") else ""
+    # Live 2026-10-08 (register F40): the model dropped the clause and called an EMA "rising".
+    # The result says what its lines are and are not, in the result itself, so the rule reaches
+    # the model on every call and travels with the tool to any host.
+    lines = [header, _INDICATOR_REPORT_NOTE, _CONTINUOUS_CONTRACT_NOTE, *s.stated]
+
+    if not s.ma_periods:
+        lines.append("  Averages: none requested — give ma_periods, e.g. [25, 50, 100, 200]")
+    for length in s.ma_periods:
+        value = _drawn_on_last_bar(_indicators.moving_average(df, length, s.ma_type, s.source), s.offset)
+        text = left if s.offset < 0 else _or_na(f"{value:.2f}{over}", [value], bars, length + reach)
+        lines.append(f"  {s.ma_type} {length} {s.source}{shift}: {text}")
+
+    columns = ("bb_mid", "bb_upper", "bb_lower")
+    for std in s.band_stds:
+        bands = _indicators.bollinger_bands(df, s.band_period, std, s.source, s.ma_type)
+        basis, upper, lower = (_drawn_on_last_bar(bands[c], s.offset) for c in columns)
+        levels = f"{basis:.2f} / {upper:.2f} / {lower:.2f} (basis / upper / lower){over}"
+        text = left if s.offset < 0 else _or_na(levels, [basis, upper, lower], bars, s.band_period + reach)
+        lines.append(f"  BB {s.band_period} {s.ma_type} {s.source} {std:g}{shift}: {text}")
+
+    one_sigma = _indicators.bollinger_bands(df, s.band_period, 1.0, s.source, s.ma_type)
+    basis = _drawn_on_last_bar(one_sigma["bb_mid"], s.offset)
+    sigma = _drawn_on_last_bar(one_sigma["bb_upper"], s.offset) - basis
+    close = float(df["close"].iloc[-1])
+    distance = (close - basis) / sigma if sigma else float("nan")
+    basis_label = f"{s.ma_type} {s.band_period} {s.source}{shift}"
+    if s.offset < 0 or bars < s.band_period + reach or pd.isna(distance):
+        why = left if s.offset < 0 else _or_na("", [distance], bars, s.band_period + reach)
+        lines.append(f"  last close {close:.2f} vs {basis_label}: {why}")
+    else:
+        lines.append(
+            f"  last close {close:.2f} = {basis_label} {'+' if distance >= 0 else '-'} {abs(distance):.2f} StdDev "
+            f"(1 StdDev = {sigma:.2f}: population standard deviation of {s.source} over {s.band_period} bars)"
+        )
+
+    osc = s.oscillator_source
+    rsi = _indicators.rsi(df, 14, osc).iloc[-1]
+    macd = _indicators.macd(df, source=osc).iloc[-1]
+    macd_line, macd_signal = macd["macd"], macd["macd_signal"]
+    # `add_all` supplies the lines that take no source. Its own RSI, MACD and bands are on
+    # `close` at fixed settings and are not read here: the ones above carry their settings.
+    last = _indicators.add_all(df).iloc[-1]
+    atr, k, d = last["atr"], last["stoch_k"], last["stoch_d"]
+    williams, volume_ratio = last["williams_r"], last["volume_ratio"]
+    lines += [
+        f"  RSI(14) {osc}: {_or_na(f'{rsi:.1f}', [rsi], bars, 15)}",
+        f"  MACD(12,26,9) {osc}: "
+        + _or_na(f"{macd_line:.4f}  Signal: {macd_signal:.4f}", [macd_line, macd_signal], bars, 34),
+        f"  ATR(14): {_or_na(f'{atr:.4f}', [atr], bars, 14)}",
+        f"  VWAP: {_format_vwap(last, timeframe, outside_rth)}",
+        f"  Stoch %K/%D (14,3): {_or_na(f'{k:.1f} / {d:.1f}', [k, d], bars, 16)}",
+        f"  Williams %R (14): {_or_na(f'{williams:.1f}', [williams], bars, 14)}",
+        f"  Volume Ratio (20): {_or_na(f'{volume_ratio:.2f}x avg', [volume_ratio], bars, 20)}",
+    ]
+    return "\n".join(lines)
+
+
+def _describe_listing(listing: Mapping[str, Any]) -> str:
+    """One line naming a listing: name, exchange, currency, conid; "unknown" where unread."""
+    name = listing.get("name") or "name unknown"
+    exchange = listing.get("exchange") or "exchange unknown"
+    currency = listing.get("currency") or "currency unknown"
+    return f"{name}, {exchange}, {currency}, conid {listing.get('conid')}"
 
 
 # Maps first character of IBKR field 6509 (Market Data Availability) to human-readable status.
-# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-availability
 def _named_quote_fields(item: dict[str, Any]) -> dict[str, Any]:
     """The price fields of one raw snapshot item, by name, and nothing else.
 
@@ -117,6 +433,46 @@ def _TODAY() -> str:
     return str(date.today())
 
 
+def _NOW() -> datetime:
+    """The moment of a read, as naive UTC — the frame `bars_to_dataframe` builds is indexed in it."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _et_stamp(moment: Any) -> str:
+    """A datetime or Timestamp (naive = UTC), printed in ET: `2026-10-05 16:00 ET`."""
+    stamp = pd.Timestamp(moment)
+    stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+    return str(stamp.tz_convert(_ET).strftime("%Y-%m-%d %H:%M ET"))
+
+
+# No half candle (operator, 2026-10-05). An un-anchored history request's newest bar is the one
+# IBKR is still writing, and a bar is served without its last trades for one to four seconds
+# after its period ends (eight bars watched; `docs/ibkr-api-behaviors-reference.md`). So a bar
+# is kept only once its period has ended this long before the read: a hard-coded delay, stated
+# on every result, fifteen times the longest lag seen. This tool is for analysis and
+# backtesting, not live charting — the live price is `get_market_snapshot`'s.
+_SETTLE_SECONDS = 60
+
+
+def _complete_bars(df: pd.DataFrame, bar: str, read_at: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a freshly read frame into the bars kept and the bars still open at `read_at`."""
+    cutoff = read_at - timedelta(seconds=_bar_seconds(bar) + _SETTLE_SECONDS)
+    index = df.index.tz_convert(None) if df.index.tz is not None else df.index
+    kept = index <= cutoff
+    return df[kept], df[~kept]
+
+
+_SETTLE_RULE = "a bar counts once its period has ended for a minute before the read"
+
+
+def _not_kept_text(still_open: pd.DataFrame) -> str:
+    newest = _et_stamp(still_open.index[-1])
+    which = (
+        f"the bar stamped {newest}" if len(still_open) == 1 else f"{len(still_open)} bars, the newest stamped {newest}"
+    )
+    return f"Not kept: {which} — {_SETTLE_RULE}."
+
+
 def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
     """Format the within-file duplicate-tradeID warning shared by _verify_flex_import's
     three status branches (pre-validated / hash-verified / cross-checked).
@@ -131,13 +487,26 @@ def _dupe_note(raw_count: int, unique_count: int, verbose: bool = False) -> str:
     return f" ⚠ raw={raw_count} unique={unique_count}{suffix}"
 
 
+#: What `sync_flex_trades` says about the `store.db` Drive backup, by `FlexBackupResult.status`.
+#: `not-configured` says nothing: a user who never set up Drive is not told, every pull,
+#: about a backup they did not ask for.
+_BACKUP_LINES = {
+    "uploaded": "store.db backed up to Drive account_data/.",
+    "unchanged": "store.db unchanged by this pull — Drive backup left as is.",
+    "failed": "⚠ store.db Drive backup failed:",
+}
+
+
 def _format_coverage(cov: dict[str, Any]) -> list[str]:
     """Format trade date coverage into human-readable lines with staleness and gap notes.
 
-    The staleness note reports the **settled** date, because `stale` is derived from
-    `flex_trade` while `newest`/`days_since_newest` come from the legacy `trades` table.
-    Mixing them produced the self-contradictory "⚠ DATA STALE (0d old)" — a warning whose
-    own evidence said nothing was wrong, prescribing the command that had just failed.
+    The staleness note carries the verdict's own evidence — the newest statement held
+    (IBKR's `toDate`) against the weekday before today (ET), the rule
+    `SQLiteStore.get_trade_date_coverage` applies — in the words claudia_ui's startup line
+    uses. `newest`/`days_since_newest` come from the legacy `trades` table and never appear
+    in it: mixing the two once produced the self-contradictory "⚠ DATA STALE (0d old)" — a
+    warning whose own evidence said nothing was wrong, prescribing the command that had just
+    failed.
     """
     stale_note = ""
     if cov.get("flex_dataset_empty"):
@@ -146,9 +515,10 @@ def _format_coverage(cov: dict[str, Any]) -> list[str]:
             "the complete Flex dataset holds no settled rows"
         )
     elif cov.get("stale"):
-        settled = cov.get("settled_newest")
-        days = cov.get("days_since_settled")
-        detail = f"settled through {settled}, {days}d" if settled else f"{cov.get('days_since_newest', 0)}d old"
+        held = cov.get("statement_through")
+        detail = f"statement through {held}" if held else "no statement held"
+        if expected := cov.get("newest_statement_day"):
+            detail = f"{detail}; the newest that can exist is through {expected}"
         stale_note = f" ⚠ DATA STALE ({detail}) — run sync_flex_trades to refresh"
     lines = [
         f"\nTrade history: {cov['oldest']} → {cov['newest']}  ({cov['total_trades']} trades total){stale_note}",
@@ -213,17 +583,64 @@ TOOL_DEFINITIONS = [
         "name": "fetch_market_data",
         "capabilities": frozenset({"GOOGLE_DRIVE"}),
         "description": (
-            "Fetch OHLCV historical data for a symbol from IBKR. "
-            "Checks Google Drive cache first; only calls IBKR on a cache miss. "
-            "Returns a summary of the data retrieved."
+            "Fetch OHLCV historical bars from IBKR for one listing or one futures contract. "
+            "sec_type is IB's own code: STK (stocks and ETFs; the default — a bare 'ES' is the "
+            "stock with that ticker) or FUT (a futures root such as ES or CL resolves to the "
+            "front-month contract, the earliest still tradeable; pass conid to pin one contract, "
+            "an expired one included — IBKR serves its history for about a year after expiry). "
+            "A future's bars are that contract's own: before it became the front month they are "
+            "its prints as a back month, thinner; there is no continuous series. "
+            "outside_rth: regular hours only (false) or all hours IBKR has for the contract (true); "
+            "default by type — STK false, FUT true (the whole electronic session). An all-hours "
+            "futures bar is stamped at its session OPEN: the daily bar opening Thursday 18:00 ET "
+            "is Friday's session. Checks the Google Drive cache first; calls IBKR on a miss. "
+            "The result names the listing or contract (name, exchange, currency, conid), the end "
+            "date and the hours used, and the exact symbol and outside_rth to pass to "
+            "add_indicators, run_backtest and get_analytics (a future is cached under its own "
+            "symbol, e.g. ESZ6). Volume is IBKR's FILTERED historical volume — block trades, "
+            "combos and derivative-priced trades excluded — so it is lower than an exchange's "
+            "reported total where those are large (crude futures), and that gap is not an error. "
+            "Data is delayed by rule, never a half candle: a bar is kept only once its period has "
+            "ended for a minute before the read (IBKR's newest bar is the one it is still writing, "
+            "and it publishes a bar's last trades a few seconds after the bar ends), so a daily bar "
+            "is kept from the next morning. The result says when IBKR was read and which bar, if "
+            "any, was not kept; a cache hit says when its bars were read. The live price is "
+            "get_market_snapshot's."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker, e.g. AAPL"},
-                "period": {"type": "string", "description": "History period, lowercase units, e.g. '6m', '1y', '30d'"},
-                "bar": {"type": "string", "description": "Bar size, e.g. '1d', '1h'", "default": "1d"},
-                "end": {"type": "string", "description": "End date YYYY-MM-DD, defaults to today"},
+                "symbol": {"type": "string", "description": "Ticker (AAPL) or futures root (ES)"},
+                "sec_type": {
+                    "type": "string",
+                    "enum": ["STK", "FUT"],
+                    "description": "IB security type: STK (default, stocks and ETFs) or FUT (futures)",
+                },
+                "conid": {
+                    "type": "integer",
+                    "description": "FUT only: the exact contract to fetch (from get_futures, a position or a trade); skips the front-month rule",
+                },
+                "period": {
+                    "type": "string",
+                    "description": (
+                        "History period in IBKR's grammar: a whole number and a unit — min, h, d, w, "
+                        "m (months), y — e.g. '30d', '6m', '1y'. Anything else ('ytd', '6 months') is "
+                        "refused; give a span like year-to-date in days"
+                    ),
+                },
+                "bar": {
+                    "type": "string",
+                    "description": "Bar size, one of IBKR's step table: 1min, 2min, 3min, 5min, 10min, 15min, 30min, 1h, 2h, 3h, 4h, 8h, 1d, 1w, 1m. This tool refuses second bars (1S): IBKR does return them, but stamps them 60 seconds apart, and no stamp is changed here",
+                    "default": "1d",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "End date YYYY-MM-DD; defaults to today, and the result states which was used",
+                },
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "true = all hours IBKR has for the contract; false = regular trading hours only. Default by sec_type: STK false, FUT true; the result states which was used",
+                },
             },
             "required": ["symbol", "period"],
         },
@@ -239,10 +656,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -281,20 +705,34 @@ TOOL_DEFINITIONS = [
         "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Get trade history. source='live' queries IBKR directly (last 7 days max — current day "
-            "plus 6 previous). source='store' queries the local SQLite store — unlimited history, "
-            "includes all data synced via sync_flex_trades. Use source='store' for any analysis beyond 7 days."
+            "plus 6 previous). source='store' reads the Flex statements in the local store — unlimited "
+            "history, one line per execution with IBKR's trade date and realised P&L, and their total; "
+            "statements are T+1, so today's fills are never in it. Use source='store' for any analysis "
+            "beyond 7 days and for any realised P&L figure."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Filter by symbol (optional)"},
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Filter by symbol (optional). For source='store' this is the statement's symbol, matched "
+                        "exactly: a future is listed under its contract symbol (ESU6), not its root (ES)"
+                    ),
+                },
                 "source": {
                     "type": "string",
-                    "description": "'live' (IBKR API, last 7 days max) or 'store' (SQLite, unlimited history including Flex syncs)",
+                    "description": "'live' (IBKR API, last 7 days max) or 'store' (Flex statements, unlimited history, T+1)",
                     "default": "store",
                 },
-                "start": {"type": "string", "description": "Start date YYYY-MM-DD (store source only, optional)"},
-                "end": {"type": "string", "description": "End date YYYY-MM-DD (store source only, optional)"},
+                "start": {
+                    "type": "string",
+                    "description": "First trade date YYYY-MM-DD, inclusive (store source only, optional)",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "Last trade date YYYY-MM-DD, inclusive (store source only, optional)",
+                },
             },
             "required": [],
         },
@@ -344,11 +782,11 @@ TOOL_DEFINITIONS = [
         "capabilities": frozenset({"DATABASE"}),
         "description": (
             "Verify Flex import completeness by comparing source XML archives in Google Drive "
-            "account_data/ against the local SQLite trades table. For each XML file, extracts "
-            "all tradeIDs and checks whether they are present in SQLite. Reports per-file "
-            "counts (XML records vs SQLite matches) and an aggregate summary. "
-            "A missing tradeID means that execution was not imported. "
-            "Does not touch the trades table. It does write to the import manifest (flex_import_log): a first-encounter entry, and verified_at on each successful check."
+            "account_data/ against the Flex dataset in the local store — the statements every other "
+            "tool reads. For each XML file, extracts all tradeIDs and checks whether the dataset "
+            "holds them. Reports per-file counts (XML records vs dataset matches) and an aggregate "
+            "summary. A missing tradeID means that execution was not imported. "
+            "Does not touch the trade data. It does write to the import manifest (flex_import_log): a first-encounter entry, and verified_at on each successful check."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -359,7 +797,9 @@ TOOL_DEFINITIONS = [
             "Fetch the full historical trade history from IBKR Flex Web Service and store it in "
             "the local SQLite database and Google Drive cache. Requires IBKR_FLEX_TOKEN and "
             "IBKR_FLEX_QUERY_ID to be configured. Run this once or daily to keep historical "
-            "trade data current beyond the 6-day API limit."
+            "trade data current beyond the 6-day API limit. After the pull it re-checks the "
+            "dataset, and backs store.db up to Google Drive when the pull changed it and Drive is "
+            "configured; the result says both."
         ),
         "input_schema": {
             "type": "object",
@@ -379,10 +819,19 @@ TOOL_DEFINITIONS = [
             "Get ALL non-terminal orders for the account regardless of origin — "
             "includes orders placed via IBKR mobile, TWS, web portal, or ClaudIA staging. "
             "Uses the account-scoped endpoint which returns every working order on the account. "
-            "IMPORTANT: orders placed via mobile or TWS CANNOT be modified or cancelled by the API. "
-            "When reporting such orders, explicitly state: 'I can see this order but cannot modify "
-            "or cancel it — use IBKR mobile or TWS to manage it.' Never skip or silently omit "
-            "externally-placed orders. Always flag their origin when it differs from ClaudIA staging."
+            "An order's origin says where it was placed, not whether it can be changed: orders "
+            "placed on IBKR Mobile were modified and cancelled through this API (measured "
+            "2026-11-12). Whether a given order can be cancelled or modified is IBKR's own answer, "
+            "per order: get_order_status's cannot_cancel_order and order_not_editable flags — read "
+            "them before telling the user an order cannot be changed, and never infer it from the "
+            "origin. Never skip or silently omit externally-placed orders. Always flag their origin "
+            "when it differs from ClaudIA staging. "
+            "A bracket child carries no reference of its own: its origin is its parent's, read "
+            "through parentId, and its line says 'attached child of order N'; a child whose parent "
+            "is not in the list reads 'origin not determinable' — then get_order_status's "
+            "cannot_cancel_order flag is the authority, not this label. "
+            "Each line quotes IBKR's own description of the order, which states its time in force "
+            "in words (', Day', ', GTC'); for the typed value use get_order_status."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -561,17 +1010,91 @@ TOOL_DEFINITIONS = [
         "name": "add_indicators",
         "capabilities": frozenset({"COMPUTE"}),
         "description": (
-            "Load cached market data for a symbol and compute all technical indicators "
-            "(RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, Williams %R, and Volume Ratio). "
-            "Returns a summary of current indicator values."
+            "Load cached market data and compute technical indicators on its last bar, with "
+            "TradingView's settings. Moving averages (ma_periods, ma_type, source, offset) and "
+            "Bollinger bands (band_period, band_stds, ma_type as the 'Basis MA Type', source, "
+            "offset) are labelled as TradingView's chart legend labels them — 'SMA 200 hl2', "
+            "'BB 200 SMA hl2 2' — followed by where the last bar's close sits against the bands' "
+            "basis, in the bands' standard deviations. Then RSI(14) and MACD(12,26,9) on "
+            "oscillator_source, ATR(14), VWAP (intraday bars only), the Fast Stochastic (14,3), "
+            "Williams %R (14) and Volume Ratio (20). "
+            "Every line names the settings it was computed with, and a setting you leave out is "
+            "printed as '(by default)': the averages and bands read hl2 = (high + low)/2 by "
+            "default, RSI and MACD read close. Say which source a figure is on when you quote it. "
+            "Fetch a period longer than your longest length: an average needs its full length in "
+            "bars (a 200-bar average on 126 bars prints 'n/a' with both counts), and EMA, SMMA, RSI, "
+            "MACD and ATR are less exact near the start of the data — nothing is fetched behind the "
+            "scenes. Not offered: MACD's two MA types, RSI's smoothing and divergence, and a "
+            "timeframe other than the cached bars'. Report each line as printed, '(over N bars)' "
+            "included: the bar count is part of the value of an EMA or SMMA, which depends on how "
+            "much history it was computed over. The result states the last bar's values and nothing "
+            "else — no line carries a slope, trend or direction, so do not add one."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": list(_indicators.SOURCES),
+                    "description": (
+                        "Price source of the moving averages and the Bollinger bands — TradingView's "
+                        "'Source': hl2 = (high + low)/2, hlc3 = (high + low + close)/3, ohlc4 = "
+                        "(open + high + low + close)/4, hlcc4 = (high + low + close + close)/4. "
+                        "Default hl2, stated on the result (TradingView's own default is close)"
+                    ),
+                },
+                "oscillator_source": {
+                    "type": "string",
+                    "enum": list(_indicators.SOURCES),
+                    "description": (
+                        "Price source of RSI and MACD, same eight names. Default close — the price "
+                        "both are defined on, and TradingView's default"
+                    ),
+                },
+                "ma_type": {
+                    "type": "string",
+                    "enum": list(_indicators.MA_TYPES),
+                    "description": (
+                        "Type of the moving averages and of the bands' basis — TradingView's 'Basis "
+                        "MA Type'. On the bands it moves the basis line only; the deviation stays "
+                        "the population standard deviation of the source. VWMA weighs by IBKR's "
+                        "filtered volume. Default SMA"
+                    ),
+                },
+                "ma_periods": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Lengths of the moving averages to report, in bars, e.g. [25, 50, 100, 200]. None by default",
+                },
+                "band_period": {
+                    "type": "integer",
+                    "description": "Bollinger bands 'Length', in bars. Default 20",
+                },
+                "band_stds": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Bollinger bands 'StdDev' — one band pair per value, e.g. [1, 2, 2.5]. Default [2]",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": (
+                        "TradingView's 'Offset' for the averages and bands, in bars. The values are "
+                        "unchanged; a positive offset draws the line that many bars to the right, so "
+                        "the last bar shows the value computed that many bars earlier, and a negative "
+                        "one draws it to the left, so nothing sits on the last bar. Default 0"
+                    ),
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -589,10 +1112,17 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "code": {"type": "string", "description": "Python strategy code string"},
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
                 "strategy_name": {"type": "string", "description": "Human-readable name", "default": ""},
             },
             "required": ["code", "symbol", "timeframe", "period", "end"],
@@ -606,7 +1136,11 @@ TOOL_DEFINITIONS = [
             "emits an indicator study from a list of indicators; source='backtest' emits a "
             "strategy() script from the most recent stored run_backtest result for the symbol "
             "(real metrics in the header — always use this after run_backtest instead of "
-            "writing PineScript by hand). Output pastes directly into the Pine Editor."
+            "writing PineScript by hand). Output pastes directly into the Pine Editor. "
+            "In an indicator study every length and every price source is a TradingView input: "
+            "the script opens on its defaults (source close) and the user changes them in the "
+            "script's settings — e.g. Source to (H + L)/2 — so say that rather than rewriting "
+            "the script."
         ),
         "input_schema": {
             "type": "object",
@@ -653,10 +1187,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol fetch_market_data reported — a ticker (AAPL) or, for a future, the contract's own symbol (ESZ6), never the root",
+                },
                 "timeframe": {"type": "string", "description": "e.g. '1D'"},
                 "period": {"type": "string", "description": "e.g. '1Y'"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours the cached series covers, as fetch_market_data reported: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -667,14 +1208,24 @@ TOOL_DEFINITIONS = [
         "description": (
             "Preview an order using IBKR's whatif endpoint — returns estimated cost, "
             "commission, margin impact, and buying power effect WITHOUT placing the order. "
-            "Use this before proposing a trade to verify feasibility and cost."
+            "Use this before proposing a trade to verify feasibility and cost. Pass the time in "
+            "force of the order you will propose (tif): the preview is for that order and states "
+            "it; with none it is for a DAY order and says so. The result names the contract it "
+            "priced — for a futures root, the front month it resolved to — with its conid."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker symbol, e.g. AAPL"},
                 "action": {"type": "string", "description": "'BUY' or 'SELL'"},
-                "quantity": {"type": "integer", "description": "Number of shares"},
+                "quantity": {
+                    "type": "number",
+                    "description": (
+                        "Number of shares or contracts. A fraction (e.g. 1000.5) is previewed as given, exactly as "
+                        "it will be proposed; IBKR accepts or refuses it itself — the contract's rules "
+                        "(fraqTypes / fraqInt) and the account's fractional permission both apply."
+                    ),
+                },
                 "order_type": {
                     "type": "string",
                     "description": "'MKT', 'LMT', 'STP' (stop-market), 'STOP_LIMIT', or 'MIDPRICE'. Trailing types (TRAIL/TRAILLMT) are not supported by this tool.",
@@ -692,6 +1243,16 @@ TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Security type of the symbol: STK (default), IND, BOND, FUT (resolves front month), or CASH (FX pair like 'EUR.USD')",
                     "default": "STK",
+                },
+                "tif": {
+                    "type": "string",
+                    "enum": ["DAY", "GTC", "IOC", "OPG"],
+                    "description": (
+                        "Time in force of the order being previewed — the one you will propose. Omitted: "
+                        "the preview is for a DAY order and says so. These four are the ones this tool "
+                        "previews; GTD and the overnight values (OVT, OND) exist per contract and cannot "
+                        "be previewed here"
+                    ),
                 },
             },
             "required": ["symbol", "action", "quantity"],
@@ -1052,10 +1613,17 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Ticker symbol"},
+                "symbol": {
+                    "type": "string",
+                    "description": "The cached symbol — a ticker (AAPL) or a futures contract's own symbol (ESZ6)",
+                },
                 "timeframe": {"type": "string", "description": "Bar size, e.g. 1D, 1H"},
                 "period": {"type": "string", "description": "Lookback period, e.g. 1Y, 6M"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
+                "outside_rth": {
+                    "type": "boolean",
+                    "description": "The hours of the entry to delete: false = regular trading hours (default), true = all hours",
+                },
             },
             "required": ["symbol", "timeframe", "period", "end"],
         },
@@ -1263,6 +1831,11 @@ def _safe_error(tool: str, exc: Exception) -> str:
                 " pacing is per process, the limit per IP — or this process sending a call the pacer warned was"
                 " over the limit. Wait before retrying."
             )
+        if exc.status_code == 503 and exc.detail:
+            return (
+                f"Tool '{tool}' failed: IBKR answered HTTP 503 — not a pacing violation, not retried."
+                f' IBKR\'s message: "{exc.detail}".'
+            )
         if exc.status_code == 503:
             return (
                 f"Tool '{tool}' failed: IBKR gateway answered HTTP 503 repeatedly — unavailable, not a pacing"
@@ -1292,6 +1865,17 @@ def _safe_error(tool: str, exc: Exception) -> str:
     return f"Tool '{tool}' encountered an unexpected error."
 
 
+def _iso_day(value: Any) -> date | None:
+    """A `YYYY-MM-DD` tool argument as a date; None when the argument is absent or blank.
+
+    Raises:
+        ValueError: If the text is not an ISO date — the caller answers with the expected form.
+    """
+    if value is None or str(value).strip() == "":
+        return None
+    return date.fromisoformat(str(value).strip())
+
+
 def _validate_account_id(account_id: str) -> str:
     """Raise ValueError if account_id is not a valid IBKR account ID format."""
     if not _ACCOUNT_ID_RE.match(account_id):
@@ -1312,7 +1896,7 @@ _UNKNOWN_MONEY = "—"
 _WATCHLIST_CONTENTS_LIMIT = 25
 
 
-def _format_vwap(last: Any, timeframe: str) -> str:
+def _format_vwap(last: Any, timeframe: str, outside_rth: bool) -> str:
     """Render the VWAP line, or say why there is no VWAP to render.
 
     VWAP accumulates across one trading session. On daily or coarser bars each
@@ -1328,23 +1912,30 @@ def _format_vwap(last: Any, timeframe: str) -> str:
     year labelled "VWAP". Saying "n/a" is the honest output.
 
     The session is the UTC calendar day of the bars — `indicators.vwap`'s default, and
-    the only clock `add_all` offers. That is right for the bars this tool can hold:
-    `fetch_market_data` never asks for `outsideRth`, and a US or European regular
-    session sits inside one UTC day. It would be wrong for a CME session, which opens
-    at 18:00 New York and crosses midnight UTC an hour later; `indicators.vwap` takes
-    `tz` and `session_open` for that (DATA-R6, 2026-09-17).
+    the only clock `add_all` offers. That is right for a regular-hours series: a US or
+    European regular session sits inside one UTC day. It is wrong for an all-hours one. A
+    CME session opens at 18:00 New York and crosses midnight UTC (DATA-R6, 2026-09-17: on
+    ES minute bars the figure restarted mid-session), and a US stock's post-market runs to
+    20:00 New York, past midnight UTC for the months New York is on standard time. This
+    said "`fetch_market_data` never asks for `outsideRth`" until 2.2.0 made an all-hours
+    series fetchable (2026-10-03), which made that wrong figure printable; an all-hours
+    series now gets the reason instead (2026-10-05). `indicators.vwap` takes `tz` and
+    `session_open` for a caller who knows the session; this tool does not guess one.
 
     Args:
         last: Final row of the indicator frame.
         timeframe: IBKR bar-size string the bars were loaded at.
+        outside_rth: Whether the cached series covers all hours.
 
     Returns:
-        A formatted price for intraday bars, else an explanatory placeholder.
+        A formatted price for regular-hours intraday bars, else the reason there is none.
     """
     if not _analytics.is_intraday_timeframe(timeframe):
         return f"n/a ({timeframe} bars — VWAP is an intraday, single-session measure)"
+    if outside_rth:
+        return "n/a (an all-hours session crosses the UTC day this VWAP restarts on — none is computed for an all-hours series)"
     value = last.get("vwap", float("nan"))
-    return f"{value:.2f}"
+    return _or_na(f"{value:.2f}", [value])
 
 
 def _money(v: float | None) -> str:
@@ -1447,6 +2038,66 @@ def _iso_date(yyyymmdd: Any) -> str | None:
     return f"{text[:4]}-{text[4:6]}-{text[6:]}"
 
 
+# Where the order was placed, and nothing more. Until 2026-11-12 it ended "— read-only via API",
+# which IBKR disproved that day: two orders placed on IBKR Mobile (ES, F) were each modified and
+# cancelled through this package's gated writes (register F47). `get_order_status`'s
+# `cannot_cancel_order` / `order_not_editable` are IBKR's answer for a given order.
+_EXTERNAL_LIVE = "EXTERNAL (mobile/TWS/web portal)"
+
+
+def _order_reference(o: Any) -> str:
+    """IBKR's `order_ref` — the real Live Orders field, snake_case (verified 2026-07-10 against
+    the CP API scrape) — with the spellings this package has seen as fallbacks only."""
+    return str(o.get("order_ref") or o.get("orderRef") or o.get("cOID") or o.get("clientOrderId") or "")
+
+
+def _own_origin(o: Any, external: str) -> str:
+    """An order's origin from its own row: a `CLAUDIA-` reference is definitive; a non-zero
+    clientId is another API client; anything else is external.
+
+    In practice the reference decides, and a modify made elsewhere keeps it: a ClaudIA order whose
+    limit was moved on IBKR Mobile read back with its `CLAUDIA-` reference and its id (2026-11-12).
+    `clientId` is not a Live Orders field — IBKR's page and its
+    OpenAPI spec list none; it is the TWS API's connection id — and on 2026-11-12 no row carried
+    it: two orders placed on IBKR Mobile and one staged through this package (register F47).
+    2026-07-10 had recorded `clientId=0` on both Client Portal API and mobile orders. The branch
+    stays for a row that does carry one. The origin decides nothing about what can be changed:
+    `get_order_status`'s `cannot_cancel_order` / `order_not_editable` do."""
+    if _order_reference(o).startswith("CLAUDIA-"):
+        return "ClaudIA-staged"
+    client_id = o.get("clientId")
+    if client_id not in (None, "", 0, "0", "absent"):
+        return f"API (clientId={client_id})"
+    return external
+
+
+def _order_origin(o: Any, by_id: dict[str, Any], external: str) -> str:
+    """The one origin rule of both order views (`get_live_orders`, `diagnose_orders`).
+
+    A bracket child carries no reference of its own: IBKR puts `order_ref` on the PARENT only
+    and `parentId` on the child (measured 2026-10-18 on Ford, a parent with three attached
+    children; `docs/ibkr-api-behaviors-reference.md`). So a child's origin is its parent's,
+    read through `parentId` from the same response — never its own row's absence of a
+    reference. Until 2026-10-19 both views labelled such a child EXTERNAL "read-only via API",
+    and a model told its user a ClaudIA-staged stop loss could not be cancelled (claudia_ui
+    #36 live acceptance). A child whose parent is not in the list (filled, cancelled) is said
+    to be not determinable from this row, never EXTERNAL: `get_order_status`'s
+    `cannot_cancel_order` is the authority on whether it can be cancelled.
+    """
+    if _order_reference(o).startswith("CLAUDIA-") or o.get("clientId") not in (None, "", 0, "0", "absent"):
+        return _own_origin(o, external)
+    parent_id = o.get("parentId", o.get("parent_order_id"))
+    if parent_id in (None, ""):
+        return external
+    parent = by_id.get(str(parent_id))
+    if parent is None:
+        return (
+            f"attached child of order {parent_id}, which is not in this list — origin not "
+            f"determinable from this row; get_order_status says whether it can be cancelled"
+        )
+    return f"{_own_origin(parent, external)} (attached child of order {parent_id}; IBKR puts the reference on the parent only)"
+
+
 def _today_date() -> date:
     """Today in UTC. A date field carries no timezone, and `ltd`'s own is the exchange's, so
     exactness is not achievable from it; `>=` keeps a contract through its last trade date,
@@ -1455,19 +2106,44 @@ def _today_date() -> date:
 
 
 def _last_trade_key(row: Mapping[str, Any]) -> int:
-    """`ltd` when IBKR supplies one, else `expirationDate`, else 0 for "unknown".
+    """The EARLIER of `ltd` and `expirationDate`, whichever are present; 0 for "unknown".
 
-    They differ: ES Dec-26 reports `expirationDate` 20261218 and `ltd` 20261217 (measured
-    2026-09-20). Trading stops at `ltd`, so that is the field that decides tradeability.
+    IBKR defines `ltd` as "Last trade date of the future contract" and `expirationDate` as
+    "Expiration date of the specific future contract" (/trsrv/futures reference, read
+    2026-09-28), and **neither alone is the last trade date for every root** (claudia_ui
+    gap #71, register F16):
+
+    - ES Dec-26: `expirationDate` 20261218, `ltd` 20261217 — `ltd` is the earlier field
+      (measured 2026-09-20; gap #58 chose `ltd` from ES alone).
+    - CLV6 (NYMEX): `expirationDate` 20260922, `ltd` 20261001 — there `ltd` is the FIRST DAY
+      OF THE CONTRACT MONTH, after trading stopped on the expiration date (CME CL: trading
+      terminates three business days before the 25th calendar day of the month prior to the
+      contract month = 2026-09-22). Measured live 2026-09-24, two days after: a bare `CL`
+      resolved to the expired October contract, its quote a prior close with no bid or ask,
+      and it stayed the front month for as long as IBKR still listed it — gone by day seven
+      (2026-09-29) — where `ltd` alone would have allowed nine days. Every monthly roll.
+      NG has the same shape; DX reports the two equal.
+
+    The earlier date is right for every root this account trades and, by construction, can
+    never keep a contract past either date. Until 2.2.0 this read `ltd` first; claudia_ui
+    carries the same rule in `order_flow._last_trade_key` until its pin moves to the release
+    that has this one, and says so in that docstring.
+
+    Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol
+    (read 2026-09-28) and the CME CL contract specs,
+    https://www.cmegroup.com/markets/energy/crude-oil/light-sweet-crude.contractSpecs.html
+    (scraped 2026-09-24 for claudia_ui #71; the page is script-rendered and answered no plain
+    fetch on 2026-09-28).
     """
+    dates: list[int] = []
     for key in ("ltd", "expirationDate"):
         try:
             value = int(row.get(key) or 0)
         except (TypeError, ValueError):
             value = 0
         if value:
-            return value
-    return 0
+            dates.append(value)
+    return min(dates, default=0)
 
 
 def _still_tradeable(rows: Sequence[Any], today: int) -> list[Any]:
@@ -1493,8 +2169,8 @@ def _sorted_with_front_month(rows: Sequence[IBKRResponse | dict[str, Any]]) -> l
     each root flagged `front_month: true` — the rule `_resolve_snapshot_conid` applies,
     stated in the result. Rows without a parseable date sort first and are never flagged.
 
-    **One field decides.** Ordering and the flag use `_last_trade_key` — `ltd`, falling back
-    to `expirationDate` — the same function that decides tradeability. They used
+    **One rule decides.** Ordering and the flag use `_last_trade_key` — the earlier of `ltd`
+    and `expirationDate` — the same function that decides tradeability. They used
     `_expiration_key`, which read `expirationDate` alone, so the two disagreed about what
     "has a date" means: a tradeable row reporting only `ltd` was never flagged, and where
     the two fields rank differently the front month was chosen by the field this docstring
@@ -1599,7 +2275,7 @@ def _preview_warning_lines(result: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
+def _format_order_preview(result: Mapping[str, Any], headline: str, time_in_force: str = "", contract: str = "") -> str:
     """Render a whatif response for the model, refusal first.
 
     **The refusal is the point.** `error` and `warns` were not read at all until
@@ -1618,6 +2294,10 @@ def _format_order_preview(result: Mapping[str, Any], headline: str) -> str:
     Warnings come from `warn` AND `warns` — see `_preview_warning_lines`.
     """
     lines = [headline]
+    if contract:
+        lines.append(f"  {'Contract:':<22}{contract}")
+    if time_in_force:
+        lines.append(f"  {'Time in force:':<22}{time_in_force}")
     error = result.get("error")
     if error:
         lines.append("  ⚠ IBKR REFUSED THIS ORDER — it would NOT be accepted as submitted:")
@@ -1798,6 +2478,25 @@ class ClaudeToolkit:
         return self._client
 
     @property
+    def store(self) -> SQLiteStore:
+        """The SQLite store the toolkit was built with — trades, the Flex dataset, the session log.
+
+        Public since 2.2.0 so a host does not read the private attribute (register F29). The
+        Drive cache is deliberately not exposed: an accessor would hand a consumer the whole
+        Drive client, uploads and deletes included.
+        """
+        return self._store
+
+    @property
+    def config(self) -> Config:
+        """The configuration the toolkit was built with — paths, the gateway URL, feature keys.
+
+        Public since 2.2.0, for the same reason as `store`. It holds secrets (the Flex token,
+        API keys, hidden from its repr): read the field you need, never log the object.
+        """
+        return self._config
+
+    @property
     def tools(self) -> list[dict[str, Any]]:
         """The tool schemas to hand to Claude, in `TOOL_DEFINITIONS` order, without the
         package-internal `capabilities` field."""
@@ -1858,12 +2557,37 @@ class ClaudeToolkit:
             "fetch_page": self._handle_fetch_page,
         }
         handler = handlers.get(name)
-        if not handler:
-            return f"Unknown tool: {name}", None
-        try:
-            return handler(inputs)
-        except Exception as e:
-            return _safe_error(name, e), None
+        # One audit record per call — the tool, the inputs redacted, the decision, the result's
+        # size, never its text (`audit.py`; MCP security checklist 8.1). Inside `audit.call()`,
+        # so anything the call leads to shares its id.
+        started = time.monotonic()
+        with audit.call():
+            if not handler:
+                audit.record("tool_call", actor="model", tool=name, params=inputs, decision="unknown_tool")
+                return f"Unknown tool: {name}", None
+            try:
+                text, fig = handler(inputs)
+            except Exception as e:
+                audit.record(
+                    "tool_call",
+                    actor="model",
+                    tool=name,
+                    params=inputs,
+                    decision="error",
+                    outcome=type(e).__name__,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+                return _safe_error(name, e), None
+            audit.record(
+                "tool_call",
+                actor="model",
+                tool=name,
+                params=inputs,
+                decision="executed",
+                summary=audit.summary_of(str(text)),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return text, fig
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -1907,32 +2631,96 @@ class ClaudeToolkit:
         return [a.get("accountId", a.get("id", "")) for a in accounts], None
 
     def _fetch_market_data(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Fetch OHLCV bars for a symbol, Drive-cache first, IBKR on miss.
+        """Fetch OHLCV bars for one listing or one futures contract, Drive-cache first, IBKR on miss.
 
-        On a cache hit, loads and summarizes the parquet. On a miss, resolves the
-        conid (STK only — no sec_type parameter on this tool), then calls
-        get_market_history_paginated with up to 3 warmup retries (2s apart) because
-        /iserver/marketdata/history may return 404/500/empty on the first request
-        while IBKR initializes the subscription. Saves the result to the Drive
-        cache. Returns a human-readable summary, not the raw bars.
+        Market-data batch (2026-10-02/03, operator decisions in claudia_ui's status file):
+
+        - `sec_type` is IB's code, STK (default, stated) or FUT; the handler refuses anything
+          else itself, since the schema enum is not enforced server-side.
+        - FUT: a root resolves to the front month by the rule every tool uses (earliest contract
+          still tradeable, gap #58/#71), or `conid` pins one contract, expired ones included —
+          their history is what the handle is for. The bars are that contract's own (thin before
+          it was the front month); there is no continuous series (IBKR: TWS API only).
+        - One contract, one key: a future is cached under its local symbol (ESZ6), so ESU6 and
+          ESZ6 never share an entry and a roll produces a new key by itself. The contract must be
+          nameable (local symbol from /iserver/contract/{conid}/info) or nothing is fetched.
+        - `outside_rth` defaults by type — STK false, FUT true — and is part of the key: IBKR's
+          daily stock bar changed on 20 of 20 days with the flag (probe 2026-10-03).
+        - Stamps are IBKR's and are kept. An all-hours futures bar is stamped at its session
+          OPEN (18:00 ET the evening before for ES; Sunday's stamp is Monday's session; a CME
+          holiday session is one bar), so such a series prints its stamps as opens, in ET, with
+          the reading rule — never a bare date one day early. Nothing computes a session date.
+
+        On a miss the history is read with up to 3 warmup retries (2s apart) because
+        /iserver/marketdata/history may return 404/500/empty on the first request while IBKR
+        initializes the subscription. Returns a human-readable summary, not the raw bars.
         """
         symbol = inputs["symbol"].upper()
+        sec_type = str(inputs.get("sec_type") or "STK").upper()
+        if sec_type not in _FETCH_SEC_TYPES:
+            return (
+                f"sec_type {sec_type!r} is not offered by fetch_market_data; offered (IB codes): "
+                f"{', '.join(_FETCH_SEC_TYPES)}. Nothing was read.",
+                None,
+            )
+        pinned = inputs.get("conid")
+        if pinned is not None and sec_type != "FUT":
+            return (
+                "conid pins a futures contract (sec_type FUT); a stock resolves to its US listing from "
+                "the ticker alone. Nothing was read.",
+                None,
+            )
         period = inputs["period"]
+        if problem := _period_problem(period):
+            # IBKR would answer `ytd` with a window of its own, and the result and the cache key
+            # would both say `ytd`. Refused before anything is resolved, read or cached.
+            return f"{problem} Nothing was read.", None
         bar = inputs.get("bar", "1d")
-        end = inputs.get("end", _TODAY())
+        if problem := _bar_problem(bar):
+            # Second bars: IBKR has them, stamped 60 s apart, and no stamp is changed here.
+            return f"{problem} Nothing was read.", None
+        # The end date and the hours are key parts the indicator and backtest tools require, so
+        # a default is stated, never silent.
+        end = inputs.get("end") or _TODAY()
+        end_note = f"ending {end} (as given)" if inputs.get("end") else f"ending {end} (today, by default)"
+        outside, hours_note, hours_word = _hours(inputs, default=sec_type == "FUT", why=f"by default for {sec_type}")
         timeframe = bar.upper()
 
-        if self._cache.check(symbol, timeframe, period, end):
-            df = self._cache.load(symbol, timeframe, period, end)
+        resolved: _Resolved | None = None
+        if sec_type == "FUT":
+            resolved = self._futures_listing(symbol, pinned)
+            if resolved.error:
+                return resolved.error, None
+            cache_symbol = str(resolved.local_symbol)
+            label = f"{cache_symbol} FUT"
+        else:
+            cache_symbol = symbol
+            label = f"{symbol} STK" + (" (by default)" if not inputs.get("sec_type") else "")
+        futures_all_hours = sec_type == "FUT" and outside
+
+        if self._cache.check(cache_symbol, timeframe, period, end, outside_rth=outside):
+            df = self._cache.load(cache_symbol, timeframe, period, end, outside_rth=outside)
+            # The key is the symbol, not the listing: say which listing the bars came from, or
+            # that this entry was saved before that was recorded — never nothing.
+            row = self._cache.entry(cache_symbol, timeframe, period, end, outside_rth=outside) or {}
+            served = _describe_listing(row["listing"]) if row.get("listing") else "listing not recorded for this entry"
+            # The same key answers all day, so a hit says when IBKR was actually read.
+            cached_at = row.get("cached_at")
+            read_note = (
+                f"read from IBKR {_et_stamp(datetime.fromisoformat(cached_at))}"
+                if cached_at
+                else "read time not recorded for this entry"
+            )
             return (
-                f"Cache HIT — loaded {symbol} {timeframe} ({period}) from Drive. "
-                f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}.",
+                f"Cache HIT — loaded {label} {timeframe} ({period}) {end_note}, {hours_note}, from Drive — {served}; "
+                f"{read_note}. {_span_text(df, bar, futures_all_hours)}.",
                 None,
             )
 
-        resolved = self._resolve_snapshot_conid(symbol, "STK", None)
-        if resolved.error:
-            return f"{resolved.error} Is IBKR connected?", None
+        if resolved is None:
+            resolved = self._resolve_snapshot_conid(symbol, "STK", None)
+            if resolved.error:
+                return f"{resolved.error} Is IBKR connected?", None
         conid = resolved.conid
 
         # iserver/marketdata/history first-call behavior: IBKR may return 404 or 500
@@ -1945,7 +2733,7 @@ class ClaudeToolkit:
         raw = None
         for attempt in range(3):
             try:
-                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar)
+                raw = self._client.get_market_history_paginated(conid, period=period, bar=bar, outside_rth=outside)
                 if raw and raw.get("data"):
                     break
             except IBKRAPIError:
@@ -1954,19 +2742,32 @@ class ClaudeToolkit:
                 time.sleep(2)
         if not raw or not raw.get("data"):
             return (
-                f"IBKR returned no data for {symbol} (period={period}, bar={bar}) "
+                f"IBKR returned no data for {label} (period={period}, bar={bar}, {hours_note}) "
                 f"after 3 attempts. Check that the IBKR gateway is authenticated and "
                 f"that the period/bar combination is valid for this instrument."
             ), None
 
-        df = _bars_to_dataframe(raw)
-        span = f"{len(df)} bars from {df.index[0].date()} to {df.index[-1].date()}"
+        read_at = _NOW()
+        df, still_open = _complete_bars(_bars_to_dataframe(raw), bar, read_at)
+        if df.empty:
+            return (
+                f"{len(still_open)} bar(s) of {label} {timeframe} ({period}, {hours_note}) read from IBKR "
+                f"{_et_stamp(read_at)}, none kept — {_SETTLE_RULE}. Nothing saved.",
+                None,
+            )
+        span = _span_text(df, bar, futures_all_hours)
+        fetched = (
+            f"Fetched {label} {timeframe} ({period}) {end_note}, {hours_note}, from IBKR — {resolved.describe()}: "
+            f"{span}; read from IBKR {_et_stamp(read_at)}."
+        )
+        if len(still_open):
+            fetched += f" {_not_kept_text(still_open)}"
 
         incomplete = raw.get("ibkr_core_warning")
         if incomplete:
             # Deliberately NOT cached. The Drive cache is shared across machines and its
-            # key is (symbol, timeframe, period, end), so a partial window stored under the
-            # requested period answers every later request for that period, on every
+            # key is (symbol, timeframe, period, end, hours), so a partial window stored under
+            # the requested period answers every later request for that period, on every
             # machine, as though it were complete. This repo has already paid for that
             # once — the 2026-08-05 `startTime` incident needed a cache purge because "a
             # code fix is not sufficient: `_fetch_market_data` returns 'Cache HIT' and
@@ -1975,35 +2776,136 @@ class ClaudeToolkit:
             # (audit finding API-02, 2026-09-16).
             return (
                 f"{incomplete}\n\n"
-                f"Fetched {symbol} {timeframe} ({period}) from IBKR: {span}. "
+                f"{fetched} "
                 f"NOT saved to the Drive cache — storing this under '{period}' would label a "
                 f"partial window as a complete one for every later request. Re-run with a "
                 f"shorter period or a larger bar size to get a cacheable, complete result.",
                 None,
             )
 
-        self._cache.save(df, symbol, timeframe, period, end)
+        self._cache.save(df, cache_symbol, timeframe, period, end, outside_rth=outside, listing=resolved.listing())
         return (
-            f"Fetched {symbol} {timeframe} ({period}) from IBKR: {span}. Saved to Drive cache.",
+            f"{fetched} Saved to Drive cache under {cache_symbol} ({hours_word}) — use symbol {cache_symbol} and "
+            f"outside_rth={'true' if outside else 'false'} with add_indicators / run_backtest / get_analytics.",
             None,
+        )
+
+    def _futures_listing(self, root: str, pinned: Any) -> _Resolved:
+        """One futures contract, named in IB's strings: the pinned conid, or the root's front month.
+
+        Fails closed: a contract IBKR cannot describe (no local symbol from
+        /iserver/contract/{conid}/info) has no key to be cached under and no name to be shown,
+        so the error says nothing was fetched. "expires" becomes "expired" past the maturity
+        date — an expired contract's history is exactly what `conid` is for (IBKR served ESU5
+        12 months after expiry and refused ESM5 at 15; the boundary is not established).
+        """
+        if pinned is not None:
+            try:
+                conid = int(pinned)
+            except (TypeError, ValueError):
+                return _Resolved(0, None, f"conid {pinned!r} is not an integer. Nothing was read.")
+        else:
+            front = self._resolve_snapshot_conid(root, "FUT", None)
+            if front.error:
+                return front
+            conid = front.conid
+        identity = self._futures_identity(conid)
+        if not identity:
+            return _Resolved(
+                0,
+                None,
+                f"IBKR could not describe contract {conid} (no local symbol from /iserver/contract/{conid}/info): "
+                f"nothing fetched, nothing cached.",
+            )
+        expires = identity.get("expires")
+        when = ""
+        if expires:
+            when = f" · {'expired' if date.fromisoformat(expires) < _today_date() else 'expires'} {expires}"
+        name = " · ".join(
+            part for part in (identity.get("name"), identity["local_symbol"], identity.get("month")) if part
+        )
+        return _Resolved(
+            conid,
+            self._listing_currency(conid),
+            None,
+            name=f"{name}{when}",
+            exchange=identity.get("exchange"),
+            root=root,
+            local_symbol=identity["local_symbol"],
+        )
+
+    def _cache_miss_text(self, symbol: str, timeframe: str, period: str, end: str, outside_rth: bool) -> str:
+        """What a tool that reads the cache says when the key is not there.
+
+        "No cached data … fetch it first" sent the model back to repeat a fetch it had just
+        made under another end date — the fetch defaults `end` to today, these tools require
+        it. So the miss lists the symbol's cached windows to match, each with its hours (a key
+        part since step 2), names the default when there are none, and — a futures root (`ES`)
+        being no cache symbol — points a root at the contracts cached for it (step 1 and 2,
+        2026-10-02/03).
+        """
+        asked = f"{symbol} {timeframe} {period} ending {end} ({'all hours' if outside_rth else 'regular hours'})"
+        rows = self._cache.list_cached()
+
+        def _window(e: Mapping[str, Any]) -> str:
+            hours = "all hours" if e.get("outside_rth") else "regular hours"
+            name = (e.get("listing") or {}).get("name")
+            named = f"{hours} — {name}" if name else hours
+            return f"{e.get('symbol')} {e.get('timeframe')} {e.get('period')} ending {e.get('end')} ({named})"
+
+        have = [_window(e) for e in rows if str(e.get("symbol", "")).upper() == symbol.upper()]
+        contracts = [
+            _window(e) for e in rows if str((e.get("listing") or {}).get("root", "")).upper() == symbol.upper()
+        ]
+        if have:
+            # Live 2026-10-03: `ES` the stock was cached beside ESZ6; the miss named neither.
+            also = f" {symbol} is also the root of cached contracts: {'; '.join(contracts)}." if contracts else ""
+            return f"No cached data for {asked}. Cached for {symbol}: {'; '.join(have)}.{also} Call again with one of those."
+        if contracts:
+            return (
+                f"Nothing is cached under {symbol}: it is a futures root, and a future is cached under its own "
+                f"contract symbol. Cached for root {symbol}: {'; '.join(contracts)}. Call again with that symbol."
+            )
+        return (
+            f"Nothing is cached for {symbol}. Fetch it first with fetch_market_data, then call this "
+            f"with the symbol, end date and outside_rth it reports (its end defaults to today when none is given)."
         )
 
     def _check_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return HIT/MISS for a specific symbol/timeframe/period/end combination."""
-        hit = self._cache.check(inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"])
+        outside, _, hours_word = _hours(inputs, default=False, why="by default")
+        hit = self._cache.check(
+            inputs["symbol"], inputs["timeframe"], inputs["period"], inputs["end"], outside_rth=outside
+        )
         label = "HIT" if hit else "MISS"
-        return f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']}", None
+        return (
+            f"Cache {label} for {inputs['symbol']} {inputs['timeframe']} {inputs['period']}–{inputs['end']} ({hours_word})",
+            None,
+        )
 
     def _list_cache(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """List every dataset in the Drive market-data cache with row count and cache date.
 
         Returns "Drive cache is empty." when nothing is cached. Each line is
-        "<key>: <rows> bars, cached <YYYY-MM-DD>", tolerating missing rows/cached_at.
+        "<key>: <rows> bars, <hours>, cached <YYYY-MM-DD>", tolerating missing rows/cached_at,
+        followed by the listing the bars came from when the entry records one (saved from 2.2.0
+        on). A row without the hours field was written before 2.2.0 and no 2.2.0 key reaches it;
+        it is named legacy rather than mistaken for current.
         """
         entries = self._cache.list_cached()
         if not entries:
             return "Drive cache is empty.", None
-        lines = [f"- {e['key']}: {e.get('rows', '?')} bars, cached {e.get('cached_at', '?')[:10]}" for e in entries]
+
+        def _hours_of(e: Mapping[str, Any]) -> str:
+            if "outside_rth" not in e:
+                return "legacy (pre-2.2.0 key, unreachable from 2.2.0)"
+            return "all hours" if e["outside_rth"] else "regular hours"
+
+        lines = [
+            f"- {e['key']}: {e.get('rows', '?')} bars, {_hours_of(e)}, cached {e.get('cached_at', '?')[:10]}"
+            + (f" — {_describe_listing(e['listing'])}" if e.get("listing") else "")
+            for e in entries
+        ]
         return f"Cached datasets ({len(entries)}):\n" + "\n".join(lines), None
 
     def _get_account_summary(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -2065,7 +2967,14 @@ class ClaudeToolkit:
         """Query trade history from two complementary sources — choose based on recency and origin needs.
 
         ## source='store' — Flex (full history, all origins)
-        Reads local SQLite populated by sync_flex_trades. Flex Activity Statements are
+        Reads the Flex dataset through `flex_dataset.FlexDataset` — the statement executions
+        (`flex_trade`, `source='flex'`), one line each, dated by IBKR's trade date, and their
+        realised total (`fifoPnlRealized`, no open/close filter). Until 2.2.0 this branch read
+        the legacy `trades` table, whose total left out every row imported before 2026-05-26
+        (822 of them carry no figure) and which holds 133 executions twice (register F20);
+        the dashboard in claudia_ui read `flex_trade`, so the model and the screen disagreed
+        on lifetime realised P&L. `start`/`end` are trade dates, both inclusive — the legacy
+        comparison was against a timestamp and silently dropped the end day. Flex Activity Statements are
         account-level reports, not per-platform logs, so they cover trades regardless of
         which client placed them (CP API, mobile app, TWS, web portal) — the specific
         enumeration of origins is empirically confirmed for live CP-API trades by
@@ -2073,9 +2982,9 @@ class ClaudeToolkit:
         by a single official page enumerating all four origins for Flex specifically. No
         date limit on queries — full account history from the first Flex sync.
         Availability: T+1 (today's trades are never present; yesterday's trades become
-        available after IBKR's overnight processing). Also includes any executions captured
-        live via the WebSocket `str` topic (`mcp_server.py --stream`), which land in the
-        same `trades` table in real time.
+        available after IBKR's overnight processing). A fill captured live before its
+        statement (source='live', or `mcp_server.py --stream`) is not listed here: it has no
+        trade date and no realised figure until the statement delivers both.
         Source: https://www.interactivebrokers.com/campus/glossary-terms/activity-statements/
 
         ## source='live' — CP API /iserver/account/trades (last 7 days max)
@@ -2092,31 +3001,60 @@ class ClaudeToolkit:
         source = inputs.get("source", "store")
         symbol = inputs.get("symbol")
         if source == "store":
-            trades = self._store.get_trades(
-                symbol=symbol,
-                start=inputs.get("start"),
-                end=inputs.get("end"),
-            )
-            if not trades:
+            try:
+                start, end = _iso_day(inputs.get("start")), _iso_day(inputs.get("end"))
+            except ValueError:
+                return "start and end must be dates in YYYY-MM-DD form.", None
+            try:
+                with FlexDataset.open(self._config.sqlite_path) as flex:
+                    executions = flex.executions(symbol=symbol, start=start, end=end)
+            except StoreError:
+                return (
+                    "No Flex dataset in the local store yet. "
+                    "Run sync_flex_trades to pull the statements from IBKR (T+1 — yesterday's trades available today)."
+                ), None
+            if not executions:
                 return (
                     "No trades found in Flex store for the requested period. "
                     "Run sync_flex_trades to pull the latest data from IBKR (T+1 — yesterday's trades available today)."
                 ), None
-            total_pnl = sum(t.get("realized_pnl") or 0.0 for t in trades)
-            has_pnl = any(t.get("realized_pnl") is not None for t in trades)
+            # One read path for realised P&L (register F20): the sum of IBKR's own
+            # fifoPnlRealized over the statement executions in the filter, no open/close
+            # filter — the rule the dashboard windows apply (`FlexDataset.realised_window`).
+            total = sum(e.realised for e in executions)
+            by_class: dict[str, float] = {}
+            for e in executions:
+                by_class[e.asset_class or "?"] = by_class.get(e.asset_class or "?", 0.0) + e.realised
+            currencies = sorted({e.currency for e in executions if e.currency})
+            if len(currencies) == 1:
+                unit = f" {currencies[0]}"
+            elif currencies:
+                unit = f" (mixed currencies: {', '.join(currencies)} — a sum across them, not one currency)"
+            else:
+                unit = ""
             lines = [
-                f"- {t['time'][:10]} {t['symbol']} [{t.get('asset_class') or '?'}] "
-                f"{t['side']} {t['size']} @ {t['price']} "
-                f"comm={t.get('commission', 0):.2f}"
-                + (f" pnl={t['realized_pnl']:+.2f}" if t.get("realized_pnl") is not None else "")
-                for t in trades[:50]
+                f"- {e.trade_date or '?'} {e.symbol} [{e.asset_class or '?'}] "
+                f"{'BUY' if e.quantity > 0 else 'SELL'} {abs(e.quantity)} @ {e.price} "
+                f"comm={e.commission:.2f} pnl={e.realised:+.2f}"
+                for e in executions[:50]
             ]
-            suffix = f"  (showing first 50 of {len(trades)})" if len(trades) > 50 else ""
-            pnl_line = f"\nTotal realized P&L: {total_pnl:+.2f}" if has_pnl else ""
+            suffix = f"  (showing first 50 of {len(executions)})" if len(executions) > 50 else ""
+            split = (
+                "\nBy asset class: "
+                + ", ".join(f"{k} {v:+.2f}" for k, v in sorted(by_class.items(), key=lambda kv: -abs(kv[1])))
+                if len(by_class) > 1
+                else ""
+            )
+            # The statements' own `toDate` — what the store holds — not the newest trade date:
+            # a weekday with no fills still has a statement (claudia_ui #79).
+            held = statement_through(self._config.sqlite_path)
             return (
-                f"Trade history — Flex store ({len(trades)} total, all origins incl. mobile/TWS){suffix}:\n"
+                f"Trade history — Flex statements through {held or 'an unreadable date'} "
+                f"({len(executions)} executions, all origins incl. mobile/TWS){suffix}:\n"
                 + "\n".join(lines)
-                + pnl_line
+                + f"\nTotal realized P&L: {total:+.2f}{unit}"
+                + split
+                + "\nFills since the last statement are not in this list or its total — use source='live'."
             ), None
         # source == 'live'
         # Note: CP API /iserver/account/trades is session-scoped — mobile/TWS-placed
@@ -2177,8 +3115,14 @@ class ClaudeToolkit:
         ## Availability timing (T+1)
         Flex data is generated by IBKR's overnight batch processing. Today's trades are NEVER
         present in Flex on the same calendar day they execute. The Flex file for a given
-        trade date becomes available the following calendar day. This T+1 behavior is observed;
-        IBKR does not publish a specific daily cutoff time.
+        trade date becomes available the following calendar day. IBKR publishes what a day's
+        statement *includes* — "The statement cutoff time for commodities is generally 5:15 PM
+        EST, and the statement cutoff time for securities is generally 8:20 PM EST" (Client
+        Portal statements guide,
+        https://www.ibkrguides.com/clientportal/performanceandstatements/statements.htm) — and
+        no retrieval time; `store.newest_statement_day` is the rule. (This docstring said IBKR
+        publishes no cutoff until 2.2.0: register F19 corrected `flex_query.py` and left this
+        copy.)
 
         ## For today's trades
         Use get_pa_transactions (Portfolio Analyst back-office data — all origins, faster
@@ -2202,6 +3146,10 @@ class ClaudeToolkit:
         trades = flex.fetch_trades(account_id)
         cov = self._store.get_trade_date_coverage()
         archive = flex.last_archive_result
+        backup = flex.last_backup_result
+        # A pull is the one thing that can change whether the dataset is sound, so it is
+        # re-checked here, for every caller — the model, the MCP server, a host's startup.
+        validity = validate_dataset(self._config.sqlite_path)
         self._store.log_entry(
             "flex_sync",
             account=account_id,
@@ -2210,6 +3158,8 @@ class ClaudeToolkit:
             total=cov.get("total_trades"),
             archive_ok=archive.ok if archive else None,
             archive_reason=archive.reason if archive and not archive.ok else None,
+            backup=backup.status if backup else None,
+            valid=validity.ok,
         )
 
         lines = []
@@ -2226,6 +3176,13 @@ class ClaudeToolkit:
             )
         lines.append(f"Flex sync complete: {len(trades)} trades fetched for account {account_id}.")
         lines.extend(_format_coverage(cov))
+        if backup is not None and (line := _BACKUP_LINES.get(backup.status)):
+            lines.append(line + (f" {backup.reason}" if backup.reason else ""))
+        if not validity.ok:
+            lines.append(
+                f"⚠ Trade dataset failed validation after the sync — {validity.summary}. "
+                "Realised P&L computed from these rows is unverified until this is resolved."
+            )
         return "\n".join(lines), None
 
     def _sync_flex_archive(self, inputs: dict[str, Any]) -> tuple[str, Any]:
@@ -2331,7 +3288,13 @@ class ClaudeToolkit:
                 None,
             )
 
-        db_ids = self._store.get_all_execution_ids()
+        # The Flex dataset's tradeIDs — what every reader reports — not the legacy table's
+        # (register F20). An unreadable dataset holds none, so every XML tradeID is missing.
+        try:
+            with FlexDataset.open(self._config.sqlite_path) as flex:
+                db_ids: frozenset[str] = flex.trade_ids()
+        except StoreError:
+            db_ids = frozenset()
         now = datetime.now(UTC).isoformat()
         all_xml_ids: set[str] = set()
         file_lines: list[str] = []
@@ -2410,7 +3373,7 @@ class ClaudeToolkit:
         lines = [
             "Flex Import Integrity Check",
             f"  {len(xml_files)} XML file(s) in Drive account_data/",
-            f"  {len(db_ids)} execution_ids in SQLite trades table",
+            f"  {len(db_ids)} tradeIDs in the Flex dataset",
             "",
             *file_lines,
             "",
@@ -2427,10 +3390,12 @@ class ClaudeToolkit:
         return "\n".join(lines), None
 
     def _get_live_orders(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Return working orders (all statuses except Filled/Cancelled/Expired) across all instrument types.
+        """Return working orders (all statuses except Filled/Cancelled/ApiCancelled/Expired) across all instrument types.
 
         Origin is determined from the order_ref prefix ('CLAUDIA-' = ClaudIA-staged) rather
-        than clientId, which is unreliable — both CP API and mobile orders can show clientId=0.
+        than clientId, which this endpoint does not document and did not send on any row on
+        2026-11-12 (`_own_origin`). Origin is where an order was placed, not whether it can
+        be changed — IBKR's per-order flags on `get_order_status` answer that (register F47).
         order_ref is IBKR's real Live Orders field (snake_case); orderRef/cOID/clientOrderId
         are kept as fallbacks only (see claudia_ui's docs/project-status.md Known Gaps in that repo, found 2026-07-10).
         """
@@ -2451,38 +3416,33 @@ class ClaudeToolkit:
         if not orders:
             return "No open orders.", None
         lines = []
+        by_id = {str(o.get("orderId")): o for o in orders}
         for o in orders:
             ticker = o.get("ticker") or o.get("symbol") or "?"
             side = o.get("side", "?")
             qty = o.get("totalSize", "?")
             price = o.get("price", "MKT")
             status = o.get("status", "?")
-            tif = o.get("timeInForce") or o.get("tif") or ""
-            order_ref = (
-                o.get("order_ref")  # IBKR's real Live Orders field (snake_case) — verified
-                # against docs/audits/audit-evidence/scrapes/cpapi-v1.md
-                or o.get("orderRef")  # kept in case IBKR ever adds a camelCase alias
-                or o.get("cOID")
-                or o.get("clientOrderId")
-                or ""
-            )
-            client_id = o.get("clientId")
-            # Determine origin: CLAUDIA-prefixed cOID is definitive; clientId is unreliable
-            # because both ClaudIA (Client Portal API) and mobile orders may show clientId=0
-            if order_ref.startswith("CLAUDIA-"):
-                origin = "ClaudIA-staged"
-            elif client_id and client_id != 0:
-                origin = f"API (clientId={client_id})"
-            else:
-                origin = "EXTERNAL (mobile/TWS/web portal) — read-only via API"
+            # The row's `timeInForce` is NOT shown as the order's TIF: it reads `CLOSE` for a
+            # DAY order — in no IBKR enum — measured on a stock (2026-09-24) and on a future
+            # (ES stop, 2026-10-02), and "TIF=CLOSE" reads as an at-the-close order. IBKR's
+            # own sentence for the order (`orderDesc`, e.g. "Buy 1 F Limit 5.10, Day") says it
+            # in words; the raw field is printed under its own name only without one (F8).
+            description = " ".join(str(o.get("orderDesc") or "").split())
+            raw_tif = o.get("timeInForce") or o.get("tif") or ""
+            order_ref = _order_reference(o)
+            # One rule for both views (`_order_origin`): the reference is definitive, clientId
+            # unreliable, and a bracket child reads its parent's origin through `parentId`.
+            origin = _order_origin(o, by_id, external=_EXTERNAL_LIVE)
             # outsideRTH decides when a stop on a US future can trigger. The row carries
             # it undocumented — measured 2026-09-04: False on a stock GTC limit, None on an
             # ES futures limit — so three states, and None must read as not reported.
             rth = o.get("outsideRTH")
             rth_str = "not-reported" if not isinstance(rth, bool) else ("yes" if rth else "no")
+            said = f'IBKR: "{description}"' if description else f"timeInForce={raw_tif}"
             line = (
                 f"- orderId={o.get('orderId', '?')} {ticker} {side} {qty} @ {price} "
-                f"[{status}] TIF={tif} outsideRTH={rth_str} origin={origin}"
+                f"[{status}] {said} outsideRTH={rth_str} origin={origin}"
             )
             if order_ref and not order_ref.startswith("CLAUDIA-"):
                 line += f" ref={order_ref}"
@@ -2508,17 +3468,13 @@ class ClaudeToolkit:
         # Show every order with all fields + note which would be filtered
         terminal = {"Filled", "Cancelled", "ApiCancelled", "Expired"}
         lines = []
+        by_id = {str(o.get("orderId")): o for o in orders}
         for o in orders:
             status = o.get("status", "MISSING")
             filtered = " [FILTERED by get_live_orders]" if status in terminal or not status else ""
-            order_ref = o.get("order_ref") or o.get("orderRef") or o.get("cOID") or ""
+            order_ref = _order_reference(o)
             client_id = o.get("clientId", "absent")
-            if order_ref.startswith("CLAUDIA-"):
-                origin = "ClaudIA-staged"
-            elif client_id not in (0, "0", "absent", None):
-                origin = f"API (clientId={client_id})"
-            else:
-                origin = "EXTERNAL"
+            origin = _order_origin(o, by_id, external="EXTERNAL")
             lines.append(
                 f"orderId={o.get('orderId')} ticker={o.get('ticker', o.get('symbol'))} "
                 f"side={o.get('side')} qty={o.get('totalSize')} price={o.get('price')} "
@@ -2785,28 +3741,21 @@ class ClaudeToolkit:
         return f"FYI Notifications ({count}):\n" + "\n".join(lines), None
 
     def _add_indicators(self, inputs: dict[str, Any]) -> tuple[str, Any]:
-        """Compute RSI, MACD, Bollinger Bands, ATR, VWAP, Stochastic, and Williams %R from cached bars."""
+        """Indicators on the last cached bar, with TradingView's settings — see `_indicator_report`."""
         symbol = inputs["symbol"].upper()
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
-        if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached data for {symbol} {timeframe} {period}. Fetch it first with fetch_market_data.", None
-        df = self._cache.load(symbol, timeframe, period, end)
-        df = _indicators.add_all(df)
-        last = df.iloc[-1]
-        lines = [
-            f"Indicators for {symbol} (last bar: {df.index[-1].date()}):",
-            f"  RSI(14):          {last.get('rsi', float('nan')):.1f}",
-            f"  MACD:             {last.get('macd', float('nan')):.4f}  Signal: {last.get('macd_signal', float('nan')):.4f}",
-            f"  BB Upper/Mid/Low: {last.get('bb_upper', float('nan')):.2f} / {last.get('bb_mid', float('nan')):.2f} / {last.get('bb_lower', float('nan')):.2f}",
-            f"  ATR(14):          {last.get('atr', float('nan')):.4f}",
-            f"  VWAP:             {_format_vwap(last, timeframe)}",
-            f"  Stoch %K/%D:      {last.get('stoch_k', float('nan')):.1f} / {last.get('stoch_d', float('nan')):.1f}",
-            f"  Williams %R:      {last.get('williams_r', float('nan')):.1f}",
-            f"  Volume Ratio:     {last.get('volume_ratio', float('nan')):.2f}x avg",
-        ]
-        return "\n".join(lines), None
+        settings = _indicator_settings(inputs)
+        if isinstance(settings, str):
+            return settings, None
+        outside, hours_note, _ = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return self._cache_miss_text(symbol, timeframe, period, end, outside), None
+        df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
+        row = self._cache.entry(symbol, timeframe, period, end, outside_rth=outside)
+        header = f"Indicators for {symbol} {timeframe}, {hours_note} ({_last_bar_text(df, row)}):"
+        return _indicator_report(df, settings, header, timeframe, outside), None
 
     def _run_backtest(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Execute a vectorised backtest strategy on cached OHLCV bars and return performance metrics."""
@@ -2816,9 +3765,10 @@ class ClaudeToolkit:
         end = inputs["end"]
         code = inputs["code"]
         strategy_name = inputs.get("strategy_name", "")
-        if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
-        df = self._cache.load(symbol, timeframe, period, end)
+        outside, hours_note, _ = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return self._cache_miss_text(symbol, timeframe, period, end, outside), None
+        df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
         # Annualise with the bar size actually backtested, the same way _get_analytics
         # does. Hardcoding 252 here made run_backtest and get_analytics disagree by
         # sqrt(periods/252) on identical bars — 8.8x for 5-minute data — and the wrong
@@ -2852,7 +3802,7 @@ class ClaudeToolkit:
         except Exception as exc:
             log.warning("_run_backtest: failed to persist result to store: %s", redact_error(exc))
         lines = [
-            f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period})",
+            f"Backtest: {strategy_name or 'Unnamed'} on {symbol} {timeframe} ({period}, {hours_note})",
             f"  Total Return:  {result.total_return:.1%}",
             f"  Sharpe Ratio:  {result.sharpe:.2f}",
             f"  Sortino Ratio: {result.sortino:.2f}",
@@ -2920,15 +3870,39 @@ class ClaudeToolkit:
         IND, BOND, FUT (front month), or CASH ('BASE.QUOTE'). OPT is not supported.
         Price mapping per order type follows the CP API place-order spec.
         """
-        # Order type names match IBKR CP API place-order field spec. Only types this
-        # tool can fully parameterize are admitted: TRAIL/TRAILLMT need trailingAmt/
-        # trailingType (not exposed here); MOC/LOC are not in the documented type list.
-        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+        # Order type names are IBKR's (OpenAPI `orderType` enum: MKT, LMT, STP, STOP_LIMIT,
+        # MIDPRICE, TRAIL, TRAILLMT). Only the types this tool can fully parameterize are
+        # offered: TRAIL/TRAILLMT need trailingAmt/trailingType, which it does not take.
+        # MOC/LOC are NOT offered either, and not because they are undocumented — this comment
+        # said "not in the documented type list" until 2026-10-05, which holds for that enum
+        # only: IBKR's order-type pages document `"orderType": "MOC"` / `"LOC"` for the Web
+        # API, and a stock's contract rules list them. Whether the gateway accepts them is
+        # unmeasured, so they are not previewed here (docs/order-management-examples.md
+        # § Time in force, part 5).
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
         _VALID_ACTIONS = frozenset({"BUY", "SELL"})
         _VALID_ORDER_TYPES = frozenset({"MKT", "LMT", "STP", "STOP_LIMIT", "MIDPRICE"})
+        # Four of the five values in IBKR's `tif` enum — "Allowed values: DAY, IOC, GTC, OPG,
+        # PAX" (https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order;
+        # the place-order page above carries no TIF list, which this comment used to cite).
+        # PAX is defined nowhere in IBKR's documentation (searched 2026-10-05) and is in neither
+        # F's nor ES's contract rules, so it is not offered; GTD, OVT and OND are in no
+        # enum and are returned per contract by /iserver/contract/rules — not offered here.
+        # A preview is for ONE time in force and says which (register F7): every preview used
+        # to be sent as DAY, silently, so a GTC order was previewed as a different order than
+        # the one proposed.
+        _VALID_TIFS = ("DAY", "GTC", "IOC", "OPG")
+        given_tif = inputs.get("tif")
+        tif = str(given_tif).upper() if given_tif else "DAY"
         symbol = inputs["symbol"].upper()
         action = inputs["action"].upper()
-        quantity = int(inputs["quantity"])
+        # A fraction is previewed AS GIVEN (register F37, claudia_ui #18): `int()` previewed 1000 for
+        # a 1000.5 ticket, so the preview did not describe the order about to be proposed. IBKR's
+        # whatif takes `quantity` as a float ("Used to designate the total number of shares traded",
+        # archived reference) and accepts a fraction where the contract's rules permit it (measured
+        # 2026-10-06: EUR.USD 1000.5 priced; CHF.USD 1000.5 → IBKR's own HTTP 500). A whole number
+        # stays an int, as every preview until now was sent.
+        quantity = _whole_or_fraction(inputs["quantity"])
         order_type = inputs.get("order_type", "MKT").upper()
         limit_price = inputs.get("limit_price")
         stop_price = inputs.get("stop_price")
@@ -2938,8 +3912,12 @@ class ClaudeToolkit:
             return f"Invalid action {action!r}. Must be BUY or SELL.", None
         if order_type not in _VALID_ORDER_TYPES:
             return f"Invalid order_type {order_type!r}. Must be one of: {', '.join(sorted(_VALID_ORDER_TYPES))}.", None
-        if quantity <= 0:
-            return f"Invalid quantity {quantity}. Must be a positive integer.", None
+        if not math.isfinite(quantity) or quantity <= 0:
+            # `1e400` is valid JSON and parses to `inf`; `inf <= 0` is False, and the old `int()` raised
+            # before any request — so not finite is refused here, never POSTed as `Infinity` (review).
+            return f"Invalid quantity {quantity}. Must be a positive number.", None
+        if tif not in _VALID_TIFS:
+            return f"Invalid tif {tif!r}. Must be one of: {', '.join(_VALID_TIFS)}.", None
         if order_type == "LMT" and limit_price is None:
             return "order_type='LMT' requires limit_price.", None
         if order_type == "STP" and stop_price is None:
@@ -2954,6 +3932,16 @@ class ClaudeToolkit:
         if resolved.error:
             return resolved.error, None
         conid = resolved.conid
+        # The result names the contract it priced, with its conid (claudia_ui gap #96): the
+        # model proposes with a conid only when a result has shown it one, and this result
+        # used to print just the symbol it was asked for. A future is named in IB's strings
+        # by the function the market-data tools use; one IBKR cannot describe keeps the
+        # resolver's listing ("name unknown", never a guess) and the preview still runs.
+        listing = resolved
+        if sec_type == "FUT":
+            named = self._futures_listing(symbol, conid)
+            if not named.error:
+                listing = named
 
         account_id, err = self._first_account_id()
         if err:
@@ -2963,12 +3951,12 @@ class ClaudeToolkit:
             "conid": conid,  # IBKR requires int
             "orderType": order_type,
             "side": action,
-            "quantity": int(quantity),  # int matches place_order convention
-            "tif": "DAY",
+            "quantity": quantity,  # an int for a whole number, the fraction itself otherwise (F37)
+            "tif": tif,
         }
         if sec_type in ("FUT", "FOP"):
             # Required for US Futures and Futures Options — CME Group Rule 536-B
-            # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+            # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
             #
             # `extOperator` is documented beside `manualIndicator`, but IBKR rejects any
             # non-empty value on this account class as undocumented field 8089 — the
@@ -2991,8 +3979,9 @@ class ClaudeToolkit:
             order["auxPrice"] = float(stop_price)
 
         result = self._client.get_order_preview(account_id, order)
-        headline = f"Order Preview: {action} {quantity} {symbol} ({order_type})"
-        return _format_order_preview(result, headline), None
+        headline = f"Order Preview: {action} {quantity} {symbol} ({order_type}, {tif})"
+        stated = tif if given_tif else "DAY — none was given, so this preview is for a DAY order"
+        return _format_order_preview(result, headline, time_in_force=stated, contract=listing.describe()), None
 
     def _get_pnl(self, inputs: dict[str, Any]) -> tuple[str, Any]:
         """Return real-time account/model-partition P&L (daily + unrealized), not per-position.
@@ -3003,7 +3992,7 @@ class ClaudeToolkit:
         per-position/conid breakdown in this endpoint at all, despite an earlier
         version of this docstring claiming one; for per-position detail use
         get_positions instead. Verified against
-        https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md
+        https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss
         (scraped 2026-07-02, re-verified 2026-07-07).
 
         Cold-gateway quirk (live-verified 2026-07-17, see
@@ -3113,9 +4102,10 @@ class ClaudeToolkit:
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
-        if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached data for {symbol}. Fetch it first with fetch_market_data.", None
-        df = self._cache.load(symbol, timeframe, period, end)
+        outside, hours_note, _ = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return self._cache_miss_text(symbol, timeframe, period, end, outside), None
+        df = self._cache.load(symbol, timeframe, period, end, outside_rth=outside)
         returns = df["close"].pct_change().dropna()
         periods = _analytics.periods_for_timeframe(timeframe)
         caveat = None
@@ -3127,7 +4117,7 @@ class ClaudeToolkit:
             )
         report = _analytics.full_report(returns, periods=periods)
         lines = [
-            f"Analytics for {symbol} {timeframe} ({period}–{end}, {periods} periods/yr):",
+            f"Analytics for {symbol} {timeframe} ({period}–{end}, {hours_note}, {periods} periods/yr):",
             f"  Total Return:       {report['total_return']:.1%}",
             f"  CAGR:               {report['cagr']:.1%}",
             f"  Sharpe Ratio:       {report['sharpe']:.2f}",
@@ -3246,7 +4236,7 @@ class ClaudeToolkit:
         rather than omit it. Silence is the one outcome that is not allowed: it reads as
         "the usual currency", which is exactly the assumption this exists to remove.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid
                 (GET /iserver/secdef/info; returns a LIST, live-verified 2026-07-28 —
                 the wrapper's return annotation says dict, so both shapes are handled)
         """
@@ -3269,7 +4259,7 @@ class ClaudeToolkit:
         `local_symbol "ESU6"`, `contract_month "202609"`, `maturity_date "20260918"`,
         `company_name "E-mini S&P 500"`, `multiplier "50"`. Cached per conid. None when the
         read fails or carries no local symbol: the block is then omitted, never guessed.
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-instrument-info.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-instrument-info
         """
         cached = self._contract_identity.get(conid)
         if cached is not None:
@@ -3289,6 +4279,7 @@ class ClaudeToolkit:
             "month": _month_token(info.get("contract_month")),
             "expires": _iso_date(info.get("maturity_date")),
             "name": str(info.get("company_name") or "").strip() or None,
+            "exchange": str(info.get("exchange") or "").strip() or None,
         }
         try:
             identity["multiplier"] = float(info["multiplier"])
@@ -3327,9 +4318,9 @@ class ClaudeToolkit:
 
         Returns a `_Resolved`: the conid and the currency it trades in, or an error.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md (trsrv/futures)
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol (trsrv/futures)
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
         """
         if sec_type == "FUT":
             futures = self._client.get_futures([sym])
@@ -3489,7 +4480,13 @@ class ClaudeToolkit:
                 conid_int = 0
             if conid_int <= 0:
                 return _Resolved(0, None, f"Contract found for {sym} but conid missing.")
-            return _Resolved(conid_int, self._listing_currency(conid_int), None)
+            return _Resolved(
+                conid_int,
+                self._listing_currency(conid_int),
+                None,
+                name=rows[0]["name"] if rows[0]["name"] != "?" else None,
+                exchange=rows[0]["exchange"] if rows[0]["exchange"] != "?" else None,
+            )
 
         def _describe(rows: list[dict[str, Any]]) -> str:
             return "; ".join(
@@ -3578,8 +4575,8 @@ class ClaudeToolkit:
         meant. Reporting the other symbols while staying quiet about that one would be
         the same defect as picking a listing at random.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-availability
         """
         symbols = [s.upper() for s in inputs["symbols"]]
         sec_type = inputs.get("sec_type", "STK")
@@ -3617,7 +4614,7 @@ class ClaudeToolkit:
 
         # First call initializes the iServer subscription but returns no price fields.
         # Retry once after 1s — same two-call warmup pattern as /iserver/account/orders.
-        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot
         def _has_prices(s: list[dict[str, Any]]) -> bool:
             return any(item.get("31") or item.get("84") or item.get("86") for item in s)
 
@@ -3687,7 +4684,7 @@ class ClaudeToolkit:
                 "even within a US equities bundle. "
                 "Check: Account Management → Settings → Market Data Subscriptions. "
                 "If the ticker is incorrect, please provide the right one. "
-                "Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/market-data-availability.md"
+                "Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/market-data-availability"
             )
         if notes:
             result = "\n".join(notes) + "\n\n" + result
@@ -3993,9 +4990,10 @@ class ClaudeToolkit:
         timeframe = inputs["timeframe"]
         period = inputs["period"]
         end = inputs["end"]
-        if not self._cache.check(symbol, timeframe, period, end):
-            return f"No cached entry for {symbol} {timeframe} ({period}, end={end}).", None
-        self._cache.delete(symbol, timeframe, period, end)
+        outside, _, hours_word = _hours(inputs, default=False, why="by default")
+        if not self._cache.check(symbol, timeframe, period, end, outside_rth=outside):
+            return f"No cached entry for {symbol} {timeframe} ({period}, end={end}, {hours_word}).", None
+        self._cache.delete(symbol, timeframe, period, end, outside_rth=outside)
         return f"Deleted cache entry for {symbol} {timeframe} ({period}, end={end}).", None
 
     def _validate_public_url(self, url: str) -> str | None:
@@ -4061,7 +5059,7 @@ class ClaudeToolkit:
                 None,
             )
         if self._firecrawl is None:
-            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key)
+            self._firecrawl = FirecrawlClient(self._config.firecrawl_api_key.get_secret_value())
 
         query = inputs.get("query", "").strip()
         limit = int(inputs.get("limit", 5))

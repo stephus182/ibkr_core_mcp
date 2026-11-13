@@ -176,8 +176,21 @@ def _names_exc(node: ast.expr, bound: str) -> bool:
     return isinstance(node, ast.Name) and node.id == bound
 
 
-@pytest.mark.parametrize("module", ["claude_tools.py", "mcp_server.py"])
+@pytest.mark.parametrize(
+    "module",
+    [
+        "claude_tools.py",
+        "mcp_server.py",
+        "gateway/preflight.py",
+        "gateway/manager.py",
+        "gateway/__main__.py",
+        "gateway/session.py",
+    ],
+)
 def test_the_model_layer_interpolates_no_raw_exception(module):
+    """The model layer, and — since register F45 (condition G) — every gateway module that renders
+    an exception into a reading an operator or a host will show: a `requests` error carries the
+    request URL, and the gateway's readings are pasted into records."""
     offenders = _unredacted_interpolations((PACKAGE_DIR / module).read_text())
     assert not offenders, f"{module}: raw exception text at lines {offenders}"
 
@@ -276,3 +289,68 @@ def test_the_store_chmod_warning_names_the_file_without_the_username(monkeypatch
     assert messages, "the chmod failure was not logged at all — the check would be vacuous"
     assert str(tmp_path) not in messages[0], messages[0]
     assert "~/.ibkr_core/store.db" in messages[0], messages[0]
+
+
+def test_the_refused_env_file_warning_names_the_file_without_the_username(monkeypatch, tmp_path):
+    """`load_env_file` logs why a `.env`'s secrets were refused, with the `chmod 600` fix —
+    a line the operator will paste into a shell or an issue. The home directory is `~` in
+    it, as in the two log surfaces above (register F48, 2026-10-16)."""
+    from ibkr_core_mcp.config import load_env_file
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / ".env"
+    target.write_text("IBKR_FLEX_TOKEN=not-a-real-token\n")
+    target.chmod(0o640)
+
+    messages = _emitted("ibkr_core_mcp.config", lambda: load_env_file(target))
+
+    line = next(m for m in messages if "chmod 600" in m)
+    assert str(tmp_path) not in line, line
+    assert "chmod 600 ~/.env" in line, line
+    assert "not-a-real-token" not in line
+
+
+def test_the_audit_warning_names_the_file_without_the_username(monkeypatch, tmp_path):
+    """The sixth `collapse_home` surface (2026-11-09): `audit.record`'s warning that a record could
+    not be written names the file — with `~`, never the account name — and the exception through
+    `redact_error`. Driven under a throwaway `HOME` like the other log surfaces."""
+    from ibkr_core_mcp import audit
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    blocker = tmp_path / "blocker"
+    blocker.write_text("")  # a file where the record's directory should be
+    audit.configure(blocker / "audit.jsonl")
+    messages = _emitted(
+        "ibkr_core_mcp.audit", lambda: audit.record("tool_call", actor="model", tool="t", decision="executed")
+    )
+
+    line = next(m for m in messages if "Audit record not written" in m)
+    assert str(tmp_path) not in line, line
+    assert "~/blocker/audit.jsonl" in line, line
+
+
+def test_the_suspend_lock_release_warning_collapses_the_home_directory(tmp_path, monkeypatch, caplog):
+    """Condition E (register F45): a lock that cannot be removed is logged once, through
+    `redact_error`, so the line carries `~` and never the operator's home directory in clear.
+    Driven, not read: the lock sits in a throwaway HOME whose directory is made unwritable."""
+    import logging
+    import os
+    import stat
+
+    from ibkr_core_mcp.gateway.session import SuspendLock
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    lock = SuspendLock(path=home / ".ibkr_core" / "session.suspend")
+    lock.acquire("login in progress")
+    os.chmod(lock.path.parent, stat.S_IRUSR | stat.S_IXUSR)  # 0500: the file cannot be unlinked
+    try:
+        with caplog.at_level(logging.WARNING, logger="ibkr_core_mcp.gateway.session"):
+            lock.release()
+    finally:
+        os.chmod(lock.path.parent, stat.S_IRWXU)
+        lock.path.unlink(missing_ok=True)
+    lines = [r.getMessage() for r in caplog.records if "suspend lock" in r.getMessage()]
+    assert len(lines) == 1, lines
+    assert str(home) not in lines[0] and "~/.ibkr_core/session.suspend" in lines[0], lines[0]

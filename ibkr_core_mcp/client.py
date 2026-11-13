@@ -60,23 +60,33 @@ Endpoint reference: https://www.interactivebrokers.com/docs/web-api/
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
 import math
 import re
 import time
-from collections.abc import Mapping, Sequence
+import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, TypeVar, cast
 
 import requests
 import urllib3
 
+from ibkr_core_mcp import audit
 from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth
-from ibkr_core_mcp.config import Config
-from ibkr_core_mcp.exceptions import ConfigError, HumanAuthError, IBKRAPIError, OrderValidationError
+from ibkr_core_mcp.config import Config, require_loopback_url
+from ibkr_core_mcp.exceptions import (
+    ConfigError,
+    ConfirmationDeclinedError,
+    ConfirmationTimeoutError,
+    HumanAuthError,
+    IBKRAPIError,
+    OrderValidationError,
+    ReplyNotConfirmedError,
+)
 from ibkr_core_mcp.human_auth import (
     ORDER_WRITE_AUTHORIZATION_TTL_S,
     OrderWriteAuthorization,
@@ -110,6 +120,8 @@ from ibkr_core_mcp.models import (
     parse_one,
 )
 from ibkr_core_mcp.order_confirm import (
+    MULTIPLIER_ASSET_CLASSES,
+    child_tif_defect,
     confirm_bracket_dialog,
     confirm_cancel_dialog,
     confirm_modify_dialog,
@@ -141,7 +153,7 @@ _DELIVERY_OPTIONS = frozenset({"device", "email"})
 # "a12b34c5-d678-9e012f-3456-7a890b12cd3e" — hex + hyphens, non-standard
 # UUID grouping (not 8-4-4-4-12), so match on charset/length, not exact
 # segment structure. Source: docs/audits/audit-evidence/scrapes/cpapi-v1.md
-# (https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md)
+# (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation)
 #
 # **Measured 2026-09-16 against 24 reply IDs IBKR actually sent**, recovered from the
 # persisted `ibkr_replies` reply logs of real orders placed 2026-09-10/11 (claudia_ui's
@@ -156,7 +168,7 @@ _REPLY_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 # ---------------------------------------------------------------------------
 # Market history pagination helpers
 # /iserver/marketdata/history is capped at 1000 data points per request.
-# Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
 # ---------------------------------------------------------------------------
 
 _PERIOD_RE = re.compile(r"^(\d+)(min|h|d|w|m|y)$", re.IGNORECASE)
@@ -213,7 +225,7 @@ _BARS_PER_CALENDAR_DAY: dict[str, float] = {
 #
 # From the official Step Size table ("the permitted minimum and maximum bar size for any
 # given period"), scraped 2026-09-15 from
-# https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+# https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
 #
 #     period      1min  1h        1d        1w          1m       3m       6m       1y      2y/3y    15y
 #     bar         1min  1min-8h   1min-8h   10min-1w    1h-1m    2h-1m    4h-1m    8h-1m   1d-1m    1w-1m
@@ -240,6 +252,28 @@ _MAX_PERIOD_DAYS_FOR_BAR: dict[str, float] = {
     "1w": 5475,
     "1m": 5475,
 }
+# Seconds in one bar of each size `get_market_history_paginated` pages. Used to anchor the
+# next window one bar AFTER the oldest bar held (see the loop). A month is taken as 31 days:
+# on daily and longer bars IBKR ends an anchored window one bar before the anchor, so any
+# anchor inside the following bar is lossless and at worst repeats the oldest bar, which the
+# de-duplication removes.
+_BAR_SECONDS: dict[str, int] = {
+    "1min": 60,
+    "2min": 120,
+    "3min": 180,
+    "5min": 300,
+    "10min": 600,
+    "15min": 900,
+    "30min": 1800,
+    "1h": 3600,
+    "2h": 7200,
+    "3h": 10800,
+    "4h": 14400,
+    "8h": 28800,
+    "1d": 86400,
+    "1w": 7 * 86400,
+    "1m": 31 * 86400,
+}
 _MAX_POINTS = 1000
 _CHUNK_SAFETY = 0.80  # target 80% of limit per chunk
 _MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
@@ -250,12 +284,96 @@ _MAX_CHUNKS = 120  # runaway guard; a stalled cursor must not loop forever
 _MAX_WIDENINGS = 4
 
 
+_SECOND_BAR_RE = re.compile(r"^\d+\s*s$", re.IGNORECASE)
+
+
+def _whole_or_fraction(value: Any) -> int | float:
+    """A quantity as IBKR should see it: an int when it is whole, the fraction itself otherwise.
+
+    JSON carries `10` and `10.0` alike; both are the whole number 10 and go out as `10`, as every
+    order and preview was sent until 2026-11-07. `1000.5` stays `1000.5` (register F37). An int
+    stays an int without a trip through float, so a quantity above 2**53 keeps its exact value
+    (review, 2026-11-07); a bool is a number here only in the sense it always was (`True` → 1).
+    Not finite (`inf`, `nan` — `1e400` is valid JSON and parses to `inf`) is the CALLER's refusal:
+    this function only shapes the number.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+def _bar_problem(bar: Any) -> str | None:
+    """Why `bar` is refused, or None.
+
+    Second bars exist at IBKR — `bar=1S` returns genuine one-second bars, `barLength: 1` —
+    but their `t` is 60 seconds apart: the last of 300 bars ending 13:59:58 ET is stamped
+    18:53:59 (measured 2026-09-25 and 2026-10-05, register F22). This package never changes a
+    stamp (operator, 2026-10-05), so this package refuses them with that reason — naming itself as
+    the one refusing and IBKR as the one returning them (register F39: a passive "are refused" let a
+    model tell the user "IBKR refuses them") — rather than lowercasing them into IBKR's HTTP 500 for `1s`. Any other size outside the step table is refused with the
+    table: IBKR answers a size it does not know with a size of its own, silently.
+    """
+    text = str(bar).strip()
+    offered = ", ".join(_BAR_SECONDS)
+    if _SECOND_BAR_RE.match(text):
+        return (
+            f"bar {bar!r}: this package does not offer second bars — IBKR does return them, but with stamps "
+            f"60 seconds apart (the last of 300 one-second bars ending 13:59:58 ET is stamped 18:53:59), and "
+            f"this package never changes a stamp. Bars offered: {offered}."
+        )
+    if text.lower() not in _BAR_SECONDS:
+        return f"bar {bar!r} is not a size IBKR offers: {offered}."
+    return None
+
+
+def _bar_seconds(bar: str) -> int:
+    """Seconds in one bar, for a bar size IBKR's step table offers; ValueError otherwise."""
+    if problem := _bar_problem(bar):
+        raise ValueError(problem)
+    return _BAR_SECONDS[bar.lower()]
+
+
 def _parse_period_days(period: str) -> float | None:
     """Return approximate calendar days for a period string, or None if unparseable."""
     m = _PERIOD_RE.match(period)
     if not m:
         return None
     return float(m.group(1)) * _UNIT_TO_DAYS[m.group(2).lower()]
+
+
+def _period_days(period: str) -> float:
+    """Approximate calendar days of a period, or ValueError if IBKR's grammar does not hold it.
+
+    The grammar is a whole number and a unit — "{1-30}min, {1-8}h, {1-1000}d, {1-792}w,
+    {1-182}m, {1-15}y"
+    (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data).
+    **A period outside it is not rejected by IBKR**: the endpoint answers with a window of its
+    own and nothing in the response says so (measured 2026-07-06: `6M` returned four months of
+    dailies before the unit was lowercased here; the model sent `ytd` twice in 2026-09 and was
+    told it had its year to date). So the refusal has to be this side of the request.
+
+    The shape is what is checked — a number of at least one, and a unit. The per-request
+    ranges are not: `get_market_history_paginated` reaches past them by design.
+    """
+    days = _parse_period_days(period) if isinstance(period, str) else None
+    if not days:
+        raise ValueError(
+            f"period {period!r} is not in IBKR's grammar — a whole number and a unit: min, h, d, w, "
+            "m (months) or y, e.g. '30d', '6m', '1y'; a span like year-to-date is given in days. "
+            "IBKR does not reject such a period: it answers with a window of its own."
+        )
+    return days
+
+
+def _period_problem(period: Any) -> str | None:
+    """The sentence `_period_days` refuses `period` with, or None — for a caller that answers
+    in words (the tool layer, which may not put an exception's text in a result)."""
+    try:
+        _period_days(period)
+    except ValueError as refusal:
+        return str(refusal)
+    return None
 
 
 def _chunk_days_for_bar(bar: str) -> int:
@@ -298,7 +416,7 @@ def _fits_in_one_call(total_days: float, bar: str) -> bool:
 
     Under-estimating is the safe direction here: it costs an extra request, never data.
 
-    Source for the cap: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+    Source for the cap: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
     """
     return total_days * _BARS_PER_CALENDAR_DAY.get(bar.lower(), 0.69) <= _MAX_POINTS * _CHUNK_SAFETY
 
@@ -325,9 +443,11 @@ def _order_write_scope(kind: str, account_id: str, body: Mapping[str, Any], orde
     loudly instead of quietly minting the weaker scope.
 
     Args:
-        kind: "place", "modify", "cancel" or "place_bracket". It is part of the scope, so an
-            authorization earned for one kind can never cover another — a bracket's
-            authorization is not a single order's, even where the parent body matches.
+        kind: "place", "modify", "cancel", "place_bracket" or "attach". It is part of the
+            scope, so an authorization earned for one kind can never cover another — a
+            bracket's authorization is not a single order's, even where the parent body
+            matches. An attach's scope also carries the parent's id, so an authorization
+            earned for one parent never covers a child of another.
         account_id: The account the write is aimed at — part of the transaction.
         body: The order body about to be sent. For a bracket this is the whole ticket array
             wrapped as `{"orders": [...]}`, so every leg is inside the scope; bound to the
@@ -353,6 +473,63 @@ def _order_label(order: Mapping[str, Any]) -> str:
     """
     symbol = order.get("ticker", order.get("symbol", "UNKNOWN"))
     return f"{order.get('side', '?')} {order.get('quantity', '?')} {symbol}"
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _write_decision(exc: BaseException) -> str:
+    """The audit record's `decision` for a write that raised: the gates' own outcomes by type."""
+    if isinstance(exc, ConfirmationTimeoutError):
+        return "timed_out"
+    if isinstance(exc, (ConfirmationDeclinedError, ReplyNotConfirmedError)):
+        return "declined"
+    if isinstance(exc, HumanAuthError):
+        return "denied"
+    if isinstance(exc, (OrderValidationError, ConfigError, ValueError)):
+        return "refused"
+    return "error"
+
+
+def _audited_write(action: str) -> Callable[[_F], _F]:
+    """Every gated write leaves one redacted audit record — sent, denied, declined, timed out,
+    refused or in error — with the call's arguments summarised (`audit.summarise`: the order's
+    recognisable fields, the account id masked at record time) and the human as the actor
+    (MCP security checklist 8.1, 2026-11-09). On the gated method itself, beside the gates, for
+    the reason the gates are there: a wrapper one level up can be bypassed by calling what it
+    wraps. `tests/security/test_order_write_boundary.py` holds that every `GATED_OWNERS` member
+    carries it under its own name."""
+
+    def wrap(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def run(self: Any, *args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                result = fn(self, *args, **kwargs)
+            except BaseException as exc:
+                audit.record(
+                    "order_write",
+                    actor="operator",
+                    action=action,
+                    params=audit.summarise(args, kwargs),
+                    decision=_write_decision(exc),
+                    outcome=type(exc).__name__,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+                raise
+            audit.record(
+                "order_write",
+                actor="operator",
+                action=action,
+                params=audit.summarise(args, kwargs),
+                decision="sent",
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return result
+
+        return cast(_F, run)
+
+    return wrap
 
 
 def _authorize_order_write(
@@ -392,6 +569,12 @@ def _validate_order_id(order_id: str) -> None:
     and alert_id (IBKR reuses the same numeric ID namespace for both — see
     docs/audits/security-audit-2026-07-11.md H-2). The rule is `_require_numeric`'s,
     shared with conids, page indices and notification IDs (SEC-R7).
+
+    It also keeps out IBKR's cancel-all id. IBKR's Cancel Order page: "Submitting '-1' will
+    cancel all open orders", measured true on 2026-11-12: one DELETE of `-1` cancelled every
+    working order, one placed through this package and one placed on IBKR Mobile. And IBKR
+    itself returns order_id "-1" for a bracket child it failed to place. So the rule must never
+    admit a sign (register F51; `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate`).
     """
     _require_numeric(order_id, "order_id/alert_id")
 
@@ -446,6 +629,26 @@ def _validate_delivery_option(option: str) -> None:
     """
     if option not in _DELIVERY_OPTIONS:
         raise ConfigError(f"Invalid delivery option {option!r}: must be one of {sorted(_DELIVERY_OPTIONS)}.")
+
+
+def _reply_not_confirmed_message(question: str, refusal: HumanAuthError) -> str:
+    """What happened and why, for a reply IBKR was answered no to (register F34).
+
+    One sentence a consumer can show as it is: IBKR asked, why it was not confirmed — declined
+    at the dialog, nobody answered in time, or the dialog's own reason — and the question,
+    cleaned as the dialog showed it and folded onto one line. Never "nothing was sent" (the
+    write had been posted when IBKR asked), never "cancelled", and not the words "timed out",
+    which a consumer may still read as the Gate 2 timeout.
+    """
+    if isinstance(refusal, ConfirmationDeclinedError):
+        why = "it was declined at the dialog"
+    elif isinstance(refusal, ConfirmationTimeoutError):
+        why = "nobody answered the dialog in time"
+    else:
+        why = f"the dialog could not be completed ({refusal})"
+    sentence = f"IBKR asked for a confirmation before accepting the request, and {why} — IBKR was answered no."
+    asked = " ".join(reply_message_text(question).split())
+    return f'{sentence} IBKR\'s question: "{asked}"' if asked else sentence
 
 
 def _as_reply_list(data: Any) -> list[dict[str, Any]]:
@@ -637,6 +840,144 @@ def pair_bracket_response(tickets: Sequence[Mapping[str, Any]], entries: Sequenc
     return BracketPairing(parent_entry, tuple(children), tuple(unmatched), tuple(problems))
 
 
+# The states in which IBKR will take a child on an existing order. A parent in any other
+# state — filled, cancelled, inactive — is refused before any gate (design 2026-10-17 § 1).
+_ATTACHABLE_PARENT_STATUSES = frozenset({"PreSubmitted", "Submitted", "PendingSubmit", "ApiPending"})
+# IBKR's order-status read spells the side as a letter (measured 2026-09-22); a body wants the word.
+_STATUS_SIDE = {"B": "BUY", "S": "SELL", "BUY": "BUY", "SELL": "SELL"}
+# The status read names the type in IBKR's long form; the body takes the short one.
+_STATUS_ORDER_TYPE = {
+    "LIMIT": "LMT",
+    "MARKET": "MKT",
+    "STOP": "STP",
+    "STOP_LIMIT": "STOP_LIMIT",
+    "STP LMT": "STOP_LIMIT",
+}
+
+
+def _children_count(status: Mapping[str, Any]) -> int:
+    """How many children IBKR already reports on a parent.
+
+    `children_order_ids` is a STRING on the status read, **semicolon**-separated — measured
+    2026-10-18 with two children attached to one Ford parent: `"<id>;<id>"`
+    (`docs/ibkr-api-behaviors-reference.md`). The 2026-09-22 reading saw one child, so the
+    separator was unmeasured and a comma was assumed until the live session showed otherwise.
+    A comma is still accepted; a list is accepted in case IBKR ever changes its mind; an
+    absent field is zero.
+    """
+    raw = status.get("children_order_ids")
+    if isinstance(raw, list | tuple):
+        return len(raw)
+    return len([x for x in re.split(r"[;,]", str(raw or "")) if x.strip()])
+
+
+def _parent_from_status(order_id: str, status: Mapping[str, Any]) -> dict[str, Any]:
+    """A working IBKR order as a parent ticket for the bracket rules and the bracket dialog.
+
+    Everything a child derives — contract, side, size, TIF — comes from IBKR's record, never
+    from a caller's copy. The parent is never re-sent: `cOID` here is the link a child carries
+    as `parentId` (IBKR's own order id), which is what makes `_bracket_tickets`' link rule
+    apply unchanged. A parent in any state but working is refused before any gate.
+
+    The one display-only key it adds, `_working_at_ibkr`, is the bracket dialog's extra row
+    for an attach: the parent is IBKR's, in this state, already carrying this many children.
+    `_`-prefixed, so `_bracket_tickets` strips it and it never reaches the wire.
+
+    Raises:
+        ValueError: The parent is not working, or IBKR's record lacks a side, a size or a
+            conid — a child cannot be derived from what is not there, and nothing is guessed.
+    """
+    state = str(status.get("order_status") or status.get("status") or "").strip()
+    if state not in _ATTACHABLE_PARENT_STATUSES:
+        raise ValueError(
+            f"Order {order_id} is {state or 'in an unknown state'}, not working — nothing can be attached to it"
+        )
+    side = _STATUS_SIDE.get(str(status.get("side") or "").strip().upper())
+    if side is None:
+        raise ValueError(f"Order {order_id}: IBKR reports no side, so a child's side cannot be derived")
+    quantity = status.get("total_size", status.get("size"))
+    conid = status.get("conid")
+    if quantity in (None, "") or conid in (None, ""):
+        raise ValueError(f"Order {order_id}: IBKR reports no size or no conid, so a child cannot be derived")
+    size = float(quantity)
+    raw_type = str(status.get("order_type") or "").strip().upper()
+    parent: dict[str, Any] = {
+        "conid": int(float(conid)),
+        "side": side,
+        "quantity": _whole_or_fraction(size),
+        "orderType": _STATUS_ORDER_TYPE.get(raw_type, raw_type or "MKT"),
+        "tif": str(status.get("tif") or "DAY").strip().upper(),
+        "ticker": str(status.get("symbol") or status.get("ticker") or ""),
+        "cOID": str(order_id),
+        "_working_at_ibkr": f"order {order_id} · {state} · {_children_count(status)} attached",
+    }
+    # The body's price fields, by type: a stop-limit carries the limit as `price` and the
+    # stop as `auxPrice`; a stop carries its trigger as `price`; a limit its limit.
+    limit, stop = status.get("limit_price"), status.get("stop_price")
+    if parent["orderType"] == "STOP_LIMIT":
+        if limit not in (None, ""):
+            parent["price"] = float(limit)
+        if stop not in (None, ""):
+            parent["auxPrice"] = float(stop)
+    elif parent["orderType"] == "STP" and stop not in (None, ""):
+        parent["price"] = float(stop)
+    elif limit not in (None, ""):
+        parent["price"] = float(limit)
+    # The display keys the cancel dialog derives from the same read (`_cancel_dialog_details`):
+    # the company name and the currency, so the parent's rows read "F — FORD MOTOR CO" and
+    # "7.39 USD" rather than "F" and "7.39" (live 2026-10-18).
+    for key, field in (("_companyName", "company_name"), ("_currency", "currency")):
+        if status.get(field):
+            parent[key] = status[field]
+    asset_class = str(status.get("sec_type") or "").strip().upper()
+    if asset_class in ("FUT", "FOP"):  # CME Rule 536-B: futures and futures options only
+        parent["manualIndicator"] = True
+    if asset_class in MULTIPLIER_ASSET_CLASSES:  # a status read carries no multiplier
+        parent["_multiplier_unknown"] = True
+    return parent
+
+
+def _complete_child(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
+    """The child as IBKR defines an attached order: the parent's contract and size, the
+    opposite side, the parent's TIF unless the child states its own.
+
+    The caller's values for the derived fields are overridden, not merged — a caller's
+    conid, side or quantity never reaches the wire. What the caller does own stays as
+    given: the order type, the prices, a stated TIF, `outsideRTH`.
+    """
+    kid = dict(child)
+    kid["conid"] = parent["conid"]
+    kid["quantity"] = parent["quantity"]
+    kid["side"] = "SELL" if parent["side"] == "BUY" else "BUY"
+    kid["parentId"] = parent["cOID"]
+    kid.pop("cOID", None)
+    if not str(kid.get("tif") or "").strip():
+        kid["tif"] = parent["tif"]
+    if parent.get("manualIndicator"):
+        kid["manualIndicator"] = True
+    # Display-only keys travel to the dialog and are stripped before the wire. `ticker` is
+    # NOT copied: the contract on the wire is the conid, as in this package's own documented
+    # bracket example, and the dialog inherits the parent's `ticker` for the screen itself.
+    for key in ("_companyName", "_multiplier", "_multiplier_unknown", "_currency"):
+        if key in parent and key not in kid:
+            kid[key] = parent[key]
+    return kid
+
+
+def attached_entry(parent_order_id: str, entries: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The terminal entry IBKR reports as attached to `parent_order_id`, else None. Pure, no network.
+
+    IBKR's response order is arbitrary (measured 2026-09-21/22), so the link is found by the
+    `parent_order_id` IBKR echoes, never by position. Public for the same reason
+    `pair_bracket_response` is: it encodes IBKR's wire shape, and the caller that words the
+    outcome for a human needs the same reader the write used.
+    """
+    for entry in entries:
+        if str(entry.get("parent_order_id") or "") == str(parent_order_id):
+            return dict(entry)
+    return None
+
+
 def _described_with_status(status: Mapping[str, Any]) -> str | None:
     """IBKR's own description of an order, with its status when that adds something.
 
@@ -679,7 +1020,7 @@ class IBKRClient:
     All endpoints connect only to localhost. Any non-localhost gateway URL raises
     ConfigError at construction time.
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/introduction.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/introduction
     All docs pages are fully public (no login required). Endpoint behavior
     is verified against official documentation per the "Docs First" rule.
     """
@@ -701,13 +1042,9 @@ class IBKRClient:
                 self-signed certificate, so the host is pinned to localhost to keep
                 that exemption from ever applying to a remote server.
         """
-        self._base = config.gateway_url.rstrip("/")
-        _host = urlparse(config.gateway_url).hostname
-        if _host not in ("localhost", "127.0.0.1", "::1"):
-            raise ConfigError(
-                f"IBKRClient: verify=False is only permitted for localhost; "
-                f"got {_host!r}. Set IBKR_GATEWAY_URL to a localhost address."
-            )
+        # The one pin for every certificate-exempt call (register F45, condition C): a line before
+        # `verify = False`, held there by tests/security/test_tls_policy.py.
+        self._base = require_loopback_url(config.gateway_url).rstrip("/")
         self._session = requests.Session()
         self._session.verify = False
         auth = auth or BrowserCookieAuth()
@@ -753,7 +1090,7 @@ class IBKRClient:
         test confirming POST behaves identically — see get_auth_status() for the same
         discrepancy on a code path with no production callers.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
         """
         # /iserver/auth/status returns authenticated=false on the very first request of a new
         # gateway session (IBKR quirk) even when the user is fully logged in.
@@ -784,7 +1121,7 @@ class IBKRClient:
         method, since no live test has been run to confirm POST is required. This method
         itself has no callers elsewhere in the codebase as of 2026-06-30.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
         Endpoint: GET /iserver/auth/status (see Note above)
         """
         return parse_one(AuthStatus, self._get("/iserver/auth/status"))
@@ -795,7 +1132,7 @@ class IBKRClient:
         Call every few minutes during idle periods. ConnectivityChecker calls this
         every 60s as a side effect of its /tickle poll, preventing IBKR auto-logout.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server
         Endpoint: POST /tickle
         """
         try:
@@ -819,15 +1156,26 @@ class IBKRClient:
         has not recently logged in. Do NOT call proactively — it terminates any
         active authenticated session, including fresh logins.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/re-authenticate-the-brokerage-session-deprecated.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/re-authenticate-the-brokerage-session-deprecated
         Endpoint: POST /iserver/reauthenticate (Deprecated)
+
+        **Deprecated in this package too (register F45, step 2; removed in 3.0).** The gateway
+        session has one owner, `ibkr_core_mcp.gateway.session`: a soft timeout is recovered by
+        its poll (`attempt_soft_recovery`, `ssodh/init` with `compete: false`), and nothing else
+        re-establishes a session. A `DeprecationWarning` is emitted; the request is still sent.
         """
+        warnings.warn(
+            "IBKRClient.reauthenticate() is deprecated and will be removed in 3.0: the gateway session's "
+            "one owner is ibkr_core_mcp.gateway.session (a soft timeout is recovered by its poll).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._post("/iserver/reauthenticate")
 
     def validate_sso(self) -> dict[str, Any]:
         """Validate the SSO token. Used after initial login to confirm the session is active.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/validate-sso.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/validate-sso
         Endpoint: GET /sso/validate
         """
         return self._get("/sso/validate")
@@ -877,9 +1225,17 @@ class IBKRClient:
         For requests that may exceed 1000 data points, use get_market_history_paginated()
         which chunks the request automatically using the startTime parameter.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/historical-market-data.md
+        Raises:
+            ValueError: If `period` is not in the grammar above — IBKR would not reject it,
+                it would answer with a window of its own (`_period_days`) — or `bar` is not a
+                size in the step table, second bars included (`_bar_problem`: IBKR stamps
+                them 60 seconds apart, and no stamp is changed here).
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
         Endpoint: GET /iserver/marketdata/history
         """
+        _period_days(period)
+        _bar_seconds(bar)  # the step table, before any request
         return parse_one(
             MarketHistory,
             self._get(
@@ -932,6 +1288,21 @@ class IBKRClient:
         stale, and any analysis run on it would have been confidently wrong. It affected
         every request wider than one chunk — `3y`/`5y` on most bars, and `1y`/`2y` on `1h`.
 
+        ## Where the next window is anchored: one bar after the oldest bar held
+
+        IBKR ends an anchored window *before* the anchor — two bars before it on intraday
+        bars, one bar before it on daily and weekly bars (measured 2026-10-05: `1min` anchor
+        14:00:00 → newest bar 13:58; `1h` 14:00 → 12:00; `1d` any time on Friday → Thursday;
+        `1w` a bar's own stamp → the bar before). Anchored ON the oldest bar held, as this
+        method was until that day, the next window ended two bars back and the bar just
+        before the oldest was never requested — one 1-minute bar lost at every seam the
+        1000-point cap cuts inside a futures session (ESZ6 `5d`/`1min`: 3 of 5,140 bars,
+        all three real; register F23). Anchored one bar later (`_BAR_SECONDS`), the window
+        ends exactly on that bar; on daily bars it ends on the oldest bar itself, a repeat
+        the de-duplication removes. Two bars later was measured too: consecutive pages then
+        share a bar, at the price of one extra request at every session boundary, where IBKR
+        answers with a single bar.
+
         The newest chunk sends **no** `startTime`: "If omitted, the current time is used".
         Measured the same day on SPY `30d`/`1d` — omitted reached 2026-08-05, an explicit
         timestamp of that same moment reached 08-04, and midnight-today reached 08-03. Only
@@ -975,14 +1346,16 @@ class IBKRClient:
         """
         from datetime import datetime, timedelta
 
-        total_days = _parse_period_days(period)
+        total_days = _period_days(period)
+        _bar_seconds(bar)  # the step table, before any request
+        bar = bar.lower()  # the single call lowercases too; IBKR substitutes for a unit it does not know
         chunk_days = _chunk_days_for_bar(bar)
 
         # The fast path is an optimisation and is only sound when ONE call can carry the
         # whole span: a width that fits in a chunk still overflows the 1000-point cap for
         # 1-minute bars (see _fits_in_one_call). When in doubt, take the loop — it costs a
         # request and cannot lose data.
-        if total_days is None or (total_days <= chunk_days and _fits_in_one_call(total_days, bar)):
+        if total_days <= chunk_days and _fits_in_one_call(total_days, bar):
             return self.get_market_history(conid, period, bar, outside_rth)
 
         all_bars: list[dict[str, Any]] = []
@@ -990,15 +1363,17 @@ class IBKRClient:
         now = datetime.utcnow()
         target = now - timedelta(days=total_days)
 
-        # The cursor is the END of the next window, and it advances to the OLDEST bar that
+        # The cursor is the END of the next window, and it advances with the OLDEST bar that
         # actually arrived — never by the width that was requested. That distinction is the
         # whole correctness argument: a chunk that hits the 1000-point cap covers less ground
         # than it asked for, and the endpoint says so only by returning fewer bars. Advancing
         # by the request width opened an unannounced hole between every pair of chunks
         # (measured 2026-09-15: 30d/1min returned ~15% of its bars, in five islands).
         # Advancing by the response cannot lose data whatever the size estimate does — it
-        # only takes more requests.
+        # only takes more requests. Where exactly the cursor sits relative to that oldest
+        # bar is decided below, by where IBKR ends an anchored window.
         cursor: datetime | None = None  # None == "now"
+        oldest_seen: datetime | None = None
         truncation_warning: str | None = None
         # How many times the CURRENT window has been doubled after coming back empty. Reset
         # the moment a chunk delivers bars — see the `if not stamps` branch below.
@@ -1067,11 +1442,22 @@ class IBKRClient:
                 break
             widenings = 0
             oldest = datetime.utcfromtimestamp(min(stamps) / 1000)
-            if cursor is not None and oldest >= cursor:
+            if oldest_seen is not None and oldest >= oldest_seen:
                 # No progress: the window did not move back. Stopping beats looping.
                 log.warning("market history pagination stalled at %s (conid=%s bar=%s)", oldest, conid, bar)
                 break
-            cursor = oldest
+            oldest_seen = oldest
+            # The next window must END on the bar just before `oldest`. IBKR ends an
+            # anchored window two bars before the anchor on intraday bars and one bar before
+            # it on daily and weekly bars (measured 2026-10-05 — 1min: anchor 14:00:00 →
+            # newest 13:58; 1h: 14:00 → 12:00; 1d: any time on Friday → Thursday; 1w: a bar's
+            # own stamp → the bar before). Anchored ON `oldest`, as this loop was until that
+            # day, the window ended two bars back and the bar before `oldest` was never
+            # requested: one 1-minute bar lost at every seam a futures session forces
+            # (1,380 bars against the 1000-point cap; ESZ6 5d/1min lost 3, all three real,
+            # register F23). One bar later, the window ends exactly on it; on daily bars it
+            # ends on `oldest` itself, a repeat the de-duplication below removes.
+            cursor = oldest + timedelta(seconds=_bar_seconds(bar))
             if oldest <= target:
                 break
         else:
@@ -1082,7 +1468,7 @@ class IBKRClient:
             # with 33%, and a backtest labelled "1 year" that silently saw four months
             # draws a conclusion about a period it never had. So the response says so, in
             # the response (audit finding API-02, 2026-09-16).
-            truncated_at = cursor.strftime("%Y-%m-%d") if cursor is not None else "an unknown date"
+            truncated_at = oldest_seen.strftime("%Y-%m-%d") if oldest_seen is not None else "an unknown date"
             truncation_warning = (
                 f"INCOMPLETE: asked for {period} of {bar} bars but stopped at the "
                 f"{_MAX_CHUNKS}-chunk safety guard. The data returned goes back only to "
@@ -1096,7 +1482,7 @@ class IBKRClient:
                 conid,
                 period,
                 bar,
-                cursor,
+                oldest_seen,
             )
 
         if not all_bars:
@@ -1146,7 +1532,7 @@ class IBKRClient:
 
         Limits: max 100 conids per request, max 50 fields per request.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/live-market-data-snapshot
         Changelog: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
         Endpoint: GET /iserver/marketdata/snapshot
         """
@@ -1159,7 +1545,7 @@ class IBKRClient:
     def unsubscribe_market_data(self, conid: int) -> dict[str, Any]:
         """Unsubscribe a specific contract from streaming market data.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/unsubscribe-single.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/unsubscribe-single
         Endpoint: POST /iserver/marketdata/unsubscribe
         """
         return self._post("/iserver/marketdata/unsubscribe", {"conid": conid})
@@ -1167,7 +1553,7 @@ class IBKRClient:
     def unsubscribe_all_market_data(self) -> dict[str, Any]:
         """Cancel all active streaming market data subscriptions.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/market-data/unsubscribe-all.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/unsubscribe-all
         Endpoint: GET /iserver/marketdata/unsubscribeall
         """
         return self._get("/iserver/marketdata/unsubscribeall")
@@ -1197,7 +1583,7 @@ class IBKRClient:
         and get_currency_pairs() (/iserver/currency/pairs) respectively. OPT requires
         the separate secdef/search -> secdef/info flow (see get_secdef_info()).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
                 (read 2026-08-05; the old cpapi-v1 anchor redirects and drops the fragment)
         Endpoint: GET /iserver/secdef/search
         """
@@ -1207,7 +1593,7 @@ class IBKRClient:
     def get_contract_info(self, conid: int) -> ContractDetails | dict[str, Any]:
         """Full contract metadata: exchange, currency, primary exchange, trading class, multiplier.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/contract-information-by-contract-id
         Endpoint: GET /iserver/contract/{conid}/info
         """
         _validate_conid(conid)
@@ -1216,7 +1602,7 @@ class IBKRClient:
     def get_contract_info_and_rules(self, conid: int) -> ContractDetails | dict[str, Any]:
         """Contract info plus trading rules (min tick, valid order types, etc.).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/find-all-info-and-rules-for-a-given-contract.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/find-all-info-and-rules-for-a-given-contract
         Endpoint: GET /iserver/contract/{conid}/info-and-rules
         """
         _validate_conid(conid)
@@ -1235,7 +1621,7 @@ class IBKRClient:
         A bare list is still accepted; the only cost is tolerating a shape IBKR does not
         currently publish, and the alternative is another silent empty.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-algo-params-by-contract-id
         Endpoint: GET /iserver/contract/{conid}/algos
         """
         _validate_conid(conid)
@@ -1247,7 +1633,7 @@ class IBKRClient:
     def get_secdef_info(self, conid: int) -> SecDefInfo | dict[str, Any]:
         """Security definition info: type, symbol, currency, exchange, listing exchange.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid
         Endpoint: GET /iserver/secdef/info
         """
         return parse_one(SecDefInfo, self._get("/iserver/secdef/info", {"conid": conid}))
@@ -1263,7 +1649,7 @@ class IBKRClient:
         empty arrays unless /iserver/secdef/search was called for the same underlying
         beforehand (without the `name` field).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-strikes-by-underlying-contract-id
         Endpoint: GET /iserver/secdef/strikes
         """
         data = self._get(
@@ -1289,7 +1675,7 @@ class IBKRClient:
         Reimplemented 2026-07-07 (audit register item 6) — replaces the previous call
         to /trsrv/secdef/chains, which is absent from the documented CP API and 404'd
         on every call.
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
         Endpoints: GET /iserver/secdef/search + GET /iserver/secdef/strikes
         """
         results = self._get("/iserver/secdef/search", {"symbol": symbol})
@@ -1326,7 +1712,7 @@ class IBKRClient:
     def get_bond_filters(self, symbol: str, issue_id: str) -> dict[str, Any]:
         """Available filter criteria for bond search.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-bond-filter-information.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-bond-filter-information
         Endpoint: GET /iserver/secdef/bond-filters
         """
         return self._get("/iserver/secdef/bond-filters", {"symbol": symbol, "issuerId": issue_id})
@@ -1338,7 +1724,7 @@ class IBKRClient:
         arrays, raises `IBKRAPIError` on a 2xx `{"error": …}` object, and answers [] for
         any other shape.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-future-by-symbol
         Endpoint: GET /trsrv/futures
         """
         data = self._get("/trsrv/futures", {"symbols": ",".join(symbols)})
@@ -1356,7 +1742,7 @@ class IBKRClient:
         Flattening drops the symbol key, so callers resolving more than one symbol at a
         time cannot tell the records apart — pass one symbol per call when that matters.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/security-stocks-by-symbol
                 (read 2026-08-05; the old cpapi-v1 anchor redirects and drops the fragment)
         Endpoint: GET /trsrv/stocks
         """
@@ -1413,7 +1799,7 @@ class IBKRClient:
         `timezone`, `schedules[]`. There is no `regularTradingHours` or `liquidHours` —
         `docs/tools-reference.md` promised both until 2026-09-16 and neither exists.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-trading-schedule
         Endpoint: GET /trsrv/secdef/schedule
         """
         has_conid = conid != ""
@@ -1482,7 +1868,7 @@ class IBKRClient:
         document CASH as a valid secType (only STK, IND, BOND) — this is the only
         documented FX resolution path.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
         Endpoint: GET /iserver/currency/pairs
         """
         data = self._get("/iserver/currency/pairs", {"currency": currency})
@@ -1491,7 +1877,7 @@ class IBKRClient:
     def get_contract_rules(self, conid: int, is_buy: bool = True) -> ContractRules | dict[str, Any]:
         """Order rules for a contract: min tick, valid order types, size constraints.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-rules.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules
         Endpoint: POST /iserver/contract/rules
         """
         return parse_one(ContractRules, self._post("/iserver/contract/rules", {"conid": conid, "isBuy": is_buy}))
@@ -1505,7 +1891,7 @@ class IBKRClient:
 
         Returns [{"accountId": "U1234567", ...}].
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-accounts
         Endpoint: GET /portfolio/accounts
         """
         return parse_many(Account, self._get("/portfolio/accounts"))
@@ -1517,7 +1903,7 @@ class IBKRClient:
         to `/portfolio/accounts` (24 keys, 2026-09-17), so it shares that model rather than
         getting a second one that would drift from it.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-subaccounts.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-subaccounts
         Endpoint: GET /portfolio/subaccounts
         """
         return parse_many(Account, self._get("/portfolio/subaccounts"))
@@ -1525,7 +1911,7 @@ class IBKRClient:
     def get_account_meta(self, account_id: str) -> Account | dict[str, Any]:
         """Account metadata: display name, status, type.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/specific-accounts-portfolio-information.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/specific-accounts-portfolio-information
         Endpoint: GET /portfolio/{accountId}/meta
         """
         _validate_account_id(account_id)
@@ -1544,7 +1930,7 @@ class IBKRClient:
         is IBKR's own `{"amount", "currency", "isNull", "timestamp", "value"}` object,
         including the currency the four typed attributes drop.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-summary
         Endpoint: GET /portfolio/{accountId}/summary
         """
         _validate_account_id(account_id)
@@ -1553,7 +1939,7 @@ class IBKRClient:
     def get_account_ledger(self, account_id: str) -> dict[str, Any]:
         """Cash balances by currency with detailed ledger fields.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-ledger.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-ledger
         Endpoint: GET /portfolio/{accountId}/ledger
         """
         _validate_account_id(account_id)
@@ -1562,7 +1948,7 @@ class IBKRClient:
     def get_account_allocation(self, account_id: str) -> dict[str, Any]:
         """Portfolio breakdown by asset class, sector, and industry.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-allocation-single.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-allocation-single
         Endpoint: GET /portfolio/{accountId}/allocation
         """
         _validate_account_id(account_id)
@@ -1588,7 +1974,7 @@ class IBKRClient:
         Returns [{"conid": ..., "contractDesc": ..., "position": ..., "mktPrice": ...,
         "mktValue": ..., "unrealizedPnl": ..., "realizedPnl": ...}].
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/positions
         Endpoint: GET /portfolio/{accountId}/positions/{page}
         """
         _validate_account_id(account_id)
@@ -1649,7 +2035,7 @@ class IBKRClient:
         is a similarly-named page documenting ``GET /portfolio/{acctId}/position/{conid}`` —
         a different endpoint — and reading the shape off it gives the wrong answer.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/position-contract-info.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/position-contract-info
         Endpoint: GET /portfolio/positions/{conid}
         """
         _validate_conid(conid)
@@ -1662,7 +2048,7 @@ class IBKRClient:
     def get_position(self, account_id: str, conid: int) -> dict[str, Any]:
         """Position for a specific account + contract pair.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions-by-conid.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/positions-by-conid
         Endpoint: GET /portfolio/{accountId}/position/{conid}
         """
         _validate_account_id(account_id)
@@ -1672,7 +2058,7 @@ class IBKRClient:
     def get_combo_positions(self, account_id: str) -> list[dict[str, Any]]:
         """Combo/spread positions for an account. Returns [] if not a list.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/combination-positions.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/combination-positions
         Endpoint: GET /portfolio/{accountId}/combo/positions
         """
         _validate_account_id(account_id)
@@ -1682,7 +2068,7 @@ class IBKRClient:
     def get_portfolio_allocation(self, account_ids: list[str]) -> dict[str, Any]:
         """Aggregated allocation across multiple accounts.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/portfolio-allocation-all.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/portfolio-allocation-all
         Endpoint: POST /portfolio/allocation
         """
         return self._post("/portfolio/allocation", {"acctIds": account_ids})
@@ -1690,7 +2076,7 @@ class IBKRClient:
     def invalidate_positions_cache(self, account_id: str) -> dict[str, Any]:
         """Force-refresh the IBKR position cache. Call before get_positions() if data looks stale.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/invalidate-backend-portfolio-cache.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/invalidate-backend-portfolio-cache
         Endpoint: POST /portfolio/{accountId}/positions/invalidate
         """
         _validate_account_id(account_id)
@@ -1781,7 +2167,7 @@ class IBKRClient:
         already known to surprise. An empty *list* from IBKR is still returned as `[]`:
         that empty is an answer.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: GET /iserver/account/orders
 
@@ -1817,7 +2203,7 @@ class IBKRClient:
         exactly as IBKR sent it — no status filtering, no shape normalization. Used
         by ClaudeToolkit's diagnose_orders to show what the server actually returned.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/live-orders.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/live-orders
         Endpoint: GET /iserver/account/orders
         """
         self._ensure_accounts_initialized()
@@ -1831,7 +2217,7 @@ class IBKRClient:
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         """Full order details for a specific order ID.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/order-status.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status
         Endpoint: GET /iserver/account/order/status/{orderId}
         """
         _validate_order_id(order_id)
@@ -1849,7 +2235,7 @@ class IBKRClient:
         IBKR's reference says: "Returns a list of trades for the currently selected
         account for current day and six previous days", and its own example passes
         `days=3`. It documents **no maximum**
-        (https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/trades.md).
+        (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/trades).
 
         Two claims previously stated here were wrong and are corrected rather than
         quietly deleted, because both were repeated downstream:
@@ -1868,8 +2254,10 @@ class IBKRClient:
 
         ⚠ **The docs advise calling this endpoint once per session**, and the CP rate
         limit table allows 1 request per 5 seconds. Callers on a timer must not poll it
-        unconditionally — `claudia/dashboard_poller.py` refetches only when the ledger's
-        `realizedpnl` moves, which happens if and only if a position closed.
+        unconditionally — refetch on evidence of a fill in data already held (claudia_ui keys
+        on the ledger's realised figure, the positions' quantities and the local date; an
+        opening fill moves no realised figure, which is why the quantity is in the key),
+        never on the clock alone.
 
         ## Origin coverage — verified live 2026-07-06
         The official reference documents only "trades for the currently selected
@@ -1893,7 +2281,7 @@ class IBKRClient:
         trades. (This warmup was the real cause of the 2026-07-02 'mobile fills
         missing' observation — origin coverage is complete once primed.)
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/trades.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/trades
         Endpoint: GET /iserver/account/trades
         """
         # days=7 requests maximum lookback; without it IBKR returns today's session only
@@ -1928,7 +2316,7 @@ class IBKRClient:
 
         The "periods" list is nested inside each account sub-dict, NOT at the top level.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/all-periods.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio-analyst/all-periods
         Endpoint: POST /pa/allperiods
         """
         data = self._post("/pa/allperiods", {"acctIds": account_ids})
@@ -1955,7 +2343,7 @@ class IBKRClient:
         that extraction returns [], this method exposes the untouched response so the
         caller can identify the shape (used by ClaudeToolkit's get_pa_periods fallback).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/all-periods.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio-analyst/all-periods
         Endpoint: POST /pa/allperiods
         """
         return self._post("/pa/allperiods", {"acctIds": account_ids})
@@ -1969,7 +2357,7 @@ class IBKRClient:
         are not valid for this endpoint. Use get_pa_periods() to retrieve the
         authoritative list for the account.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/account-performance.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio-analyst/account-performance
         Endpoint: POST /pa/performance
         """
         return self._post("/pa/performance", {"acctIds": account_ids, "period": period})
@@ -1998,7 +2386,7 @@ class IBKRClient:
         ints) and `currency` (string). `days` is optional (int). Old calls returned HTTP
         400 because `conids` and `currency` were missing from the request body.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio-analyst/transaction-history.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio-analyst/transaction-history
         Endpoint: POST /pa/transactions
         """
         body: dict[str, Any] = {
@@ -2021,7 +2409,7 @@ class IBKRClient:
     def get_scanner_params(self) -> dict[str, Any]:
         """Available scanner types and filter parameters.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/scanner/iserver-scanner-parameters.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/scanner/iserver-scanner-parameters
         Endpoint: GET /iserver/scanner/params
         """
         return self._get("/iserver/scanner/params")
@@ -2029,7 +2417,7 @@ class IBKRClient:
     def run_iserver_scanner(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Run a scanner with full parameter control. Returns [] if no contracts matched.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/scanner/iserver-market-scanner.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/scanner/iserver-market-scanner
         Endpoint: POST /iserver/scanner/run
         """
         data = self._post("/iserver/scanner/run", params)
@@ -2044,7 +2432,7 @@ class IBKRClient:
         """Account notifications — order fills, margin calls, system messages.
 
         IBKR enforces a hard cap of 10 notifications per request.
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-notifications.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-a-list-of-notifications
         Endpoint: GET /fyi/notifications
         """
         max_results = min(max(1, max_results), 10)
@@ -2054,7 +2442,7 @@ class IBKRClient:
     def get_unread_count(self) -> int:
         """Number of unread FYI notifications.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/unread-bulletins.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/unread-bulletins
         Endpoint: GET /fyi/unreadnumber
         """
         data = self._get("/fyi/unreadnumber")
@@ -2063,7 +2451,7 @@ class IBKRClient:
     def get_delivery_options(self) -> dict[str, Any]:
         """Notification delivery channel configuration.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-delivery-options.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/get-delivery-options
         Endpoint: GET /fyi/deliveryoptions
         """
         return self._get("/fyi/deliveryoptions")
@@ -2071,7 +2459,7 @@ class IBKRClient:
     def get_mta_alert(self) -> MTAAlert | dict[str, Any]:
         """Mobile Trading Alerts — account-level watchdog alerts.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-mta-alert.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-mta-alert
         Endpoint: GET /iserver/account/mta
         """
         return parse_one(MTAAlert, self._get("/iserver/account/mta"))
@@ -2079,7 +2467,7 @@ class IBKRClient:
     def get_alerts(self, account_id: str) -> list[Alert | dict[str, Any]]:
         """All price alerts configured on the account. The orderId field is the alert ID.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-a-list-of-available-alerts
         Endpoint: GET /iserver/account/{accountId}/alerts
         """
         _validate_account_id(account_id)
@@ -2128,7 +2516,7 @@ class IBKRClient:
     def get_watchlist(self, watchlist_id: str) -> WatchlistDetail | dict[str, Any]:
         """Contents of a specific watchlist. Uses the watchlist ID as a query param.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/get-watchlist-information
         Endpoint: GET /iserver/watchlist
         """
         return parse_one(WatchlistDetail, self._get("/iserver/watchlist", {"id": watchlist_id}))
@@ -2167,7 +2555,7 @@ class IBKRClient:
         Documented errors: 401, 500, 503 — **no 404**, which is worth knowing because an
         unentitled account is reported some other way (API-R4).
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories
         Endpoint: GET /forecast/category/tree
         """
         return self._get("/forecast/category/tree")
@@ -2181,7 +2569,7 @@ class IBKRClient:
         Args:
             conid: The event contract's identifier.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract
         Endpoint: GET /forecast/contract/details
         """
         _validate_conid(conid)
@@ -2195,7 +2583,7 @@ class IBKRClient:
                 `underlyingConid`, documented required).
             exchange: Optional exchange; IBKR determines one internally when omitted.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets
         Endpoint: GET /forecast/contract/market
         """
         _validate_conid(underlying_conid)
@@ -2210,7 +2598,7 @@ class IBKRClient:
         Args:
             conid: The event contract's identifier.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules
         Endpoint: GET /forecast/contract/rules
         """
         _validate_conid(conid)
@@ -2222,7 +2610,7 @@ class IBKRClient:
         Args:
             conid: The event contract's identifier.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule
         Endpoint: GET /forecast/contract/schedules
         """
         _validate_conid(conid)
@@ -2232,6 +2620,7 @@ class IBKRClient:
     # Order Management (write — human auth required)
     # ------------------------------------------------------------------
 
+    @_audited_write("place_order")
     def place_order(
         self,
         account_id: str,
@@ -2283,7 +2672,7 @@ class IBKRClient:
         is accepted — this docstring previously claimed HTTP 400 without both, which the
         measurement contradicts.
         Source: https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-changelog/
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
 
         Returns whatever IBKR sent, always as a list. The endpoint publishes THREE shapes:
         the normal array, the Alternate (reply-required) array, and a bare object
@@ -2294,7 +2683,7 @@ class IBKRClient:
         list; it already existed, but was applied only by ``place_order_and_confirm``, one
         layer too far out to save the dict.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/account/{accountId}/orders
         """
@@ -2319,7 +2708,7 @@ class IBKRClient:
         # manualIndicator is FUT/FOP only (CME Rule 536-B) — caller adds it for futures;
         # omit here to avoid type-rejection on equity orders. extOperator is NOT sent at
         # all: IBKR rejects any non-empty value as field 8089 (see place_order's docstring).
-        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         data = self._post(f"/iserver/account/{account_id}/orders", {"orders": [api_order]})
         # IBKR's documented rejection is a bare OBJECT — `{"error": "We cannot accept an
@@ -2330,6 +2719,7 @@ class IBKRClient:
         # ever applied by `place_order_and_confirm`, one layer too late to save the dict.
         return _as_reply_list(data)
 
+    @_audited_write("modify_order")
     def modify_order(
         self,
         account_id: str,
@@ -2382,7 +2772,7 @@ class IBKRClient:
         exact replacement body and order id. When it covers them, Gate 1 is not repeated;
         Gate 2 always runs. Called directly with none, it prompts as it always has.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/account/{accountId}/order/{orderId}
         """
@@ -2413,8 +2803,14 @@ class IBKRClient:
         api_order = {k: v for k, v in order.items() if not k.startswith("_")}
         return self._post(f"/iserver/account/{account_id}/order/{order_id}", api_order)
 
+    @_audited_write("cancel_order")
     def cancel_order(
-        self, account_id: str, order_id: str, order_details: dict[str, Any] | None = None
+        self,
+        account_id: str,
+        order_id: str,
+        order_details: dict[str, Any] | None = None,
+        *,
+        manual_indicator: bool | None = None,
     ) -> dict[str, Any]:
         """Cancel an order. Requires Touch ID (Gate 1) + tkinter confirmation dialog (Gate 2).
 
@@ -2423,12 +2819,63 @@ class IBKRClient:
         mirrors modify_order()'s dialog, which already receives the full order dict. Found
         missing live 2026-07-10 — user-flagged hard requirement.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/cancel-order.md
+        **`manual_indicator` is the CME Rule 536-B tag on the cancel** (2.2.0, claudia_ui gap
+        #7). IBKR lists `manualIndicator` as a query parameter "required when trading Futures
+        and Futures Options contracts to remain in compliance with CME Group Rule 536-B", and
+        adds: "Regardless of original submission, the cancellation must also include the
+        manualIndicator tag". `True` — cancelled by a person through an interface — sends
+        `?manualIndicator=true`; `False` — by an automated system — `?manualIndicator=false`;
+        `None`, the default, sends the bare `DELETE` this method always sent. **The caller
+        states it, as it does on place and modify** (`place_order`): only the caller knows the
+        contract class and who made the decision, so nothing here derives it from the display
+        dict or guesses it. For a FUT or FOP cancel a caller should pass it; on other classes
+        leave it out — the tag is rejected on an equity *place*, and an equity cancel carrying
+        it has not been probed.
+
+        What was measured, and what was not:
+
+        - A bare cancel is **accepted**: seventeen futures orders (ES on CME, CL on NYMEX),
+          2026-07-28 to 2026-09-24, each read back `Cancelled`, none rejected — counted from
+          claudia_ui's decision log. Acceptance is not compliance — that is why the parameter
+          exists.
+        - A cancel carrying `?manualIndicator=true` is **accepted**: 2026-10-01, a resting ES
+          limit order, through both gates. The gateway's own request log recorded the
+          `DELETE` with the query string and `200`; the order read back `Cancelled`. The body
+          is the bare cancel's own — `{"msg": "Request was submitted", "order_id": …,
+          "conid": -1, "account": null}` — so **the response cannot tell a caller whether the
+          tag was sent**; the log line this method writes can.
+        - `extOperator` is **not sent**, on cancel as on place and modify: IBKR documents it
+          beside `manualIndicator` and rejects it on a place as field 8089 (`place_order`).
+          On a cancel it has not been probed.
+        - What IBKR does with the tag after accepting it is not observable from here.
+
+        Args:
+            account_id: The account holding the order.
+            order_id: IBKR's order id.
+            order_details: Display-only detail for Gate 2; fetched after Gate 1 when omitted.
+            manual_indicator: Keyword-only. The Rule 536-B tag, or None to send none.
+
+        Raises:
+            OrderValidationError: `manual_indicator` is neither a bool nor None — refused
+                before any gate, since the string "false" is truthy and a compliance tag is
+                never coerced.
+            HumanAuthError: A gate declined or timed out. Nothing was sent.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/cancel-order.md
+                (read 2026-10-01, byte-identical to the 2026-09-08 capture)
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
-        Endpoint: DELETE /iserver/account/{accountId}/order/{orderId}
+        Endpoint: DELETE /iserver/account/{accountId}/order/{orderId}[?manualIndicator=true|false]
         """
         _validate_account_id(account_id)
         _validate_order_id(order_id)
+        # A compliance tag is stated, never coerced: the string "false" is truthy. Refused
+        # here, before the gates, so nothing is asked of the human for a request that will
+        # not be sent.
+        if manual_indicator is not None and not isinstance(manual_indicator, bool):
+            raise OrderValidationError(
+                f"manual_indicator must be True, False or None, not {manual_indicator!r} — "
+                "it is sent to IBKR as the CME Rule 536-B tag and is never guessed from another value"
+            )
         self._ensure_accounts_initialized()
         require_touch_id(f"cancel IBKR order {order_id}")
         # Cancel is a single write with no reply chain, so no authorization value — but
@@ -2445,7 +2892,15 @@ class IBKRClient:
         confirm_cancel_dialog(order_id, account_id, order_details)
         path = f"/iserver/account/{account_id}/order/{order_id}"
         url = f"{self._base}{path}"
-        resp = with_retry(lambda: self._session.delete(url, timeout=30), path=path)
+        # IBKR's own spelling (`?manualIndicator=true`), never Python's `True`. `extOperator`
+        # is not sent, on cancel as on place and modify (see `place_order`).
+        params = None if manual_indicator is None else {"manualIndicator": "true" if manual_indicator else "false"}
+        log.info(
+            "cancel:%s %s",
+            order_id,
+            "manualIndicator not sent" if params is None else f"manualIndicator={params['manualIndicator']}",
+        )
+        resp = with_retry(lambda: self._session.delete(url, params=params, timeout=30), path=path)
         return _decode(resp, path)
 
     def _refuse_child_larger_than_parent_fill(self, order_id: str, order: dict[str, Any]) -> str | None:
@@ -2474,8 +2929,10 @@ class IBKRClient:
         filled — so held-vs-released is decided by the PARENT's fill state and never by the
         child's status string.
 
-        Failure is not refusal. `/iserver/account/order/status` is rate-limited (measured
-        HTTP 503 after a dense run), and a read that fails must not block an urgent modify;
+        Failure is not refusal. `/iserver/account/order/status` can answer HTTP 503 (measured
+        2026-09-21 after a dense run and read then as a rate limit; IBKR documents a 503 there
+        as its answer for an order it holds no cached information about, so which it was is not
+        established — register F36), and a read that fails must not block an urgent modify;
         the gap is named on Gate 2 instead, the same pattern `confirm_cancel_dialog` uses
         when it cannot read an order at all. A control with a SILENT skip is not a control —
         this one says so on the screen.
@@ -2547,13 +3004,17 @@ class IBKRClient:
         An order id is not something a human can verify against the order they mean.
 
         Read-only and failure-tolerant on purpose: a cancel must not become impossible
-        because a *display* read failed, and `/iserver/account/order/status` is rate-limited
-        (measured 2026-09-21: HTTP 503 after a dense run of calls). Returning None lets the
-        dialog state the gap instead of pretending it does not exist.
+        because a *display* read failed, and `/iserver/account/order/status` can answer HTTP
+        503 (measured 2026-09-21 after a dense run of calls; whether that was pacing or IBKR's
+        documented "no cached information" answer is not established — register F36).
+        Returning None lets the dialog state the gap instead of pretending it does not exist.
 
-        `_multiplier_unknown` is set for FUT/FOP because an order-status read never carries
-        the contract multiplier, and price x quantity on a future is not an estimate — it is
-        the notional divided by the multiplier.
+        `_multiplier_unknown` is set for FUT/FOP/OPT because an order-status read never carries
+        the contract multiplier, and price x quantity on a future or an option is not an
+        estimate — it is the notional divided by the multiplier. `"FUT"` is the spelling
+        measured live on this endpoint; `"OPT"` is IBKR's on the contract endpoints and is
+        assumed here, no option order having been placed live through this package
+        (2026-11-12).
 
         **`limit_price` and `stop_price` are read although IBKR documents neither.** They are
         absent from both the field list and the example response object on the order-status
@@ -2597,7 +3058,7 @@ class IBKRClient:
         price = status.get("limit_price") or status.get("stop_price")
         if price not in (None, ""):
             details["price"] = price
-        if str(status.get("sec_type") or "").upper() in ("FUT", "FOP"):
+        if str(status.get("sec_type") or "").strip().upper() in MULTIPLIER_ASSET_CLASSES:
             details["_multiplier_unknown"] = True
         # A6 — cancelling one leg of an OCA group cancels the whole group. The endpoint
         # returns the membership and this method dropped it, which is the same shape as the
@@ -2639,6 +3100,7 @@ class IBKRClient:
             details["outsideRTH"] = True
         return {k: v for k, v in details.items() if v not in (None, "")}
 
+    @_audited_write("reply_order")
     def reply_order(self, reply_id: str, ibkr_confirmed: bool = True) -> list[dict[str, Any]]:
         """Confirm an order requiring an explicit IBKR reply (e.g. after a warning).
 
@@ -2656,7 +3118,7 @@ class IBKRClient:
         text IBKR wants the human to read before confirming; the caller (Gate 2
         dialog) must display it, not just the reply_id.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
                 https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
         Endpoint: POST /iserver/reply/{replyId}
         """
@@ -2673,6 +3135,7 @@ class IBKRClient:
         # point is that one endpoint is not read three ways.
         return _as_reply_list(data)
 
+    @_audited_write("_resolve_one_reply")
     def _resolve_one_reply(
         self,
         entry: dict[str, Any],
@@ -2693,13 +3156,15 @@ class IBKRClient:
         from the confirmation POST (caller normalizes list vs. dict per its own
         return-type contract via _as_reply_list()/_as_reply_dict()).
 
-        On decline (HumanAuthError from confirm_reply_dialog), POSTs
-        {"confirmed": False} to IBKR *before* re-raising — unlike the standalone
+        When the reply is not confirmed (any HumanAuthError from confirm_reply_dialog: declined,
+        not answered in time, or the dialog failed), POSTs {"confirmed": False} to IBKR *before*
+        raising `ReplyNotConfirmedError`, whose message says which and quotes IBKR's question
+        (register F34; it was "User declined IBKR order reply" for all three) — unlike the standalone
         reply_order(), which raises without ever contacting IBKR and leaves the
         order ambiguous on IBKR's side. This is a deliberate behavior change, not
         a bug: see docs/plans/archive/security-orders/2026-07-06-order-reply-confirmation-design.md.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
         Endpoint: POST /iserver/reply/{replyId}
 
         `authorization` / `scope` (2026-09-11): the chain's authorization and the scope it was
@@ -2739,14 +3204,74 @@ class IBKRClient:
         else:
             log.info("Gate 1: reply %s covered by authorization %s", reply_id, scope)
         try:
-            # The unauthorised path keeps its call exactly as before — no label to show.
-            reply_kwargs = {"order_label": authorization.label} if authorization is not None else {}
-            confirm_reply_dialog(reply_id, message, options, **reply_kwargs)
-        except HumanAuthError:
+            if authorization is None:
+                # The unauthorised path keeps its call exactly as before — no label to show,
+                # and no write to name.
+                confirm_reply_dialog(reply_id, message, options)
+            else:
+                confirm_reply_dialog(
+                    reply_id,
+                    message,
+                    options,
+                    order_label=authorization.label,
+                    modifies=authorization.kind == "modify",
+                )
+        except HumanAuthError as refusal:
             self._post(f"/iserver/reply/{reply_id}", {"confirmed": False})
-            raise HumanAuthError("User declined IBKR order reply") from None
+            raise ReplyNotConfirmedError(_reply_not_confirmed_message(message, refusal)) from refusal
         record["confirmed"] = True
         return self._post(f"/iserver/reply/{reply_id}", {"confirmed": True})
+
+    def _resolve_reply_chain(
+        self,
+        response: list[dict[str, Any]],
+        reply_log: list[dict[str, Any]] | None,
+        authorization: OrderWriteAuthorization,
+        scope: str,
+    ) -> list[dict[str, Any]]:
+        """Walk every index of a multi-ticket reply chain until no entry carries an `id`.
+
+        Extracted from `place_bracket_and_confirm` on 2026-10-17 so the attach write shares
+        it; the bracket tests pin its behaviour — a reply on the SECOND ticket, a terminal
+        leg kept while another still replies, a re-sent reply id refused, replies answered
+        in index order back-to-back. The rationale is that method's docstring: IBKR's reply
+        array is index-aligned with the submitted tickets, so every entry carrying an `id` is
+        resolved, and the terminal entries are accumulated rather than replaced because the
+        composition of a reply's response is not yet measured (M6).
+
+        Returns the terminal entries — everything IBKR said that was not a question — in
+        the order first seen, de-duplicated on exact equality (and only that; see
+        `place_bracket_and_confirm`).
+
+        Raises:
+            IBKRAPIError: IBKR re-sent a reply id that was already answered — a loop, not a
+                chain, and every round of it would prompt a human again.
+        """
+        terminal: list[dict[str, Any]] = []
+        answered: set[str] = set()
+        while True:
+            # `dict` and not `Mapping` here, deliberately: `response` is `_as_reply_list` over
+            # a `_post` body, so these rows are JSON the caller decoded a moment ago and can
+            # never be a typed model. The two checks that read data a CALLER may supply —
+            # `pair_bracket_response` and `_cancel_dialog_details` — take `Mapping`.
+            pending = [entry for entry in response if isinstance(entry, dict) and "id" in entry]
+            for entry in response:
+                if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
+                    terminal.append(entry)
+            if not pending:
+                return terminal
+            latest: list[dict[str, Any]] = []
+            for entry in pending:
+                reply_id = str(entry["id"])
+                if reply_id in answered:
+                    # Answering the same precaution twice is not a chain. Each round costs a
+                    # human dialog, so an unguarded loop would prompt forever.
+                    raise IBKRAPIError(f"IBKR re-sent reply {reply_id}, which was already answered")
+                answered.add(reply_id)
+                latest.extend(
+                    _as_reply_list(self._resolve_one_reply(entry, reply_log, authorization=authorization, scope=scope))
+                )
+            response = latest
 
     def place_order_and_confirm(
         self,
@@ -2773,12 +3298,13 @@ class IBKRClient:
 
         Runs the loop body back-to-back with no unrelated requests interleaved — IBKR's
         docs warn that a reply left pending while other requests are made will 503 on
-        the next reply attempt. If the human declines any reply in the chain,
-        HumanAuthError is raised (see _resolve_one_reply() for the decline-then-POST
-        semantics, a deliberate change from reply_order()'s behavior).
+        the next reply attempt. If any reply in the chain is not confirmed — declined, or
+        not answered — IBKR is answered no and ReplyNotConfirmedError (a HumanAuthError) is
+        raised, saying which (see _resolve_one_reply() for the decline-then-POST semantics,
+        a deliberate change from reply_order()'s behavior).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
         Endpoint: POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
 
         `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
@@ -2795,6 +3321,7 @@ class IBKRClient:
             )
         return response
 
+    @_audited_write("place_bracket_and_confirm")
     def place_bracket_and_confirm(
         self,
         account_id: str,
@@ -2869,8 +3396,8 @@ class IBKRClient:
             IBKRAPIError: IBKR re-sent a reply id that was already answered — a loop, not a
                 chain, and every round of it would prompt a human again.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
         Endpoint: POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
         """
         _validate_account_id(account_id)
@@ -2892,39 +3419,99 @@ class IBKRClient:
         # Gate 2, once, both legs.
         confirm_bracket_dialog(parent, children, account_id)
         response = _as_reply_list(self._post(f"/iserver/account/{account_id}/orders", {"orders": tickets}))
-        terminal: list[dict[str, Any]] = []
-        answered: set[str] = set()
-        while True:
-            # `dict` and not `Mapping` here, deliberately: `response` is `_as_reply_list` over
-            # a `_post` body, so these rows are JSON this method decoded a moment ago and can
-            # never be a typed model. The two checks that read data a CALLER may supply —
-            # `pair_bracket_response` and `_cancel_dialog_details` — take `Mapping`.
-            pending = [entry for entry in response if isinstance(entry, dict) and "id" in entry]
-            for entry in response:
-                if isinstance(entry, dict) and "id" not in entry and entry not in terminal:
-                    terminal.append(entry)
-            if not pending:
-                # Verify before returning, so a caller that never calls pair_bracket_response
-                # still leaves a record. NOT raised: the orders are already placed by now, and
-                # swallowing IBKR's response to throw would destroy the only account of what
-                # happened. The caller decides what to tell a human; this decides that nobody
-                # can fail to be told.
-                pairing = pair_bracket_response(tickets, terminal)
-                for problem in pairing.problems:
-                    log.error("Bracket response did not pair cleanly: %s", problem)
-                return terminal
-            latest: list[dict[str, Any]] = []
-            for entry in pending:
-                reply_id = str(entry["id"])
-                if reply_id in answered:
-                    # Answering the same precaution twice is not a chain. Each round costs a
-                    # human dialog, so an unguarded loop would prompt forever.
-                    raise IBKRAPIError(f"IBKR re-sent reply {reply_id}, which was already answered")
-                answered.add(reply_id)
-                latest.extend(
-                    _as_reply_list(self._resolve_one_reply(entry, reply_log, authorization=authorization, scope=scope))
-                )
-            response = latest
+        terminal = self._resolve_reply_chain(response, reply_log, authorization, scope)
+        # Verify before returning, so a caller that never calls pair_bracket_response still
+        # leaves a record. NOT raised: the orders are already placed by now, and swallowing
+        # IBKR's response to throw would destroy the only account of what happened. The
+        # caller decides what to tell a human; this decides that nobody can fail to be told.
+        pairing = pair_bracket_response(tickets, terminal)
+        for problem in pairing.problems:
+            log.error("Bracket response did not pair cleanly: %s", problem)
+        return terminal
+
+    @_audited_write("attach_order_and_confirm")
+    def attach_order_and_confirm(
+        self,
+        account_id: str,
+        parent_order_id: str,
+        child: dict[str, Any],
+        *,
+        reply_log: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Attach ONE child to an order already working at IBKR — IBKR's sequential bracket form.
+
+        In IBKR's model an attached order is a bracket child whose parent already exists, and
+        this is exactly that: the parent is read from IBKR (`get_order_status`) and refused
+        unless working; the child is completed from that record (`_complete_child`: the
+        parent's contract and size, the opposite side, the parent's TIF unless the child
+        states one); the bracket rules run unchanged (`_bracket_tickets`: link, opposite side,
+        same contract, child ≤ parent, child TIF ≤ the parent's); one Touch ID with scope kind `attach`, bound to the
+        ticket AND the parent's id; the bracket dialog with the parent's "At IBKR" row; one
+        ticket posted, carrying `parentId` = IBKR's own order id.
+
+        **One child per write.** IBKR documents the sequential form one order at a time, and
+        one Touch ID covers one write (the standing rule, 2026-09-11): two children on a
+        working order are two calls. No cap on how many children a parent may carry — IBKR
+        decides, and the dialog shows what the parent already has.
+
+        `place_order_and_confirm` is not reused and not modified (D5): the ticket goes
+        through the same array endpoint the bracket write uses, as a one-element array, and
+        its reply chain through the same walker.
+
+        Returns IBKR's terminal entries. The one post-send check is `attached_entry`: a
+        response that does not report the link — no entry whose `parent_order_id` is the
+        parent — is logged at ERROR and returned intact, never treated as success and never
+        raised over, because the order is placed by then. The caller words it
+        (claudia_ui gap #36, design 2026-10-17 § 1).
+
+        Args:
+            account_id: The account the parent works in and the child is sent to.
+            parent_order_id: IBKR's order id of the working parent.
+            child: The child ticket as the caller wants it — order type, prices, a TIF if
+                not the parent's, `outsideRTH` if stated, display-only `_` keys. Its conid,
+                side and quantity are derived from the parent and never taken from here.
+            reply_log: When given, receives one record per resolved reply.
+
+        Raises:
+            ValueError: The parent is not working, cannot yield a child (no side, size or
+                conid in IBKR's record), or the pair fails a bracket rule — all before any gate.
+            HumanAuthError: Touch ID failed, or the human declined the dialog or any reply.
+            IBKRAPIError: IBKR re-sent a reply id that was already answered.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status
+        Endpoint: GET /iserver/account/order/status/{orderId}, then
+                  POST /iserver/account/{accountId}/orders, then POST /iserver/reply/{replyId}*
+        """
+        _validate_account_id(account_id)
+        _validate_order_id(parent_order_id)
+        self._ensure_accounts_initialized()
+        parent = _parent_from_status(parent_order_id, self.get_order_status(parent_order_id))
+        kid = _complete_child(parent, child)
+        # The bracket rules, unchanged, before any gate; [0] is the parent, never sent.
+        ticket = self._bracket_tickets(parent, [kid])[1]
+        ticket["acctId"] = account_id
+        # Gate 1, bound to this ticket AND this parent: an authorization earned for one
+        # parent never covers a child of another.
+        scope = _order_write_scope("attach", account_id, ticket, order_id=parent_order_id)
+        # Named by the CHILD being sent, never by the parent: the Touch ID prompt and every reply
+        # dialog of this write say "SELL 1 F (attached to order …)". Live 2026-10-18 the reply
+        # dialog for a SELL stop was titled with the parent's "BUY 1 F" — the last screen before
+        # a send must name the order it sends. The child carries no ticker on the wire (the
+        # contract is the conid), so the parent's is lent to the label only.
+        child_label = _order_label({**kid, "ticker": parent["ticker"]})
+        label = f"{child_label} (attached to order {parent_order_id})"
+        authorization = _authorize_order_write(
+            f"attach {child_label} to IBKR order {parent_order_id} ({_order_label(parent)})", scope, label
+        )
+        log.info("Gate 1: granted for %s (%s)", scope, label)
+        # Gate 2: the bracket dialog, the parent shown as IBKR's.
+        confirm_bracket_dialog(parent, [kid], account_id)
+        response = _as_reply_list(self._post(f"/iserver/account/{account_id}/orders", {"orders": [ticket]}))
+        terminal = self._resolve_reply_chain(response, reply_log, authorization, scope)
+        if attached_entry(parent_order_id, terminal) is None:
+            log.error("IBKR's response does not report the order attached to %s: %s", parent_order_id, terminal)
+        return terminal
 
     def modify_order_and_confirm(
         self,
@@ -2967,16 +3554,21 @@ class IBKRClient:
 
         Live 2026-09-21: a parent-price modify was accepted with **no reply chain at all** —
         the place of the same order raised the account's value-limit precaution, and the modify
-        to a slightly lower price, still over that same limit, raised none. So IBKR does
-        not re-raise that precaution on modify, and **the modify reply chain remains
-        un-exercised live**; only the place_order 3-reply chain has been (see
-        place_order_and_confirm()'s docstring). The fix above rests on IBKR's documented shape
-        plus an offline reproduction, not on a live precaution.
+        to a slightly lower price, still over that same limit, raised none.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
+        **Live 2026-11-12: the modify reply chain ran for the first time.** A modify of an ES
+        order placed on IBKR Mobile (BUY 1 LMT 7000 → 6990, GTC) drew the account's Total Value
+        Limit precaution ("value estimate of 349,500 USD exceeds the Total Value Limit of 100,000
+        USD"); it was shown in its own dialog, confirmed, and the chain resolved under the one
+        Touch ID with IBKR answering `PreSubmitted` — the order read back at 6990 (register F47).
+        So IBKR does raise that precaution on a modify, and did not on 2026-09-21 — the first
+        order had been placed through this API, its precaution answered at placement; the second
+        on IBKR Mobile. That is the difference observed, not a rule established.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
+
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
         Endpoint: POST /iserver/account/{accountId}/order/{orderId}, then POST /iserver/reply/{replyId}*
 
         `reply_log` collects one record per resolved reply (see _resolve_one_reply); the
@@ -3004,7 +3596,7 @@ class IBKRClient:
         `tests/security/test_preview_is_not_execution.py`, which asserts this is the only
         function in `client.py` building it.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order
         Endpoint: POST /iserver/account/{accountId}/orders/whatif
         """
         _validate_account_id(account_id)
@@ -3017,11 +3609,11 @@ class IBKRClient:
         One ticket. A bracket cannot come through here — it is one request carrying an array,
         so it has its own entry point (`get_bracket_preview`); both post through `_whatif`.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order
         Endpoint: POST /iserver/account/{accountId}/orders/whatif
         """
         # Strip display-only fields (underscore-prefixed) — same convention as place_order.
-        # Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
         api_order = {k: v for k, v in dict(order).items() if not k.startswith("_")}
         return self._whatif(account_id, [api_order])
 
@@ -3089,8 +3681,16 @@ class IBKRClient:
         two pages disagree: the field table says `BUY`/`SELL`, the bracket example writes
         `"Buy"`/`"Sell"`. The caller's own casing is passed through untouched.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+        **A child's TIF is equal to or shorter than the parent's** (claudia_ui gap #36, operator
+        rule 2026-10-18). IBKR's TWS guide: "You must set the TIF for a child order equal to or
+        shorter than that of the parent. Otherwise, the TIF of the parent order will override
+        that of the child order" — so a GTC exit on a DAY parent would reach IBKR as DAY after
+        the human approved GTC. `order_confirm.child_tif_defect` holds the ranking and the
+        quote; only a stated pair is compared.
+
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+                https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm
         """
         ref = parent.get("cOID")
         # Blank-after-strip, not merely falsy: `cOID="   "` passed a bare truthiness test,
@@ -3148,6 +3748,13 @@ class IBKRClient:
                         f"A bracket child may never be larger than the parent: "
                         f"child {kid_qty:g} > parent {parent_qty:g}"
                     )
+            # The child's TIF is equal to or shorter than the parent's — IBKR's rule, quoted on
+            # `order_confirm.child_tif_defect` with its ranking. Checked here so a place is
+            # refused BEFORE Touch ID and the preview inherits it; the dialog repeats it, as it
+            # does the rules above. Only a stated pair is compared: a child with no TIF takes
+            # the parent's downstream.
+            if (tif_defect := child_tif_defect(parent, kid)) is not None:
+                raise ValueError(f"A bracket child's TIF is refused: {tif_defect}")
         return [{k: v for k, v in t.items() if not k.startswith("_")} for t in (parent, *children)]
 
     def get_bracket_preview(
@@ -3157,7 +3764,8 @@ class IBKRClient:
 
         Read-only, no gates, like `get_order_preview`. Both legs are sent so the ticket ARRAY
         is validated as one unit: `_bracket_tickets` runs the same structural rules here as on
-        the write path — the parent→child link, one contract, opposite sides, H1 — so a pair
+        the write path — the parent→child link, one contract, opposite sides, H1, the child's TIF
+        no longer than the parent's — so a pair
         that could not be placed is not priced either.
 
         **They are not sent for the price.** This said "because a preview of the parent alone
@@ -3173,7 +3781,7 @@ class IBKRClient:
         and size refusals live in `_bracket_tickets` and `confirm_bracket_dialog` and can
         never be replaced by a reading of this response.
 
-        Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact.md
+        Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/preview-margin-impact
         Endpoint: POST /iserver/account/{accountId}/orders/whatif
         """
         return self._whatif(account_id, self._bracket_tickets(parent, children))
@@ -3187,7 +3795,7 @@ class IBKRClient:
         (same pattern as get_order_status) — IBKR resolves the alert from the
         session's logged-in account.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/get-details-of-a-specific-alert.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/get-details-of-a-specific-alert
         Endpoint: GET /iserver/account/alert/{order_id}?type=Q
         """
         _validate_order_id(alert_id)
@@ -3229,7 +3837,7 @@ class IBKRClient:
     def delete_alert(self, account_id: str, alert_id: str) -> dict[str, Any]:
         """Delete an alert permanently.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/delete-an-alert.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/delete-an-alert
         Endpoint: DELETE /iserver/account/{accountId}/alert/{alertId}
         """
         _validate_account_id(account_id)
@@ -3242,7 +3850,7 @@ class IBKRClient:
     def activate_alert(self, account_id: str, alert_id: str, activate: bool = True) -> dict[str, Any]:
         """Toggle alert on (activate=True) or off (activate=False) without deleting it.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/alerts/activate-or-deactivate-an-alert.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/alerts/activate-or-deactivate-an-alert
         Endpoint: POST /iserver/account/{accountId}/alert/activate
         """
         _validate_account_id(account_id)
@@ -3258,7 +3866,7 @@ class IBKRClient:
     def create_watchlist(self, name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Create a new watchlist. rows is a list of {"C": conid} objects.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/create-a-watchlist.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/create-a-watchlist
         Endpoint: POST /iserver/watchlist
         """
         return self._post("/iserver/watchlist", {"id": name, "name": name, "rows": rows})
@@ -3266,7 +3874,7 @@ class IBKRClient:
     def delete_watchlist(self, watchlist_id: str) -> dict[str, Any]:
         """Delete a watchlist permanently. watchlist_id is passed as query param `id`.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/watchlists/delete-a-watchlist.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/watchlists/delete-a-watchlist
         Endpoint: DELETE /iserver/watchlist
         """
         url = f"{self._base}/iserver/watchlist"
@@ -3298,7 +3906,7 @@ class IBKRClient:
 
         Returns {"V": 1, "T": <ms>} — V acknowledges the edit, T is how long it took.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/mark-notification-read.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/mark-notification-read
                 https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-fy-is-and-notifications/read-fyi-notification.md
         Endpoint: PUT /fyi/notifications/{notificationId}
         """
@@ -3344,8 +3952,8 @@ class IBKRClient:
             device_name: Human-readable device name; defaults to `device_id`.
             ui_name: Interface title; defaults to `device_id`.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-device-option.md
-                https://ibkrcampus.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-email-option.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-device-option
+                https://www.interactivebrokers.com/docs/web-api/v1/endpoints/fy-is-and-notifications/enable-disable-email-option
         Endpoint: POST /fyi/deliveryoptions/device | PUT /fyi/deliveryoptions/email
         """
         _validate_delivery_option(option)
@@ -3378,7 +3986,7 @@ class IBKRClient:
         IBKRClient instance and caches the result; every order read/write method calls
         it first, so callers never need to call this directly under normal use.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/receive-brokerage-accounts
         Endpoint: GET /iserver/accounts
         """
         return parse_one(BrokerageSession, self._get("/iserver/accounts"))
@@ -3395,7 +4003,7 @@ class IBKRClient:
     def switch_account(self, account_id: str) -> dict[str, Any]:
         """Switch the active account. For advisors and family accounts.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/switch-account.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/switch-account
         Endpoint: POST /iserver/account
         """
         _validate_account_id(account_id)
@@ -3404,7 +4012,7 @@ class IBKRClient:
     def get_pnl(self) -> dict[str, Any]:
         """Real-time partitioned P&L — daily, unrealized, realized — across all positions.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/accounts/account-profit-and-loss
         Endpoint: GET /iserver/account/pnl/partitioned
         """
         return self._get("/iserver/account/pnl/partitioned")
@@ -3412,7 +4020,19 @@ class IBKRClient:
     def logout(self) -> dict[str, Any]:
         """End the current IBKR session.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/logout-of-the-current-session.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/logout-of-the-current-session
         Endpoint: POST /logout
+
+        **Deprecated (register F45, step 2; removed in 3.0).** The gateway session has one owner,
+        `ibkr_core_mcp.gateway.session`: `release_session(url)` is the one logout in the package,
+        reached by `python -m ibkr_core_mcp.gateway preflight --release` and never run
+        automatically — its scope is undocumented and may end an IBKR Mobile session too. A
+        `DeprecationWarning` is emitted; the request is still sent.
         """
+        warnings.warn(
+            "IBKRClient.logout() is deprecated and will be removed in 3.0: the gateway session's one owner "
+            "is ibkr_core_mcp.gateway.session (release_session; `python -m ibkr_core_mcp.gateway preflight --release`).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._post("/logout")

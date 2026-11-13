@@ -17,6 +17,7 @@ while a statement is still generating) and :data:`TRUNCATED_XML`.
 
 from __future__ import annotations
 
+from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.flex_schema import ELEMENTS
 
 # ── Payloads that are not statements ────────────────────────────────────────────
@@ -203,3 +204,36 @@ def annual_statement(
         to_date=end,
         when_generated=f"{year + 1}0102;120000",
     )
+
+
+def lot(**overrides: str) -> str:
+    """Render a `<Lot>` — one closed tax lot — overridable per test.
+
+    Two lots with identical attributes are both stored: the parser folds the occurrence
+    index into each row's key, exactly as it must for a real statement.
+    """
+    attrs = {
+        "accountId": "U0000000",
+        "symbol": "TEST",
+        "assetCategory": "STK",
+        "tradeDate": "20260601",
+        "fifoPnlRealized": "0",
+    }
+    attrs.update(overrides)
+    return element("Lot", **attrs)
+
+
+def seed_flex_dataset(config: Config, *statements: str) -> None:
+    """Store each statement through the real parser and the real writer.
+
+    The read side is tested against tables the write side built, so a test double can never
+    be weaker than the schema: a column the reader needs and the writer does not produce
+    fails here, not in a consumer. (claudia_ui's hand-built tables twice lacked
+    `execution_key`, the column its pending rule rests on — 2026-09-24.)
+    """
+    from ibkr_core_mcp.flex_import import parse_statement
+    from ibkr_core_mcp.store import SQLiteStore
+
+    store = SQLiteStore(config)
+    for index, xml in enumerate(statements):
+        store.upsert_flex_statement(parse_statement(xml, f"synthetic-{index}.xml"))

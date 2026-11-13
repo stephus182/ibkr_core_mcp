@@ -28,26 +28,33 @@ class IBKRAuthError(IBKRCoreError):
 
 
 class IBKRRateLimitError(IBKRCoreError):
-    """Gateway returned 429 or 503 and retries are exhausted; `.status_code` says which.
+    """Gateway returned 429 or 503 — after the retries, or at once on a 503 carrying IBKR's own
+    sentence (not retried since 2026-10-02); `.status_code` says which.
 
     On a 429 the IP is in IBKR's fifteen-minute penalty box, for every endpoint. The pacer that
     should have prevented it (`rate_limiter.EndpointPacer`) budgets per process while IBKR
     counts per IP, so the first suspect is another process on this machine — a script, a test
     run, the MCP server — talking to the same gateway; the second is this process having been
     warned that a call was over the limit and sent anyway (the pacer never holds a call longer
-    than 65 s). A 503 is the gateway being unavailable and means neither.
+    than 65 s). **A 503 is not a pacing verdict and means neither**: it is the gateway being
+    unavailable, or IBKR's own answer to a request it cannot serve — the order-status endpoint
+    documents a 503 for an order it holds no cached information about. `.detail` carries
+    IBKR's sentence when the 503 came with one (register F36).
     """
 
-    def __init__(self, message: str, status_code: int = 0) -> None:
-        """Record the message and the HTTP status that exhausted the retries.
+    def __init__(self, message: str, status_code: int = 0, detail: str = "") -> None:
+        """Record the message and the HTTP status the gateway answered.
 
         Args:
             message: Human-readable description of the failure.
             status_code: 429 or 503 from the gateway; 0 when unknown, so callers can branch
                 on it without it ever being None — the same contract as `IBKRAPIError`.
+            detail: IBKR's own `error` text from the last response's body; "" when the body
+                carried none.
         """
         super().__init__(message)
         self.status_code = status_code
+        self.detail = detail
 
 
 class IBKRAPIError(IBKRCoreError):
@@ -101,6 +108,43 @@ class HumanAuthError(IBKRCoreError):
     """Raised when Touch ID is denied, times out, unavailable, or the user cancels the confirmation dialog."""
 
 
+class ConfirmationTimeoutError(HumanAuthError):
+    """The Gate 2 dialog dismissed itself with no decision: nothing was sent, the order is as it was.
+
+    A subclass, so every `except HumanAuthError` keeps catching it; its own type, so a consumer
+    can record a timeout as a timeout. Until 2026-09-29 the dialog's auto-dismiss raised the
+    abandon button's "Order cancelled by user", and a consumer told its user an order had been
+    cancelled when the timeout had kept it (claudia_ui gap #67, register F21). The message names
+    what the timeout leaves — nothing sent to IBKR, the order as it was — never an action.
+    """
+
+
+class ConfirmationDeclinedError(HumanAuthError):
+    """The human pressed a Gate 2 dialog's abandon button: nothing was sent.
+
+    A subclass, so every `except HumanAuthError` keeps catching it; its own type, so a consumer
+    matches the TYPE and not the wording. Until 2.2.0 the abandon button raised a bare
+    `HumanAuthError("Order cancelled by user")` on every dialog — including the cancel dialog's
+    `KEEP ORDER`, where the click had kept the order — and claudia_ui recognised a decline by
+    finding those words in the message (register F6). The message is each dialog's own sentence
+    for what the click leaves in place: not sent, left unchanged, kept, not confirmed.
+    """
+
+
+class ReplyNotConfirmedError(HumanAuthError):
+    """A question IBKR asked before accepting an order write was not confirmed, and IBKR was
+    answered no.
+
+    Raised by the reply chain of `place_order_and_confirm`, `modify_order_and_confirm` and the
+    bracket, after the `{"confirmed": false}` POST. Its own type because it is neither Gate 2
+    outcome: the write had already been sent when IBKR asked, so "nothing was sent" is not true
+    of it. The message says what happened and why — declined at the dialog, nobody answered in
+    time, or the dialog could not be completed — and quotes IBKR's question; `__cause__` is the
+    dialog's own error for a consumer that wants the reason as a type. Until 2.2.0 all three
+    arrived as `HumanAuthError("User declined IBKR order reply")` (register F34).
+    """
+
+
 class OrderValidationError(IBKRCoreError, ValueError):
     """Raised when this package refuses an order write because it would break a safety rule.
 
@@ -137,3 +181,20 @@ class StreamingError(IBKRCoreError):
 
 class GatewayError(IBKRCoreError):
     """Raised when the IBKR Client Portal Gateway cannot be started or reached."""
+
+
+class RestartRefusedError(GatewayError):
+    """`GatewayManager.start()` / `restart()` refused to end the session the container holds.
+
+    A restart gives the gateway a fresh Java process and so a clean, unauthenticated session.
+    It is refused — before any Docker command — where it would destroy something or help
+    nothing: a LIVE session, a login IBKR REFUSED (a restart did not clear one, 2026-10-08), or
+    one IBKR is still VALIDATING. `force=True` overrides. `code` is the pre-flight's verdict
+    code; `reason` its headline and guidance (register F45, step 2, condition F).
+    """
+
+    def __init__(self, reason: str, *, code: int) -> None:
+        """Carry the verdict's code and its text."""
+        super().__init__(reason)
+        self.reason = reason
+        self.code = code

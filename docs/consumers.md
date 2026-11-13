@@ -10,6 +10,453 @@
 
 ## Changes consumers should know about
 
+### Unreleased — an option order's dialog shows no total unless the host supplies `_multiplier`
+
+**What a host sees.** A Gate 2 dialog for an order whose `secType` names an option (`OPT`,
+`667629330:OPT`, `667629330@OPT`) printed `Total (est.)` as price × quantity: `25.00 USD` for ten
+contracts at 2.50, which cost 2,500. It now reads `— (contract multiplier unknown; not price ×
+quantity)`, the line a future has shown since 2026-09-21.
+
+**What a host that stages option orders does.** Pass the contract's multiplier as the display key
+`_multiplier`, as for a future — IBKR returns it on `/iserver/secdef/info` (`get_secdef_info`), and
+its own example there is an AAPL put with `"multiplier": "100"`. The total is then price × quantity
+× multiplier. Display keys are stripped before the wire, as before.
+
+**What does not change.** A body with no `secType` and no multiplier key — how ClaudIA sends a
+stock — still prints price × quantity. `manualIndicator` is still set for futures and futures
+options only. No option order has been placed live through this package (2026-11-12); this is the
+dialog's arithmetic, measured without a gateway.
+
+### Unreleased — the gateway session has one owner in the package: `get_session()`, `up` / `reset` / `keepalive`, `startup()` through the owner (register F45, step 2)
+
+**What a host imports.** `from ibkr_core_mcp.gateway import get_session, GatewayManager` —
+`get_session()` is the process-wide owner (`GatewaySession`). `get_session().establish(
+GatewayManager(), url=cfg.gateway_url, emit=print)` brings the session to LIVE or says why it
+cannot, blocking (call it from `asyncio.to_thread`); `recover(manager, force=False)` clears a
+session by restarting the container, behind the guard below; `start(url=…)` begins the 60 s
+poll every other component reads from, `state()` / `phase` / `is_live()` / `may_call_ibkr()` are
+the synchronous reads, and `subscribe(callback)` fires on a phase change. `SessionPhase`,
+`SessionState` and `SuspendLock` are exported too. The lock path (`~/.ibkr_core/session.suspend`)
+is a contract: a keepalive still installed from a host reads the same file.
+
+**Behaviour changes.** `GatewayManager.startup()` is now the owner's sequence and returns
+whether the session is LIVE — the two `input()` prompts are gone (nothing reads stdin), a login
+IBKR **refused** is named and the page still opens (the step-1 gate had refused the page; the
+operator's rule of 2026-10-12 stands), and a login IBKR is still **validating** gets no second
+page. `GatewayManager.start()` / `restart()` raise `RestartRefusedError` (`.code`, `.reason`)
+on a LIVE, REFUSED or VALIDATING session unless `force=True`; `recover()` reports that refusal
+as a reading, never an exception. Every session write — the logout, the soft recovery, the
+restart — leaves a redacted `session_write` record in the audit log.
+
+**The command line.** `python -m ibkr_core_mcp.gateway up [--wait-timeout S] [--allow-restart]`
+(0 LIVE · 1 DOWN · 3 otherwise; no `--no-wait`), `reset [--force]` (the before verdict, the
+restart behind the guard, the after verdict; 1 when refused), `keepalive [--print-url]
+[--interval S]` (the host-side tickler; a launchd or systemd unit runs it with the venv's
+Python), `preflight --release` (the one opt-in logout). All take `--env-file`.
+
+**Your test suite.** The owner's I/O is three names in `ibkr_core_mcp.gateway.session`:
+`read_state`, `confirm_session`, `read_login_events` — patch them there, pass
+`lock=SuspendLock(path=tmp_path / "session.suspend")`, and stand in `sleep` and `monotonic`.
+`read_login_events` is a `docker exec`; a unit test must stand it in (this package's door 6
+refuses the real command).
+
+### Unreleased — `IBKRClient.logout()` and `reauthenticate()` are deprecated; the session owner is the one path (register F45, step 2)
+
+Both methods now emit a `DeprecationWarning` and will be removed in 3.0. They still send their
+request, so nothing breaks today — but each is a second authority over the one brokerage
+session, which is what the gateway session owner (`ibkr_core_mcp.gateway.session`, this
+release) exists to remove. Use instead:
+
+- to drop a held session, `python -m ibkr_core_mcp.gateway preflight --release` — the one
+  logout in the package, opt-in, and possibly ending an IBKR Mobile session too (IBKR does not
+  document the scope of `/logout`); in Python, `gateway.session.release_session(url)`;
+- to clear a session a restart can clear (a borrowed one), `python -m ibkr_core_mcp.gateway
+  reset` or `get_session().recover(GatewayManager())`;
+- for a soft timeout (`connected` with `authenticated` false after a working session), nothing:
+  the owner's poll recovers it with `ssodh/init` and `compete: false`. `reauthenticate` is
+  IBKR's own deprecated endpoint and ends fresh logins — never call it proactively.
+
+### Unreleased — secrets at rest: the OS keychain is read before the `.env` file
+
+`keyring>=25` is a new base dependency. `Config.from_env` now resolves `IBKR_FLEX_TOKEN`,
+`FIRECRAWL_API_KEY` and every name you pass as `secret_names` in one order: the environment you
+set, then the OS keychain (macOS Keychain, Windows Credential Locker, Linux Secret Service;
+service `ibkr_core_mcp`, the variable name as the account), then the `.env` file. Nothing changes
+for a host that does nothing: a secret in `.env` or in the environment is read as before, and a
+machine without a usable keychain reads as "absent" with one DEBUG line on the
+`ibkr_core_mcp.secret_store` logger. No secret enters the environment from either store
+(invariant 12).
+
+To move a secret: `python -m ibkr_core_mcp.secret_store set IBKR_FLEX_TOKEN` (typed, never
+echoed, never an argument), or `import-env .env` to store every secret the file holds and be
+told which lines to remove; `list [--env-file PATH]` prints where each is held and never a value.
+Your own names — `ANTHROPIC_API_KEY`, say — take `--names ANTHROPIC_API_KEY` on each subcommand,
+as they take `secret_names=` in code; in Python, `secret_store.read_secret(name)` returns a
+`SecretStr | None` and `secret_store.resolve(name, env)` the stored value in keychain-then-file
+order.
+
+**Your test suite:** set `keyring`'s null backend once in `pytest_configure`
+(`keyring.set_keyring(keyring.backends.null.Keyring())`) so no unit test reads the operator's
+keychain — this package's suite does (door 7), and a `Config.from_env()` inside a test otherwise
+reads the real one.
+
+### Unreleased — verify the release you pin: PEP 740 attestations
+
+Every release since 2.0.1 is published by Trusted Publishing from `publish.yml`, and PyPI holds a
+PEP 740 provenance attestation for each artifact — checked for 2.1.0 on 2026-11-09 (one bundle,
+GitHub publisher `stephus182/ibkr_core_mcp`, workflow `publish.yml`). pip does not verify it at
+install, so a consumer that pins an exact version (claudia_ui's `core-ref.txt`) can verify the
+artifact it installs, in CI or by hand, with the reference tool:
+
+```bash
+pip install pypi-attestations
+pypi-attestations verify pypi --repository https://github.com/stephus182/ibkr_core_mcp \
+  pypi:ibkr_core_mcp-2.1.0-py3-none-any.whl
+# OK: ibkr_core_mcp-2.1.0-py3-none-any.whl          (measured 2026-11-09, pypi-attestations 0.0.31; the sdist likewise)
+```
+
+`--repository` is the claim being checked: the artifact was built by *this* repository's publish
+workflow, not merely signed by someone. A failure is a stop, not a warning — the file on PyPI is
+not the one the tag built. (MCP security checklist 1.2, `docs/audits/mcp-security-checklist-2026-11-09.md`.)
+
+### Unreleased — the package keeps an audit record; a host configures and names itself once
+
+Every tool call and every gated order write now leaves one redacted JSON line in
+`~/.ibkr_core/audit.jsonl` (`ibkr_core_mcp.audit`; MCP security checklist 8.1). What a host does:
+
+- **Configure once at start:** `audit.configure(cfg.audit_log_path)` — the new `Config.audit_log_path`
+  (env `IBKR_AUDIT_LOG`, default `~/.ibkr_core/audit.jsonl`). Without it the default path is used;
+  constructors never configure, so a `Config` built in a test cannot repoint the record.
+- **Name yourself:** `with audit.context(client="your-app 1.2", agent="<model id>"):` around the
+  code that drives the toolkit or the client — the `client` and `agent` fields read `unknown`
+  otherwise. The MCP server fills `client` from the initialize handshake by itself, and the
+  gateway's command line records its own session writes as `ibkr_core_mcp.gateway`, `agent` `none`.
+- **Nothing else.** `ClaudeToolkit.execute` records every call; the seven gated writes record
+  themselves with the gates' own outcome (`sent`, `denied`, `declined`, `timed_out`, `refused`,
+  `error`). A host that already keeps its own transcript or decision store keeps it; this is the
+  package's record of what it did, redacted (every string through `redact_text`, account ids
+  masked, no response text), 0600, one rotation at 20 MB, and never an exception into your path.
+- The two new public names in `ibkr_core_mcp.redaction`: `redact_text(text, limit)`.
+
+### Unreleased — `startup()` opens no login on a session that must not be logged into; the gateway package has a command line (register F45, step 1)
+
+**Behaviour change in `GatewayManager.startup()`.** Once the gateway answers, and before any
+login page, it reads the session — `GET /tickle`, `GET /sso/validate`, and after a FREE reading
+the gateway's own log through `docker exec` — and acts on the verdict: a **live** session returns
+`True` at once (as the fast path already did when the container was running); a **contested**
+session (another IBKR client competing), a **borrowed** one (the gateway holding an SSO session
+issued to another app), a login **IBKR refused**, a login IBKR is **still validating**, or a
+gateway that stopped answering, print the verdict and its guidance and return `False` **without
+opening a login page**. Only a **free** gateway goes on to the login as before. A consumer that
+relied on `startup()` opening the page on every unauthenticated gateway now gets `False` and the
+printed reason on those readings — which is what the readings exist to say: on three of the four
+a login is the wrong move. **Superseded at step 2 for two readings** (the section above): a
+login IBKR refused is named and the page opens, by the operator's rule; a login IBKR is still
+validating still gets no page. The others stand.
+
+**New public module `ibkr_core_mcp.gateway.preflight`** — the readings and the rule, read-only:
+`GatewayState`, `read_state(url)`, `confirm_session(url)`, `verdict(state)` with
+`EXIT_READY … EXIT_VALIDATING`, `LOGIN_PHRASES`, `LoginEvent`, `login_events`, `last_login`,
+`refine_with_log`, `gateway_api_url(env_file=None)`. **New in `gateway.manager`:**
+`read_login_events(timeout=15.0)` — the gateway's own log reduced to time, event and code; no
+container argument. **New in `config`:** `LOOPBACK_HOSTS`, `is_loopback_url`,
+`require_loopback_url`. `read_state` and `confirm_session` raise `ConfigError` on a
+non-loopback URL before any request.
+
+**New command line:** `python -m ibkr_core_mcp.gateway preflight [--env-file PATH]` (exit: the
+verdict's code, 0 READY · 1 DOWN · 2 FREE · 3 BUSY · 4 BORROWED · 5 REFUSED · 6 VALIDATING) and
+`… diagnose [--env-file PATH]` (0 on READY or FREE, else 3). `--env-file` is the `.env` a host
+keeps elsewhere; a non-loopback gateway URL exits 1 before any request. The user id is never
+printed. Step 2 adds `up`, `reset`, `keepalive` and `preflight --release`.
+
+### Unreleased — one child attached to a working order; two new rows on the bracket dialog
+
+**New public API** (claudia_ui gap #36, design 2026-10-17):
+
+| Name | What it is |
+|---|---|
+| `IBKRClient.attach_order_and_confirm(account_id, parent_order_id, child, *, reply_log=None)` | Touch-ID gated. **One** child on an order already working — IBKR's sequential bracket form. The parent is read from IBKR **before Gate 1** and refused (`ValueError`) unless working; the child is completed from IBKR's record (contract, size, opposite side, TIF unless stated — a stated TIF longer than the parent's is refused before any gate, 2026-10-18) and the caller's conid, side and quantity are overridden; Gate 1 scope kind `attach`, bound to the ticket **and** the parent's id; Gate 2 is the bracket dialog titled for an attach, the child's side on its banner, with a `Parent — At IBKR` row; one ticket posted, its reply chain resolved. Returns IBKR's terminal entries. Two children are two calls. Measured live 2026-10-18 |
+| `attached_entry(parent_order_id, entries)` → `dict` or `None` | The entry IBKR reports as attached to the parent, by the `parent_order_id` it echoes, never by position. A **module-level function** — `from ibkr_core_mcp import attached_entry`. The write runs it and logs a response without the link at ERROR; a consumer runs it to word the outcome |
+
+**What a consumer does with the result.** `attached_entry(...)` returning `None` after a write
+means IBKR answered without reporting the link: the order may exist unattached. Say so, and never
+say "attached".
+
+**The bracket dialog is three sections since 2026-10-19** (`Parent`, `Profit taker`, `Stop loss`, each
+titled once, a dict value per section in `details`) **and carries two rows added in this window:** the
+Parent section's `At IBKR` on an attach, and `⚠ Partial fill`
+on any bracket whose parent is above one lot without `allOrNone: true` — rendered red and bold, as
+every `⚠` row now is. A consumer that sets `allOrNone` by product class (IBKR's list: stocks, ETFs,
+options, bonds, EFPs; never futures) sees the line only where a partial fill is possible.
+
+### Unreleased — `Config.flex_token` and `.firecrawl_api_key` are `SecretStr`; a `.env` secret never enters the environment
+
+`Config.from_env()` used to run `load_dotenv(override=False)`, so a consumer that called it
+found `IBKR_FLEX_TOKEN` and `FIRECRAWL_API_KEY` in `os.environ` afterwards and every child
+process inherited them (CWE-526; register F48). It now reads the file through
+`load_env_file`: settings still reach the environment where unset, secrets reach the `Config`
+only, as `pydantic.SecretStr`.
+
+What changes for a caller:
+
+- `cfg.flex_token` and `cfg.firecrawl_api_key` are `SecretStr`. `if cfg.flex_token:` keeps
+  working (an empty secret is falsy); `== "…"`, string formatting and `json.dumps` do not —
+  call `.get_secret_value()` at the one place that sends the value. `Config(flex_token="…")`
+  with a plain string still works at runtime (coerced in `__post_init__`), but the parameter
+  is typed `SecretStr`, so typed code — and a test suite under mypy — passes
+  `SecretStr("…")`; assigning the attribute after construction must assign a `SecretStr`.
+- A consumer whose `.env` lies elsewhere than the package's search finds it passes the path:
+  `Config.from_env(dotenv_path="/path/to/.env")`. Until now the secrets reached `from_env`
+  through the environment a host had already filled; they no longer do, so a host that
+  removes secrets from its environment (claudia_ui does) must pass the path or the Flex
+  token reads as "not configured".
+- A secret set in the real environment is still read, and wins over the file.
+- On POSIX a `.env` readable by group or others has its secrets refused — `EnvFile.refused`
+  carries the message (`load_env_file(...)` returns it), and the package logs a warning.
+
+### Unreleased — `IBKRWebSocket.connect()` completes IBKR's handshake
+
+`connect()` used to return the moment the socket opened. IBKR drops any topic sent before its
+`sts` frame ("Authentication Status", sent on every new connection) and says nothing, so a
+consumer that subscribed straight after `connect()` — every consumer did — could hold a socket
+that stayed open, heartbeated, and never delivered (claudia_ui gap #68: its automatic fill
+report had never fired in production). `connect()` now returns once `sts` has reported
+`authenticated: true`; frames read on the way reach `listen()` first, in order.
+
+What changes for a caller:
+
+- `await ws.connect()` can now take a moment (IBKR's own example waits three seconds before
+  its first topic) and raises `StreamingError` after `auth_timeout` seconds without an `sts`
+  (default 10), or when `sts` reports the brokerage session as not authenticated. The socket is
+  closed before the error is raised. A retry loop that already catches exceptions from
+  `connect()` needs nothing new; one that treated `connect()` as infallible now has an error to
+  handle — the error is the truth it was missing.
+- Subscribing right after `connect()` is now correct. Remove any sleep added to work around
+  the drop.
+- `listen()` still yields `LiveQuote | TradeExecution | PnLUpdate` only. `sts` and the other
+  unsolicited topics are logged (DEBUG, by topic; WARNING for an `sts` reporting the session
+  unauthenticated mid-stream), never yielded.
+- The constructor's `session_cookie` is unchanged. Its docstring now names IBKR's documented
+  form, `api=<session>` from `POST /tickle`; measured 2026-09-24, the gateway authenticated
+  the socket with and without it, so this is documentation, not a behaviour change.
+
+### Unreleased — `get_trade_date_coverage`: the `stale` flag follows the statement rule
+
+The flag used to compare the newest settled **trade** date with the NYSE session before the
+last one, so on day D a store through D-2 read `stale: False` all day (claudia_ui gap #72,
+measured 2026-09-24), and a weekday with no fills read as behind although its statement was
+held. It now applies one sentence: **the store is current when it holds the statement for the
+weekday before today (ET)** — "holds" read from IBKR's own `toDate` in the Flex archive, "the
+weekday before today" from `ibkr_core_mcp.store.newest_statement_day(now)`, which is public
+so a consumer can stop carrying its own copy (claudia_ui's `flex_sync.newest_statement_day`
+is that function).
+
+What changes for a caller:
+
+- Two keys added: `statement_through` (IBKR's `toDate` of the newest statement held, ISO or
+  None) and `newest_statement_day` (ISO). One removed: `last_trading_day` — the NYSE date the
+  old rule needed. The market calendar's own `last_trading_day`, in
+  `get_market_calendar_context`, is unchanged.
+- `stale` is `statement_through is None or statement_through < newest_statement_day`. A store
+  with no Flex archive at all is stale; so is one whose archive holds no statement.
+- The empty store returns **every** key (register F1) — `stale: True`, `oldest`, `newest` and
+  `days_since_newest` None, `total_trades` 0 — where it used to return four. A consumer that
+  read a missing `stale` as "current" was wrong before and gets the right answer now.
+- `days_since_newest` and `days_since_settled` count to the ET date of `now`; the latter is
+  None when no settled trade exists (it used to borrow the legacy table's date).
+- `get_trade_date_coverage(now=<aware datetime>)` is new and optional: the verdict is for that
+  instant, the current time by default.
+- `check_flex_coverage`'s stale note carries the verdict's evidence:
+  `⚠ DATA STALE (statement through 2026-09-22; the newest that can exist is through 2026-09-23)`.
+
+### Unreleased — a Gate 2 timeout is its own outcome
+
+The dialog's auto-dismiss used to raise the abandon button's `HumanAuthError("Order cancelled by
+user")`, so a consumer could not tell a declined dialog from one nobody answered — and told its
+user an order was cancelled when the timeout had kept it (claudia_ui gap #67, register F21, seen
+live 2026-09-25). Now:
+
+- `ConfirmationTimeoutError`, a subclass of `HumanAuthError` exported from `ibkr_core_mcp`, is
+  raised when the dialog dismisses itself with no decision, on all three renderers (the AppKit
+  subprocess, the osascript fallback, tkinter). Its message names what the timeout leaves:
+  "Confirmation dialog timed out after 60 s with no decision — nothing was sent to IBKR; the
+  order is as it was". Catch it before `HumanAuthError` to record a timeout as a timeout; a bare
+  `except HumanAuthError` keeps working.
+- The dialog script prints `TIMED_OUT` beside `CONFIRMED` and `CANCELLED`; `order_confirm`
+  imports the three tokens from `_order_dialog`, so the reader cannot drift from the writer.
+- A consumer that classified the abandon message by its text ("cancelled by user") no longer
+  sees a timeout under it; one that already matched "timed out" gets the right stage for free.
+- The abandon button has its own type and its own sentence per dialog since the same release —
+  the next section.
+
+### Unreleased — the Gate 2 dialogs: a declined dialog has its own type; buttons say validate or discard
+
+Reviewed with the operator on the rendered dialogs, one at a time (register F6, 2026-10-01).
+
+- **Match the type, not the words.** Pressing a dialog's abandon button raises
+  `ConfirmationDeclinedError`, a subclass of `HumanAuthError` exported from `ibkr_core_mcp` —
+  beside `ConfirmationTimeoutError`, and never the same outcome. Until this release it was a
+  bare `HumanAuthError("Order cancelled by user")` on every dialog. **A consumer that recognised
+  a decline by finding "cancelled by user" in the message must switch to `isinstance`**: the
+  sentence is gone, and an unmatched `HumanAuthError` is easily reported as a Touch ID failure
+  (claudia_ui's table would have done exactly that).
+- **The message says what the click leaves in place**, per dialog, and none says "cancelled":
+  place and bracket "Not sent — nothing reached IBKR."; modify "Left unchanged — the order is as
+  it was."; cancel "Kept — the order is still working."; reply "Not confirmed — the order was
+  not placed." — that last one on the standalone `reply_order()` only; inside a chain the reply
+  has its own type, next item.
+- **A reply that was not confirmed is `ReplyNotConfirmedError`** (register F34), raised by the
+  chains of `place_order_and_confirm`, `modify_order_and_confirm` and the bracket after IBKR
+  has been answered no. A `HumanAuthError`, exported, and **neither Gate 2 type**: the write had
+  already been posted when IBKR asked, so a row that says "nothing was sent" must not claim it.
+  The message says what happened and why, and quotes IBKR's question on one line — "IBKR asked
+  for a confirmation before accepting the request, and it was declined at the dialog — IBKR was
+  answered no. IBKR's question: "…"" — with "nobody answered the dialog in time" or "the dialog
+  could not be completed (…)" as the other two reasons; `__cause__` is the dialog's own error.
+  It was `HumanAuthError("User declined IBKR order reply")` for all three, a timeout included.
+  **A consumer that matched "declined IBKR order reply" must match the type.**
+- **One colour rule on every dialog: the button that validates is blue, the button that
+  discards is red.** The banner says what the action is; the colour says go ahead or back out.
+- **The cancel dialog's buttons are now `VALIDATE` and `DISCARD`** (were `CANCEL ORDER` and
+  `KEEP ORDER`): under a banner that already reads CANCEL ORDER, a blue `CANCEL ORDER` over a
+  red `KEEP ORDER` read as ambiguous. **A consumer that names the Gate 2 button in its own text
+  must update the cancel path.** The other dialogs keep `SEND TO IBKR` / `DO NOT SEND`,
+  `MODIFY ORDER` / `LEAVE UNCHANGED`.
+- **The reply dialog's buttons are `CONFIRM` and `CANCEL`** (were `CONFIRM REPLY` and `DO NOT
+  REPLY`; register F35, settled on the rendered dialogs 2026-10-02), and the sentence under
+  IBKR's message says what each does for the write the question belongs to: "CONFIRM sends the
+  order. CANCEL: the order is not placed." for a new order, "CONFIRM applies the change. CANCEL:
+  the order stays as it was." for a modify — there CANCEL leaves a live order working.
+- The banner text is centred; the banner for an unstated side is yellow, not amber.
+- **Your own mark on the dialog:** `ibkr_core_mcp.set_dialog_icon(path)` at startup replaces the
+  default icon (the Python launcher's rocket on macOS) with an image of yours; `None` clears it.
+  The package ships no icon and no broker's logo. An unreadable file leaves the default; the
+  icon keeps the system's size and position. AppKit dialogs only.
+
+### Unreleased — `get_market_calendar_context` says who holds a session today, per exchange
+
+`is_trading_day` was, and is, the **primary** exchange's flag (NYSE by default), and
+`holidays_by_exchange` is built from weekdays, so a consumer asking "who is open today?" on a
+Saturday found nobody in any holiday list and read every exchange as open — claudia_ui's
+startup briefing printed "All tracked exchanges open today" on Saturday 2026-09-26 (gap #78,
+register F24). The calendars were loaded; the answer was not in the dict.
+
+- New key `sessions_today: dict[str, bool]`, keyed like `holidays_by_exchange`, one verdict per
+  exchange from its own calendar (`is_session(today)`): a Saturday is `False` everywhere, a
+  Friday is `False` for Tadawul, a NYSE holiday says nothing about CME or London.
+- On the failure marker (`{"error": ..., "is_trading_day": None}`) it is `None` — unknown, not
+  an empty map that would read as "nobody open".
+- New optional `today=` (a `date`): the verdicts for that day rather than the current one; the
+  process cache keys on it. `last_trading_day` / `next_trading_day` are then relative to that
+  day's midnight UTC.
+- The weekday rule a consumer had to carry itself (claudia_ui's briefing decides a weekend
+  before reading any list) can be deleted once it reads `sessions_today`.
+- New key `early_closes_today: dict[str, dict[str, str]]` (register F18): for each exchange whose
+  session today ends early, `{"close": "13:00", "tz": "America/New_York"}` — the exchange's own
+  time and its IANA zone. Empty on an ordinary day; `None` on the failure marker. The figures
+  are the calendar library's; `scripts/calendar_half_days.py` lists them beside each exchange's
+  own page, and its docstring records the last comparison (2026-10-02: the date agreed on 17 of
+  17 checks, the time on four exchanges of five read).
+- **CME never appears in `early_closes_today`.** Its holiday hours differ by product group and
+  the library holds one closing time. `futures["holiday_schedule_today"]` (`True` / `False`,
+  `None` when unknown) says that today Globex runs a holiday schedule; the hours are on CME's
+  own calendar, which `futures["note"]` names.
+
+### Unreleased — `ClaudeToolkit.store` and `.config` are public; the Drive cache is not
+
+A host that needed the store or the configuration the toolkit was built with read the private
+`_store` and `_config`, because `client` was the only public accessor. A private name carries
+no compatibility promise.
+
+- **New, read-only:** `toolkit.store` (the `SQLiteStore`) and `toolkit.config` (the `Config`),
+  each the object passed to the constructor. Switch `toolkit._store` → `toolkit.store` and
+  `toolkit._config` → `toolkit.config`.
+- **`config` holds secrets** (the Flex token, API keys — hidden from its repr). Read the field
+  you need; never log the object.
+- **The Drive cache has no public accessor, on purpose.** `toolkit.cache` would hand a consumer
+  the whole Drive client — uploads, the `store.db` backup, deletes — where reading cached bars
+  is two calls. A consumer that reads `_cache` today (claudia_ui's chart pane does: `check` and
+  `load`) is reading a private name and should pin it in its own contract test; if that need is
+  ever served publicly, it will be with a narrow read, not with the object.
+- The public surface of a toolkit is exactly `client`, `store`, `config`, `tools`, `execute`.
+
+### Unreleased — `cancel_order` can carry the CME Rule 536-B tag
+
+IBKR documents `manualIndicator` as required on a futures or futures-option **cancel**, as it is
+on a place and a modify: "Regardless of original submission, the cancellation must also include
+the manualIndicator tag". `cancel_order` sent a bare `DELETE`, which IBKR accepts (seventeen futures
+cancels measured, 2026-07-28 to 09-24) — accepted, not shown compliant.
+
+- **New, keyword-only:** `cancel_order(account_id, order_id, order_details=None, *,
+  manual_indicator=None)`. `True` → `?manualIndicator=true`, `False` → `?manualIndicator=false`,
+  `None` → the bare `DELETE`, exactly as before. Nothing changes for a caller that passes nothing.
+- **What a consumer should do:** pass `manual_indicator=True` when a person cancels a FUT or FOP
+  order (`False` if your own automation does). Leave it out for other classes. The package does
+  not derive it: only the caller knows the contract class and who decided.
+- **Strict on purpose:** anything that is not a bool or `None` raises `OrderValidationError`
+  before Touch ID — the string `"false"` is truthy and would otherwise be sent as `true`.
+- **Measured 2026-10-01:** a tagged cancel of a resting ES limit order was accepted and read back
+  `Cancelled`; the gateway's request log shows the query string. IBKR answers a tagged and a bare
+  cancel with the same body, so check the log line `cancel:<id> manualIndicator=…`, not the
+  response, to know which was sent. `extOperator` is not sent (rejected on a place as field 8089).
+- claudia_ui passes it for futures cancels once its pin moves to this release (its gap #7).
+
+### Unreleased — the Flex dataset has a typed read API, and every reader in this package uses it
+
+The package owns the Flex dataset and what it means (claudia_ui's Flex boundary, decided
+2026-09-29). Until now a consumer that wanted realised P&L by window, closed-lot statistics or
+"is this fill on a statement yet" wrote SQL against `flex_trade` and `flex_lot` — claudia_ui
+held twenty-two such statements — while this package's own `get_trades(source='store')` summed
+a different table and reported a different lifetime figure (register F20).
+
+What changes for a caller:
+
+- **Ask `ibkr_core_mcp.flex_dataset.FlexDataset`, not the tables.** Open, ask, close, on one
+  thread:
+
+  ```python
+  from ibkr_core_mcp.flex_dataset import FlexDataset
+
+  with FlexDataset.open(config.sqlite_path) as flex:
+      week = flex.realised_window(monday, today)   # RealisedWindow: total, by_asset, currencies
+      settled = flex.settled_execution_ids(ids)    # frozenset of the ids a statement holds
+  ```
+
+  Every method raises `StoreError` when the dataset cannot be read — a missing file, table or
+  column, a damaged database, an unparseable stored date — so an unreadable store is never
+  shown as zero. The connection is `mode=ro`; nothing the reader does can write. The path is
+  opened as `SQLiteStore` opens it — no `~` expansion, a relative path against the working
+  directory — and a path holding a NUL is refused rather than cut at it.
+- **The dataset's state is `ibkr_core_mcp.flex_sync`:** `validate_dataset`,
+  `dataset_fingerprint`, `last_import`, `statement_through`, `pull_due`. These never raise.
+  claudia_ui carried them as `claudia/flex_sync.py`; same names, same signatures, same answers.
+  Its `validate_dataset_daily` — a verdict kept for the day in a file beside the store — is not
+  carried over: the checks take a quarter of a second, so a host runs `validate_dataset` at
+  each start and the answer always describes a check that just ran.
+- **What the last pull did is `flex_sync.last_pull(path)`** — new in this release, never raising.
+  It returns a `PullOutcome` read from the `session_log` row `sync_flex_trades` writes after
+  every pull: `at`, `trades_fetched`, `archive_ok` / `archive_reason`, `backup`
+  (`uploaded` / `unchanged` / `failed` / `not-configured`) and `valid`, with `problems` naming
+  what is known to have gone wrong (`archive`, `backup`, `validation`, in that order). **Take a
+  display level from `problems`, never from the tool's text** — a consumer that showed the text
+  under a tick showed "✅ … ⚠ store.db Drive backup failed". A field is `None` when the pull did
+  not record it (rows written before this release): unknown, not a problem and not a success.
+  Compare `at` with when you asked — a pull that raised before recording leaves an older row
+  as the newest. `None` for no row, an unopenable store, or a malformed row; the account the
+  row names is never carried.
+- **A pull backs the store up to Drive by itself.** `FlexQueryClient.fetch_trades` uploads
+  `store.db` to `account_data/` when the pull changed the dataset and records the outcome in
+  `last_backup_result`. A consumer that made this backup after its own pull should stop: a
+  second upload re-sends the file the pull has just sent.
+- **`get_trades(source='store')`, `verify_flex_import`, `ibkr://trades/recent` and
+  `get_trade_date_coverage` read the Flex dataset.** Their totals and counts change where the
+  legacy table was wrong: each execution appears once, `total_trades` counts executions, the
+  realised total matches `realised_window`. The resource keeps its keys. The tools' text
+  changes as the CHANGELOG lists; a host that renders it verbatim (claudia_ui's System log
+  does) shows the new backup and validation lines of `sync_flex_trades`.
+- **`SQLiteStore.get_trades` and `get_all_execution_ids` are deprecated** (legacy table; removed
+  in 3.0). Their replacements are `FlexDataset.executions` and `FlexDataset.trade_ids`.
+
 ### 2.1.0 — brackets, and three stricter refusals
 
 **New public API.** A bracket — a parent order plus its held children — is one POST of a
@@ -17,7 +464,7 @@ ticket array, and it has its own entry point rather than a branch of the single-
 
 | Name | What it is |
 |---|---|
-| `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved |
+| `IBKRClient.place_bracket_and_confirm(account_id, parent, children)` | Touch-ID gated. **One** Gate 1 bound to the whole array, **one** Gate 2 showing every leg, then every ticket's reply chain resolved; a child whose TIF is longer than the parent's is refused (`ValueError`) before any gate — IBKR's rule, 2026-10-18 |
 | `IBKRClient.get_bracket_preview(account_id, parent, children)` | Whatif for a parent plus its children. Read-only, ungated, like `get_order_preview`. Both legs are sent so the array is validated as one unit, but IBKR prices the **first ticket only** — a mismatched bracket previews clean (measured live 2026-09-20, re-confirmed 2026-09-22), so a clean preview is never evidence about the child |
 | `pair_bracket_response(tickets, entries)` → `BracketPairing` | Which returned entry is which leg. A **module-level function**, not a method on `IBKRClient` — `from ibkr_core_mcp import pair_bracket_response` |
 

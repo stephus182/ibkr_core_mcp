@@ -39,7 +39,7 @@ def _drive(monkeypatch, files, payloads):
         return request
 
     cache._get_service.return_value.files.return_value.get_media.side_effect = get_media
-    monkeypatch.setattr(fetch_flex_archive, "_cache", lambda: cache)
+    monkeypatch.setattr(fetch_flex_archive, "_cache", lambda env_path: cache)
 
     class FakeDownloader:
         def __init__(self, buffer, request):

@@ -73,7 +73,9 @@ The principal external baseline is the OWASP GenAI Security Project's
 [*A Practical Guide for Secure MCP Server Development*, v1.0, February 2026](https://genai.owasp.org/resource/a-practical-guide-for-secure-mcp-server-development/)
 — the PDF behind that page's *Download* link, cited by section below. It was retrieved in
 full on 2026-09-14 and mapped item by item in
-`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. The summary:
+`docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`. The summary: An enterprise MCP security checklist
+(29 scored items) was read beside it on 2026-11-09:
+`docs/audits/mcp-security-checklist-2026-11-09.md`.
 
 | OWASP domain | Standing here | Where in this document |
 |---|---|---|
@@ -116,7 +118,7 @@ mean something else.
 | Mechanism | Apple `LocalAuthentication` — `LAPolicyDeviceOwnerAuthentication` (biometrics first, device password on a failed scan) |
 | Frequency | **Once per order write.** Place, modify and cancel each take one Touch ID — as IBKR Mobile and TWS ask once per placement, modification or cancellation — and the precaution replies IBKR sends for that write validate through their own dialogs (explicit button, order named in the title) without a second fingerprint. `client._authorize_order_write` → `human_auth.OrderWriteAuthorization`: bound to the write's own account id and body (hashed; the account joined the scope 2026-09-17, SEC-07), 300 s, checked identically at the write and at every reply, fails closed, never persisted, never global. User rule 2026-09-11; sources (OWASP, NIST SP 800-63B-4, CISA, EU RTS 2018/389, Apple) in claudia_ui `docs/api-reference.md` § Order authorization. |
 | Password / PIN fallback | **Device password after a failed biometric read** — Apple's own recovery path under this policy. The biometrics-only policy (`…WithBiometrics`) was evaluated and rejected: a failed scan under it leaves the user no recovery at all (`human_auth.py`). Corrected 2026-09-11: this document had claimed biometrics-only with no fallback while the code never did (claudia_ui gap #48). |
-| Timeout | 60 seconds; raises `HumanAuthError` on expiry |
+| Timeout | 60 seconds; the dialog dismisses itself and raises `ConfirmationTimeoutError` (a `HumanAuthError`) — nothing sent, the order as it was; its own outcome since 2026-09-29, not the abandon button's |
 | On denial | `HumanAuthError` raised immediately; IBKR endpoint is never contacted |
 | Location | `ibkr_core_mcp/human_auth.py` |
 
@@ -126,10 +128,10 @@ mean something else.
 
 | Property | Value |
 |---|---|
-| Mechanism | On macOS an AppKit `NSAlert` run in a subprocess (`_order_dialog.py`, banner colour-coded by side: green BUY, red SELL, dark red CANCEL, amber when the side is unknown), falling back to an `osascript` dialog if that subprocess fails; a `tkinter` modal on other platforms. All three show the typed order rows and a live-order disclaimer |
-| Confirmation | Explicit mouse click on the confirm button (labelled for the action: SEND TO IBKR / MODIFY ORDER / CANCEL ORDER / CONFIRM REPLY). **Return confirms on none of the three renderers**, by three different mechanisms: AppKit clears the Return key equivalent off the confirm button and gives Escape to the abandon one, so no button is default at all; `osascript` names the abandon button `default button`; `tkinter` marks no default, and Tk's `Button` class binds `<space>` and the mouse — never `<Return>`. This row read "the default button is the abandon one" until 2026-09-17, which held for `osascript` alone (SEC-09); each mechanism now has the test that checks it |
-| Button → verdict | AppKit answers `NSAlertFirstButtonReturn` (1000) for the **first button added**, and that is the only response `_order_dialog.py` turns into `CONFIRMED`. Nothing tied that position to a title, so swapping the two `addButtonWithTitle_` lines — which would make GO BACK place the order and SEND TO IBKR abandon it — passed all 1,537 unit tests when it was tried on 2026-09-17 (SEC-R4). `test_the_button_that_reports_confirmed_is_the_confirm_button` and `test_the_abandon_button_cannot_report_confirmed` now assert the binding by title, never by position |
-| Auto-cancel | 60-second countdown ticker; raises `HumanAuthError` on expiry |
+| Mechanism | On macOS the core's own AppKit modal window run in a subprocess (`_order_dialog.py`; one layout for every dialog at every height since 2026-11-07, claudia_ui #111 — an `NSAlert` until then, which drew three layouts by content height and label width; a titled window with no close, minimise or zoom button, so the ways out are the two buttons, Escape and the timer; banner colour-coded by side: green BUY, red SELL, red CANCEL, yellow when the side is unknown; the button that validates is blue and the one that discards is red, on every dialog, painted so the colours hold in an inactive window), falling back to an `osascript` dialog if that subprocess fails; a `tkinter` modal on other platforms. All three show the typed order rows and a live-order disclaimer; the two fallbacks draw no button colours |
+| Confirmation | Explicit mouse click on the confirm button (labelled for the action: SEND TO IBKR / MODIFY ORDER / VALIDATE on the cancel dialog / CONFIRM on a reply). **Return confirms on none of the three renderers**, by three different mechanisms: AppKit clears the Return key equivalent off the confirm button and gives Escape to the abandon one, so no button is default at all — and since 2026-11-07 the confirm button also refuses keyboard focus (`refusesFirstResponder`), so with Full Keyboard Access on, Space cannot press it either: the confirm is a mouse click or nothing (OWASP Transaction Authorization § 1.1, What You See Is What You Sign — an acknowledgement the user did not make is not one); `osascript` names the abandon button `default button`; `tkinter` marks no default, and Tk's `Button` class binds `<space>` and the mouse — never `<Return>`. This row read "the default button is the abandon one" until 2026-09-17, which held for `osascript` alone (SEC-09); each mechanism now has the test that checks it |
+| Button → verdict | Each button's action is a method of a plain Python target (`_order_dialog._Decision`) that stops the modal loop with its own code — 1000 for the validating button, 1001 for the abandon one — and 1000 is the only response `_order_dialog.py` turns into `CONFIRMED` (`outcome_token`). Until 2026-11-07 the code was NSAlert's `NSAlertFirstButtonReturn` for the **first button added**, and nothing tied that position to a title: swapping the two `addButtonWithTitle_` lines — GO BACK placing the order, SEND TO IBKR abandoning it — passed all 1,537 unit tests when it was tried on 2026-09-17 (SEC-R4). `test_the_button_titled_send_stops_the_loop_with_the_confirm_code_and_the_other_cannot` presses each button by its TITLE through the selector set on it and reads the code; `test_the_abandon_button_cannot_report_confirmed` holds the other direction; `test_the_row_is_two_equal_buttons_blue_left_red_right_centred` reads the frames by title — never by position |
+| Timeout | 60-second countdown ticker; the dialog dismisses itself and raises `ConfirmationTimeoutError` (a `HumanAuthError`) — nothing sent, the order as it was |
 | Rationale for timeout | Prevents an unattended dialog on a locked screen from being confirmed by physical access |
 | Location | `ibkr_core_mcp/order_confirm.py` |
 
@@ -144,13 +146,16 @@ cancel_order()  ──► require_touch_id() ──► cancel_dialog()  ──�
 reply_order()   ──► require_touch_id() ──► reply_dialog()   ──► POST /iserver/reply/{replyId}
 place_bracket_and_confirm()
                 ──► require_touch_id() ──► bracket_dialog() ──► POST /iserver/account/{id}/orders
+attach_order_and_confirm()
+                ──► require_touch_id() ──► bracket_dialog() ──► POST /iserver/account/{id}/orders  (one child, parentId = a working order's id)
 ```
 
-`place_order_and_confirm` / `modify_order_and_confirm` / `place_bracket_and_confirm` run the
+`place_order_and_confirm` / `modify_order_and_confirm` / `place_bracket_and_confirm` /
+`attach_order_and_confirm` run the
 write's gates once and then, for each precaution reply IBKR returns, the reply dialog (covered
 by the write's `OrderWriteAuthorization`, so no second fingerprint). The order dict is copied at
 method entry, so the body the dialog shows is the body sent. Since 2026-09-13 this whole shape
-is read from the source by `tests/security/test_order_write_boundary.py`: those six functions
+is read from the source by `tests/security/test_order_write_boundary.py`: those seven functions
 are the only ones that may build an order-write URL, each must call a gate before its first
 network call, and `claude_tools.py` / `mcp_server.py` may not name any of them.
 
@@ -163,6 +168,18 @@ leg. Its reply chain is resolved per ticket, index-aligned: the single-order idi
 `response[0]` would leave a precaution raised against the child unanswered and drop that leg,
 leaving a resting position with no exit.
 
+`attach_order_and_confirm` (2026-10-17) attaches **one** child to an order already working at
+IBKR — the sequential bracket form. The parent is read from IBKR (`get_order_status`) **before
+Gate 1** and refused unless working, so no fingerprint is spent on a filled or cancelled
+order; that read is the second named pre-gate exemption in the boundary test, beside
+`_ensure_accounts_initialized`, and like it a GET of the operator's own data. The child is
+completed from IBKR's record — contract, size, opposite side, TIF — never from the caller;
+the bracket rules run unchanged; Gate 1's scope binds the ticket **and the parent's id**
+(kind `attach`), so an authorization earned for one parent never covers a child of another;
+Gate 2 is the bracket dialog with a `Parent — At IBKR` row. One child per write, one Touch
+ID per write. The post-send check (`attached_entry`) logs a response that does not report
+the link at ERROR and never reports it as success.
+
 ### Gated vs. Ungated Endpoints
 
 **Gated (Touch ID → confirmation dialog required before any order-write request):**
@@ -174,6 +191,7 @@ leaving a resting position with no exit.
 | `cancel_order` | Cancellation confirmation |
 | `reply_order` | IBKR reply confirmation |
 | `place_bracket_and_confirm` | Every leg on one screen: parent, each held child, one notional named as the parent's |
+| `attach_order_and_confirm` | The bracket dialog titled `LIVE ATTACHED ORDER CONFIRMATION`, its banner the child's side (the order being sent), one more row `Parent — At IBKR` (the working order's id, state and children count), and the red `⚠ Partial fill` line on a multi-lot parent without all-or-none |
 
 **Explicitly ungated.** What these have in common is not that they read — it is that none of
 them can place, modify, cancel or confirm an order. That is the property the gates protect, and
@@ -254,6 +272,24 @@ said "42 read-only tools" while eight of them mutated state outside the machine
 | Analytics & backtest | `add_indicators`, `run_backtest`, `generate_pinescript`, `get_analytics` |
 | PA reporting | `get_pa_periods`, `get_pa_performance`, `get_pa_transactions` |
 | Web scraping | `firecrawl_search`, `search_site`, `crawl_site`, `fetch_page` |
+
+### No gateway session operation in the tool surface (register F45, 2026-11-09)
+
+The gateway package — `ibkr_core_mcp.gateway`: the container, the login page, the session's
+readings and, since step 2 the same day, its writes (`/logout`, `ssodh/init`, the suspend lock,
+the recovery) — declares no tool, and the model layer cannot reach it: `claude_tools.py` and
+`mcp_server.py` import nothing from it and name none of `logout`, `reauthenticate`,
+`release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`,
+`get_session`, `read_login_events`, `KeepAwake`, `restart_refusal` (constitution **(13)**,
+`tests/security/test_gateway_boundary.py`). The capability registry alone did not hold this:
+a handler that declared `ACCOUNT_STATE` could have called `logout`, and one importing
+`GatewayManager` under `if False:` passed the whole suite (F45 review, probes M1 and M2).
+The same file holds that the three session endpoints are *called* only in the owner set
+(`gateway/session.py`'s `release_session` and `attempt_soft_recovery`, and `IBKRClient.logout` /
+`reauthenticate`, deprecated, until 3.0) and that a `GatewayManager` is *driven* —
+`start`, `restart`, `stop`, `startup`, the login page — only inside the gateway package; a host
+constructs one and hands it to the owner. A gateway operation is the operator's, through the
+command line or a host's button, and the model learns what it needs from a 401.
 
 ### Capability declarations
 
@@ -390,11 +426,15 @@ any invalid probe") and left. Since 2026-09-14 one function, `redaction.collapse
 rewrites the home directory as `~`. One definition of "show a
 path", the way `price_text_safe` is one definition of showing a broker price.
 
-**Four surfaces call it**, and the set is an inventory rather than a filter, because a library
+**Six surfaces call it**, and the set is an inventory rather than a filter, because a library
 must not reconfigure the host application's logging: `redact_error` applies it to all exception
-text before the length cap; `_import_flex_file` builds its refusal from it; and, since
+text before the length cap; `_import_flex_file` builds its refusal from it; since
 2026-09-17, `mcp_server._issue_sse_token`'s token-file line and `store._restrict`'s
-chmod-failure warning. Those last two are **logs, not model surfaces** — the rule below is
+chmod-failure warning; since 2026-10-16 (register F48), `config.load_env_file`'s warning
+that a `.env` accessible to others had its secrets refused, which carries the `chmod 600` fix
+the operator will paste; and, since 2026-11-09, `audit.record`'s warning that a record could not
+be written, which names the file (every string *inside* a record passes `redact_text`, which
+collapses the home directory itself). Those three are **logs, not model surfaces** — the rule below is
 about the model and was never broken — but the function's own docstring claimed "every surface
 that shows one to the model or a log" while both wrote `/Users/<name>/…` in full (audit finding
 SEC-10; the store one came out of its sweep, which is why the count is stated and checked
@@ -603,7 +643,12 @@ the rest from the 2026-09-13 audit:
 | `test_sandbox_boundary.py` | Strategy code cannot read, write, spawn or import — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
 | `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
-| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env` |
+| `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12); `keyring` is imported only by `secret_store.py`, and under pytest its backend is the null one from `pytest_configure` on (door 7, 2026-11-09) |
+| `test_no_real_data_io.py` | No unit test can reach the operator's data directory (`~/.ibkr_core`, where the trade store, the Drive token, the Drive credentials and the browser profiles default once the scrub has removed the `IBKR_`/`GDRIVE_`/`CRAWL4AI_` variables): an audit hook armed before collection refuses every SQLite open of a database there — by every route to SQLite and every spelling of the path, a `file:` URI read as SQLite reads it, the directory recognised by identity as well as by name — and every file opened, created, changed or removed there, before the operation, with a refusal `except Exception` cannot swallow and a run that fails at session end if one was swallowed anyway. Integration tests are exempt from their setup to their teardown |
+| `test_no_human_reached.py` | No unit test can reach a person — a Touch ID prompt or a Gate 2 dialog. From `pytest_configure` on, the five doors a gate has to a human are shut: Apple's `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that refuse any use, `tkinter.Tk` is replaced where tkinter exists, and an audit hook refuses a child process that would run `_order_dialog.py` or `osascript`, or open the Chrome login window (register F44), whichever call asked; the refusal is a `BaseException`, recorded, and the run fails at its end if one was swallowed. Nothing is exempt; a test of a gate places its own double. Includes the 2026-10-01 incident replayed through the real call chain (Gate 1 skipped, Gate 2 left real → a refusal, nothing sent), and every test is safe on a broken guard |
+| `test_gateway_boundary.py` | Constitution (13), register F45: the model layer — `claude_tools.py`, `mcp_server.py` — imports nothing from `ibkr_core_mcp.gateway` (both statement forms, any depth) and names no session write (`logout`, `reauthenticate`, `release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`, `get_session`, `read_login_events`, `KeepAwake`, `restart_refusal`), proven on the review's probe M1; the three session endpoints (`ssodh/init`, `/logout`, `reauthenticate`) are *called* only in the owner set — `IBKRClient.logout` / `reauthenticate` until step 2 — by an AST walk that ignores prose; a `GatewayManager` is driven (`start`, `restart`, `stop`, `startup`) and the login page opened only inside the gateway package; and no string literal under `ibkr_core_mcp/gateway/` — docstrings included — names the consumer or one of its commands or documents, so every message the package prints names its own `python -m ibkr_core_mcp.gateway …` and `docs/gateway-auth-reference.md` |
+| `test_tls_policy.py` | Every function in the package that disables certificate verification — `verify=False`, `.verify = False`, `check_hostname = False`, `verify_mode = ssl.CERT_NONE` — is one of a declared set, and each calls `config.is_loopback_url` / `require_loopback_url` on a line before its first disabling line; the probe is proven against an unpinned call, a pin placed after the call, each spelling, and verification left on |
+| `test_no_desktop_reached.py` | No unit test can start a process that reaches the operator's machine: `docker` (the container holding the live IBKR session), `open` (Docker Desktop) and `caffeinate` are refused by name — each word's last path component — on every process-creation event from `pytest_configure` on, the refusal a `BaseException` recorded for the run's end; integration tests alone are exempt, from setup to teardown, because they read the gateway's own log through `docker exec` by design. Sized to an inventory of every start a full run makes (2026-11-09: 16, all `git`, `python3.11`, `ruff`); every test safe on a broken guard — the `open` and `caffeinate` cases run a decoy linked to `true` |
 | `test_subprocess_boundary.py` | Only `order_confirm`, `gateway/manager` and `backtest` spawn processes; no `shell=True` anywhere |
 | `test_documented_controls.py` | The regexes this document presents as the mitigation are character-for-character what `client.py` compiles, in both directions; the documented `order_id` pattern actually rejects Unicode digits; every file running under `-m security` appears in the table above |
 | `test_path_identifier_validation.py` | Every value interpolated into a URL path in `client.py` is itself passed to a validator, or listed with a reason; the checker fires on an unguarded snippet, ignores prose that merely begins with a path, and holds no exemption for an interpolation that no longer exists |
@@ -613,23 +658,45 @@ the rest from the 2026-09-13 audit:
 
 Each structural file also feeds its checker a deliberately-violating snippet, so the guard is
 proven able to fire. The properties, as a constitution: **(1)** no order reaches IBKR except
-through the six gated functions — the five public writes plus the private
+through the seven gated functions — the six public writes plus the private
 `_resolve_one_reply` — and the model layer never references them; **(2)** preview is
 not execution; **(3)** every tool declares its capabilities and none declares `ORDER_EXECUTION`;
 **(4)** strategy code cannot touch the filesystem, processes or network, and its allowlist is
 frozen; **(5)** every externally derived URL is checked before the fetch and on every browser
 request; **(6)** error text reaching the model or a log passes one redaction function; **(7)**
-unit tests cannot open sockets, resolve names or see credentials; **(8)** processes are spawned
+unit tests cannot open sockets, resolve names, see credentials, reach the operator's data
+directory or keychain, or start a desktop command (`docker`, `open`, `caffeinate`); **(8)** processes are spawned
 only from three named modules, never through a shell; **(9)** every value
 interpolated into a URL path is validated, or carries a written exemption; **(10)** the HTTP transport validates `Host`
 and `Origin` and admits only the holder of this launch's bearer token; **(11)** on the MCP
-transport an argument set that fails the tool's `inputSchema` never reaches a handler.
+transport an argument set that fails the tool's `inputSchema` never reaches a handler;
+**(12)** a secret read from `.env` never enters the process environment, and the package
+writes none there; **(13)** the model layer imports nothing from the gateway package and names no
+session write, the session endpoints are called only in the owner set, and a manager is driven
+only inside the gateway package.
 
 CI adds two gates the four code gates cannot provide: `pip-audit` over a **fresh resolve** of
 `.[dev,server,scraper]` (requirements mode — `pip install --dry-run --report` in a throwaway
 venv, installing nothing — weekly as well as per push, ignores only from
 `security/pip-audit-ignores.txt` with a reason and a re-check date) and `gitleaks` over the
 pushed range (`.gitleaks.toml`: default rules plus the Firecrawl and Anthropic key shapes).
+
+Two more since 2026-11-09 (MCP security checklist 1.3 and 2.2, `docs/audits/mcp-security-checklist-2026-11-09.md`):
+an **SBOM** of what a user installs — `.[server,scraper]` resolved on the runner — as a CycloneDX
+1.6 JSON artifact per push and per week (`sbom` job; the package itself and every dependency,
+112 components when generated locally on 2026-11-09), so a vulnerability advisory can be answered
+with "do we ship it?" from the artifact; and a **scan of the gateway image** (`gateway-image-scan`
+job: the image built from `ibkr_core_mcp/gateway/` exactly as `GatewayManager` builds it, then
+`trivy` over its OS packages and Java libraries, CRITICAL and HIGH, unfixed findings ignored).
+The scan is **informational until its first run has been seen** (`continue-on-error`, as the
+forward-compat lane began), then a CRITICAL finding blocks. The released artifacts carry PEP 740
+provenance attestations from Trusted Publishing (checklist 1.2): `pypi-attestations verify pypi
+--repository https://github.com/stephus182/ibkr_core_mcp pypi:ibkr_core_mcp-2.1.0-py3-none-any.whl`
+answered `OK` for the wheel and the sdist on 2026-11-09; a consumer verifies its pinned release
+that way (`docs/consumers.md`). Dependencies stay version floors, not hashes — a hash-pinned lock
+would be the churn the 2026-09-13 decision declined, and PyPI artifacts are immutable, so the
+integrity gap it would close is the index serving a different file for the same version, which
+the attestation already covers.
 
 Publishing (2.0.1): releases upload through PyPI Trusted Publishing from `.github/workflows/publish.yml`,
 behind a reviewed GitHub environment (`pypi`, tag rule `v*`); no PyPI token exists anywhere, and
@@ -653,6 +720,37 @@ The MCP page's hijacking section (now *State Handle Hijacking*, about server-min
 - The cookie is not logged or included in any `repr()` output, and it is only ever sent to a loopback host: `IBKRClient.__init__` and `IBKRWebSocket.connect` both refuse a non-loopback gateway URL before attaching it.
 - The gateway validates the session server-side on every request; a stale or invalid cookie returns HTTP 401, which is surfaced as `IBKRAuthError` immediately (see rate limiter below — 401 is **never** retried).
 
+### The gateway session's owner (register F45, step 2, 2026-11-09)
+
+`ibkr_core_mcp.gateway.session` is the one place in the package that opens a login, posts to a
+session endpoint or restarts a container holding a session (`test_gateway_boundary.py`). What it
+holds, each by a test a mutation turns red:
+
+- **The suspend lock** (`SuspendLock`, condition E) is written 0600 in a directory created 0700,
+  beside the trade store; a lock naming a dead process, a malformed one, or one with a pid below
+  1 is ignored — `os.kill(0, 0)` and `os.kill(-1, 0)` succeed, so a lock saying `pid: 0` would
+  have suspended every keepalive forever. The liveness check is platform-bound: `os.kill(pid, 0)`
+  on POSIX, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` on Windows, where `os.kill` with any
+  signal but the two console events terminates the process (the `os` documentation). Fail-open.
+- **`compete` is `COMPETE: Final = False`** (condition F), spelled once: the soft recovery's
+  `ssodh/init` never evicts an IBKR Mobile or TWS session, and the constant is held in source and
+  on the wire.
+- **A restart is guarded inside `GatewayManager.start()`** (condition F): a LIVE, REFUSED or
+  VALIDATING session raises `RestartRefusedError` before any Docker command — the consumer's reset
+  rule as `manager.restart_refusal`, so no route to a restart can skip it but `force=True`.
+- **The two writes pin their URL and redact every exception** (conditions C and G):
+  `release_session` and `attempt_soft_recovery` call `require_loopback_url` before sending
+  (`test_tls_policy.py`), and every exception rendered in the module — the writes, the poll loop,
+  the lock's release warning — passes `redact_error` (`test_error_redaction.py`).
+- **Every session write leaves a `session_write` audit record** (§ Audit Record): the logout, the
+  soft recovery, the restart or its refusal — the decision and, for a failure, the exception's
+  type, never its text.
+- **The keepalive honours the lock** (`keepalive_loop`, `python -m ibkr_core_mcp.gateway
+  keepalive`): an active lock means `SUSPENDED` and no request; `caffeinate -i` (`KeepAwake`) is
+  held only while the gateway answers, with `PATH` alone in its environment.
+- **`IBKRClient.logout()` / `reauthenticate()` are deprecated** and removed in 3.0; until then they
+  stay in the owner set.
+
 ### Browser Allowlist
 
 `BrowserCookieAuth` validates the browser name against an explicit allowlist before `getattr` access on the `browser_cookie3` module:
@@ -669,6 +767,35 @@ Import and extraction failures are handled distinctly to prevent silent unauthen
 
 - `ImportError` on `browser_cookie3` → silent (expected in CI/headless environments where no browser is present)
 - Any other exception → `warnings.warn` with the exception text (signals a broken Chrome profile or extraction failure to the operator)
+
+### The login window's profile — what it keeps at rest, and what its Chrome sends (2026-11-11)
+
+`GatewayManager.open_login_page()` opens the gateway login in a Chrome of its own, on the profile `~/.ibkr_core/login-chrome` (register F44, 2026-10-13). That profile is a store at rest this document did not list until 2026-11-11. Measured that day on the operator's Mac, read-only, after the day's one login (Chrome 157; counts, names and modes only — no cookie value, password or URL parameter value was read):
+
+| What | Measured | Note |
+|---|---|---|
+| Access | `~/.ibkr_core`, the profile and its `Default/` are `0700`; the cookie, history and login stores are `0600` | **Nothing in this package sets or repairs these modes.** The package never creates the profile directory — Chrome does; the parent is the directory `SQLiteStore`, the audit record and the suspend lock create `0700` |
+| Saved passwords, autofill entries, cards | 0, 0, 0 | Chrome's password manager is not configured in this profile, so its default applies; nothing had been saved |
+| Cookies | 7 for `localhost`, set by the gateway's login pages — `JSESSIONID`, `x-sess-uuid`, `XYZAB`, `XYZAB_AM.LOGIN` (session cookies), `SBID` (400 days), `device.info` (394 days), `TABID` (1 day) — and 1 for `.google.com`, `NID` (183 days) | Values encrypted by Chrome: the plaintext column is empty in every row. The four session cookies were still on disk after the window had been closed |
+| History | 3 URLs, all `https://localhost:5055/…`; one carries three query parameters (`forwardTo`, `RL`, `ip2loc`) | |
+| Google account, privacy settings | no account signed in; none of the settings read is set in the profile, so Chrome's defaults apply | |
+| Chrome's own lock | `SingletonLock` → `<host>-<pid>`, `SingletonCookie`, and `SingletonSocket` → a socket in the user's private temp directory (`0700`): all three still present after the owner had closed the window — the pid gone, nothing listening | below |
+
+**What the cookies are worth.** The gateway serves data reads on its authenticated session to a client that sends no cookie at all (register F46, measured 2026-10-13), so while the session lives these cookies add nothing to what loopback access already gives, and after it they are stale. What `SBID` and `device.info` mean to IBKR is not known here. Anything running as the operator can read the profile — the same boundary as the `.env`, the SSE token and the browser's own cookie store (`docs/security-architecture.md` § 9).
+
+**The lock that stays — not a vulnerability, and not cleaned up (decision, 2026-11-11).** `LoginWindow.close()` ends its Chrome with `terminate()`, and Chrome's three singleton links stay behind. They disclose a host name, a dead pid, a temp path and a random number — no credential — inside directories only the operator can enter; taking over the socket to intercept the next launch needs write access to those directories, which is already the operator's account. Chromium treats a lock whose pid is not a running Chrome as orphaned and removes it at the next launch (`chrome/browser/process_singleton_posix.cc`: "Orphaned lockfile (no process with pid, or non-chrome process.)"). One edge, read in that source and not measured: had the dead pid been reused by another Chrome *browser* process, the next launch would, after its retries, either refuse the profile as in use or kill that process ("Retries failed. Kill the unresponsive chrome process and continue."). Removing the three links once the owner has reaped its own Chrome would close that edge in about six lines; the operator judged it overkill and it is not built. On Windows the mark is a `lockfile` opened delete-on-close (`process_singleton_win.cc`), so nothing would stay; neither Windows nor Linux was measured.
+
+**What the window's Chrome sends to Google (researched 2026-11-11).** The `NID` cookie was created in the second the window was launched, one second before the gateway's first cookie: Chrome's own contact, not the login page's. The profile directory also holds components Chrome fetched by itself (`Safe Browsing`, `Variations`, `CertificateRevocation`, `OptimizationHints`, `component_crx_cache`, and more). Google's own account of each, retrieved that day:
+
+- **`NID`** is a preferences cookie — "used to remember your preferences and other information, such as your preferred language" — which "expires 6 months from a user’s last use" and "can be used to show ads in Google services for signed-out users" (https://policies.google.com/technologies/cookies). It is not a credential; it lets Google recognise this Chrome profile for six months.
+- **The request that set it was not determined.** "To provide suggestions and search results more quickly, Chrome may preconnect to your default search engine in the background" (https://support.google.com/chrome/answer/13730681) is the likeliest origin of a `google.com` request at launch; saying which takes a network capture of a login, and none was made.
+- **Safe Browsing**, at the level Chrome applies by default: a visited URL is first checked against lists stored on the device; when it is not on the safe list "Chrome sends an obfuscated portion of the URL to Google through a privacy server that hides your IP address", and "If suspicious behavior is detected, Chrome sends obfuscated or full URLs and bits of page content directly to Google Safe Browsing" (https://support.google.com/chrome/answer/13844634). Whether a `localhost` URL is checked at all is not stated there and was not verified.
+- **Updates:** the updater sends the release channel, basic hardware information, the Chrome version and how long it has been installed, and whether Chrome was recently used (https://support.google.com/chrome/answer/14697318).
+- **Usage statistics and crash reports:** "Chrome sends usage statistics and crash reports by default", and crash reports "may include site URLs, your activity before the crash, and the contents of the memory at the time of the crash" (https://support.google.com/chrome/answer/14746339). **The profile holds no value for that setting, and which default applies to a profile started with `--user-data-dir` and `--no-first-run` was not determined.** It is the one item here with a real stake: a crash during a login is the only documented path by which page memory could leave the machine.
+
+Chrome has switches for this traffic — `--disable-background-networking` ("Disable various background network services, including extension updating,safe browsing service, upgrade detector, translate, UMA"), `--disable-component-update`, `--disable-breakpad` (crash-dump collection), `--metrics-recording-only` — listed in the Chrome team's own reference (https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md). **None is passed, by decision (2026-11-11):** the first also turns off the Safe Browsing service on the one window where the credentials are typed, and no switch is added to that window without a login seen through it. If the crash-report question is to be closed, `--disable-breakpad` is the candidate, after a network capture says what the window sends today.
+
+Every retrieval, with its time, method, byte count and SHA-256: `docs/audits/audit-evidence/scrapes/manifest.json`. The pages are not committed; the sentences relied on are quoted above.
 
 ---
 
@@ -688,15 +815,52 @@ Accepted rather than fixed, for now, because the practical precondition is steep
 
 ### Subprocess Injection Analysis
 
-All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The three values that appear in subprocess arguments are:
+All `docker` CLI calls in `manager.py` use list form (`subprocess.run(["docker", ...], ...)`), never `shell=True`. The seven values that appear in their arguments are:
 
 | Value | Type | Source | Injection risk |
 |---|---|---|---|
 | `self._port` | `int` | Constructor parameter | None — integers cannot carry shell metacharacters |
 | `self.IMAGE_NAME` | class constant `"ibkr-core-gateway"` | Hardcoded | None |
 | `self.CONTAINER_NAME` | class constant `"ibkr_core_gateway"` | Hardcoded | None |
+| `_RUN_OPTIONS_LABEL` | module constant `"ibkr-core-mcp.run-options"` | Hardcoded; the label's value is the run options, built from `self._port` and constants (register F43) | None |
+| `_DOCKER_DIR` | `Path` | `Path(__file__).resolve().parent` — the package's own `gateway/` directory, `docker build`'s context | None — one list element, never parsed by a shell |
+| `GATEWAY_LOG_DIR` | module constant `"/app/api_gateway/logs"` | Hardcoded — the gateway's own log directory inside the container, `read_login_events`' last argument (register F45, 2026-11-09) | None |
+| `LOGIN_PHRASES` | six module constants (`preflight.py`) | Hardcoded; each is its own `-e` argument to `grep -F`, which reads them literally | None — fixed strings, list form |
 
-No user-supplied string reaches any subprocess argument.
+No user-supplied string reaches any subprocess argument. `read_login_events(timeout=15.0)` has
+**no container parameter** — the consumer's version took one — so nothing a caller passes can
+reach `docker exec`, where a value beginning with `-` is read as an option (OWASP OS Command
+Injection: every command injection is also an argument injection).
+
+### The gateway's own log, read in-container (register F45, 2026-11-09)
+
+The one place a login IBKR refused shows is the gateway's internal log, inside the container
+(`/app/api_gateway/logs/gw.<UTC date>.log`); `docker logs` carries none of it. `read_login_events`
+reads it with one command and no shell anywhere: `docker exec ibkr_core_gateway grep -rHF
+--include=gw.[0-9]*.log -e <phrase>… /app/api_gateway/logs`, the six phrases
+`preflight.LOGIN_PHRASES` verbatim, with `env={PATH, HOME, DOCKER_*}` and nothing else of the
+host's environment (measured 2026-10-12: `PATH` alone runs `docker exec`; `HOME` holds the
+CLI's configuration, `DOCKER_*` select a daemon), and a 15 s timeout as a backstop — the
+command ends on its own over finite files. The log carries the username, a numeric user id,
+session cookies, a MAC address and device identifiers, verbatim; **only the time, the event
+and its code leave the reader** (`preflight.login_events` cuts each matching line to those
+three before anything can log, print or store it — OWASP Logging Cheat Sheet, "Data to
+exclude"), a phrase line without a leading time is refused rather than guessed, and a partial
+read (exit 2) is never parsed. The exit rule is measured: 0 → parse; 1 with empty stderr → no
+login recorded; anything else → unreadable, the first line of stderr (≤ 200 chars) the
+reason; an `OSError` passes `redact_error`. A unit test that would run it is refused by name
+(`tests/conftest.py` door 6).
+
+### The restart guard and the sleep assertion (register F45, step 2, 2026-11-09)
+
+`start()` and `restart()` read the session before any Docker command (`restart_refusal`: two
+GETs, and the gateway's log after a FREE reading) and refuse to end a LIVE, REFUSED or VALIDATING
+one — `RestartRefusedError` with the verdict's code and reason, nothing run, `ensure_docker_running`
+not even called; `force=True` overrides. `KeepAwake` is the manager's second `Popen`:
+`caffeinate -i`, resolved with `shutil.which`, `PATH` alone in its environment, all three fds on
+`DEVNULL`, one child at a time, terminated and waited for on release. Both are spawn sites in the
+one allowed module (`test_subprocess_boundary.py`), and door 6 refuses `docker` and `caffeinate`
+in every unit test, so every test of them patches `subprocess.run` / `Popen` by name.
 
 ### Shell Scripts (healthcheck.sh, run_gateway.sh)
 
@@ -708,7 +872,7 @@ The two bundled shell scripts receive all configuration via Docker environment v
 
 All values originate from `manager.py` constants or the integer `port` parameter. No external input is expanded by the shell inside the container.
 
-`GATEWAY_PORT` is the only variable passed, and the shrink is itself the security change. A third script, `tickler.sh`, ran a `while true` loop POSTing `/tickle` on three `TICKLE_*` variables; it left the image on 2026-08-06 and the tree on 2026-08-07, and the variables stopped being passed the same day. An in-container renewal loop is not a neutral convenience — it cannot see the host-side suspend flag that coordinates a login, and on 2026-08-05 three of them kept a **borrowed** SSO session alive through every attempt to clear it (`POST /logout` could not; `docker restart` could). Renewal is the caller's, from the host. `healthcheck.sh` was changed from POST to GET on the same reasoning: `/tickle` is documented as preventing a session from ending, so a POST there is a session-affecting write dressed as a health check.
+`GATEWAY_PORT` is the only variable passed, and the shrink is itself the security change. A third script, `tickler.sh`, ran a `while true` loop POSTing `/tickle` on three `TICKLE_*` variables; it left the image on 2026-08-06 and the tree on 2026-08-07, and the variables stopped being passed the same day. Since 2.2.0 `start()` reuses a container only when it was made with exactly the options it gives today — the loopback-only publish and this one variable, recorded on the container as the label `ibkr-core-mcp.run-options` (register F43) — so an option removed from `start()`, as these were, also leaves the running container at the next start, and a container made before 2.2.0 is recreated. An in-container renewal loop is not a neutral convenience — it cannot see the host-side suspend flag that coordinates a login, and on 2026-08-05 three of them kept a **borrowed** SSO session alive through every attempt to clear it (`POST /logout` could not; `docker restart` could). Renewal is the caller's, from the host. `healthcheck.sh` was changed from POST to GET on the same reasoning: `/tickle` is documented as preventing a session from ending, so a POST there is a session-affecting write dressed as a health check.
 
 ### conf.yaml Security Decisions
 
@@ -716,8 +880,8 @@ The gateway configuration file (`gateway/conf.yaml`) is a derivative of the IBKR
 
 | Setting | Value | Rationale |
 |---|---|---|
-| `cors.origin.allowed` | `"*"` | IBKR default; mitigated by `allowCredentials: false` — the browser will not send authentication cookies in cross-origin requests, so any cross-origin request will receive HTTP 401 |
-| `cors.allowCredentials` | `false` | Prevents credential forwarding in CORS requests; effective mitigation for the wildcard origin |
+| `cors.origin.allowed` | `"https://localhost:5055"` | The gateway's own origin, since 2026-11-09 (MCP security checklist 5.4). IBKR's template ships `"*"`, which this file kept until then with `allowCredentials: false` as its only mitigation. Nothing legitimate is cross-origin: the login page is served by the gateway itself (same-origin, outside CORS) and every client of this package is a process that sends no `Origin`. IBKR documents the key's presence (a sample `conf.yaml` in its port guide), not its semantics, so the change is held by measurement and in source by `test_documented_controls.py`, which also holds this cell to the file. Measured 2026-11-09 12:52 EST on the live gateway, still on the 2026-08-07 image with `"*"`: a CORS preflight from `https://example.invalid` was answered `204` with `Access-Control-Allow-Origin: *`, methods `POST,GET,OPTIONS,DELETE,PUT`, headers `Content-Type,portal,Cookie`; and a request with **no cookie** and that foreign `Origin` was served on the authenticated session (`/tickle`: `authenticated = True`). The session lives in the gateway process, not in a browser cookie, so `allowCredentials: false` — this row's only stated mitigation until that day, with the claim that a cross-origin request "will receive HTTP 401" — never protected anything: the wildcard approved any web page's cross-origin JSON write, and the gateway would have run it on the operator's session. (Whether a given browser then sends it — a self-signed certificate, a local-network permission prompt — was not measured.) After the rebuild, measured 13:07 EST on the rebuilt image (built 2026-11-09 18:03 UTC) after a fresh login through the gateway's own page, which authenticated: the foreign origin's preflight **and** its plain `GET` are refused by the gateway itself, `403 CORS Rejected - Invalid origin`, so such a request never reaches the session; the gateway's own origin is approved (`204`, `Access-Control-Allow-Origin: https://localhost:5055`); a request with no `Origin` — how every client of this package calls — is served (`200`). |
+| `cors.allowCredentials` | `false` | No credentialed cross-origin request. Kept, but it is **not** a control on this gateway: authentication is the gateway process's, not a cookie's (measured 2026-11-09, row above), so a request needs no credential to act on the session. The explicit origin is the control |
 | `ips.allow` | `127.*`, `192.168.*`, `172.16.*`–`172.31.*` (16 entries), `131.216.*` | Loopback + the *actual* RFC 1918 private ranges (fixed 2026-07-11 — `192.*`/`172.*` previously matched the full `192.0.0.0/8`/`172.0.0.0/8` blocks, 256×/16× broader than RFC 1918 and including public IPv4 space; see `docs/audits/security-audit-2026-07-11.md` M-1) + IBKR's own proxy infrastructure (`131.216.*`) needed for `proxyRemoteHost: api.ibkr.com`. This allowlist is a compensating control, not the primary defense — see H-3's fix for why the container shouldn't be reachable beyond loopback in the first place. |
 | `sslPwd` | `"mywebapi"` | Well-known default password for the IBKR-bundled self-signed JKS keystore. Not a secret — all IBKR Client Portal users share this default cert and password. The certificate is self-signed and localhost-only. |
 | `listenSsl` | `true` | Gateway always uses HTTPS, even on loopback |
@@ -738,9 +902,47 @@ The Docker layer cache means the download only occurs on the first `docker build
 
 `manager.py` calls `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)` at module import time. This is a **process-global** side effect: it suppresses `InsecureRequestWarning` for all `requests` calls in the same Python process, not only gateway health-check calls.
 
-This is intentional. Exactly three code paths disable certificate verification, and every one is pinned to loopback before it can run: the gateway health and auth polls in `manager.py` (`requests.get(..., verify=False)` against `https://localhost:{port}`), the `IBKRClient` session (`self._session.verify = False`, permitted only because the constructor raises `ConfigError` for any non-loopback `gateway_url`), and `IBKRWebSocket.connect` (`ssl.CERT_NONE`, after the same loopback check). No external IBKR or third-party call disables verification; `client.py` also calls `urllib3.disable_warnings` at import. The warning suppression prevents console noise from expected behaviour; it does not weaken any other connection's actual TLS verification.
+This is intentional. **Every function that disables certificate verification pins its URL to loopback first — on a line before the disabling one, through the one helper `config.require_loopback_url` / `is_loopback_url` (`localhost`, `127.0.0.1`, `::1`) — and the set of such functions is held by `tests/security/test_tls_policy.py`**: today the gateway health and auth polls in `manager.py` (`requests.get(..., verify=False)`), the `IBKRClient` session (`self._session.verify = False`; the constructor raises `ConfigError` for any non-loopback `gateway_url`) and `IBKRWebSocket.connect` (`ssl.CERT_NONE`; `StreamingError`). Until 2026-11-09 this paragraph read "exactly three code paths … every one pinned to loopback" and nothing held either half: the count was prose, the two pins were inline tuples written twice, and the two polls had no pin at all (register F45, probe M6). No external IBKR or third-party call disables verification; `client.py` also calls `urllib3.disable_warnings` at import. The warning suppression prevents console noise from expected behaviour; it does not weaken any other connection's actual TLS verification.
 
 ---
+
+## Audit Record — every tool call and every order or session write, redacted
+
+Since 2026-11-09 (MCP security checklist 8.1, `docs/audits/mcp-security-checklist-2026-11-09.md`)
+the package keeps its own record of what it was asked to do and what it did: one JSON object
+per line, appended to `~/.ibkr_core/audit.jsonl` by default (`Config.audit_log_path`, env
+`IBKR_AUDIT_LOG`; a host calls `audit.configure(path)` once at start — the MCP server's `main()`
+does). It supersedes the 2026-09-14 decision not to keep one, whose ground was that a parameter
+log would carry model-supplied URLs and paths into a channel the redaction did not cover
+(`docs/security-architecture.md` § 8).
+
+| Field | Content |
+|---|---|
+| `ts`, `id` | UTC time; a correlation id — every record made inside one `audit.call()` shares it, so a tool call and the writes it leads to correlate |
+| `kind`, `actor` | `tool_call` (`actor: model`), `order_write` (`actor: operator` — the human at the gates), `session_write` (register F45 step 2) |
+| `client`, `agent` | Set by the host through `audit.context(client=…, agent=…)`; the MCP server fills `client` from the initialize handshake's `clientInfo`; the gateway's command line (`python -m ibkr_core_mcp.gateway`) names itself `ibkr_core_mcp.gateway` with `agent` `none`; `unknown` otherwise |
+| `tool` / `action` | The tool's name; a write's gated method (`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `_resolve_one_reply`) |
+| `params` | A tool's inputs, or a write's arguments summarised (an order's recognisable fields and the names of its other keys; a list as its length) — **every string redacted** |
+| `decision` | `executed`, `unknown_tool`; for a write the gates' own outcome: `sent`, `denied` (Gate 1), `declined` / `timed_out` (Gate 2 and a reply answered no), `refused` (before any gate), `error` |
+| `outcome`, `summary`, `duration_ms` | `ok` or the exception's type name — never its text; a result's **length**, never its text; the time taken |
+
+**What makes the channel safe to keep.** Every string in a record passes `redaction.redact_text`
+— the same secret shapes, query strings and home-directory collapse `redact_error` applies to an
+exception — then an account-id mask (`U` and 6–9 digits → `U******`) and a 200-character cap;
+nesting is cut at three levels; a response body is never recorded. **It is evidence, not a
+gate:** a write that fails is one redacted warning per path and never an exception into the path
+it records. The file is `0600` in a `0700` directory, with one `.1` rotation at 20 MB.
+
+**Where it is written from, held by test.** `ClaudeToolkit.execute` records every tool call
+(`tests/claude_tools/test_audit_record.py`); `mcp_server._dispatch` records the two server-local
+tools; every member of `GATED_OWNERS` carries `@_audited_write("<its name>")`
+(`tests/security/test_order_write_boundary.py::test_every_gated_write_records_an_audit_entry`) —
+on the gated method itself, beside the gates, for the reason the gates are there. The record's own
+contract — fields, redaction, permissions, rotation, correlation, fail-open — is `tests/test_audit.py`.
+
+**What it is not.** Not a SIEM, not an alert (checklist 8.2, 8.3: a single-operator workstation
+has neither); not tamper-evident beyond the file's mode (an operator-owned file, like every
+other under `~/.ibkr_core`). It is the prerequisite for both, and the record a host can ship.
 
 ## Secrets Management
 
@@ -760,9 +962,34 @@ package makes no model call and never read it (TOOL-07), and
 `test_config_carries_no_model_vendor_credential` holds that no vendor's model credential returns
 under any name. Both remaining fields are excluded from `repr()`, preventing accidental exposure in logs, tracebacks, and debug output. Exception text is the other channel a key can travel through — a `requests` failure carries the full request URL, Flex token included — which is why every exception the model layer shows or logs passes through `redaction.redact_error` (§ Error text and raw payloads reach the model only through redaction).
 
+Since 2026-10-16 (register F48) the two fields are `pydantic.SecretStr`, read by `load_env_file`
+from the file into the `Config` and never into `os.environ` — `load_dotenv` is gone from the
+package. A `.env` accessible to group or others has its secrets refused on POSIX, with
+`chmod 600 <path>` in the message. The environment is still read for a secret the user set
+there (the MCP server's `"env"` contract), and never written.
+
+Since 2026-11-09 (MCP security checklist 7.1) the store at rest is the operating system's own
+keychain — macOS Keychain, Windows Credential Locker, the Secret Service on Linux — through the
+`keyring` library, one entry per secret name under the service `ibkr_core_mcp`
+(`ibkr_core_mcp.secret_store`). `Config.from_env` resolves a secret in one order: the
+environment the user set, then the keychain, then the `.env` file. `config.py` stays the one
+reader of the environment, `load_env_file` the one reader of files, and the keychain, like the
+file, is never written back to the environment. A workstation without a usable keychain runs
+from the file as before: every keychain error reads as "absent", with one DEBUG line. The
+operator's command line never prints a value — `python -m ibkr_core_mcp.secret_store set NAME`
+reads it with `getpass` (an argument would land in shell history), `list` prints names and
+where each is held, `import-env PATH` moves a file's secrets into the keychain and names the
+lines to remove, `delete NAME`; a host's own names come through `--names`, as through
+`secret_names` in code. Under pytest the keychain is unreachable: `tests/conftest.py` sets
+`keyring`'s null backend from `pytest_configure` on (door 7), and `keyring` is imported in
+`secret_store.py` and nowhere else (`test_no_live_io.py`). What stays a 0600 file: the Drive
+OAuth token and the SSE token, which the package writes and rotates itself and nobody types,
+and the `.env` route itself, for the settings and for a machine without a keychain. This lifts
+the operator's 2026-10-16 deferral of encryption at rest (`docs/security-architecture.md` § 8).
+
 ### Credentials Never in Version Control
 
-`.env`, `token.json`, and `credentials.json` must never be committed to the repository. The package loads credentials from environment variables only — never hardcoded defaults. Two checks stand behind the rule: `gitleaks` scans every pushed range in CI (`.gitleaks.toml`), and the unit-test suite never sees the operator's values — `tests/conftest.py` makes `load_dotenv` a no-op and removes every secret-named variable, so a test cannot pass on a real key by accident (`tests/security/test_no_live_io.py`).
+`.env`, `token.json`, and `credentials.json` must never be committed to the repository. The package reads a credential from the environment or from `.env` through `load_env_file` — never from a hardcoded default. Two checks stand behind the rule: `gitleaks` scans every pushed range in CI (`.gitleaks.toml`), and the unit-test suite never sees the operator's values — `tests/conftest.py` cuts the loader's default search, keeps `load_dotenv` a no-op and removes every secret-named variable, so a test cannot pass on a real key by accident (`tests/security/test_no_live_io.py`).
 
 ### OAuth Token File Permissions
 
@@ -778,6 +1005,14 @@ os.chmod(token_path, 0o600)   # O_CREAT's mode applies only on creation; the chm
 (`gdrive_auth.persist_credentials` — **the one place it exists.** `cache.GDriveCache` and
 `web_scraper.WebDocsStore` both delegate to it.)
 
+The same `O_CREAT … 0o600` idiom writes two other files, each its own control and none a
+copy of this one: `mcp_server._issue_sse_token` (the per-launch SSE token, § Transport
+Security) and, since 2026-11-09, `gateway.session.SuspendLock.acquire` (the gateway suspend
+lock, created in a 0700 directory when none exists — not a secret but a flag beside the trade
+store, private because that directory is; register F45, condition E).
+`tests/security/test_documented_controls.py` holds the three as an inventory, so a fourth
+writer, or a copy of the token write, is red there.
+
 > This read "and the same sequence in `cache.GDriveCache._get_service` and
 > `web_scraper.WebDocsStore._get_service`" until 2026-09-16, and was stale in one direction
 > and about to be stale in the other. `cache.py` had already been refactored to delegate, so
@@ -792,7 +1027,7 @@ This restricts read access to the file owner, preventing other local users from 
 
 ### In-Memory Secrets
 
-The IBKR session cookie is held in process memory as a Python `str`. Core dumps or heap inspections could expose it. This is unavoidable in Python without native memory management — no practical mitigation exists short of OS-level memory protection. Operators should ensure core dumps are disabled in production environments.
+The IBKR session cookie is held in process memory as a Python `str`. Core dumps or heap inspections could expose it. This is unavoidable in Python without native memory management — no practical mitigation exists short of OS-level memory protection. Operators should ensure core dumps are disabled in production environments. Since 2026-10-16 the Flex token and the Firecrawl key are held in `Config` as `pydantic.SecretStr` — masked in `repr`, `str` and any log line that formats them — and unwrapped only at the one place each is sent (register F48); the session cookie stays a plain `str`.
 
 ---
 
@@ -936,13 +1171,25 @@ until then the seeder had layer 1 only, and a sitemap listing a loopback URL was
 
 | Connection | TLS verification |
 |---|---|
-| IBKR Client Portal Gateway (`localhost:5055`) — Python REST (`IBKRClient`, `GatewayManager` polls) | `verify=False` — intentional; self-signed cert on loopback only; the client constructor refuses any non-loopback URL |
-| IBKR Client Portal Gateway — WebSocket (`IBKRWebSocket`) | `ssl.CERT_NONE` — same certificate; `connect()` refuses any non-loopback URL before sending the cookie |
+| IBKR Client Portal Gateway (`localhost:5055`) — Python REST (`IBKRClient`, `GatewayManager` polls) | `verify=False` — intentional; self-signed cert on loopback only; each function pins its URL through `config.require_loopback_url` on a line before (`test_tls_policy.py`, 2026-11-09) |
+| IBKR Client Portal Gateway — WebSocket (`IBKRWebSocket`) | `ssl.CERT_NONE` — same certificate; `connect()` refuses any non-loopback URL before sending the cookie; its context pins `minimum_version = TLSVersion.TLSv1_2` itself (`test_tls_policy.py`, 2026-11-09) |
 | IBKR Client Portal Gateway — container-internal (`healthcheck.sh`) | `curl -sk` — verification disabled; self-signed cert on loopback within the Docker network |
 | IBKR Flex Web Service (`ndcdyn.interactivebrokers.com`) | Standard TLS, no overrides |
 | Google Drive API | Standard TLS via Google client library |
 
-No external IBKR or third-party connections are made with verification disabled.
+No external IBKR or third-party connections are made with verification disabled. The set of functions that disable it, and that each pins its URL first, is held by `tests/security/test_tls_policy.py` (register F45, 2026-11-09).
+
+**TLS 1.2 or later, everywhere.** Every HTTP connection goes through `requests`, and so through
+urllib3, whose floor here is `urllib3>=2.2.2`; urllib3 v2 "Changed the default minimum TLS
+version to TLS 1.2 (previously was TLS 1.0)" and documents why — "Dropping TLS 1.0 and 1.1 by
+default means you won't be vulnerable to TLS downgrade attacks if a vulnerability in TLS 1.0
+or 1.1 were discovered in the future" (v2 migration guide, § HTTPS requires TLS 1.2+, read
+2026-11-09). The one `SSLContext` this package builds itself, `IBKRWebSocket.connect`'s, sets
+`minimum_version = ssl.TLSVersion.TLSv1_2` rather than inheriting the interpreter's default —
+which was already TLS 1.2 on the day it was measured (Python 3.11.18, OpenSSL 3.5.9) and is
+held in source by `test_tls_policy.py` so a host's OpenSSL configuration cannot lower it.
+Cipher suites are the platform's; nothing in the package widens them. (MCP security
+checklist 5.1, `docs/audits/mcp-security-checklist-2026-11-09.md`.)
 
 ### Rate Limiting and Retry Safety
 
@@ -1046,7 +1293,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | SSRF via Flex URL field | Domain allowlist prefix check | HTTPS enforced on all external connections |
 | SSRF via the local browser (`fetch_page` / `crawl_site`) or the seeder (`search_site`) | `_validate_public_url` blocks private/loopback/link-local/reserved/shared-range hosts before anything is constructed, parsing decimal/hex/octal literals locally; the validate-before-reach order is asserted by `test_ssrf_boundary.py` | `_reject_private_requests` re-checks every request Chromium actually makes (navigation, redirects, subresources) at the Playwright level; `_reject_private_httpx_request` does the same on the seeder's httpx client for `search_site`. Crawl4AI is also an opt-in extra (`pip install ibkr_core_mcp[scraper]`) — base install has no local-fetch surface at all |
 | Path traversal via crafted domain (`profiles_dir / domain`) | `_safe_domain` explicitly rejects `..`, `/`, `\`, and empty domains before any path join, in both `Crawl4AIScraper.scrape_batch()` and `create_profile()` | `create_profile()` is CLI-only (human-typed argument, no LLM/tool-input path) |
-| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal and — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus both log surfaces driven under a throwaway `HOME` |
+| The operator's username leaks through a path in a tool result **or a log line** | `redaction.collapse_home` rewrites the home directory as `~`, applied by `redact_error`, by `_import_flex_file`'s refusal, — since 2026-09-17, SEC-10 — by the SSE token-file line and `store._restrict`'s chmod warning, — since 2026-10-16, F48 — by `config.load_env_file`'s refusal warning, and — since 2026-11-09 — by `audit.record`'s could-not-write warning; every string inside an audit record passes `redact_text` | Canaries in `test_error_redaction.py`: the real handler's blocked-path message, plus all four log surfaces driven under a throwaway `HOME` |
 | Credential exposure in logs or tool results | `repr=False` on `flex_token` and `firecrawl_api_key` (no model credential exists in `Config` to expose, by test); every logged or shown exception passes `redact_error` | Credentials loaded from env vars only, never hardcoded; `gitleaks` in CI; unit tests never load `.env` |
 | Vulnerable dependency in the resolved tree | `pip-audit` over `[dev,server,scraper]`, per push and weekly, fixable findings block | Dependabot alerts on the manifest's direct dependencies |
 | OAuth token readable by other users | `os.chmod(token_file, 0o600)` after write | Token file path user-configurable, not world-accessible by default |
@@ -1056,7 +1303,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 | Unauthenticated session on cookie failure | `warnings.warn` on extraction error (not silent) | `browser_cookie3` access restricted to allowlisted browser names |
 | Session credential exposure in 401 retry | 401 raises `IBKRAuthError` immediately, never retried | — |
 | Docker supply chain (IBKR zip download) | HTTPS with server cert verification from IBKR's official distribution server | Accepted risk: same class as `pip install` without a separately-verified hash |
-| Cross-origin browser requests to gateway | `allowCredentials: false` prevents session cookie forwarding in CORS requests | IP allowlist (`127.*`, `192.168.*`, `172.16.*`–`172.31.*`, `131.216.*`, fixed 2026-07-11) restricts inbound connections to loopback and the actual RFC 1918 private ranges |
+| Cross-origin browser requests to gateway | `cors.origin.allowed` is the gateway's own origin (2026-11-09, checklist 5.4), and the gateway refuses a request carrying any other origin with `403` before it reaches the session (measured 2026-11-09, preflight and plain `GET` alike). `allowCredentials: false` is not a control here: a request with no cookie is served on the authenticated session (measured 2026-11-09) | IP allowlist (`127.*`, `192.168.*`, `172.16.*`–`172.31.*`, `131.216.*`, fixed 2026-07-11) restricts inbound connections to loopback and the actual RFC 1918 private ranges |
 | Gateway container compromise / escape | Loopback-only port exposure (`-p 127.0.0.1:5055:5055`, fixed 2026-07-11), no `--privileged`, no host volume mounts | Standard Docker isolation; gateway has no access to host filesystem or other containers |
 
 ---
@@ -1066,7 +1313,7 @@ No single control is the sole barrier. Each threat has layered mitigations:
 The following rules are enforced at PR review. Any PR that violates them will be rejected:
 
 1. **Never add a bypass flag or a session cache** to `require_touch_id` or any order confirmation function. An `OrderWriteAuthorization` is not a cache: it is bound to one write's account and body, expires in 300 s, is verified at the write and at every reply, and fails closed — never widen it.
-2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`.
+2. **Never move the gates out of `IBKRClient`** — enforcement must be at the innermost call site inside `place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`.
 3. **Never make an authorization global or persistent, and never let a reply skip its dialog** — one biometric per order write, one dialog per message. The device-password fallback under `LAPolicyDeviceOwnerAuthentication` is Apple's recovery path and stays.
 4. **Never add order-write tools to `ClaudeToolkit`** — the LLM must not have a path to order execution. Every new tool declares its `capabilities`; `ORDER_EXECUTION` may never appear, and a handler that touches a sink its declaration omits fails `tests/security/test_tool_capabilities.py`.
 5. **Never forward raw exception messages to the LLM or a log** — `_safe_error` for tool error returns; `redact_error` wherever detail is needed. `tests/security/test_error_redaction.py` fails on a bare `{exc}`, `str(exc)` or `log.warning(..., exc)` in `claude_tools.py` / `mcp_server.py`.
@@ -1079,6 +1326,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 12. **Never register the MCP call handler with `validate_input=False`**, and add every new server-local tool to `_ALL_TOOL_DEFS` as well as to `_dispatch` — the SDK validates only tools it has listed. Give any future tool that returns structured content an `outputSchema`. `tests/security/test_tool_input_validation.py` holds the first two; the third is a rule until a structured tool exists.
 13. **Never give `build_sse_app`'s `token` a default, and never print the token** — a default makes an unauthenticated server reachable by forgetting an argument, and a terminal is not a secret store. The file is 0600 under `~/.ibkr_core/`; only its path is logged.
 14. **Never show the model an absolute path built from `Path.home()`** — pass it through `redaction.collapse_home` so the message names the root, not the account.
+15. **Never add a gated write without `@_audited_write("<its name>")`, and never record a result's text or an unredacted parameter** — a record passes `redaction.redact_text` on every string; `tests/security/test_order_write_boundary.py` and `tests/test_audit.py` hold both.
 
 ---
 
@@ -1086,6 +1334,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 
 | Date | Commit | Scope | Outcome |
 |---|---|---|---|
+| 2026-11-09 | `release/2.2.0`, F45 step 1 | An enterprise MCP security checklist — 29 items in 8 sections (origin, application security, environment, authentication, communications, action security, secrets, monitoring), each scored 2–4 — answered against this package with the test or file behind each answer: `docs/audits/mcp-security-checklist-2026-11-09.md` | 4 YES, 16 PARTIAL, 2 NO, 7 N/A. No item scored 4 is a NO; the NOs are monitoring (8.1 a dated decision, 8.3). PyPI holds a PEP 740 provenance attestation for 2.1.0 (verified). Deep dive ordered: a redacted per-call record of order and session writes, attestation verification and an SBOM in CI, a gateway image scan, a measured TLS minimum, the gateway's wildcard CORS measured |
 | 2026-05-25 | `4dbe6ad` | All production modules | 2 Critical, 5 High, 5 Medium resolved. 3 Low/Info accepted. |
 | 2026-05-25 | `5f7b5ab` | `flex_query.py` | URL validation, datetime error handling hardened. |
 | 2026-06-10 | `bc8032b` | `gateway/` module — `GatewayManager`, `Dockerfile`, `tickler.sh`, `healthcheck.sh`, `conf.yaml` | 5 Low/Informational findings (GW-01 – GW-05) accepted. No code changes required. All subprocess calls use list form; no user input reaches shell. Docker container exposed on localhost only, no privileged mode. |

@@ -27,7 +27,7 @@ Any other `IBKR_GATEWAY_URL` raises `ConfigError` at construction time.
 
 **Account/order ID initialization:** Every order read/write method (`get_live_orders`,
 `get_orders_raw`, `get_order_status`, `place_order`, `modify_order`, `cancel_order`,
-`reply_order`, `place_bracket_and_confirm`, `get_order_preview`, `get_bracket_preview`) calls `get_brokerage_accounts()` once per client instance
+`reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `get_order_preview`, `get_bracket_preview`) calls `get_brokerage_accounts()` once per client instance
 before its own request — the official docs require `GET /iserver/accounts` to run before
 order operations. The call is cached on `_accounts_initialized`; callers never need to invoke
 `get_brokerage_accounts()` directly under normal use.
@@ -93,8 +93,8 @@ limit, use `get_market_history_paginated()`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `conid` | int | — | Contract ID (use `search_contract()` to find) |
-| `period` | str | `"1y"` | `{1-30}min`, `{1-8}h`, `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y` |
+| `conid` | int | — | Contract ID. For a stock, resolve it through `get_stocks()` and its `isUS` flag — never the first match of `search_contract()` (see that method) |
+| `period` | str | `"1y"` | `{1-30}min`, `{1-8}h`, `{1-1000}d`, `{1-792}w`, `{1-182}m`, `{1-15}y`. A period outside this grammar (`"ytd"`) raises `ValueError` before any request — IBKR would answer it with a window of its own |
 | `bar` | str | `"1d"` | `1min`, `2min`, `3min`, `5min`, `10min`, `15min`, `30min`, `1h`, `2h`, `3h`, `4h`, `8h`, `1d`, `1w`, `1m` |
 | `outside_rth` | bool | `False` | Include pre/post-market bars |
 
@@ -204,7 +204,13 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data
 ## Contract / Security Definition
 
 ### `search_contract(symbol, sec_type) -> list[Contract | dict]`
-Resolve a symbol to one or more contracts. Returns `[]` if no match.
+Every contract IBKR matches to a symbol. Returns `[]` if no match.
+
+**The list is not ranked and its first element is not "the" contract.** The endpoint carries no
+`isUS` flag, and IBKR documents no order for its results: measured live 2026-07-28, the first
+match for `IGV` was the Mexican listing, in MXN (`docs/symbology-reference.md` § 2). To resolve
+a stock, use `get_stocks()` — `/trsrv/stocks` carries `isUS` per contract — and stop when the
+US listing is not unique, as `docs/api-usage-examples.md` § Market Data does.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -231,8 +237,8 @@ every equity named `ES` (Eversource on NYSE and MEXI, …), so the type does **n
 list. **An exchange local symbol is not a search input**: `symbol=ESU6` and `symbol=ES SEP26`
 both return `{"error": "No symbol found"}`. The month-qualified path is search → `secdef/info`
 (below), never search alone. Sources (scraped 2026-09-10, archive `claudia_ui/.firecrawl/ibkr/`):
-https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-symbols.md,
-https://ibkrcampus.com/docs/web-api/trading/instrument-discovery/finding-derivative-products.md,
+https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-symbols,
+https://www.interactivebrokers.com/docs/web-api/trading/instrument-discovery/finding-derivative-products,
 https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
 
 ---
@@ -267,7 +273,7 @@ and `companyName` come back `null` on a future. `month` takes `MMMYY` (`SEP26`) 
 `secType` are both accepted; **`exchange` is required** (omitting it → the same HTTP 500). This
 method wraps only the `conid` form; a month-qualified wrapper is the futures-identity design of
 2026-09-10 (claudia_ui Known Gaps #37). Sources:
-https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-info.md,
+https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-contracts/get-contract-info,
 https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-query-contract-details-for-derivatives-in-the-web-api/,
 https://www.interactivebrokers.com/campus/trading-lessons/contract-search/
 
@@ -418,7 +424,16 @@ valid `secType` (only `STK`, `IND`, `BOND`) — this is the only documented FX r
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
 
 ### `get_contract_rules(conid, is_buy) -> ContractRules | dict`
-Order rules for a contract (min tick, valid order types, size constraints).
+Order rules for a contract (min tick, valid order types, size constraints) — **and the times in
+force that contract accepts** (`tifTypes`, typed `tif_types`): the per-contract authority, which
+can hold values IBKR's place-order enum lacks (`GTD`, `OVT`, `OND`). Entries arrive as IBKR
+sends them, `"OND/o,a,LIMIT"`. See `docs/order-management-examples.md` § Time in force.
+**The per-contract fractional rule** (since 2026-11-07, register F27): `fractional_order_types`
+(`fraqTypes`, IBKR's lowercase order-type names permitted with a fractional quantity) and
+`fractional_digits` (`fraqInt`, the decimals allowed) — `[]` / `0` when IBKR sends neither, so a
+reply without them reads as "no fractions". Per contract, never per asset class: EUR.USD and EUR.CHF
+permit two decimals, CHF.USD none (measured 2026-09-28). The rules do not reflect the account's own
+fractional permission — only IBKR's whatif or order reply does.
 **Endpoint:** `POST /iserver/contract/rules`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules
 
@@ -851,28 +866,28 @@ finding API-R4).
 ### `get_forecast_categories() -> Any`
 **Endpoint:** `GET /forecast/category/tree` — no parameters.
 Category ids, parent ids and markets; the starting point for contract discovery.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-categories
 
 ### `get_forecast_contract(conid) -> Any`
 **Endpoint:** `GET /forecast/contract/details` — `conid` required.
 Instrument details including the Yes and No side identifiers, question, strike and expiration.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-contract
 
 ### `get_forecast_market(underlying_conid, exchange=None) -> Any`
 **Endpoint:** `GET /forecast/contract/market` — `underlyingConid` required, `exchange` optional.
 Every contract affiliated with one underlying market. `exchange` is omitted from the query
 when not given, rather than sent empty — IBKR determines one internally.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-markets
 
 ### `get_forecast_rules(conid) -> Any`
 **Endpoint:** `GET /forecast/contract/rules` — `conid` required.
 Payout, price increment, source agency, release and payout times, exchange timezone.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-rules
 
 ### `get_forecast_schedules(conid) -> Any`
 **Endpoint:** `GET /forecast/contract/schedules` — `conid` required.
 Liquid and extended trading hours for the coming and prior trading days.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-event-contracts/get-forecast-schedule
 
 ---
 
@@ -881,8 +896,10 @@ Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-event-
 Every method in this section enforces two sequential security gates before any API call is made:
 1. **Gate 1:** macOS Touch ID / Face ID (`LAPolicyDeviceOwnerAuthentication`, falls back to the
    device's system password on a failed/cancelled biometric scan, 60s timeout).
-2. **Gate 2:** a modal dialog carrying the full order details. On macOS an AppKit `NSAlert`
-   run in a subprocess, falling back to an AppleScript `display dialog` if that subprocess
+2. **Gate 2:** a modal dialog carrying the full order details. On macOS the core's own AppKit
+   modal window run in a subprocess (one layout for every dialog at every height since
+   2026-11-07 — claudia_ui gap #111; an `NSAlert` until then), falling back to an AppleScript
+   `display dialog` if that subprocess
    fails; a `tkinter` modal only off macOS — which an order write never reaches, because
    Gate 1 is macOS-only and raises first. Return confirms on none of the three; the
    per-renderer mechanisms are in `SECURITY.md` § Gate 2. This line named `tkinter` as *the*
@@ -933,6 +950,10 @@ stripped).
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
+**The body's `tif` is sent exactly as given** — no list is applied and no default is added.
+IBKR's enum is `DAY`, `IOC`, `GTC`, `OPG`, `PAX`; a contract's own rules can accept more
+(`docs/order-management-examples.md` § Time in force).
+
 **One ticket per call.** This method wraps the single `order` dict as `{"orders": [order]}`.
 IBKR's endpoint takes an *array* — "Only one order ticket object may be submitted per request,
 unless constructing a bracket" — where a bracket is a parent carrying `cOID` plus children
@@ -940,21 +961,54 @@ carrying `parentId` equal to it, held by IBKR until the parent fills. That shape
 reachable through this method** (nor through `get_order_preview()`, which wraps one dict the
 same way); a bracket needs its own method that shows both legs on Gate 2. Documented
 2026-09-06, tracked in claudia_ui as Known Gaps #36.
-Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
-        https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md
+Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
+        https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
 
-### `modify_order(account_id, order_id, order) -> dict`
-Modify an existing order after both security gates pass.
+### `modify_order(account_id, order_id, order, *, authorization=None) -> list[dict] | dict`
+Modify an existing order after both security gates pass. `order` is the **whole** order with the
+fields to change, not a diff — IBKR: "The body content of the modify order endpoint will follow the
+same structure as the standard /iserver/account/{accountId}/orders endpoint. The content should
+mirror the content of the original order." A futures modify carries `manualIndicator`, which IBKR
+requires "regardless of original submission". Measured 2026-11-12: whole bodies were accepted for
+orders placed on IBKR Mobile, a stock and a CME future (`docs/ibkr-api-behaviors-reference.md`
+§ An order placed on IBKR Mobile can be modified and cancelled through this API).
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
-### `cancel_order(account_id, order_id, order_details) -> dict`
+### `cancel_order(account_id, order_id, order_details, *, manual_indicator=None) -> dict`
 Cancel an order after both security gates pass. `order_details` is optional display-only info
 (symbol/side/qty/price/TIF/etc.) shown in the Gate 2 dialog so the human can verify the correct
 order before cancelling — mirrors `modify_order()`'s dialog, which already receives the full
 order dict.
-**Endpoint:** `DELETE /iserver/account/{accountId}/order/{orderId}`
+
+`manual_indicator` (keyword-only, 2.2.0) is the CME Rule 536-B tag IBKR documents as required
+on a futures or futures-option cancel: `True` sends `?manualIndicator=true` (cancelled by a
+person), `False` sends `?manualIndicator=false` (by an automated system), `None` — the default —
+sends the bare `DELETE`. The caller states it, as on place and modify; a value that is not a
+bool is refused before any gate. `extOperator` is never sent. IBKR accepts both forms (bare:
+seventeen futures cancels, 2026-07-28 to 09-24; tagged: 2026-10-01, the query string witnessed in
+the gateway's request log) and answers both with the same body, so only the method's log line
+— `cancel:<id> manualIndicator=true` — records which was sent.
+
+The answer is `{"msg": "Request was submitted", "order_id": <int>, "conid": -1, "account": null}`
+on every cancel measured, a stock and a future on 2026-11-12 included. IBKR's page defines `conid`
+`-1` and `account` `null` as "for orders that were immediately cancelled on request".
+
+**An order id of `-1` is refused here, before Gate 1.** IBKR's page: "Submitting '-1' will cancel
+all open orders", and IBKR itself returns `order_id` `"-1"` for a bracket child it failed to place
+(measured; `tests/test_client.py`). `_validate_order_id` admits non-negative integers only, so the
+id never reaches the `DELETE`. `test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate` pins it
+(register F51). Checked against a live session on 2026-11-12: `"-1"` and `-1` both raised `ConfigError`,
+no gate was reached, and the order book read the same before and after.
+
+**IBKR's claim was measured the same day, and it is true.** A probe sent one `DELETE …/order/-1`,
+deliberately around this guard, on the operator's word. It ran behind Touch ID and the cancel dialog, with
+only two stock test orders working, untagged. IBKR answered HTTP 200 `{"msg": "Request was submitted",
+"order_id": null, "conid": -1, "account": null}`, and three seconds later **both** orders read `Cancelled`:
+one placed through this package and one placed on IBKR Mobile. Nothing else in the book changed
+(`docs/audits/live-test-log.md`, run 2026-11-12 (second)).
+**Endpoint:** `DELETE /iserver/account/{accountId}/order/{orderId}[?manualIndicator=true|false]`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/cancel-order
          https://www.interactivebrokers.com/campus/trading-lessons/request-modify-orders/
 
@@ -967,14 +1021,16 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/plac
 
 ---
 
-### `place_order_and_confirm(account_id, order) -> list[dict]` — recommended entry point
+### `place_order_and_confirm(account_id, order, *, reply_log=None) -> list[dict]` — recommended entry point
 Places an order and resolves its **full reply chain**, looping Gate 1 + Gate 2 + the confirm
 POST for each reply until a terminal response, showing the human the actual IBKR warning text
 at every step (not just a bare `reply_id`). Calls `place_order()` for the initial submission —
 Gate 1 + Gate 2 already run correctly there.
 
 Runs the loop back-to-back with no unrelated requests interleaved, per IBKR's reply-immediacy
-warning (see above). If the human declines any reply in the chain, `HumanAuthError` is raised
+warning (see above). If any reply in the chain is not confirmed — declined at the dialog, or not
+answered before it dismissed itself — `ReplyNotConfirmedError` (a `HumanAuthError`) is raised,
+its message saying which and quoting IBKR's question
 — but the decline is POSTed to IBKR (`{"confirmed": False}`) first, unlike the standalone
 `reply_order()`, which raises without ever contacting IBKR and leaves the order ambiguous on
 IBKR's side. This is a deliberate behavior difference, not a bug.
@@ -983,7 +1039,7 @@ IBKR's side. This is a deliberate behavior difference, not a bug.
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
          https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order-reply-confirmation
 
-### `modify_order_and_confirm(account_id, order_id, order) -> dict` — recommended entry point
+### `modify_order_and_confirm(account_id, order_id, order, *, reply_log=None) -> dict` — recommended entry point
 Same loop/display/decline semantics as `place_order_and_confirm()`, applied to `modify_order()`
 instead.
 
@@ -999,9 +1055,12 @@ had never been applied to — and `modify_order()`'s annotation is the union IBK
 sends rather than a `dict` that let mypy believe the narrowing was sound.
 
 This method was added proactively to close the same never-loops-replies gap that `place_order()`
-had before `place_order_and_confirm()` was added, but the gap has **not been live-verified for
-`modify_order` specifically** as of 2026-07-06 — only the `place_order` 3-reply chain has been
-confirmed live.
+had before `place_order_and_confirm()` was added. Until 2026-11-12 this paragraph said the chain
+had "not been live-verified for `modify_order` specifically". **It ran live on 2026-11-12:** a
+modify of an ES order placed on IBKR Mobile drew the account's Total Value Limit precaution, which
+was shown in its own dialog, confirmed, and resolved under the one Touch ID, IBKR answering
+`{"order_id": "<id>", "order_status": "PreSubmitted", "encrypt_message": "1"}`
+(`docs/audits/live-test-log.md`, run 2026-11-12, O1).
 
 **Endpoint:** `POST /iserver/account/{accountId}/order/{orderId}`, then `POST /iserver/reply/{replyId}` per chained reply
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
@@ -1013,7 +1072,10 @@ Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modi
 Whatif preview — cost, commission, margin impact. No order placed, no security gates. Same
 underscore-field-stripping as `place_order()`. One ticket; a bracket has its own entry point
 below. Both post through the private `_whatif`, which is the only function permitted to build
-the whatif path.
+the whatif path. The body goes through as given — a fractional `quantity` included: IBKR's
+whatif takes it as a float and accepts a fraction where the contract's rules permit one (EUR.USD
+1000.5 priced; CHF.USD 1000.5 → IBKR's own HTTP 500, measured 2026-10-06), and the `preview_order`
+tool no longer casts it to an int (register F37, 2026-11-07).
 **Endpoint:** `POST /iserver/account/{accountId}/orders/whatif`
 Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/preview-order-what-if-order
 
@@ -1094,6 +1156,45 @@ throwing would destroy the only account of what happened.
 Accepts and returns `Mapping[str, Any]`, not `dict`: a typed IBKR row is a `Mapping` and is
 not a `dict`, and a `dict` filter here would silently discard every row a caller supplied.
 
+### `attach_order_and_confirm(account_id, parent_order_id, child, *, reply_log=None) -> list[dict]` — Touch ID gated
+Attaches **one** child to an order already working at IBKR — the sequential bracket form
+(2026-10-17, claudia_ui gap #36). In IBKR's model an attached order is a bracket child whose
+parent already exists, and the method is exactly that:
+
+- **The parent is read from IBKR** (`get_order_status`) **before Gate 1** and refused
+  (`ValueError`) unless working — `PreSubmitted`, `Submitted`, `PendingSubmit`, `ApiPending`.
+  No fingerprint is spent on a filled, cancelled or inactive order.
+- **The child is completed from IBKR's record, never from the caller:** the parent's conid
+  and size, the opposite side, the parent's TIF unless the child states one. The caller owns
+  the order type, the prices, a stated `tif` and `outsideRTH`. `parentId` is IBKR's own order
+  id, so `_bracket_tickets`' rules — link, opposite side, same contract, child ≤ parent — run
+  unchanged.
+- **One Touch ID**, scope kind `attach`, bound to the ticket **and** the parent's id: an
+  authorization earned for one parent never covers a child of another; its label names the
+  child being sent (`SELL 1 F (attached to order …)`), so every reply dialog of the write is
+  titled for that order. **Gate 2 is `confirm_bracket_dialog`**, titled `LIVE ATTACHED ORDER
+  CONFIRMATION`, its banner and Action row the child's side, its disclaimer saying the parent
+  is already working and not sent again, with one added row in the Parent section, `At IBKR` (`order <id> ·
+  <state> · <n> attached`), and the red `⚠ Partial fill` line when the parent is above one lot
+  without `allOrNone: true`. Measured live 2026-10-18 on Ford.
+- One ticket is posted, as a one-element array, to the endpoint the bracket uses; its reply
+  chain is resolved by the walker the bracket write uses. `place_order_and_confirm` is not
+  reused and not modified.
+- **One child per write.** Two children on a working order are two calls — IBKR documents the
+  sequential form one order at a time, and one Touch ID covers one write.
+- Returns the terminal entries. The one post-send check is `attached_entry`: a response with no
+  entry whose `parent_order_id` is the parent is logged at ERROR and returned intact, never
+  raised over (the order is placed by then) and never reported as success.
+
+**Endpoint:** `GET /iserver/account/order/status/{orderId}`, then `POST /iserver/account/{accountId}/orders`, then `POST /iserver/reply/{replyId}` per pending reply
+Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups
+
+### `attached_entry(parent_order_id, entries) -> dict | None` — module-level, pure
+The terminal entry IBKR reports as attached to `parent_order_id`, found by the
+`parent_order_id` IBKR echoes and never by position (the response order is arbitrary,
+measured 2026-09-21/22), else `None`. Imports from `ibkr_core_mcp` beside
+`pair_bracket_response`, for the same reason: it encodes IBKR's wire shape.
+
 ---
 
 ## Account / Admin
@@ -1113,7 +1214,7 @@ account, and per-account capability flags (`supportsCashQty`, `supportsFractions
 or querying open orders.** `IBKRClient._ensure_accounts_initialized()` calls this once per
 client instance (cached) and runs automatically at the top of every order read/write
 method (`get_live_orders`, `get_orders_raw`, `get_order_status`, `place_order`, `modify_order`,
-`cancel_order`, `reply_order`, `place_bracket_and_confirm`, `get_order_preview`, `get_bracket_preview`) — callers do not need to call this
+`cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`, `get_order_preview`, `get_bracket_preview`) — callers do not need to call this
 directly under normal use.
 
 **Returns:** a `BrokerageSession` over the 12-key object IBKR sends — `accounts` (list of account ID strings), `selectedAccount`, `isPaper`, `isFT`, `sessionId`, `serverInfo`, `acctProps`, `aliases`, `allowFeatures`, `chartPeriods`, `groups`, `profiles` (measured 2026-09-17; verified live as an object, NOT a bare list, on 2026-06-30). `session.is_paper` and `session.selected_account` are the two a caller branches on; the account-keyed blocks stay mappings.

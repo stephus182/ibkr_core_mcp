@@ -67,7 +67,7 @@ All 44 `ClaudeToolkit` tools plus:
 |---|---|
 | `ibkr://accounts` | All IBKR accounts |
 | `ibkr://positions/current` | Current positions for primary account |
-| `ibkr://trades/recent` | Last 100 trades from SQLite |
+| `ibkr://trades/recent` | The 100 newest statement executions (Flex, T+1), in the legacy key set plus `trade_date` |
 | `ibkr://pnl/live` | Latest account P&L snapshot (WebSocket `spl` topic, `--stream` only) |
 
 ### How `--stream` drives alerts

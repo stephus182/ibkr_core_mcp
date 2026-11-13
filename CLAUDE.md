@@ -41,6 +41,33 @@ script until the package was reinstalled. If a script outside the repo cannot im
 that exists, check `site-packages/__editable___*_finder.py`'s `MAPPING`, reinstall, and delete
 the stale `build/` tree.
 
+**A `.venv` ages; CI's environment does not.** The base dependencies float upward on purpose and
+CI resolves them fresh on every run, while a venv keeps what it had the day it was built. On
+2026-11-12 the release worktree's venv differed from CI's install in **56 of 115 packages** —
+pandas 3.0.6 against 3.1.1, RestrictedPython 8.5 against 9.0, and the gate tools themselves
+(ruff, mypy, pytest). Four green local gates were therefore green on other versions than CI's,
+and the first CI run on the branch (run 43322834049) was red twice over: a backtest test that
+only the newer pandas exposed, and a suite-wide alarm that only the newer pytest tripped.
+Nothing had compared the two environments.
+
+`python scripts/check_env_drift.py` does: it asks pip for a fresh resolve of `.[dev,server]`
+(`pip install --dry-run --ignore-installed --report`, installing nothing) and compares it with
+this environment, package by package. Exit 0 is no drift, 1 is drift with the `pip install` line
+that aligns it, and 2 is *could not check* — never read 2 as 0. It needs the network, so it is
+not one of the four gates and not in the pre-push hook. Run it:
+
+- when you start work in a venv you did not build this week;
+- before you treat a local green as evidence about CI, and when a CI failure does not reproduce
+  here — compare first, the comparison found that day's cause in minutes;
+- before a release (§ Publishing, step 3).
+
+Comparing with a CI log is not a substitute. CI runs on Linux and never installs the macOS-only
+`pyobjc` packages behind both order gates; that evening they were a major version behind
+(12.2.2 against 13.0), and only this check, run on a Mac, showed it. **After aligning a `pyobjc`
+package the gates have to be seen working by a person** — a Touch ID prompt, and a click on each
+button of a Gate 2 dialog — because the unit suite cannot reach either, by design. Pandas and
+the rest are pip packages inside the venv; Homebrew supplies the interpreter only.
+
 **Python:** 3.11+ required. Use Homebrew Python on macOS (`brew install python`) — invoke the
 versioned binary (`python3.11 -m venv`), not bare `python3`, since Homebrew may resolve that
 to a newer, unsupported interpreter.
@@ -63,7 +90,7 @@ pytest tests/claude_tools/test_flex.py                   # one domain file
 pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 
-# Security regression suite — the eleven properties of SECURITY.md § Security Regression Suite,
+# Security regression suite — the thirteen properties of SECURITY.md § Security Regression Suite,
 # each read from the source or driven with canaries; ~10 s. Part of the unit run and of CI.
 pytest -m security
 
@@ -134,6 +161,16 @@ not a substitute for running the line yourself while you still have work to fix.
 shape is already recorded above for CI: run 34082479743 failed at `ruff format --check` and
 that red step hid two real `mypy` errors CI never reached.
 
+**The test job also runs every week, with no push** (since 2026-11-12). `ci.yml`'s schedule ran
+the dependency audit alone until then — the test job carried `if: github.event_name !=
+'schedule'` — so a dependency release that broke the code was seen at the next push to `main`
+and not before, and between 2026-09-22 and 2026-11-12 there was none.
+`test_the_ci_test_job_runs_on_the_weekly_schedule_too` holds it. Two limits: a schedule runs on
+the default branch only, so it watches `main`, not a release branch; and GitHub pauses a
+schedule after 60 days without repository activity. A red weekly run with no commit behind it
+means a dependency moved: read the job's `Successfully installed` line against
+`scripts/check_env_drift.py` here (Dev Setup).
+
 **Two more gates run in CI only** (they need the network): `pip-audit` over a **fresh resolve**
 of `.[dev,server,scraper]` — requirements mode, `pip install --dry-run` in a throwaway venv,
 installing nothing — weekly as well as per push, with ignores only from
@@ -142,7 +179,13 @@ machine happens to have and is not what CI checks; that difference produced a ne
 2026-09-16. Reproduce CI exactly with the command in `.github/workflows/ci.yml`. And
 `gitleaks` over the pushed range, configured by `.gitleaks.toml`. Neither is in the pre-push
 hook. Added 2026-09-13; the reasoning is in
-`docs/audits/security-architecture-audit-2026-09-13.md` § Phase 3.
+`docs/audits/security-architecture-audit-2026-09-13.md` § Phase 3. **Two more since 2026-11-09**
+(MCP security checklist, `docs/audits/mcp-security-checklist-2026-11-09.md`): `sbom`, a CycloneDX
+artifact of what a user installs, per push and per week; and `gateway-image-scan`, `trivy` over the
+gateway image built as `GatewayManager` builds it — **informational until its first run has been
+seen**, then blocking on CRITICAL. Neither needs a local step; the SBOM can be generated here with
+`cyclonedx-py environment --output-format JSON --output-file sbom.cdx.json` from a venv that has
+`cyclonedx-bom`.
 
 `[tool.mypy]` runs `strict = true` against `ibkr_core_mcp/` and `scripts/`. `tests/` is also checked
 (`files = ["ibkr_core_mcp", "tests", "scripts"]`) but under a narrower `tests.*` override that relaxes
@@ -183,7 +226,8 @@ anywhere). Per version:
    and the doc pins do not use. `test_pyproject_version_is_already_pep440_canonical` refuses it
    in the four gates, before a tag exists.
    Source: https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization
-3. Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
+3. `python scripts/check_env_drift.py` exits 0 (Dev Setup: gates run on a stale venv prove less
+   than they say). Run the four gates bare and unpiped; commit `release: vX.Y.Z`; push; `gh run watch <id>
    --exit-status` (no pipe) green.
 4. `git tag -l --sort=-v:refname | head -1` (never reuse a tag); `git tag vX.Y.Z && git push origin vX.Y.Z`.
 5. Optional rehearsal (needs a separate TestPyPI account with its own pending publisher, environment `testpypi`): Actions → *Publish to PyPI* → *Run workflow* on `main` → uploads to TestPyPI only;
@@ -194,7 +238,9 @@ anywhere). Per version:
    PEP 740 attestations. TestPyPI is not in this path — `4a70f8b` made that job
    `workflow_dispatch`-only (step 5).
 7. Verify: `pip install "ibkr-core-mcp==X.Y.Z"` in a fresh venv, `pip check`, the project page renders.
-8. `docs/consumers.md` and claudia_ui's pin.
+8. `docs/consumers.md` — rename its `### Unreleased` section to the version being released (it
+   mirrors the CHANGELOG's `[Unreleased]`, and a heading left behind ships as stale text) — and
+   claudia_ui's pin.
 
 **The wheel is checked as an artifact before it can upload** (2026-09-19). `publish.yml`'s build
 job runs `scripts/verify_wheel.py` after `twine check`: a fresh venv under `$RUNNER_TEMP`,
@@ -253,6 +299,17 @@ IBKR_SQLITE_PATH=~/.ibkr_core/store.db
 GDRIVE_TOKEN_FILE=~/.ibkr_core/token_ibkr_core_mcp.json
 GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 ```
+
+**A secret in `.env` never enters the process environment (register F48, 2026-10-16).**
+`Config.from_env()` reads the file through `load_env_file`: settings are exported where unset,
+`IBKR_FLEX_TOKEN` and `FIRECRAWL_API_KEY` reach the `Config` as `SecretStr` and nowhere else;
+a file accessible to group or others has its secrets refused, with `chmod 600 <path>` in the
+warning. A secret you set in your own shell is still read, and since 2026-11-09 the OS keychain
+is read between the two (`secret_store`; `python -m ibkr_core_mcp.secret_store set
+IBKR_FLEX_TOKEN`) — the test suite sets `keyring`'s null backend so no unit test reaches yours
+(door 7). Nothing in the package or `scripts/`
+may call `load_dotenv` (a structural test refuses it); the `set -a; source ./.env` line below
+is for the live scraper tests in your own shell and stays a developer's choice.
 
 **Standalone dev exception:** with no `.env` here, `firecrawl_search` correctly reports
 "not configured" and never touches Drive — by design, not a bug, since
@@ -323,11 +380,14 @@ ibkr_core_mcp/
 ├── flex_schema.py        # GENERATED by scripts/audit_flex_xml.py — every attribute IBKR emits, as columns
 ├── flex_import.py        # Parse a Flex statement into the flex_* tables; refuses on unknown attributes
 ├── flex_store.py         # SQLite writer for the generated flex_* schema
+├── flex_dataset.py       # FlexDataset — the typed, read-only answers every reader asks (realised, lots, settled ids)
+├── flex_sync.py          # The dataset's state: validity, fingerprint, last pull, statement held, pull due
 ├── backtest.py           # RestrictedPython sandbox executor
 ├── indicators.py         # Technical indicators (RSI, MACD, BB, ATR, VWAP, OBV, ...)
 ├── analytics.py          # Performance metrics (Sharpe, Sortino, Calmar, drawdown, ...)
 ├── claude_tools.py       # Claude tool definitions + handlers (44 tools, portable; each declares `capabilities`)
 ├── redaction.py          # redact_error — the one path for exception text the model layer shows or logs
+├── audit.py              # The audit record — one redacted JSON line per tool call and per gated order write (checklist 8.1)
 ├── mcp_server.py         # MCP server (stdio + SSE transports) — 46 tools, 4 resources
 ├── human_auth.py         # Gate 1: Touch ID / Face ID biometric authentication
 ├── order_confirm.py      # Gate 2: builds the confirmation dialog + side extraction
@@ -338,10 +398,14 @@ ibkr_core_mcp/
 ├── pinescript.py         # PineScript v5 generation from strategies and indicators
 ├── rate_limiter.py       # Proactive per-endpoint pacing (sliding window) + backoff on 429
 ├── config.py             # Config dataclass loaded from environment variables
+├── secret_store.py       # The OS keychain behind the one loader — a secret is read env → keychain → .env (checklist 7.1)
 ├── gdrive_auth.py        # Shared Google OAuth token/refresh helper (used by cache + web_scraper)
 └── gateway/
     ├── __init__.py
-    ├── manager.py        # GatewayManager — Docker lifecycle, auth polling
+    ├── manager.py        # GatewayManager — Docker lifecycle; start() guarded by restart_refusal; read_login_events; KeepAwake (F45)
+    ├── preflight.py      # The session's readings (/tickle, /sso/validate, /portfolio/accounts) and the verdict rule (F45)
+    ├── session.py        # The session's one owner: establish / recover / the poll, SuspendLock, the two writes, keepalive_loop (F45 step 2)
+    ├── __main__.py       # `python -m ibkr_core_mcp.gateway preflight|diagnose|up|reset|keepalive` — the operator's command line (F45)
     ├── Dockerfile        # eclipse-temurin:21 + IBKR Client Portal zip
     ├── conf.yaml         # Gateway config (port, SSL, CORS, IP allowlist)
     ├── run_gateway.sh    # Entrypoint: start the Java process and wait — nothing else
@@ -357,11 +421,11 @@ Basic object setup used throughout the codebase (`Config`, `IBKRClient`, `GDrive
 
 **ALL order write operations require two sequential human validations. There is no bypass.**
 
-Every call to `place_order`, `modify_order`, `cancel_order`, `reply_order`, or
-`place_bracket_and_confirm` must pass both gates — in order — before **any order-write
-request** reaches IBKR. Those five are the whole **public** set. `GATED_OWNERS` in
-`tests/security/test_order_write_boundary.py` — which is what the boundary is checked
-against — holds **six** names: those five plus the private `_resolve_one_reply`, which
+Every call to `place_order`, `modify_order`, `cancel_order`, `reply_order`,
+`place_bracket_and_confirm` or `attach_order_and_confirm` must pass both gates — in order —
+before **any order-write request** reaches IBKR. Those six are the whole **public** set.
+`GATED_OWNERS` in `tests/security/test_order_write_boundary.py` — which is what the boundary
+is checked against — holds **seven** names: those six plus the private `_resolve_one_reply`, which
 answers one chained precaution reply and therefore builds `/iserver/reply/{}` itself. No
 other function in `client.py` may build an order-write URL. This paragraph said the five
 *were* `GATED_OWNERS` until 2026-09-22. That is invisible to a caller — the sixth is private
@@ -391,7 +455,7 @@ Measured with Gate 1 denying: one GET on a fresh session, zero once initialised,
 | Gate | Mechanism | Behaviour |
 |---|---|---|
 | **Gate 1 — Touch ID** | Apple `LocalAuthentication` (`LAPolicyDeviceOwnerAuthentication`) | Touch ID/Face ID first, falls back to the device's system password on a failed/cancelled biometric scan. 60-second timeout. |
-| **Gate 2 — Visual confirmation** | On macOS an AppKit `NSAlert` in a subprocess (`osascript` if that fails); a `tkinter` modal elsewhere. Full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
+| **Gate 2 — Visual confirmation** | On macOS the core's own AppKit modal window in a subprocess — one layout at every height since 2026-11-07, an `NSAlert` before (`osascript` if that fails); a `tkinter` modal elsewhere. Full order details + live-order disclaimer | Explicit mouse click required. Enter key does not confirm. |
 
 If either gate fails (denied, timeout, cancelled), `HumanAuthError` is raised immediately and no order is placed, modified or cancelled.
 
@@ -411,8 +475,9 @@ contacts nothing on a decline.
 | `cancel_order` | Touch ID → cancel dialog |
 | `reply_order` | Touch ID → reply dialog |
 | `place_bracket_and_confirm` | **One** Touch ID bound to the *whole ticket array* (so a child altered after the fingerprint falls outside it), then **one** Gate 2 dialog carrying the parent and every child, then a reply dialog per pending reply on *any* ticket until every chain is terminal. Two dialogs are deliberately not offered: they would permit the parent to be sent with the child declined, which is the one state a bracket exists to prevent |
+| `attach_order_and_confirm` | **One** Touch ID bound to the child ticket **and the parent's order id** (scope kind `attach`), then the bracket dialog with a `Parent — At IBKR` row, then a reply dialog per pending reply. One child per write — IBKR's sequential bracket form. The parent is read from IBKR and refused unless working, **before** Gate 1, so no fingerprint is spent on an order nothing can be attached to (2026-10-17) |
 
-`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`; it is not a branch of the single-order path, which stays live-proven and unmodified. Its read-only twin is `get_bracket_preview` (ungated, like `get_order_preview`), and `pair_bracket_response` tells the caller which returned entry is which leg — IBKR's response is **not** index-aligned with the submission.
+`place_order_and_confirm` / `modify_order_and_confirm` are the recommended entry points — a single IBKR order can require multiple chained replies before reaching a terminal state, and these methods resolve the whole chain safely. `place_order` / `modify_order` / `reply_order` stay available for callers who want manual control over each step. A **bracket** — a parent plus its held children — is one POST of a ticket array and has its own entry point, `place_bracket_and_confirm`; it is not a branch of the single-order path, which stays live-proven and unmodified. Its read-only twin is `get_bracket_preview` (ungated, like `get_order_preview`), and `pair_bracket_response` tells the caller which returned entry is which leg — IBKR's response is **not** index-aligned with the submission. An **attached order** — one child on an order already working — is `attach_order_and_confirm` (2026-10-17): IBKR's sequential bracket form, one ticket per write, the child completed from IBKR's own record of the parent; `attached_entry` finds the child in the response by the `parent_order_id` IBKR echoes.
 
 **Explicitly ungated.** What these share is not that they read — it is that none can place,
 modify, cancel or confirm an order. They are *not* all read-only.
@@ -443,6 +508,7 @@ declarations). Documentation only — no gate or classification changed.
 - Never move the gates out of `IBKRClient` — enforcement must be at the innermost call site.
 - The required policy is `LAPolicyDeviceOwnerAuthentication` (Touch ID/Face ID, falling back to the device's system password on a failed/cancelled biometric scan) — Apple's own recovery path for a genuinely-failed biometric read, not a bypass this library adds. The stricter biometrics-only policy was evaluated and rejected: a failed scan under it has no recovery path at all. Don't change this policy without updating both this file and `README.md`'s Security section in the same PR.
 - Any PR that weakens these gates *beyond* the documented policy above — e.g. skipping `require_touch_id`/`confirm_order_dialog` entirely, caching a prior success, or adding a fallback beyond the OS's own password prompt — will be rejected.
+- **Every gated write carries `@_audited_write("<its name>")`** (2026-11-09): one redacted audit record per write — sent, denied, declined, timed out, refused or in error — in `~/.ibkr_core/audit.jsonl`; `tests/security/test_order_write_boundary.py` holds it on every `GATED_OWNERS` member.
 - **The boundary is machine-checked** (2026-09-13): `tests/security/test_order_write_boundary.py` reads `client.py` and fails if an order-write endpoint is built anywhere but the gated methods, if a gated method reaches the network before a gate — directly or through a helper, with
   `_ensure_accounts_initialized` the one exemption, named and reasoned in the test — or if `claude_tools.py`/`mcp_server.py` name an order-write method, `_post`, `_session` or `OrderWriteAuthorization`. A new tool with side effects must declare them in its `capabilities` set, and no tool may declare `ORDER_EXECUTION` (`tests/security/test_tool_capabilities.py`). The full list of held properties: `SECURITY.md` § Security Regression Suite; the audits that produced them: `docs/audits/security-architecture-audit-2026-09-13.md` (invariants 1–10) and `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md` (invariant 11, and the SSE bearer token in 10).
 
@@ -450,7 +516,7 @@ declarations). Documentation only — no gate or classification changed.
 
 ## Gateway Authentication & Session
 
-The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit 10 requests/second globally, with much stricter per-endpoint limits — see `docs/gateway-auth-reference.md`. Handled transparently by `rate_limiter.py`, which since 2026-09-16 **paces proactively** (`EndpointPacer`, sliding window, limits in `ENDPOINT_LIMITS`) as well as retrying 429s. Exceeding a limit costs a fifteen-minute penalty box on the IP across every endpoint, so prevention is the part that matters. **The pacer's budget is per process and IBKR's limit is per IP**: a script, a test run and the MCP server on one machine share the limit without sharing the budget (§ Rate limits of that doc). Since 2026-09-19 the README's Quick start, the `IBKRRateLimitError` message on a 429 and the tool layer's error text all say so — until then the fact lived only in the class docstring, that reference and the changelog. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
+The IBKR Client Portal Gateway must run on the **same machine** as the browser used to authenticate — no cloud deployment possible. `BrowserCookieAuth` (default) reads Chrome's cookie store for `localhost`; start it via the built-in `GatewayManager`. **Before touching the login page, `python -m ibkr_core_mcp.gateway preflight`** reads the session (read-only: two GETs, then the gateway's own log after a FREE reading) and says whether a login may start; `startup()` applies the same rule and opens no login on a live, contested, borrowed, refused or still-validating session (register F45, 2026-11-09; `diagnose` adds the login timeline). Session expires without activity — call `client.tickle()` every 60s to keep it alive. Rate limit 10 requests/second globally, with much stricter per-endpoint limits — see `docs/gateway-auth-reference.md`. Handled transparently by `rate_limiter.py`, which since 2026-09-16 **paces proactively** (`EndpointPacer`, sliding window, limits in `ENDPOINT_LIMITS`) as well as retrying 429s. Exceeding a limit costs a fifteen-minute penalty box on the IP across every endpoint, so prevention is the part that matters. **The pacer's budget is per process and IBKR's limit is per IP**: a script, a test run and the MCP server on one machine share the limit without sharing the budget (§ Rate limits of that doc). Since 2026-09-19 the README's Quick start, the `IBKRRateLimitError` message on a 429 and the tool layer's error text all say so — until then the fact lived only in the class docstring, that reference and the changelog. Full login walkthrough, `GatewayManager` code, and headless `TokenAuth` usage for batch jobs: `docs/gateway-auth-reference.md`
 
 ---
 
@@ -517,8 +583,13 @@ The IBKR Client Portal Gateway must run on the **same machine** as the browser u
     is 576 B).
   - The new site is AI-friendly, which makes verification cheap: append **`.md`** to any page
     URL for clean markdown, and **`https://www.interactivebrokers.com/docs/web-api/llms.txt`**
-    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**, **re-measured 2026-09-22: 483** — IBKR adds pages, so every figure here is true only as of its date and a count worth acting on is one you take yourself; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There is also an MCP server at
-    `https://ibkrcampus.com/docs/web-api/_mcp/server`. Prefer these over scraping the HTML — they
+    is the complete page index (469 unique .md URLs measured 2026-08-07, **re-measured 2026-08-11: still 469**, **re-measured 2026-09-22: 483** — IBKR adds pages, so every figure here is true only as of its date and a count worth acting on is one you take yourself; it said "517-page" from an earlier, unverified count). Note the index lists its URLs on the `ibkrcampus.com` host while the docs cite `www.interactivebrokers.com` — both serve the same pages, so compare by *path*, not by full URL. There was also an MCP server at
+    `https://ibkrcampus.com/docs/web-api/_mcp/server` — unavailable on 2026-10-05, when `ibkrcampus.com/docs` answered
+    HTTP 403 with a Cloudflare error 1000 on every page and the same path on `www.interactivebrokers.com` answered
+    "MCP is disabled for this docs site". **Cite `www.interactivebrokers.com/docs/…`**: the 189 links here that used
+    the other host were repointed that day by path, each verified by `.md`, `llms.txt` and a fabricated control, and
+    ten page names that had never existed were corrected (`docs/external-docs-reference.md`). Prefer `.md` and
+    `llms.txt` over scraping the HTML — they
     cost no Firecrawl credits and cannot be edge-blocked. If you do scrape, the recovery ladder
     is gone: as of 2026-07-30 there are **four web tools, one job each, and no fallback
     between them**. Anything with a URL goes to the free local browser — `fetch_page` (one
@@ -642,7 +713,7 @@ not `@import`s, so they don't load into every session's context automatically.
   per-host quirks, troubleshooting): `docs/web-scraper-reference.md`
 - Scraping *method* — approaching an unfamiliar host, the four-way matrix, reading a blocked
   page, and where we stop on the anti-bot ladder: `docs/web-scraping-methodology.md`
-- Security architecture — principals, privilege tiers, the trust-boundary map, the eleven
+- Security architecture — principals, privilege tiers, the trust-boundary map, the thirteen
   invariants with their tests, subsystem designs, CI gates, the decision log, change recipes:
   `docs/security-architecture.md`; the OWASP MCP-guide applicability decision (2026-09-14, the
   principal external baseline, section by section): `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`,

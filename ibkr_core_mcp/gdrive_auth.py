@@ -14,10 +14,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
+import httplib2
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
+from googleapiclient.discovery import build
+from googleapiclient.http import HttpRequest
 
 
 def load_or_refresh_credentials(token_file: Path, scopes: list[str]) -> Credentials | None:
@@ -58,3 +63,20 @@ def persist_credentials(token_file: Path, creds: Credentials) -> None:
     with os.fdopen(fd, "w") as fh:
         fh.write(creds.to_json())
     os.chmod(token_path, 0o600)
+
+
+def build_drive_service(creds: Credentials) -> Any:
+    """A Drive API v3 service whose every request has its own connection.
+
+    httplib2 is not thread-safe; Google's documented pattern is a `requestBuilder` that gives
+    each request a new `AuthorizedHttp` over a fresh `httplib2.Http`. Media transfers use the
+    request's own `.http`, so they are covered. The one place this package builds the service.
+
+    Source: https://googleapis.github.io/google-api-python-client/docs/thread_safety.html
+    """
+
+    def build_request(_http: Any, *args: Any, **kwargs: Any) -> HttpRequest:
+        """An `HttpRequest` on its own connection; the shared `_http` is not used."""
+        return HttpRequest(AuthorizedHttp(creds, http=httplib2.Http()), *args, **kwargs)
+
+    return build("drive", "v3", requestBuilder=build_request, http=AuthorizedHttp(creds, http=httplib2.Http()))

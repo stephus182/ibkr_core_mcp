@@ -206,7 +206,7 @@ def test_every_tracked_file_stating_the_live_suite_size_agrees_with_it():
 # Frozen here on purpose, not imported from the code under test. IBKR's own page says it
 # twice — "The endpoint supports paging, each page will return up to 100 positions" and
 # "One page contains a maximum of 100 positions"
-# (https://ibkrcampus.com/docs/web-api/v1/endpoints/portfolio/positions). A guard that read
+# (https://www.interactivebrokers.com/docs/web-api/v1/endpoints/portfolio/positions). A guard that read
 # the number out of `client.py` would follow the source anywhere it drifted, which is how a
 # mutant survived in `tests/security/test_published_identifiers.py`.
 _IBKR_POSITIONS_PAGE_SIZE = 100
@@ -555,6 +555,27 @@ def test_tracked_markdown_links_only_to_tracked_paths():
     assert bad == [], "links to untracked paths:\n" + "\n".join(bad)
 
 
+_FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+
+
+def test_no_tracked_example_takes_the_first_match_of_search_contract():
+    """`search_contract` is `/iserver/secdef/search`: no `isUS`, no currency, and a result
+    order IBKR does not document — its first match for IGV is the Mexican listing, in MXN
+    (`docs/symbology-reference.md` § 2). Every read path left that pick behind in 2026-08; the
+    README's quick start and the order walkthrough still taught it until 2026-10-05, the
+    second one to build an order body. An example that calls `search_contract` may not index
+    its result: a stock resolves through `get_stocks` and its `isUS` flag, and stops when the
+    listing is not unique."""
+    bad = []
+    for md in _git_ls_files("*.md"):
+        if md.startswith("docs/audits/"):
+            continue  # dated records, never retroactively edited
+        for block in _FENCED_BLOCK_RE.findall((_REPO / md).read_text()):
+            if "search_contract(" in block and "[0]" in block:
+                bad.append(md)
+    assert bad == [], f"an example indexes the result of search_contract: {sorted(set(bad))}"
+
+
 _ENV_READ_RE = re.compile(r'os\.(?:environ(?:\.get)?\(?\[?|getenv\()\s*"([A-Z0-9_]+)"')
 
 
@@ -717,3 +738,29 @@ def test_every_documented_client_method_actually_exists_on_IBKRClient():
     assert not offenders, "documented `client.` calls that IBKRClient does not have: " + "; ".join(
         f"client.{n}() in {sorted(f)}" for n, f in sorted(offenders.items())
     )
+
+
+# ---------------------------------------------------------------------------
+# The weekly canary: the test job runs on the schedule, not only on a push
+# ---------------------------------------------------------------------------
+# The base dependencies float upward on purpose, and until 2026-11-12 the only job that ran on
+# the weekly schedule was the dependency audit: the test job carried
+# `if: github.event_name != 'schedule'`. So a release of a dependency that broke the code was
+# seen at the next push to `main` and not before — and between 2026-09-22 and 2026-11-12 there
+# was none. pandas 3.1.1 broke a documented backtest strategy in that window and the first run
+# to show it was a draft pull request opened by hand (run 43322834049).
+
+
+def _ci_job(name):
+    ci = (_REPO / ".github" / "workflows" / "ci.yml").read_text()
+    block = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)", ci, re.M | re.S)
+    assert block, f"ci.yml no longer has a `{name}` job; update or remove this guard"
+    return block.group(1)
+
+
+def test_the_ci_test_job_runs_on_the_weekly_schedule_too():
+    ci = (_REPO / ".github" / "workflows" / "ci.yml").read_text()
+    assert re.search(r"^  schedule:\n(?:\s*#.*\n)*\s*- cron:", ci, re.M), "ci.yml has no scheduled trigger"
+    excluded = [line.strip() for line in _ci_job("test").splitlines() if re.match(r"\s*if:.*schedule", line)]
+    assert not excluded, f"the test job is switched off on the schedule: {excluded}"
+    assert "pytest" in _ci_job("test"), "the block read is not the test job — this guard is measuring nothing"

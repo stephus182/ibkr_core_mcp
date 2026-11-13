@@ -1,6 +1,6 @@
 """SECURITY.md's control inventory must match the code it describes.
 
-**This is a documentation-accuracy check, not one of the eleven invariants.** The invariants
+**This is a documentation-accuracy check, not one of the twelve invariants.** The invariants
 are listed in SECURITY.md § Security Regression Suite; nothing here adds to that list. It
 exists because a *stale copy of a control* is its own failure mode, and this repository has
 now produced that failure three times: the per-endpoint rate-limit table (API-03), the
@@ -160,12 +160,16 @@ def test_the_documented_0600_token_write_lives_where_security_md_says():
     package = _ROOT / "ibkr_core_mcp"
     holders = sorted(p.name for p in package.rglob("*.py") if sequence in p.read_text())
 
-    # Two secrets, two writers, and they are different secrets — this test found the second
-    # one itself when a first version asserted a single holder and failed.
+    # Three files, three writers, each its own control — this test found the second one itself
+    # when a first version asserted a single holder and failed, and the third arrived with the
+    # gateway session owner (register F45, step 2).
     #   gdrive_auth.py  the Google Drive OAuth refresh token (this section)
     #   mcp_server.py   the per-launch SSE bearer token (§ Transport Security), whose own
     #                   comment cites gdrive_auth for the same O_CREAT/chmod reasoning
-    assert holders == ["gdrive_auth.py", "mcp_server.py"], f"the 0600 write now lives in {holders}"
+    #   session.py      the gateway suspend lock (§ Session Security; condition E) — not a
+    #                   secret but a flag beside the trade store, private because that
+    #                   directory is; a 0700 directory is created for it when none exists
+    assert holders == ["gdrive_auth.py", "mcp_server.py", "session.py"], f"the 0600 write now lives in {holders}"
 
     # The property that matters for the Drive token: ONE implementation, and neither of the
     # two consumers carries a copy. Both did once; the copy in web_scraper.py is what missed
@@ -225,6 +229,8 @@ _GATED_ORDER_WRITES = frozenset(
         # being mentioned somewhere in SECURITY.md would be a weaker claim than being known
         # to be gated (claudia_ui gap #36, 2026-09-21).
         "place_bracket_and_confirm",
+        # One child to a working order, through the same array endpoint (2026-10-17).
+        "attach_order_and_confirm",
     }
 )
 
@@ -336,4 +342,55 @@ def test_security_md_states_the_real_number_of_collapse_home_surfaces():
         f"SECURITY.md says {stated[0]} surfaces call collapse_home; the package has "
         f"{sum(sites.values())}: {sites}. Add the new one to the inventory and give it a "
         "canary in test_error_redaction.py, or the inventory reads as complete while it is not."
+    )
+
+
+def test_security_md_names_the_label_a_reused_gateway_container_is_judged_by():
+    """SECURITY.md says a gateway container is reused only when it was made with today's run
+    options — the loopback-only publish among them — recorded under a label (register F43).
+    The label it names must be the one `start()` writes, or the documented control is a stale
+    copy: the failure mode this module exists for."""
+    from ibkr_core_mcp.gateway.manager import _RUN_OPTIONS_LABEL
+
+    assert f"`{_RUN_OPTIONS_LABEL}`" in (_ROOT / "SECURITY.md").read_text()
+
+
+# ── The gateway's CORS origin is its own, not IBKR's wildcard (MCP security checklist 5.4, 2026-11-09) ──
+
+_CONF_YAML = _ROOT / "ibkr_core_mcp" / "gateway" / "conf.yaml"
+
+
+def _cors_block() -> dict[str, str]:
+    """The `cors:` mapping of the gateway's `conf.yaml`, read without a YAML parser: the file
+    is IBKR's flat template, and PyYAML is not a dependency of this package."""
+    block: dict[str, str] = {}
+    inside = False
+    for line in _CONF_YAML.read_text(encoding="utf-8").splitlines():
+        if not inside:
+            inside = line.strip() == "cors:"
+            continue
+        if not line.startswith((" ", "\t")):
+            break
+        key, _, value = line.strip().partition(":")
+        block[key.strip()] = value.strip().strip('"')
+    return block
+
+
+def test_the_gateway_cors_origin_is_the_gateways_own_and_security_md_quotes_it():
+    """IBKR ships `cors.origin.allowed: "*"` and this package kept it until 2026-11-09, mitigated
+    by `allowCredentials: false` alone. Every client here is a process that sends no `Origin`,
+    and the login page is served by the gateway itself — same-origin, outside CORS — so the only
+    cross-origin browser requester is one this package does not want. The origin is the gateway's
+    own loopback URL, credentials stay off, and `SECURITY.md`'s conf.yaml table quotes the same
+    value, so the two cannot drift apart silently."""
+    from ibkr_core_mcp.config import is_loopback_url
+
+    cors = _cors_block()
+    origin = cors["origin.allowed"]
+    assert origin != "*", "the gateway's CORS origin is IBKR's wildcard again"
+    assert origin.startswith("https://") and is_loopback_url(origin), origin
+    assert cors["allowCredentials"] == "false"
+    security_md = (_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert f'| `cors.origin.allowed` | `"{origin}"` |' in security_md, (
+        "SECURITY.md's conf.yaml table does not quote the origin conf.yaml carries"
     )
