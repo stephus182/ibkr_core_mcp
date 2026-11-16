@@ -507,7 +507,11 @@ rather than by every test remembering:
   `BaseException`, so `require_touch_id`'s `except ImportError` and the dialog's
   `except Exception` fallback cannot absorb it; it is recorded, and the run fails at its end if
   one was swallowed. Nothing is exempt — a test of a gate places its own double for its own
-  duration (`test_no_human_reached.py`, every test of which is safe on a broken guard).
+  duration (`test_no_human_reached.py`, every test of which is safe on a broken guard). The two
+  stand-ins are held in a dict, not as attributes of the conftest, and no test module holds
+  one: pytest 9.2.0 reads `_mock_name` off every object of the namespaces it scans for
+  fixtures, and a stand-in found there took that read for a reach, so every run ended red with
+  no test at fault.
 - **The operator's machine** (2026-11-09, register F45, door 6). The same kind of audit hook refuses
   a child process that would run `docker`, `open` or `caffeinate`, by each word's last path
   component: `docker restart` ends the live IBKR session held in the container, `open -a Docker`

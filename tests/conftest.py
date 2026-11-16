@@ -278,8 +278,15 @@ class _NoHumanFramework(types.ModuleType):
         raise AttributeError(name)
 
 
-_GATE_1_FRAMEWORK = _NoHumanFramework("LocalAuthentication")
-_DIALOG_FRAMEWORK = _NoHumanFramework("AppKit")
+# The two stand-ins are held in a dict, not as attributes of this module. pytest scans this
+# module's namespace for fixtures and, from 9.2.0, reads `_mock_name` off every object it finds
+# there (`_pytest/fixtures.py`, `_find_wrapped_fixture_def`): a stand-in found there took that
+# read for a test reaching a person, and every run ended red. A dict answers such a read
+# itself, so a tool that reads attributes off this namespace reaches no stand-in, whatever name
+# it reads; the stand-ins still refuse every name but a dunder. pytest scans test modules and
+# test classes the same way, so none may hold a stand-in either
+# (`test_no_module_of_the_suite_holds_a_stand_in`).
+_STAND_INS: dict[str, _NoHumanFramework] = {name: _NoHumanFramework(name) for name in ("LocalAuthentication", "AppKit")}
 _displaced: dict[str, object] = {}  # what configure replaced, put back by unconfigure
 
 
@@ -355,7 +362,7 @@ def _shut_the_tk_door(tkinter_module: types.ModuleType) -> None:
 def _shut_the_doors_to_a_human() -> None:
     """Replace the two frameworks and `tkinter.Tk`, and arm the process hook. Called once,
     from `pytest_configure`."""
-    for stand_in in (_GATE_1_FRAMEWORK, _DIALOG_FRAMEWORK):
+    for stand_in in _STAND_INS.values():
         _displaced[stand_in.__name__] = sys.modules.get(stand_in.__name__, _displaced)
         sys.modules[stand_in.__name__] = stand_in
     try:
@@ -371,7 +378,7 @@ def _shut_the_doors_to_a_human() -> None:
 def _open_the_doors_again() -> None:
     """Undo `_shut_the_doors_to_a_human` (an audit hook cannot be removed, only disarmed)."""
     _HUMAN_GUARD["armed"] = False
-    for name in (_GATE_1_FRAMEWORK.__name__, _DIALOG_FRAMEWORK.__name__):
+    for name in _STAND_INS:
         was = _displaced.pop(name, _displaced)
         if was is _displaced:
             sys.modules.pop(name, None)

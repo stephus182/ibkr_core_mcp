@@ -18,6 +18,7 @@ and a reader copying it would have reintroduced the gap that audit 2026-07-11 H-
 a gap whose fix that same file records further down.
 """
 
+import ast
 import pathlib
 import re
 
@@ -394,3 +395,38 @@ def test_the_gateway_cors_origin_is_the_gateways_own_and_security_md_quotes_it()
     assert f'| `cors.origin.allowed` | `"{origin}"` |' in security_md, (
         "SECURITY.md's conf.yaml table does not quote the origin conf.yaml carries"
     )
+
+
+def test_every_file_of_the_security_suite_carries_the_security_mark():
+    """`pytest -m security` is the security regression suite (`CLAUDE.md`, `SECURITY.md` § Security
+    Regression Suite): a file under `tests/security/` without the mark runs in the unit suite and
+    not in that one. `test_no_human_reached.py` was such a file from the day it was written until
+    the human-gate guard's stand-ins were moved out of the conftest, and nothing noticed. Read by
+    structure: a module-level `pytestmark` that is `pytest.mark.security`, or a list holding it (pytest
+    refuses a tuple there); both of pytest's default file patterns are read.
+    """
+
+    def is_the_mark(node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "security"
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "mark"
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == "pytest"
+        )
+
+    here = _ROOT / "tests" / "security"
+    files = sorted({*here.glob("test_*.py"), *here.glob("*_test.py")})
+    assert len(files) >= 15, f"only {len(files)} files found under tests/security/: the scan is broken"
+    unmarked = []
+    for path in files:
+        values = [
+            node.value
+            for node in ast.parse(path.read_text()).body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets)
+        ]
+        if not any(is_the_mark(v) or (isinstance(v, ast.List) and any(is_the_mark(e) for e in v.elts)) for v in values):
+            unmarked.append(path.name)
+    assert unmarked == []

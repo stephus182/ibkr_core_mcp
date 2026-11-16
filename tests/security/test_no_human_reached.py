@@ -38,6 +38,7 @@ import contextlib
 import shutil
 import subprocess
 import sys
+import types
 from unittest.mock import patch
 
 import pytest
@@ -45,7 +46,14 @@ import pytest
 from ibkr_core_mcp import _order_dialog, human_auth, order_confirm
 from tests import conftest
 
+pytestmark = pytest.mark.security
+
 _TRUE = shutil.which("true")
+# Both read while collection imports this module, which is after `pytest_configure` shut the doors.
+_ARMED_WHEN_THIS_MODULE_WAS_IMPORTED = conftest._HUMAN_GUARD["armed"]
+_SHUT_WHEN_THIS_MODULE_WAS_IMPORTED = {
+    name: isinstance(sys.modules.get(name), conftest._NoHumanFramework) for name in ("LocalAuthentication", "AppKit")
+}
 
 
 @contextlib.contextmanager
@@ -66,7 +74,7 @@ def refused(door: str):
 def test_touch_id_cannot_prompt(monkeypatch):
     """Door 1. `require_touch_id` imports the framework inside the call, so the stand-in is
     what it gets — and a `BaseException` passes its `except ImportError`."""
-    assert sys.modules["LocalAuthentication"] is conftest._GATE_1_FRAMEWORK  # before anything real
+    assert sys.modules["LocalAuthentication"] is conftest._STAND_INS["LocalAuthentication"]  # before anything real
     monkeypatch.setattr(human_auth, "_TIMEOUT", 0.01)  # a stand-in that only waited must not cost a minute
     with refused("LocalAuthentication"):
         human_auth.require_touch_id("a unit test")
@@ -74,7 +82,7 @@ def test_touch_id_cannot_prompt(monkeypatch):
 
 def test_the_dialog_cannot_run_inside_the_test_process():
     """Door 2. `_order_dialog._run_alert` builds the core's own AppKit window; here it gets the stand-in."""
-    assert sys.modules["AppKit"] is conftest._DIALOG_FRAMEWORK  # before anything real
+    assert sys.modules["AppKit"] is conftest._STAND_INS["AppKit"]  # before anything real
     with refused("AppKit"):
         _order_dialog._run_alert({"title": "t", "details": {}, "confirm_label": "OK"})
 
@@ -191,3 +199,107 @@ def test_the_run_turns_red_at_its_end_when_an_attempt_was_recorded(monkeypatch, 
     assert loud.exitstatus == 1
     assert "A HUMAN GATE REACHED FOR" in out and "subprocess.Popen osascript" in out
     assert "REAL DATA REACHED FOR" not in out
+
+
+def test_nothing_the_conftest_holds_takes_a_read_for_a_reach():
+    """pytest scans the conftest's namespace for fixtures, and from 9.2.0 reads `_mock_name` off
+    every object it finds there (`_pytest/fixtures.py`, `_find_wrapped_fixture_def`). The two
+    stand-ins were found there, took that read for a test reaching a person, and every run ended
+    red whatever its tests did. Nothing the conftest holds may answer a read so: neither the name
+    pytest reads nor any other a tool might.
+    """
+    before = len(conftest._human_refusals)
+    for value in list(vars(conftest).values()):
+        for name in ("_mock_name", "_a_name_any_tool_might_read"):
+            with contextlib.suppress(pytest.fail.Exception, Exception):  # what pytest's safe_getattr swallows
+                getattr(value, name, None)
+    recorded = conftest._human_refusals[before:]
+    del conftest._human_refusals[before:]
+    assert recorded == []
+
+
+def test_no_module_of_the_suite_holds_a_stand_in():
+    """pytest scans test modules and test classes for fixtures the same way it scans the conftest
+    (`_pytest/python.py`; a class through every `__dict__` of its `__mro__`), so a stand-in held as
+    an attribute of either brings the false alarm back. Every module of the suite this run has
+    imported is checked, the conftest among them, every class found in one and every class nested
+    in one of the suite's own: in a full run, all of them. By type, reading nothing off what it
+    finds.
+    """
+    held: set[str] = set()
+    for module_name, module in list(sys.modules.items()):
+        if module is None or not (module_name == "tests" or module_name.startswith("tests.")):
+            continue
+        namespaces = [(module_name, dict(vars(module)))]
+        pending = [(f"{module_name}.{name}", value) for name, value in vars(module).items() if isinstance(value, type)]
+        seen: set[type] = set()
+        while pending:  # every class, and every class nested in one of the suite's own (pytest collects those)
+            where, klass = pending.pop()
+            if klass in seen:
+                continue
+            seen.add(klass)
+            for owner in klass.__mro__:
+                namespace = dict(vars(owner))
+                namespaces.append((where, namespace))
+                pending += [
+                    (f"{where}.{name}", value)
+                    for name, value in namespace.items()
+                    if isinstance(value, type) and str(value.__module__).startswith("tests")
+                ]
+        for where, namespace in namespaces:
+            held.update(
+                f"{where}.{attribute}"
+                for attribute, value in namespace.items()
+                if isinstance(value, conftest._NoHumanFramework)
+            )
+    assert sorted(held) == []
+
+
+@pytest.mark.parametrize("framework", ["LocalAuthentication", "AppKit"])
+def test_a_stand_in_refuses_the_name_pytest_reads_like_any_other(framework):
+    """The stand-ins are kept out of the namespaces pytest scans, not taught to forgive a name:
+    `_mock_name` read off a stand-in is still a refusal, and only dunder reads are let through
+    (pytest, coverage and `inspect` read those off everything)."""
+    stand_in = sys.modules[framework]
+    assert isinstance(stand_in, conftest._NoHumanFramework)  # before anything real
+    with refused(f"{framework}._mock_name") as caught:
+        _ = stand_in._mock_name
+    assert f"({framework}._mock_name)" in str(caught.value)  # the refusal names the read
+    with pytest.raises(AttributeError):
+        _ = stand_in.__wrapped__
+
+
+def test_the_doors_are_shut_before_any_test_module_is_imported():
+    """The stand-ins are in `sys.modules` and the guard is armed from `pytest_configure`, before
+    collection imports a test module, so a module that reaches a framework while it is imported
+    meets a stand-in and is refused. Arming once collection is over would also have quieted the
+    false alarm, and that reach would then pass unseen; installing the stand-ins late would let it
+    import the real framework, which is installed here (pyobjc).
+    """
+    assert _ARMED_WHEN_THIS_MODULE_WAS_IMPORTED is True
+    assert _SHUT_WHEN_THIS_MODULE_WAS_IMPORTED == {"LocalAuthentication": True, "AppKit": True}
+
+
+def test_the_doors_open_again_to_what_was_there(monkeypatch):
+    """`pytest_unconfigure` puts back what configure replaced: a framework imported before the run
+    gets its module back, one that was not is removed, `tkinter.Tk` is restored, and the guard is
+    disarmed. Run on doubles of that record and of `tkinter` (a module that is not the real one,
+    so this runs where tkinter is missing too), everything put back by monkeypatch when the test
+    ends; between the call and the end the test only asserts, and the suite runs no thread that
+    imports a framework meanwhile.
+    """
+    real = types.ModuleType("LocalAuthentication")  # stands for a framework imported before configure
+    fake_tkinter = types.ModuleType("tkinter")
+    real_tk = object()  # stands for the `Tk` that configure replaced
+    record: dict[str, object] = {}
+    record.update({"LocalAuthentication": real, "AppKit": record, "tkinter.Tk": real_tk})  # AppKit: nothing was there
+    monkeypatch.setattr(conftest, "_displaced", record)
+    monkeypatch.setitem(conftest._HUMAN_GUARD, "armed", True)
+    monkeypatch.setitem(sys.modules, "tkinter", fake_tkinter)
+    for name in ("LocalAuthentication", "AppKit"):
+        monkeypatch.setitem(sys.modules, name, sys.modules[name])
+    conftest._open_the_doors_again()
+    assert sys.modules["LocalAuthentication"] is real
+    assert "AppKit" not in sys.modules
+    assert vars(fake_tkinter)["Tk"] is real_tk
+    assert conftest._HUMAN_GUARD["armed"] is False
