@@ -491,8 +491,8 @@ default search (`find_dotenv` → `""`), keeps `load_dotenv` a no-op for any thi
 removes every variable carrying a package prefix, so `Config()` in a test cannot pull the
 repository's `.env` into the process; an explicit tmp path given by a test still reads.
 
-Three more things a unit test cannot reach, each from `pytest_configure` on, each by structure
-rather than by every test remembering:
+Four more things a unit test cannot reach, each by structure rather than by every test
+remembering, and each from `pytest_configure` on, but for a person, whose doors are shut earlier:
 
 - **The operator's data** (2026-09-30). An audit hook refuses every SQLite open under
   `~/.ibkr_core` and every file opened, created, changed or removed there
@@ -513,9 +513,13 @@ rather than by every test remembering:
   fixtures, and a stand-in found there took that read for a reach, so every run ended red with
   no test at fault. A person is reached only by a call, so a stand-in now answers a read and
   refuses a call, or a class built on what a read answered (§ 8, 2026-11-16), and the dict stays
-  as a second layer. A folder's conftest is imported before the doors are shut when that folder
-  is named on the command line, so no conftest has an import statement for a GUI framework
-  outside a function.
+  as a second layer. The doors are shut while pytest imports the root conftest, before any other
+  conftest of the suite (§ 8, 2026-11-17): a folder named on the command line has its
+  `__init__.py`, its conftest and that conftest's first hooks run before `pytest_configure`,
+  and `tests/scripts/conftest.py` imports the package at its top. What runs before that call,
+  `tests/__init__.py` and the root conftest's own statements above it, imports neither a GUI
+  framework nor the package, and a second session in the same process has its
+  `pytest_configure` shut them again.
 - **The operator's machine** (2026-11-09, register F45, door 6). The same kind of audit hook refuses
   a child process that would run `docker`, `open` or `caffeinate`, by each word's last path
   component: `docker restart` ends the live IBKR session held in the container, `open -a Docker`
@@ -656,6 +660,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-11-09 | `startup()` opens the page on a login IBKR refused, after naming it; no page on one IBKR is still validating | The owner's rule (operator, 2026-10-12): the remedy is a website login then one gateway login, and withholding the page would deadlock it; step 1's gate had refused the page there. The owner had no rule for VALIDATING and step 1's protection would have gone with the body it guarded, so the owner gained that one branch | The operator revisiting the 2026-10-12 rule on the real log |
 | 2026-11-11 | The login window's leftover Chrome lock is not cleaned up, and the window's Chrome gets no switch against its background traffic to Google | The lock holds no credential, inside `0700` directories, and Chromium removes an orphaned one at the next launch; the switch that silences the traffic also turns off the Safe Browsing service on the window where the credentials are typed, and nothing is added to that window without a login seen through it (`SECURITY.md` § The login window's profile) | A network capture of a login shows more than Chrome's documented signed-out traffic; crash reporting is found enabled in that profile; a second OS user shares the machine |
 | 2026-11-16 | The human-gate stand-ins answer a read and refuse a call, or a class built on what a read answered, where they had refused every read but a dunder | A person is reached only by a call (`LAContext.new()`, `NSAlert.alloc()`), while tools read attributes off what they inspect, and a refused read failed runs in which no test was at fault: pytest 9.2.0's fixture scan reads `_mock_name`, which ended every run red until the stand-ins left the conftest's namespace, and `pickle.whichmodule` walks `sys.modules`. Measured before it was chosen, on pytest 9.1.1 and 9.2.0: Touch ID, the in-process dialog, a dialog built by hand and a call made while a module is imported are still refused; a read made while a module is imported is not, and reaches no one | A way is found to reach a person through a stood-in framework without a call or a class, or a gate comes to use a framework the guard does not stand in for |
+| 2026-11-17 | The human-gate guard's doors are shut while pytest imports `tests/conftest.py`, where they had been shut in `pytest_configure` | Measured on pytest 9.2.0 and 9.1.1: when a folder is named on the command line, its `__init__.py`, its conftest and that conftest's `pytest_addoption`, `pytest_plugin_registered` and `pytest_configure` run before the root conftest's `pytest_configure`, and `tests/scripts/conftest.py` imports the package at its top, so `pytest tests/scripts …` imported the package, 31 of its modules, before the doors were shut: a framework imported in any of them, or at the top of a module of the package, would have been the real one, and nothing would have refused a call to it. No code did either; the review of the second commit found the window. The root conftest is imported before all of them, and what runs before its call, `tests/__init__.py` and its own statements above the call, imports neither a framework nor the package, by test; `pytest_configure` shuts the doors again only when an earlier session in the same process has opened them. The other guards of § 6.7 stay in `pytest_configure`: under an audit hook, the imports `pytest tests/scripts` makes before it did nothing the socket, data or desktop guards refuse but a loopback `bind`, urllib3's IPv6 probe | Something has to run before the root conftest and import a framework or the package: a `conftest.py` at the repository's root, which a test refuses, or a plugin |
 
 ---
 

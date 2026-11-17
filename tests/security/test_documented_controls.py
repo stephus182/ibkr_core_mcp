@@ -404,10 +404,10 @@ def test_the_gateway_cors_origin_is_the_gateways_own_and_security_md_quotes_it()
 def test_minus_m_security_selects_every_test_under_tests_security(monkeypatch):
     """`pytest -m security` is the security regression suite (`CLAUDE.md`, `SECURITY.md` § Security
     Regression Suite): a test under `tests/security/` that it does not select runs in the unit suite
-    and not in that one. `test_no_human_reached.py` was such a file from the day it was written until
+    or the live one and not in that one. `test_no_human_reached.py` was such a file from the day it was written until
     the human-gate guard's stand-ins were moved out of the conftest, and nothing noticed. Measured,
-    not read: `tests/security/` is collected twice in a child pytest, for the unit run and for
-    `-m security`, and the first may hold no test the second lacks. A reading of each file's
+    not read: `tests/security/` is collected twice in a child pytest, whole and with
+    `-m security`, and the first may hold no test the second lacks, integration tests included. A reading of each file's
     `pytestmark`, which this replaced, passed a file that set it to `[]` after the mark and refused
     one that annotated it. The child gets this process's environment without its `PYTEST_`
     variables: a `PYTEST_ADDOPTS` in a developer's shell, a `-k` say, would narrow both collections
@@ -417,21 +417,21 @@ def test_minus_m_security_selects_every_test_under_tests_security(monkeypatch):
     monkeypatch.setenv("PYTEST_ADDOPTS", "-k a_name_no_test_has")
     child_env = {name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")}
 
-    def collected(selection: str) -> set[str]:
-        args = ["--collect-only", "-q", "-p", "no:cacheprovider", "-m", selection, "tests/security"]
+    def collected(*selection: str) -> set[str]:
+        args = ["--collect-only", "-q", "-p", "no:cacheprovider", *selection, "tests/security"]
         done = subprocess.run(
             [sys.executable, "-B", "-m", "pytest", *args],
             cwd=_ROOT,
             env=child_env,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=120,  # under pytest-timeout's 300 s (pyproject.toml): this one names the command
             check=False,
         )
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         return {line for line in done.stdout.splitlines() if line.startswith("tests/security/") and "::" in line}
 
-    unit = collected("not integration")
-    security = collected("security and not integration")
-    assert len(unit) >= 300, f"only {len(unit)} tests collected under tests/security/: the collection is broken"
-    assert sorted({node.split("::")[0] for node in unit - security}) == []
+    whole = collected()
+    security = collected("-m", "security")
+    assert len(whole) >= 300, f"only {len(whole)} tests collected under tests/security/: the collection is broken"
+    assert sorted({node.split("::")[0] for node in whole - security}) == []

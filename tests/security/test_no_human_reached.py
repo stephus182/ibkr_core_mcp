@@ -9,8 +9,8 @@ opened on the operator's screen during a live session — for a fake order, with
 mocked and sockets blocked, so nothing reached IBKR; but whether that mutant was "caught" was
 decided by which button a person clicked. Five older tests had the same shape.
 
-A gate reaches a person through five doors, and `tests/conftest.py` shuts each from
-`pytest_configure` on:
+A gate reaches a person through five doors, and `tests/conftest.py` shuts each while pytest
+imports it, before any other conftest of the suite:
 
 1. Apple's `LocalAuthentication` framework — Gate 1, in-process (`human_auth.require_touch_id`);
 2. `AppKit` — the dialog itself, when `_order_dialog` runs in the test process;
@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import os
 import pathlib
 import shutil
 import subprocess
@@ -51,7 +52,7 @@ from tests import conftest
 pytestmark = pytest.mark.security
 
 _TRUE = shutil.which("true")
-# Both read while collection imports this module, which is after `pytest_configure` shut the doors.
+# Both read while collection imports this module, which is after the root conftest shut the doors.
 _ARMED_WHEN_THIS_MODULE_WAS_IMPORTED = conftest._HUMAN_GUARD["armed"]
 _SHUT_WHEN_THIS_MODULE_WAS_IMPORTED = {
     name: isinstance(sys.modules.get(name), conftest._NoHumanFramework) for name in ("LocalAuthentication", "AppKit")
@@ -301,6 +302,21 @@ def test_a_class_built_on_a_stand_in_is_refused():
     assert "(AppKit.NSObject)" in str(caught.value)
 
 
+def test_a_stand_in_made_without_its_init_still_refuses_a_call():
+    """`copy` and `pickle` make an object with `object.__new__` and fill it in afterwards, and a tool
+    can stop between the two. What a read answered, made that way, holds no dotted path of its own:
+    a read off it is still answered, its repr still says what it is, and a call to it is still
+    refused. Each of the three used to look the missing path up through `__getattr__`, which looked
+    it up again, until a `RecursionError`: an `Exception`, which an `except Exception` swallows where
+    a refusal is not."""
+    bare = object.__new__(conftest._RefusedWhenCalled)
+    assert repr(bare.alloc) == "<stand-in for a stand-in.alloc>"
+    assert repr(bare) == "<stand-in for a stand-in>"
+    with refused("a stand-in") as caught:
+        bare()
+    assert "(a stand-in)" in str(caught.value)
+
+
 def test_a_tool_that_reads_what_the_suite_holds_takes_no_refusal():
     """What turned every run red was a tool's read, not a test's reach. A tool that walks
     `sys.modules` reading a name off every module, as `pickle.whichmodule` does, and a read through
@@ -324,27 +340,27 @@ def test_a_tool_that_reads_what_the_suite_holds_takes_no_refusal():
 
 
 def test_the_doors_are_shut_before_any_test_module_is_imported():
-    """The stand-ins are in `sys.modules` and the guard is armed from `pytest_configure`, before
-    collection imports a test module, so a module that calls a framework while it is imported
-    meets a stand-in and is refused. Arming once collection is over, one of the fixes measured
-    for the false alarm, would let that call pass unseen; installing the stand-ins late would let
-    it import the real framework, which is installed here (pyobjc).
+    """The stand-ins are in `sys.modules` and the guard is armed from the moment pytest imports the
+    root conftest, before collection imports a test module, so a module that calls a framework while
+    it is imported meets a stand-in and is refused. Arming once collection is over, one of the fixes
+    measured for the false alarm, would let that call pass unseen; installing the stand-ins late
+    would let it import the real framework, which is installed here (pyobjc).
     """
     assert _ARMED_WHEN_THIS_MODULE_WAS_IMPORTED is True
     assert _SHUT_WHEN_THIS_MODULE_WAS_IMPORTED == {"LocalAuthentication": True, "AppKit": True}
 
 
 def test_the_doors_open_again_to_what_was_there(monkeypatch):
-    """`pytest_unconfigure` puts back what configure replaced: a framework imported before the run
+    """`pytest_unconfigure` puts back what shutting the doors replaced: a framework imported before the run
     gets its module back, one that was not is removed, `tkinter.Tk` is restored, and the guard is
     disarmed. Run on doubles of that record and of `tkinter` (a module that is not the real one,
     so this runs where tkinter is missing too), everything put back by monkeypatch when the test
     ends; between the call and the end the test only asserts, and the suite runs no thread that
     imports a framework meanwhile.
     """
-    real = types.ModuleType("LocalAuthentication")  # stands for a framework imported before configure
+    real = types.ModuleType("LocalAuthentication")  # stands for a framework imported before the doors were shut
     fake_tkinter = types.ModuleType("tkinter")
-    real_tk = object()  # stands for the `Tk` that configure replaced
+    real_tk = object()  # stands for the `Tk` that shutting the doors replaced
     record: dict[str, object] = {}
     record.update({"LocalAuthentication": real, "AppKit": record, "tkinter.Tk": real_tk})  # AppKit: nothing was there
     monkeypatch.setattr(conftest, "_displaced", record)
@@ -359,19 +375,20 @@ def test_the_doors_open_again_to_what_was_there(monkeypatch):
     assert conftest._HUMAN_GUARD["armed"] is False
 
 
-def test_configure_records_what_each_door_had_and_shuts_it(monkeypatch):
-    """`pytest_configure`'s half of the guard, which `test_the_doors_open_again_to_what_was_there`
-    relies on: it records what each door had (a framework imported before the run; the record's
-    own marker for one that was not; `tkinter.Tk`), puts the stand-ins in `sys.modules`, replaces
-    `Tk`, adds the process hook and arms the guard. Run on doubles of that record, of `tkinter` (so
+def test_shutting_the_doors_records_what_each_door_had(monkeypatch):
+    """The half of the guard that shuts the doors, run once while pytest imports the root conftest,
+    which `test_the_doors_open_again_to_what_was_there` relies on: it records what each door had (a
+    framework imported before the run; the record's own marker for one that was not; `tkinter.Tk`),
+    puts the stand-ins in `sys.modules`, replaces `Tk`, adds the process hook and arms the guard.
+    Run on doubles of that record, of `tkinter` (so
     it runs where tkinter is missing, as in this venv) and of `sys.addaudithook` (an audit hook
     cannot be removed), everything put back by monkeypatch when the test ends. Between disarming
     the guard and the call that arms it again the test does nothing else, and the suite runs no
     thread meanwhile.
     """
-    before = types.ModuleType("LocalAuthentication")  # stands for a framework imported before configure
+    before = types.ModuleType("LocalAuthentication")  # stands for a framework imported before the doors were shut
     fake_tkinter = types.ModuleType("tkinter")
-    real_tk = object()  # stands for the `Tk` that configure replaces
+    real_tk = object()  # stands for the `Tk` that shutting the doors replaces
     vars(fake_tkinter)["Tk"] = real_tk
     record: dict[str, object] = {}
     hooks: list[object] = []
@@ -407,24 +424,66 @@ def test_a_name_with_two_underscores_at_one_end_only_is_answered_like_any_other(
     assert f"(AppKit.NSAlert.{name})" in str(off_what_a_read_answered.value)
 
 
-def test_no_conftest_imports_a_gui_framework_at_its_top():
-    """A folder's conftest is imported before `pytest_configure` shuts the doors when that folder,
-    or a file in it, is named on the command line (`pytest tests/scripts/...`), and after it when
-    only `tests/` is: a framework imported at its top could then be the real one, not a stand-in.
-    So no conftest of the suite has an `import` statement for one outside a function: a class body
-    runs when the module is imported, a function's body when it is called, and one imported inside
-    a fixture meets the stand-in. The frameworks are the guard's own: the stand-ins' names and
-    `tkinter`. Read by structure, statements only: neither `importlib` nor what an imported module
-    imports is seen (the package's `order_confirm` imports `tkinter` at its top, which door 3 meets
-    by replacing `Tk` on the module itself).
+def test_importing_the_root_conftest_shuts_the_doors():
+    """The doors are shut by a call at the root conftest's top level, while pytest imports it, and not
+    in `pytest_configure`: when a folder is named on the command line, its `__init__.py`, its
+    conftest and that conftest's `pytest_addoption` run before `pytest_configure`, and
+    `tests/scripts/conftest.py` imports the package at its top, so `pytest tests/scripts …` imported
+    the package, 31 of its modules, before the doors were shut. Measured in a child process that imports
+    the conftest and nothing else, as pytest imports it before any other: once that import returns,
+    both stand-ins are in `sys.modules` and the guard is armed. The child gets this process's
+    environment without its `PYTEST_` variables, and calls nothing a gate calls.
     """
-    frameworks = {*conftest._STAND_INS, "tkinter"}
     root = pathlib.Path(__file__).resolve().parents[2]
-    conftests = sorted((root / "tests").rglob("conftest.py"))
-    assert len(conftests) >= 3, f"only {len(conftests)} conftest files found: the scan is broken"
+    probe = (
+        "import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import tests.conftest as c\n"
+        "print(sorted(n for n in c._STAND_INS if sys.modules.get(n) is c._STAND_INS[n]), c._HUMAN_GUARD['armed'])\n"
+    )
+    child_env = {name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")}
+    done = subprocess.run(
+        [sys.executable, "-B", "-c", probe, str(root)],
+        cwd=root,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert (done.returncode, done.stdout.strip()) == (0, "['AppKit', 'LocalAuthentication'] True"), done.stderr[-3000:]
+
+
+def test_nothing_run_before_the_doors_are_shut_imports_a_framework_or_the_package():
+    """The call that shuts the doors is at the root conftest's top level, so it runs before any other
+    conftest of the suite, any `__init__.py` below `tests/`, and any of their hooks. Two things run
+    before it and could still bind a real framework: `tests/__init__.py`, which pytest imports
+    first, and the conftest's own statements above the call. Neither has an `import` statement for
+    one of the guard's frameworks, the stand-ins' names and `tkinter`, nor for the package, whose
+    modules could import one at their top. Read by structure, statements only, a class body included
+    and a function's body not, since that runs when the function is called: an import made through
+    `importlib`, or by a module imported there, is not seen. The call must be there, once. A
+    `conftest.py` at the repository's root would be imported before both, so there must be none.
+    """
+    forbidden = {*conftest._STAND_INS, "tkinter", "ibkr_core_mcp"}
+    root = pathlib.Path(__file__).resolve().parents[2]
+    assert not (root / "conftest.py").exists(), "a conftest.py at the repository's root runs before the doors are shut"
+    top = ast.parse((root / "tests" / "conftest.py").read_text()).body
+    calls = [
+        index
+        for index, node in enumerate(top)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_shut_the_doors_to_a_human"
+    ]
+    assert len(calls) == 1, f"the root conftest's top level makes that call {len(calls)} times, not once"
+    before: dict[str, list[ast.AST]] = {
+        "tests/__init__.py": list(ast.parse((root / "tests" / "__init__.py").read_text()).body),
+        "tests/conftest.py": list(top[: calls[0]]),
+    }
     found: list[str] = []
-    for path in conftests:
-        pending: list[ast.AST] = list(ast.parse(path.read_text()).body)
+    for where, pending in before.items():
         while pending:
             node = pending.pop()
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # a class body runs at import
@@ -435,6 +494,40 @@ def test_no_conftest_imports_a_gui_framework_at_its_top():
                 names = [node.module or ""]
             else:
                 names = []
-            found += [f"{path.relative_to(root)}: {name}" for name in names if name.split(".")[0] in frameworks]
+            found += [f"{where}: {name}" for name in names if name.split(".")[0] in forbidden]
             pending += list(ast.iter_child_nodes(node))
     assert found == []
+
+
+def test_a_second_session_in_one_process_shuts_the_doors_again():
+    """The root conftest is imported once per process, so a second pytest session in the same
+    process (`pytest.main` called twice, which the suite never does) imports nothing again and finds
+    the doors opened by the first session's end. Its `pytest_configure` shuts them again, and only
+    then: shutting them while they are shut would record a stand-in as what each door had, and the
+    session's end would put it back into `sys.modules`. Measured in a child process that runs, in two
+    sessions, one test of this file that needs the doors shut when it is called: both pass, and
+    neither leaves a stand-in behind. The child gets this process's environment without its
+    `PYTEST_` variables.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    probe = (
+        "import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import pytest\n"
+        "args = [sys.argv[2], '-q', '-p', 'no:cacheprovider', '-m', 'not integration']\n"
+        "codes = [int(pytest.main(args)) for _ in range(2)]\n"
+        "print(codes, sorted(name for name in ('LocalAuthentication', 'AppKit') if name in sys.modules))\n"
+    )
+    test = "tests/security/test_no_human_reached.py::test_a_chain_of_reads_is_refused_at_its_first_call"
+    child_env = {name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")}
+    done = subprocess.run(
+        [sys.executable, "-B", "-c", probe, str(root), test],
+        cwd=root,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    last = done.stdout.strip().splitlines()[-1:]
+    assert (done.returncode, last) == (0, ["[0, 0] []"]), done.stdout[-3000:] + done.stderr[-3000:]

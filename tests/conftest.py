@@ -200,7 +200,8 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 # the mutant was "caught" was decided by which button a person pressed, and five older tests
 # had the same shape (register F32). So the rule is structural, like the two above it.
 #
-# A gate reaches a person through five doors, each shut in `pytest_configure`:
+# A gate reaches a person through five doors, each shut while pytest imports this conftest, before
+# any other conftest of the suite (the call is below `_open_the_doors_again`):
 #
 # 1. `LocalAuthentication` — Gate 1 runs in-process through PyObjC, with no audit event, so
 #    the framework itself is replaced in `sys.modules`. `require_touch_id` imports it inside
@@ -224,17 +225,15 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 # there is safe on a broken guard.
 #
 # What it cannot see, stated rather than implied: a prompt raised by code that already holds a
-# reference to the real framework taken before configure time, a dialog shown by a child of a
-# child under another name, a browser opened through `webbrowser` on Linux (`xdg-open`) or
-# named inside one shell command string (door 5 reads argument lists and paths, not commands),
-# a framework a conftest imports at its top other than by an `import` statement of its own,
-# through `importlib` or a module it imports (a folder's conftest is imported before configure
-# when that folder is named on the command line, and
-# `test_no_conftest_imports_a_gui_framework_at_its_top` reads statements; the package's own
-# `import tkinter` in `order_confirm` is met by door 3, which replaces `Tk` on the module), a
-# framework the guard does not stand in for (`Foundation`, `Security`, the keychain's, or `objc`
-# itself, which can load any class by name), and anything that disables it on purpose. It
-# catches accidents.
+# reference to the real framework taken before the doors were shut, by `tests/__init__.py` or by
+# this module above the call that shuts them other than through an `import` statement of their
+# own (`test_nothing_run_before_the_doors_are_shut_imports_a_framework_or_the_package` reads both
+# for those, not for `importlib` or what an imported module imports), or by a plugin pytest loads
+# before any conftest; a dialog shown by a child of a child under another name, a browser opened
+# through `webbrowser` on Linux (`xdg-open`) or named inside one shell command string (door 5
+# reads argument lists and paths, not commands), a framework the guard does not stand in for
+# (`Foundation`, `Security`, the keychain's, or `objc` itself, which can load any class by name),
+# and anything that disables it on purpose, `--noconftest` among them. It catches accidents.
 _HUMAN_GUARD = {"armed": False}
 _human_refusals: list[str] = []  # read by `pytest_sessionfinish`
 _DIALOG_LAUNCHERS = ("_order_dialog.py", "osascript")
@@ -259,7 +258,7 @@ _PROCESS_EVENTS: dict[str, tuple[int, ...]] = {
 }
 
 
-def _refuse_human(door: str) -> None:
+def _refuse_human(door: str) -> NoReturn:
     """Record the attempt and fail the test: a unit test was about to reach a person."""
     _human_refusals.append(door)
     pytest.fail(
@@ -283,6 +282,8 @@ class _RefusedWhenCalled:
     inspect: pytest 9.2.0's fixture scan reads `_mock_name`, `pickle.whichmodule` walks
     `sys.modules`. A read refused for them ended runs red with no test at fault."""
 
+    _refused_path = "a stand-in"  # what one made without `__init__` (`object.__new__`) names
+
     def __init__(self, path: str) -> None:
         """Hold the dotted path read so far, which a refusal names."""
         self._refused_path = path
@@ -296,7 +297,6 @@ class _RefusedWhenCalled:
     def __call__(self, *args: object, **kwargs: object) -> NoReturn:
         """Refuse: this call would reach a person."""
         _refuse_human(self._refused_path)
-        raise AssertionError("unreachable: the refusal raises")
 
     def __mro_entries__(self, bases: tuple[object, ...]) -> NoReturn:
         """Refuse a class built on this, as a call is refused: subclassing `NSObject` is how a
@@ -334,10 +334,10 @@ class _NoHumanFramework(types.ModuleType):
 # dict stays as a second layer. pytest scans test modules and test classes the same way, so
 # none may hold a stand-in either (`test_no_module_of_the_suite_holds_a_stand_in`).
 _STAND_INS: dict[str, _NoHumanFramework] = {name: _NoHumanFramework(name) for name in ("LocalAuthentication", "AppKit")}
-_displaced: dict[str, object] = {}  # what configure replaced, put back by unconfigure
+_displaced: dict[str, object] = {}  # what shutting the doors replaced, put back by unconfigure
 
 
-def _no_tk_window(*args: object, **kwargs: object) -> None:
+def _no_tk_window(*args: object, **kwargs: object) -> NoReturn:
     """What `tkinter.Tk` is during the run."""
     _refuse_human("tkinter.Tk")
 
@@ -407,8 +407,9 @@ def _shut_the_tk_door(tkinter_module: types.ModuleType) -> None:
 
 
 def _shut_the_doors_to_a_human() -> None:
-    """Replace the two frameworks and `tkinter.Tk`, and arm the process hook. Called once,
-    from `pytest_configure`."""
+    """Replace the two frameworks and `tkinter.Tk`, and arm the process hook. Called at this
+    module's top level, while pytest imports it, and by `pytest_configure` only when an earlier
+    session in the same process has opened the doors."""
     for stand_in in _STAND_INS.values():
         _displaced[stand_in.__name__] = sys.modules.get(stand_in.__name__, _displaced)
         sys.modules[stand_in.__name__] = stand_in
@@ -435,6 +436,16 @@ def _open_the_doors_again() -> None:
         import tkinter
 
         tkinter.Tk = _displaced.pop("tkinter.Tk")  # type: ignore[assignment,misc]
+
+
+# The doors are shut here, while pytest imports this module: before any other conftest of the
+# suite, any folder's `__init__.py` below `tests/`, and any of their hooks. When a folder is named
+# on the command line, all three run before `pytest_configure`, where the doors were shut until
+# 2026-11-17, and `tests/scripts/conftest.py` imports the package at its top: a framework imported
+# in any of them, or at the top of a module of the package, was the real one. Nothing above this
+# line imports a framework or the package. `pytest_unconfigure` opens the doors again, and a
+# second session in the same process has its `pytest_configure` shut them again.
+_shut_the_doors_to_a_human()
 
 
 def _human_violations(refusals: list[str]) -> list[str]:
@@ -608,9 +619,14 @@ def pytest_configure(config):
     # for the test body.
     sys.addaudithook(_operator_data_hook)
     _OPERATOR_GUARD["armed"] = True
-    # And the two gates, for the same reason again: a module-scoped fixture or an import can
-    # reach Touch ID or a dialog as easily as a test body can.
-    _shut_the_doors_to_a_human()
+    # The two gates' doors were shut earlier still, while pytest imported this module (below
+    # `_open_the_doors_again`): a module-scoped fixture or an import can reach Touch ID or a dialog
+    # as easily as a test body can, and some conftests and hooks run before this one. A second
+    # session in the same process imports nothing again and finds them opened by the first one's
+    # end, so it shuts them here; only then, since shutting them twice would record a stand-in as
+    # what a door had.
+    if not _HUMAN_GUARD["armed"]:
+        _shut_the_doors_to_a_human()
     # And the machine (door 6, register F45): `docker`, `open`, `caffeinate` by name, from here on.
     sys.addaudithook(_desktop_hook)
     _DESKTOP_GUARD["armed"] = True
