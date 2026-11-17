@@ -18,9 +18,11 @@ and a reader copying it would have reintroduced the gap that audit 2026-07-11 H-
 a gap whose fix that same file records further down.
 """
 
-import ast
+import os
 import pathlib
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -130,11 +132,13 @@ def test_every_security_test_file_appears_in_the_suite_inventory():
     inventory look complete while it is not — the same defect as invariant 9 being listed
     in the constitution with no test behind it (SEC-04). This file was itself the missing
     one: it was added during the 2026-09-16 audit and left out of the table it exists to
-    police, which is how it got written.
+    police, which is how it got written. Both of pytest's default file-name patterns are read,
+    `test_*.py` and `*_test.py`: pytest collects both, so `-m security` runs both.
     """
     table = (_ROOT / "SECURITY.md").read_text().split("## Security Regression Suite")[1]
-    documented = set(re.findall(r"^\| `(test_\w+\.py)`", table, re.M))
-    on_disk = {p.name for p in (_ROOT / "tests" / "security").glob("test_*.py")}
+    documented = set(re.findall(r"^\| `(test_\w+\.py|\w+_test\.py)`", table, re.M))
+    here = _ROOT / "tests" / "security"
+    on_disk = {p.name for p in (*here.glob("test_*.py"), *here.glob("*_test.py"))}
 
     assert on_disk, "no security test files found — the check would be vacuous"
     assert on_disk - documented == set(), (
@@ -397,36 +401,37 @@ def test_the_gateway_cors_origin_is_the_gateways_own_and_security_md_quotes_it()
     )
 
 
-def test_every_file_of_the_security_suite_carries_the_security_mark():
+def test_minus_m_security_selects_every_test_under_tests_security(monkeypatch):
     """`pytest -m security` is the security regression suite (`CLAUDE.md`, `SECURITY.md` § Security
-    Regression Suite): a file under `tests/security/` without the mark runs in the unit suite and
-    not in that one. `test_no_human_reached.py` was such a file from the day it was written until
-    the human-gate guard's stand-ins were moved out of the conftest, and nothing noticed. Read by
-    structure: a module-level `pytestmark` that is `pytest.mark.security`, or a list holding it (pytest
-    refuses a tuple there); both of pytest's default file patterns are read.
+    Regression Suite): a test under `tests/security/` that it does not select runs in the unit suite
+    and not in that one. `test_no_human_reached.py` was such a file from the day it was written until
+    the human-gate guard's stand-ins were moved out of the conftest, and nothing noticed. Measured,
+    not read: `tests/security/` is collected twice in a child pytest, for the unit run and for
+    `-m security`, and the first may hold no test the second lacks. A reading of each file's
+    `pytestmark`, which this replaced, passed a file that set it to `[]` after the mark and refused
+    one that annotated it. The child gets this process's environment without its `PYTEST_`
+    variables: a `PYTEST_ADDOPTS` in a developer's shell, a `-k` say, would narrow both collections
+    alike and hide the very file this looks for. The test sets one that would hide every test, so a
+    child that inherited it would fail here.
     """
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k a_name_no_test_has")
+    child_env = {name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")}
 
-    def is_the_mark(node: ast.expr) -> bool:
-        return (
-            isinstance(node, ast.Attribute)
-            and node.attr == "security"
-            and isinstance(node.value, ast.Attribute)
-            and node.value.attr == "mark"
-            and isinstance(node.value.value, ast.Name)
-            and node.value.value.id == "pytest"
+    def collected(selection: str) -> set[str]:
+        args = ["--collect-only", "-q", "-p", "no:cacheprovider", "-m", selection, "tests/security"]
+        done = subprocess.run(
+            [sys.executable, "-B", "-m", "pytest", *args],
+            cwd=_ROOT,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
         )
+        assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+        return {line for line in done.stdout.splitlines() if line.startswith("tests/security/") and "::" in line}
 
-    here = _ROOT / "tests" / "security"
-    files = sorted({*here.glob("test_*.py"), *here.glob("*_test.py")})
-    assert len(files) >= 15, f"only {len(files)} files found under tests/security/: the scan is broken"
-    unmarked = []
-    for path in files:
-        values = [
-            node.value
-            for node in ast.parse(path.read_text()).body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets)
-        ]
-        if not any(is_the_mark(v) or (isinstance(v, ast.List) and any(is_the_mark(e) for e in v.elts)) for v in values):
-            unmarked.append(path.name)
-    assert unmarked == []
+    unit = collected("not integration")
+    security = collected("security and not integration")
+    assert len(unit) >= 300, f"only {len(unit)} tests collected under tests/security/: the collection is broken"
+    assert sorted({node.split("::")[0] for node in unit - security}) == []

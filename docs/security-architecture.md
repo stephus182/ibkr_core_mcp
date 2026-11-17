@@ -501,17 +501,21 @@ rather than by every test remembering:
   and a test that replaced one gate and not the other could open the real one: a mutation run
   that skipped Gate 1 did, on the operator's screen. The five doors are shut: Apple's
   `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that
-  refuse any use, `tkinter.Tk` is replaced where tkinter exists, and an audit hook refuses a
-  child process that would run `_order_dialog.py` or `osascript`, or open the Chrome login
-  window (register F44). The refusal is a
-  `BaseException`, so `require_touch_id`'s `except ImportError` and the dialog's
-  `except Exception` fallback cannot absorb it; it is recorded, and the run fails at its end if
+  answer a read and refuse a call, `tkinter.Tk` is replaced where tkinter exists, and an audit
+  hook refuses a child process that would run `_order_dialog.py` or `osascript`, or open the
+  Chrome login window (register F44). The refusal is a `BaseException`, so no
+  `except Exception` on its way, the dialog's fallback among them, can absorb it; it is
+  recorded, and the run fails at its end if
   one was swallowed. Nothing is exempt — a test of a gate places its own double for its own
   duration (`test_no_human_reached.py`, every test of which is safe on a broken guard). The two
   stand-ins are held in a dict, not as attributes of the conftest, and no test module holds
   one: pytest 9.2.0 reads `_mock_name` off every object of the namespaces it scans for
   fixtures, and a stand-in found there took that read for a reach, so every run ended red with
-  no test at fault.
+  no test at fault. A person is reached only by a call, so a stand-in now answers a read and
+  refuses a call, or a class built on what a read answered (§ 8, 2026-11-16), and the dict stays
+  as a second layer. A folder's conftest is imported before the doors are shut when that folder
+  is named on the command line, so no conftest has an import statement for a GUI framework
+  outside a function.
 - **The operator's machine** (2026-11-09, register F45, door 6). The same kind of audit hook refuses
   a child process that would run `docker`, `open` or `caffeinate`, by each word's last path
   component: `docker restart` ends the live IBKR session held in the container, `open -a Docker`
@@ -651,6 +655,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-11-09 | The suspend lock is 0600 in a 0700 directory, a pid below 1 is malformed, and the liveness check is platform-bound — `os.kill(pid, 0)` on POSIX, `OpenProcess` on Windows (condition E) | `os.kill(0, 0)` succeeds, so a lock saying `pid: 0` would have suspended every keepalive forever (probes M3/M4); on Windows `os.kill` with any signal but the console events terminates the process, so the consumer's check moved as it was would have killed the lock's owner | A platform without either call |
 | 2026-11-09 | `startup()` opens the page on a login IBKR refused, after naming it; no page on one IBKR is still validating | The owner's rule (operator, 2026-10-12): the remedy is a website login then one gateway login, and withholding the page would deadlock it; step 1's gate had refused the page there. The owner had no rule for VALIDATING and step 1's protection would have gone with the body it guarded, so the owner gained that one branch | The operator revisiting the 2026-10-12 rule on the real log |
 | 2026-11-11 | The login window's leftover Chrome lock is not cleaned up, and the window's Chrome gets no switch against its background traffic to Google | The lock holds no credential, inside `0700` directories, and Chromium removes an orphaned one at the next launch; the switch that silences the traffic also turns off the Safe Browsing service on the window where the credentials are typed, and nothing is added to that window without a login seen through it (`SECURITY.md` § The login window's profile) | A network capture of a login shows more than Chrome's documented signed-out traffic; crash reporting is found enabled in that profile; a second OS user shares the machine |
+| 2026-11-16 | The human-gate stand-ins answer a read and refuse a call, or a class built on what a read answered, where they had refused every read but a dunder | A person is reached only by a call (`LAContext.new()`, `NSAlert.alloc()`), while tools read attributes off what they inspect, and a refused read failed runs in which no test was at fault: pytest 9.2.0's fixture scan reads `_mock_name`, which ended every run red until the stand-ins left the conftest's namespace, and `pickle.whichmodule` walks `sys.modules`. Measured before it was chosen, on pytest 9.1.1 and 9.2.0: Touch ID, the in-process dialog, a dialog built by hand and a call made while a module is imported are still refused; a read made while a module is imported is not, and reaches no one | A way is found to reach a person through a stood-in framework without a call or a class, or a gate comes to use a framework the guard does not stand in for |
 
 ---
 

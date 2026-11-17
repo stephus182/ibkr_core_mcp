@@ -3,6 +3,7 @@ import re
 import sys
 import types
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -213,8 +214,9 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 #    starts Chrome for the login window (register F44, 2026-10-13). The same hook refuses it
 #    by the Chrome binary's name or by an `--app=` argument.
 #
-# The refusal is `pytest.fail`, a `BaseException`: it passes `require_touch_id`'s
-# `except ImportError` and `_show_confirm_dialog`'s `except Exception` fallback alike. Nothing
+# A stand-in answers a read and refuses a call: a person is reached only by a call, and tools
+# read attributes off whatever they inspect. The refusal is `pytest.fail`, a `BaseException`, so
+# no `except Exception` on its way, `_show_confirm_dialog`'s fallback among them, absorbs it. Nothing
 # is exempt, integration tests included — none of them drives a gate. A test OF a gate places
 # its own double for its own duration (`monkeypatch.setitem(sys.modules, …)`,
 # `patch("…order_confirm.subprocess.run")`), as those tests always did.
@@ -225,7 +227,14 @@ def _refusal_violations(refusals: list[str]) -> list[str]:
 # reference to the real framework taken before configure time, a dialog shown by a child of a
 # child under another name, a browser opened through `webbrowser` on Linux (`xdg-open`) or
 # named inside one shell command string (door 5 reads argument lists and paths, not commands),
-# and anything that disables it on purpose. It catches accidents.
+# a framework a conftest imports at its top other than by an `import` statement of its own,
+# through `importlib` or a module it imports (a folder's conftest is imported before configure
+# when that folder is named on the command line, and
+# `test_no_conftest_imports_a_gui_framework_at_its_top` reads statements; the package's own
+# `import tkinter` in `order_confirm` is met by door 3, which replaces `Tk` on the module), a
+# framework the guard does not stand in for (`Foundation`, `Security`, the keychain's, or `objc`
+# itself, which can load any class by name), and anything that disables it on purpose. It
+# catches accidents.
 _HUMAN_GUARD = {"armed": False}
 _human_refusals: list[str] = []  # read by `pytest_sessionfinish`
 _DIALOG_LAUNCHERS = ("_order_dialog.py", "osascript")
@@ -261,31 +270,69 @@ def _refuse_human(door: str) -> None:
     )
 
 
+def _is_dunder(name: str) -> bool:
+    """A name introspection reads off everything (`__wrapped__`, `__file__`): two underscores at
+    both ends. A stand-in answers it `AttributeError`, like any module without the attribute."""
+    return name.startswith("__") and name.endswith("__")
+
+
+class _RefusedWhenCalled:
+    """What a read off an armed stand-in answers: a read off it is answered the same way, and a
+    call to it, or a class built on it, is refused. A person is reached only by a call
+    (`LAContext.new()`, `NSAlert.alloc()`), while tools read attributes off whatever they
+    inspect: pytest 9.2.0's fixture scan reads `_mock_name`, `pickle.whichmodule` walks
+    `sys.modules`. A read refused for them ended runs red with no test at fault."""
+
+    def __init__(self, path: str) -> None:
+        """Hold the dotted path read so far, which a refusal names."""
+        self._refused_path = path
+
+    def __getattr__(self, name: str) -> "_RefusedWhenCalled":
+        """Answer a read with another such object; a dunder is not there."""
+        if _is_dunder(name):
+            raise AttributeError(name)
+        return _RefusedWhenCalled(f"{self._refused_path}.{name}")
+
+    def __call__(self, *args: object, **kwargs: object) -> NoReturn:
+        """Refuse: this call would reach a person."""
+        _refuse_human(self._refused_path)
+        raise AssertionError("unreachable: the refusal raises")
+
+    def __mro_entries__(self, bases: tuple[object, ...]) -> NoReturn:
+        """Refuse a class built on this, as a call is refused: subclassing `NSObject` is how a
+        PyObjC delegate is made, and without this the class statement would fail with a plain
+        `TypeError`, which an `except Exception` swallows."""
+        self()
+
+    def __repr__(self) -> str:
+        """Say what this stands for."""
+        return f"<stand-in for {self._refused_path}>"
+
+
 class _NoHumanFramework(types.ModuleType):
-    """A stand-in for a GUI framework: importing it works, using it is refused.
+    """A stand-in for a GUI framework: importing it and reading from it work; calling what a read
+    answers is refused (`_RefusedWhenCalled`).
 
     Dunder lookups answer `AttributeError` like any module without the attribute — pytest,
-    coverage and `inspect` read those off everything in `sys.modules`, and that is not a test
-    reaching a person.
+    coverage and `inspect` read those off everything in `sys.modules`.
     """
 
-    def __getattr__(self, name: str) -> object:
-        """Refuse any real use; stay an ordinary module for introspection."""
-        if name.startswith("__") and name.endswith("__"):
+    def __getattr__(self, name: str) -> _RefusedWhenCalled:
+        """Answer a read with what refuses a call; stay an ordinary module for introspection."""
+        if _is_dunder(name):
             raise AttributeError(name)
         if _HUMAN_GUARD["armed"]:
-            _refuse_human(f"{self.__name__}.{name}")
+            return _RefusedWhenCalled(f"{self.__name__}.{name}")
         raise AttributeError(name)
 
 
 # The two stand-ins are held in a dict, not as attributes of this module. pytest scans this
 # module's namespace for fixtures and, from 9.2.0, reads `_mock_name` off every object it finds
-# there (`_pytest/fixtures.py`, `_find_wrapped_fixture_def`): a stand-in found there took that
-# read for a test reaching a person, and every run ended red. A dict answers such a read
-# itself, so a tool that reads attributes off this namespace reaches no stand-in, whatever name
-# it reads; the stand-ins still refuse every name but a dunder. pytest scans test modules and
-# test classes the same way, so none may hold a stand-in either
-# (`test_no_module_of_the_suite_holds_a_stand_in`).
+# there (`_pytest/fixtures.py`, `_find_wrapped_fixture_def`): while a stand-in refused every
+# read, one found there took that read for a test reaching a person, and every run ended red.
+# A stand-in now answers a read and refuses only a call, so such a read reaches nothing; the
+# dict stays as a second layer. pytest scans test modules and test classes the same way, so
+# none may hold a stand-in either (`test_no_module_of_the_suite_holds_a_stand_in`).
 _STAND_INS: dict[str, _NoHumanFramework] = {name: _NoHumanFramework(name) for name in ("LocalAuthentication", "AppKit")}
 _displaced: dict[str, object] = {}  # what configure replaced, put back by unconfigure
 

@@ -34,7 +34,9 @@ the interpreter swapped for `true`.
 
 from __future__ import annotations
 
+import ast
 import contextlib
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -73,7 +75,7 @@ def refused(door: str):
 
 def test_touch_id_cannot_prompt(monkeypatch):
     """Door 1. `require_touch_id` imports the framework inside the call, so the stand-in is
-    what it gets — and a `BaseException` passes its `except ImportError`."""
+    what it gets, and its first call into it, `LAContext.new()`, is refused."""
     assert sys.modules["LocalAuthentication"] is conftest._STAND_INS["LocalAuthentication"]  # before anything real
     monkeypatch.setattr(human_auth, "_TIMEOUT", 0.01)  # a stand-in that only waited must not cost a minute
     with refused("LocalAuthentication"):
@@ -206,7 +208,8 @@ def test_nothing_the_conftest_holds_takes_a_read_for_a_reach():
     every object it finds there (`_pytest/fixtures.py`, `_find_wrapped_fixture_def`). The two
     stand-ins were found there, took that read for a test reaching a person, and every run ended
     red whatever its tests did. Nothing the conftest holds may answer a read so: neither the name
-    pytest reads nor any other a tool might.
+    pytest reads nor any other a tool might. A stand-in now answers a read and refuses only a
+    call, so this is a second layer: it holds if a read is ever refused again.
     """
     before = len(conftest._human_refusals)
     for value in list(vars(conftest).values()):
@@ -224,7 +227,7 @@ def test_no_module_of_the_suite_holds_a_stand_in():
     an attribute of either brings the false alarm back. Every module of the suite this run has
     imported is checked, the conftest among them, every class found in one and every class nested
     in one of the suite's own: in a full run, all of them. By type, reading nothing off what it
-    finds.
+    finds. A stand-in now answers a read, so this too is a second layer.
     """
     held: set[str] = set()
     for module_name, module in list(sys.modules.items()):
@@ -256,25 +259,76 @@ def test_no_module_of_the_suite_holds_a_stand_in():
 
 
 @pytest.mark.parametrize("framework", ["LocalAuthentication", "AppKit"])
-def test_a_stand_in_refuses_the_name_pytest_reads_like_any_other(framework):
-    """The stand-ins are kept out of the namespaces pytest scans, not taught to forgive a name:
-    `_mock_name` read off a stand-in is still a refusal, and only dunder reads are let through
-    (pytest, coverage and `inspect` read those off everything)."""
+def test_a_read_off_a_stand_in_is_answered_and_a_call_is_refused(framework):
+    """A person is reached only by a call (`LAContext.new()`, `NSAlert.alloc()`), and tools read
+    attributes off whatever they inspect: pytest 9.2.0's fixture scan reads `_mock_name`, which is
+    how every run came to end red with no test at fault. So a read off a stand-in, of that name or
+    of any other but a dunder, is answered and recorded nowhere, and calling what it answered is
+    refused, naming it. Dunders answer `AttributeError`, as off any module without them."""
     stand_in = sys.modules[framework]
-    assert isinstance(stand_in, conftest._NoHumanFramework)  # before anything real
+    assert stand_in is conftest._STAND_INS[framework]  # before anything real
+    before = len(conftest._human_refusals)
+    answered = stand_in._mock_name
+    assert conftest._human_refusals[before:] == []  # a read is not a reach
     with refused(f"{framework}._mock_name") as caught:
-        _ = stand_in._mock_name
-    assert f"({framework}._mock_name)" in str(caught.value)  # the refusal names the read
+        answered()
+    assert f"({framework}._mock_name)" in str(caught.value)  # the refusal names what was called
     with pytest.raises(AttributeError):
         _ = stand_in.__wrapped__
+    with pytest.raises(AttributeError):
+        _ = answered.__wrapped__
+
+
+def test_a_chain_of_reads_is_refused_at_its_first_call():
+    """`NSAlert.alloc().init().runModal()` is how a dialog is built by hand. The reads on the way
+    are answered, and the first call, `alloc()`, is refused and named."""
+    app_kit = sys.modules["AppKit"]
+    assert app_kit is conftest._STAND_INS["AppKit"]  # before anything real
+    with refused("AppKit.NSAlert.alloc") as caught:
+        app_kit.NSAlert.alloc().init().runModal()
+    assert "(AppKit.NSAlert.alloc)" in str(caught.value)  # the first call, not a read before it
+
+
+def test_a_class_built_on_a_stand_in_is_refused():
+    """Subclassing `NSObject` is how a PyObjC delegate is made, and a class statement does not call
+    its base: it asks it for `__mro_entries__`, which what a read answered refuses as it refuses a
+    call. Without that, the class statement would fail with a plain `TypeError`, which an
+    `except Exception` swallows."""
+    app_kit = sys.modules["AppKit"]
+    assert app_kit is conftest._STAND_INS["AppKit"]  # before anything real
+    with refused("AppKit.NSObject") as caught:
+        types.new_class("_Delegate", (app_kit.NSObject,))  # what a class statement does with its bases
+    assert "(AppKit.NSObject)" in str(caught.value)
+
+
+def test_a_tool_that_reads_what_the_suite_holds_takes_no_refusal():
+    """What turned every run red was a tool's read, not a test's reach. A tool that walks
+    `sys.modules` reading a name off every module, as `pickle.whichmodule` does, and a read through
+    an object that hands its reads on to a stand-in, record nothing and fail nothing."""
+    assert sys.modules["AppKit"] is conftest._STAND_INS["AppKit"]  # before anything real
+
+    class _HandsItsReadsOn:
+        def __getattr__(self, name):
+            return getattr(sys.modules["AppKit"], name)
+
+    before = len(conftest._human_refusals)
+    try:
+        for module in list(sys.modules.values()):
+            with contextlib.suppress(Exception):  # what a tool swallows; a refusal is not an Exception
+                getattr(module, "a_name_no_module_has", None)
+        assert getattr(_HandsItsReadsOn(), "_mock_name", None) is not None
+    finally:
+        recorded = conftest._human_refusals[before:]
+        del conftest._human_refusals[before:]
+    assert recorded == []
 
 
 def test_the_doors_are_shut_before_any_test_module_is_imported():
     """The stand-ins are in `sys.modules` and the guard is armed from `pytest_configure`, before
-    collection imports a test module, so a module that reaches a framework while it is imported
-    meets a stand-in and is refused. Arming once collection is over would also have quieted the
-    false alarm, and that reach would then pass unseen; installing the stand-ins late would let it
-    import the real framework, which is installed here (pyobjc).
+    collection imports a test module, so a module that calls a framework while it is imported
+    meets a stand-in and is refused. Arming once collection is over, one of the fixes measured
+    for the false alarm, would let that call pass unseen; installing the stand-ins late would let
+    it import the real framework, which is installed here (pyobjc).
     """
     assert _ARMED_WHEN_THIS_MODULE_WAS_IMPORTED is True
     assert _SHUT_WHEN_THIS_MODULE_WAS_IMPORTED == {"LocalAuthentication": True, "AppKit": True}
@@ -303,3 +357,84 @@ def test_the_doors_open_again_to_what_was_there(monkeypatch):
     assert "AppKit" not in sys.modules
     assert vars(fake_tkinter)["Tk"] is real_tk
     assert conftest._HUMAN_GUARD["armed"] is False
+
+
+def test_configure_records_what_each_door_had_and_shuts_it(monkeypatch):
+    """`pytest_configure`'s half of the guard, which `test_the_doors_open_again_to_what_was_there`
+    relies on: it records what each door had (a framework imported before the run; the record's
+    own marker for one that was not; `tkinter.Tk`), puts the stand-ins in `sys.modules`, replaces
+    `Tk`, adds the process hook and arms the guard. Run on doubles of that record, of `tkinter` (so
+    it runs where tkinter is missing, as in this venv) and of `sys.addaudithook` (an audit hook
+    cannot be removed), everything put back by monkeypatch when the test ends. Between disarming
+    the guard and the call that arms it again the test does nothing else, and the suite runs no
+    thread meanwhile.
+    """
+    before = types.ModuleType("LocalAuthentication")  # stands for a framework imported before configure
+    fake_tkinter = types.ModuleType("tkinter")
+    real_tk = object()  # stands for the `Tk` that configure replaces
+    vars(fake_tkinter)["Tk"] = real_tk
+    record: dict[str, object] = {}
+    hooks: list[object] = []
+    monkeypatch.setattr(conftest, "_displaced", record)
+    monkeypatch.setattr(sys, "addaudithook", hooks.append)
+    monkeypatch.setitem(sys.modules, "tkinter", fake_tkinter)
+    monkeypatch.setitem(sys.modules, "LocalAuthentication", before)
+    monkeypatch.setitem(conftest._HUMAN_GUARD, "armed", False)
+    monkeypatch.delitem(sys.modules, "AppKit")  # nothing was there; the next line puts the stand-in back
+    conftest._shut_the_doors_to_a_human()
+    assert record["LocalAuthentication"] is before
+    assert record["AppKit"] is record  # the record's own marker: nothing to put back
+    assert record["tkinter.Tk"] is real_tk
+    assert sys.modules["LocalAuthentication"] is conftest._STAND_INS["LocalAuthentication"]
+    assert sys.modules["AppKit"] is conftest._STAND_INS["AppKit"]
+    assert vars(fake_tkinter)["Tk"] is conftest._no_tk_window
+    assert hooks == [conftest._human_hook]
+    assert conftest._HUMAN_GUARD["armed"] is True
+
+
+@pytest.mark.parametrize("name", ["__not_a_dunder", "not_a_dunder__"])
+def test_a_name_with_two_underscores_at_one_end_only_is_answered_like_any_other(name):
+    """Only a dunder, two underscores at both ends, answers `AttributeError`. A name with two at
+    one end only is answered like any other, off a stand-in and off what a read answered, and
+    calling it is refused."""
+    app_kit = sys.modules["AppKit"]
+    assert app_kit is conftest._STAND_INS["AppKit"]  # before anything real
+    with refused(f"AppKit.{name}") as off_the_stand_in:
+        getattr(app_kit, name)()
+    with refused(f"AppKit.NSAlert.{name}") as off_what_a_read_answered:
+        getattr(app_kit.NSAlert, name)()
+    assert f"(AppKit.{name})" in str(off_the_stand_in.value)
+    assert f"(AppKit.NSAlert.{name})" in str(off_what_a_read_answered.value)
+
+
+def test_no_conftest_imports_a_gui_framework_at_its_top():
+    """A folder's conftest is imported before `pytest_configure` shuts the doors when that folder,
+    or a file in it, is named on the command line (`pytest tests/scripts/...`), and after it when
+    only `tests/` is: a framework imported at its top could then be the real one, not a stand-in.
+    So no conftest of the suite has an `import` statement for one outside a function: a class body
+    runs when the module is imported, a function's body when it is called, and one imported inside
+    a fixture meets the stand-in. The frameworks are the guard's own: the stand-ins' names and
+    `tkinter`. Read by structure, statements only: neither `importlib` nor what an imported module
+    imports is seen (the package's `order_confirm` imports `tkinter` at its top, which door 3 meets
+    by replacing `Tk` on the module itself).
+    """
+    frameworks = {*conftest._STAND_INS, "tkinter"}
+    root = pathlib.Path(__file__).resolve().parents[2]
+    conftests = sorted((root / "tests").rglob("conftest.py"))
+    assert len(conftests) >= 3, f"only {len(conftests)} conftest files found: the scan is broken"
+    found: list[str] = []
+    for path in conftests:
+        pending: list[ast.AST] = list(ast.parse(path.read_text()).body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # a class body runs at import
+                continue
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                names = []
+            found += [f"{path.relative_to(root)}: {name}" for name in names if name.split(".")[0] in frameworks]
+            pending += list(ast.iter_child_nodes(node))
+    assert found == []
