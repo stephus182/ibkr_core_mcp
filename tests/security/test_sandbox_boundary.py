@@ -299,7 +299,7 @@ _REVIEWED_AND_WITHHELD: set[str] = set()
 
 def test_sandbox_builtins_are_exactly_the_documented_set(ohlcv):
     """One level below `test_sandbox_globals_are_exactly_the_documented_set`: the names a
-    strategy resolves as builtins. Until 2026-11-13 nothing held them. They were whatever the
+    strategy resolves as builtins. Until 2026-11-17 nothing held them. They were whatever the
     installed RestrictedPython shipped, and 9.0 took `bytes`, `sorted`, `tuple` and `zip` away
     without one test noticing (`docs/plans/2026-11-12-sandbox-lazy-import-plan.md`, Part III, a
     local working document)."""

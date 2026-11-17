@@ -504,7 +504,7 @@ Model-written strategy code runs in a `RestrictedPython` sandbox inside a child 
 
 | Capability | Mechanism |
 |---|---|
-| `import` statements | Refused when the statement runs: a strategy frame's builtins hold no `__import__`, and CPython raises `ImportError: __import__ not found`. `compile_restricted` lets the statement through; it rejects only the name `__import__` written out. This row said "blocked syntactically" until 2026-11-13, which was never the mechanism |
+| `import` statements | Refused before the strategy is compiled: the child looks for the statement in the parsed source and the strategy is answered with `BacktestSyntaxError`, "Line N: import statements are not available to strategy code; pd and np are already provided." (*`import` statements: refused in words* below). Underneath that check, and unchanged, a strategy frame's builtins hold no `__import__`, so an `import` that reached execution would raise `ImportError: __import__ not found`. That second refusal is the boundary; the check is the wording. `compile_restricted` is neither: it allows the statement. It checks only the names listed after the word `import`, and their aliases, as it checks any name (one that starts with an underscore is refused, `__import__` among them), and it refuses a `*`. This row said "blocked syntactically" until 2026-11-17, while `import os` compiled and failed only when it ran |
 | `open`, `eval`, `exec`, `compile` | Removed from `__builtins__` |
 | `bytes`, `reversed`, `sorted`, `tuple`, `zip` | Not on the frozen list of builtins (*Builtins: a frozen list* below). RestrictedPython 9.0 removed the four it shipped, and they are deliberately not handed back |
 | Network access (`urllib`, `requests`, `socket`) | Not importable — `__import__` removed |
@@ -549,9 +549,9 @@ ones one at a time is the `eval`/`query` fix again, forever. `tests/security/tes
 holds each path closed with canary files and pins the sandbox globals and the two safe
 namespaces to frozen sets — widening any of them is a security change made in that test too.
 
-### C-level imports underneath strategy code (2026-11-13)
+### C-level imports underneath strategy code (2026-11-17)
 
-A strategy's builtins hold no `__import__` on purpose. Until 2026-11-13 that absence also broke
+A strategy's builtins hold no `__import__` on purpose. Until 2026-11-17 that absence also broke
 code that had imported nothing. CPython's `PyImport_Import` takes the globals of the innermost
 *Python* frame, reads `__builtins__` out of them and calls the `__import__` it finds there; C
 functions push no frame, so C code called directly by a strategy was looking in the strategy's
@@ -569,7 +569,8 @@ The sandbox's `__builtins__` is now a module object, `backtest._SandboxBuiltins`
 - Its **dict** is what a strategy frame resolves builtins in and what a strategy's own `import`
   statement searches. It holds the builtins of the frozen list below, each RestrictedPython's own
   object, with nothing added, so
-  `import os` fails exactly as before.
+  an `import os` that runs fails exactly as before (a strategy that holds one is refused
+  earlier, and in words: *`import` statements: refused in words* below).
 - Its **class** carries `__import__`. For a module-valued `__builtins__`, `PyImport_Import` reads
   `__import__` as an attribute of the module, not as an item of its dict. The function behind it,
   `_serve_c_import`, imports nothing and returns nothing: CPython discards what `__import__`
@@ -587,7 +588,7 @@ service loads none. `tests/security/test_sandbox_cold_path.py` runs one statemen
 in a fresh child, sweeps the numpy vocabulary in one, and holds every builtin to a name and an
 object of RestrictedPython's set.
 
-### Builtins: a frozen list, and RestrictedPython's minimum (2026-11-13)
+### Builtins: a frozen list, and RestrictedPython's minimum (2026-11-17)
 
 The builtins a strategy can name are a list this project owns, `backtest._SANDBOX_BUILTIN_NAMES`:
 77 names, the set RestrictedPython 9.0 ships. RestrictedPython supplies the objects (its guarded
@@ -595,7 +596,7 @@ The builtins a strategy can name are a list this project owns, `backtest._SANDBO
 enter the sandbox. A name is in a strategy's builtins only if it is on the list **and**
 RestrictedPython ships it.
 
-Until 2026-11-13 the sandbox copied whatever the installed RestrictedPython shipped, and that set
+Until 2026-11-17 the sandbox copied whatever the installed RestrictedPython shipped, and that set
 moved while nothing here watched it: `Ellipsis` came and `ExceptionGroup` went between 7.0 and
 8.4, and 9.0 removed `bytes`, `sorted`, `tuple` and `zip`. One release of this package gave
 strategy code 81 builtins where RestrictedPython 8.4 was installed and 77 where 9.0 was. Now:
@@ -623,6 +624,46 @@ attribute hook ends in. 9.0 is also the release the list was taken from and the 
 There is no ceiling, so that the weekly CI run meets each new release.
 Source: https://github.com/zopefoundation/RestrictedPython/blob/9.0/CHANGES.rst
 
+### `import` statements: refused in words (2026-11-17)
+
+A strategy cannot import, and the reason has not changed: its builtins hold no `__import__`
+(above). What changed is what it is told, and when. CPython's own text, `ImportError: __import__
+not found`, names a missing builtin and not the rule, it came only once the strategy had run as
+far as the statement, and a real backtest that began `import numpy as np` was answered with it
+(July 2026).
+
+The child now parses the strategy before it compiles it and looks for `import` statements
+(`backtest._first_import_line`). If it holds one, anywhere, nothing of the strategy is compiled or
+run, and the answer is `BacktestSyntaxError`: "Line N: import statements are not available to strategy code; pd and np are already provided."
+
+- **The check can only refuse.** Source without an `import` statement goes on to
+  `compile_restricted` exactly as before. So does source the parser rejects, whatever it
+  raised: what becomes of it is `compile_restricted`'s business, as before, and a syntax error
+  is still reported in its words.
+- **It is not the boundary.** The run-time refusal is still underneath, and five tests reach it
+  by calling `compile_restricted` and `exec` themselves, past the check. Without the check an
+  `import` would fail as it did before. It would not succeed.
+- **It reads statements, not text.** The word `import` in a string, a comment or a name is
+  none of its business. It parses the source as `compile_restricted` does next (the same
+  function, the same arguments), with one difference: the parser's warnings are silenced, so
+  that each is shown once, by the second parse. Where a host turns warnings into errors, a
+  source that holds such a warning and an `import` is therefore answered about the `import`
+  first. And it runs in the child, where the compile has always run: the parent parses nothing.
+- **One answer at a time.** A strategy that holds an `import` statement is told about the
+  `import` and nothing else. Whatever else `compile_restricted` would have objected to in source
+  that parses (a name that starts with an underscore, a `return` outside a function), and
+  whatever would have failed or run too long before the statement was reached, is reported on
+  the next attempt, once the `import` is gone.
+- **It is stricter than the run-time refusal, on purpose.** An `import` that did no harm used
+  to let the strategy complete: one that never executed (inside a function nobody calls, under
+  `if False`), or one whose failure the strategy caught (under `try/except ImportError`). Each
+  is now refused like any other. The rule is the one these documents always stated: strategy
+  code holds no `import`.
+- **The exception class changed** for a strategy that imports: `BacktestSyntaxError`, where it
+  was `BacktestRuntimeError`. Both are `BacktestError`.
+- **The answer carries nothing to redact.** It is a constant sentence and a line number: no
+  exception text, no path, nothing copied from the strategy (OWASP §6, *Safe Error Handling*).
+
 ### Resource limits
 
 | Limit | Value | Error on breach |
@@ -643,7 +684,7 @@ insufficient.
 
 **`DataFrame.eval`/`.query` (fixed 2026-07-11)** — Both methods run pandas' own expression engine on a string, entirely outside `compile_restricted`'s AST-level guards, and could reach `__globals__`/`sys.modules['os']` for full RCE (see `docs/audits/security-audit-2026-07-11.md` H-1). The sandbox's `_getattr_` hook denies `eval`/`query` by name with a specific message. Since 2026-09-13 that denylist is superseded in effect by the attribute allowlist above — neither name is on it — and the rule for a newly discovered string-evaluating method is the inverse: it is blocked unless someone adds it to `_PANDAS_ALLOWED_ATTRS`, which is the security change.
 
-**C-level imports (fixed 2026-11-13)** — Allowed operations failed in a fresh child whenever C code underneath them asked CPython for an import (`arr.max()`, `ts.strftime(...)`, printing an array, any numpy warning on Python 3.13), and one of them crashed it. The section *C-level imports underneath strategy code* above has the mechanism and the answer. What remains: a module C code asks for that the sandbox has not loaded is refused, and the operation fails with a message that says so.
+**C-level imports (fixed 2026-11-17)** — Allowed operations failed in a fresh child whenever C code underneath them asked CPython for an import (`arr.max()`, `ts.strftime(...)`, printing an array, any numpy warning on Python 3.13), and one of them crashed it. The section *C-level imports underneath strategy code* above has the mechanism and the answer. What remains: a module C code asks for that the sandbox has not loaded is refused, and the operation fails with a message that says so.
 
 **Thread timeout non-termination (fixed 2026-07-16)** — The sandbox once ran strategy code in a `ThreadPoolExecutor` thread, which `Future.cancel()` cannot stop: `while True: pass` outlived the 10-second timeout and could hang the host at exit. It now runs in a `multiprocessing` spawn child with a `Pipe` for the result and a daemon watchdog that escalates SIGTERM → SIGKILL at the deadline — a process can be killed, a thread cannot, and killing it is also what unblocks the parent's pipe read. Design and review record: `docs/plans/archive/infrastructure/2026-07-15-backtest-sandbox-subprocess-isolation-design.md`.
 
@@ -718,7 +759,7 @@ the rest from the 2026-09-13 audit:
 | `test_preview_is_not_execution.py` | `/orders/whatif` is built in exactly one place (`_whatif`); every preview entry point — `get_order_preview` and `get_bracket_preview` — runs no gate; a bracket with an unlinked child is refused; `preview_order` touches no other order method |
 | `test_tool_capabilities.py` | Every tool declares capabilities; none declares `ORDER_EXECUTION`; `READ_ONLY` never shares a declaration with a mutating capability; every sink a handler touches is declared |
 | `test_sandbox_boundary.py` | Strategy code cannot read, write or spawn — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals, safe namespaces and the builtins a strategy can name are frozen sets; a builtin RestrictedPython adds does not reach a strategy, one it removes leaves, and either turns a test red; RestrictedPython's declared minimum is 9.0, with no ceiling |
-| `test_sandbox_cold_path.py` | What the sandbox allows works in the process a strategy really runs in: one statement per kind of C-level import runs in a freshly spawned child, and so does the numpy vocabulary, generated from the allowlists; numpy's own error text reaches the model; an `import` statement is still refused, in five forms; strategy code cannot name its way to the builtins object, in five forms, and the attribute guard refuses the service on it; every builtin a strategy frame resolves is a name and an object of RestrictedPython's set; the import service loads nothing, returns nothing and refuses an unloaded module by name |
+| `test_sandbox_cold_path.py` | What the sandbox allows works in the process a strategy really runs in: one statement per kind of C-level import runs in a freshly spawned child, and so does the numpy vocabulary, generated from the allowlists; numpy's own error text reaches the model; a strategy that holds an `import` statement is refused before it is compiled, in a sentence, wherever the statement stands, with nothing of it run and by the child alone, while source without one, or that does not parse, is left to `compile_restricted`; underneath, an `import` that runs is still refused, in five forms; strategy code cannot name its way to the builtins object, in five forms, and the attribute guard refuses the service on it; every builtin a strategy frame resolves is a name and an object of RestrictedPython's set; the import service loads nothing, returns nothing and refuses an unloaded module by name |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
 | `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12); `keyring` is imported only by `secret_store.py`, and under pytest its backend is the null one from `pytest_configure` on (door 7, 2026-11-09) |

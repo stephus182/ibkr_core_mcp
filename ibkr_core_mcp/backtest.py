@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import multiprocessing
 import sys
 import threading
 import types
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
@@ -364,7 +366,7 @@ def _terminate_then_kill(process: multiprocessing.process.BaseProcess) -> None:
 
 
 # ---------------------------------------------------------------------------
-# C-level imports underneath strategy code (2026-11-13, checklist B2a).
+# C-level imports underneath strategy code (2026-11-17, checklist B2a).
 #
 # CPython's `PyImport_Import` — what `PyImport_ImportModule` and numpy's `npy_cache_import`
 # are built on — does not import by itself. It takes the globals of the innermost PYTHON
@@ -425,7 +427,7 @@ def _serve_c_import(name: str, *_call_args: object) -> None:
         )
 
 
-# The builtins strategy code may name (2026-11-13). RestrictedPython supplies the OBJECTS: its
+# The builtins strategy code may name (2026-11-17). RestrictedPython supplies the OBJECTS: its
 # guarded `setattr`, `delattr` and `_getattr_`, and Python's own for the rest. This list
 # decides which NAMES enter the sandbox. Until it existed the sandbox copied whatever the
 # installed RestrictedPython shipped: 81 names in 7.0, 8.4 and 8.5, and 77 in 9.0, which took
@@ -509,11 +511,53 @@ def build_sandbox(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# `import` statements in strategy code (2026-11-17).
+#
+# A strategy cannot import. Its builtins hold no `__import__`, so CPython refuses the statement
+# when it runs, with `ImportError: __import__ not found`. That refusal is the boundary and it is
+# untouched. What it lacked was words: the text is CPython's, it names a missing builtin and
+# not the rule, and a real backtest that began `import numpy as np` was answered with it
+# (July 2026).
+#
+# So the child looks for the statement before it compiles anything, and answers in a sentence.
+# The check can only refuse. Source the parser rejects is left to `compile_restricted`, as
+# before; source without an `import` statement takes the path it always took.
+# It is stricter than the run-time refusal in one way, on purpose: an `import` that did no
+# harm before (in a function nobody calls, or failing inside the strategy's own
+# `try/except ImportError`) is refused as well. One rule, the one the documents always stated:
+# strategy code holds no `import`.
+#
+# It runs here, in the child, like the compile: the parent never parses strategy source.
+# ---------------------------------------------------------------------------
+_IMPORT_REFUSAL = "import statements are not available to strategy code; pd and np are already provided."
+
+
+def _first_import_line(code: str) -> int | None:
+    """The line of the first `import` statement in strategy source, or None if it holds none.
+
+    None also when the source does not parse, whatever the parser raised: what becomes of such
+    source is `compile_restricted`'s business, as before, and this check must not get in its
+    way. The parse is the one `compile_restricted` makes next, with the same arguments, except
+    that the parser's warnings are silenced here, so that each is shown once, by that second
+    parse. Where a host turns warnings into errors the two parses can therefore differ: a
+    source that holds such a warning and an `import` is answered about the `import` first.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(code, "<strategy>", "exec")
+    except Exception:
+        return None
+    lines = [node.lineno for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    return min(lines, default=None)
+
+
 def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> None:
     """Compile and run strategy code inside an isolated child process.
 
-    Runs entirely in the child (both compile_restricted and exec) so the parent
-    can kill the whole OS process on timeout — a thread cannot be forcibly
+    Runs entirely in the child (the import check, compile_restricted and exec) so the
+    parent can kill the whole OS process on timeout — a thread cannot be forcibly
     stopped once it's running, a process can. `conn` is the write end of a
     multiprocessing.Pipe; sends a ("ok", df) / ("syntax_error", msg) /
     ("runtime_error", msg) tuple back to the parent.
@@ -526,6 +570,10 @@ def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> Non
     after start()), so if the child dies part-way through send() the reader is
     delivered EOF promptly instead of hanging. See run_backtest.
     """
+    import_line = _first_import_line(code)
+    if import_line is not None:
+        conn.send(("syntax_error", f"Line {import_line}: {_IMPORT_REFUSAL}"))
+        return
     try:
         byte_code = compile_restricted(code, "<strategy>", "exec")
     except SyntaxError as e:
@@ -569,8 +617,8 @@ def run_backtest(
     item 2 records that defect class being fixed for `full_report()`; this path was missed.
 
     Raises:
-        BacktestSyntaxError: If the strategy code exceeds the size limit or will not
-            compile.
+        BacktestSyntaxError: If the strategy code exceeds the size limit, holds an
+            `import` statement, or will not compile.
         BacktestError: If `df` has no rows, or the sandbox fails. An empty frame used
             to produce a fully-populated result reading "0.0% return, 0 trades",
             because `(sig == 0).all()` is True for an empty Series — a measurement

@@ -16,7 +16,7 @@
 `Strategy runtime error: KeyError: '__import__'` on strategies that had imported nothing: any
 that took `.values` or `.to_numpy()` and called `.max()`, `.mean()`, `.std()` and the like on
 the array, formatted a date with `strftime`, or printed an array. They now run. A strategy
-that writes `import ...` is refused as before, with `ImportError: __import__ not found`.
+that writes `import ...` is still refused (the second entry below says what it is now told).
 
 **What a host does.** Nothing. No signature, return type or exception type changed.
 
@@ -44,6 +44,28 @@ such strategy.
 what strategy code may call without a test turning red; and `RestrictedPython>=7.0` admitted
 releases with sandbox escapes that later ones closed. `SECURITY.md` § *Builtins: a frozen list,
 and RestrictedPython's minimum* has both.
+
+### Unreleased — backtests: a strategy that holds an `import` statement gets a sentence, and `BacktestSyntaxError`
+
+**What a host sees.** `run_backtest` (and the `run_backtest` tool) answers a strategy that holds
+an `import` statement with `BacktestSyntaxError`: `Strategy syntax error: Line 1: import
+statements are not available to strategy code; pd and np are already provided.` Until now it was
+`BacktestRuntimeError`, `Strategy runtime error: ImportError: __import__ not found`, raised when
+the statement ran. The refusal now comes before the strategy is compiled, so it also meets an
+`import` that did no harm before: one that never ran (inside a function nobody calls, under
+`if False`), or one whose failure the strategy caught (under `try/except ImportError`). Those
+strategies used to complete. And a strategy with an `import` is told about the `import` only:
+whatever else is wrong with it is reported on the next attempt.
+
+**What a host does.** A host that catches `BacktestError` does nothing. A host that tells
+`BacktestRuntimeError` from `BacktestSyntaxError`, or matches the text `__import__`, looks at
+that code; ClaudIA's tracked files do neither. If a host's prompts or examples show strategies
+that begin with `import pandas as pd` or `import numpy as np`, remove those lines: `pd` and `np`
+are already in the namespace.
+
+**Why.** CPython's text named a missing builtin and not the rule, and a real backtest failed on
+exactly that line in July 2026. What strategy code can reach is unchanged: the sandbox's
+builtins still hold no `__import__`. `SECURITY.md` § *`import` statements: refused in words*.
 
 ### Unreleased — an option order's dialog shows no total unless the host supplies `_multiplier`
 

@@ -1,7 +1,7 @@
 """Security constitution §4, the other half — what the sandbox ALLOWS has to work in the
 process a strategy really runs in: a child that `run_backtest` has just spawned.
 
-Until 2026-11-13 it did not. CPython's `PyImport_Import` looks `__import__` up in the builtins
+Until 2026-11-17 it did not. CPython's `PyImport_Import` looks `__import__` up in the builtins
 of the innermost Python frame, and while C code called directly by a strategy is running that
 frame is the strategy's, whose builtins deliberately have none. So `arr.max()` raised
 `KeyError: '__import__'` in a fresh child: numpy fetches the Python helper behind that method
@@ -24,9 +24,12 @@ Two rules follow, and every test below obeys one of them:
 
 from __future__ import annotations
 
+import ast
 import datetime
 import multiprocessing
 import sys
+import types
+import warnings
 from multiprocessing.connection import Connection
 from typing import Any
 
@@ -37,7 +40,7 @@ from RestrictedPython import compile_restricted, safe_builtins
 
 from ibkr_core_mcp import backtest
 from ibkr_core_mcp.backtest import build_sandbox, run_backtest
-from ibkr_core_mcp.exceptions import BacktestRuntimeError
+from ibkr_core_mcp.exceptions import BacktestRuntimeError, BacktestSyntaxError
 
 pytestmark = pytest.mark.security
 
@@ -294,9 +297,198 @@ _IMPORT_STATEMENTS = {
 @pytest.mark.parametrize("form", sorted(_IMPORT_STATEMENTS))
 def test_an_import_statement_in_strategy_code_is_still_refused(ohlcv, form):
     """The import service exists for C code only. A strategy's own `import` looks in the
-    frame's builtins DICT, which holds no `__import__`, and CPython refuses it as before."""
+    frame's builtins DICT, which holds no `__import__`, and CPython refuses it as before.
+
+    This is the boundary. Since 2026-11-17 it is the second thing an `import` meets: the
+    child refuses the statement in a sentence before it compiles anything (the tests below).
+    These five call `compile_restricted` and `exec` themselves, past that check, which is
+    how they still see what is underneath it."""
     with pytest.raises(ImportError, match="__import__ not found"):
         exec(compile_restricted(_IMPORT_STATEMENTS[form], "<s>", "exec"), build_sandbox(ohlcv.copy()))  # noqa: S102
+
+
+# The check in front of that refusal. CPython's text, `__import__ not found`, names a missing
+# builtin and not the rule, and a real backtest that began `import numpy as np` was answered
+# with it (July 2026). So the child looks for the statement before it compiles the strategy,
+# and answers in a sentence. Until 2026-11-17 nothing did.
+
+_REFUSAL = "import statements are not available to strategy code; pd and np are already provided."
+
+# source -> the line of its first import statement
+_WHERE_THE_FIRST_IMPORT_IS = {
+    "import": ("import os\n", 1),
+    "from-import": ("from os import path\n", 1),
+    "import-as": ("import numpy as np\n", 1),
+    "a star import": ("from os import *\n", 1),
+    "a relative import": ("from . import x\n", 1),
+    "a __future__ import": ("from __future__ import annotations\n", 1),
+    "after a statement on the same line": ("x = 1; import os\n", 1),
+    "on line 3": ("x = 1\ny = 2\nimport os\n", 3),
+    "two of them": ("x = 1\nimport os\ny = 2\nimport sys\n", 2),
+    "inside a function nobody calls": ("def f():\n    import os\n    return 1\n", 2),
+    "inside a nested function": ("def f():\n    def g():\n        import os\n    return g\n", 3),
+    "under if False": ("if False:\n    import os\n", 2),
+    "under try/except ImportError": ("try:\n    import numpy as np\nexcept ImportError:\n    pass\n", 2),
+    "inside a class body": ("class A:\n    import os\n", 2),
+    # `ast.walk` is breadth-first: it meets line 3 before line 2 here
+    "a nested one above a top-level one": ("def f():\n    import os\nimport sys\n", 2),
+    # the line the statement starts on, not the one it ends on
+    "spread over several lines": ("x = 1\nfrom os import (\n    path,\n)\n", 2),
+}
+
+
+@pytest.mark.parametrize("form", sorted(_WHERE_THE_FIRST_IMPORT_IS))
+def test_the_first_import_statement_is_found_wherever_it_stands(form):
+    """Every form of the statement, at any depth, executed or not. The line reported is the
+    one the first of them starts on, which is where a reader looks."""
+    source, line = _WHERE_THE_FIRST_IMPORT_IS[form]
+    assert backtest._first_import_line(source) == line
+
+
+_NOT_AN_IMPORT_STATEMENT = {
+    "the word in a string": 'x = "import os"\n',
+    "the word in a comment": "# import os\nx = 1\n",
+    "the line inside a multi-line string": "s = '''\nimport os\n'''\n",
+    "names that begin with import": "important = 1\nimported = df['close']\n",
+    "an f-string": "x = f'import {1}'\n",
+    "__import__ called by name": "x = __import__('os')\n",
+    "a plain strategy": "df['signal'] = (df['close'] > df['close'].rolling(5).mean()).astype(int)\n",
+    "the empty strategy": "",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_NOT_AN_IMPORT_STATEMENT))
+def test_source_without_an_import_statement_is_none_of_the_checks_business(form):
+    """The check reads statements, not text: for source that holds no `import` statement it
+    has no line to report, whatever words the source contains."""
+    assert backtest._first_import_line(_NOT_AN_IMPORT_STATEMENT[form]) is None
+
+
+def test_the_check_has_no_line_to_report_for_source_the_parser_rejects():
+    """An `import` on line 1 and an unclosed bracket on line 2. What the caller is then told
+    is `compile_restricted`'s to say: the test of the child's entry point below holds that."""
+    assert backtest._first_import_line("import os\nx = (\n") is None
+
+
+def test_the_check_shows_none_of_the_parsers_warnings():
+    """An invalid escape sequence makes the parser warn. `compile_restricted` parses the same
+    source next and shows the warning; the check's own parse stays silent, so that the
+    warning is shown once, as before."""
+    with warnings.catch_warnings(record=True) as shown:
+        warnings.simplefilter("always")
+        assert backtest._first_import_line("x = '\\d'\n") is None
+    assert shown == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [RecursionError("maximum recursion depth exceeded during ast construction"), ValueError("x"), MemoryError()],
+    ids=["RecursionError", "ValueError", "MemoryError"],
+)
+def test_whatever_the_parser_raises_the_check_has_no_opinion(monkeypatch, error):
+    """The parser has other objections than SyntaxError. On Python 3.11 a source nested a few
+    thousand levels deep raises RecursionError inside `ast.parse` (measured), and CPython's
+    documentation of `ast.parse` names ValueError. MemoryError stands for anything else. The
+    check answers none of them: what happens next is whatever `compile_restricted` does with
+    that source, today and in a later RestrictedPython."""
+
+    def parse(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(backtest, "ast", types.SimpleNamespace(parse=parse))
+    assert backtest._first_import_line("import os\n") is None
+
+
+def test_a_lone_surrogate_is_left_alone_like_any_other_objection_of_the_parser():
+    """Real input this time, not a stand-in: a strategy that holds a lone surrogate, which a
+    JSON string can carry (`"\\udcff"`). On Python 3.11, 3.12 and 3.13 `ast.parse` raises
+    UnicodeEncodeError for it, a ValueError and not a SyntaxError (measured). The check has no
+    opinion, although the source holds an `import`."""
+    source = "import os\nx = '\udcff'\n"
+    with pytest.raises(ValueError):
+        ast.parse(source, "<strategy>", "exec")
+    assert backtest._first_import_line(source) is None
+
+
+class _Recorder:
+    """Stands in for the write end of the pipe: keeps what the child's entry point sends."""
+
+    def __init__(self) -> None:
+        self.sent: list[Any] = []
+
+    def send(self, message: Any) -> None:
+        self.sent.append(message)
+
+
+def test_the_child_answers_once_and_runs_nothing_of_a_strategy_it_refuses(ohlcv):
+    """The child's entry point, driven in-process with a stand-in for the pipe. Line 1 would
+    write a column if anything of the strategy ran. The answer is about line 2, it is the
+    only answer, and the frame is untouched."""
+    frame = ohlcv.copy()
+    pipe: Any = _Recorder()
+    backtest._execute_in_subprocess("df['signal'] = 1\nimport os\n", frame, pipe)
+    assert pipe.sent == [("syntax_error", f"Line 2: {_REFUSAL}")]
+    assert "signal" not in frame.columns
+
+
+def test_an_import_beside_a_syntax_error_is_answered_by_compile_restricted(ohlcv):
+    """The parser rejects this source, so the check has nothing to say, and the answer is
+    `compile_restricted`'s, in its own words, as before."""
+    pipe: Any = _Recorder()
+    backtest._execute_in_subprocess("import os\nx = (\n", ohlcv.copy(), pipe)
+    ((status, text),) = pipe.sent
+    assert status == "syntax_error"
+    assert "was never closed" in text and "import statements" not in text
+
+
+def test_the_check_runs_in_the_child_and_the_parent_parses_nothing(ohlcv, monkeypatch):
+    """The compile and the exec have always run in the child (`_execute_in_subprocess`), and
+    the check runs there too. Here the parent's own copies of the check, of the parser and of
+    the compiler refuse to be called, and the refusal arrives all the same: the spawned child
+    has its own."""
+
+    def not_here(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the parent process parsed or compiled strategy source")
+
+    monkeypatch.setattr(backtest, "_first_import_line", not_here)
+    monkeypatch.setattr(backtest, "compile_restricted", not_here)
+    monkeypatch.setattr(backtest, "ast", types.SimpleNamespace(parse=not_here))
+    with pytest.raises(BacktestSyntaxError, match="Line 1: import statements are not available"):
+        run_backtest("import os\ndf['signal'] = 0\n", ohlcv)
+
+
+_THROUGH_THE_REAL_CHILD = (
+    # the first line of the real backtest that failed; CPython's answer to it was
+    # `ImportError: __import__ not found`
+    "import-as",
+    # RestrictedPython has words of its own for this one (`"*" imports are not allowed.`):
+    # the check comes before it
+    "a star import",
+    # these two used to COMPLETE: the import never ran, or its failure was caught
+    "inside a function nobody calls",
+    "under try/except ImportError",
+)
+
+
+@pytest.mark.parametrize("form", _THROUGH_THE_REAL_CHILD)
+def test_a_strategy_that_holds_an_import_statement_is_refused_in_words_a_model_can_act_on(ohlcv, form):
+    """What the caller is told, through the real `run_backtest`: the line, that imports are
+    not available, and what is there instead. Also where the statement did no harm before:
+    in a function nobody calls, or failing inside the strategy's own `try/except`."""
+    source, line = _WHERE_THE_FIRST_IMPORT_IS[form]
+    with pytest.raises(BacktestSyntaxError) as info:
+        run_backtest(source + "df['signal'] = 0\n", ohlcv)
+    assert str(info.value) == f"Strategy syntax error: Line {line}: {_REFUSAL}"
+
+
+def test_the_names_the_refusal_promises_are_in_the_sandbox(ohlcv):
+    """The sentence tells a model what is there instead. The names it gives are read out of
+    the package's own sentence, and each has to be the sandbox's safe namespace."""
+    assert backtest._IMPORT_REFUSAL == _REFUSAL
+    promised = backtest._IMPORT_REFUSAL.split("; ")[1].removesuffix(" are already provided.").split(" and ")
+    assert promised == ["pd", "np"], "a name added to the sentence has to be held to the sandbox here"
+    sandbox = build_sandbox(ohlcv)
+    assert sandbox["pd"] is backtest._SAFE_PD and sandbox["np"] is backtest._SAFE_NP
 
 
 _REACHING_FOR_THE_BUILTINS = {

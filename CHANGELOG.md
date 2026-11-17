@@ -443,13 +443,46 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **A backtest strategy that holds an `import` statement is refused before it runs, in a sentence
+  (2026-11-17).**
+  - **What a strategy sees:** `Strategy syntax error: Line 1: import statements are not available
+    to strategy code; pd and np are already provided.` It used to see `Strategy runtime error:
+    ImportError: __import__ not found`, CPython's own text, and a real backtest that began
+    `import numpy as np` failed with it in July 2026.
+  - **Breaking, in two narrow ways.** The exception is `BacktestSyntaxError`, where it was
+    `BacktestRuntimeError` (both are `BacktestError`), so a caller that tells the two apart, or
+    matches the text `__import__`, sees the difference. And the refusal is stricter: an `import`
+    that did no harm used to let the strategy complete, whether it never executed (inside a
+    function nobody calls, under `if False`) or failed where the strategy caught it (under
+    `try/except ImportError`), and it is now refused like any other. The rule is the one the
+    documents always stated: strategy code holds no `import`.
+  - **What did not change:** what strategy code can reach. The sandbox's builtins still hold no
+    `__import__`, so an `import` that ran would still fail: the check stands in front of that
+    refusal, not in place of it. Source without an `import` statement is handled exactly as
+    before, and source the check cannot parse is left to `compile_restricted`, as before.
+  - **How:** the child parses the strategy and looks for the statement
+    (`backtest._first_import_line`) before `compile_restricted` runs, so nothing of a refused
+    strategy is compiled or run. It reads statements, not text: the word in a string, a comment
+    or a name is not refused. A strategy with an `import` is told about the `import` only;
+    anything else wrong with it is reported once the `import` is gone.
+  - **Held by** 39 new tests (38 in `tests/security/test_sandbox_cold_path.py`, one at the tool
+    layer) and by `tests/test_backtest.py::test_sandbox_cannot_import_os`, which now expects the
+    sentence. 39 of the 40 were red before the change; the other holds something that must not
+    change (an `import` beside a syntax error is still answered by `compile_restricted`) and was
+    watched failing on a mutant.
 - **The backtest sandbox's builtins are a list this project owns, and RestrictedPython's minimum is
-  9.0 (2026-11-13).**
-  - **What a strategy sees:** `sorted`, `zip`, `tuple` and `bytes` are not available, on any
-    install: `NameError: name 'sorted' is not defined`. RestrictedPython 9.0 (2026-11-04) had
-    already removed them, so on a fresh install nothing changes; where an older RestrictedPython
-    was installed they worked until now. `df['close'].sort_values()`, a tuple literal and column
-    arithmetic do the same work.
+  9.0 (2026-11-17).**
+  - **What a strategy sees (breaking where an older RestrictedPython was installed):** `sorted`,
+    `zip`, `tuple` and `bytes` are not available, on any install: `NameError: name 'sorted' is
+    not defined`. RestrictedPython 9.0 (2026-11-04) had already removed them, so on a fresh
+    install nothing changes; where an older RestrictedPython was installed they worked until
+    now. `df['close'].sort_values()`, a tuple literal and column arithmetic do the same work.
+    Where it was a 7.x, two more things go: the builtin `ExceptionGroup` and the
+    `try`/`except*` statement, which RestrictedPython 8.0 removed together to close a sandbox
+    escape (CVE-2025-22153). Where it was older than 8.3, one more form is refused: a
+    positional-only parameter whose name starts with an underscore and is never read, such as
+    `def f(_x, /): return 1`. An ordinary parameter of that name, and any read of it, were
+    refused already; 8.3 closed a sandbox escape with this one.
   - **Why a list:** the sandbox copied whatever the installed RestrictedPython shipped, 81 names
     in 7.0, 8.4 and 8.5 and 77 in 9.0, and no test noticed the difference.
     `backtest._SANDBOX_BUILTIN_NAMES` is 9.0's set, written out. A name RestrictedPython adds no longer reaches strategy code until
@@ -842,14 +875,16 @@ below. The consumer's half — importing the owner, deleting its own copies — 
     could not show it at all: there the calls had already been made from ordinary frames.
   - **What changed:** the sandbox's `__builtins__` is a module object whose dict holds the
     sandbox's builtins only, and whose class answers `PyImport_Import` and
-    nothing else. The answer loads nothing and returns nothing. A strategy's own `import` still
-    fails with `ImportError: __import__ not found`. A module C code asks for that the sandbox
+    nothing else. The answer loads nothing and returns nothing. A strategy's own `import` is still
+    refused (in a sentence, before it runs: the entry under *Changed*). A module C code asks for that the sandbox
     has not loaded is refused in a message that names it.
   - **Held by** `tests/security/test_sandbox_cold_path.py` (37 tests): each kind of operation in
     a fresh child, the numpy vocabulary generated from the allowlists in one, the refusals, and that
     strategy code cannot reach the object that carries the service.
   - **Documents corrected on the way:** `SECURITY.md` and `docs/security-architecture.md` § 6.3
-    said `import` is blocked by the compiler. It is refused when the statement runs.
+    said `import` is blocked by the compiler. `compile_restricted` allows the statement (it
+    checks only the names after the word `import`, and their aliases, and refuses a `*`): an
+    ordinary `import` was refused only when it ran, until the check described under *Changed*.
 - **The Gate 2 dialogs no longer print price × quantity as an option's total (found 2026-11-12,
   while the README's order paragraph was being checked against the code).**
   - **What it printed:** for ten option contracts at 2.50 USD, `Total (est.): 25.00 USD`. IBKR's
