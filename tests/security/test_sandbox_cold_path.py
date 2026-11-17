@@ -327,12 +327,14 @@ def test_the_attribute_guard_refuses_the_service_even_on_the_builtins_object(ohl
 
 
 def test_strategy_frames_resolve_builtins_in_restrictedpythons_safe_set_and_nothing_else(ohlcv):
-    """A name here is a builtin handed to model-written code. The set is RestrictedPython's,
-    unchanged; `__import__` in particular is not in it."""
+    """A name here is a builtin handed to model-written code. Each one is a name of
+    RestrictedPython's safe set and RestrictedPython's own object; `__import__` in particular is
+    not among them. WHICH names of that set a strategy gets is this project's list, held by
+    `test_sandbox_builtins_are_exactly_the_documented_set` in `test_sandbox_boundary.py`."""
     builtins = build_sandbox(ohlcv)["__builtins__"]
     namespace = builtins if isinstance(builtins, dict) else vars(builtins)
     assert "__import__" not in namespace
-    assert namespace == safe_builtins
+    assert all(name in safe_builtins and namespace[name] is safe_builtins[name] for name in namespace)
     assert namespace is not safe_builtins, "each sandbox gets its own copy, not RestrictedPython's shared dict"
 
 

@@ -16,12 +16,15 @@ channel. These tests hold each of those closed.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
+from RestrictedPython import compile_restricted, safe_builtins
 
+from ibkr_core_mcp import backtest
 from ibkr_core_mcp.backtest import _SAFE_NP, _SAFE_PD, build_sandbox, run_backtest
 from ibkr_core_mcp.exceptions import BacktestRuntimeError
 
@@ -262,6 +265,115 @@ def test_safe_numpy_namespace_has_no_io_or_loading_functions():
         "cumsum", "cumprod", "diff", "log", "log2", "exp", "sqrt", "abs", "maximum", "minimum",
         "clip", "percentile", "arange", "linspace", "sign", "floor", "ceil", "round", "argmax", "argmin",
     }  # fmt: skip
+
+
+# The builtins a strategy can name. RestrictedPython supplies the objects; the LIST is this
+# project's (`backtest._SANDBOX_BUILTIN_NAMES`). It is written out here a second time on
+# purpose: a name reaches strategy code only when someone has put it in both places.
+_DOCUMENTED_BUILTINS = {
+    # constants, and the hook a `class` statement compiles to
+    "None", "True", "False", "Ellipsis", "__build_class__",
+    # functions and types, Python's own
+    "abs", "bool", "callable", "chr", "complex", "divmod", "float", "hash", "hex", "id", "int",
+    "isinstance", "issubclass", "len", "oct", "ord", "pow", "range", "repr", "round", "slice", "str",
+    # RestrictedPython's guarded versions, not Python's
+    "_getattr_", "delattr", "setattr",
+    # exceptions and warnings
+    "ArithmeticError", "AssertionError", "AttributeError", "BaseException", "BufferError",
+    "BytesWarning", "DeprecationWarning", "EOFError", "EnvironmentError", "Exception",
+    "FloatingPointError", "FutureWarning", "GeneratorExit", "IOError", "ImportError",
+    "ImportWarning", "IndentationError", "IndexError", "KeyError", "KeyboardInterrupt",
+    "LookupError", "MemoryError", "NameError", "NotImplementedError", "OSError", "OverflowError",
+    "PendingDeprecationWarning", "ReferenceError", "RuntimeError", "RuntimeWarning",
+    "StopIteration", "SyntaxError", "SyntaxWarning", "SystemError", "SystemExit", "TabError",
+    "TypeError", "UnboundLocalError", "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError",
+    "UnicodeTranslateError", "UnicodeWarning", "UserWarning", "ValueError", "Warning",
+    "ZeroDivisionError",
+}  # fmt: skip
+
+# Builtins RestrictedPython ships that this project has reviewed and decided NOT to hand to
+# strategy code. Empty today. When `test_restrictedpython_ships_no_builtin_this_project_has_not_reviewed`
+# goes red, each new name goes here or into the list above. Both are decisions.
+_REVIEWED_AND_WITHHELD: set[str] = set()
+
+
+def test_sandbox_builtins_are_exactly_the_documented_set(ohlcv):
+    """One level below `test_sandbox_globals_are_exactly_the_documented_set`: the names a
+    strategy resolves as builtins. Until 2026-11-13 nothing held them. They were whatever the
+    installed RestrictedPython shipped, and 9.0 took `bytes`, `sorted`, `tuple` and `zip` away
+    without one test noticing (`docs/plans/2026-11-12-sandbox-lazy-import-plan.md`, Part III, a
+    local working document)."""
+    assert set(vars(build_sandbox(ohlcv)["__builtins__"])) == _DOCUMENTED_BUILTINS
+    assert backtest._SANDBOX_BUILTIN_NAMES == _DOCUMENTED_BUILTINS
+
+
+def test_restrictedpython_ships_no_builtin_this_project_has_not_reviewed():
+    """The drift guard. A RestrictedPython release that adds or removes a builtin turns this
+    red, on the weekly CI run at the latest. Nothing has reached a strategy by then: the frozen
+    list filters what it does not name. Red means a decision is owed, not a fix."""
+    shipped = set(safe_builtins)
+    unreviewed = shipped - backtest._SANDBOX_BUILTIN_NAMES - _REVIEWED_AND_WITHHELD
+    gone = backtest._SANDBOX_BUILTIN_NAMES - shipped
+    assert not unreviewed, (
+        f"RestrictedPython now ships builtins this project has not reviewed: {sorted(unreviewed)}. "
+        "Strategy code does not get them (the frozen list filters them out). Review each, then "
+        "record the decision: add it to backtest._SANDBOX_BUILTIN_NAMES and to _DOCUMENTED_BUILTINS "
+        "here (it is handed to model-written code), or to _REVIEWED_AND_WITHHELD here (it is not)."
+    )
+    assert not gone, (
+        f"RestrictedPython no longer ships {sorted(gone)}, which the frozen list names. Strategy "
+        "code has already lost them. Read RestrictedPython's change log for the reason, then remove "
+        "them from backtest._SANDBOX_BUILTIN_NAMES and from _DOCUMENTED_BUILTINS, and say so in "
+        "CHANGELOG.md: a strategy that used one stops working."
+    )
+    assert not _REVIEWED_AND_WITHHELD & backtest._SANDBOX_BUILTIN_NAMES, "a name is handed out or withheld, not both"
+
+
+def test_a_builtin_restrictedpython_adds_does_not_reach_strategy_code(ohlcv, monkeypatch):
+    """What the frozen list is for. Before it, the sandbox copied RestrictedPython's dict, so a
+    name added upstream was a name handed to model-written code the day it was installed."""
+    monkeypatch.setattr(backtest, "safe_builtins", {**safe_builtins, "sorted": sorted, "open": open})
+    namespace = vars(build_sandbox(ohlcv)["__builtins__"])
+    assert "sorted" not in namespace
+    assert "open" not in namespace
+    assert set(namespace) == _DOCUMENTED_BUILTINS
+
+
+def test_a_builtin_restrictedpython_removes_leaves_the_sandbox_and_breaks_nothing(ohlcv, monkeypatch):
+    """The other direction. A name is in the sandbox only if it is on the list AND RestrictedPython
+    still ships it, so an upstream removal narrows the sandbox; it must not make building one fail."""
+    monkeypatch.setattr(backtest, "safe_builtins", {k: v for k, v in safe_builtins.items() if k != "slice"})
+    namespace = vars(build_sandbox(ohlcv)["__builtins__"])
+    assert set(namespace) == _DOCUMENTED_BUILTINS - {"slice"}
+
+
+@pytest.mark.parametrize("name", ["bytes", "reversed", "sorted", "tuple", "zip"])
+def test_the_builtins_that_iterate_in_c_are_not_available_to_a_strategy(ohlcv, name):
+    """A decision, not a guard: the four names RestrictedPython 9.0 removed, and the one it
+    chose not to add, are deliberately not handed back. `_getiter_` is plain `iter` here, so
+    nothing would be bypassed; what is being kept is the sandbox's vocabulary. A refusal, so
+    in-process."""
+    code = compile_restricted(f"x = {name}\n", "<s>", "exec")
+    with pytest.raises(NameError, match=rf"name '{name}' is not defined"):
+        exec(code, build_sandbox(ohlcv.copy()))  # noqa: S102
+
+
+def test_the_declared_restrictedpython_floor_is_9_with_no_ceiling():
+    """`RestrictedPython>=7.0` admitted releases whose own change log names sandbox escapes that
+    later ones closed: `try/except*` (8.0, CVE-2025-22153) and a positional-only parameter
+    shadowing an injected guard such as `_getattr_` (8.3), which is what this sandbox's allowlist
+    is. 9.0 is also the release the frozen list was taken from and the one CI installs. No
+    ceiling, by design: the weekly CI run has to meet each new release."""
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    repo = Path(__file__).resolve().parents[2]
+    dependencies = tomllib.loads((repo / "pyproject.toml").read_text())["project"]["dependencies"]
+    (requirement,) = [r for r in map(Requirement, dependencies) if r.name.lower() == "restrictedpython"]
+    assert not requirement.specifier.contains("8.5"), f"{requirement} admits a release older than 9.0"
+    assert requirement.specifier.contains("9.0")
+    assert requirement.specifier.contains("99.0"), f"{requirement} has a ceiling"
 
 
 # ── The allowlist must not break real strategies ──────────────────────────────

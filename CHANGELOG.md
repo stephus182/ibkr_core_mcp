@@ -443,6 +443,29 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   exits rc 0 and the running instance opens the window, out of the handle's reach).
 
 ### Changed
+- **The backtest sandbox's builtins are a list this project owns, and RestrictedPython's minimum is
+  9.0 (2026-11-13).**
+  - **What a strategy sees:** `sorted`, `zip`, `tuple` and `bytes` are not available, on any
+    install: `NameError: name 'sorted' is not defined`. RestrictedPython 9.0 (2026-11-04) had
+    already removed them, so on a fresh install nothing changes; where an older RestrictedPython
+    was installed they worked until now. `df['close'].sort_values()`, a tuple literal and column
+    arithmetic do the same work.
+  - **Why a list:** the sandbox copied whatever the installed RestrictedPython shipped, 81 names
+    in 7.0, 8.4 and 8.5 and 77 in 9.0, and no test noticed the difference.
+    `backtest._SANDBOX_BUILTIN_NAMES` is 9.0's set, written out. A name RestrictedPython adds no longer reaches strategy code until
+    someone puts it on the list; a name it removes leaves the sandbox; either turns
+    `test_restrictedpython_ships_no_builtin_this_project_has_not_reviewed` red.
+  - **Why 9.0:** `RestrictedPython>=7.0` admitted releases whose own change log names sandbox
+    escapes closed later: `try/except*` (8.0, CVE-2025-22153) and a positional-only parameter
+    shadowing an injected guard such as `_getattr_` (8.3). Installing this release upgrades an
+    older RestrictedPython. There is still no ceiling.
+    Source: https://github.com/zopefoundation/RestrictedPython/blob/9.0/CHANGES.rst
+  - **Why the four are not handed back:** not for RestrictedPython's reason (they iterate in C,
+    past the `_getiter_` guard, which is plain `iter` here), but because strategy code is pandas
+    and numpy expressions, literals and comprehensions; `list`, `min`, `max`, `sum` and
+    `enumerate` were never available either.
+  - **Held by** ten tests in `tests/security/test_sandbox_boundary.py`, four of them red before
+    the change.
 - **CI's test job runs on the weekly schedule too, not only on a push (2026-11-12).** The
   schedule ran the dependency audit alone: the test job carried `if: github.event_name !=
   'schedule'`. So a dependency release that broke the code was seen at the next push to `main` —
@@ -817,8 +840,8 @@ below. The consumer's half — importing the owner, deleting its own copies — 
     child, and it passed because an earlier pandas line of it happened to make numpy's call
     first; pandas 3.1.0 stopped doing that. The strategies the suite runs in the pytest process
     could not show it at all: there the calls had already been made from ordinary frames.
-  - **What changed:** the sandbox's `__builtins__` is a module object whose dict is
-    RestrictedPython's safe builtins, unchanged, and whose class answers `PyImport_Import` and
+  - **What changed:** the sandbox's `__builtins__` is a module object whose dict holds the
+    sandbox's builtins only, and whose class answers `PyImport_Import` and
     nothing else. The answer loads nothing and returns nothing. A strategy's own `import` still
     fails with `ImportError: __import__ not found`. A module C code asks for that the sandbox
     has not loaded is refused in a message that names it.

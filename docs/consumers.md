@@ -20,11 +20,30 @@ that writes `import ...` is refused as before, with `ImportError: __import__ not
 
 **What a host does.** Nothing. No signature, return type or exception type changed.
 
-**What does not change.** What strategy code can reach. `build_sandbox(df)` returns the same
-keys; the value under `"__builtins__"` is now a module object whose dict is RestrictedPython's
-safe builtins, where it used to be that dict itself. A host that read
+**What this fix does not change.** What strategy code can reach (the next entry is a separate
+change that does). `build_sandbox(df)` returns the same keys; the value under
+`"__builtins__"` is now a module object whose dict holds the sandbox's builtins, where it used
+to be RestrictedPython's dict itself. A host that read
 `build_sandbox(df)["__builtins__"]` as a dict would use `vars(...)` of it; ClaudIA does not
 read it.
+
+### Unreleased — backtests: RestrictedPython 9.0 or newer, and four builtins gone from strategy code
+
+**What a host sees.** Installing this release upgrades RestrictedPython to 9.0 or newer where an
+older one is installed. Strategy code can then no longer call `sorted`, `zip`, `tuple` or
+`bytes`: it fails with `Strategy runtime error: NameError: name 'sorted' is not defined`. Where
+RestrictedPython 9.0 was already installed this is not new, because 9.0 removed them itself.
+
+**What a host does.** Nothing in code. If its prompts or examples show strategies that use one of
+the four, replace them: `df['close'].sort_values()` for `sorted`, a tuple literal `(a, b)` for
+`tuple`, column arithmetic or `pd.DataFrame({...})` for `zip`. ClaudIA's tracked files show no
+such strategy.
+
+**Why.** The sandbox's builtins are now a list this package owns
+(`backtest._SANDBOX_BUILTIN_NAMES`), so that a RestrictedPython release can no longer change
+what strategy code may call without a test turning red; and `RestrictedPython>=7.0` admitted
+releases with sandbox escapes that later ones closed. `SECURITY.md` § *Builtins: a frozen list,
+and RestrictedPython's minimum* has both.
 
 ### Unreleased — an option order's dialog shows no total unless the host supplies `_multiplier`
 

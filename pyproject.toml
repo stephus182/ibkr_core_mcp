@@ -32,7 +32,10 @@ dependencies = [
     "pydantic>=2.0",
     "pandas>=2.2",
     "numpy>=1.26",
-    "RestrictedPython>=7.0",  # no ceiling by design — CI prints the resolved version so a breaking release is easy to spot
+    # Floor 9.0 since 2026-11-13: RestrictedPython's own change log names sandbox escapes closed in
+    # 8.0 (CVE-2025-22153) and 8.3, and the sandbox's builtin list is 9.0's (backtest.py). Held by
+    # tests/security/test_sandbox_boundary.py.
+    "RestrictedPython>=9.0",  # no ceiling by design — CI prints the resolved version so a breaking release is easy to spot
     "pyarrow>=16.0",
     "google-api-python-client>=2.130",
     "google-auth-httplib2>=0.2",

@@ -506,6 +506,7 @@ Model-written strategy code runs in a `RestrictedPython` sandbox inside a child 
 |---|---|
 | `import` statements | Refused when the statement runs: a strategy frame's builtins hold no `__import__`, and CPython raises `ImportError: __import__ not found`. `compile_restricted` lets the statement through; it rejects only the name `__import__` written out. This row said "blocked syntactically" until 2026-11-13, which was never the mechanism |
 | `open`, `eval`, `exec`, `compile` | Removed from `__builtins__` |
+| `bytes`, `reversed`, `sorted`, `tuple`, `zip` | Not on the frozen list of builtins (*Builtins: a frozen list* below). RestrictedPython 9.0 removed the four it shipped, and they are deliberately not handed back |
 | Network access (`urllib`, `requests`, `socket`) | Not importable — `__import__` removed |
 | OS access (`os`, `sys`, `subprocess`) | Not importable |
 | Module mutation (`pd.read_parquet = ...`) | Custom `_write_guard` blocks writes to `ModuleType` and `SimpleNamespace` |
@@ -566,7 +567,8 @@ strategy run in the pytest process finds those calls already made from an ordina
 The sandbox's `__builtins__` is now a module object, `backtest._SandboxBuiltins`:
 
 - Its **dict** is what a strategy frame resolves builtins in and what a strategy's own `import`
-  statement searches. It is a copy of RestrictedPython's `safe_builtins` with nothing added, so
+  statement searches. It holds the builtins of the frozen list below, each RestrictedPython's own
+  object, with nothing added, so
   `import os` fails exactly as before.
 - Its **class** carries `__import__`. For a module-valued `__builtins__`, `PyImport_Import` reads
   `__import__` as an attribute of the module, not as an item of its dict. The function behind it,
@@ -582,8 +584,44 @@ What this does not change. Strategy code cannot name `__builtins__` or `__import
 attribute (`safer_getattr`), and is handed no module by the service. Modules were already being
 loaded while strategies ran, by pandas' and pyarrow's own lazy imports in their own frames; the
 service loads none. `tests/security/test_sandbox_cold_path.py` runs one statement of each kind
-in a fresh child, sweeps the numpy vocabulary in one, and holds the builtins dict to
-RestrictedPython's set.
+in a fresh child, sweeps the numpy vocabulary in one, and holds every builtin to a name and an
+object of RestrictedPython's set.
+
+### Builtins: a frozen list, and RestrictedPython's minimum (2026-11-13)
+
+The builtins a strategy can name are a list this project owns, `backtest._SANDBOX_BUILTIN_NAMES`:
+77 names, the set RestrictedPython 9.0 ships. RestrictedPython supplies the objects (its guarded
+`setattr`, `delattr` and `_getattr_`, Python's own for the rest); the list decides which names
+enter the sandbox. A name is in a strategy's builtins only if it is on the list **and**
+RestrictedPython ships it.
+
+Until 2026-11-13 the sandbox copied whatever the installed RestrictedPython shipped, and that set
+moved while nothing here watched it: `Ellipsis` came and `ExceptionGroup` went between 7.0 and
+8.4, and 9.0 removed `bytes`, `sorted`, `tuple` and `zip`. One release of this package gave
+strategy code 81 builtins where RestrictedPython 8.4 was installed and 77 where 9.0 was. Now:
+
+- A name RestrictedPython **adds** does not reach strategy code. It is filtered out until
+  someone puts it on the list.
+- A name RestrictedPython **removes** leaves the sandbox with it.
+- Either way `test_restrictedpython_ships_no_builtin_this_project_has_not_reviewed` turns red, on
+  the weekly CI run at the latest, and a decision is owed: hand the name to model-written code,
+  or record it in the test file as reviewed and withheld.
+
+`bytes`, `reversed`, `sorted`, `tuple` and `zip` are deliberately not on the list.
+RestrictedPython dropped them because they iterate their argument in C, past the `_getiter_`
+guard. Here `_getiter_` is plain `iter`, so that is not this sandbox's reason. Its reason is
+the vocabulary: strategy code is pandas and numpy expressions, literals and comprehensions,
+and `list`, `min`, `max`, `sum` and `enumerate` have never been in it either. Widening it is
+one deliberate decision, not one name at a time.
+
+**The minimum is `RestrictedPython>=9.0`, with no ceiling.** The earlier `>=7.0` admitted
+releases whose own change log names sandbox escapes that later ones closed: `try/except*`
+(closed in 8.0, CVE-2025-22153), and a positional-only parameter that shadows an injected guard
+such as `_getattr_` or `_write_` (closed in 8.3), the two guards this sandbox injects. 8.4
+closed `string.Formatter` traversal through `safer_getattr` (CVE-2026-76825), the function the
+attribute hook ends in. 9.0 is also the release the list was taken from and the one CI installs.
+There is no ceiling, so that the weekly CI run meets each new release.
+Source: https://github.com/zopefoundation/RestrictedPython/blob/9.0/CHANGES.rst
 
 ### Resource limits
 
@@ -679,8 +717,8 @@ the rest from the 2026-09-13 audit:
 | `test_order_write_boundary.py` | The three order-write endpoints are built only inside the gated methods; each runs a gate before its first network call; the model layer never names an order write; `OrderWriteAuthorization` is minted in one function; the body Gate 2 shows is the body sent |
 | `test_preview_is_not_execution.py` | `/orders/whatif` is built in exactly one place (`_whatif`); every preview entry point — `get_order_preview` and `get_bracket_preview` — runs no gate; a bracket with an unlinked child is refused; `preview_order` touches no other order method |
 | `test_tool_capabilities.py` | Every tool declares capabilities; none declares `ORDER_EXECUTION`; `READ_ONLY` never shares a declaration with a mutating capability; every sink a handler touches is declared |
-| `test_sandbox_boundary.py` | Strategy code cannot read, write or spawn — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals and safe namespaces are frozen sets |
-| `test_sandbox_cold_path.py` | What the sandbox allows works in the process a strategy really runs in: one statement per kind of C-level import runs in a freshly spawned child, and so does the numpy vocabulary, generated from the allowlists; numpy's own error text reaches the model; an `import` statement is still refused, in five forms; strategy code cannot name its way to the builtins object, in five forms, and the attribute guard refuses the service on it; the builtins a strategy frame resolves are RestrictedPython's set and nothing else; the import service loads nothing, returns nothing and refuses an unloaded module by name |
+| `test_sandbox_boundary.py` | Strategy code cannot read, write or spawn — by attribute, by string name, by class attribute or by list-like spec; column labels and named aggregation still work; the error channel is one bounded line; sandbox globals, safe namespaces and the builtins a strategy can name are frozen sets; a builtin RestrictedPython adds does not reach a strategy, one it removes leaves, and either turns a test red; RestrictedPython's declared minimum is 9.0, with no ceiling |
+| `test_sandbox_cold_path.py` | What the sandbox allows works in the process a strategy really runs in: one statement per kind of C-level import runs in a freshly spawned child, and so does the numpy vocabulary, generated from the allowlists; numpy's own error text reaches the model; an `import` statement is still refused, in five forms; strategy code cannot name its way to the builtins object, in five forms, and the attribute guard refuses the service on it; every builtin a strategy frame resolves is a name and an object of RestrictedPython's set; the import service loads nothing, returns nothing and refuses an unloaded module by name |
 | `test_ssrf_boundary.py` | A twenty-row table of local/reserved address forms is blocked; every browser- or seeder-reaching handler validates first; both crawler entry points install the Playwright guard and `search_site` installs the httpx hook |
 | `test_error_redaction.py` | Secret-shaped material (20 forms — userinfo, OAuth parameters, the quoted JSON forms, and those forms severed before the closing quote) never survives `redact_error`; no `except … as exc` in the model layer is interpolated, `%`/`.format`ted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw |
 | `test_no_live_io.py` | Name resolution and TCP are blocked in unit tests; no variable the package reads (derived from source) is visible; `Config()` loads no `.env`; `load_dotenv` appears nowhere in the package or `scripts/`, `dotenv_values` only in `config.py` (invariant 12); `keyring` is imported only by `secret_store.py`, and under pytest its backend is the null one from `pytest_configure` on (door 7, 2026-11-09) |
@@ -1360,7 +1398,7 @@ The following rules are enforced at PR review. Any PR that violates them will be
 6. **Never pass unsanitized LLM input to URLs or SQL** — validate with `_validate_account_id` or equivalent before use.
 7. **Never use string concatenation in SQL queries** — all user-supplied values must be passed as bind parameters.
 8. **Never use stdlib `xml.etree.ElementTree` for external XML** — use `defusedxml.ElementTree`.
-9. **Never widen the sandbox by accident** — a name added to `backtest._PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS`, or an object added to `build_sandbox()`, is a security change: check it accepts no path, buffer, callable or string resolved as a name, and update the frozen sets in `tests/security/test_sandbox_boundary.py` in the same commit. The same holds for a name put in the dict of the sandbox's builtins and for a module added to `backtest._PRELOADED_FOR_C_CODE`, both pinned in `tests/security/test_sandbox_cold_path.py`; and a test of what a strategy *can* do runs in a fresh child, not in the pytest process.
+9. **Never widen the sandbox by accident** — a name added to `backtest._PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS`, or an object added to `build_sandbox()`, is a security change: check it accepts no path, buffer, callable or string resolved as a name, and update the frozen sets in `tests/security/test_sandbox_boundary.py` in the same commit. The same holds for a name added to `backtest._SANDBOX_BUILTIN_NAMES`, pinned in `tests/security/test_sandbox_boundary.py`, for a module added to `backtest._PRELOADED_FOR_C_CODE`, pinned in `tests/security/test_sandbox_cold_path.py`, and for lowering `RestrictedPython>=9.0` in `pyproject.toml`; and a test of what a strategy *can* do runs in a fresh child, not in the pytest process.
 10. **Never spawn a process outside `order_confirm`, `gateway/manager` and `backtest`** without adding the module to `tests/security/test_subprocess_boundary.py` with the reason; never `shell=True`.
 11. **Never let a fetch reach a model-supplied host before `_validate_public_url`**, and install `_install_ssrf_guard` on every browser this package opens.
 12. **Never register the MCP call handler with `validate_input=False`**, and add every new server-local tool to `_ALL_TOOL_DEFS` as well as to `_dispatch` — the SDK validates only tools it has listed. Give any future tool that returns structured content an `outputSchema`. `tests/security/test_tool_input_validation.py` holds the first two; the third is a rule until a structured tool exists.

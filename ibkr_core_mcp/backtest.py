@@ -382,7 +382,7 @@ def _terminate_then_kill(process: multiprocessing.process.BaseProcess) -> None:
 #
 # 1. When `__builtins__` is a MODULE, CPython reads `__import__` as an ATTRIBUTE of it,
 #    while a frame takes its builtins from the module's DICT (`_PyEval_BuiltinsFromGlobals`,
-#    Objects/frameobject.c). So a module object whose dict is the safe builtins, unchanged,
+#    Objects/frameobject.c). So a module object whose dict holds the sandbox's builtins only,
 #    and whose CLASS carries `__import__` is seen by C code and by nothing else: names in
 #    strategy code, and the strategy's own `import` statement, resolve in the dict and
 #    find no `__import__`, exactly as before.
@@ -425,11 +425,41 @@ def _serve_c_import(name: str, *_call_args: object) -> None:
         )
 
 
+# The builtins strategy code may name (2026-11-13). RestrictedPython supplies the OBJECTS: its
+# guarded `setattr`, `delattr` and `_getattr_`, and Python's own for the rest. This list
+# decides which NAMES enter the sandbox. Until it existed the sandbox copied whatever the
+# installed RestrictedPython shipped: 81 names in 7.0, 8.4 and 8.5, and 77 in 9.0, which took
+# `bytes`, `sorted`, `tuple` and `zip` away without anything here noticing. Now a name
+# RestrictedPython adds stays out until someone puts it on this list, and a name it removes
+# leaves the sandbox with it; either way `tests/security/test_sandbox_boundary.py` turns red
+# and a decision is owed. The list is RestrictedPython 9.0's set, written out. `bytes`,
+# `reversed`, `sorted`, `tuple` and `zip` are deliberately not on it.
+# https://github.com/zopefoundation/RestrictedPython/blob/9.0/CHANGES.rst
+_SANDBOX_BUILTIN_NAMES: frozenset[str] = frozenset(
+    {
+        "None", "True", "False", "Ellipsis", "__build_class__",
+        "abs", "bool", "callable", "chr", "complex", "divmod", "float", "hash", "hex", "id", "int",
+        "isinstance", "issubclass", "len", "oct", "ord", "pow", "range", "repr", "round", "slice", "str",
+        "_getattr_", "delattr", "setattr",
+        "ArithmeticError", "AssertionError", "AttributeError", "BaseException", "BufferError",
+        "BytesWarning", "DeprecationWarning", "EOFError", "EnvironmentError", "Exception",
+        "FloatingPointError", "FutureWarning", "GeneratorExit", "IOError", "ImportError",
+        "ImportWarning", "IndentationError", "IndexError", "KeyError", "KeyboardInterrupt",
+        "LookupError", "MemoryError", "NameError", "NotImplementedError", "OSError", "OverflowError",
+        "PendingDeprecationWarning", "ReferenceError", "RuntimeError", "RuntimeWarning",
+        "StopIteration", "SyntaxError", "SyntaxWarning", "SystemError", "SystemExit", "TabError",
+        "TypeError", "UnboundLocalError", "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError",
+        "UnicodeTranslateError", "UnicodeWarning", "UserWarning", "ValueError", "Warning",
+        "ZeroDivisionError",
+    }
+)  # fmt: skip
+
+
 class _SandboxBuiltins(types.ModuleType):
     """The sandbox's `__builtins__`: a module object, so that C code can ask it for imports.
 
-    Its dict is what strategy frames use as their builtins and must stay RestrictedPython's
-    safe set and nothing else. `__import__` is a CLASS attribute on purpose: an instance
+    Its dict is what strategy frames use as their builtins and must hold the builtins of
+    `_SANDBOX_BUILTIN_NAMES` and nothing else. `__import__` is a CLASS attribute on purpose: an instance
     attribute would live in that dict, where the strategy's own `import` statement looks.
     """
 
@@ -437,11 +467,15 @@ class _SandboxBuiltins(types.ModuleType):
 
 
 def _sandbox_builtins() -> types.ModuleType:
-    """A fresh builtins module for one sandbox, holding a copy of the safe builtins."""
+    """A fresh builtins module for one sandbox, holding the builtins of the frozen list.
+
+    A name is in it only if it is on `_SANDBOX_BUILTIN_NAMES` AND RestrictedPython ships it.
+    The object is always RestrictedPython's.
+    """
     module = _SandboxBuiltins("backtest_sandbox_builtins")
     namespace = vars(module)
     namespace.clear()  # drop __name__, __doc__ and the rest: the dict is the builtins, exactly
-    namespace.update(safe_builtins)
+    namespace.update({name: value for name, value in safe_builtins.items() if name in _SANDBOX_BUILTIN_NAMES})
     return module
 
 
@@ -454,8 +488,8 @@ def build_sandbox(df: pd.DataFrame) -> dict[str, Any]:
     same commit (docs/audits/security-architecture-audit-2026-09-13.md, B4).
 
     `__builtins__` is a module object rather than RestrictedPython's dict (see
-    `_SandboxBuiltins`). The builtins strategy code can name are the same set;
-    `tests/security/test_sandbox_cold_path.py` holds that.
+    `_SandboxBuiltins`). The builtins strategy code can name are `_SANDBOX_BUILTIN_NAMES`,
+    frozen one level below this key set and held by the same test file.
     """
     return {
         **safe_globals,
@@ -551,11 +585,11 @@ def run_backtest(
             "Check the symbol, timeframe, period and end date passed to fetch_market_data."
         )
 
-    # The sandbox's builtins are RestrictedPython's safe_builtins, which exclude
-    # __import__, open, eval, exec, compile, print and all introspection attrs.
-    # build_sandbox hands them over as the dict of a module object (_SandboxBuiltins)
-    # and does NOT narrow them further — the tiny limited_builtins dict would strip
-    # most safe builtins and make strategies unable to use isinstance, bool, etc.
+    # The sandbox's builtins are the names of _SANDBOX_BUILTIN_NAMES, each RestrictedPython's
+    # own object: no __import__, open, eval, exec, compile or print, and no introspection attrs.
+    # build_sandbox hands them over as the dict of a module object (_SandboxBuiltins). The list
+    # is RestrictedPython 9.0's whole safe set on purpose — the tiny limited_builtins dict would
+    # strip most safe builtins and make strategies unable to use isinstance, bool, etc.
     ctx = multiprocessing.get_context("spawn")
     reader, writer = ctx.Pipe(duplex=False)
     process = ctx.Process(target=_execute_in_subprocess, args=(code, df, writer))
