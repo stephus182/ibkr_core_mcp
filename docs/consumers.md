@@ -10,6 +10,22 @@
 
 ## Changes consumers should know about
 
+### Unreleased — backtests: strategies that call numpy array methods now run
+
+**What a host sees.** `run_backtest` (and the `run_backtest` tool) used to fail with
+`Strategy runtime error: KeyError: '__import__'` on strategies that had imported nothing: any
+that took `.values` or `.to_numpy()` and called `.max()`, `.mean()`, `.std()` and the like on
+the array, formatted a date with `strftime`, or printed an array. They now run. A strategy
+that writes `import ...` is refused as before, with `ImportError: __import__ not found`.
+
+**What a host does.** Nothing. No signature, return type or exception type changed.
+
+**What does not change.** What strategy code can reach. `build_sandbox(df)` returns the same
+keys; the value under `"__builtins__"` is now a module object whose dict is RestrictedPython's
+safe builtins, where it used to be that dict itself. A host that read
+`build_sandbox(df)["__builtins__"]` as a dict would use `vars(...)` of it; ClaudIA does not
+read it.
+
 ### Unreleased — an option order's dialog shows no total unless the host supplies `_multiplier`
 
 **What a host sees.** A Gate 2 dialog for an order whose `secType` names an option (`OPT`,

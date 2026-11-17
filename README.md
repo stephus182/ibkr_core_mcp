@@ -481,7 +481,7 @@ Both gates are part of `ibkr_core_mcp` itself. Downstream consumers such as [Cla
 ### Machine-checked, not just documented
 
 Since the 2026-09-13 security architecture audit, the properties above are enforced by tests
-that read the source, not only by convention (`pytest -m security`, ~10 s, part of every unit
+that read the source, not only by convention (`pytest -m security`, ~20 s, part of every unit
 run and of CI):
 
 - the three order-write endpoints are built only inside the seven functions of `GATED_OWNERS` — the six public writes plus the private `_resolve_one_reply` that answers one chained precaution reply — each runs a gate before its first network call, and the tool layer never references an order write;
@@ -620,7 +620,7 @@ pytest -m "not integration"
 # All tests (requires running IBKR gateway + credentials)
 pytest
 
-# Security invariants only (~10 s)
+# Security invariants only (~20 s)
 pytest -m security
 
 # Lint + type check

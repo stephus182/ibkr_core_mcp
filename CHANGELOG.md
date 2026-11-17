@@ -797,6 +797,36 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **The backtest sandbox no longer fails on allowed operations whose C code asks for an import
+  (checklist B2a; found 2026-11-12 by CI's first run in seven weeks; both published releases,
+  2.0.1 and 2.1.0, have it).**
+  - **What failed:** in the freshly spawned child every backtest runs in, `arr.max()` and the
+    other array reductions (`min`, `mean`, `std`, `var`, `prod`, `any`, `all`, `clip`; `sum` on
+    Linux), `str(arr)` and f-strings of an array, `str(arr.dtype)`, `ts.strftime(...)` and
+    `f'{ts:%Y}'`, an array times a `Timedelta`, a strategy `lambda` called by `rolling.apply`,
+    large-integer division on Python 3.12+, and any numpy floating-point warning on Python
+    3.13 raised `KeyError: '__import__'` (or numpy's `Unable to configure default
+    ndarray.__str__`); `np.maximum.outer` killed the child with SIGSEGV; and a genuine numpy
+    `TypeError` was replaced by the `KeyError`. The same computations written with `np.mean(...)`
+    or kept in pandas worked. It failed closed.
+  - **Why:** CPython's `PyImport_Import` looks `__import__` up in the builtins of the innermost
+    Python frame. C code called directly by a strategy has the strategy's frame above it, and
+    the sandbox's builtins hold no `__import__` on purpose.
+    Source: https://github.com/python/cpython/blob/v3.11.18/Python/import.c#L1988-L2051
+  - **Why no test saw it:** one strategy in the suite called a method on a numpy array in a
+    child, and it passed because an earlier pandas line of it happened to make numpy's call
+    first; pandas 3.1.0 stopped doing that. The strategies the suite runs in the pytest process
+    could not show it at all: there the calls had already been made from ordinary frames.
+  - **What changed:** the sandbox's `__builtins__` is a module object whose dict is
+    RestrictedPython's safe builtins, unchanged, and whose class answers `PyImport_Import` and
+    nothing else. The answer loads nothing and returns nothing. A strategy's own `import` still
+    fails with `ImportError: __import__ not found`. A module C code asks for that the sandbox
+    has not loaded is refused in a message that names it.
+  - **Held by** `tests/security/test_sandbox_cold_path.py` (37 tests): each kind of operation in
+    a fresh child, the numpy vocabulary generated from the allowlists in one, the refusals, and that
+    strategy code cannot reach the object that carries the service.
+  - **Documents corrected on the way:** `SECURITY.md` and `docs/security-architecture.md` § 6.3
+    said `import` is blocked by the compiler. It is refused when the statement runs.
 - **The Gate 2 dialogs no longer print price × quantity as an option's total (found 2026-11-12,
   while the README's order paragraph was being checked against the code).**
   - **What it printed:** for ten option contracts at 2.50 USD, `Total (est.): 25.00 USD`. IBKR's

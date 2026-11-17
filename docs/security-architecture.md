@@ -188,7 +188,7 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 | 1 | No order reaches IBKR except through the seven functions in `GATED_OWNERS` — the six public `IBKRClient` writes plus the private `_resolve_one_reply` — and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before the first network call, checked **transitively** so a helper one call deeper is seen, with two named exemptions, each a GET of the operator's own data — `_ensure_accounts_initialized` (IBKR's documented order prerequisite; the account list) and `get_order_status` (the attach write's read of its parent before Gate 1, 2026-10-17; a parent that is not working is refused before any fingerprint); `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
 | 2 | Preview is not execution | Every preview posts to `/orders/whatif` through `_whatif` and calls no gate | `test_preview_is_not_execution.py`: path asserted; literal built once (**still one builder after `get_bracket_preview` was added 2026-09-20** — the set stayed size 1 because both entry points delegate); both entry points asserted gate-free; `preview_order` touches only `get_order_preview` | None foreseeable |
 | 3 | Every tool declares its capabilities; `ORDER_EXECUTION` has no legal spelling | `capabilities` on all 46 definitions from a vocabulary that omits `ORDER_EXECUTION`; `tools` strips the field; the MCP server derives `ToolAnnotations` from the same set | `test_tool_capabilities.py`: declared, known, non-empty; the forbidden name absent from the vocabulary; `READ_ONLY` exclusive; dispatch dict and definitions name the same tools; every sink the handler's source touches is declared; annotations derived | New tool: declare; new sink in an existing handler: add to the declaration **and** the mutating-tool list in the test |
-| 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open/import; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
+| 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces. `test_sandbox_cold_path.py`: every kind of allowed operation in a fresh child; five `import` forms refused; the builtins dict is RestrictedPython's set | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
 | 5 | Every externally derived URL is checked before the fetch and on every request afterwards | `_validate_public_url` (layer 1: scheme, host, literal parsing with `inet_aton`, DNS); `_reject_private_requests` (layer 2, Playwright route); `_reject_private_httpx_request` (layer 2 for the seeder) | `test_ssrf_boundary.py`: 20-row literal table; validate-before-reach ordering in every handler; both crawler entry points install the Playwright guard; `search_site` installs the httpx hook | New fetch tool: call `_validate_public_url` before constructing anything; if it is not a browser, say in its docstring that it has layer 1 only |
 | 6 | Error text reaching the model or a log passes one redaction function | `_safe_error` (type → sentence) for `execute()`; `redact_error` (detail, scrubbed by shape, one line) everywhere else; in the gateway package every exception that becomes a reading or a log line passes it (F45 condition G, 2026-11-09) | `test_error_redaction.py`: 20 secret shapes never survive — including the quoted `{"identifier": "value"}` forms a JSON error body actually has, missed until SEC-06 (2026-09-17), and the same forms severed before their closing quote by a 400-character body preview, missed until SEC-R8 the same day; the figure read 14 against a real 13 before that, an off-by-one nothing checked; no `except … as exc` in the model layer is interpolated, formatted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw — nor in `gateway/preflight.py`, `gateway/manager.py` or `gateway/__main__.py` (F45) | Never interpolate `exc`; wrap it |
 | 7 | Unit tests cannot open sockets, resolve names, see credentials, or start a desktop command (`docker`, `open`, `caffeinate`), or reach the operator's keychain | pytest-socket's own `disable_socket`/`enable_socket` markers applied at collection (so the block lands before any fixture, module-scoped included) plus a session block for import time; `_no_real_secrets` cuts the loader's default search (`find_dotenv` → `""`), keeps `load_dotenv` a no-op for any third party and removes every package-prefixed variable; an audit hook refuses the three commands by name from `pytest_configure` on (door 6, 2026-11-09), integration tests exempt from setup to teardown; `keyring`'s null backend set there too (door 7, 2026-11-09) | `test_no_live_io.py` (the variable set is derived from source; `keyring` imported in `secret_store.py` alone, the backend null under pytest); `test_conftest_hygiene.py` for the exemption list; `test_no_desktop_reached.py` (the door, every test safe on a broken guard) | A test that needs DNS goes in `_REAL_DNS_EXEMPT_TESTS` with the reason; one that needs a secret sets a fake with `monkeypatch.setenv`; one that drives the manager patches `subprocess.run`/`Popen` by name, as every manager test does |
@@ -328,8 +328,13 @@ opposite-side order can open a position rather than close one.
 
 Strategy code is model-written, so it is treated as hostile. Four layers:
 
-1. **`compile_restricted`** (RestrictedPython): no `import`, no `_`-prefixed names, no
-   `open`/`eval`/`exec` builtins, guarded attribute access.
+1. **`compile_restricted`** (RestrictedPython) and the builtins it runs on: no `_`-prefixed
+   names, guarded attribute access, and no `open`/`eval`/`exec`/`__import__` builtin — so an
+   `import` statement compiles and fails when it runs (this line said "no `import`" under
+   the compiler until 2026-11-13). The builtins are the dict of a module object,
+   `_SandboxBuiltins`, whose class answers the imports C code makes underneath a strategy
+   and nothing else: it loads nothing and returns nothing (SECURITY.md § C-level imports
+   underneath strategy code).
 2. **Attribute allowlist** (`backtest._sandboxed_getattr`): on any pandas or numpy object,
    only the names in `_PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS` (and, for ufuncs,
    `_UFUNC_ALLOWED_ATTRS`) resolve; a DataFrame column label passes as data when no method
@@ -354,7 +359,7 @@ flowchart TB
     classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
 
     CODE["Model-written strategy code<br/>refused above 4,096 characters"]
-    CR["Layer 1 · compile_restricted<br/>no import, no _-prefixed name,<br/>no open / eval / exec builtin,<br/>attribute access routed through a guard"]
+    CR["Layer 1 · compile_restricted<br/>no _-prefixed name,<br/>attribute access routed through a guard"]
     SPAWN["Layer 3 · multiprocessing spawn"]
     CODE --> CR
     CR -. "BacktestSyntaxError" .-> ERR
@@ -362,7 +367,7 @@ flowchart TB
 
     subgraph CHILD["The child — its own interpreter, the operator's uid, no shared memory"]
         direction TB
-        NS["build_sandbox() — a frozen namespace.<br/>pd.DataFrame and pd.Series are constructor<br/>functions, so no class, and therefore no<br/>unbound method, is ever reachable"]
+        NS["build_sandbox() — a frozen namespace.<br/>No open / eval / exec / __import__ builtin:<br/>an import statement fails when it runs.<br/>pd.DataFrame and pd.Series are constructor<br/>functions, so no class, and therefore no<br/>unbound method, is ever reachable"]
         GA["Layer 2 · _sandboxed_getattr<br/>_PANDAS_ALLOWED_ATTRS · _NUMPY_ALLOWED_ATTRS ·<br/>_UFUNC_ALLOWED_ATTRS. A column label passes as<br/>data when no method shadows it. The same list<br/>faces the string function spec of apply / agg /<br/>aggregate / transform, in any list-like shape,<br/>and the function half of every named aggregation"]
         EX["exec"]
         NS --> EX
@@ -632,6 +637,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-13 | Semgrep not added | Every uncovered class is a 30-line `ast` test with zero noise and no new tool | External contributors, or a second HTTP client |
 | 2026-09-13 | Dependabot alerts kept; no `dependabot.yml` version-update PRs | Floors are unpinned, so update PRs would be churn; alerts cost nothing | — |
 | 2026-09-13 | Sandbox exposes constructor functions, never classes | A class hands out unbound methods whose first argument is the object; the string-function guard cannot see past it — the fresh-eye review wrote four files that way | Never; `isinstance(x, pd.DataFrame)` is the one idiom lost, and strategies do not need it |
+| 2026-11-13 | The sandbox answers C-level imports through a module-valued `__builtins__`; it neither warms numpy's caches nor wraps calls | Measured: a warm-up cannot satisfy the imports CPython makes on every call (`strftime`, every C-level warning on 3.13), and a wrapper cannot reach operators or formatting. The service loads nothing and returns nothing, and a strategy's own `import` still fails in the dict | CPython stops reading `__import__` as an attribute of a module-valued `__builtins__`, or stops taking a frame's builtins from its dict — `test_sandbox_cold_path.py` goes red on the first run |
 | 2026-09-13 | `ORDER_EXECUTION` removed from the capability vocabulary | "No tool declares it" was a test asserting an empty set; an unspellable capability fails by construction | Never |
 | 2026-09-13 | Test isolation on pytest-socket's own markers, applied at collection | A session block plus a per-test fixture left module-scoped live fixtures blocked (silent skips) and unit-scope fixtures uncovered; the plugin's setup hook runs before every fixture | — |
 | 2026-09-13 | The seeder gets an httpx request hook rather than "documented as layer 1 only" | The seeder accepts a client and httpx runs hooks per request including redirects — the browser's layer 2 in httpx form, for one function | — |
@@ -730,7 +736,9 @@ form; constants or stdin, never a model-derived argument; never `shell=True`.
 
 **Expose something new to strategy code.** Add it to `build_sandbox()`, to the frozen set in
 `test_sandbox_boundary.py`, and — if it is a pandas/numpy name — to the allowlist after
-checking it accepts no path, buffer, callable or string that is resolved as a name.
+checking it accepts no path, buffer, callable or string that is resolved as a name. Test what
+it *can* do in a fresh child (`run_backtest`), never in the pytest process, which has already
+run everything once: `tests/security/test_sandbox_cold_path.py` says why.
 
 **Change a gate.** Read CLAUDE.md § Security and SECURITY.md § Two-Gate System first; the
 policy (`LAPolicyDeviceOwnerAuthentication`, once per write, dialog per reply) is deliberate.

@@ -91,7 +91,7 @@ pytest -m orders                                         # one domain, repo-wide
 pytest tests/claude_tools/test_tool_descriptions.py      # schema/description honesty only
 
 # Security regression suite — the thirteen properties of SECURITY.md § Security Regression Suite,
-# each read from the source or driven with canaries; ~10 s. Part of the unit run and of CI.
+# each read from the source or driven with canaries; ~20 s. Part of the unit run and of CI.
 pytest -m security
 
 # Web tools — a LIVE run is mandatory before calling any scraper change done.

@@ -59,7 +59,10 @@ def _blocked(code: str, ohlcv: pd.DataFrame) -> str:
 def _blocked_inline(code: str, ohlcv: pd.DataFrame) -> str:
     """Run `code` in-process against `build_sandbox` — the same compile, the same hooks, no
     child process. The allowlist decision is made by `_getattr_`, which is identical here;
-    ~1 ms instead of ~350 ms of spawn. `_blocked` keeps a few probes end to end."""
+    ~1 ms instead of ~350 ms of spawn. `_blocked` keeps a few probes end to end.
+
+    For REFUSALS only. What a strategy CAN do must be tested in a fresh child: this process
+    has already run everything once (`tests/security/test_sandbox_cold_path.py` says why)."""
     from RestrictedPython import compile_restricted
 
     with pytest.raises(Exception) as info:  # the sandbox raises AttributeError or TypeError by design
@@ -266,7 +269,11 @@ def test_safe_numpy_namespace_has_no_io_or_loading_functions():
 
 def test_ordinary_indicator_strategies_still_run(ohlcv):
     """Guard against the allowlist being tightened past what documented strategies use:
-    rolling/ewm/shift/diff/clip/where/loc/astype/cumsum/np.where/pct_change/std/max/min."""
+    rolling/ewm/shift/diff/clip/where/loc/astype/cumsum/np.where/pct_change/std/max/min.
+
+    Its last line, `arr.max()`, is what CI failed on, on 2026-11-12. Until pandas 3.1.0 it passed
+    only because line 12 made pandas call `ndarray.max()` first. One statement per child is in
+    `test_sandbox_cold_path.py`; this test stays as the many-lines case."""
     code = """
 c = df['close']
 sma = c.rolling(5).mean()
