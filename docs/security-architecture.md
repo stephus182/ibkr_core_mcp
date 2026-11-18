@@ -344,13 +344,13 @@ Strategy code is model-written, so it is treated as hostile. Four layers:
 2. **Attribute allowlist** (`backtest._sandboxed_getattr`): on any pandas or numpy object,
    only the names in `_PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS` (and, for ufuncs,
    `_UFUNC_ALLOWED_ATTRS`) resolve; a DataFrame column label passes as data when no method
-   shadows it. `pd.DataFrame`/`pd.Series` are constructor *functions*, so no class — and no
-   unbound method — is ever reachable. The positional function spec of `apply`/`agg`/
-   `aggregate`/`transform`, whatever its list-like shape, and the function half of every
-   named-aggregation keyword face the same list, because pandas resolves those names with
+   shadows it. `pd.DataFrame`/`pd.Series` are constructor *functions*, not the classes, so no
+   unbound method of either is handed to strategy code. The positional function spec of
+   `apply`/`agg`/`aggregate`/`transform`, whatever its list-like shape, and the function half of
+   every named-aggregation keyword face the same list, because pandas resolves those names with
    its own `getattr`. This replaced a two-name denylist after the 2026-09-13 audit showed
    `df.style.from_custom_template` reading any file and `df.to_csv` writing any path; the
-   class-free namespace and the list-like recursion came from the fresh-eye review the same
+   constructor functions and the list-like recursion came from the fresh-eye review the same
    day, which reached the writer through `pd.Series.apply(series, 'to_csv', …)`.
 3. **Process isolation**: `multiprocessing` spawn child, `Pipe` result, daemon watchdog that
    `SIGTERM`s at 10 s and `SIGKILL`s 1 s later if the child has not exited, 4,096-char code limit.
@@ -372,7 +372,7 @@ flowchart TB
         direction TB
         IM["Import check<br/>any import statement is refused"]
         CR["Layer 1 · compile_restricted<br/>no _-prefixed names, guarded attributes"]
-        NS["build_sandbox() · a frozen namespace<br/>no open / eval / exec / __import__,<br/>no class reachable"]
+        NS["build_sandbox() · a frozen namespace<br/>no open / eval / exec / __import__,<br/>pd.DataFrame / pd.Series<br/>are functions, not classes"]
         GA["Layer 2 · _sandboxed_getattr<br/>pandas and numpy attributes<br/>checked against an allowlist"]
         EX["exec"]
         IM --> CR
@@ -645,7 +645,7 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-13 | CodeQL default setup **kept, not extended, not made a gate** | Free on a public repo; one real catch (workflow permissions) and one false positive in three months; structurally blind to tool inputs; `security-extended` would add low-precision noise (`verify=False`, `assert`) already reasoned at the site | Alerts start recurring on the same dismissed pattern, or the repo gains web request handlers CodeQL can model |
 | 2026-09-13 | Semgrep not added | Every uncovered class is a 30-line `ast` test with zero noise and no new tool | External contributors, or a second HTTP client |
 | 2026-09-13 | Dependabot alerts kept; no `dependabot.yml` version-update PRs | Floors are unpinned, so update PRs would be churn; alerts cost nothing | — |
-| 2026-09-13 | Sandbox exposes constructor functions, never classes | A class hands out unbound methods whose first argument is the object; the string-function guard cannot see past it — the fresh-eye review wrote four files that way | Never; `isinstance(x, pd.DataFrame)` is the one idiom lost, and strategies do not need it |
+| 2026-09-13 | Sandbox exposes `pd.DataFrame`/`pd.Series` as constructor functions, never as classes | A class hands out unbound methods whose first argument is the object; the string-function guard cannot see past it — the fresh-eye review wrote four files that way | Never; `isinstance(x, pd.DataFrame)` is the one idiom lost, and strategies do not need it |
 | 2026-11-17 | The sandbox answers C-level imports through a module-valued `__builtins__`; it neither warms numpy's caches nor wraps calls | Measured: a warm-up cannot satisfy the imports CPython makes on every call (`strftime`, every C-level warning on 3.13), and a wrapper cannot reach operators or formatting. The service loads nothing and returns nothing, and a strategy's own `import` still fails in the dict | CPython stops reading `__import__` as an attribute of a module-valued `__builtins__`, or stops taking a frame's builtins from its dict — `test_sandbox_cold_path.py` goes red on the first run |
 | 2026-11-17 | The builtins strategy code can name are a frozen list the project owns (`_SANDBOX_BUILTIN_NAMES`); `RestrictedPython>=9.0` with no ceiling; `bytes`, `reversed`, `sorted`, `tuple` and `zip` are not handed back | Measured: the set RestrictedPython ships moved in both directions inside the range `>=7.0` allowed, 9.0's removal of four names reached no test, and 7.0 still compiles `try/except*` and a positional-only parameter named `_getattr_`, which 8.0 and 8.3 closed as sandbox escapes. The four names bypass no guard here (`_getiter_` is `iter`); they stay out because the sandbox's vocabulary is pandas, numpy and literals | `test_restrictedpython_ships_no_builtin_this_project_has_not_reviewed` goes red (a release added or removed a builtin), or strategies are to get a wider vocabulary, as one decision |
 | 2026-11-17 | A strategy that holds an `import` statement is refused before it is compiled, in a sentence; the run-time refusal stays underneath | The rule was already what the model is told (`no imports or I/O`), and a strategy that broke it learned so only when the statement ran, in CPython's words (`ImportError: __import__ not found`). The strategy is refused either way, and OWASP's MCP guide § 3 asks no more of an input that does not match; refusing it before anything of it is compiled or run, with a clear error, is this project's choice, and the practice OWASP's Input Validation Cheat Sheet describes ("before the application uses it"). Measured on 42 statements: every form of the statement gets the sentence unless the parser rejects the source, and none of the 14 that hold no `import` statement is answered differently. Rewording the text where it is raised would mean recognising CPython's message: unchanged since Python 2.7 and quoted by RestrictedPython's own documentation and tests, but promised by no compatibility policy. A subclass of RestrictedPython's transformer would have changed the compiler; a check in front of it changes nothing in it and can only refuse. The check is a search for two kinds of statement, so it is not the control: the control is the builtins. Stricter on purpose: an `import` that never ran, or whose failure the strategy caught, used to let the strategy complete | Strategies are to import something, which is a decision about the boundary (SECURITY.md § C-level imports underneath strategy code), not about this check |

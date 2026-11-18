@@ -1214,6 +1214,20 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   delete.
 
 ### Security
+- **`docs/security-architecture.md` said no class is ever reachable from strategy code, which was
+  false as written (register F60, 2026-11-18; documentation only, nothing in the installed package
+  changes).**
+  - **What it said:** § 6.3, since 2026-09-13: `pd.DataFrame` and `pd.Series` are constructor
+    functions, "so no class — and no unbound method — is ever reachable". The sandbox diagram's box
+    and the § 8 decision row said the same, shorter.
+  - **What is true:** strategy code can name the exception classes, which are among its builtins,
+    and `ValueError.mro()` returns `[ValueError, Exception, BaseException, object]` (measured at
+    `5cfa1e3`). What the design meant holds by construction: the two pandas classes are handed out
+    as functions, so no unbound method of either reaches strategy code. `SECURITY.md` already said
+    that ("exposed as constructor functions, not classes").
+  - **What changed:** the four places now say it in those words, seven lines in and seven out. The
+    diagram was rendered through Mermaid's own renderer, and a copy with one bracket deleted was
+    refused. No code changed; no test read the old phrase.
 - **A test now names IBKR's cancel-all order id, `-1` (register F51, 2026-11-12).**
   - **The risk:** IBKR's Cancel Order page says "Submitting '-1' will cancel all open orders". IBKR also
     returns `order_id` `"-1"` itself, for a bracket child it failed to place, so a caller can read the
