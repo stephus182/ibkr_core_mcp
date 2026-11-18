@@ -1214,6 +1214,37 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   delete.
 
 ### Security
+- **No test of the suite is collected, and the pre-push hook runs no gate, while the environment
+  would change what they check (register F59, checklist B2g, 2026-11-18; the test suite and the
+  pre-push hook only, nothing in the installed package changes).**
+  - **The risk:** pytest prepends `PYTEST_ADDOPTS` to every command line, loads the plugins
+    `PYTEST_PLUGINS` names and honours `PYTEST_DISABLE_PLUGIN_AUTOLOAD`, and the command shows none
+    of it. Measured before the change, in scratch clones:
+    - a `-k` left in a shell made `.githooks/pre-push` print "all four gates green" after 9 tests
+      of 2,950;
+    - `--force-enable-socket` let a unit test create a socket;
+    - `--noconftest` switched off every guard of `tests/conftest.py` at once: the human-gate doors,
+      the socket block, the operator-data and desktop hooks, the null keychain, the secret scrub.
+  - **Not set anywhere:** checked 2026-11-18, nothing on the development machine or in CI sets any
+    of the three.
+  - **What changed:** three layers refuse them, each with a message that names the variable, never
+    its value.
+    - `tests/__init__.py` refuses to be imported while any is set. pytest imports it for every
+      module of the suite, conftest or not. It leaves `sys.modules` before refusing, because pytest's
+      importlib mode keeps a package whose `__init__` raised: without that, 2,814 tests collected
+      under `--import-mode=importlib --continue-on-collection-errors`.
+    - The root conftest's `pytest_configure` refuses a second session in one process.
+    - `.githooks/pre-push` refuses them in shell, before any gate, a value made only of newlines
+      included. It is the layer that holds for a value that makes pytest collect nothing of the
+      suite, `--help` or `--ignore=tests`, which meets no package to refuse it.
+  - **Held by** `tests/security/test_run_changing_environment.py`: 16 tests, 14 red before the
+    change, each safe on a broken guard. It also asks pytest's own `resolve_package_path` that
+    every test module resolves to the `tests` package, and that no `test*.txt` doctest file exists.
+    Fourteen mutants of the change were caught, and a no-op survived.
+  - **Left on purpose:** a `--noconftest`, `-p no:…` or `-o addopts=` typed on the command line
+    still runs without the guards, like `git push --no-verify`; so does a run the environment
+    steers away from the suite, outside the hook; `PYTEST_TIMEOUT` and `PYTEST_DEBUG_TEMPROOT` are
+    not refused, since neither changes which tests run (`docs/security-architecture.md` § 9).
 - **`docs/security-architecture.md` said no class is ever reachable from strategy code, which was
   false as written (register F60, 2026-11-18; documentation only, nothing in the installed package
   changes).**

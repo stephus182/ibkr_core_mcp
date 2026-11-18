@@ -7,6 +7,8 @@ from typing import NoReturn
 
 import pytest
 
+from tests import run_changing_variables_refusal
+
 # ── No unit test reaches the operator's data ────────────────────────────────────
 #
 # `Config.from_env()` defaults `sqlite_path` to `~/.ibkr_core/store.db` — an ABSOLUTE path, so
@@ -611,6 +613,12 @@ def pytest_configure(config):
     are covered too. From the first test on, pytest-socket's own per-test hooks take over
     (see `pytest_collection_modifyitems`); its teardown re-enables sockets after every
     test, which is why this call alone is not the per-test guarantee."""
+    # No session starts while the environment would change what it checks (register F59). The
+    # package refuses first, once per process, as pytest imports it; this refuses a second session
+    # in a process that has imported it already, before anything below is armed.
+    refusal = run_changing_variables_refusal()
+    if refusal is not None:
+        raise pytest.UsageError(refusal)
     from pytest_socket import disable_socket
 
     disable_socket(allow_unix_socket=True)

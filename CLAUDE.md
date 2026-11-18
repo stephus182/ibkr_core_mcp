@@ -99,6 +99,14 @@ pytest -m security
 pytest tests/test_web_tools_live.py -v -m integration
 ```
 
+**No test of the suite is collected, and the pre-push hook runs no gate, while `PYTEST_ADDOPTS`,
+`PYTEST_PLUGINS` or `PYTEST_DISABLE_PLUGIN_AUTOLOAD` is set** (2026-11-18, register F59). pytest reads all three without the command showing them: a `-k`
+left in a shell made the pre-push hook print "all four gates green" after 9 tests, and
+`--noconftest` there switched off every guard of the suite (`docs/security-architecture.md`
+§ 6.7). `tests/__init__.py`, the root conftest and `.githooks/pre-push` refuse them and name the
+variable; unset it and put the options on the command line. A `--noconftest` typed there is a
+deliberate bypass, like `--no-verify`, and a run started that way is not a gate (§ 9 of that file).
+
 **A new guard is not a guard until you have watched it fail.** This audit repeatedly found
 tests that could not fail — one read its own oracle from the code under test, another asserted
 a handler had been *registered* rather than that it worked. `scripts/audit/mutation_battery.py`
