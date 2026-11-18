@@ -364,16 +364,16 @@ flowchart TB
     classDef out fill:#e3f5e8,stroke:#1a7f37,color:#111827
     classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
 
-    CODE["Model-written strategy code<br/>refused above 4,096 characters"]
+    CODE["Model-written strategy code<br/>at most 4,096 characters"]
     SPAWN["Layer 3 · multiprocessing spawn"]
     CODE --> SPAWN
 
-    subgraph CHILD["The child — its own interpreter, the operator's uid, no shared memory"]
+    subgraph CHILD["The child — its own interpreter, the operator's uid"]
         direction TB
-        IM["In front of layer 1 · the import check<br/>a strategy that holds an import statement<br/>is refused before anything of it is compiled"]
-        CR["Layer 1 · compile_restricted<br/>no _-prefixed name,<br/>attribute access routed through a guard"]
-        NS["build_sandbox() — a frozen namespace.<br/>No open / eval / exec / __import__ builtin:<br/>an import that ran would still fail.<br/>pd.DataFrame and pd.Series are constructor<br/>functions, so no class, and therefore no<br/>unbound method, is ever reachable"]
-        GA["Layer 2 · _sandboxed_getattr<br/>_PANDAS_ALLOWED_ATTRS · _NUMPY_ALLOWED_ATTRS ·<br/>_UFUNC_ALLOWED_ATTRS. A column label passes as<br/>data when no method shadows it. The same list<br/>faces the string function spec of apply / agg /<br/>aggregate / transform, in any list-like shape,<br/>and the function half of every named aggregation"]
+        IM["Import check<br/>any import statement is refused"]
+        CR["Layer 1 · compile_restricted<br/>no _-prefixed names, guarded attributes"]
+        NS["build_sandbox() · a frozen namespace<br/>no open / eval / exec / __import__,<br/>no class reachable"]
+        GA["Layer 2 · _sandboxed_getattr<br/>pandas and numpy attributes<br/>checked against an allowlist"]
         EX["exec"]
         IM --> CR
         CR --> EX
@@ -382,11 +382,11 @@ flowchart TB
     end
 
     SPAWN --> IM
-    IM -. "BacktestSyntaxError" .-> SYN["Refused before anything of it runs:<br/>the reason, in words, to the caller"]
+    IM -. "BacktestSyntaxError" .-> SYN["Refused before it runs,<br/>the reason in words"]
     CR -. "BacktestSyntaxError" .-> SYN
-    WD["Daemon watchdog<br/>SIGTERM at 10 s,<br/>SIGKILL 1 s later"] -. "kills the child; the parent's recv never hangs" .-> CHILD
-    EX -- "ok, DataFrame — over a Pipe" --> RES["Result to the caller"]
-    EX -- "runtime_error, redact_error(exc)" --> ERR["Layer 4 · one line, 300 characters:<br/>enough for the model to fix its own code,<br/>not enough to be a transfer"]
+    WD["Daemon watchdog<br/>SIGTERM at 10 s,<br/>SIGKILL 1 s later"] -. "kills the child" .-> CHILD
+    EX -- "DataFrame, over a Pipe" --> RES["Result to the caller"]
+    EX -- "error, redacted" --> ERR["Layer 4 · one line,<br/>at most 300 characters"]
 
     class IM,CR,GA,WD guard
     class SPAWN,NS,EX proc
