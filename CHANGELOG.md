@@ -1259,6 +1259,41 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   - **What changed:** the four places now say it in those words, seven lines in and seven out. The
     diagram was rendered through Mermaid's own renderer, and a copy with one bracket deleted was
     refused. No code changed; no test read the old phrase.
+- **No unit test can reach a person — a Touch ID prompt, a Gate 2 dialog or the login window — and
+  pytest 9.2.0 no longer trips the guard that holds it (register F32, 2026-10-01; door 5, register F44,
+  2026-10-13; repaired as checklist B2d, 2026-11-16 and 17; the test suite only, nothing in the
+  installed package changes; neither the guard nor its false alarm was in a released version).**
+  - **Why the guard exists:** on 2026-10-01 a mutant skipped Gate 1 in `cancel_order`. A test had
+    replaced Touch ID alone, so the mutant walked on to the real Gate 2 dialog, which opened on the
+    operator's screen during a live session, for a fake order. Nothing reached IBKR: the DELETE was a
+    mock and sockets were blocked. Five older tests had the same shape.
+  - **What it does:** `tests/conftest.py` shuts the five doors a gate has to a person. Apple's
+    `LocalAuthentication` and `AppKit` are replaced in `sys.modules` by stand-ins that answer a read and
+    refuse a call; `tkinter.Tk` is replaced where tkinter exists; an audit hook refuses a child process
+    that would run `_order_dialog.py` or `osascript`, or open the Chrome login window. The refusal is a
+    `BaseException`, recorded, and the run fails at its end if one was swallowed. Nothing is exempt: a
+    test of a gate places its own double. `tests/security/test_no_human_reached.py` holds it, every test
+    safe on a broken guard.
+  - **What B2d repaired:** under pytest 9.2.0 every run exited 1 with the guard's own alarm, whatever
+    tests ran. pytest's fixture scan reads `_mock_name` off the objects it scans, and the stand-ins
+    counted that read as reaching a person; no test reached one.
+    - `ea86c10` ended the false alarm: the stand-ins are held in a dict, out of the namespaces pytest
+      scans. The guard's own test file gained the `security` mark it lacked, so `-m security` had never
+      run it.
+    - `00f9ea4` closed what the operator chose to close from the review of `ea86c10`, and `13d88c0`
+      what was chosen from the review of `00f9ea4`. Among them: a stand-in answers a read and refuses a
+      call; what `-m security` selects is measured by collecting `tests/security/`; and the doors are
+      shut while pytest imports the root conftest, before any other conftest of the suite. Until then a
+      folder named on the command line ran its conftest before the doors were shut, and
+      `tests/scripts/conftest.py` imports the package, so a GUI framework imported there, or at the top
+      of a module of the package, would have been the real one; none was. That gap was latent and
+      unrelated to pytest 9.2.0.
+  - **Held by** the tests of `tests/security/test_no_human_reached.py`; B2d's three commits had mutation
+    batteries of 14, 29 and 36 mutants, every one caught; CI run `44182225166`.
+  - **What it cannot see** is stated in `tests/conftest.py`, including: a framework it does not stand
+    in for (`Foundation`, `Security`, `objc`), a dialog shown by a child of a child under another name,
+    a browser opened through `webbrowser` on Linux (`xdg-open`), and anything that disables it on
+    purpose. It catches accidents.
 - **A test now names IBKR's cancel-all order id, `-1` (register F51, 2026-11-12).**
   - **The risk:** IBKR's Cancel Order page says "Submitting '-1' will cancel all open orders". IBKR also
     returns `order_id` `"-1"` itself, for a bracket child it failed to place, so a caller can read the
