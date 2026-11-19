@@ -1214,6 +1214,27 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   delete.
 
 ### Security
+- **The security documents said the sandbox caps every error in the child, and the decision log
+  still held two CI decisions that `3e3a09c` had reversed (2026-11-19; documentation and one code
+  comment, no behaviour changes).**
+  - **The cap.** `docs/security-architecture.md` § 6.3, `SECURITY.md`, the OWASP applicability
+    record and a comment in `claude_tools.py` said the child sends every sandbox error as one line
+    of at most 300 characters. That holds for a runtime error. A strategy that does not compile is
+    answered with RestrictedPython's messages, which the child does not cap: 3,890 characters of
+    source came back as one line of 30,182 (measured for the 2.2.0 sandbox plan). The tool layer's
+    cap of 1,000 is their only one, so the model sees at most that much; a direct caller of
+    `run_backtest` receives them whole. None of the strategy has run when they are sent, so they
+    carry nothing it computed, which is what the cap is for. The four places now say what is capped
+    where; the applicability record gets a dated addendum, and its row is left as written.
+  - **The CI.** On 2026-09-19 `3e3a09c` pinned every GitHub Action by SHA and added Dependabot
+    version updates for Actions and pip, and the § 8 decision log kept the two rows it reversed:
+    "GitHub Actions stay tag-pinned" (2026-09-14) and "no `dependabot.yml` version-update PRs"
+    (2026-09-13). Both are now marked superseded, and a 2026-09-19 row, written from the commit,
+    records what was done. The § 7 diagram's test job said "3.11 and 3.12"; it has run 3.13 too
+    since the same commit.
+  - **What changed:** four files, 35 lines in and 11 out, besides this entry. The § 7 diagram was
+    rendered through Mermaid's own renderer, and a copy with one bracket deleted was refused. No
+    test read the old phrases.
 - **No test of the suite is collected, and the pre-push hook runs no gate, while the environment
   would change what they check (register F59, checklist B2g, 2026-11-18; the test suite and the
   pre-push hook only, nothing in the installed package changes).**

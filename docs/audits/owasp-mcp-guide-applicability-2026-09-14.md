@@ -470,3 +470,18 @@ profile). Re-answered:
 | OWASP item | Relevant? | Existing control | Evidence | Gap? | Action |
 |---|---|---|---|---|---|
 | Strict lifecycle management (flush handles, temp storage, cached tokens on session end) | **PARTIAL** (was NO-D) | The package's own state is still not cached per session: `OrderWriteAuthorization` is frame-local, the suspend lock is released in `finally`, and the login window's process is ended at the first authenticated reading. What stays is the browser's — cookies encrypted by Chrome, `0600` in a `0700` profile under a `0700` parent — and the session they belong to is IBKR's, which expires without activity | `SECURITY.md` § The login window's profile; `tests/test_gateway_session.py` (the lock's release, the window's close) | **accepted residual**: nothing flushes the profile at session end, and its modes are Chrome's, not enforced by the package | **none built** (operator, 2026-11-11: removing the lock links is overkill — Chromium removes an orphaned lock at the next launch). Revisit with a second OS user on the machine |
+
+## Addendum 2026-11-19 — §3's output-size row, the sandbox's compile errors
+
+An addition, dated; the row above is left as written on 2026-09-14.
+
+§3's row *Enforce size limits on all outputs from tools* says the sandbox error channel "is capped
+twice — 300 characters in the child, re-capped at 1,000 by the handler". That is true of a runtime
+error, and was never true of a strategy that does not compile: the child sends RestrictedPython's
+messages as they are (`backtest.py`, `_execute_in_subprocess`), and 3,890 characters of source
+were measured coming back as one line of 30,182. The handler's 1,000 is their only cap, so the
+model sees at most 1,000 characters; a direct caller of `run_backtest` receives them whole. They
+hold names from the strategy's source and nothing it computed, since none of it has run, and
+data a strategy computed is what the cap exists to keep from leaving. The row's verdict, partial
+by decision, is unchanged. `docs/security-architecture.md` § 6.3 and `SECURITY.md` now say what
+is capped where.

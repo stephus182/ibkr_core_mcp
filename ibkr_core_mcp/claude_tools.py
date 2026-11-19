@@ -3785,9 +3785,11 @@ class ClaudeToolkit:
             result = _run_backtest(code, df, strategy_name=strategy_name, symbol=symbol, periods=periods)
         except BacktestError as exc:
             # Sandbox errors are errors in code the LLM itself wrote — the detail is
-            # required for self-correction. The child already redacted and capped its
-            # line; the wider limit here keeps a multi-violation RestrictedPython list
-            # whole instead of cutting it a second time (review 2026-09-13).
+            # required for self-correction. The child redacts and caps a runtime error
+            # at 300 characters; a compile error leaves the child uncapped, since none of
+            # the strategy has run, so this limit is its only cap and keeps a
+            # multi-violation RestrictedPython list whole up to 1,000 (review 2026-09-13;
+            # the compile-error half corrected 2026-11-19).
             cols = ", ".join(str(c) for c in df.columns)
             return (
                 f"Backtest failed: {redact_error(exc, limit=1000)}\n"

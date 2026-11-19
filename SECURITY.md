@@ -465,9 +465,11 @@ is nothing to validate and none was invented. Rule: a future tool that returns s
 content declares an `outputSchema` and lets the SDK validate it. Output size was measured
 rather than capped. List outputs are bounded: 50 rows from `get_trades`' store branch, 20 from
 its CP-API-session branch, 50 from `get_pa_transactions`, 10 page URLs from `crawl_site`. The
-sandbox's error channel is capped twice — the child sends one `redact_error` line of 300
-characters, and the handler re-caps at 1,000 so a multi-violation RestrictedPython list is not
-cut a second time. `fetch_page` returns the whole page (typically 5–35 KB; 144,125 characters
+sandbox's runtime errors are capped twice — the child sends one `redact_error` line of 300
+characters, and the handler re-caps at 1,000. A strategy that does not compile is answered with
+RestrictedPython's messages, which only the handler caps, at 1,000, so a list of several
+violations is not cut at 300; nothing of the strategy has run when they are sent. `fetch_page`
+returns the whole page (typically 5–35 KB; 144,125 characters
 is the largest on record, `docs/web-scraper-reference.md` § 5). No cap is imposed there — the page is untrusted at
 any size, and a silent clip would hide content from the operator. If a host ever reports
 context exhaustion, the fix is explicit, marked truncation, not silent clipping.
