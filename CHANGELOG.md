@@ -853,6 +853,14 @@ below. The consumer's half — importing the owner, deleting its own copies — 
   and `FlexDataset.trade_ids`. Both keep working until 3.0, and the table is still written.
 
 ### Fixed
+- **The link list at the foot of this file is brought up to date (found 2026-11-19, reviewing
+  the 2.2.0 release checklist).** It had stopped at 2.0.0: `[Unreleased]` still compared from
+  `v2.0.0`, and `## [2.0.1]` and `## [2.1.0]` had no line of their own, so neither heading
+  rendered as a link, though both tags exist. Both releases shipped that way.
+  - **Now:** `[Unreleased]` compares from `v2.1.0`, and 2.1.0 and 2.0.1 each have their line.
+  - **Why it was missed twice:** no step of `CLAUDE.md` § Publishing a New Version named the
+    list, and nothing checks it. Step 1 names it now; still nothing checks it.
+  - Documentation only: nothing installed changes.
 - **The backtest sandbox no longer fails on allowed operations whose C code asks for an import
   (checklist B2a; found 2026-11-12 by CI's first run in seven weeks; both published releases,
   2.0.1 and 2.1.0, have it).**
@@ -3212,7 +3220,9 @@ fail" pattern this audit found in the live suite and the order-write boundary.
 
 ---
 
-[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/stephus182/ibkr_core_mcp/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v2.0.1...v2.1.0
+[2.0.1]: https://github.com/stephus182/ibkr_core_mcp/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.2...v2.0.0
 [1.2.2]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/stephus182/ibkr_core_mcp/compare/v1.2.0...v1.2.1

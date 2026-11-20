@@ -226,7 +226,10 @@ Releases go to PyPI through `.github/workflows/publish.yml` (Trusted Publishing;
 anywhere). Per version:
 
 1. `CHANGELOG.md`: move `[Unreleased]` items under `## [X.Y.Z] — YYYY-MM-DD` — the workflow refuses
-   a tag without that heading.
+   a tag without that heading. Then the link list at the foot of the file, which nothing checks:
+   add `[X.Y.Z]: …/compare/v<previous>...vX.Y.Z` and repoint `[Unreleased]` to
+   `…/compare/vX.Y.Z...HEAD`. 2.0.1 and 2.1.0 both shipped without their line (repaired
+   2026-11-19).
 2. `pyproject.toml`: `version = "X.Y.Z"` — the workflow refuses a tag that differs, and it
    compares literally, so the version must already be **PEP 440 canonical**: write `2.1.0rc1`,
    never `2.1.0-rc1`, `2.1.0.rc1`, `2.1.0-post1` or `02.1.0`. setuptools normalises when it
