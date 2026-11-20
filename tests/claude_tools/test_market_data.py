@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ibkr_core_mcp.claude_tools import _today_date
+from ibkr_core_mcp.claude_tools import _TODAY, _today_date
 
 from .conftest import assert_tool_failed, assert_tool_succeeded
 
@@ -52,15 +52,26 @@ def test_list_cache_empty(toolkit):
 def test_list_cache_happy_path(toolkit):
     """Returns one line per cached dataset with key, row count, and date."""
     toolkit._cache.list_cached.return_value = [
-        {"key": "AAPL_1D_1Y_2026-06-30", "rows": 252, "cached_at": "2026-06-30T12:00:00"},
+        {
+            "key": "AAPL_1D_1Y_2026-06-30_RTH",
+            "rows": 252,
+            "cached_at": "2026-06-30T12:00:00",
+            "outside_rth": False,
+            "listing": {"conid": 265598, "name": "APPLE INC", "exchange": "NASDAQ", "currency": "USD"},
+        },
+        {"key": "ESZ6_1D_6M_2026-10-03_ALL", "rows": 126, "cached_at": "2026-10-03T14:00:00", "outside_rth": True},
         {"key": "MSFT_1D_6M_2026-06-30", "rows": 126, "cached_at": "2026-06-29T08:00:00"},
     ]
     text, fig = toolkit.execute("list_cache", {})
     assert fig is None
-    assert "Cached datasets (2)" in text
-    assert "AAPL_1D_1Y_2026-06-30" in text
-    assert "252 bars" in text
-    assert "2026-06-30" in text
+    assert "Cached datasets (3)" in text
+    assert (
+        "AAPL_1D_1Y_2026-06-30_RTH: 252 bars, regular hours, cached 2026-06-30 — APPLE INC, NASDAQ, USD, conid 265598"
+        in text
+    )
+    assert "ESZ6_1D_6M_2026-10-03_ALL: 126 bars, all hours, cached 2026-10-03" in text
+    # A row written before 2.2.0 has no hours field and no reachable key; it is named as such.
+    assert "MSFT_1D_6M_2026-06-30: 126 bars, legacy (pre-2.2.0 key, unreachable from 2.2.0), cached 2026-06-29" in text
 
 
 def test_execute_add_indicators(toolkit):
@@ -87,6 +98,11 @@ def test_execute_add_indicators(toolkit):
     )
     assert_tool_succeeded(text)
     assert fig is None
+    # The description tells the model how to report the result (register F40): the bar count
+    # is part of an EMA's or SMMA's value, and no line carries a direction to add.
+    tool = next(t for t in toolkit.tools if t["name"] == "add_indicators")
+    assert "'(over N bars)'" in tool["description"] and "part of the value" in tool["description"]
+    assert "no line carries a slope, trend or direction" in tool["description"]
     assert "RSI" in text
 
 
@@ -125,7 +141,7 @@ def test_execute_get_market_snapshot_fut_uses_futures_endpoint_not_search(toolki
     """FUT must resolve via /trsrv/futures, not /iserver/secdef/search.
 
     /iserver/secdef/search only documents STK, IND, BOND support.
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-by-symbol
     """
     toolkit._client.get_futures.return_value = [
         {"symbol": "ES", "conid": 111, "expirationDate": _dated(90), "ltd": _dated(90)},
@@ -354,7 +370,7 @@ def test_execute_get_market_snapshot_cash_uses_currency_pairs_not_search(toolkit
     """CASH must resolve via /iserver/currency/pairs, not /iserver/secdef/search.
 
     secType=CASH is not in the documented STK/IND/BOND list for secdef/search.
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/contract/currency-pairs.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/currency-pairs
     """
     toolkit._client.get_currency_pairs.return_value = [
         {"symbol": "EUR.USD", "conid": 12087792, "ccyPair": "USD"},
@@ -439,6 +455,237 @@ def test_fetch_market_data_empty_data(toolkit):
     with patch("time.sleep"):
         text, _fig = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1Y", "bar": "1d"})
     assert "no data" in text.lower()
+
+
+# ── Market-data batch step 1 (2026-10-02): the result says what was fetched ────────────────
+
+_IGV_BATS = {"conid": 12658199, "name": "ISHARES EXPANDED TECH-SOFTWA", "exchange": "BATS", "currency": "USD"}
+
+
+def _two_daily_bars():
+    return {
+        "data": [{"t": 1_758_000_000_000 + i * 86_400_000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1} for i in range(2)]
+    }
+
+
+def test_the_fetch_result_names_the_listing_and_the_end_date_it_was_given(toolkit):
+    """IGV's Mexican listing in pesos was served as IGV: the result never said which listing,
+    in which currency, the bars came from. It now names the listing the resolver chose — the
+    fields it already had in hand — and hands the same to the cache beside the bars."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_stocks.return_value = _igv_stocks()
+    toolkit._client.get_secdef_info.return_value = [{"conid": 12658199, "currency": "USD"}]
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
+
+    assert "ISHARES EXPANDED TECH-SOFTWA" in text and "BATS" in text and "USD" in text and "conid 12658199" in text
+    assert "(6m) ending 2026-09-30 (as given), regular trading hours (by default for STK), from IBKR" in text, text
+    assert toolkit._cache.save.call_args.kwargs["listing"] == _IGV_BATS
+
+
+def test_a_fetch_without_an_end_date_says_it_used_today(toolkit):
+    """The fetch filled `end` in silently while the indicator and backtest tools require it,
+    so a model that fetched without one could not know which value to pass them next."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m"})
+
+    assert (
+        f"(6m) ending {_TODAY()} (today, by default), regular trading hours (by default for STK), from IBKR" in text
+    ), text
+
+
+def test_a_cache_hit_names_the_listing_the_entry_records_or_says_none_is_recorded(toolkit):
+    """A hit is where a wrong listing hid longest — served as a normal hit until flushed."""
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2026-09-01", periods=2))
+
+    toolkit._cache.entry.return_value = {"symbol": "IGV", "listing": _IGV_BATS}
+    named, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
+    toolkit._cache.entry.return_value = {"symbol": "IGV"}
+    unnamed, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-09-30"})
+
+    assert "ISHARES EXPANDED TECH-SOFTWA" in named and "BATS" in named and "USD" in named, named
+    assert "listing not recorded" in unnamed and "ISHARES" not in unnamed, unnamed
+
+
+@pytest.mark.parametrize("tool", ["add_indicators", "run_backtest", "get_analytics"])
+def test_a_cache_miss_lists_what_is_cached_for_the_symbol(toolkit, tool):
+    """ "No cached data … fetch it first" sent the model back to repeat the fetch it had just
+    made under another end date. The miss now lists the symbol's cached windows so the model
+    can match one, and when there is none, says what end the fetch defaults to."""
+    toolkit._cache.check.return_value = False
+    inputs = {"symbol": "IGV", "timeframe": "1D", "period": "6m", "end": "2026-09-30", "code": "df['signal'] = 1"}
+
+    toolkit._cache.list_cached.return_value = [
+        {"key": "IGV_1D_6M_2026-10-02", "symbol": "IGV", "timeframe": "1D", "period": "6m", "end": "2026-10-02"},
+        {"key": "AAPL_1D_6M_2026-10-02", "symbol": "AAPL", "timeframe": "1D", "period": "6m", "end": "2026-10-02"},
+    ]
+    listed, _ = toolkit.execute(tool, inputs)
+    toolkit._cache.list_cached.return_value = []
+    empty, _ = toolkit.execute(tool, inputs)
+
+    assert "No cached data for IGV 1D 6m ending 2026-09-30" in listed, listed
+    assert "IGV 1D 6m ending 2026-10-02" in listed and "AAPL" not in listed, listed
+    assert "Nothing is cached for IGV" in empty and "defaults to today" in empty, empty
+
+
+# ── Market-data batch step 2 (2026-10-03): security type, one contract per key, the hours ────
+#
+# Probe evidence (claudia_ui/docs/plans/2026-10-03-outside-rth-probe/): IBKR's daily stock bar
+# changes with outsideRth on 20 of 20 days; a futures all-hours daily bar is stamped at its
+# session OPEN (18:00 ET the evening before; Sunday's stamp is Monday's session); the day
+# session is stamped 09:30 ET on the session's own date.
+
+
+def _es_contract_info(local_symbol="ESZ6", month="202612", maturity=None, exchange="CME"):
+    return {
+        "local_symbol": local_symbol,
+        "contract_month": month,
+        "maturity_date": maturity if maturity is not None else _dated(76),
+        "company_name": "E-mini S&P 500",
+        "multiplier": "50",
+        "exchange": exchange,
+        "currency": "USD",
+    }
+
+
+def _front_month_es(toolkit):
+    """Two ES rows: one past its last trade date, one live — the resolver must take the live one."""
+    expired, live = _dated(-15), _dated(76)
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "ES", "conid": 649180671, "expirationDate": expired, "ltd": expired},
+        {"symbol": "ES", "conid": 515416632, "expirationDate": live, "ltd": live},
+    ]
+    toolkit._client.get_contract_info.return_value = _es_contract_info()
+    toolkit._client.get_secdef_info.return_value = [{"conid": 515416632, "currency": "USD"}]
+
+
+def test_a_futures_root_fetches_the_front_month_and_caches_it_under_the_contracts_own_symbol(toolkit):
+    """Point 1 and 2 of step 2: `ES` means the front-month contract's own bars, named in IB's
+    strings, cached under its local symbol so ESU6 and ESZ6 never share an entry and a roll
+    produces a new key by itself; all hours by default for a future, stated."""
+    _front_month_es(toolkit)
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT"})
+
+    toolkit._cache.check.assert_called_once_with("ESZ6", "1D", "6m", _TODAY(), outside_rth=True)
+    toolkit._client.get_market_history_paginated.assert_called_once_with(
+        515416632, period="6m", bar="1d", outside_rth=True
+    )
+    saved = toolkit._cache.save.call_args
+    assert saved.args[1] == "ESZ6" and saved.kwargs["outside_rth"] is True
+    assert saved.kwargs["listing"] == {
+        "conid": 515416632,
+        "name": f"E-mini S&P 500 · ESZ6 · DEC26 · expires {_iso(_dated(76))}",
+        "exchange": "CME",
+        "currency": "USD",
+        "root": "ES",
+    }
+    assert "Fetched ESZ6 FUT 1D (6m)" in text and "all trading hours (by default for FUT)" in text, text
+    assert "E-mini S&P 500 · ESZ6 · DEC26" in text and "CME, USD, conid 515416632" in text, text
+    assert "under ESZ6" in text and "outside_rth=true" in text and "ESU6" not in text, text
+
+
+def _iso(yyyymmdd: int) -> str:
+    t = str(yyyymmdd)
+    return f"{t[:4]}-{t[4:6]}-{t[6:]}"
+
+
+def test_a_pinned_conid_fetches_that_contract_and_an_expired_one_says_so(toolkit):
+    """Point 1's addition: `conid` pins one contract, skipping the front-month rule — an expired
+    contract's history is exactly what it is for, and the result says "expired". IBKR serves
+    it for about a year (ESU5 at 12 months, ESM5 refused at 15 — 2026-09-25)."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_contract_info.return_value = _es_contract_info("ESU6", "202609", _dated(-15))
+    toolkit._client.get_secdef_info.return_value = [{"conid": 649180671, "currency": "USD"}]
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    text, _ = toolkit.execute(
+        "fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT", "conid": 649180671}
+    )
+
+    toolkit._client.get_futures.assert_not_called()
+    toolkit._client.get_contract_info.assert_called_with(649180671)
+    assert toolkit._cache.save.call_args.args[1] == "ESU6"
+    assert f"ESU6 · SEP26 · expired {_iso(_dated(-15))}" in text, text
+
+
+def test_a_contract_ibkr_cannot_describe_fetches_nothing(toolkit):
+    """Fail closed: no local symbol from /iserver/contract/{conid}/info means no key to cache
+    under and no name to show — nothing is fetched, nothing is written."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_contract_info.return_value = {"company_name": "E-mini S&P 500"}
+
+    text, _ = toolkit.execute(
+        "fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT", "conid": 649180671}
+    )
+
+    toolkit._client.get_market_history_paginated.assert_not_called()
+    toolkit._cache.save.assert_not_called()
+    assert "could not" in text.lower() and "649180671" in text and "nothing" in text.lower(), text
+
+
+def test_the_hours_are_stated_by_default_and_as_given_and_reach_the_key(toolkit):
+    """Point 4: STK defaults to regular hours, every result says which hours and why."""
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_market_history_paginated.return_value = _two_daily_bars()
+
+    default, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m"})
+    toolkit._client.get_market_history_paginated.assert_called_with(265598, period="6m", bar="1d", outside_rth=False)
+    assert "AAPL STK (by default)" in default and "regular trading hours (by default for STK)" in default, default
+    assert toolkit._cache.save.call_args.kwargs["outside_rth"] is False
+
+    given, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "6m", "outside_rth": True})
+    toolkit._client.get_market_history_paginated.assert_called_with(265598, period="6m", bar="1d", outside_rth=True)
+    assert "all trading hours (as given)" in given and "under AAPL (all hours)" in given, given
+    assert toolkit._cache.save.call_args.kwargs["outside_rth"] is True
+
+
+@pytest.mark.parametrize(
+    "inputs, expect",
+    [
+        ({"symbol": "SPX", "period": "6m", "sec_type": "IND"}, "STK, FUT"),
+        ({"symbol": "IGV", "period": "6m", "conid": 325209548}, "futures contract"),
+    ],
+    ids=["type-not-offered", "conid-on-a-stock"],
+)
+def test_a_type_outside_the_offer_and_a_conid_on_a_stock_are_refused_before_any_read(toolkit, inputs, expect):
+    """Point 3: the enum is IB's codes and lists only what this tool serves; the handler
+    refuses the rest itself, since the schema is not enforced server-side."""
+    text, _ = toolkit.execute("fetch_market_data", inputs)
+    assert expect in text, text
+    toolkit._client.get_stocks.assert_not_called()
+    toolkit._client.get_futures.assert_not_called()
+    toolkit._cache.check.assert_not_called()
+
+
+def test_all_hours_futures_bars_are_printed_as_opens_in_et_with_the_reading_rule(toolkit):
+    """Point 4, the trap: an all-hours futures daily bar is stamped at its session open, 18:00 ET
+    the evening before. The stamp is IBKR's and is kept; the result prints it as an open, in
+    ET, with the rule for reading it — never a bare date one day early."""
+    _front_month_es(toolkit)
+    toolkit._cache.check.return_value = False
+    # Thursday 2026-10-01 22:00 UTC = 18:00 ET: the open of Friday's session.
+    thursday_open_ms = 1_790_892_000_000
+    toolkit._client.get_market_history_paginated.return_value = {
+        "data": [
+            {"t": thursday_open_ms - 86_400_000, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1},
+            {"t": thursday_open_ms, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1},
+        ]
+    }
+
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "ES", "period": "6m", "sec_type": "FUT"})
+
+    assert "stamped at their open (ET)" in text and "2026-10-01 18:00" in text, text
+    assert "Thursday 18:00 is Friday's session" in text, text
+    assert "2026-10-02" not in text, text
 
 
 # ============================================================================
@@ -772,7 +1019,7 @@ def test_delete_cache_happy_path(toolkit):
     assert fig is None
     assert "Deleted" in text
     assert "AAPL" in text
-    toolkit._cache.delete.assert_called_once_with("AAPL", "1D", "1Y", "2026-05-22")
+    toolkit._cache.delete.assert_called_once_with("AAPL", "1D", "1Y", "2026-05-22", outside_rth=False)
 
 
 def test_delete_cache_miss(toolkit):
@@ -827,9 +1074,10 @@ def test_front_month_skips_a_contract_whose_last_trade_date_has_passed(toolkit):
     assert [r["conid"] for r in flagged] == [515416632], "the expired contract must not be the front month"
 
 
-def test_front_month_prefers_ltd_over_expiration_date(toolkit):
-    """They differ: ES Dec-26 reports expirationDate 20261218 and ltd 20261217 (measured
-    2026-09-20). The last trade date is the one that decides whether it can still be traded."""
+def test_a_contract_past_its_ltd_is_not_front_month_while_its_expiration_date_is_ahead(toolkit):
+    """The ES shape: Dec-26 reports expirationDate 20261218 and ltd 20261217 (measured
+    2026-09-20), so `ltd` is the earlier date and the one that decides. (Named "prefers ltd"
+    until F16 showed the CL shape runs the other way — the earlier date decides, whichever.)"""
     live = _dated(60)
     toolkit._client.get_futures.return_value = [
         # Expiry still in the future, but trading has already stopped.
@@ -840,8 +1088,9 @@ def test_front_month_prefers_ltd_over_expiration_date(toolkit):
     assert [r["conid"] for r in rows if r["front_month"]] == [222]
 
 
-# One field must decide. `_last_trade_key` reads `ltd` then `expirationDate` and settles
-# tradeability; `_expiration_key` read `expirationDate` ALONE and settled both the ordering
+# One rule must decide. `_last_trade_key` reads the earlier of `ltd` and `expirationDate` —
+# it read `ltd` first until F16 — and settles tradeability; `_expiration_key` read
+# `expirationDate` ALONE and settled both the ordering
 # and which row gets flagged, so the two disagreed about what "has a date" even means:
 #
 #   * a tradeable row reporting only `ltd` was never flagged front month, because
@@ -858,7 +1107,8 @@ def test_front_month_prefers_ltd_over_expiration_date(toolkit):
 
 
 def test_front_month_is_flagged_on_a_row_that_reports_only_ltd(toolkit):
-    """`ltd` decides tradeability, so a row carrying only `ltd` is dated for every purpose."""
+    """`ltd` is one of the two dates that decide tradeability, so a row carrying only `ltd`
+    is dated for every purpose."""
     toolkit._client.get_futures.return_value = [
         {"symbol": "ES", "conid": 555, "ltd": _dated(30)},
         {"symbol": "ES", "conid": 666, "ltd": _dated(120)},
@@ -867,12 +1117,75 @@ def test_front_month_is_flagged_on_a_row_that_reports_only_ltd(toolkit):
     assert [r["conid"] for r in rows if r["front_month"]] == [555], rows
 
 
-def test_front_month_ORDERING_follows_ltd_not_expiration_date(toolkit):
-    """Both tradeable; `ltd` ranks them one way and `expirationDate` the other. Trading stops
-    at `ltd`, so `ltd` chooses the front month."""
+def test_front_month_ORDERING_follows_the_earlier_date_when_ltd_is_it(toolkit):
+    """Both tradeable; `ltd` ranks them one way and `expirationDate` the other, and `ltd` is
+    the earlier date on each row (the ES shape), so `ltd` chooses the front month."""
     toolkit._client.get_futures.return_value = [
         {"symbol": "XX", "conid": 777, "ltd": _dated(10), "expirationDate": _dated(90)},
         {"symbol": "XX", "conid": 888, "ltd": _dated(40), "expirationDate": _dated(50)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["XX"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [777], rows
+
+
+# Neither field alone is the last trade date for every root (claudia_ui gap #71, register F16,
+# measured live 2026-09-24). For ES, `ltd` is the earlier field (Dec-26: `expirationDate`
+# 20261218, `ltd` 20261217). For NYMEX energy it is the LATER one: CLV6 reported
+# `expirationDate` 20260922 and `ltd` 20261001 — there `ltd` is the first day of the contract
+# month, after trading has stopped — so "`ltd`, falling back to `expirationDate`" kept the
+# expired October CL as the front month after the roll, for as long as IBKR still listed it (two
+# days after expiry it did, by day seven it no longer did), and a bare `CL` resolved to a
+# contract whose quote was a prior close with no bid or ask. The earlier of the two is right
+# for both shapes and, by construction, can never keep a contract past either date.
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        pytest.param({"expirationDate": 20261218, "ltd": 20261217}, 20261217, id="ES: ltd earlier"),
+        pytest.param({"expirationDate": 20260922, "ltd": 20261001}, 20260922, id="CL: expirationDate earlier"),
+        pytest.param({"expirationDate": 20261214, "ltd": 20261214}, 20261214, id="equal (DX reports them equal)"),
+        pytest.param({"ltd": 20261217}, 20261217, id="only ltd"),
+        pytest.param({"expirationDate": 20261218}, 20261218, id="only expirationDate"),
+        pytest.param({"expirationDate": "not a date", "ltd": None}, 0, id="nothing usable"),
+        pytest.param({}, 0, id="undated"),
+    ],
+)
+def test_the_last_trade_key_is_the_earlier_of_ltd_and_expiration_date(row, expected):
+    """One definition — the same as claudia_ui's `order_flow._last_trade_key` (gap #71)."""
+    from ibkr_core_mcp.claude_tools import _last_trade_key
+
+    assert _last_trade_key(row) == expected
+
+
+def test_front_month_skips_a_contract_past_its_expiration_date_even_while_ltd_is_ahead(toolkit):
+    """The CL case of 2026-09-24: two days after CLV6 stopped trading (its `expirationDate`),
+    its `ltd` still lay a week ahead, so the rule that trusted `ltd` flagged the dead contract."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "CL", "conid": 304037496, "expirationDate": _dated(-2), "ltd": _dated(7)},
+        {"symbol": "CL", "conid": 304037511, "expirationDate": _dated(28), "ltd": _dated(37)},
+    ]
+    rows = json.loads(toolkit.execute("get_futures", {"symbols": ["CL"]})[0])
+    assert [r["conid"] for r in rows if r["front_month"]] == [304037511], rows
+
+
+def test_a_bare_root_never_resolves_to_a_contract_past_its_expiration_date(toolkit):
+    """The same rows through `_resolve_snapshot_conid` — the path `get_market_snapshot` and
+    `preview_order` take, where the dead contract's quote was a prior close, no bid, no ask."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "CL", "conid": 304037496, "expirationDate": _dated(-2), "ltd": _dated(7)},
+        {"symbol": "CL", "conid": 304037511, "expirationDate": _dated(28), "ltd": _dated(37)},
+    ]
+    resolved = toolkit._resolve_snapshot_conid("CL", "FUT", None)
+    assert resolved.conid == 304037511, f"resolved the expired contract: {resolved}"
+
+
+def test_front_month_ORDERING_follows_the_earlier_date_when_expiration_date_is_it(toolkit):
+    """The mirror of the `ltd` ordering test above: both tradeable, and now `expirationDate`
+    is the earlier field on each row. The earlier date orders them, whichever field it is."""
+    toolkit._client.get_futures.return_value = [
+        {"symbol": "XX", "conid": 777, "expirationDate": _dated(10), "ltd": _dated(90)},
+        {"symbol": "XX", "conid": 888, "expirationDate": _dated(50), "ltd": _dated(40)},
     ]
     rows = json.loads(toolkit.execute("get_futures", {"symbols": ["XX"]})[0])
     assert [r["conid"] for r in rows if r["front_month"]] == [777], rows
@@ -965,6 +1278,7 @@ def test_get_futures_names_the_front_month_in_ibkr_terms(toolkit):
         "maturity_date": "20260918",
         "company_name": "E-mini S&P 500",
         "multiplier": "50",
+        "exchange": "CME",
     }
     text, _fig = toolkit.execute("get_futures", {"symbols": ["ES"]})
     front, back = json.loads(text)
@@ -973,6 +1287,7 @@ def test_get_futures_names_the_front_month_in_ibkr_terms(toolkit):
         "month": "SEP26",
         "expires": "2026-09-18",
         "name": "E-mini S&P 500",
+        "exchange": "CME",  # kept since 2.2.0 — the market-data result names the contract's exchange
         "multiplier": 50.0,
     }
     assert "_contract" not in back
@@ -1114,6 +1429,225 @@ def test_add_indicators_prints_a_vwap_number_on_intraday_bars(toolkit):
     assert any(ch.isdigit() for ch in vwap_line.split("VWAP")[1]), vwap_line
 
 
+def _framework_frame():
+    """Five bars whose hl2 is 6, 8, 10, 12, 14 and whose closes sit one above — small enough
+    to work the averages, the deviation and the distance in deviations by hand, and no number on `close`
+    equals its counterpart on `hl2`."""
+    import pandas as pd
+
+    hl2 = [6.0, 8.0, 10.0, 12.0, 14.0]
+    return pd.DataFrame(
+        {
+            "open": hl2,
+            "high": [v + 2 for v in hl2],
+            "low": [v - 2 for v in hl2],
+            "close": [v + 1 for v in hl2],
+            "volume": 1.0,
+        },
+        index=pd.date_range("2026-05-18", periods=5, freq="B"),
+    )
+
+
+def _indicator_line(text, label):
+    """The value part of the one output line that starts with `label`."""
+    (line,) = [ln for ln in text.splitlines() if ln.strip().startswith(label)]
+    return line.split(label, 1)[1].strip()
+
+
+_AAPL_WINDOW = {"symbol": "AAPL", "timeframe": "1D", "period": "1Y", "end": "2026-05-22"}
+
+
+def test_add_indicators_reports_the_framework_in_tradingviews_labels_with_every_setting_named(toolkit):
+    """The operator's chart, 2026-10-05: `SMA 200 hl2` and `BB 200 SMA hl2 2.5` — averages and
+    bands of (high + low)/2, and where the last close sits in standard deviations. Worked by
+    hand on the last three bars: hl2 10, 12, 14 → SMA 12; population deviation sqrt(8/3) = 1.633;
+    bands 12 ± 1.633 and 12 ± 2.5 × 1.633; close 15 = +1.84 deviations. On `close` the average would be
+    13, so a source that is named and not used cannot pass. hl2 is the default here and is
+    said to be; RSI and MACD stay on `close` and say so."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute(
+        "add_indicators", {**_AAPL_WINDOW, "ma_periods": [3], "band_period": 3, "band_stds": [1, 2.5]}
+    )
+
+    assert_tool_succeeded(text)
+    assert "source: hl2 = (high + low)/2 (by default)" in text, text
+    assert _indicator_line(text, "SMA 3 hl2:") == "12.00"
+    assert _indicator_line(text, "BB 3 SMA hl2 1:") == "12.00 / 13.63 / 10.37 (basis / upper / lower)"
+    assert _indicator_line(text, "BB 3 SMA hl2 2.5:") == "12.00 / 16.08 / 7.92 (basis / upper / lower)"
+    assert "last close 15.00 = SMA 3 hl2 + 1.84 StdDev (1 StdDev = 1.63:" in text, text
+    assert "RSI and MACD — source: close (by default)" in text, text
+    assert _indicator_line(text, "RSI(14) close:") and _indicator_line(text, "MACD(12,26,9) close:")
+
+
+@pytest.mark.parametrize(
+    ("ma_type", "average_line", "basis_line", "over"),
+    [
+        # Pine's EMA seeded with the first value: 6 → 6.8 → 8.4 → 10.2 → 12.1; the deviation stays sqrt(8/3).
+        ("EMA", "EMA 3 hl2:", "BB 3 EMA hl2 1:", " (over 5 bars)"),
+        # SMMA (RMA) seeded with the first SMA: 8 → 9.33 → 10.89; alpha 1/3.
+        ("SMMA (RMA)", "SMMA (RMA) 3 hl2:", "BB 3 SMMA (RMA) hl2 1:", " (over 5 bars)"),
+        # A simple average depends on its last three bars only — nothing to state.
+        ("SMA", "SMA 3 hl2:", "BB 3 SMA hl2 1:", ""),
+    ],
+)
+def test_a_recursive_average_states_how_many_bars_it_was_computed_over(
+    toolkit, ma_type, average_line, basis_line, over
+):
+    """Witnessed 2026-10-06: the same EMA 200 hl2 read 7,759.90 over 479 bars and 7,759.77 over
+    1,500 — TradingView's ES1! chart, with years of history, showed 7,759.80 — while the SMA was the
+    same on every history length. An EMA or SMMA value depends on how much history it was
+    computed over, so its line says so (operator: "as text, not charting"); an SMA's does not."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute(
+        "add_indicators", {**_AAPL_WINDOW, "ma_type": ma_type, "ma_periods": [3], "band_period": 3, "band_stds": [1]}
+    )
+
+    assert_tool_succeeded(text)
+    assert _indicator_line(text, average_line).endswith(over), text
+    assert _indicator_line(text, basis_line).endswith(f"(basis / upper / lower){over}"), text
+    if over:
+        assert "(over 5 bars)" not in _indicator_line(text, "RSI(14) close:"), text
+    # Live 2026-10-08 (register F40, claudia_ui #95): the model dropped the clause and called the
+    # EMA "rising". The result's own first body line says what the lines are and are not, so the
+    # rule travels with the tool to any host (Anthropic: the tool text is the lever).
+    note = text.splitlines()[1].strip()
+    assert note.startswith("Quote each line as printed"), text
+    assert "'(over N bars)'" in note and "part of the value" in note, text
+    assert "no line carries a slope, trend or direction" in note, text
+
+
+_CONTINUOUS_CONTRACT_LINE = (
+    "A future contract is computed on its own contract's prices. A continuous chart (TradingView's ES1!, "
+    "for example) joins contracts, so its bars before a contract switch are the earlier contract's, "
+    "back-adjusted only if that chart setting is on. A line that reaches back across a switch can therefore "
+    "read differently: window lines (SMA, WMA, VWMA, the bands' width, Stoch, %R) only while their window "
+    "spans the switch, and recursive lines (EMA, SMMA, RSI, MACD, ATR) by an amount that shrinks with every "
+    "bar after it. To compare, use the chart of the contract itself."
+)
+
+
+def test_add_indicators_says_how_a_continuous_chart_differs_from_the_contract(toolkit):
+    """Regression caught: the result stops warning that a continuous chart (ES1!) can read differently
+    from the contract this tool computes on, or the operator-approved wording drifts.
+
+    Measured 2026-11-12 (register F4): TradingView's EMA 200 hl2 on ESZ2026 equalled this tool's to the
+    cent, and so did ES1!'s about two months after its 2026-09-15 switch; on 2026-10-06, about three weeks
+    after it, ES1! read 0.03 away. TradingView's back-adjustment is off by default. The wording was
+    approved by the operator on 2026-11-12 and is pinned here verbatim, so a change to it is deliberate."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "ma_type": "EMA", "ma_periods": [3]})
+
+    assert_tool_succeeded(text)
+    assert text.splitlines()[2].strip() == _CONTINUOUS_CONTRACT_LINE, text
+
+
+def test_add_indicators_never_prints_nan_and_says_how_many_bars_it_needs(toolkit):
+    """A 200-bar average cannot exist on a 5-bar window. `nan` reads as a broken tool; the
+    line says what is missing and what to do, on every line that has no value."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "ma_periods": [200]})
+
+    assert_tool_succeeded(text)
+    assert _indicator_line(text, "SMA 200 hl2:") == "n/a — 5 bars in the window, 200 needed; fetch a longer period"
+    assert "nan" not in text.lower(), text
+
+
+@pytest.mark.parametrize(
+    ("offset", "label", "expected"),
+    [
+        # Drawn one bar to the right: the last bar shows the average as of the bar before, (8+10+12)/3.
+        (1, "SMA 3 hl2 offset 1:", "10.00"),
+        # Drawn one bar to the left: the line stops short of the last bar.
+        (-1, "SMA 3 hl2 offset -1:", "nothing is drawn on the last bar — the line ends 1 bar(s) earlier"),
+    ],
+)
+def test_add_indicators_offset_reports_what_tradingview_draws_on_the_last_bar(toolkit, offset, label, expected):
+    """TradingView's Offset moves the line "Forwards or Backwards relative to the current
+    market"; Pine's `plot` "Shifts the plot to the left or to the right on the given number of
+    bars". The values are unchanged — what changes is which one sits on the last bar."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "source": "hl2", "ma_periods": [3], "offset": offset})
+
+    assert _indicator_line(text, label) == expected
+    assert "source: hl2 = (high + low)/2 (as given)" in text, text
+
+
+@pytest.mark.parametrize(
+    ("setting", "names"),
+    [
+        ({"source": "typical"}, "open, high, low, close, hl2, hlc3, ohlc4, hlcc4"),
+        ({"oscillator_source": "mid"}, "open, high, low, close, hl2, hlc3, ohlc4, hlcc4"),
+        ({"ma_type": "HMA"}, "SMA, EMA, SMMA (RMA), WMA, VWMA"),
+        ({"ma_periods": [0]}, "ma_periods"),
+        ({"band_period": 0}, "band_period"),
+        ({"band_stds": []}, "band_stds"),
+        ({"band_stds": [0]}, "band_stds"),
+        ({"offset": 1.5}, "offset"),
+    ],
+)
+def test_add_indicators_refuses_a_setting_it_cannot_honour(toolkit, setting, names):
+    """A source or type outside TradingView's lists is refused with the list — never computed
+    on `close` under the name that was asked for."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _framework_frame()
+
+    text, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, **setting})
+
+    assert "Nothing computed" in text, text
+    assert names in text, text
+
+
+def test_add_indicators_computes_rsi_and_macd_on_the_source_it_names(toolkit):
+    """Flat closes under a rising midpoint. On `close`, the default, RSI has no value — 0/0,
+    which no source defines — and the line says so rather than printing `nan`; on `hl2` it is
+    100. A line labelled `hl2` and computed on `close` would print the first under the
+    second's name."""
+    import pandas as pd
+
+    rising = [float(i) for i in range(40)]
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = pd.DataFrame(
+        {"open": 100.0, "high": [101.0 + 2 * r for r in rising], "low": 99.0, "close": 100.0, "volume": 1.0},
+        index=pd.date_range("2026-03-02", periods=40, freq="B"),
+    )
+
+    on_close, _ = toolkit.execute("add_indicators", _AAPL_WINDOW)
+    on_hl2, _ = toolkit.execute("add_indicators", {**_AAPL_WINDOW, "oscillator_source": "hl2"})
+
+    assert _indicator_line(on_close, "RSI(14) close:") == "n/a — undefined on the last bar"
+    assert "nan" not in on_close.lower(), on_close
+    assert _indicator_line(on_hl2, "RSI(14) hl2:") == "100.0"
+    assert _indicator_line(on_hl2, "MACD(12,26,9) hl2:") != _indicator_line(on_close, "MACD(12,26,9) close:")
+
+
+def test_add_indicators_prints_no_vwap_for_an_all_hours_series(toolkit):
+    """This VWAP restarts on the UTC day. A regular US session sits inside one; an all-hours
+    session does not — a futures session opens at 18:00 New York and crosses midnight UTC
+    (measured 2026-09-17 on ES minute bars: the figure restarted mid-session, DATA-R6). Since
+    2.2.0 an all-hours series can be cached, so the line says why there is no figure instead
+    of printing that one. The regular-hours test above is the counter-case."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _indicator_frame(120, "5min")
+
+    text, _ = toolkit.execute(
+        "add_indicators",
+        {"symbol": "ESZ6", "timeframe": "5min", "period": "1D", "end": "2026-05-22", "outside_rth": True},
+    )
+
+    vwap_line = _indicator_line(text, "VWAP:")
+    assert vwap_line.startswith("n/a") and "all-hours" in vwap_line, vwap_line
+
+
 def _history_payload(n_bars, start_ms, step_ms, warning=None):
     """A get_market_history_paginated return value, optionally flagged incomplete."""
     payload = {
@@ -1122,6 +1656,30 @@ def _history_payload(n_bars, start_ms, step_ms, warning=None):
     if warning:
         payload["ibkr_core_warning"] = warning
     return payload
+
+
+def test_fetch_market_data_refuses_a_period_outside_ibkrs_grammar(toolkit):
+    """`period="ytd"` was sent twice by the model; IBKR answered with a window of its own and
+    the result named `ytd` as if it had been honoured, under a cache key that says `YTD`. The
+    period is refused with the grammar before anything is resolved, read or cached."""
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "ytd"})
+
+    assert "period 'ytd'" in text and "min, h, d, w, m" in text and "Nothing was read" in text, text
+    toolkit._client.get_stocks.assert_not_called()
+    toolkit._cache.check.assert_not_called()
+    toolkit._client.get_market_history_paginated.assert_not_called()
+
+
+def test_fetch_market_data_refuses_second_bars_with_the_reason(toolkit):
+    """`bar="1S"` reaches IBKR today as `1s` and comes back HTTP 500 after three attempts; the
+    refusal names what IBKR does with second bars and what the tool offers, before anything
+    is resolved, read or cached (register F22; operator 2026-10-05: no stamp is changed)."""
+    text, _ = toolkit.execute("fetch_market_data", {"symbol": "ES", "sec_type": "FUT", "period": "1d", "bar": "1S"})
+
+    assert "stamps 60 seconds apart" in text and "1min, 2min" in text and "Nothing was read" in text, text
+    toolkit._client.get_futures.assert_not_called()
+    toolkit._cache.check.assert_not_called()
+    toolkit._client.get_market_history_paginated.assert_not_called()
 
 
 def test_fetch_market_data_refuses_to_cache_a_truncated_window(toolkit):
@@ -1204,3 +1762,191 @@ def test_get_trading_schedule_description_does_not_promise_a_next_trading_date(t
     assert "next trading date" not in tool["description"].lower()
     assert "default: SMART" not in tool["description"]
     assert "SMART" in tool["description"], "the SMART trap should be named, not silently dropped"
+
+
+@pytest.mark.parametrize("tool", ["add_indicators", "run_backtest", "get_analytics"])
+def test_the_readers_take_the_hours_and_state_them(toolkit, tool):
+    """Step 2: the hours are a key part, so each cache reader takes `outside_rth` (default
+    false — it has no security type to default from) and says which hours it read."""
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.entry.return_value = {"outside_rth": True}
+    toolkit._cache.load.return_value = pd.DataFrame(
+        {"open": 1.0, "high": 1.0, "low": 1.0, "close": [1.0 + i / 100 for i in range(60)], "volume": 1.0},
+        index=pd.date_range("2026-07-01", periods=60, freq="B"),
+    )
+    base = {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03", "code": "df['signal'] = 1"}
+
+    given, _ = toolkit.execute(tool, {**base, "outside_rth": True})
+    toolkit._cache.check.assert_called_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+    toolkit._cache.load.assert_called_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+    assert "all trading hours (as given)" in given, given
+
+    default, _ = toolkit.execute(tool, base)
+    toolkit._cache.check.assert_called_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=False)
+    assert "regular trading hours (by default)" in default, default
+
+
+def test_add_indicators_prints_an_all_hours_futures_last_bar_as_its_open_in_et(toolkit):
+    """The stamp is IBKR's session open; "last bar: 2026-10-01" would read as Thursday's bar
+    when it is Friday's session. The row knows the series is an all-hours future."""
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.entry.return_value = {"outside_rth": True, "listing": {"root": "ES", "conid": 515416632}}
+    idx = pd.to_datetime(
+        [1_790_892_000_000 - 86_400_000 * i for i in range(59, -1, -1)], unit="ms"
+    )  # last = Thu 18:00 ET
+    toolkit._cache.load.return_value = pd.DataFrame(
+        {"open": 1.0, "high": 1.0, "low": 1.0, "close": [1.0 + i / 100 for i in range(60)], "volume": 1.0}, index=idx
+    )
+    text, _ = toolkit.execute(
+        "add_indicators",
+        {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03", "outside_rth": True},
+    )
+    assert "last bar stamped 2026-10-01 18:00 ET (its session open)" in text, text
+    assert "last bar: 2026-10-01" not in text
+
+
+def test_a_cache_miss_names_the_hours_and_points_a_root_at_its_cached_contracts(toolkit):
+    """A miss under the wrong hours lists what IS cached with its hours; a root (`ES`) is not a
+    cache symbol, and the miss points at the contracts cached for it rather than saying nothing."""
+    toolkit._cache.check.return_value = False
+    toolkit._cache.list_cached.return_value = [
+        {
+            "key": "ESZ6_1D_6M_2026-10-03_ALL",
+            "symbol": "ESZ6",
+            "timeframe": "1D",
+            "period": "6m",
+            "end": "2026-10-03",
+            "outside_rth": True,
+            "listing": {"root": "ES", "conid": 515416632},
+        },
+    ]
+    wrong_hours, _ = toolkit.execute(
+        "add_indicators", {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03"}
+    )
+    assert "No cached data for ESZ6 1D 6m ending 2026-10-03 (regular hours)" in wrong_hours, wrong_hours
+    assert "ESZ6 1D 6m ending 2026-10-03 (all hours)" in wrong_hours, wrong_hours
+
+    root, _ = toolkit.execute(
+        "add_indicators", {"symbol": "ES", "timeframe": "1D", "period": "6m", "end": "2026-10-03"}
+    )
+    assert "Nothing is cached under ES" in root and "root" in root, root
+    assert "ESZ6 1D 6m ending 2026-10-03 (all hours" in root, root
+
+    # Live 2026-10-03: `ES` the stock was cached too, and the miss listed it without its name
+    # and without a word about the contracts cached for the root. Every window is named, and
+    # a symbol that is also a root of cached contracts says so.
+    toolkit._cache.list_cached.return_value.append(
+        {
+            "key": "ES_1D_3M_2026-10-03_RTH",
+            "symbol": "ES",
+            "timeframe": "1D",
+            "period": "3m",
+            "end": "2026-10-03",
+            "outside_rth": False,
+            "listing": {"name": "EVERSOURCE ENERGY", "conid": 182880167},
+        },
+    )
+    both, _ = toolkit.execute(
+        "add_indicators", {"symbol": "ES", "timeframe": "1D", "period": "6m", "end": "2026-10-03"}
+    )
+    assert "ES 1D 3m ending 2026-10-03 (regular hours — EVERSOURCE ENERGY)" in both, both
+    assert "ES is also the root of cached contracts: ESZ6 1D 6m ending 2026-10-03 (all hours" in both, both
+
+
+def test_check_cache_takes_the_hours(toolkit):
+    toolkit._cache.check.return_value = True
+    text, _ = toolkit.execute(
+        "check_cache", {"symbol": "ESZ6", "timeframe": "1D", "period": "6m", "end": "2026-10-03", "outside_rth": True}
+    )
+    toolkit._cache.check.assert_called_once_with("ESZ6", "1D", "6m", "2026-10-03", outside_rth=True)
+    assert "HIT" in text and "all hours" in text, text
+
+
+# ── Market-data batch step 5 (2026-10-05): no half candle — a bar is kept once its period has
+# ended for at least a minute before the read ───────────────────────────────────────────────
+
+_SETTLE_FIXTURE_T0 = 1_791_226_800  # 2026-10-05 19:00:00 UTC (15:00 ET), a Monday during the US session
+
+
+def _hourly_bars(stamps_utc: list[int]) -> dict[str, list[dict[str, float]]]:
+    return {"data": [{"t": t * 1000, "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10} for t in stamps_utc]}
+
+
+def _utc(seconds: int):
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(seconds, tz=UTC).replace(tzinfo=None)
+
+
+@pytest.mark.parametrize(
+    ("read_offset_from_newest_end", "kept", "why"),
+    [
+        (-1800, 2, "the newest bar is still in progress at the read"),
+        (30, 2, "the newest bar ended 30 s before the read: IBKR was still publishing its last trades"),
+        (60, 3, "ended a full minute before the read: kept"),
+    ],
+)
+def test_a_bar_is_kept_only_once_its_period_has_ended_for_a_minute(toolkit, read_offset_from_newest_end, kept, why):
+    """Measured 2026-10-05: an un-anchored request's newest bar is the one in progress, and a
+    bar is served without its last trades for one to four seconds after its period ends. The
+    operator's rule: no half candle, a hard-coded delay, stated. The margin is one minute."""
+    stamps = [_SETTLE_FIXTURE_T0 - 7200, _SETTLE_FIXTURE_T0 - 3600, _SETTLE_FIXTURE_T0]
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_stocks.return_value = [{"contracts": [{"conid": 265598, "isUS": True}]}]
+    toolkit._client.get_market_history_paginated.return_value = _hourly_bars(stamps)
+    read_at = _utc(_SETTLE_FIXTURE_T0 + 3600 + read_offset_from_newest_end)
+
+    with patch("ibkr_core_mcp.claude_tools._NOW", return_value=read_at):
+        text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1d", "bar": "1h"})
+
+    saved = toolkit._cache.save.call_args.args[0]
+    assert len(saved) == kept, f"{why}: {text}"
+    assert f"read from IBKR {read_at.strftime('2026-10-05 %H:%M')}" not in text, (
+        "the read time is printed in ET, not UTC"
+    )
+    assert f"read from IBKR 2026-10-05 {(read_at.hour - 4):02d}:{read_at.minute:02d} ET" in text, text  # EDT that day
+    if kept == 2:
+        assert "Not kept: the bar stamped 2026-10-05 15:00 ET" in text, text  # 19:00 UTC
+    else:
+        assert "Not kept" not in text, text
+
+
+def test_a_fetch_whose_every_bar_is_still_open_saves_nothing_and_says_so(toolkit):
+    toolkit._cache.check.return_value = False
+    toolkit._client.get_stocks.return_value = [{"contracts": [{"conid": 265598, "isUS": True}]}]
+    toolkit._client.get_market_history_paginated.return_value = _hourly_bars([_SETTLE_FIXTURE_T0])
+
+    with patch("ibkr_core_mcp.claude_tools._NOW", return_value=_utc(_SETTLE_FIXTURE_T0 + 600)):
+        text, _ = toolkit.execute("fetch_market_data", {"symbol": "AAPL", "period": "1d", "bar": "1h"})
+
+    toolkit._cache.save.assert_not_called()
+    assert "none kept" in text and "Nothing saved" in text, text
+
+
+def test_a_cache_hit_states_when_the_bars_were_read_from_ibkr(toolkit):
+    import pandas as pd
+
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2026-09-01", periods=2))
+
+    toolkit._cache.entry.return_value = {"symbol": "IGV", "cached_at": "2026-10-05T21:28:55.123456+00:00"}
+    dated, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-10-05"})
+    toolkit._cache.entry.return_value = {"symbol": "IGV"}
+    undated, _ = toolkit.execute("fetch_market_data", {"symbol": "IGV", "period": "6m", "end": "2026-10-05"})
+
+    assert "read from IBKR 2026-10-05 17:28 ET" in dated, dated
+    assert "read time not recorded for this entry" in undated, undated
+
+
+def test_the_bar_description_names_who_refuses_second_bars(tool_definition):
+    """Register F39 (seen live 2026-10-08): the description read "Second bars (1S) are refused with
+    the reason: IBKR stamps them 60 seconds apart…" — passive, no subject — and the model told
+    the user "IBKR refuses them". IBKR does return them; this tool refuses them. The actor is named."""
+    bar = tool_definition("fetch_market_data")["input_schema"]["properties"]["bar"]["description"]
+    assert "This tool refuses second bars (1S)" in bar, bar
+    assert "IBKR does return them" in bar, bar
+    assert "are refused" not in bar, "no passive voice: the model supplies a subject of its own"

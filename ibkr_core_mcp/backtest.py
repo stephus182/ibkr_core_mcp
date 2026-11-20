@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import importlib
 import multiprocessing
+import sys
 import threading
 import types
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
@@ -12,7 +16,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython import compile_restricted, safe_builtins, safe_globals
 from RestrictedPython.Guards import full_write_guard, safer_getattr
 from RestrictedPython.Limits import limited_range
 
@@ -361,6 +365,122 @@ def _terminate_then_kill(process: multiprocessing.process.BaseProcess) -> None:
         process.join()
 
 
+# ---------------------------------------------------------------------------
+# C-level imports underneath strategy code (2026-11-17, checklist B2a).
+#
+# CPython's `PyImport_Import` — what `PyImport_ImportModule` and numpy's `npy_cache_import`
+# are built on — does not import by itself. It takes the globals of the innermost PYTHON
+# frame, reads `__builtins__` out of them, and calls the `__import__` it finds there. C
+# functions push no frame, so while C code called directly by a strategy runs, that frame
+# is the strategy's, and RestrictedPython's builtins deliberately hold no `__import__`.
+# numpy fetches the Python helper behind `ndarray.max()` that way on first use; CPython's
+# datetime asks for `time` on every `strftime`; from 3.13 every warning raised in C asks
+# for `warnings`. Each raised `KeyError: '__import__'` in a fresh sandbox child — or was
+# reworded by numpy, or, for `ufunc.outer`, killed the child — on code that had imported
+# nothing and that the allowlist permits. Both published releases, 2.0.1 and 2.1.0, have this.
+# https://github.com/python/cpython/blob/v3.11.18/Python/import.c#L1988-L2051
+#
+# Two facts of that function make a narrow answer possible:
+#
+# 1. When `__builtins__` is a MODULE, CPython reads `__import__` as an ATTRIBUTE of it,
+#    while a frame takes its builtins from the module's DICT (`_PyEval_BuiltinsFromGlobals`,
+#    Objects/frameobject.c). So a module object whose dict holds the sandbox's builtins only,
+#    and whose CLASS carries `__import__` is seen by C code and by nothing else: names in
+#    strategy code, and the strategy's own `import` statement, resolve in the dict and
+#    find no `__import__`, exactly as before.
+# 2. It DISCARDS what `__import__` returns and takes the module from `sys.modules` itself
+#    ("Calling for side-effect of import"). So the service below returns nothing and
+#    imports nothing: it answers whether the module is already loaded.
+#
+# The two modules CPython's own C code loads on first use are loaded by the child before the
+# strategy runs, whether or not something else has imported them. Anything else is refused in
+# words that say what happened.
+# ---------------------------------------------------------------------------
+_PRELOADED_FOR_C_CODE: tuple[str, ...] = ("_strptime", "_pylong")
+
+
+def _preload_for_c_code() -> None:
+    """Load the modules of `_PRELOADED_FOR_C_CODE` that this Python has.
+
+    `_strptime` backs `datetime.strptime`; `_pylong`, new in Python 3.12, backs the
+    division of very large integers. CPython imports both from C on first use.
+    """
+    for name in _PRELOADED_FOR_C_CODE:
+        try:
+            importlib.import_module(name)
+        except ImportError:  # `_pylong` does not exist on Python 3.11
+            continue
+
+
+def _serve_c_import(name: str, *_call_args: object) -> None:
+    """Answer `PyImport_Import` for C code running directly under strategy code.
+
+    Loads nothing and returns nothing (see the block comment above): a module that is
+    already in `sys.modules` is the caller's to take from there, and any other is refused.
+    The remaining arguments CPython passes — globals, locals, fromlist, level — are unused.
+    """
+    if sys.modules.get(name) is None:
+        raise ImportError(
+            f"backtest sandbox: this operation needs the module {name!r} from C code, and the "
+            "sandbox has not loaded it. That is a limit of the sandbox, not an error in the "
+            "strategy: write the operation another way."
+        )
+
+
+# The builtins strategy code may name (2026-11-17). RestrictedPython supplies the OBJECTS: its
+# guarded `setattr`, `delattr` and `_getattr_`, and Python's own for the rest. This list
+# decides which NAMES enter the sandbox. Until it existed the sandbox copied whatever the
+# installed RestrictedPython shipped: 81 names in 7.0, 8.4 and 8.5, and 77 in 9.0, which took
+# `bytes`, `sorted`, `tuple` and `zip` away without anything here noticing. Now a name
+# RestrictedPython adds stays out until someone puts it on this list, and a name it removes
+# leaves the sandbox with it; either way `tests/security/test_sandbox_boundary.py` turns red
+# and a decision is owed. The list is RestrictedPython 9.0's set, written out. `bytes`,
+# `reversed`, `sorted`, `tuple` and `zip` are deliberately not on it.
+# https://github.com/zopefoundation/RestrictedPython/blob/9.0/CHANGES.rst
+_SANDBOX_BUILTIN_NAMES: frozenset[str] = frozenset(
+    {
+        "None", "True", "False", "Ellipsis", "__build_class__",
+        "abs", "bool", "callable", "chr", "complex", "divmod", "float", "hash", "hex", "id", "int",
+        "isinstance", "issubclass", "len", "oct", "ord", "pow", "range", "repr", "round", "slice", "str",
+        "_getattr_", "delattr", "setattr",
+        "ArithmeticError", "AssertionError", "AttributeError", "BaseException", "BufferError",
+        "BytesWarning", "DeprecationWarning", "EOFError", "EnvironmentError", "Exception",
+        "FloatingPointError", "FutureWarning", "GeneratorExit", "IOError", "ImportError",
+        "ImportWarning", "IndentationError", "IndexError", "KeyError", "KeyboardInterrupt",
+        "LookupError", "MemoryError", "NameError", "NotImplementedError", "OSError", "OverflowError",
+        "PendingDeprecationWarning", "ReferenceError", "RuntimeError", "RuntimeWarning",
+        "StopIteration", "SyntaxError", "SyntaxWarning", "SystemError", "SystemExit", "TabError",
+        "TypeError", "UnboundLocalError", "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError",
+        "UnicodeTranslateError", "UnicodeWarning", "UserWarning", "ValueError", "Warning",
+        "ZeroDivisionError",
+    }
+)  # fmt: skip
+
+
+class _SandboxBuiltins(types.ModuleType):
+    """The sandbox's `__builtins__`: a module object, so that C code can ask it for imports.
+
+    Its dict is what strategy frames use as their builtins and must hold the builtins of
+    `_SANDBOX_BUILTIN_NAMES` and nothing else. `__import__` is a CLASS attribute on purpose: an instance
+    attribute would live in that dict, where the strategy's own `import` statement looks.
+    """
+
+    __import__ = staticmethod(_serve_c_import)
+
+
+def _sandbox_builtins() -> types.ModuleType:
+    """A fresh builtins module for one sandbox, holding the builtins of the frozen list.
+
+    A name is in it only if it is on `_SANDBOX_BUILTIN_NAMES` AND RestrictedPython ships it.
+    The object is always RestrictedPython's.
+    """
+    module = _SandboxBuiltins("backtest_sandbox_builtins")
+    namespace = vars(module)
+    namespace.clear()  # drop __name__, __doc__ and the rest: the dict is the builtins, exactly
+    namespace.update({name: value for name, value in safe_builtins.items() if name in _SANDBOX_BUILTIN_NAMES})
+    return module
+
+
 def build_sandbox(df: pd.DataFrame) -> dict[str, Any]:
     """The complete namespace strategy code runs in — every name it can reach, in one place.
 
@@ -368,9 +488,14 @@ def build_sandbox(df: pd.DataFrame) -> dict[str, Any]:
     exactly the documented one: a name added here is a new capability handed to
     model-written code, and it should be added on purpose, with the test updated in the
     same commit (docs/audits/security-architecture-audit-2026-09-13.md, B4).
+
+    `__builtins__` is a module object rather than RestrictedPython's dict (see
+    `_SandboxBuiltins`). The builtins strategy code can name are `_SANDBOX_BUILTIN_NAMES`,
+    frozen one level below this key set and held by the same test file.
     """
     return {
         **safe_globals,
+        "__builtins__": _sandbox_builtins(),
         "_write_": _write_guard,
         "_getattr_": _sandboxed_getattr,
         "_getitem_": lambda ob, key: ob[key],
@@ -386,11 +511,53 @@ def build_sandbox(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# `import` statements in strategy code (2026-11-17).
+#
+# A strategy cannot import. Its builtins hold no `__import__`, so CPython refuses the statement
+# when it runs, with `ImportError: __import__ not found`. That refusal is the boundary and it is
+# untouched. What it lacked was words: the text is CPython's, it names a missing builtin and
+# not the rule, and a real backtest that began `import numpy as np` was answered with it
+# (July 2026).
+#
+# So the child looks for the statement before it compiles anything, and answers in a sentence.
+# The check can only refuse. Source the parser rejects is left to `compile_restricted`, as
+# before; source without an `import` statement takes the path it always took.
+# It is stricter than the run-time refusal in one way, on purpose: an `import` that did no
+# harm before (in a function nobody calls, or failing inside the strategy's own
+# `try/except ImportError`) is refused as well. One rule, the one the documents always stated:
+# strategy code holds no `import`.
+#
+# It runs here, in the child, like the compile: the parent never parses strategy source.
+# ---------------------------------------------------------------------------
+_IMPORT_REFUSAL = "import statements are not available to strategy code; pd and np are already provided."
+
+
+def _first_import_line(code: str) -> int | None:
+    """The line of the first `import` statement in strategy source, or None if it holds none.
+
+    None also when the source does not parse, whatever the parser raised: what becomes of such
+    source is `compile_restricted`'s business, as before, and this check must not get in its
+    way. The parse is the one `compile_restricted` makes next, with the same arguments, except
+    that the parser's warnings are silenced here, so that each is shown once, by that second
+    parse. Where a host turns warnings into errors the two parses can therefore differ: a
+    source that holds such a warning and an `import` is answered about the `import` first.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(code, "<strategy>", "exec")
+    except Exception:
+        return None
+    lines = [node.lineno for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    return min(lines, default=None)
+
+
 def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> None:
     """Compile and run strategy code inside an isolated child process.
 
-    Runs entirely in the child (both compile_restricted and exec) so the parent
-    can kill the whole OS process on timeout — a thread cannot be forcibly
+    Runs entirely in the child (the import check, compile_restricted and exec) so the
+    parent can kill the whole OS process on timeout — a thread cannot be forcibly
     stopped once it's running, a process can. `conn` is the write end of a
     multiprocessing.Pipe; sends a ("ok", df) / ("syntax_error", msg) /
     ("runtime_error", msg) tuple back to the parent.
@@ -403,12 +570,17 @@ def _execute_in_subprocess(code: str, df: pd.DataFrame, conn: Connection) -> Non
     after start()), so if the child dies part-way through send() the reader is
     delivered EOF promptly instead of hanging. See run_backtest.
     """
+    import_line = _first_import_line(code)
+    if import_line is not None:
+        conn.send(("syntax_error", f"Line {import_line}: {_IMPORT_REFUSAL}"))
+        return
     try:
         byte_code = compile_restricted(code, "<strategy>", "exec")
     except SyntaxError as e:
         conn.send(("syntax_error", str(e)))
         return
 
+    _preload_for_c_code()
     sandbox = build_sandbox(df)
     try:
         exec(byte_code, sandbox)  # noqa: S102
@@ -445,8 +617,8 @@ def run_backtest(
     item 2 records that defect class being fixed for `full_report()`; this path was missed.
 
     Raises:
-        BacktestSyntaxError: If the strategy code exceeds the size limit or will not
-            compile.
+        BacktestSyntaxError: If the strategy code exceeds the size limit, holds an
+            `import` statement, or will not compile.
         BacktestError: If `df` has no rows, or the sandbox fails. An empty frame used
             to produce a fully-populated result reading "0.0% return, 0 trades",
             because `(sig == 0).all()` is True for an empty Series — a measurement
@@ -461,11 +633,11 @@ def run_backtest(
             "Check the symbol, timeframe, period and end date passed to fetch_market_data."
         )
 
-    # safe_globals already sets __builtins__ = safe_builtins, which excludes
-    # __import__, open, eval, exec, compile, print and all introspection attrs.
-    # We do NOT override __builtins__ further — replacing it with the tiny
-    # limited_builtins dict would strip most safe builtins and make strategies
-    # unable to use isinstance, bool, etc.
+    # The sandbox's builtins are the names of _SANDBOX_BUILTIN_NAMES, each RestrictedPython's
+    # own object: no __import__, open, eval, exec, compile or print, and no introspection attrs.
+    # build_sandbox hands them over as the dict of a module object (_SandboxBuiltins). The list
+    # is RestrictedPython 9.0's whole safe set on purpose — the tiny limited_builtins dict would
+    # strip most safe builtins and make strategies unable to use isinstance, bool, etc.
     ctx = multiprocessing.get_context("spawn")
     reader, writer = ctx.Pipe(duplex=False)
     process = ctx.Process(target=_execute_in_subprocess, args=(code, df, writer))

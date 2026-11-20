@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ibkr_core_mcp.exceptions import HumanAuthError
+from ibkr_core_mcp.exceptions import ConfirmationDeclinedError, ConfirmationTimeoutError, HumanAuthError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,6 +71,7 @@ def _dialog_args():
         "disclaimer": "Live order warning",
         "confirm_label": "SEND TO IBKR",
         "abandon_label": "DO NOT SEND",
+        "abandon_message": "Not sent — nothing reached IBKR.",
     }
 
 
@@ -93,9 +94,11 @@ def test_dispatch_darwin_appkit_cancel_does_not_fall_back():
 
     with (
         patch.object(sys, "platform", "darwin"),
-        patch.object(oc, "_show_appkit_dialog", side_effect=HumanAuthError("Order cancelled by user")),
+        patch.object(
+            oc, "_show_appkit_dialog", side_effect=ConfirmationDeclinedError("Not sent — nothing reached IBKR.")
+        ),
         patch.object(oc, "_show_osascript_dialog") as mock_osa,
-        pytest.raises(HumanAuthError, match="cancelled by user"),
+        pytest.raises(ConfirmationDeclinedError, match="Not sent"),
     ):
         oc._show_confirm_dialog(**_dialog_args())
     mock_osa.assert_not_called()
@@ -129,7 +132,7 @@ def test_show_confirm_dialog_tkinter_cancel_raises():
     with (
         patch.object(sys, "platform", "linux"),
         patch("ibkr_core_mcp.order_confirm.tk", mock_tk),
-        pytest.raises(HumanAuthError, match="cancelled by user"),
+        pytest.raises(ConfirmationDeclinedError, match=re.escape("Not sent — nothing reached IBKR.")),
     ):
         oc._show_confirm_dialog(**_dialog_args())
 
@@ -141,7 +144,7 @@ def test_show_confirm_dialog_tkinter_window_close_raises():
     with (
         patch.object(sys, "platform", "linux"),
         patch("ibkr_core_mcp.order_confirm.tk", mock_tk),
-        pytest.raises(HumanAuthError, match="cancelled by user"),
+        pytest.raises(ConfirmationDeclinedError, match=re.escape("Not sent — nothing reached IBKR.")),
     ):
         oc._show_confirm_dialog(**_dialog_args())
 
@@ -178,13 +181,17 @@ def test_appkit_dialog_confirmed_does_not_raise():
 
 
 def test_appkit_dialog_cancelled_raises_humanauth():
+    """The abandon button is a HumanAuthError still — and, since 2.2.0, its own type, with a
+    sentence that never says "cancelled" (register F6)."""
     import ibkr_core_mcp.order_confirm as oc
 
     with (
         patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")),
-        pytest.raises(HumanAuthError, match="cancelled by user"),
+        pytest.raises(ConfirmationDeclinedError, match="nothing was sent to IBKR") as caught,
     ):
         oc._show_appkit_dialog("T", {"Action": "BUY"}, "warn", "SEND TO IBKR", "BUY", "DO NOT SEND")
+    assert isinstance(caught.value, HumanAuthError)
+    assert "cancel" not in str(caught.value).lower()
 
 
 def test_appkit_dialog_subprocess_failure_raises_runtimeerror():
@@ -244,7 +251,12 @@ def test_confirm_cancel_dialog_passes_order_id():
         confirm_cancel_dialog("ORD456", "U1234567")
     kwargs = mock_show.call_args.kwargs
     assert kwargs["details"]["Order ID"] == "ORD456"
-    assert "CANCEL" in kwargs["confirm_label"]
+    # The button says VALIDATE since 2026-10-01 (register F6), so WHAT is validated must be
+    # said by everything around it: the title, the banner's action and the disclaimer.
+    assert kwargs["confirm_label"] == "VALIDATE"
+    assert "CANCEL ORDER" in kwargs["title"]
+    assert kwargs["action"] == "CANCEL"
+    assert "CANCEL a live order" in kwargs["disclaimer"]
 
 
 def test_confirm_cancel_dialog_shows_typed_order_details_when_provided():
@@ -330,7 +342,7 @@ def test_confirm_reply_dialog_accepts_options_without_error():
 
         confirm_reply_dialog("RPL789", "msg", ["Yes", "No"])
     kwargs = mock_show.call_args.kwargs
-    assert kwargs["confirm_label"] == "CONFIRM REPLY"
+    assert kwargs["confirm_label"] == "CONFIRM"
 
 
 # ============================================================================
@@ -732,7 +744,8 @@ def test_the_banner_states_the_action_not_the_side():
     """
     from ibkr_core_mcp._order_dialog import _banner
 
-    green, red, amber = (0.10, 0.50, 0.20), (0.72, 0.10, 0.10), (0.55, 0.42, 0.05)
+    # `amber` is a caution yellow since 2026-10-01 (register F6: the operator, on the rendered dialog).
+    green, red, amber = (0.10, 0.50, 0.20), (0.72, 0.10, 0.10), (0.90, 0.72, 0.00)
     for side in ("BUY", "SELL", "B", None):
         assert _banner(side, "CANCEL") == (red, "CANCEL ORDER")
     # Modify states the action but keeps the ORDER'S colour, as IB does (user decision
@@ -750,8 +763,8 @@ def test_the_banner_still_reads_the_side_when_placing():
     assert _banner("BUY", None) == ((0.10, 0.50, 0.20), "BUY ORDER")
     assert _banner("SELL", None) == ((0.72, 0.10, 0.10), "SELL ORDER")
     assert _banner("SHORT", None) == ((0.72, 0.10, 0.10), "SELL ORDER")
-    assert _banner(None, None) == ((0.55, 0.42, 0.05), "REVIEW ORDER")
-    assert _banner("", None) == ((0.55, 0.42, 0.05), "REVIEW ORDER")
+    assert _banner(None, None) == ((0.90, 0.72, 0.00), "REVIEW ORDER")
+    assert _banner("", None) == ((0.90, 0.72, 0.00), "REVIEW ORDER")
 
 
 def test_quantity_never_shows_a_trailing_point_zero():
@@ -1080,7 +1093,7 @@ def test_the_bracket_dialog_does_not_mutate_the_tickets_it_is_given():
         confirm_bracket_dialog(parent, children, "U1")
 
     # The screen DID inherit, or this test would pass by the mechanism never running.
-    assert mock_show.call_args.kwargs["details"]["Profit taker — Symbol"] == "ES — ESU6 · SEP26"
+    assert mock_show.call_args.kwargs["details"]["Profit taker"]["Symbol"] == "ES — ESU6 · SEP26"
     # ...and not one key of the caller's own dicts moved.
     assert parent == parent_before
     assert children == children_before
@@ -1139,6 +1152,16 @@ def test_modify_dialog_changes_row_covers_every_field_kind():
     )
 
 
+def test_a_time_in_force_that_was_not_sent_is_shown_as_not_sent_never_as_day():
+    """Register F10: the last screen before a write showed "DAY" for a body that carried no
+    time in force — an unknown shown as a value. Like an absent order type, it is said."""
+    from ibkr_core_mcp.order_confirm import _order_rows
+
+    rows = _order_rows({"ticker": "AAPL", "side": "BUY", "quantity": 1, "orderType": "LMT", "price": 1.0}, "U1")
+    assert rows["TIF"] == "— (not sent)"
+    assert _order_rows({"ticker": "AAPL", "side": "BUY", "quantity": 1, "tif": "GTC"}, "U1")["TIF"] == "GTC"
+
+
 def test_reply_dialog_title_names_the_order_when_told():
     """With Gate 1 once per write (2026-09-11) this dialog is the only gate on a reply,
     so its title says which order it is about; the standalone reply path stays as it was."""
@@ -1153,10 +1176,10 @@ def test_reply_dialog_title_names_the_order_when_told():
 
 
 def _fake_appkit(detail_height: float = 90.0, disclaimer_height: float = 34.0):
-    """A MagicMock AppKit: NSAlert confirms; attributed strings report the given heights."""
+    """A MagicMock AppKit: the modal loop confirms; attributed strings report the given heights."""
     ak = MagicMock()
-    alert = ak.NSAlert.alloc.return_value.init.return_value
-    alert.runModal.return_value = 1000
+    ak.NSApplication.sharedApplication.return_value.runModalForWindow_.return_value = 1000
+    ak.NSMakeRect.side_effect = lambda *xywh: xywh  # frames readable as (x, y, w, h)
     detail = ak.NSMutableAttributedString.alloc.return_value.init.return_value
     detail.boundingRectWithSize_options_context_.return_value = MagicMock(size=MagicMock(height=detail_height))
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
@@ -1167,10 +1190,10 @@ def _fake_appkit(detail_height: float = 90.0, disclaimer_height: float = 34.0):
 
 
 def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
-    """User design 2026-09-10/11: the full order detail on every pop-up, in bold.
-
-    NSAlert informative text is plain, so detail and disclaimer live in the accessory view:
-    detail (bold) above the disclaimer (regular) above the banner — the order read today.
+    """User design 2026-09-10/11: the full order detail on every pop-up, in bold, read top to
+    bottom — detail (bold) above the disclaimer (regular) above the banner above the buttons.
+    Since 2026-11-07 the dialog is the core's own window (claudia_ui #111): the same reading
+    order, laid out by frames in a 452-pt window, the heights measured from the text.
     """
     import sys
 
@@ -1189,20 +1212,22 @@ def test_dialog_renders_the_order_detail_bold_and_keeps_the_reading_order():
                 "timeout_s": 1,
             }
         )
-    alert = ak.NSAlert.alloc.return_value.init.return_value
-    alert.setInformativeText_.assert_called_once_with("")
     made = ak.NSAttributedString.alloc.return_value.initWithString_attributes_
-    disc_text, disc_attrs = made.call_args_list[-1].args
-    assert disc_text == "This is a LIVE order."
+    # Found by its text: the two button titles are made after it.
+    disc_attrs = next(c.args[1] for c in made.call_args_list if c.args[0] == "This is a LIVE order.")
     assert disc_attrs[ak.NSFontAttributeName] == ak.NSFont.systemFontOfSize_.return_value
-    # container = banner 48 + gap 8 + disclaimer (34 + 2) + gap 8 + detail (90 + 2); the
-    # container is the first rect made, the banner box the second; then the disclaimer field
-    # sits just above the banner and the detail field above that — the reading order.
+    # The frames, by their measured sizes: disclaimer (34 + 2) and detail (90 + 2) fields 404
+    # wide inside the 420-pt body, the banner box 420 × 48, the buttons 32 tall. Reading order
+    # is y descending: detail above disclaimer above banner above the row.
     rects = [c.args for c in ak.NSMakeRect.call_args_list]
-    assert rects[0] == (0, 0, 420, 48 + 8 + 36 + 8 + 92)
-    assert rects[1] == (0, 0, 420, 48)
-    assert (8, 48 + 8, 404, 36) in rects  # disclaimer field
-    assert (8, 48 + 8 + 36 + 8, 404, 92) in rects  # detail field, above it
+    (detail_y,) = [y for x, y, w, h in rects if (x, w, h) == (24, 404, 92)]
+    (disclaimer_y,) = [y for x, y, w, h in rects if (x, w, h) == (24, 404, 36)]
+    (banner_y,) = [y for x, y, w, h in rects if (x, w, h) == (16, 420, 48)]
+    button_ys = {y for x, y, w, h in rects if h == 32}
+    assert detail_y > disclaimer_y > banner_y > max(button_ys), (detail_y, disclaimer_y, banner_y, button_ys)
+    # 16 + 32 + 16 (row) + 48 + 8 + 36 + 8 + 92 (body) + 12 + 22 + 8 + 56 + 8 (title, icon): one window
+    window_rect = ak.NSWindow.alloc.return_value.initWithContentRect_styleMask_backing_defer_.call_args.args[0]
+    assert window_rect == (0, 0, 452, 362)
 
 
 def test_a_futures_price_is_not_a_currency_amount():
@@ -1429,7 +1454,7 @@ def test_dialog_bolds_the_values_not_the_labels():
     bold = ak.NSFont.boldSystemFontOfSize_.return_value
     regular = ak.NSFont.systemFontOfSize_.return_value
     runs = [(c.args[0], c.args[1][ak.NSFontAttributeName]) for c in made.call_args_list]
-    assert runs == [
+    assert runs[:6] == [  # the two button titles follow
         ("Action: ", regular),
         ("BUY", bold),
         ("\n", regular),
@@ -1588,6 +1613,46 @@ def _bracket_details(parent: dict[str, Any], children: list[dict[str, Any]]) -> 
     return dict(_bracket_call(parent, children)["details"])
 
 
+def _flat_rows(details: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Every row of a sectioned dialog in reading order: a section's rows under its title."""
+    rows: list[tuple[str, Any]] = []
+    for key, value in details.items():
+        if isinstance(value, dict):
+            rows.extend(value.items())
+        else:
+            rows.append((key, value))
+    return rows
+
+
+def test_detail_lines_render_a_section_as_a_title_and_indented_rows():
+    """The plain renderers (osascript, tkinter) and the AppKit one agree on the shape: a flat
+    row is `key: value`; a section is a blank line, its title once, then its rows indented."""
+    from ibkr_core_mcp.order_confirm import _detail_lines
+
+    lines = _detail_lines({"Account": "U1", "Parent": {"Symbol": "F", "Price": "7.46"}, "Order ID": "7"})
+    assert lines == ["Account: U1", "", "Parent", "    Symbol: F", "    Price: 7.46", "", "Order ID: 7"]
+
+
+def test_bracket_dialog_is_three_sections_each_titled_once():
+    """Operator design 2026-10-19 (after the first live bracket): three distinct sections —
+    Parent, Profit taker, Stop loss — the title once as a header, never repeated on every
+    row (`Parent — Symbol`, `Stop loss — TIF` …), separated for readability. Account and
+    Action stay above the sections: the banner and the side are the dialog's, not a leg's."""
+    d = _bracket_details(
+        _bracket_parent(),
+        [_bracket_child(), _bracket_child(orderType="STP", price=None, auxPrice=7600.0)],
+    )
+    assert list(d)[:2] == ["Account", "Action"]
+    assert [k for k, v in d.items() if isinstance(v, dict)] == ["Parent", "Profit taker", "Stop loss"]
+    for key, _value in _flat_rows(d):
+        assert " — " not in key, key
+    assert "Account" not in d["Parent"] and "Action" in d["Parent"]
+    assert d["Parent"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert next(iter(d["Profit taker"])) == "Held by IBKR"
+    assert d["Stop loss"]["Held by IBKR"] == "until the parent fills"
+    assert d["Stop loss"]["Order Type"] == "STP"
+
+
 def test_bracket_dialog_shows_both_legs_in_one_call():
     """One Gate 2 for the pair: the human sees the parent AND the child before SEND.
 
@@ -1600,24 +1665,24 @@ def test_bracket_dialog_shows_both_legs_in_one_call():
     assert kwargs["abandon_label"] == "DO NOT SEND"
     d = kwargs["details"]
     assert d["Account"] == "U1234567"
-    assert d["Parent — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
-    assert d["Parent — Quantity"] == "1 (×50 per contract)"
-    assert d["Parent — Order Type"] == "LMT"
-    assert d["Parent — Price"] == "7,725.00"
-    assert d["Parent — TIF"] == "GTC"
-    assert d["Profit taker — Action"] == "BUY"
-    assert d["Profit taker — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
-    assert d["Profit taker — Order Type"] == "LMT"
-    assert d["Profit taker — Price"] == "7,700.00"
-    assert d["Profit taker — TIF"] == "GTC"
+    assert d["Parent"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Parent"]["Quantity"] == "1 (×50 per contract)"
+    assert d["Parent"]["Order Type"] == "LMT"
+    assert d["Parent"]["Price"] == "7,725.00"
+    assert d["Parent"]["TIF"] == "GTC"
+    assert d["Profit taker"]["Action"] == "BUY"
+    assert d["Profit taker"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Profit taker"]["Order Type"] == "LMT"
+    assert d["Profit taker"]["Price"] == "7,700.00"
+    assert d["Profit taker"]["TIF"] == "GTC"
 
 
 def test_bracket_dialog_says_the_child_is_held_never_working():
     """`PreSubmitted` is a working state for a single order and a HELD one for a bracket
     child (review 2026-09-08 item 2). The dialog must never call the child working."""
     d = _bracket_details(_bracket_parent(), [_bracket_child()])
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
-    rendered = " ".join(f"{k}: {v}" for k, v in d.items()).lower()
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
+    rendered = " ".join(f"{k}: {v}" for k, v in _flat_rows(d)).lower()
     assert "working" not in rendered
 
 
@@ -1625,10 +1690,10 @@ def test_bracket_dialog_labels_the_notional_as_the_parents_only():
     """Review item 8: a bracket's two legs are OPPOSITE, so a row called `Total` would be
     read as their sum. Exactly one notional row, and it names whose it is."""
     d = _bracket_details(_bracket_parent(), [_bracket_child()])
-    assert d["Parent notional (est.)"] == "386,250.00 USD (×50 multiplier)"
+    assert d["Parent"]["Notional (est.)"] == "386,250.00 USD (×50 multiplier)"
     assert "Total (est.)" not in d
-    notionals = [k for k in d if "notional" in k.lower() or "total" in k.lower()]
-    assert notionals == ["Parent notional (est.)"], notionals
+    notionals = [k for k, _v in _flat_rows(d) if "notional" in k.lower() or "total" in k.lower()]
+    assert notionals == ["Notional (est.)"], notionals
 
 
 def test_bracket_dialog_side_colour_is_the_parents():
@@ -1696,60 +1761,22 @@ def _bracket(parent_qty=1, child_qtys=(1, 1)):
     return parent, children
 
 
-def test_a_multi_child_bracket_discloses_that_the_children_outsize_the_parent():
-    """A two-child bracket renders two full-size SELLs under a one-lot BUY, and nothing said
-    only one of them can fill — so the arithmetic read as an instruction to sell twice what
-    was being bought. That is the alarming reading and the wrong one.
-
-    The disclosure is NOT a guardrail: IBKR's own published bracket is a full-size profit
-    taker AND a full-size stop on one position (50/50/50), so refusing the aggregate would
-    refuse the standard shape. See `_bracket_tickets` for why H1 stays per-child.
-    """
-    details = _bracket_details(*_bracket(parent_qty=1, child_qtys=(1, 1)))
-    disclosure = details["Children together"]
-    assert "total 2 against a parent of 1" in disclosure
-    assert "one filling cancels the others" in disclosure
-    # Dated and hedged, never stated as a permanent guarantee about THIS order.
-    assert "2026-09-22" in disclosure
-    assert "cannot verify the link for the order about to be submitted" in disclosure
-    # The partial-fill unknown is disclosed, not policed.
-    assert "PARTIALLY" in disclosure
-
-
 @pytest.mark.parametrize(
-    ("why", "parent_qty", "child_qtys"),
-    [
-        ("a single child cannot outsize anything by aggregation", 1, (1,)),
-        ("a genuine scale-out does not oversubscribe the parent", 3, (1, 1)),
-        ("equal aggregate is not an excess", 2, (1, 1)),
-    ],
+    ("parent_qty", "child_qtys"),
+    [(1, (1, 1)), (1, (None, None)), (3, (1, 1)), (2, (1,))],
 )
-def test_the_aggregate_disclosure_stays_quiet_when_there_is_nothing_to_disclose(why, parent_qty, child_qtys):
-    """The counter-cases, and what makes the test above discriminating rather than a banner
-    printed on every bracket. A warning shown always is a warning read never."""
-    details = _bracket_details(*_bracket(parent_qty=parent_qty, child_qtys=child_qtys))
-    assert "Children together" not in details, why
-
-
-def test_a_child_with_no_stated_quantity_counts_as_full_size_in_the_disclosure():
-    """`_bracket_tickets` documents an absent child quantity as DERIVED from the parent, so
-    an all-derived two-child bracket is two full-size legs and the arithmetic is still
-    exact. Counting an absent quantity as ZERO would suppress the disclosure on exactly the
-    bracket that most needs it — the one whose legs the caller never sized by hand."""
-    details = _bracket_details(*_bracket(parent_qty=1, child_qtys=(None, None)))
-    assert "total 2 against a parent of 1" in details["Children together"]
-
-
-def test_the_disclosure_drops_the_arithmetic_when_the_parent_states_no_quantity():
-    """The only case where the numbers cannot be stated. The disclosure must still appear —
-    the mutual-exclusivity point does not depend on arithmetic — but it must not invent a
-    total it cannot compute, which is this package's rule everywhere else on this dialog
-    (an unknown is named, never guessed)."""
-    parent, children = _bracket(parent_qty=1, child_qtys=(None, None))
-    del parent["quantity"]
-    disclosure = _bracket_details(parent, children)["Children together"]
-    assert "each sized to the full parent quantity" in disclosure
-    assert "total" not in disclosure.split("They are exits")[0]
+def test_the_bracket_dialog_carries_no_children_together_paragraph(parent_qty, child_qtys):
+    """Operator 2026-10-19, after the first live bracket: the `Children together` paragraph
+    ("These 2 children total 2 against a parent of 1 … observed 2026-09-22 … ReduceOnFillNonBlock
+    … IBKR does not document …") was too long to be read — "too long text is NOT explicit and
+    loses impact". The partial-fill risk is the one thing it had to say, and the red
+    `⚠ Partial fill` row says it, exactly when it exists. Nothing else is printed for two
+    children, whatever their sizes; review item 2026-09-08 (the aggregate reading) is withdrawn."""
+    parent, children = _bracket(parent_qty=parent_qty, child_qtys=child_qtys)
+    details = _bracket_details(parent, children)
+    assert "Children together" not in details
+    for key, _value in _flat_rows(details):
+        assert "together" not in key.lower() and "observed" not in str(_value)
 
 
 def test_bracket_dialog_child_inherits_the_parents_contract_display_keys():
@@ -1766,14 +1793,14 @@ def test_bracket_dialog_child_inherits_the_parents_contract_display_keys():
     price, which passes with or without the fix — a test that cannot fail is not a control.
     """
     d = _bracket_details(_bracket_parent(), [_bracket_child()])
-    assert d["Profit taker — Symbol"] == d["Parent — Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
-    assert d["Profit taker — Quantity"] == d["Parent — Quantity"] == "1 (×50 per contract)"
+    assert d["Profit taker"]["Symbol"] == d["Parent"]["Symbol"] == "ES — ESU6 · SEP26 · expires 2026-09-18"
+    assert d["Profit taker"]["Quantity"] == d["Parent"]["Quantity"] == "1 (×50 per contract)"
 
 
 def test_bracket_dialog_never_overrides_a_display_key_the_child_carries():
     """Inheritance fills gaps; it never overwrites what the caller established."""
     d = _bracket_details(_bracket_parent(), [_bracket_child(_companyName="ITS OWN LABEL", _multiplier=50)])
-    assert d["Profit taker — Symbol"] == "ES — ITS OWN LABEL"
+    assert d["Profit taker"]["Symbol"] == "ES — ITS OWN LABEL"
 
 
 # The two futures signals added on 2026-09-21 — `secType` and `manualIndicator` — are read
@@ -1812,9 +1839,9 @@ def test_bracket_dialog_legs_agree_on_the_instrument_class_however_it_was_declar
         "price": 7400.0,
     }
     d = _bracket_details(parent, [child])
-    assert "USD" not in d["Parent — Price"], d["Parent — Price"]
-    assert "USD" not in d["Profit taker — Price"], (
-        f"index points labelled as currency on the leg the human has never seen: {d['Profit taker — Price']!r}"
+    assert "USD" not in d["Parent"]["Price"], d["Parent"]["Price"]
+    assert "USD" not in d["Profit taker"]["Price"], (
+        f"index points labelled as currency on the leg the human has never seen: {d['Profit taker']['Price']!r}"
     )
 
 
@@ -1843,8 +1870,8 @@ def test_bracket_dialog_still_shows_the_currency_on_BOTH_legs_of_an_equity_brack
         "price": 160.0,
     }
     d = _bracket_details(parent, [child])
-    assert "USD" in d["Parent — Price"], d["Parent — Price"]
-    assert "USD" in d["Profit taker — Price"], d["Profit taker — Price"]
+    assert "USD" in d["Parent"]["Price"], d["Parent"]["Price"]
+    assert "USD" in d["Profit taker"]["Price"], d["Profit taker"]["Price"]
 
 
 def test_bracket_dialog_does_not_MUTATE_the_tickets_it_is_shown():
@@ -1914,7 +1941,7 @@ def test_bracket_dialog_shows_a_stop_loss_child_under_its_own_name():
     """D1 makes the profit taker v1, but the signature takes a list and a `stop_loss`
     sibling is designed to be additive — a STP child must not be labelled a profit taker."""
     d = _bracket_details(_bracket_parent(), [_bracket_child(orderType="STP", price=None, auxPrice=7800.0)])
-    assert d["Stop loss"] == "held by IBKR until the parent fills"
+    assert d["Stop loss"]["Held by IBKR"] == "until the parent fills"
     assert "Profit taker" not in d
 
 
@@ -1922,8 +1949,8 @@ def test_bracket_dialog_shows_the_outside_rth_attribute_of_each_leg():
     """R4 (user, 2026-09-21): the child inherits the parent's `outsideRTH`. The dialog
     shows what each ticket actually carries — it derives nothing here."""
     d = _bracket_details(_bracket_parent() | {"outsideRTH": True}, [_bracket_child(outsideRTH=True)])
-    assert d["Parent — Outside RTH"] == "Yes"
-    assert d["Profit taker — Outside RTH"] == "Yes"
+    assert d["Parent"]["Outside RTH"] == "Yes"
+    assert d["Profit taker"]["Outside RTH"] == "Yes"
 
 
 def test_bracket_dialog_refuses_a_parent_with_no_side():
@@ -1947,10 +1974,10 @@ def test_bracket_dialog_shows_every_child_when_two_are_the_same_kind():
         _bracket_parent(),
         [_bracket_child(price=7700.0), _bracket_child(price=7650.0)],
     )
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
-    assert d["Profit taker 2"] == "held by IBKR until the parent fills"
-    assert d["Profit taker — Price"] == "7,700.00"
-    assert d["Profit taker 2 — Price"] == "7,650.00"
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
+    assert d["Profit taker 2"]["Held by IBKR"] == "until the parent fills"
+    assert d["Profit taker"]["Price"] == "7,700.00"
+    assert d["Profit taker 2"]["Price"] == "7,650.00"
 
 
 def test_bracket_dialog_refuses_a_child_on_a_different_contract():
@@ -1981,14 +2008,14 @@ def test_bracket_dialog_refuses_a_child_on_a_different_contract():
 def test_bracket_dialog_accepts_a_child_that_names_the_same_contract():
     """The check is a mismatch refusal, not a requirement that the child carry a conid."""
     d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child(conid=649180671)])
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
 
 
 def test_bracket_dialog_accepts_a_child_that_carries_no_conid_of_its_own():
     """The child's conid is derived from the parent (D2), so a ticket without one is normal
     and must not be refused — only a stated mismatch is."""
     d = _bracket_details(_bracket_parent() | {"conid": 649180671}, [_bracket_child()])
-    assert d["Profit taker"] == "held by IBKR until the parent fills"
+    assert d["Profit taker"]["Held by IBKR"] == "until the parent fills"
 
 
 # ---------------------------------------------------------------------------
@@ -2104,6 +2131,44 @@ def test_a_stock_order_without_multiplier_keys_STILL_prints_its_total():
     assert "1,500.00" in total, total
 
 
+# An option is the third class whose total is not price x quantity. IBKR's own worked example
+# of `/iserver/secdef/info` is an AAPL put carrying `"secType": "OPT"` and `"multiplier": "100"`,
+# so ten contracts at 2.50 cost 2,500 — and this dialog printed `Total (est.): 25.00 USD` for
+# them, a figure 100x too small on the last screen before the write (measured 2026-11-12 on the
+# row builder itself, no gateway). FUT and FOP were refused since 2026-09-21; OPT was simply
+# not in the list. No option order has been placed live through this package as of that date,
+# which is how the gap stayed unseen.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+_OPTION_SEC_TYPES = ["OPT", "667629330:OPT", "667629330@OPT", "opt"]
+
+
+def _option_order(**over: object) -> dict[str, object]:
+    return {
+        "ticker": "AAPL",
+        "side": "BUY",
+        "quantity": 10,
+        "orderType": "LMT",
+        "price": 2.50,
+        "tif": "DAY",
+        "_currency": "USD",
+    } | over
+
+
+@pytest.mark.parametrize("sec_type", _OPTION_SEC_TYPES)
+def test_an_option_order_never_prints_price_times_quantity_as_its_total(sec_type):
+    """Without the multiplier the dialog says so, for every spelling of `secType` IBKR uses."""
+    total = _total_row(_option_order(secType=sec_type))
+    assert "25.00" not in total, f"printed a 100x-wrong total as fact for {sec_type!r}: {total!r}"
+    assert "multiplier unknown" in total
+
+
+def test_an_option_order_WITH_its_multiplier_prints_the_multiplied_total():
+    """The discriminating half: the refusal is for an UNKNOWN multiplier, not for options. A
+    caller that supplies the contract's multiplier gets the real figure, in its currency."""
+    total = _total_row(_option_order(secType="667629330:OPT", _multiplier=100))
+    assert "2,500.00 USD" in total, total
+
+
 def test_cancel_dialog_without_detail_NAMES_the_gap_instead_of_hiding_it():
     """Reproduced live 2026-09-21: a detail-less cancel rendered Order ID + Account and nothing
     else, so the human authorised the cancellation of an order id they could not verify. An
@@ -2139,6 +2204,30 @@ def test_bracket_dialog_ALSO_refuses_a_child_larger_than_the_parent():
     with (
         patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
         pytest.raises(HumanAuthError, match="larger than the parent"),
+    ):
+        confirm_bracket_dialog(parent, [child], "U1234567")
+    mock_show.assert_not_called()
+
+
+def test_bracket_dialog_ALSO_refuses_a_child_tif_longer_than_the_parent():
+    """IBKR's child-TIF rule at Gate 2 as well as in `_bracket_tickets`, for the reason H1 is:
+    this dialog is public API, callable without the builder, and the last screen before the send.
+    TWS guide, Using the Orders Panel: a longer child TIF is overridden by the parent's."""
+    from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
+
+    parent = {"cOID": "C-1", "conid": 1, "side": "SELL", "quantity": 1, "orderType": "LMT", "price": 10.0, "tif": "DAY"}
+    child = {
+        "parentId": "C-1",
+        "conid": 1,
+        "side": "BUY",
+        "quantity": 1,
+        "orderType": "LMT",
+        "price": 9.0,
+        "tif": "GTC",
+    }
+    with (
+        patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show,
+        pytest.raises(HumanAuthError, match="TIF"),
     ):
         confirm_bracket_dialog(parent, [child], "U1234567")
     mock_show.assert_not_called()
@@ -2218,7 +2307,7 @@ def test_bracket_dialog_refuses_a_parent_carrying_NO_cOID():
 def test_bracket_dialog_refuses_a_child_carrying_its_OWN_cOID():
     """IBKR: a cOID "should not be set for the child of a bracket order". `_bracket_tickets`
     refuses one; the dialog did not, so the rule held on one of two reachable paths.
-    Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
     """
     from ibkr_core_mcp.order_confirm import confirm_bracket_dialog
 
@@ -2263,3 +2352,204 @@ def test_bracket_dialog_accepts_an_equal_and_a_smaller_child():
         with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as mock_show:
             confirm_bracket_dialog(parent, [child], "U1234567")
         mock_show.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 outcomes — confirmed, declined, timed out (register F21, F6)
+# ---------------------------------------------------------------------------
+#
+# A dialog ends three ways and they must never be confused: only the first button confirms; the
+# abandon button raises `ConfirmationDeclinedError` with the dialog's own sentence for what the
+# click leaves in place; an auto-dismiss raises `ConfirmationTimeoutError`. Found live
+# 2026-09-25 (claudia_ui #67): a timed-out cancel dialog read "Order cancelled by user" for an
+# order the timeout had KEPT. Buttons and sentences settled with the operator on the rendered
+# dialogs, 2026-10-01.
+
+
+def test_dialog_outcome_token_is_one_per_way_the_modal_can_end():
+    """Only the first button's response is CONFIRMED; a timer that fired is never a decision."""
+    from ibkr_core_mcp import _order_dialog as script
+
+    first, second = script._CONFIRM_CODE, script._ABANDON_CODE
+    assert script.outcome_token(first) == script.CONFIRMED
+    assert script.outcome_token(second) == script.CANCELLED
+    assert script.outcome_token(second, timed_out=True) == script.TIMED_OUT
+    assert script.outcome_token(first, timed_out=True) == script.TIMED_OUT
+    # Measured live 2026-09-29: the abort response is -1001, not the -1000 a comment had claimed.
+    assert script.outcome_token(-1001) == script.TIMED_OUT
+    assert len({script.CONFIRMED, script.CANCELLED, script.TIMED_OUT}) == 3
+
+
+def test_an_answer_the_dialog_never_prints_is_never_a_confirmation():
+    """Plain `HumanAuthError`, nothing sent — and neither a decline nor a timeout."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    with (
+        patch.object(subprocess, "run", return_value=_appkit_proc("MAYBE\n")),
+        pytest.raises(HumanAuthError, match="Unexpected dialog response") as caught,
+    ):
+        oc._show_appkit_dialog("T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND")
+    assert type(caught.value) is HumanAuthError
+
+
+_GATE2_DIALOGS = {
+    "confirm_order_dialog": ("SEND TO IBKR", "DO NOT SEND", "Not sent — nothing reached IBKR."),
+    "confirm_bracket_dialog": ("SEND TO IBKR", "DO NOT SEND", "Not sent — nothing reached IBKR."),
+    "confirm_modify_dialog": ("MODIFY ORDER", "LEAVE UNCHANGED", "Left unchanged — the order is as it was."),
+    "confirm_cancel_dialog": ("VALIDATE", "DISCARD", "Kept — the order is still working."),
+    "confirm_reply_dialog": ("CONFIRM", "CANCEL", "Not confirmed — the order was not placed."),
+}
+
+
+def test_every_gate2_dialog_states_its_buttons_and_what_an_abandon_leaves():
+    """The whole table, per dialog — the two labels and the abandon sentence — as a consumer prints
+    and matches them. A new dialog, or a changed word, is a changed row here, by a decision."""
+    stated = {
+        name: (kw["confirm_label"], kw["abandon_label"], kw["abandon_message"])
+        for name, kw in _invoke_every_gate2_dialog()
+    }
+    assert stated == _GATE2_DIALOGS
+
+
+@pytest.mark.parametrize(
+    ("modifies", "sentence", "left"),
+    [
+        (
+            False,
+            "CONFIRM sends the order. CANCEL: the order is not placed.",
+            "Not confirmed — the order was not placed.",
+        ),
+        (
+            True,
+            "CONFIRM applies the change. CANCEL: the order stays as it was.",
+            "Not confirmed — the order is as it was.",
+        ),
+        (
+            None,
+            "This will CONFIRM a pending order at Interactive Brokers.",
+            "Not confirmed — the order was not placed.",
+        ),
+    ],
+    ids=["a-new-order", "a-modify", "kind-unknown"],
+)
+def test_the_reply_dialog_says_what_each_button_does_for_the_write_it_belongs_to(modifies, sentence, left):
+    """Register F35, settled with the operator on the rendered dialogs 2026-10-02: the buttons
+    read CONFIRM / CANCEL, and the sentence says what each does — on a modify, CANCEL leaves a
+    live order working, and "cancel" must not be read as cancelling it."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    with patch("ibkr_core_mcp.order_confirm._show_confirm_dialog") as shown:
+        if modifies is None:
+            oc.confirm_reply_dialog("r-1", "Confirm?")
+        else:
+            oc.confirm_reply_dialog("r-1", "Confirm?", order_label="BUY 1 ES", modifies=modifies)
+    kwargs = shown.call_args.kwargs
+    assert (kwargs["confirm_label"], kwargs["abandon_label"]) == ("CONFIRM", "CANCEL")
+    assert kwargs["disclaimer"] == sentence
+    assert kwargs["abandon_message"] == left
+
+
+@pytest.mark.parametrize("render", ["appkit", "osascript", "tkinter"])
+def test_an_abandon_raises_its_own_type_with_the_dialogs_sentence(render):
+    """A consumer matches the TYPE: claudia_ui matched the words "cancelled by user", and a
+    reworded sentence would have reached it as a Touch ID failure."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    message = "Kept — the order is still working."
+    with pytest.raises(ConfirmationDeclinedError) as caught:
+        if render == "appkit":
+            with patch.object(subprocess, "run", return_value=_appkit_proc("CANCELLED\n")):
+                oc._show_appkit_dialog("T", {}, "w", "VALIDATE", None, "DISCARD", "CANCEL", abandon_message=message)
+        elif render == "osascript":
+            proc = MagicMock(returncode=0, stdout="DISCARD\n", stderr="")
+            with patch.object(subprocess, "run", return_value=proc):
+                oc._show_osascript_dialog("T", {}, "w", "VALIDATE", "DISCARD", abandon_message=message)
+        else:
+            with patch("ibkr_core_mcp.order_confirm.tk", _make_tk_mock("DISCARD")):
+                oc._show_tkinter_dialog("T", {}, "w", "VALIDATE", "DISCARD", abandon_message=message)
+
+    assert str(caught.value) == message
+    assert not isinstance(caught.value, ConfirmationTimeoutError)
+
+
+def test_a_timeout_raises_its_own_type_and_never_the_abandon_sentence():
+    """A dialog that dismissed itself decided nothing: it says what it leaves, not "cancelled"."""
+    import ibkr_core_mcp.order_confirm as oc
+
+    with (
+        patch.object(subprocess, "run", return_value=_appkit_proc("TIMED_OUT\n")),
+        pytest.raises(ConfirmationTimeoutError) as caught,
+    ):
+        oc._show_appkit_dialog(
+            "T", {}, "w", "SEND TO IBKR", "BUY", "DO NOT SEND", abandon_message="Not sent — nothing reached IBKR."
+        )
+    message = str(caught.value)
+    assert not isinstance(caught.value, ConfirmationDeclinedError)
+    assert "nothing was sent to IBKR" in message and "Not sent" not in message
+    assert "cancel" not in message.lower()
+
+
+def test_the_names_a_host_matches_and_calls_are_public():
+    """Two error types a consumer matches on, one function a host calls at startup."""
+    import ibkr_core_mcp
+    from ibkr_core_mcp import order_confirm
+
+    for name in ("ConfirmationDeclinedError", "ConfirmationTimeoutError", "set_dialog_icon"):
+        assert name in ibkr_core_mcp.__all__
+    assert issubclass(ibkr_core_mcp.ConfirmationDeclinedError, ibkr_core_mcp.HumanAuthError)
+    assert issubclass(ibkr_core_mcp.ConfirmationTimeoutError, ibkr_core_mcp.HumanAuthError)
+    assert ibkr_core_mcp.set_dialog_icon is order_confirm.set_dialog_icon
+
+
+# ---------------------------------------------------------------------------
+# The bracket dialog for an attach, and the partial-fill line (claudia_ui gap #36, design 2026-10-17)
+# ---------------------------------------------------------------------------
+
+
+def test_bracket_dialog_shows_the_parent_as_working_at_ibkr_when_it_already_is():
+    """An attach's parent is IBKR's, not a ticket about to be sent: the dialog says so on one
+    row, from the display key `client._parent_from_status` sets — and only then."""
+    parent = {**_bracket_parent(), "_working_at_ibkr": "order 123 · Submitted · 0 attached"}
+    details = _bracket_details(parent, [_bracket_child()])
+    assert details["Parent"]["At IBKR"] == "order 123 · Submitted · 0 attached"
+    assert "At IBKR" not in _bracket_details(_bracket_parent(), [_bracket_child()])["Parent"]
+
+
+@pytest.mark.parametrize(
+    ("quantity", "all_or_none", "warned"),
+    [(1, None, False), (2, True, False), (2, None, True), (2, False, True), (3.0, None, True)],
+    ids=["one-lot", "aon", "two-lots", "aon-false", "three-lots"],
+)
+def test_bracket_dialog_warns_in_red_only_on_a_multi_lot_parent_without_all_or_none(quantity, all_or_none, warned):
+    """Keyed on the ATTRIBUTE, not the instrument (operator, 2026-10-17): a parent carrying
+    `allOrNone: true` cannot partially fill and shows nothing; a parent of 1 cannot either;
+    any other parent above one lot does, whatever it trades — futures cannot carry the
+    attribute at all (refused on CME, NYMEX and COMEX, measured 2026-09-21 and 2026-10-17)."""
+    parent = {**_bracket_parent(), "quantity": quantity}
+    if all_or_none is not None:
+        parent["allOrNone"] = all_or_none
+    details = _bracket_details(parent, [_bracket_child(quantity=quantity)])
+    assert ("⚠ Partial fill" in details["Parent"]) is warned
+    if warned:
+        assert details["Parent"]["⚠ Partial fill"] == (
+            f"Parent {quantity:g} lots without All-or-None: it can fill in part, and IBKR does not "
+            f"document what becomes of the {quantity:g}-lot children."
+        )
+
+
+def test_bracket_dialog_for_an_attach_names_the_child_it_sends_and_a_parent_already_working():
+    """An attach sends the CHILD, never the parent (live 2026-10-18: the reused bracket wording
+    read "The parent order is sent to Interactive Brokers now" under a green BUY banner while a
+    SELL stop was sent). With `_working_at_ibkr` set: the title says ATTACHED, the Action row —
+    which decides the banner — is the child's side, and the disclaimer says the parent is
+    already working. Without it, the bracket wording is exactly what it was."""
+    attach = _bracket_call(
+        {**_bracket_parent(), "_working_at_ibkr": "order 123 · Submitted · 0 attached"}, [_bracket_child()]
+    )
+    assert attach["title"] == "⚠  LIVE ATTACHED ORDER CONFIRMATION"
+    assert attach["details"]["Action"] == "BUY"  # the child's side; the parent is a SELL
+    assert "already working" in attach["disclaimer"] and "sent to Interactive Brokers now" not in attach["disclaimer"]
+    bracket = _bracket_call(_bracket_parent(), [_bracket_child()])
+    assert bracket["title"] == "⚠  LIVE BRACKET ORDER CONFIRMATION"
+    assert bracket["details"]["Action"] == "SELL"  # the parent's side
+    assert "sent to Interactive Brokers now" in bracket["disclaimer"]

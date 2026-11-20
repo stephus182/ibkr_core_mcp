@@ -80,6 +80,21 @@ def assert_tool_failed(text: str, containing: str | None = None) -> None:
 
 
 @pytest.fixture
+def tool_definition():
+    """One tool's definition from TOOL_DEFINITIONS, by name — for tests of a schema or a description.
+
+    Unannotated on purpose: mypy strict reads the list as `dict[str, Collection[str]]`, and a test
+    indexes the schema freely through an `Any` return (test_alerts.py's `_tool` is the same idiom).
+    """
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    def _lookup(name):
+        return next(t for t in TOOL_DEFINITIONS if t["name"] == name)
+
+    return _lookup
+
+
+@pytest.fixture
 def toolkit(mock_config):
     from ibkr_core_mcp.claude_tools import ClaudeToolkit
 
@@ -99,7 +114,12 @@ def toolkit(mock_config):
     # Currency is read once per resolved conid; keep it a real string so output
     # assertions see "USD" rather than a MagicMock repr.
     client.get_secdef_info.return_value = [{"conid": 265598, "currency": "USD"}]
-    cache = MagicMock()
+    from ibkr_core_mcp.cache import GDriveCache
+
+    cache = MagicMock(spec=GDriveCache)
+    # `entry()` answers a manifest row or None. Left as a bare mock it answers a truthy
+    # MagicMock, which reads as "an all-hours futures series" to everything that asks.
+    cache.entry.return_value = None
     store = MagicMock()
     return ClaudeToolkit(client, cache, store, mock_config)
 

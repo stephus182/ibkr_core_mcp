@@ -24,8 +24,9 @@ from mcp.server.models import InitializationOptions
 from mcp.types import Resource, TextContent, Tool, ToolAnnotations
 from pydantic import AnyUrl
 
-from ibkr_core_mcp import __version__
+from ibkr_core_mcp import __version__, audit
 from ibkr_core_mcp.claude_tools import READ_LIKE_CAPABILITIES, TOOL_DEFINITIONS, ClaudeToolkit, _safe_error
+from ibkr_core_mcp.flex_dataset import FlexDataset, FlexExecution
 from ibkr_core_mcp.models import json_default
 from ibkr_core_mcp.redaction import collapse_home, redact_error
 
@@ -87,33 +88,91 @@ def tool_annotations(capabilities: frozenset[str]) -> ToolAnnotations:
     )
 
 
+def _legacy_trade_row(e: FlexExecution) -> dict[str, Any]:
+    """One statement execution in the key set `ibkr://trades/recent` has always served.
+
+    Until 2.2.0 the resource listed rows of the legacy `trades` table. Its keys and their
+    conventions for a statement row are kept, so a client reading the resource sees no
+    change of shape: `execution_id` is IBKR's `tradeID` (what the legacy table keyed a
+    statement row by), `size` is signed as the statement signs it, `time` is the statement's
+    ISO `dateTime`, `commission` is a positive cost, `realized_pnl` is `fifoPnlRealized`.
+    What changes is the content: each execution appears once (the live-captured duplicates
+    are gone), and `asset_class` and `realized_pnl` are always filled — the legacy table held
+    neither for its rows imported before 2026-05-26. `trade_date` (IBKR's trade date) is new.
+    """
+    return {
+        "execution_id": str(e.trade_id) if e.trade_id is not None else e.execution_id,
+        "symbol": e.symbol,
+        "side": "BUY" if e.quantity > 0 else "SELL",
+        "size": e.quantity,
+        "price": e.price,
+        "time": e.time,
+        "commission": e.commission,
+        "account": e.account,
+        "asset_class": e.asset_class,
+        "realized_pnl": e.realised,
+        "trade_date": e.trade_date.isoformat() if e.trade_date else None,
+    }
+
+
+def _local_tool(name: str, args: dict[str, Any], store: SQLiteStore) -> str | None:
+    """The two server-local tools; None for a name that is neither."""
+    if name == "add_price_alert":
+        aid = store.add_alert(
+            int(args["conid"]),
+            str(args["symbol"]),
+            float(args["threshold"]),
+            str(args["direction"]),
+        )
+        sym = str(args["symbol"]).upper()
+        return f"Alert #{aid} created: {sym} {args['direction']} {args['threshold']}."
+    if name == "get_price_alerts":
+        alerts = store.get_alerts(active_only=bool(args.get("active_only", True)))
+        if not alerts:
+            return "No price alerts."
+        return "\n".join(
+            f"#{a['id']} {a['symbol']} {a['direction']} {a['threshold']} "
+            f"{'[triggered]' if a['triggered_at'] else '[active]'}"
+            for a in alerts
+        )
+    return None
+
+
 def _dispatch(name: str, args: dict[str, Any], toolkit: ClaudeToolkit, store: SQLiteStore) -> str:
-    """Route a tool call to the right handler. Never raises — always returns str."""
+    """Route a tool call to the right handler. Never raises — always returns str.
+
+    A toolkit tool records its own audit entry in `execute()`; the two server-local tools record
+    theirs here, the same way (`audit.py`; MCP security checklist 8.1).
+    """
+    if name in _EXISTING_TOOL_NAMES:
+        text, _ = toolkit.execute(name, args)
+        return text
+    with audit.call():
+        try:
+            local = _local_tool(name, args, store)
+        except Exception as exc:
+            audit.record(
+                "tool_call", actor="model", tool=name, params=args, decision="error", outcome=type(exc).__name__
+            )
+            return _safe_error(name, exc)
+        if local is None:
+            audit.record("tool_call", actor="model", tool=name, params=args, decision="unknown_tool")
+            return f"Unknown tool: {name!r}"
+        audit.record(
+            "tool_call", actor="model", tool=name, params=args, decision="executed", summary=audit.summary_of(local)
+        )
+        return local
+
+
+def _client_label(server: Server) -> str:
+    """The MCP client's name and version from the initialize handshake, for the audit record;
+    `mcp` when the request carries none."""
     try:
-        if name in _EXISTING_TOOL_NAMES:
-            text, _ = toolkit.execute(name, args)
-            return text
-        if name == "add_price_alert":
-            aid = store.add_alert(
-                int(args["conid"]),
-                str(args["symbol"]),
-                float(args["threshold"]),
-                str(args["direction"]),
-            )
-            sym = str(args["symbol"]).upper()
-            return f"Alert #{aid} created: {sym} {args['direction']} {args['threshold']}."
-        if name == "get_price_alerts":
-            alerts = store.get_alerts(active_only=bool(args.get("active_only", True)))
-            if not alerts:
-                return "No price alerts."
-            return "\n".join(
-                f"#{a['id']} {a['symbol']} {a['direction']} {a['threshold']} "
-                f"{'[triggered]' if a['triggered_at'] else '[active]'}"
-                for a in alerts
-            )
-        return f"Unknown tool: {name!r}"
-    except Exception as exc:
-        return _safe_error(name, exc)
+        params = server.request_context.session.client_params
+    except Exception:  # outside a request, or a session that has not initialised
+        return "mcp"
+    info = getattr(params, "clientInfo", None)
+    return f"{info.name} {info.version}" if info is not None else "mcp"
 
 
 def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
@@ -138,7 +197,8 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
     # tests/security/test_tool_input_validation.py).
     @server.call_tool(validate_input=True)
     async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
-        text = _dispatch(name, arguments or {}, toolkit, store)
+        with audit.context(client=_client_label(server)):
+            text = _dispatch(name, arguments or {}, toolkit, store)
         return [TextContent(type="text", text=text)]
 
     @server.list_resources()
@@ -146,7 +206,11 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
         return [
             Resource(uri=AnyUrl("ibkr://accounts"), name="IBKR Accounts", mimeType="application/json"),
             Resource(uri=AnyUrl("ibkr://positions/current"), name="Current Positions", mimeType="application/json"),
-            Resource(uri=AnyUrl("ibkr://trades/recent"), name="Recent Trades (SQLite)", mimeType="application/json"),
+            Resource(
+                uri=AnyUrl("ibkr://trades/recent"),
+                name="Recent Trades (Flex statements, T+1)",
+                mimeType="application/json",
+            ),
             Resource(
                 uri=AnyUrl("ibkr://pnl/live"), name="Live P&L (WebSocket, --stream only)", mimeType="application/json"
             ),
@@ -192,7 +256,13 @@ def build_server(toolkit: ClaudeToolkit, store: SQLiteStore) -> Server:
                         default=json_default,
                     )
             elif path == "ibkr://trades/recent":
-                text = json.dumps(store.get_trades()[:100], indent=2, default=json_default)
+                # The statement executions, newest first — the executions every other reader
+                # reports (register F20). It listed the legacy `trades` table until 2.2.0,
+                # where a fill captured live and later delivered by Flex appears twice. The
+                # key set and its conventions are unchanged (`_legacy_trade_row`).
+                with FlexDataset.open(toolkit._config.sqlite_path) as flex:
+                    recent = [_legacy_trade_row(e) for e in flex.executions()[:100]]
+                text = json.dumps(recent, indent=2, default=json_default)
             elif path == "ibkr://pnl/live":
                 # Only populated if the server was started with --stream; otherwise
                 # pnl_snapshots stays empty and this always returns {}.
@@ -510,7 +580,14 @@ async def _stream_loop(toolkit: ClaudeToolkit, store: SQLiteStore) -> None:
                         item.last or 0,
                     )
             elif isinstance(item, TradeExecution):
-                store.upsert_trades([_parse_stream_execution(item)])
+                execution = _parse_stream_execution(item)
+                store.upsert_trades([execution])
+                # And into the Flex dataset as a placeholder, keyed by IBKR's exec id, so the
+                # activity report sees the fill and the T+1 statement lands on this row —
+                # what `get_trades(source='live')` has done since 2026-08-04. The stream's
+                # conid and security type ride along: the legacy row shape has no place for
+                # them, and a placeholder keyed by contract is what a later reader can use.
+                store.upsert_flex_trades_from_live([{**execution, "conid": item.conid, "secType": item.sec_type}])
             elif isinstance(item, PnLUpdate):
                 store.record_pnl_snapshot(
                     account=item.account,
@@ -540,6 +617,7 @@ def main() -> None:
     from ibkr_core_mcp import ClaudeToolkit, Config, GDriveCache, IBKRClient, SQLiteStore
 
     cfg = Config.from_env()
+    audit.configure(cfg.audit_log_path)  # the record's one configuration, by the process that owns it
     store = SQLiteStore(cfg)
     toolkit = ClaudeToolkit(IBKRClient(cfg), GDriveCache(cfg), store, cfg)
     server = build_server(toolkit, store)

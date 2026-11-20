@@ -78,6 +78,11 @@ GDRIVE_CREDENTIALS_FILE=~/.ibkr_core/credentials_ibkr_core_mcp.json
 
 Python expands `~` correctly on Windows.
 
+Secrets (`IBKR_FLEX_TOKEN`, `FIRECRAWL_API_KEY`) can live in the Windows Credential Locker instead
+of the file: `python -m ibkr_core_mcp.secret_store set IBKR_FLEX_TOKEN` stores one (typed, never
+echoed), and `Config.from_env` reads the Locker before `.env` (`keyring`'s Windows backend, since
+2026-11-09). `python -m ibkr_core_mcp.secret_store list` shows where each is held, never a value.
+
 ---
 
 ## IBKR Gateway
@@ -94,6 +99,14 @@ GatewayManager().startup()   # builds the image on first run, starts the contain
 that is not this one. `GatewayManager` is the only supported way to run the gateway here.)
 
 Open `https://localhost:5055` in Chrome, log in with IBKR credentials + 2FA. The package reads the session cookie automatically once authenticated.
+
+`startup()` is the session owner's sequence (register F45, step 2): it polls the login to
+completion — no Enter prompt — and `python -m ibkr_core_mcp.gateway up --env-file .env` is the
+same sequence from a script. Two Windows notes: the suspend lock's liveness check uses
+`OpenProcess`, because `os.kill(pid, 0)` would terminate the lock's owner on Windows; and there
+is no `caffeinate`, so `python -m ibkr_core_mcp.gateway keepalive` runs without the sleep
+assertion (said once at DEBUG) — use `powercfg` or a scheduled task if the machine must stay
+awake for the gateway.
 
 ---
 
@@ -131,7 +144,7 @@ ClaudIA is designed to restore itself automatically on any machine. All persiste
 
 ## Touch ID Gate (Blocker)
 
-`ibkr_core_mcp` requires **fingerprint authentication** before any order reaches IBKR (`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`). On macOS this uses Apple's `LocalAuthentication` framework.
+`ibkr_core_mcp` requires **fingerprint authentication** before any order reaches IBKR (`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm`, `attach_order_and_confirm`). On macOS this uses Apple's `LocalAuthentication` framework.
 
 On Windows, `LocalAuthentication` is unavailable. Calling any order write method raises:
 

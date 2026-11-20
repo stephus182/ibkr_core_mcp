@@ -70,7 +70,8 @@ def collapse_home(text: str) -> str:
     `tests/security/test_error_redaction.py` drives each one under a throwaway `HOME` and
     fails if the real path reaches the record — `redact_error` (all exception text),
     `claude_tools._import_flex_file`'s allowed-root refusal, `mcp_server._issue_sse_token`'s
-    token-file line and `store._restrict`'s chmod warning. **This docstring read "every
+    token-file line, `store._restrict`'s chmod warning and `config.load_env_file`'s warning
+    that a `.env` accessible to others had its secrets refused (2026-10-16). **This docstring read "every
     surface" until 2026-09-17 while the last two interpolated the absolute path** (audit
     finding SEC-10, which named the first of them; the second came out of its sweep).
     `local_browser._main`'s `print`s are deliberately outside the inventory: that is the
@@ -114,6 +115,30 @@ def _scrub(match: re.Match[str]) -> str:
     return _REDACTED
 
 
+def redact_text(text: str, limit: int | None = _MAX_LEN) -> str:
+    """The first line of `text`, secret shapes scrubbed, the home directory collapsed, capped.
+
+    The scrub `redact_error` has always applied to an exception's message, available to any
+    other text the package is about to write down — the audit record's parameters first
+    (`audit.py`, 2026-11-09), so a model-supplied URL's query string or a path under the
+    operator's home is treated there exactly as it is in an error.
+
+    Args:
+        text: Any text about to be shown or recorded.
+        limit: Maximum length of the result; None for no cap.
+
+    Returns:
+        One line, scrubbed.
+    """
+    first_line = text.splitlines()[0] if text else ""
+    for pattern in _SECRET_PATTERNS:
+        first_line = pattern.sub(_scrub, first_line)
+    first_line = collapse_home(first_line)
+    if limit is not None and len(first_line) > limit:
+        first_line = first_line[: limit - 1] + "…"
+    return first_line
+
+
 def redact_error(exc: BaseException, limit: int = _MAX_LEN) -> str:
     """`TypeName: first line of the message`, secrets scrubbed, bounded, no newline.
 
@@ -127,11 +152,7 @@ def redact_error(exc: BaseException, limit: int = _MAX_LEN) -> str:
     Returns:
         A single line safe to place in a tool result or a log record.
     """
-    message = str(exc)
-    first_line = message.splitlines()[0] if message else ""
-    for pattern in _SECRET_PATTERNS:
-        first_line = pattern.sub(_scrub, first_line)
-    first_line = collapse_home(first_line)
+    first_line = redact_text(str(exc), limit=None)
     text = f"{type(exc).__name__}: {first_line}" if first_line else type(exc).__name__
     if len(text) > limit:
         text = text[: limit - 1] + "…"

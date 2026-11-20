@@ -112,7 +112,7 @@ flowchart TB
         T6["SANDBOX EXECUTION<br/>run_backtest — model<br/>code, in a child process"]
     end
 
-    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order · place_bracket_and_confirm<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
+    OE["ORDER EXECUTION<br/>place_order · modify_order · cancel_order · reply_order · place_bracket_and_confirm · attach_order_and_confirm<br/>No tool declares it, and none can: the name is absent from<br/>claude_tools.CAPABILITIES, so a definition that tried would fail<br/>the unknown-capability check rather than need catching in review"]
 
     M --> REACH
     H == "Gate 1 · Touch ID, then Gate 2 · an explicit click —<br/>once per write, with a dialog for every reply" ==> OE
@@ -133,8 +133,9 @@ model tool inputs ────► input allowlists (preview),           ClaudeTo
                         identifier regexes (client.py),                                  ──► IBKRClient alert writes   [ACCOUNT STATE]
                         cache-key regexes (cache.py),                                    ──► GDriveCache / WebDocsStore [EXTERNAL IO]
                         path-under-root (import_flex_file),                              ──► SQLiteStore               [EXTERNAL IO]
-                        compile_restricted + attribute        backtest.run_backtest ────────► spawn child, exec         [SANDBOX]
-                          allowlist (run_backtest),
+                        import check, compile_restricted,     backtest.run_backtest ────────► spawn child, exec         [SANDBOX]
+                          attribute allowlist (all three
+                          run in the child),
                         _validate_public_url (layer 1) ───►   local_browser.scrape/crawl ──► Chromium + route guard    [EXTERNAL IO]
                                                               search_site_detailed ────────► httpx seeder + request hook
 
@@ -162,7 +163,7 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 
 | Sink | Only through | Guarded by |
 |---|---|---|
-| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply`, `place_bracket_and_confirm` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
+| `POST /iserver/account/{acct}/orders`, `POST …/order/{id}`, `DELETE …/order/{id}`, `POST /iserver/reply/{id}` | `place_order`, `modify_order`, `cancel_order`, `reply_order`, `_resolve_one_reply`, `place_bracket_and_confirm`, `attach_order_and_confirm` | Gate 1 + Gate 2 inside each; AST test that no other function builds these paths, in any string idiom (see § 5, invariant 1) |
 | `POST …/orders/whatif` | `_whatif`, called by `get_order_preview` (one ticket) and `get_bracket_preview` (bracket array) | AST test that only `_whatif` builds the path; both entry points asserted to call no gate |
 | IBKR alerts / watchlists / FYI / account switch | `IBKRClient` ungated writers | Identifier regexes; capability declaration `ACCOUNT_STATE` |
 | Google Drive | `GDriveCache`, `WebDocsStore` | Cache-key regexes, slugs `[a-z0-9-]`, OAuth token file 0600 |
@@ -170,12 +171,14 @@ Phase 1 of the 2026-09-13 audit; it is the reference when a tool's declaration i
 | Local files | `_import_flex_file`, profile dirs, token persist | `resolve()` + `is_relative_to(~/.ibkr_core)`; `_safe_domain`; 0600 |
 | Browser cookie store | `BrowserCookieAuth` | Browser-name allowlist; CR/LF stripped; only ever sent to loopback |
 | Chromium / httpx | `Crawl4AIScraper.scrape`, `crawl_site`, `search_site_detailed` | `_validate_public_url` before; `_reject_private_requests` per browser request; `_reject_private_httpx_request` per seeder request |
-| Subprocess | `order_confirm`, `gateway/manager`, `backtest` | AST module allowlist; no `shell=True`; constant or JSON-on-stdin arguments |
+| Subprocess | `order_confirm`, `gateway/manager`, `backtest` | AST module allowlist; no `shell=True`; constant or JSON-on-stdin arguments — except the login window's Chrome (`gateway/manager`, F44, 2026-10-13): list form, the binary from a fixed per-platform table or `PATH`, its arguments the manager's own base URL and the home directory, a named-variable environment (no host secret reaches it), and a unit test that would launch it is refused (`tests/conftest.py` door 5) — and the gateway's own log, read in-container (`gateway/manager.read_login_events`, F45, 2026-11-09): `docker exec` of the class constant's container, `grep -rHF` with six fixed phrases, list form, an environment of `PATH`, `HOME` and `DOCKER_*` only, **no parameter but a timeout** so no caller can hand docker a name or an option; only the time, event and code of each matching line leave it (`preflight.login_events`), never a line of a log that carries the username, cookies and device ids; a unit test that would run it is refused (door 6) |
 | RestrictedPython `exec` | `backtest._execute_in_subprocess` | Attribute allowlist; frozen namespace; child process; watchdog |
+| The audit record — `~/.ibkr_core/audit.jsonl` | `audit.record`, called from `ClaudeToolkit.execute`, `mcp_server._dispatch` and `client._audited_write` (every gated write) | Every string through `redact_text` plus an account-id mask and a cap; no response text; 0600 in 0700; fail-open; `tests/test_audit.py`, `test_every_gated_write_records_an_audit_entry` (2026-11-09) |
+| The IBKR session — `ssodh/init`, `/logout`, `reauthenticate`, `docker restart/run/rm`, the login page | `gateway/session.py`, the owner (step 2, 2026-11-09): `release_session`, `attempt_soft_recovery`, `_recover`; `GatewayManager`'s own methods, from `gateway/manager.py`, `start()` guarded by `restart_refusal`; `IBKRClient.logout` / `reauthenticate` deprecated, removed in 3.0 | `test_gateway_boundary.py` (invariant 13): the model layer imports nothing from the gateway package and names no session write; the three endpoints are *called* only in the owner set; `start`/`restart`/`stop`/`startup` on a manager, and the login page, only inside the gateway package — a host constructs a manager and hands it to the owner, never drives it |
 
 ---
 
-## 5. The eleven invariants and their enforcement
+## 5. The thirteen invariants and their enforcement
 
 Each row is a property that must stay true regardless of implementation. "Mechanism" is the
 code that makes it true; "Enforcement" is the test that fails when it stops being true;
@@ -183,19 +186,21 @@ code that makes it true; "Enforcement" is the test that fails when it stops bein
 
 | # | Invariant | Mechanism | Enforcement (`tests/security/`) | To change deliberately |
 |---|---|---|---|---|
-| 1 | No order reaches IBKR except through the six functions in `GATED_OWNERS` — the five public `IBKRClient` writes plus the private `_resolve_one_reply` — and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before the first network call, checked **transitively** so a helper one call deeper is seen, with `_ensure_accounts_initialized` the single named exemption (IBKR's documented order prerequisite; a GET of the operator's own account list); `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
+| 1 | No order reaches IBKR except through the seven functions in `GATED_OWNERS` — the six public `IBKRClient` writes plus the private `_resolve_one_reply` — and the model layer never references them | Gates at the innermost call site; `_authorize_order_write` the one minter of `OrderWriteAuthorization` | `test_order_write_boundary.py`: endpoint templates only in the gated set — **whatever idiom builds the URL** (f-string, `+`, `%`, `.format`, `str.join`, a module-level constant, or assembled across statements); gate before the first network call, checked **transitively** so a helper one call deeper is seen, with two named exemptions, each a GET of the operator's own data — `_ensure_accounts_initialized` (IBKR's documented order prerequisite; the account list) and `get_order_status` (the attach write's read of its parent before Gate 1, 2026-10-17; a parent that is not working is refused before any fingerprint); `claude_tools.py`/`mcp_server.py` free of order-write names, `_post`, `_session`, `OrderWriteAuthorization`; body copied before the gates | Add the new function to `GATED_OWNERS` **and** give it both gates; there is no other legitimate change |
 | 2 | Preview is not execution | Every preview posts to `/orders/whatif` through `_whatif` and calls no gate | `test_preview_is_not_execution.py`: path asserted; literal built once (**still one builder after `get_bracket_preview` was added 2026-09-20** — the set stayed size 1 because both entry points delegate); both entry points asserted gate-free; `preview_order` touches only `get_order_preview` | None foreseeable |
 | 3 | Every tool declares its capabilities; `ORDER_EXECUTION` has no legal spelling | `capabilities` on all 46 definitions from a vocabulary that omits `ORDER_EXECUTION`; `tools` strips the field; the MCP server derives `ToolAnnotations` from the same set | `test_tool_capabilities.py`: declared, known, non-empty; the forbidden name absent from the vocabulary; `READ_ONLY` exclusive; dispatch dict and definitions name the same tools; every sink the handler's source touches is declared; annotations derived | New tool: declare; new sink in an existing handler: add to the declaration **and** the mutating-tool list in the test |
-| 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open/import; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals and namespaces | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
+| 4 | Strategy code cannot touch the filesystem, processes or network; what it can touch is frozen | Attribute allowlist for pandas/numpy objects; constructor functions instead of classes; string-function names checked for every list-like spec and for named aggregation's function half; column labels pass as data; child process; capped error line; `build_sandbox()` | `test_sandbox_boundary.py`: canary read/write/clipboard/open; 14 by-name, class and list-like forms; column access and named aggregation still work; frozen globals, namespaces and builtin names; RestrictedPython's declared minimum. `test_sandbox_cold_path.py`: every kind of allowed operation in a fresh child; a strategy that holds an `import` statement refused in a sentence before it is compiled, in the child, with nothing of it run, and five forms still refused when they run; every builtin is RestrictedPython's own object | Add the name to `_PANDAS_ALLOWED_ATTRS` **and** re-check it cannot take a path, buffer or callable that escapes; update the frozen sets |
 | 5 | Every externally derived URL is checked before the fetch and on every request afterwards | `_validate_public_url` (layer 1: scheme, host, literal parsing with `inet_aton`, DNS); `_reject_private_requests` (layer 2, Playwright route); `_reject_private_httpx_request` (layer 2 for the seeder) | `test_ssrf_boundary.py`: 20-row literal table; validate-before-reach ordering in every handler; both crawler entry points install the Playwright guard; `search_site` installs the httpx hook | New fetch tool: call `_validate_public_url` before constructing anything; if it is not a browser, say in its docstring that it has layer 1 only |
-| 6 | Error text reaching the model or a log passes one redaction function | `_safe_error` (type → sentence) for `execute()`; `redact_error` (detail, scrubbed by shape, one line) everywhere else | `test_error_redaction.py`: 20 secret shapes never survive — including the quoted `{"identifier": "value"}` forms a JSON error body actually has, missed until SEC-06 (2026-09-17), and the same forms severed before their closing quote by a 400-character body preview, missed until SEC-R8 the same day; the figure read 14 against a real 13 before that, an off-by-one nothing checked; no `except … as exc` in the model layer is interpolated, formatted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw | Never interpolate `exc`; wrap it |
-| 7 | Unit tests cannot open sockets, resolve names, or see credentials | pytest-socket's own `disable_socket`/`enable_socket` markers applied at collection (so the block lands before any fixture, module-scoped included) plus a session block for import time; `_no_real_secrets` stubs `load_dotenv` at every import site and removes every package-prefixed variable | `test_no_live_io.py` (the variable set is derived from source); `test_conftest_hygiene.py` for the exemption list | A test that needs DNS goes in `_REAL_DNS_EXEMPT_TESTS` with the reason; one that needs a secret sets a fake with `monkeypatch.setenv` |
-| 8 | Processes are spawned only from three named modules, never through a shell | List-form `subprocess.run`; JSON on stdin for the dialog | `test_subprocess_boundary.py`: import allowlist — module imports **and** `from os import system/exec*/fork*/popen/spawn*`, which the probe missed until SEC-08 (2026-09-17), matched on the imported name so `as` cannot hide it; no `shell=True` | Add the module to `ALLOWED_SPAWN_MODULES` with the reason, in the same commit |
+| 6 | Error text reaching the model or a log passes one redaction function | `_safe_error` (type → sentence) for `execute()`; `redact_error` (detail, scrubbed by shape, one line) everywhere else; in the gateway package every exception that becomes a reading or a log line passes it (F45 condition G, 2026-11-09) | `test_error_redaction.py`: 20 secret shapes never survive — including the quoted `{"identifier": "value"}` forms a JSON error body actually has, missed until SEC-06 (2026-09-17), and the same forms severed before their closing quote by a 400-character body preview, missed until SEC-R8 the same day; the figure read 14 against a real 13 before that, an off-by-one nothing checked; no `except … as exc` in the model layer is interpolated, formatted, `.args`-read, logged, `log.exception`ed or `exc_info`ed raw — nor in `gateway/preflight.py`, `gateway/manager.py` or `gateway/__main__.py` (F45) | Never interpolate `exc`; wrap it |
+| 7 | Unit tests cannot open sockets, resolve names, see credentials, or start a desktop command (`docker`, `open`, `caffeinate`), or reach the operator's keychain; and no test of the suite is collected while the environment would change what the run checks or switch these guards off (register F59, 2026-11-18) | pytest-socket's own `disable_socket`/`enable_socket` markers applied at collection (so the block lands before any fixture, module-scoped included) plus a session block for import time; `_no_real_secrets` cuts the loader's default search (`find_dotenv` → `""`), keeps `load_dotenv` a no-op for any third party and removes every package-prefixed variable; an audit hook refuses the three commands by name from `pytest_configure` on (door 6, 2026-11-09), integration tests exempt from setup to teardown; `keyring`'s null backend set there too (door 7, 2026-11-09); `tests/__init__.py` refuses to be imported while `PYTEST_ADDOPTS`, `PYTEST_PLUGINS` or `PYTEST_DISABLE_PLUGIN_AUTOLOAD` is set, out of `sys.modules` first, so every module of the suite is refused in every import mode, `--noconftest` or not; `pytest_configure` refuses a second session the same; the pre-push hook refuses the three in shell before any gate | `test_no_live_io.py` (the variable set is derived from source; `keyring` imported in `secret_store.py` alone, the backend null under pytest); `test_conftest_hygiene.py` for the exemption list; `test_no_desktop_reached.py` (the door, every test safe on a broken guard); `test_run_changing_environment.py` (each of the three layers; pytest's own `resolve_package_path` puts every test module in the package, and no `test*.txt` doctest file exists; every test safe on a broken guard) | A test that needs DNS goes in `_REAL_DNS_EXEMPT_TESTS` with the reason; one that needs a secret sets a fake with `monkeypatch.setenv`; one that drives the manager patches `subprocess.run`/`Popen` by name, as every manager test does; an option a run needs goes on the command line, where it is seen |
+| 8 | Processes are spawned only from three named modules, never through a shell | List-form `subprocess.run`; JSON on stdin for the dialog; the gateway's log read from constants with no caller argument (F45 condition D); `caffeinate -i` from `KeepAwake` with `PATH` alone in its environment (step 2) | `test_subprocess_boundary.py`: import allowlist — module imports **and** `from os import system/exec*/fork*/popen/spawn*`, which the probe missed until SEC-08 (2026-09-17), matched on the imported name so `as` cannot hide it; no `shell=True`; `test_no_desktop_reached.py`: a real `docker`, `open` or `caffeinate` cannot start from a unit test (door 6) | Add the module to `ALLOWED_SPAWN_MODULES` with the reason, in the same commit |
 | 9 | Every value interpolated into a URL path is validated, or carries a written exemption | `_ACCOUNT_ID_RE`, `_REPLY_ID_RE`, `_NUMERIC_PATH_SEGMENT_RE` (order and alert IDs, conids, page indices, notification IDs — one rule since SEC-R7, 2026-09-17) and the `_DELIVERY_OPTIONS` allowlist, applied to the interpolated value itself | `test_path_identifier_validation.py` (added 2026-09-16 — this row claimed the invariant with no test behind it, and it was false for three methods: findings SEC-03, SEC-04); the 2026-07-11 audit's H-2 | New URL with an interpolated value: validate that value in the method, or add it to the test's `ALLOWED` with a reason |
 | 10 | The HTTP transport validates `Host` and `Origin`, and admits only the holder of this launch's bearer token (widened 2026-09-14) | `TransportSecuritySettings` in `build_sse_app`, bare and wildcard loopback entries; `_BearerTokenGate` wrapping the whole app, `token` a required argument of `build_sse_app`; `_issue_sse_token` mints one `secrets.token_urlsafe(32)` per launch into a 0600 file | `test_transport_security.py`: 421 / 403 / loopback passes with and without a port; 401 for an absent, wrong, prefix, case-altered or scheme-altered credential, on `/messages/` and on `/sse`; a valid token reaches the SDK's own check; the signature has no token default | Adding a host means adding it to both allowlists; the test names the accepted set. The token stays required — an optional one makes an unauthenticated server the default again |
 | 11 | On the MCP transport an argument set that fails the tool's `inputSchema` never reaches a handler (added 2026-09-14) | The SDK's `call_tool(validate_input=True)`, written out explicitly in `build_server`; every name `_dispatch` routes is a listed tool, so the SDK's `if validate_input and tool` never falls through | `test_tool_input_validation.py`: four malformed sets never reach `_dispatch`, a well-formed one does, no package call passes `validate_input=False`, the routed names are a subset of the listed ones, and the probe reaches the handler for all four sets with validation off | Never pass `validate_input=False`; a port to an SDK without the flag keeps that test green by adding its own validation step. A new server-local tool is added to `_ALL_TOOL_DEFS` as well as `_dispatch` |
+| 12 | A secret read from the OS keychain or from `.env` never enters the process environment; the package reads a user-set secret from the environment and writes none (register F48, 2026-10-16; the keychain 2026-11-09) | `load_env_file`: `dotenv_values`, settings exported where unset, secrets as `SecretStr` in `EnvFile.secrets` and in `Config`; a file accessible to group or others refused on POSIX, the refusal through `collapse_home`; `Config.from_env` resolves environment first, then the OS keychain (`secret_store.resolve`, 2026-11-09), then file; `gateway.preflight.gateway_api_url` reads the gateway URL through the same loader (F45) | `tests/test_config.py` (the loader, the refusal by mode, `from_env`'s contract, the string coercion); `tests/test_secret_store.py` (the keychain: precedence, a broken keychain reads as absent, nothing reaches the environment, the command line prints no value); `tests/security/test_no_live_io.py`: `load_dotenv` nowhere in the package or `scripts/`, `dotenv_values` only in `config.py`; `tests/security/test_error_redaction.py`: the refusal warning under a throwaway `HOME` | Add a name to `SECRET_NAMES`; never export one; a host adds its own names through the parameter |
+| 13 | The model layer imports nothing from the gateway package and names no session write (register F45, condition A, 2026-11-09) | The gateway package declares no tool; nothing in `claude_tools.py` or `mcp_server.py` imports `ibkr_core_mcp.gateway*` or names `logout`, `reauthenticate`, `release_session`, `attempt_soft_recovery`, `GatewaySession`, `SuspendLock`, `GatewayManager`, `get_session`, `read_login_events`, `KeepAwake` or `restart_refusal`; the three session endpoints are called only in the owner set, and a manager is driven only inside the gateway package | `test_gateway_boundary.py`: both import forms by AST, nested blocks included; `names_referenced ∪ attribute_names_referenced` disjoint from the set; the review's probe M1 (an import under `if False:` and a `.restart()`) seen by both; the endpoint callers and the manager drivers by AST walk, prose ignored, each proven on a violating snippet | Never a tool: the model learns what it needs from a 401, and a gateway operation is the operator's — the command line or a host's button, through the owner |
 
-`pytest -m security` runs the whole set in about ten seconds; it is also part of every
+`pytest -m security` runs the whole set in about twenty seconds; it is also part of every
 unit run, of the pre-push hook, and of CI.
 
 ---
@@ -221,11 +226,12 @@ unit run, of the pre-push hook, and of CI.
 
 ### 6.1 Order writes — two gates and one authorization
 
-`place_order`, `modify_order`, `cancel_order`, `reply_order` and `place_bracket_and_confirm`
-each run **Gate 1**
+`place_order`, `modify_order`, `cancel_order`, `reply_order`, `place_bracket_and_confirm` and
+`attach_order_and_confirm` each run **Gate 1**
 (`human_auth.require_touch_id`, `LAPolicyDeviceOwnerAuthentication`, 60 s) and then **Gate 2**
 (`order_confirm.*`, a modal with the full order and an explicit button; Enter does not
-confirm; 60 s auto-cancel) *before* the first network call. The gates are inside the client
+confirm; after 60 s the modal dismisses itself and nothing is sent — `ConfirmationTimeoutError`,
+its own outcome since 2026-09-29) *before* the first network call. The gates are inside the client
 methods, not in a wrapper, so there is no way to call the method and skip them.
 
 `place_bracket_and_confirm` is the fifth, added for the 2.1.0 bracket seam: a parent plus its
@@ -240,6 +246,16 @@ from this section, from the table in § 4 and from the diagram in § 3 until 202
 present in `GATED_OWNERS` and `SECURITY.md` throughout; the omission is now machine-checked
 across every tracked document by
 `test_every_document_that_enumerates_the_gated_writes_enumerates_them_ALL`.
+
+`attach_order_and_confirm` is the sixth (2026-10-17, for the 2.2.0 seam): **one** child on
+an order already working at IBKR, the sequential bracket form. It reads the parent from IBKR
+**before** Gate 1 and refuses one that is not working, so no fingerprint is spent on an order
+nothing can be attached to — that read is the second named pre-gate exemption (invariant 1),
+a GET of the operator's own order. The child is completed from IBKR's record rather than the
+caller's, the bracket rules run unchanged, the Gate 1 scope binds the ticket **and the
+parent's id** (kind `attach`), and Gate 2 is `confirm_bracket_dialog` with an `At IBKR` row in
+its Parent section. One ticket per write; the response is checked for the link (`attached_entry`) and
+a response without it is logged, never reported as success.
 
 The chained variants `place_order_and_confirm` / `modify_order_and_confirm` take **one**
 fingerprint per write and pass an `OrderWriteAuthorization` down the call chain: bound to the
@@ -313,23 +329,37 @@ opposite-side order can open a position rather than close one.
 
 Strategy code is model-written, so it is treated as hostile. Four layers:
 
-1. **`compile_restricted`** (RestrictedPython): no `import`, no `_`-prefixed names, no
-   `open`/`eval`/`exec` builtins, guarded attribute access.
+1. **`compile_restricted`** (RestrictedPython) and the builtins it runs on: no `_`-prefixed
+   names, guarded attribute access, and no `open`/`eval`/`exec`/`__import__` builtin — so an
+   ordinary `import` statement compiles and would fail when it ran. It does not get that far:
+   the child looks for the statement first and refuses the strategy in a sentence
+   (`backtest._first_import_line`; SECURITY.md § `import` statements: refused in words). The
+   builtins are the boundary, the check is the wording (this line said "no `import`" under
+   the compiler until 2026-11-17). The builtins are the dict of a module object,
+   `_SandboxBuiltins`, whose class answers the imports C code makes underneath a strategy
+   and nothing else: it loads nothing and returns nothing (SECURITY.md § C-level imports
+   underneath strategy code). Which builtins is this project's list, not RestrictedPython's:
+   `_SANDBOX_BUILTIN_NAMES`, the 77 names of RestrictedPython 9.0, which is also the declared
+   minimum (SECURITY.md § Builtins: a frozen list, and RestrictedPython's minimum).
 2. **Attribute allowlist** (`backtest._sandboxed_getattr`): on any pandas or numpy object,
    only the names in `_PANDAS_ALLOWED_ATTRS` / `_NUMPY_ALLOWED_ATTRS` (and, for ufuncs,
    `_UFUNC_ALLOWED_ATTRS`) resolve; a DataFrame column label passes as data when no method
-   shadows it. `pd.DataFrame`/`pd.Series` are constructor *functions*, so no class — and no
-   unbound method — is ever reachable. The positional function spec of `apply`/`agg`/
-   `aggregate`/`transform`, whatever its list-like shape, and the function half of every
-   named-aggregation keyword face the same list, because pandas resolves those names with
+   shadows it. `pd.DataFrame`/`pd.Series` are constructor *functions*, not the classes, so no
+   unbound method of either is handed to strategy code. The positional function spec of
+   `apply`/`agg`/`aggregate`/`transform`, whatever its list-like shape, and the function half of
+   every named-aggregation keyword face the same list, because pandas resolves those names with
    its own `getattr`. This replaced a two-name denylist after the 2026-09-13 audit showed
    `df.style.from_custom_template` reading any file and `df.to_csv` writing any path; the
-   class-free namespace and the list-like recursion came from the fresh-eye review the same
+   constructor functions and the list-like recursion came from the fresh-eye review the same
    day, which reached the writer through `pd.Series.apply(series, 'to_csv', …)`.
 3. **Process isolation**: `multiprocessing` spawn child, `Pipe` result, daemon watchdog that
    `SIGTERM`s at 10 s and `SIGKILL`s 1 s later if the child has not exited, 4,096-char code limit.
-4. **A bounded error channel**: the child sends one line, capped at 300 chars — enough for the
-   model to fix its own code, not enough to be a transfer.
+4. **A bounded error channel**: a runtime error leaves the child as one line, capped at 300 chars
+   — enough for the model to fix its own code, not enough to be a transfer. A strategy that does
+   not compile is answered with RestrictedPython's messages, which the child does not cap: they
+   hold names from the strategy's source and nothing it computed, since none of it has run. The
+   handler caps every sandbox error the model sees at 1,000 chars; a direct caller of
+   `run_backtest` receives the messages whole.
 
 ```mermaid
 flowchart TB
@@ -338,31 +368,34 @@ flowchart TB
     classDef out fill:#e3f5e8,stroke:#1a7f37,color:#111827
     classDef stop fill:#fde3e1,stroke:#b42318,color:#111827
 
-    CODE["Model-written strategy code<br/>refused above 4,096 characters"]
-    CR["Layer 1 · compile_restricted<br/>no import, no _-prefixed name,<br/>no open / eval / exec builtin,<br/>attribute access routed through a guard"]
+    CODE["Model-written strategy code<br/>at most 4,096 characters"]
     SPAWN["Layer 3 · multiprocessing spawn"]
-    CODE --> CR
-    CR -. "BacktestSyntaxError" .-> ERR
-    CR --> SPAWN
+    CODE --> SPAWN
 
-    subgraph CHILD["The child — its own interpreter, the operator's uid, no shared memory"]
+    subgraph CHILD["The child — its own interpreter, the operator's uid"]
         direction TB
-        NS["build_sandbox() — a frozen namespace.<br/>pd.DataFrame and pd.Series are constructor<br/>functions, so no class, and therefore no<br/>unbound method, is ever reachable"]
-        GA["Layer 2 · _sandboxed_getattr<br/>_PANDAS_ALLOWED_ATTRS · _NUMPY_ALLOWED_ATTRS ·<br/>_UFUNC_ALLOWED_ATTRS. A column label passes as<br/>data when no method shadows it. The same list<br/>faces the string function spec of apply / agg /<br/>aggregate / transform, in any list-like shape,<br/>and the function half of every named aggregation"]
+        IM["Import check<br/>any import statement is refused"]
+        CR["Layer 1 · compile_restricted<br/>no _-prefixed names, guarded attributes"]
+        NS["build_sandbox() · a frozen namespace<br/>no open / eval / exec / __import__,<br/>pd.DataFrame / pd.Series<br/>are functions, not classes"]
+        GA["Layer 2 · _sandboxed_getattr<br/>pandas and numpy attributes<br/>checked against an allowlist"]
         EX["exec"]
+        IM --> CR
+        CR --> EX
         NS --> EX
         GA --> EX
     end
 
-    SPAWN --> CHILD
-    WD["Daemon watchdog<br/>SIGTERM at 10 s,<br/>SIGKILL 1 s later"] -. "kills the child; the parent's recv never hangs" .-> CHILD
-    EX -- "ok, DataFrame — over a Pipe" --> RES["Result to the caller"]
-    EX -- "runtime_error, redact_error(exc)" --> ERR["Layer 4 · one line, 300 characters:<br/>enough for the model to fix its own code,<br/>not enough to be a transfer"]
+    SPAWN --> IM
+    IM -. "BacktestSyntaxError" .-> SYN["Refused before it runs,<br/>the reason in words"]
+    CR -. "BacktestSyntaxError" .-> SYN
+    WD["Daemon watchdog<br/>SIGTERM at 10 s,<br/>SIGKILL 1 s later"] -. "kills the child" .-> CHILD
+    EX -- "DataFrame, over a Pipe" --> RES["Result to the caller"]
+    EX -- "error, redacted" --> ERR["Layer 4 · one line,<br/>at most 300 characters"]
 
-    class CR,GA,WD guard
+    class IM,CR,GA,WD guard
     class SPAWN,NS,EX proc
     class RES out
-    class ERR stop
+    class ERR,SYN stop
 ```
 
 The namespace is a value (`build_sandbox()`), so the test suite pins its key set and the two
@@ -424,7 +457,9 @@ check and the socket. Layer 2 re-asks at the moment of sending.
 ### 6.5 Error text — two functions, one rule
 
 `_safe_error` maps an exception *type* to a fixed sentence and is what `execute()` returns for
-anything a handler did not catch. `redact_error` is for the places that need detail: type name
+anything a handler did not catch. `redact_error` is for the places that need detail (and
+`redact_text`, the same scrub over any text, is what the audit record applies to every string
+it keeps, 2026-11-09): type name
 plus the first line of the message, secret-shaped material scrubbed, one line, 300 chars. The
 rule enforced by test: a name bound by `except … as` is never interpolated, `str()`'d or logged
 in `claude_tools.py` or `mcp_server.py` except through `redact_error`. The reason is concrete —
@@ -469,9 +504,76 @@ block in its own `pytest_runtest_setup`, which runs before any fixture of any sc
 session-wide block from `pytest_configure` additionally covers import and collection. (The
 first design used a session block plus a function-scoped fixture; pytest-socket's teardown
 re-enabled sockets after every test, and the first live module's module-scoped fixture ran
-blocked and skipped silently — review 2026-09-13.) `_no_real_secrets` makes `load_dotenv` a
-no-op at every import site and removes every variable carrying a package prefix, so `Config()`
-in a test cannot pull the repository's `.env` into the process.
+blocked and skipped silently — review 2026-09-13.) `_no_real_secrets` cuts the loader's
+default search (`find_dotenv` → `""`), keeps `load_dotenv` a no-op for any third party, and
+removes every variable carrying a package prefix, so `Config()` in a test cannot pull the
+repository's `.env` into the process; an explicit tmp path given by a test still reads.
+
+Four more things a unit test cannot reach, each by structure rather than by every test
+remembering, and each from `pytest_configure` on, but for a person, whose doors are shut earlier:
+
+- **The operator's data** (2026-09-30). An audit hook refuses every SQLite open under
+  `~/.ibkr_core` and every file opened, created, changed or removed there
+  (`test_no_real_data_io.py`); integration tests alone are exempt.
+- **A person** (2026-10-01). The two gates end at a human — a Touch ID prompt, a Gate 2 dialog —
+  and a test that replaced one gate and not the other could open the real one: a mutation run
+  that skipped Gate 1 did, on the operator's screen. The five doors are shut: Apple's
+  `LocalAuthentication` framework and `AppKit` are replaced in `sys.modules` by stand-ins that
+  answer a read and refuse a call, `tkinter.Tk` is replaced where tkinter exists, and an audit
+  hook refuses a child process that would run `_order_dialog.py` or `osascript`, or open the
+  Chrome login window (register F44). The refusal is a `BaseException`, so no
+  `except Exception` on its way, the dialog's fallback among them, can absorb it; it is
+  recorded, and the run fails at its end if
+  one was swallowed. Nothing is exempt — a test of a gate places its own double for its own
+  duration (`test_no_human_reached.py`, every test of which is safe on a broken guard). The two
+  stand-ins are held in a dict, not as attributes of the conftest, and no test module holds
+  one: pytest 9.2.0 reads `_mock_name` off every object of the namespaces it scans for
+  fixtures, and a stand-in found there took that read for a reach, so every run ended red with
+  no test at fault. A person is reached only by a call, so a stand-in now answers a read and
+  refuses a call, or a class built on what a read answered (§ 8, 2026-11-16), and the dict stays
+  as a second layer. The doors are shut while pytest imports the root conftest, before any other
+  conftest of the suite (§ 8, 2026-11-17): a folder named on the command line has its
+  `__init__.py`, its conftest and that conftest's first hooks run before `pytest_configure`,
+  and `tests/scripts/conftest.py` imports the package at its top. What runs before that call,
+  `tests/__init__.py` and the root conftest's own statements above it, imports neither a GUI
+  framework nor the package, and a second session in the same process has its
+  `pytest_configure` shut them again.
+- **The operator's machine** (2026-11-09, register F45, door 6). The same kind of audit hook refuses
+  a child process that would run `docker`, `open` or `caffeinate`, by each word's last path
+  component: `docker restart` ends the live IBKR session held in the container, `open -a Docker`
+  starts Docker Desktop, `caffeinate -i` holds the machine awake — and every test of
+  `gateway/manager.py` patched the spawn by name, so a test that patched one call and not another,
+  or a mutant that moved the call, could have acted on the operator's machine from a unit run
+  (F32's class, on the machine instead of the screen). Inventoried first: a full run makes 16
+  starts, all `git`, `python3.11` or `ruff`, so nothing is exempt but integration tests, which
+  read the gateway's own log through `docker exec` by design (`test_no_desktop_reached.py`, every
+  test safe on a broken guard — the `open` and `caffeinate` cases run a decoy linked to `true`).
+- **The operator's keychain** (2026-11-09, door 7). `pytest_configure` sets `keyring`'s null
+  backend for the whole run — set, never read first, since asking for the current backend would
+  initialise the real one — so a `Config.from_env()` inside a test reads no keychain item and
+  nothing prompts; the store's own tests stand in an in-memory backend for their duration, and
+  `keyring` is imported in `secret_store.py` alone (`test_no_live_io.py`).
+
+**None of this can be switched off from the environment** (2026-11-18, register F59). pytest
+prepends `PYTEST_ADDOPTS` to every command line, loads the plugins `PYTEST_PLUGINS` names and
+honours `PYTEST_DISABLE_PLUGIN_AUTOLOAD`, and the command shows none of it. Measured before the
+change: `--force-enable-socket` there let a unit test create a socket, `--noconftest` switched off
+every guard above at once, and a `-k` made the pre-push hook print "all four gates green" after 9
+tests of 2,950. `tests/__init__.py` now refuses to be imported while any of the three is set.
+pytest imports the package for every module of the suite, conftest or not: a test asks pytest's
+own `resolve_package_path` that every test module resolves to it (a folder without
+`__init__.py`, or whose name is not an identifier, would not), and that no `test*.txt` file,
+which pytest collects as a doctest without importing anything, exists. The package takes itself
+out of `sys.modules` before it refuses: pytest's importlib mode keeps a package whose `__init__`
+raised, and every later module imported past it (2,814 tests collected under
+`--import-mode=importlib --continue-on-collection-errors` before that line). The root conftest's
+`pytest_configure` refuses a second session in the same process. The pre-push hook refuses the
+three in shell before its first gate, where no pytest option reaches; it is the layer that holds
+for a value that makes pytest collect nothing of the suite, `--help` (exit 0), `--ignore=tests` or
+a doctest glob, which meets no package to refuse it (`test_run_changing_environment.py`, every test
+safe on a broken guard). An empty value is unset, as pytest reads all three; any other value, one
+made only of newlines included, is set in both layers. The message names the variables, never their
+values. What it leaves to the person at the command line is in § 9.
 
 ### 6.8 The capability registry
 
@@ -496,9 +598,11 @@ same set, so an MCP client that gates confirmation prompts on those hints sees t
 | ruff check (incl. `S`) | Known-bad calls: `shell=True`, `verify=False` without a reason, `assert`, weak hashes | Architecture; anything list-form | yes |
 | ruff format | — | — | yes |
 | mypy strict | Type errors, unstubbed dependencies | Everything typed correctly and wrong | yes |
-| pytest unit, including `tests/security/` | Behaviour, and the eleven invariants above (structural and canary) | Anything without a test | yes |
+| pytest unit, including `tests/security/` — per push, and weekly with the rest of the test job since 2026-11-12, so a dependency release that breaks the code is seen without a commit | Behaviour, and the thirteen invariants above (structural and canary) | Anything without a test | yes |
 | **pip-audit** (`dependency-audit` job) | A known-vulnerable version in the **resolved** tree, `[dev,server,scraper]`, fresh resolution in requirements mode (`pip install --dry-run --report`, nothing installed), per push and weekly | Unknown vulnerabilities | yes for fixable; no-fix findings go in `security/pip-audit-ignores.txt` with a reason and a re-check date |
 | **gitleaks** (`secret-scan` job) | A committed secret in the pushed range | History before the scan started (run `gitleaks git --redact` locally) | yes |
+| **SBOM** (`sbom` job, 2026-11-09) | Nothing by itself — it records what a user installs (`.[server,scraper]` resolved on the runner, CycloneDX 1.6) per push and per week, so an advisory is answered from the artifact | A vulnerability nobody has published; the operator's own environment, which may differ from the runner's resolve | no — an artifact |
+| **trivy** (`gateway-image-scan` job, 2026-11-09) | A known-vulnerable OS package or Java library in the gateway image, built as `GatewayManager` builds it; CRITICAL and HIGH, unfixed ignored | IBKR's own code inside the zip beyond its libraries; the image the operator built before the Dockerfile last changed | informational until the first run is seen, then yes on CRITICAL |
 | **CodeQL default setup** (GitHub, outside `ci.yml`) | Actions-workflow injection and permissions; a fixed set of Python patterns (URL-substring checks, weak hashing, insecure protocols, …) | **Taint from this codebase's untrusted source** — tool `inputs` dicts are not "remote flow sources" under the `remote` threat model, so its injection queries cannot fire here; not a merge gate | no |
 | **Dependabot alerts** (GitHub) | Advisories against the *manifest's* direct dependencies | Transitive dependencies (the nltk advisory was seen by pip-audit only) | no |
 
@@ -512,30 +616,38 @@ flowchart TB
     HOOK -->|"any step red"| STOP["Refused<br/>--no-verify bypasses"]
     HOOK -->|"green"| CI["ci.yml"]
 
-    subgraph TESTJOB["test · 3.11 and 3.12 · stops at the first red step"]
+    subgraph TESTJOB["test · 3.11, 3.12 and 3.13 · stops at the first red step"]
         direction LR
         A1["ruff check"] --> A2["ruff format"] --> A3["mypy strict"] --> A4["pytest<br/>incl. tests/security"]
     end
 
     DA["dependency-audit<br/>pip-audit · push + weekly"]
     SS["secret-scan<br/>gitleaks · pushed range"]
+    SB["sbom<br/>CycloneDX of what a user installs · artifact"]
+    GS["gateway-image-scan<br/>trivy over the built image · informational first"]
 
     CI --> A1
     CI --> DA
     CI --> SS
+    CI --> SB
+    CI --> GS
 
     OUT["CodeQL · Dependabot<br/>outside ci.yml, never gates"]
     CI -. "reported only" .-> OUT
 
     class HOOK,A1,A2,A3,A4,DA,SS gate
     class STOP stop
-    class OUT soft
+    class OUT,SB,GS soft
 ```
 
-Two facts to keep straight when reading results: CodeQL's zero open alerts is partly blindness,
-not cleanliness — the `tests/security/` suite is the coverage for the model-input boundary; and
+Three facts to keep straight when reading results: CodeQL's zero open alerts is partly blindness,
+not cleanliness — the `tests/security/` suite is the coverage for the model-input boundary;
 a `gh run watch … | tail` reports `tail`'s exit status, so read `gh run view --json conclusion`
-or `--exit-status` without a pipe.
+or `--exit-status` without a pipe; and the hook's green means what CI's means only because
+neither runs under an environment that changes what pytest checks. The hook refuses to start
+while `PYTEST_ADDOPTS`, `PYTEST_PLUGINS` or `PYTEST_DISABLE_PLUGIN_AUTOLOAD` is set (register
+F59, 2026-11-18: before that, a `-k` left in a shell made it print "all four gates green" after 9
+tests of 2,950), and CI sets none of the three (§ 6.7).
 
 ---
 
@@ -561,8 +673,11 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-13 | pip-audit over the full tree with a reasoned ignore file; **no dependency ceilings** | Ceilings for security are churn; floors bump when a fix ships; no-fix findings are the only ignores | — |
 | 2026-09-13 | CodeQL default setup **kept, not extended, not made a gate** | Free on a public repo; one real catch (workflow permissions) and one false positive in three months; structurally blind to tool inputs; `security-extended` would add low-precision noise (`verify=False`, `assert`) already reasoned at the site | Alerts start recurring on the same dismissed pattern, or the repo gains web request handlers CodeQL can model |
 | 2026-09-13 | Semgrep not added | Every uncovered class is a 30-line `ast` test with zero noise and no new tool | External contributors, or a second HTTP client |
-| 2026-09-13 | Dependabot alerts kept; no `dependabot.yml` version-update PRs | Floors are unpinned, so update PRs would be churn; alerts cost nothing | — |
-| 2026-09-13 | Sandbox exposes constructor functions, never classes | A class hands out unbound methods whose first argument is the object; the string-function guard cannot see past it — the fresh-eye review wrote four files that way | Never; `isinstance(x, pd.DataFrame)` is the one idiom lost, and strategies do not need it |
+| 2026-09-13 | Dependabot alerts kept; no `dependabot.yml` version-update PRs | Floors are unpinned, so update PRs would be churn; alerts cost nothing | **Superseded 2026-09-19** (below): version updates were added; the alerts stay |
+| 2026-09-13 | Sandbox exposes `pd.DataFrame`/`pd.Series` as constructor functions, never as classes | A class hands out unbound methods whose first argument is the object; the string-function guard cannot see past it — the fresh-eye review wrote four files that way | Never; `isinstance(x, pd.DataFrame)` is the one idiom lost, and strategies do not need it |
+| 2026-11-17 | The sandbox answers C-level imports through a module-valued `__builtins__`; it neither warms numpy's caches nor wraps calls | Measured: a warm-up cannot satisfy the imports CPython makes on every call (`strftime`, every C-level warning on 3.13), and a wrapper cannot reach operators or formatting. The service loads nothing and returns nothing, and a strategy's own `import` still fails in the dict | CPython stops reading `__import__` as an attribute of a module-valued `__builtins__`, or stops taking a frame's builtins from its dict — `test_sandbox_cold_path.py` goes red on the first run |
+| 2026-11-17 | The builtins strategy code can name are a frozen list the project owns (`_SANDBOX_BUILTIN_NAMES`); `RestrictedPython>=9.0` with no ceiling; `bytes`, `reversed`, `sorted`, `tuple` and `zip` are not handed back | Measured: the set RestrictedPython ships moved in both directions inside the range `>=7.0` allowed, 9.0's removal of four names reached no test, and 7.0 still compiles `try/except*` and a positional-only parameter named `_getattr_`, which 8.0 and 8.3 closed as sandbox escapes. The four names bypass no guard here (`_getiter_` is `iter`); they stay out because the sandbox's vocabulary is pandas, numpy and literals | `test_restrictedpython_ships_no_builtin_this_project_has_not_reviewed` goes red (a release added or removed a builtin), or strategies are to get a wider vocabulary, as one decision |
+| 2026-11-17 | A strategy that holds an `import` statement is refused before it is compiled, in a sentence; the run-time refusal stays underneath | The rule was already what the model is told (`no imports or I/O`), and a strategy that broke it learned so only when the statement ran, in CPython's words (`ImportError: __import__ not found`). The strategy is refused either way, and OWASP's MCP guide § 3 asks no more of an input that does not match; refusing it before anything of it is compiled or run, with a clear error, is this project's choice, and the practice OWASP's Input Validation Cheat Sheet describes ("before the application uses it"). Measured on 42 statements: every form of the statement gets the sentence unless the parser rejects the source, and none of the 14 that hold no `import` statement is answered differently. Rewording the text where it is raised would mean recognising CPython's message: unchanged since Python 2.7 and quoted by RestrictedPython's own documentation and tests, but promised by no compatibility policy. A subclass of RestrictedPython's transformer would have changed the compiler; a check in front of it changes nothing in it and can only refuse. The check is a search for two kinds of statement, so it is not the control: the control is the builtins. Stricter on purpose: an `import` that never ran, or whose failure the strategy caught, used to let the strategy complete | Strategies are to import something, which is a decision about the boundary (SECURITY.md § C-level imports underneath strategy code), not about this check |
 | 2026-09-13 | `ORDER_EXECUTION` removed from the capability vocabulary | "No tool declares it" was a test asserting an empty set; an unspellable capability fails by construction | Never |
 | 2026-09-13 | Test isolation on pytest-socket's own markers, applied at collection | A session block plus a per-test fixture left module-scoped live fixtures blocked (silent skips) and unit-scope fixtures uncovered; the plugin's setup hook runs before every fixture | — |
 | 2026-09-13 | The seeder gets an httpx request hook rather than "documented as layer 1 only" | The seeder accepts a client and httpx runs hooks per request including redirects — the browser's layer 2 in httpx form, for one function | — |
@@ -574,9 +689,26 @@ Dated, so a future reader can tell a decision from a default.
 | 2026-09-14 | The operator's home directory is collapsed to `~` in every message shown to the model | OWASP §6 names filesystem paths beside tokens; the 2026-07-11 audit had already noted the Flex import "discloses the exact home-directory path on any invalid probe" and left it. One definition (`redaction.collapse_home`) for both surfaces, as `price_text_safe` is one definition of rendering a price | A surface needs the real path — then it is not a model-facing surface |
 | 2026-09-17 | `collapse_home` covers **logs as well as model messages**, by an inventory of call sites rather than a logging filter | Its docstring had claimed "the model or a log" since 2026-09-14 while two log lines wrote the absolute path — the SSE token file and `store._restrict`'s chmod warning (SEC-10). A library installing a filter on the host's root logger would be the wrong fix, so the four call sites are named in `SECURITY.md` and each is driven under a throwaway `HOME` by `test_error_redaction.py` | A fifth surface appears and is not added to the inventory — then the count in `SECURITY.md` is wrong, which is what the test is for |
 | 2026-09-14 | No output size cap; no `outputSchema` for text tools | Measured: lists are bounded, pages are whole (144,125 characters is the largest on record, `docs/web-scraper-reference.md` § 5); a silent clip hides content; nothing structured exists to validate | A host reports context exhaustion (then explicit, marked truncation); a structured tool is added (then it declares a schema) |
-| 2026-09-14 | No per-invocation audit log | The client transcript is the operator's trail; a parameter log would carry model-supplied URLs and paths into a channel `redact_error` does not cover | A host without a transcript consumes the server |
-| 2026-09-14 | GitHub Actions stay tag-pinned, not SHA-pinned | `gh secret list` is empty and every job is `contents: read` on a public repository; a moved tag gains nothing | CI holds a write-capable secret (a publish token) |
+| 2026-09-14 | No per-invocation audit log | The client transcript is the operator's trail; a parameter log would carry model-supplied URLs and paths into a channel `redact_error` does not cover | **Superseded 2026-11-09** (below): the channel now passes the same redaction |
+| 2026-09-14 | GitHub Actions stay tag-pinned, not SHA-pinned | `gh secret list` is empty and every job is `contents: read` on a public repository; a moved tag gains nothing | CI holds a write-capable secret (a publish token). **Superseded 2026-09-19** (below): the publish workflow came to hold a credential |
 | 2026-09-14 | The read-then-fetch exfiltration chain under prompt injection is accepted, not blocked | Any public URL can carry data, so a filter is theatre; what the chain cannot reach — credentials, order execution — is held by test; fetch tools carry `openWorldHint` for clients that confirm outbound calls | A host consumes the server without per-call confirmation, or the tools gain a credential-bearing read |
+| 2026-09-19 | GitHub Actions **pinned by SHA**; Dependabot **version updates**, weekly, for GitHub Actions and pip (`.github/dependabot.yml`) | The publish workflow became the first to hold a credential (`id-token: write`), the condition the 2026-09-14 row set; `3e3a09c`'s message names OpenSSF Scorecard's Pinned-Dependencies and Dependency-Update-Tool checks. Written on 2026-11-19, from that commit: the two rows it reversed had not been updated | — |
+| 2026-10-01 | No unit test can reach a person: the gates' four doors (`LocalAuthentication`, `AppKit`, `tkinter.Tk`, a child process running `_order_dialog.py` or `osascript`) are shut from `pytest_configure`, with no exemption | What kept a test from opening a real prompt or dialog was each test replacing both gates. A mutation run skipped Gate 1 in `cancel_order`, the test had replaced Touch ID alone, and the real Gate 2 dialog opened on the operator's screen in a live session (nothing reached IBKR: the DELETE was a mock, sockets blocked) — the mutant's verdict was then a person's click. Five older tests had the same shape (register F32). Stand-ins in `sys.modules` rather than patches of our own functions, because the framework is the one door every route shares | An integration test needs a real gate — then an opt-in by name with a staleness test, as for DNS |
+| 2026-10-16 | Secrets stay in the protected `.env` and never enter the process environment (invariant 12, register F48) | `load_dotenv` copied the whole file into the environment of this process and of every child — the Gate 2 dialog, `osascript`, the docker CLI — none of which needs a token (CWE-526; OWASP Secrets Management). One loader; `SecretStr`; a file open to others refused, as OpenSSH does with a key file. The environment is still read, for the MCP server's contract, never written | Encryption at rest (the OS keychain) if the operator asks for it — only the loader changes |
+| 2026-11-09 | No unit test can start `docker`, `open` or `caffeinate` (door 6, register F45): refused **by command name**, sized to an inventory, integration tests exempt from setup to teardown | The gateway package is about to gain the session owner (F45), whose recovery path restarts the container holding the live session, and every manager test patches the spawn by name — a mutant that moved the call would act on the operator's machine from a unit run (F32's class). Inventoried first: 16 starts, all `git`, `python3.11`, `ruff`; refusing by name fires on nothing and needs no exemption list to go stale; the live test reads the gateway's log through `docker exec` by design, so integration tests are exempt as they are from the data hook. The inventory also found a unit test reading the operator's keychain through the default `BrowserCookieAuth` → browser_cookie3 (`security find-generic-password`), fixed with `auth=NoAuth()` rather than refused: a dependency's spawn, not the package's | A test needs a real desktop command — it does not; a live check is an integration test or done by hand. A second test reaches the keychain — then a default-auth client in a unit test becomes a structural refusal |
+| 2026-11-09 | Every function that disables certificate verification pins its URL to loopback first, through one helper (`config.require_loopback_url` / `is_loopback_url`), and the set of such functions is held by test (`test_tls_policy.py`; register F45, condition C) | `SECURITY.md` had said "exactly three code paths … every one pinned to loopback" since 2026-07 with no test behind either half: the two pins were inline tuples written twice and the manager's two polls had none (F45 review, probe M6, 2026-11-09). The session owner brings seven more certificate-exempt calls into the package, so the rule is held before any lands; one helper replaces two tuples | A certificate-exempt call to anything but the local gateway — there is none, and the allowlist's comment says every entry is the gateway |
+| 2026-11-09 | The gateway package is model-unreachable by test — invariant 13 (register F45, condition A) | The F45 move brings every session write into one package; the model layer imported nothing from it on the day (grep), but nothing held that: probe M1 — a READ_ONLY handler importing `GatewayManager` under `if False:` and calling `.restart()` — passed 350 security tests, and M2 showed a handler that *declared* `ACCOUNT_STATE` could call `logout`. OWASP LLM06:2025, "limit the extensions … to the minimum necessary"; the right direction for a package that exists to keep the session away from the model is a test, not a tool. The session-endpoint and manager-driver walks are the consumer's AST tests, ported, so their property survives the move | A model-facing status tool is wanted — it is not: a 401 already says it |
+| 2026-11-09 | The package keeps a redacted per-call audit record — every tool call, every gated order write, every session write (step 2) — in `~/.ibkr_core/audit.jsonl` (`audit.py`) | MCP security checklist 8.1 (score 3) was the one NO the first pass could fix in code. The 2026-09-14 objection — parameters carry model-supplied URLs and paths — is answered by making the record a redaction surface: every string passes `redact_text` (the same patterns as `redact_error`), account ids are masked, values capped, nesting bounded, no response text. Evidence, not a gate: fail-open, one redacted warning. The writes record on the gated method itself (`_audited_write`), beside the gates, so a bypass of the record is a bypass of the gates | The record grows a reader (a host dashboard) — then a schema version field first; a SIEM appears — then the file is what ships to it |
+| 2026-11-09 | Secrets at rest live in the OS keychain (MCP security checklist 7.1): `secret_store` over `keyring`, read by `Config.from_env` between the environment and the `.env` file; the 2026-10-16 deferral lifted by the operator the same day | A 0600 file is plain text to anything that runs as the operator, and the checklist asks for a vault; the OS keychain is the vault a single workstation already has, costs no server, and leaves `load_env_file` the one file reader and `config.py` the one environment reader. The environment stays first because it is the MCP server's documented `"env"` contract; the file stays last so a machine without a keychain still runs. Door 7 shuts the keychain to every unit test | A host that needs the file to win over the keychain (none known); a keychain backend that prompts on read (macOS does not for this package's own entries; Linux Secret Service unlocks the collection) — then `read_secret` is where a timeout would go |
+| 2026-11-09 | The gateway's CORS origin is its own, `https://localhost:5055`, not IBKR's wildcard (MCP security checklist 5.4) | Measured on the live gateway the same day: under `"*"` a foreign origin's preflight was approved for `POST`/`DELETE`/`PUT`, and a request with no cookie was served on the authenticated session — the session is the gateway process's, so `allowCredentials: false`, the stated mitigation since the file was adopted, protected nothing. Nothing legitimate is cross-origin: the login page is the gateway's own origin and every client is a process sending no `Origin`. After the rebuild the gateway refuses a foreign origin with `403` before the session, and the login works | A browser-side client of the gateway on another origin (none exists); an IBKR release that changes how `origin.allowed` is read (the measurement is the check — IBKR documents the key, not its semantics) |
+| 2026-11-09 | The gateway session has one owner in the package — `gateway/session.py` (register F45, step 2): every login, every session endpoint, every restart of a container holding a session passes through it; `startup()`, the command line and a host's button run its one sequence | A session write from several modules is several authorities over one brokerage session, and each actor fixed alone revealed the next gap (six in one day, 2026-08-06); the owner lived in the consumer, so no invariant about it could be held here | A second host needing a different sequence (then the owner grows a parameter, never a copy) |
+| 2026-11-09 | A restart is guarded inside `GatewayManager.start()`: a LIVE, REFUSED or VALIDATING session raises `RestartRefusedError` before any Docker command; `force=True` overrides (condition F) | A restart ends the session the container holds; the consumer's reset script carried the rule in bash where only its own test could hold it; inside `start()` no route to a restart can skip it | A reading a restart could help that the guard refuses (none known; the rule's five cases are the test) |
+| 2026-11-09 | The suspend lock is 0600 in a 0700 directory, a pid below 1 is malformed, and the liveness check is platform-bound — `os.kill(pid, 0)` on POSIX, `OpenProcess` on Windows (condition E) | `os.kill(0, 0)` succeeds, so a lock saying `pid: 0` would have suspended every keepalive forever (probes M3/M4); on Windows `os.kill` with any signal but the console events terminates the process, so the consumer's check moved as it was would have killed the lock's owner | A platform without either call |
+| 2026-11-09 | `startup()` opens the page on a login IBKR refused, after naming it; no page on one IBKR is still validating | The owner's rule (operator, 2026-10-12): the remedy is a website login then one gateway login, and withholding the page would deadlock it; step 1's gate had refused the page there. The owner had no rule for VALIDATING and step 1's protection would have gone with the body it guarded, so the owner gained that one branch | The operator revisiting the 2026-10-12 rule on the real log |
+| 2026-11-11 | The login window's leftover Chrome lock is not cleaned up, and the window's Chrome gets no switch against its background traffic to Google | The lock holds no credential, inside `0700` directories, and Chromium removes an orphaned one at the next launch; the switch that silences the traffic also turns off the Safe Browsing service on the window where the credentials are typed, and nothing is added to that window without a login seen through it (`SECURITY.md` § The login window's profile) | A network capture of a login shows more than Chrome's documented signed-out traffic; crash reporting is found enabled in that profile; a second OS user shares the machine |
+| 2026-11-16 | The human-gate stand-ins answer a read and refuse a call, or a class built on what a read answered, where they had refused every read but a dunder | A person is reached only by a call (`LAContext.new()`, `NSAlert.alloc()`), while tools read attributes off what they inspect, and a refused read failed runs in which no test was at fault: pytest 9.2.0's fixture scan reads `_mock_name`, which ended every run red until the stand-ins left the conftest's namespace, and `pickle.whichmodule` walks `sys.modules`. Measured before it was chosen, on pytest 9.1.1 and 9.2.0: Touch ID, the in-process dialog, a dialog built by hand and a call made while a module is imported are still refused; a read made while a module is imported is not, and reaches no one | A way is found to reach a person through a stood-in framework without a call or a class, or a gate comes to use a framework the guard does not stand in for |
+| 2026-11-17 | The human-gate guard's doors are shut while pytest imports `tests/conftest.py`, where they had been shut in `pytest_configure` | Measured on pytest 9.2.0 and 9.1.1: when a folder is named on the command line, its `__init__.py`, its conftest and that conftest's `pytest_addoption`, `pytest_plugin_registered` and `pytest_configure` run before the root conftest's `pytest_configure`, and `tests/scripts/conftest.py` imports the package at its top, so `pytest tests/scripts …` imported the package, 31 of its modules, before the doors were shut: a framework imported in any of them, or at the top of a module of the package, would have been the real one, and nothing would have refused a call to it. No code did either; the review of the second commit found the window. The root conftest is imported before all of them, and what runs before its call, `tests/__init__.py` and its own statements above the call, imports neither a framework nor the package, by test; `pytest_configure` shuts the doors again only when an earlier session in the same process has opened them. The other guards of § 6.7 stay in `pytest_configure`: under an audit hook, the imports `pytest tests/scripts` makes before it did nothing the socket, data or desktop guards refuse but a loopback `bind`, urllib3's IPv6 probe | Something has to run before the root conftest and import a framework or the package: a `conftest.py` at the repository's root, which a test refuses, or a plugin |
+| 2026-11-18 | No test of the suite is collected, and the pre-push hook runs no gate, while `PYTEST_ADDOPTS`, `PYTEST_PLUGINS` or `PYTEST_DISABLE_PLUGIN_AUTOLOAD` is set: `tests/__init__.py` refuses, the root conftest's `pytest_configure` refuses a second session, and the pre-push hook refuses in shell (register F59) | The operator asked for the cause to go rather than for each child to be given a filtered environment ("can we avoid having PYTEST_ADDOPTS in the first place"). A filter protects the one child it is written for; nothing protected a run typed by hand, or the hook, which printed "all four gates green" after 9 tests. A refusal in the conftest alone cannot see `--noconftest`, which switches off every guard of § 6.7, so the first layer is the package, which pytest imports for every module whatever else loads; it leaves `sys.modules` before refusing because importlib mode keeps a package that raised. The hook's check is in shell, where no pytest option reaches. Measured in scratch clones before it was built, every case and every import mode | pytest documents another variable that changes what a run checks: it goes in the package's list, the hook's and the test's together. The suite needs an option from the environment: none does |
 
 ---
 
@@ -589,9 +721,33 @@ Dated, so a future reader can tell a decision from a default.
   caller. (§ 6.1)
 - **Docker bridge siblings** can reach the gateway container (SECURITY.md § Residual risk);
   accepted while no other container shares the host.
-- **In-memory secrets** (session cookie, keys) are plain Python strings.
+- **In-memory secrets.** `Config` holds the Flex token and the Firecrawl key as `SecretStr`;
+  the session cookie and the SSE token are plain strings, and each secret is a plain string at
+  the one place that sends it. **Secrets at rest are in the OS keychain** since 2026-11-09
+  (`secret_store`; the 2026-10-16 deferral lifted). A `.env` still works, as the fallback store,
+  and is plain text at 0600 — `python -m ibkr_core_mcp.secret_store list` shows which secrets
+  still sit there, `import-env` moves them. The Drive OAuth token and the SSE token stay 0600
+  files the package writes itself.
+- **A run started with the suite's guards off on purpose is not a gate (2026-11-18).** A
+  `--noconftest`, `-p no:…` or `-o addopts=` typed on the command line, or an edited
+  `tests/__init__.py`, conftest or hook, still runs without the guards of § 6.7. That is a
+  decision made in the command, like `git push --no-verify`; the same option coming from the
+  environment is refused (§ 6.7, register F59). Outside the hook, the package refuses only what
+  imports it: a value that steers pytest away from the suite (`--help`, `--ignore=tests`, a
+  doctest glob or `--doctest-modules`) starts a run that collects no test of the suite and meets
+  no refusal. It can still import the package's modules, or run an example from a document (two
+  audit files hold `>>>` lines today; the package and `scripts/` none), with no guard. The hook
+  refuses all of them. Nor is a second session refused when it is started inside a
+  process that has imported the package and given `--noconftest` through its own
+  `PYTEST_ADDOPTS`: the suite starts one only in the children of two tests, one with nothing set,
+  the other setting a variable to see it refused. Two variables are not refused, because neither
+  changes which tests run: pytest's `PYTEST_DEBUG_TEMPROOT` moves `tmp_path`, and pytest-timeout's
+  `PYTEST_TIMEOUT` moves the 300 s backstop, so a run can hang or fail but not pass.
 - **Coverage as a security instrument** — a named-module branch-coverage report — is
   proposed in the audit and not started.
+- **The keepalive tickles with `GET /tickle`** where IBKR documents a POST, as the consumer's
+  script has since 2026-08-06 (a GET answers 200 and renews); a change to POST is a behaviour
+  change to measure on the live gateway first (F45 design § 11.3).
 - **CodeQL cannot see tool inputs.** Do not read its zero as coverage of the model boundary.
 - **Logs outside the model layer are not scrubbed.** `flex_query`, `gdrive_auth`, `web_scraper`
   and `streaming` log through their own loggers; a logger-level filter would not reach them
@@ -609,29 +765,37 @@ Dated, so a future reader can tell a decision from a default.
   each resolve names independently of Chromium's or httpx's resolver; a TTL-0 rebinding name
   that answers public to the guard and private to the fetcher is still theoretically possible.
   DNS pinning (resolve once, dial the classified address) is the next step if it ever matters.
+- **The login window's profile is a store at rest, and its Chrome talks to Google.**
+  `~/.ibkr_core/login-chrome` keeps the gateway's `localhost` cookies (encrypted by Chrome, `0600`
+  in a `0700` profile — modes that are Chrome's, not enforced here), a three-URL history and
+  Chrome's lock after a close; the Chrome that runs on it contacts Google by itself at launch.
+  Not determined: which request sets Google's `NID` cookie, and whether crash reports are
+  enabled in that profile (`SECURITY.md` § The login window's profile, 2026-11-11).
 
 ---
 
 ## 10. Change recipes
 
 **Add a tool.** Add the definition with a `capabilities` set (never `ORDER_EXECUTION`); add the
-handler to `execute()`'s dict; if it writes anywhere, add it to the mutating-tool list in
+handler to `execute()`'s dict (the call records its audit entry there — nothing to add); if it writes anywhere, add it to the mutating-tool list in
 `test_tool_capabilities.py` and to SECURITY.md's capability table; if it fetches a URL, call
 `_validate_public_url` first and, if it opens a browser, install the route guard; if it shows
 an exception, wrap it in `redact_error`. Run `pytest -m security`; every one of those is a
 failing test if forgotten.
 
 **Add an IBKR endpoint.** Validate every path-interpolated identifier with the regex helpers
-in `client.py`. If it writes an order, it is one of the six functions in `GATED_OWNERS` (the
-five public writes plus `_resolve_one_reply`) or it does not
-exist. If it mutates anything else, the tool that exposes it declares `ACCOUNT_STATE`.
+in `client.py`. If it writes an order, it is one of the seven functions in `GATED_OWNERS` (the
+six public writes plus `_resolve_one_reply`) or it does not
+exist, and it carries `@_audited_write("<its name>")` so the record sees it. If it mutates anything else, the tool that exposes it declares `ACCOUNT_STATE`.
 
 **Add a subprocess.** Add the module to `ALLOWED_SPAWN_MODULES` with a one-line reason; list
 form; constants or stdin, never a model-derived argument; never `shell=True`.
 
 **Expose something new to strategy code.** Add it to `build_sandbox()`, to the frozen set in
 `test_sandbox_boundary.py`, and — if it is a pandas/numpy name — to the allowlist after
-checking it accepts no path, buffer, callable or string that is resolved as a name.
+checking it accepts no path, buffer, callable or string that is resolved as a name. Test what
+it *can* do in a fresh child (`run_backtest`), never in the pytest process, which has already
+run everything once: `tests/security/test_sandbox_cold_path.py` says why.
 
 **Change a gate.** Read CLAUDE.md § Security and SECURITY.md § Two-Gate System first; the
 policy (`LAPolicyDeviceOwnerAuthentication`, once per write, dialog per reply) is deliberate.
@@ -641,6 +805,24 @@ Then run `test_order_write_boundary.py` and update the same three documents in o
 `security/pip-audit-ignores.txt`: ID, why the code path is unreachable or the risk accepted,
 date added, re-check date.
 
+**Add a gateway operation.** It is the operator's, never the model's: no tool, and no import of
+`ibkr_core_mcp.gateway` in the model layer (`test_gateway_boundary.py`, checks 1–2). A session
+write — `/logout`, `ssodh/init`, a container restart, the login page — lives in the gateway
+package's owner set and nowhere else (checks 4–5); it pins its URL before any certificate-exempt
+request (`test_tls_policy.py`), renders every exception through `redact_error`
+(`test_error_redaction.py`), names only this package's commands and documents in its strings,
+spawns from `gateway/manager.py` alone with constants or a timeout as its arguments, and its unit
+tests patch `subprocess.run` / `Popen` by name — door 6 refuses the real `docker`, `open` and
+`caffeinate`.
+
+**Add a secret.** Add its variable name to `SECRET_NAMES` in `config.py`; read it from
+`EnvFile.secrets` (or `Config`) as a `SecretStr`; unwrap with `.get_secret_value()` only where
+it is sent; never put it in `os.environ`. The OS keychain reads it under the same name with no
+further code (`secret_store.resolve`), and `python -m ibkr_core_mcp.secret_store set NAME` stores
+it — a host's own name needs `--names`. Invariant 12's structural test refuses a new
+`load_dotenv`; a new secret read through `os.environ.get("NAME")` is covered by
+`test_no_live_io.py`'s derived scan.
+
 ---
 
 ## 11. Cross-references
@@ -649,6 +831,7 @@ date added, re-check date.
 - Contributor rules: `CLAUDE.md` § Security & Fingerprint Authentication
 - The audit that produced this document, with probe evidence: `docs/audits/security-architecture-audit-2026-09-13.md`
 - The external baseline (OWASP MCP guide v1.0), mapped section by section: `docs/audits/owasp-mcp-guide-applicability-2026-09-14.md`
+- The operator's MCP security checklist (29 items, eight sections), answered item by item, with the checklist's own text in full in its appendix (added 2026-11-11): `docs/audits/mcp-security-checklist-2026-11-09.md`
 - Earlier security audits: `docs/audits/security-audit-2026-07-11.md` and predecessors
 - Order flow examples: `docs/order-management-examples.md`
 - Web scraper boundaries: `docs/web-scraper-reference.md`, `docs/web-scraping-methodology.md`

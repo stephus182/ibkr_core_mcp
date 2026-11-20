@@ -16,9 +16,10 @@ import json
 import logging
 import sqlite3
 import stat
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -26,6 +27,40 @@ from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.redaction import collapse_home
 
 log = logging.getLogger(__name__)
+
+#: IBKR's statement day is decided on the Eastern calendar (`newest_statement_day`).
+_ET = ZoneInfo("America/New_York")
+
+
+def newest_statement_day(now: datetime) -> date:
+    """The newest daily Flex statement that can exist at `now`: the weekday before today (ET).
+
+    IBKR issues one statement per weekday and publishes what a day's statement *includes*, not
+    when it can be retrieved — "The statement cutoff time for commodities is generally 5:15 PM
+    EST, and the statement cutoff time for securities is generally 8:20 PM EST" (Client Portal
+    statements guide, https://www.ibkrguides.com/clientportal/performanceandstatements/statements.htm,
+    scraped 2026-09-29); no page states an availability time. Measured on the statements' own
+    `toDate` — every one claudia_ui pulled, 29 of them 2026-06-26 → 09-28, at hours from 08:17
+    to 22:09 ET — each carried the weekday before the pull's own ET date, never the same day,
+    and weekdays rather than exchange days (the Monday 07-06 pull came back through Friday
+    07-03, a US holiday). So the day is decided by the calendar alone: no clock time and no
+    exchange calendar; a weekend steps back to the Friday. Operator rule, claudia_ui
+    2026-09-28: "pull unless the store holds the statement for the weekday before today".
+
+    Args:
+        now: An aware datetime — the day is read on the ET calendar, and a naive value has
+            no ET date.
+
+    Raises:
+        ValueError: If `now` is naive.
+    """
+    if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+        raise ValueError("newest_statement_day needs an aware datetime; a naive one has no ET date")
+    day = now.astimezone(_ET).date() - timedelta(days=1)
+    while day.weekday() >= 5:  # Saturday, Sunday
+        day -= timedelta(days=1)
+    return day
+
 
 # Process-level cache for market calendar context.
 # Key: (date_str, tuple(exchange_codes)) — recomputed only when the date changes.
@@ -52,19 +87,6 @@ def _restrict(path: Path, mode: int) -> None:
         log.warning("Could not restrict %s to %o: %s", collapse_home(str(path)), mode, exc)
 
 
-# SQL that reads a trade date out of `trades.time` regardless of which writer produced it.
-# Flex writes ISO (2026-08-04T14:21:42); the live CP API and streaming paths write IBKR's
-# compact 20260804-14:21:42. Kept as one constant so the date range, the gap scan and any
-# future reader cannot drift into understanding different subsets of the same table.
-_TRADE_DATE_SQL = """
-    CASE
-        WHEN time LIKE '____-__-__%' THEN substr(time, 1, 10)
-        WHEN time LIKE '________-%'  THEN
-            substr(time, 1, 4) || '-' || substr(time, 5, 2) || '-' || substr(time, 7, 2)
-    END
-"""
-
-
 def _iso_trade_time(value: Any) -> Any:
     """IBKR's compact `YYYYMMDD-HH:MM:SS` as ISO `YYYY-MM-DDTHH:MM:SS`.
 
@@ -87,6 +109,10 @@ _FUTURES_SCHEDULE: dict[str, Any] = {
         "Futures are not securities. Most CME Globex products trade ~23h/day "
         "Sunday 5:00 PM CT → Friday 4:00 PM CT, with a daily 4:00–5:00 PM CT maintenance break. "
         "CME stays open on several NYSE holidays (see cme_open_nyse_closed). "
+        "On those days and on the days around them Globex runs a HOLIDAY SCHEDULE whose hours "
+        "differ by product group, and Good Friday differs by year (holiday_schedule_today says "
+        "when today is one): the hours are CME's own, not stated here — "
+        "https://www.cmegroup.com/tools-information/holiday-calendar.html. "
         "IBKR routes all CME products electronically via Globex — no pit sessions."
     ),
     "maintenance_break_ct": "4:00 PM – 5:00 PM CT daily (Mon–Thu)",
@@ -145,7 +171,10 @@ class SQLiteStore:
     WAL journal mode is enabled on every connection for safe concurrent reads.
 
     Tables:
-      trades             — all Flex-synced and live-API trade executions
+      trades             — LEGACY: statement and live executions, ten fields each; still
+                           written, read by nothing in the package since 2.2.0 (register
+                           F20 — see `get_trades`). The trade record is the generated
+                           `flex_*` dataset (`flex_store`), read through `flex_dataset`
       flex_import_log    — SHA-256 integrity manifest for imported Flex XML files
       position_snapshots — timestamped position snapshots
       backtest_results   — vectorised backtest run history
@@ -500,10 +529,14 @@ class SQLiteStore:
             )
 
     def get_all_execution_ids(self) -> set[str]:
-        """Return the set of all execution_ids currently stored in the trades table.
+        """Return the set of all execution_ids stored in the LEGACY `trades` table.
 
-        Used by verify_flex_import to cross-check against source XML files.
-        Does not modify data.
+        **Deprecated since 2.2.0, with the table (register F20).** `verify_flex_import` no
+        longer calls it: it compares an archive's tradeIDs with the Flex dataset's
+        (`flex_dataset.FlexDataset.trade_ids`), because that is the dataset every reader
+        reports from. The set this returns mixes two id spaces — IBKR's `tradeID` for a row
+        a statement wrote, IBKR's exec id for a row captured live — which is why it is not
+        redefined in place. Does not modify data.
         """
         self.initialize()
         with self._connect() as conn:
@@ -522,7 +555,9 @@ class SQLiteStore:
         * ``False`` — the table exists and is **empty**, which is not the same thing at
           all. Falling back there reports the legacy table's freshness on behalf of a
           Flex dataset that holds nothing, and that is exactly the state a rebuild
-          importing zero statements leaves behind. It must read as definitively stale.
+          importing zero statements leaves behind. It drives `flex_dataset_empty`; the
+          staleness verdict itself reads the statement's `toDate` (`_statement_through`),
+          which is None in that state and so reads stale as well.
 
         Deliberately excludes `source='live'`: those are the fills whose statement has
         not arrived, and counting them would mark the store current precisely when a
@@ -536,8 +571,34 @@ class SQLiteStore:
             return str(row[0])
         return False  # table present, no settled rows — a wiped or never-imported dataset
 
-    def get_trade_date_coverage(self, gap_threshold_days: int = 45) -> dict[str, Any]:
-        """Return trade activity distribution from the trades table.
+    @staticmethod
+    def _statement_through(conn: sqlite3.Connection) -> date | None:
+        """The newest statement day the store holds — IBKR's own `toDate` — or None.
+
+        Read from `flex_change_in_nav`, one row per statement, falling back to the settled rows
+        of `flex_trade` (every archive row carries its statement's header dates). It is the
+        statement's date, not a trade's: a weekday with no fills still has a statement, and a
+        store holding it is current. Anything unreadable or unparseable is None — never a
+        guess — and None reads as stale.
+        """
+        for sql in (
+            "SELECT MAX(stmt_to_date) FROM flex_change_in_nav",
+            "SELECT MAX(stmt_to_date) FROM flex_trade WHERE source = 'flex'",
+        ):
+            try:
+                row = conn.execute(sql).fetchone()
+            except sqlite3.DatabaseError:
+                continue  # table absent — an older store, or a differently shaped archive
+            if row and row[0]:
+                try:
+                    return datetime.strptime(str(row[0]), "%Y%m%d").date()
+                except ValueError:
+                    log.warning("unparseable stmt_to_date %r in the Flex archive", row[0])
+                    return None
+        return None
+
+    def get_trade_date_coverage(self, gap_threshold_days: int = 45, *, now: datetime | None = None) -> dict[str, Any]:
+        """Return trade activity distribution from the Flex dataset, and whether it is current.
 
         Reports the date range and periods with no recorded executions.
         This is an ACTIVITY REPORT, not an import integrity check:
@@ -546,49 +607,79 @@ class SQLiteStore:
         - Data values are never validated or modified: IBKR is the authoritative source.
         - To verify import completeness against source XMLs, use verify_flex_import.
 
-        **The report and the staleness flag answer two different questions, and since
-        2026-08-05 they read two different things.**
+        **The report and the staleness flag answer two different questions and read two
+        different things.**
 
-        The *report* (oldest / newest / total / gaps) covers **every** row, whichever
-        writer produced it. It used to match on the ISO shape alone, which silently
-        excluded rows written by the live CP API and streaming paths in IBKR's compact
-        format — 38 of 1,206 on the live store, so the newest date it could report was
-        2026-08-04 while the table already held 2026-08-05. The sharp consequence was not
-        the missing day: a window containing *only* live-captured trades would appear as a
-        45+ day hole and be reported as inactivity, and ClaudIA's system prompt tells it
-        that date gaps are verified inactivity. A fabricated gap would have been passed to
-        the user as fact.
+        The *report* (oldest / newest / total / gaps) covers **every execution in
+        `flex_trade`, once** — the operator's 2026-08-05 rule, "the activity report must see
+        every row", applied to the table every other reader uses. A statement row is dated by
+        IBKR's trade date. A placeholder — a fill captured from the Client Portal before its
+        statement — is dated by its own fill time, the only date it has, so a stretch of
+        live-only activity is never reported as a gap (ClaudIA's system prompt tells the model
+        that date gaps are verified inactivity; a fabricated one would be passed on as fact).
+        When the statement arrives it lands on the placeholder's row, so the execution is
+        still counted once.
 
-        The *staleness* flag deliberately still tracks **settled Flex data only**, read
-        from `flex_trade` where that table exists. It decides whether to pull a statement,
-        and Flex is T+1 — so today's live fill is precisely the trade whose settled record
-        has *not* arrived. Letting it mark the store "current" would suppress the very pull
-        that brings the settled figures. Where `flex_trade` is absent (a store predating
-        the Flex dataset) it falls back to the ISO-format rows in `trades`, which is what
-        the Flex importer writes and therefore the same question asked of older data.
+        Until 2.2.0 the report read the legacy `trades` table (register F20), where a fill
+        captured live and later delivered by Flex sits under two ids: measured 2026-09-30 on
+        the operator's store, 1,388 rows for 1,255 executions, and 413 "trade dates" — the
+        calendar date of each fill's clock time — for 393 IBKR trade dates; one of the five
+        45-day gaps moved by three calendar days, because its edge was a Friday-evening FX fill
+        after the IdealPro day roll, which IBKR books to the Monday. Nothing in this package
+        reads the legacy table any more except the two public methods kept for outside
+        callers until it is retired (`get_trades`, `get_all_execution_ids`).
 
-        Returns: oldest, newest, total_trades, gaps, days_since_newest, last_trading_day,
-        stale.
+        The *staleness* flag is one sentence (operator rule, claudia_ui 2026-09-28): **the
+        store is current when it holds the statement for the weekday before today (ET)**.
+        "Holds" is read from IBKR's own `toDate` in the Flex archive (`_statement_through`),
+        never from a trade date — a weekday with no fills still has a statement. "The weekday
+        before today" is `newest_statement_day(now)`: no clock time and no exchange calendar,
+        because IBKR issues statements on weekdays, holidays included (measured on 29
+        statements). Until 2026-09-29 (claudia_ui #72, register F19) the flag compared the
+        newest settled TRADE date with the NYSE session before the last one, so on day D a
+        store through D-2 read `stale: False` all day — measured 2026-09-24 at 13:01Z and
+        16:33Z — and the consumer that trusted it pulled nothing. Flex is T+1, so today's
+        live fill is precisely the trade whose settled record has *not* arrived:
+        `settled_newest` (the newest settled trade) is reported beside the flag and never
+        decides it.
+
+        Args:
+            gap_threshold_days: A run of calendar days without a trade longer than this is
+                reported as a gap.
+            now: The instant the verdict is for — the current time by default. Aware,
+                because the day is decided on the ET calendar (`newest_statement_day`).
+
+        Returns:
+            The same keys on every path, an empty table included (F1: the empty path used to
+            return four of them, so a consumer's `cov.get("stale")` could not tell "no
+            verdict" from "current"): `oldest`, `newest`, `days_since_newest` (None when the
+            table is empty), `settled_newest`, `days_since_settled` (None when no settled
+            trade exists), `flex_dataset_empty` (the Flex tables exist and hold no settled
+            row), `statement_through` (IBKR's `toDate` of the newest statement held, ISO, or
+            None), `newest_statement_day` (the weekday before today in ET, ISO), `stale`
+            (`statement_through` is None or earlier than `newest_statement_day`),
+            `total_trades`, `gaps`. Both day counts use the ET date of `now`.
         """
         self.initialize()
         with self._connect() as conn:
-            # S608: the only interpolation is `_TRADE_DATE_SQL`, a module-level constant
-            # of literal SQL — no caller input reaches this string. Kept as a constant
-            # rather than inlined so the date range, the gap scan and any future reader
-            # cannot drift into understanding different subsets of the same table.
-            rows = conn.execute(
-                f"SELECT DISTINCT {_TRADE_DATE_SQL} AS d FROM trades WHERE d IS NOT NULL ORDER BY d"  # noqa: S608
-            ).fetchall()
-            total = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT CASE WHEN source = 'flex' THEN trade_date_iso"
+                    " ELSE substr(date_time_iso, 1, 10) END AS d"
+                    " FROM flex_trade WHERE d IS NOT NULL ORDER BY d"
+                ).fetchall()
+                total = conn.execute("SELECT COUNT(*) FROM flex_trade").fetchone()[0]
+            except sqlite3.DatabaseError:
+                rows, total = [], 0  # no Flex dataset in this store — nothing to report
             settled_newest = self._settled_newest_date(conn)
+            held = self._statement_through(conn)
 
-        if not rows:
-            return {"oldest": None, "newest": None, "total_trades": 0, "gaps": []}
-
-        from datetime import date, timedelta
+        moment = now if now is not None else datetime.now(tz=_ET)
+        today = moment.astimezone(_ET).date()
+        expected = newest_statement_day(moment)
 
         dates = [date.fromisoformat(r["d"]) for r in rows]
-        gaps = []
+        gaps: list[dict[str, Any]] = []
         for i in range(1, len(dates)):
             delta = (dates[i] - dates[i - 1]).days
             if delta > gap_threshold_days:
@@ -606,46 +697,21 @@ class SQLiteStore:
                     }
                 )
 
-        newest = dates[-1]
-        days_since_newest = (date.today() - newest).days
-        # Staleness asks about SETTLED data only (see the docstring). Falling back to the
-        # report's own newest keeps the old behaviour for stores with no Flex dataset —
-        # but an *empty* flex_trade (settled_newest is False) is not that case, and must
-        # not borrow the legacy table's freshness.
-        flex_dataset_empty = settled_newest is False
-        settled = date.fromisoformat(settled_newest) if isinstance(settled_newest, str) else newest
-
-        try:
-            import exchange_calendars as ec
-            from pandas import Timestamp
-
-            _cal = ec.get_calendar("XNYS")
-            last_trading_day = _cal.previous_close(Timestamp.now(tz="UTC")).date()
-            # Flex publishes yesterday's trades today — newest == yesterday is always normal.
-            # Only flag stale when data is 2+ trading days behind (genuine gap, not Flex lag).
-            penultimate_trading_day = _cal.previous_close(Timestamp(last_trading_day.isoformat(), tz="UTC")).date()
-            stale = settled < penultimate_trading_day
-        except Exception:
-            # Fallback: stale if missing more than 2 calendar days (covers weekends)
-            last_trading_day = None
-            stale = (date.today() - settled).days > 2
-
-        if flex_dataset_empty:
-            stale = True
-
+        newest = dates[-1] if dates else None
+        settled = date.fromisoformat(settled_newest) if isinstance(settled_newest, str) else None
         return {
-            "oldest": dates[0].isoformat(),
-            "newest": newest.isoformat(),
-            "days_since_newest": days_since_newest,
-            # The settled figures are reported separately from the legacy ones so a
-            # caller never has to mix them. `_format_coverage` used to print
-            # days_since_newest (legacy) beside stale (Flex-derived), yielding the
-            # uninterpretable "DATA STALE (0d old)".
-            "settled_newest": settled_newest if isinstance(settled_newest, str) else None,
-            "days_since_settled": (date.today() - settled).days if not flex_dataset_empty else None,
-            "flex_dataset_empty": flex_dataset_empty,
-            "last_trading_day": last_trading_day.isoformat() if last_trading_day else None,
-            "stale": stale,
+            "oldest": dates[0].isoformat() if dates else None,
+            "newest": newest.isoformat() if newest else None,
+            "days_since_newest": (today - newest).days if newest else None,
+            # `newest` counts a placeholder's fill date; `settled_newest` is the newest
+            # statement trade date. They differ exactly when a fill is waiting for its
+            # statement, and a caller never has to mix them.
+            "settled_newest": settled.isoformat() if settled else None,
+            "days_since_settled": (today - settled).days if settled else None,
+            "flex_dataset_empty": settled_newest is False,
+            "statement_through": held.isoformat() if held else None,
+            "newest_statement_day": expected.isoformat(),
+            "stale": held is None or held < expected,
             "total_trades": total,
             "gaps": gaps,
         }
@@ -653,11 +719,42 @@ class SQLiteStore:
     @staticmethod
     def get_market_calendar_context(
         exchanges: list[str] | None = None,
+        *,
+        today: date | None = None,
     ) -> dict[str, Any]:
         """Return trading calendar context for one or more exchanges.
 
         Covers the full current year (past + future) plus the next calendar year,
         giving complete holiday visibility with minimal data (~10-15 holidays/exchange/year).
+
+        **Who holds a session today is answered per exchange** (`sessions_today`, claudia_ui
+        #78, register F24, 2026-09-29): `is_trading_day` is the *primary* exchange's flag and
+        `holidays_by_exchange` is built from weekdays, so a consumer asking "who is open?" on a
+        Saturday found nobody in any holiday list and read every exchange as open. Each
+        exchange's own calendar answers `is_session(today)`: a Saturday is False everywhere, a
+        Friday is False for Tadawul (Sun–Thu), a NYSE holiday says nothing about CME or London.
+        Operator rule (claudia_ui 2026-09-26): the regular weekly schedule decides first,
+        holidays only subtract, no exchange opens on its weekend — which is exactly what a
+        calendar's session set encodes. On the failure marker the key is None: unknown, never
+        an empty map that reads as "nobody open".
+
+        **A half day is said, with its time** (`early_closes_today`, register F18, 2026-10-02):
+        `{code: {"close": "HH:MM", "tz": IANA zone}}` for each exchange whose session today ends
+        early, in that exchange's own time; empty on an ordinary day, None on the failure marker.
+        The data is the calendar library's; the exchanges' own pages are the witness
+        (`scripts/calendar_half_days.py` lists what to compare). Checked 2026-10-02 against
+        eight exchanges: open / closed / half day agreed on 17 of 17 dates; the time agreed for
+        NYSE, London, Sydney and Toronto and differed by thirty minutes for Istanbul.
+        **CME is never given a time**: its holiday hours differ by product group and the library
+        holds one closing time for all of them, so `futures["holiday_schedule_today"]` says only
+        that today is such a day (None when unknown) and the note points at CME's own calendar.
+
+        Args:
+            exchanges: MIC codes; None for the 20-exchange default below. A list REPLACES
+                the default rather than extending it.
+            today: The day the verdicts are for; the current local date by default. With a
+                date given, `last_trading_day` / `next_trading_day` are relative to that
+                day's midnight UTC, and the process cache keys on it.
 
         Default: 20 exchanges covering full G20 + Eurex (XNYS, CME, XLON, XETR, XEUR,
         XPAR, XMIL, XTKS, XHKG, XSHG, XBOM, XKRX, XASX, XTSE, BVMF, XMEX, XJSE,
@@ -710,19 +807,16 @@ class SQLiteStore:
                 "XIST",
             ]
         try:
-            from datetime import date as _date
-
-            _cache_key = (_date.today().isoformat(), tuple(exchanges))
+            asked = today
+            today = asked if asked is not None else date.today()
+            _cache_key = (today.isoformat(), tuple(exchanges))
             if _cache_key in _market_calendar_cache:
                 return _market_calendar_cache[_cache_key]
-
-            from datetime import date, timedelta
 
             import exchange_calendars as ec
             from pandas import Timestamp
 
-            now = Timestamp.now(tz="UTC")
-            today = date.today()
+            now = Timestamp.now(tz="UTC") if asked is None else Timestamp(asked, tz="UTC")
             year_start = date(today.year, 1, 1)
             year_end = date(today.year + 1, 12, 31)
 
@@ -741,6 +835,8 @@ class SQLiteStore:
             import contextlib
 
             holidays_by_exchange: dict[str, list[str]] = {}
+            sessions_today: dict[str, bool] = {}
+            early_closes_today: dict[str, dict[str, str]] = {}
             for xcode in exchanges:
                 with contextlib.suppress(Exception):
                     cal = ec.get_calendar(xcode)
@@ -749,12 +845,30 @@ class SQLiteStore:
                     cal_start = max(year_start, cal.first_session.date())
                     sessions = set(cal.sessions_in_range(Timestamp(cal_start), Timestamp(cal_end)).date)
                     weekdays_in_range = {d for d in all_weekdays if cal_start <= d <= cal_end}
-                    holidays_by_exchange[xcode] = sorted(d.isoformat() for d in (weekdays_in_range - sessions))
+                    # Both verdicts from this exchange's own calendar, assigned together so a
+                    # failure on either leaves the exchange out of both maps, never in one.
+                    holidays = sorted(d.isoformat() for d in (weekdays_in_range - sessions))
+                    open_today = bool(cal.is_session(Timestamp(today)))
+                    # A half day, in the exchange's own time and zone. Never for CME: the
+                    # library holds one closing time and CME's differ by product (below).
+                    closes_early = xcode != "CME" and open_today and Timestamp(today) in cal.early_closes
+                    close = (
+                        cal.session_close(Timestamp(today)).tz_convert(cal.tz).strftime("%H:%M") if closes_early else ""
+                    )
+                    holidays_by_exchange[xcode] = holidays
+                    sessions_today[xcode] = open_today
+                    if closes_early:
+                        early_closes_today[xcode] = {"close": close, "tz": str(cal.tz)}
 
             # Days CME trades when NYSE is closed — futures keep going on equity holidays
             cme_extra: list[str] = []
+            # Whether Globex runs a holiday schedule today: the library's CME early-close days
+            # are the days CME's own calendar lists as holiday schedules (checked 2026-10-02).
+            # None when the calendar could not be read — unknown, not "a regular day".
+            holiday_schedule_today: bool | None = None
             with contextlib.suppress(Exception):
                 cme_cal = ec.get_calendar("CME")
+                holiday_schedule_today = bool(Timestamp(today) in cme_cal.early_closes)
                 nyse_cal = ec.get_calendar("XNYS")
                 cme_cap = min(year_end, cme_cal.last_session.date())
                 nyse_cap = min(year_end, nyse_cal.last_session.date())
@@ -769,8 +883,11 @@ class SQLiteStore:
                 "last_trading_day": last_td.isoformat(),
                 "next_trading_day": next_td.isoformat(),
                 "primary_exchange": exchanges[0],
+                "sessions_today": sessions_today,
+                "early_closes_today": early_closes_today,
                 "holidays_by_exchange": holidays_by_exchange,
-                "futures": _FUTURES_SCHEDULE | {"cme_open_nyse_closed": cme_extra},
+                "futures": _FUTURES_SCHEDULE
+                | {"cme_open_nyse_closed": cme_extra, "holiday_schedule_today": holiday_schedule_today},
             }
             _market_calendar_cache[_cache_key] = result
             return result
@@ -782,7 +899,12 @@ class SQLiteStore:
             # wrong in a way someone notices, rather than wrong in the safe-looking
             # direction. Public API, consumed by claudia_ui.
             log.warning("get_market_calendar_context failed: %s: %s", type(exc).__name__, exc)
-            return {"error": f"{type(exc).__name__}: {exc}", "is_trading_day": None}
+            return {
+                "error": f"{type(exc).__name__}: {exc}",
+                "is_trading_day": None,
+                "sessions_today": None,
+                "early_closes_today": None,
+            }
 
     _ALLOWED_TIME_COLS = frozenset({"time", "snapshot_at", "logged_at"})
 
@@ -814,7 +936,18 @@ class SQLiteStore:
         start: str | None = None,
         end: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return trades, optionally filtered by symbol and date range."""
+        """Return rows of the LEGACY `trades` table, optionally filtered by symbol and time.
+
+        **Deprecated since 2.2.0 (register F20): nothing in this package reads this table any
+        more, and a consumer should not either.** It carries no realised P&L for the 822 rows imported
+        before 2026-05-26, and holds a fill captured live and later delivered by Flex under
+        two ids. Trade history and realised P&L are `flex_dataset.FlexDataset.executions`
+        and `realised_window`. The method stays because it is public API and the table is
+        still written; both go together in a later release.
+
+        `start`/`end` are compared with the row's ISO timestamp as text, so a date-only
+        `end` excludes that day's fills.
+        """
         self.initialize()
         query, params = self._apply_filters("SELECT * FROM trades WHERE 1=1", [], symbol, start, end, "time")
         query += " ORDER BY time DESC"

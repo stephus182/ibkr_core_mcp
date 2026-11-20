@@ -7,9 +7,11 @@ this module exists.
 
 import os
 import stat
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from google.auth.exceptions import RefreshError
+from google.oauth2.credentials import Credentials
 
 from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
 
@@ -147,3 +149,33 @@ def test_persist_credentials_creates_parent_directory(tmp_path):
     persist_credentials(token_file, mock_creds)
 
     assert token_file.read_text() == '{"token": "value"}'
+
+
+# ── One connection per request (register F17) ────────────────────────────────
+
+
+def test_every_drive_request_gets_its_own_connection():
+    """httplib2 is not thread-safe, and Google's rule is one `httplib2.Http` per thread
+    (https://googleapis.github.io/google-api-python-client/docs/thread_safety.html). One shared
+    connection aborted a host's process on 2026-09-23 (claudia_ui gap #61). The real `build()`,
+    offline: this is Google's request path, not a mock."""
+    import httplib2
+
+    from ibkr_core_mcp.gdrive_auth import build_drive_service
+
+    creds = Credentials(token="test-token")
+    service = build_drive_service(creds)
+    first = service.files().list(pageSize=1, fields="files(id)")
+    second = service.files().list(pageSize=1, fields="files(id)")
+
+    assert isinstance(first.http.http, httplib2.Http)
+    assert first.http.http is not second.http.http
+    assert first.http.credentials is creds
+
+
+def test_the_drive_service_is_built_in_one_place():
+    """Every Drive client in the package goes through `build_drive_service`: a module that
+    calls Google's `build` itself would share one connection again."""
+    package = Path(__file__).resolve().parents[1] / "ibkr_core_mcp"
+    builders = sorted(p.name for p in package.glob("*.py") if "googleapiclient.discovery" in p.read_text())
+    assert builders == ["gdrive_auth.py"]

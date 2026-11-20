@@ -810,3 +810,124 @@ def test_vwap_refuses_a_session_open_it_cannot_parse():
 
     with pytest.raises(ValueError, match="HH:MM"):
         vwap(_one_cme_session_in_utc(), session_open="6pm")
+
+
+# ============================================================================
+# TradingView's sources and moving-average types — Pine v6's own definitions
+# ============================================================================
+
+_PINE_SOURCES = {
+    "open": 1.0,
+    "high": 10.0,
+    "low": 4.0,
+    "close": 6.0,
+    "hl2": 7.0,
+    "hlc3": 20 / 3,
+    "ohlc4": 5.25,
+    "hlcc4": 6.5,
+}
+"""Each source on the bar open 1, high 10, low 4, close 6, by Pine's own words: `hl2` "Is a
+shortcut for (high + low)/2", `hlc3` "(high + low + close)/3", `ohlc4` "(open + high + low +
+close)/4", `hlcc4` "(high + low + close + close)/4"; `input.source()` lists the dropdown as
+open/high/low/close/hl2/hlc3/ohlc4/hlcc4.
+https://www.tradingview.com/pine-script-reference/v6/ (read 2026-10-05)."""
+
+
+@pytest.mark.parametrize(("source", "expected"), list(_PINE_SOURCES.items()))
+def test_price_sources_follow_pines_definitions(source, expected):
+    """One bar whose eight sources are eight different numbers, so a source read as another
+    one — `hl2` as `close` is the one that matters — cannot pass."""
+    from ibkr_core_mcp.indicators import SOURCES, price_source
+
+    bar = pd.DataFrame({"open": [1.0], "high": [10.0], "low": [4.0], "close": [6.0], "volume": [1.0]})
+
+    assert tuple(_PINE_SOURCES) == SOURCES
+    assert price_source(bar, source).iloc[0] == pytest.approx(expected)
+
+
+def test_a_source_or_a_type_outside_tradingviews_lists_is_refused_with_the_list():
+    """Never read as `close`, never as an SMA: a figure computed on something the caller did
+    not ask for, under the name they did ask for, is the failure this vocabulary exists to stop."""
+    from ibkr_core_mcp.indicators import moving_average, price_source
+
+    with pytest.raises(ValueError, match="open, high, low, close, hl2, hlc3, ohlc4, hlcc4"):
+        price_source(_four_bars(), "typical")
+    with pytest.raises(ValueError, match=r"SMA, EMA, SMMA \(RMA\), WMA, VWMA"):
+        moving_average(_four_bars(), 3, "HMA", "close")
+
+
+def _four_bars() -> pd.DataFrame:
+    """hl2 = 10, 12, 14, 18 on volumes 1, 1, 2, 4. The closes are other numbers on purpose."""
+    return pd.DataFrame(
+        {
+            "open": [9.0, 11.0, 13.0, 17.0],
+            "high": [11.0, 13.0, 15.0, 19.0],
+            "low": [9.0, 11.0, 13.0, 17.0],
+            "close": [9.5, 12.5, 13.5, 18.5],
+            "volume": [1.0, 1.0, 2.0, 4.0],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("ma_type", "name", "expected"),
+    [
+        # ta.sma: "the sum of last y values of x, divided by y"
+        ("SMA", "sma_3_hl2", (12 + 14 + 18) / 3),
+        # ta.ema: alpha = 2 / (length + 1), seeded with the first value: 10 → 11 → 12.5 → 15.25
+        ("EMA", "ema_3_hl2", 15.25),
+        # ta.rma: alpha = 1 / length, seeded with the SMA of the first 3 (12), then (2·12 + 18) / 3
+        ("SMMA (RMA)", "rma_3_hl2", 14.0),
+        # ta.wma: "weighting factors decrease in arithmetical progression" — newest 3, oldest 1
+        ("WMA", "wma_3_hl2", (12 * 1 + 14 * 2 + 18 * 3) / 6),
+        # ta.vwma: "sma(source * volume, length) / sma(volume, length)"
+        ("VWMA", "vwma_3_hl2", (12 * 1 + 14 * 2 + 18 * 4) / 7),
+    ],
+)
+def test_moving_average_types_follow_pines_definitions(ma_type, name, expected):
+    """TradingView's five built-in types ("SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA",
+    https://www.tradingview.com/support/solutions/43000742042/), each worked by hand from
+    Pine's definition. Five different answers on one frame, and none of them is the answer
+    on `close`, so neither a swapped type nor an ignored source can pass. The Series is named
+    for what it is — type, length, source."""
+    from ibkr_core_mcp.indicators import MA_TYPES, moving_average
+
+    result = moving_average(_four_bars(), 3, ma_type, "hl2")
+
+    assert ma_type in MA_TYPES
+    assert result.iloc[-1] == pytest.approx(expected)
+    assert result.name == name
+
+
+@pytest.mark.parametrize(("ma_type", "basis"), [("SMA", 12.0), ("EMA", 12.5)])
+def test_bollinger_bands_take_the_source_for_the_basis_and_the_deviation(ma_type, basis):
+    """`ta.bb` is `basis = ta.sma(src, length); dev = mult * ta.stdev(src, length)` — one
+    source for both. hl2 = 10, 12, 14: the population deviation around the simple mean 12 is
+    sqrt(8/3). "Basis MA Type … is applied to the basis plot line"
+    (https://www.tradingview.com/support/solutions/43000501840-bollinger-bands-bb/), so an
+    EMA basis moves the middle (10 → 11 → 12.5) and leaves the deviation where it was."""
+    from ibkr_core_mcp.indicators import bollinger_bands
+
+    bands = bollinger_bands(_four_bars().iloc[:3], period=3, std=1.0, source="hl2", ma_type=ma_type).iloc[-1]
+
+    sigma = (8 / 3) ** 0.5
+    assert bands["bb_mid"] == pytest.approx(basis)
+    assert bands["bb_upper"] - bands["bb_mid"] == pytest.approx(sigma)
+    assert bands["bb_mid"] - bands["bb_lower"] == pytest.approx(sigma)
+
+
+def test_rsi_and_macd_read_the_source_they_are_given_and_close_when_given_none():
+    """Flat closes under a rising midpoint. On `close` — still the functions' default — RSI
+    is undefined and MACD is zero; on `hl2` RSI is 100 and MACD is positive. A source that is
+    accepted and ignored fails, and so does a default that moved off `close`."""
+    from ibkr_core_mcp.indicators import macd, rsi
+
+    rising = np.arange(40, dtype=float)
+    bars = pd.DataFrame(
+        {"open": 100.0, "high": 101.0 + 2 * rising, "low": 99.0, "close": 100.0, "volume": 1.0}, index=range(40)
+    )
+
+    assert rsi(bars, 14, source="hl2").iloc[-1] == 100.0
+    assert np.isnan(rsi(bars, 14).iloc[-1])
+    assert macd(bars, source="hl2")["macd"].iloc[-1] > 0
+    assert macd(bars)["macd"].iloc[-1] == 0

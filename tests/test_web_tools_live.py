@@ -33,6 +33,7 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import SecretStr
 
 # Stable, static, automation-tolerant targets. docs.crawl4ai.com is used for the content
 # tests because its sitemap is small and its content changed under none of the 2026-07-30
@@ -71,7 +72,7 @@ def toolkit(tmp_path):
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=tmp_path / "token.json",
         gdrive_credentials_file=tmp_path / "credentials.json",
-        firecrawl_api_key="",
+        firecrawl_api_key=SecretStr(""),
         crawl4ai_profiles_dir=tmp_path / "profiles-that-do-not-exist",
     )
     return ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), config)
@@ -123,7 +124,7 @@ def test_search_site_needs_no_firecrawl_key(browser_available, toolkit):
     """The toolkit fixture has `firecrawl_api_key=""`. Free site search is the entire
     reason the paid crawl rung could be deleted, so a key requirement creeping back in
     would silently undo that."""
-    assert toolkit._config.firecrawl_api_key == ""
+    assert toolkit._config.firecrawl_api_key.get_secret_value() == ""
     text, _ = toolkit.execute("search_site", {"domain": DOCS_HOST, "query": "browser configuration"})
 
     assert "FIRECRAWL_API_KEY" not in text
@@ -273,7 +274,7 @@ def test_firecrawl_search_reaches_hosts_search_site_never_could(tmp_path):
         sqlite_path=tmp_path / "store.db",
         gdrive_token_file=tmp_path / "token.json",
         gdrive_credentials_file=tmp_path / "credentials.json",
-        firecrawl_api_key=key,
+        firecrawl_api_key=SecretStr(key),
     )
     toolkit = ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), config)
 
@@ -389,7 +390,7 @@ def test_a_public_url_that_redirects_to_loopback_never_reaches_it(browser_availa
             sqlite_path=tmp_path / "store.db",
             gdrive_token_file=tmp_path / "token.json",
             gdrive_credentials_file=tmp_path / "credentials.json",
-            firecrawl_api_key="",
+            firecrawl_api_key=SecretStr(""),
             crawl4ai_profiles_dir=tmp_path / "profiles-that-do-not-exist",
         )
         toolkit = ClaudeToolkit(MagicMock(), MagicMock(), MagicMock(), config)

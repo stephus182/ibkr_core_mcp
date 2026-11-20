@@ -22,7 +22,7 @@ Every living document, grouped by what you'd be doing when you need it.
 
 | File | Description |
 |---|---|
-| [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`. **Start here** — nothing else works until the gateway is authenticated |
+| [`gateway-auth-reference.md`](gateway-auth-reference.md) | Gateway login walkthrough, `GatewayManager`, headless `TokenAuth`, the `python -m ibkr_core_mcp.gateway preflight | diagnose | up | reset | keepalive` command line, and the runbook for a login that will not take (borrowed, refused, validating). **Start here** — nothing else works until the gateway is authenticated |
 | [`windows-setup.md`](windows-setup.md) | Windows install/run guide — what works out of the box vs. what needs an extra step (Touch ID gate) |
 | [`consumers.md`](consumers.md) | Which projects install this package, and what they use it for |
 
@@ -34,13 +34,15 @@ Every living document, grouped by what you'd be doing when you need it.
 | [`api-usage-examples.md`](api-usage-examples.md) | Per-module usage examples (Setup, Market Data, Technical Indicators, Backtesting, Portfolio Analytics, Claude AI Tool Layer, PineScript Generation) |
 | [`symbology-reference.md`](symbology-reference.md) | How a ticker becomes a contract — why `/trsrv/stocks` + `isUS`, why a ticker is not a unique key, and the ask-don't-guess rule (the IGV/MXN defect) |
 | [`ibkr-api-behaviors-reference.md`](ibkr-api-behaviors-reference.md) | Known IBKR API behaviors, **verified not assumed** — read before diagnosing anything surprising |
+| [`indicators-reference.md`](indicators-reference.md) | Every indicator setting — the eight price sources, the five moving-average types, Bollinger bands (basis, deviation, Basis MA Type), Offset, RSI and MACD sources — with its TradingView name, its default and whose default it is, the `n/a` rules, what is not offered, and every official page |
+| [`market-data-conventions.md`](market-data-conventions.md) | What a bar is, by asset class (STK, FUT) and source (IBKR, the exchange / the SIPs, TradingView) — stamps, hours, volume, keys — every convention with its dated proof and every official page linked (2026-10-03) |
 
 ### Placing orders (two human gates, no bypass)
 
 | File | Description |
 |---|---|
-| [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) |
-| [`security-architecture.md`](security-architecture.md) | **Living security design** — principals and threat model (incl. AI-generated changes), privilege tiers, the trust-boundary map, the eleven invariants each with its enforcing test, subsystem designs (gates, sandbox, SSRF, redaction, transport), CI as a security instrument, the dated decision log, change recipes. `SECURITY.md` is the control inventory; the audits are the evidence |
+| [`order-management-examples.md`](order-management-examples.md) | Order management code examples (read-only, place/confirm, manual reply-chain control, modify/cancel, GTC quarter-end auto-cancel) — and **time in force**: the three places IBKR states TIF values, what two contracts' rules return, what each surface of this package does with a TIF, auction orders, what is not established |
+| [`security-architecture.md`](security-architecture.md) | **Living security design** — principals and threat model (incl. AI-generated changes), privilege tiers, the trust-boundary map, the thirteen invariants each with its enforcing test, subsystem designs (gates, sandbox, SSRF, redaction, transport), CI as a security instrument, the dated decision log, change recipes. `SECURITY.md` is the control inventory; the audits are the evidence |
 
 > The gate policy itself — Touch ID → visual confirmation, enforced inside `IBKRClient`,
 > with **one Touch ID for a whole confirmation chain and a dialog for every reply in it** —
@@ -114,6 +116,7 @@ Dated filenames, not retroactively edited.
 
 | Audit | What it covers |
 |---|---|
+| [`mcp-security-checklist-2026-11-09.md`](audits/mcp-security-checklist-2026-11-09.md) | **Latest** — an enterprise MCP security checklist (29 items, 8 sections, scored 2–4) answered item by item against this package: 4 YES, 16 PARTIAL, 2 NO, 7 N/A, each with the test or file that makes it true, the deployment and provenance axes read for a single-operator local workstation, and the deep-dive order that follows. A first pass between F45's two steps |
 | [`integration-suite-audit-2026-09-20.md`](audits/integration-suite-audit-2026-09-20.md) | First full-suite run against a live gateway after the `v2.0.1` release — four findings CI cannot reach, incl. `preview_order` sending `extOperator` so every futures whatif was rejected |
 | [`live-test-log.md`](audits/live-test-log.md) | **Running log** — every live integration run against a real gateway/Drive/Firecrawl, dated. Append, don't rewrite |
 | [`claude-tools-audit-2026-07.md`](audits/claude-tools-audit-2026-07.md) | The full `claude_tools.py` audit — 42 tool descriptions vs official docs, token measurements, the follow-up register |

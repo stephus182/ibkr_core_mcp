@@ -32,7 +32,10 @@ dependencies = [
     "pydantic>=2.0",
     "pandas>=2.2",
     "numpy>=1.26",
-    "RestrictedPython>=7.0",  # no ceiling by design — CI prints the resolved version so a breaking release is easy to spot
+    # Floor 9.0 since 2026-11-17: RestrictedPython's own change log names sandbox escapes closed in
+    # 8.0 (CVE-2025-22153) and 8.3, and the sandbox's builtin list is 9.0's (backtest.py). Held by
+    # tests/security/test_sandbox_boundary.py.
+    "RestrictedPython>=9.0",  # no ceiling by design — CI prints the resolved version so a breaking release is easy to spot
     "pyarrow>=16.0",
     "google-api-python-client>=2.130",
     "google-auth-httplib2>=0.2",
@@ -41,6 +44,7 @@ dependencies = [
     "defusedxml>=0.7",
     "exchange_calendars>=4.5",
     "browser-cookie3>=0.19",
+    "keyring>=25",  # the OS keychain behind load_env_file: secrets at rest (MCP security checklist 7.1, 2026-11-09)
     "pyobjc-framework-LocalAuthentication; sys_platform == 'darwin'",
     "websockets>=12.0",  # backs IBKRWebSocket/AlertManager, exported from __init__.py — core client API, not server-only
 ]
@@ -91,6 +95,7 @@ ibkr_core_mcp = [
     "gateway/Dockerfile",
     "gateway/conf.yaml",
     "gateway/*.sh",
+    "assets/*",
 ]
 
 [tool.pytest.ini_options]
@@ -167,6 +172,8 @@ module = [
     "RestrictedPython.*",
     "googleapiclient",
     "googleapiclient.*",
+    "httplib2",
+    "google_auth_httplib2",
     "google.auth",
     "google.auth.*",
     "google.oauth2",

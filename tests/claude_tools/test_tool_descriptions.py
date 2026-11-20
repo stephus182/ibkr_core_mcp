@@ -272,3 +272,14 @@ def test_no_description_promises_content_a_handler_truncates(toolkit):
     promises_full_content = re.compile(r"full page content|complete page content|entire page", re.I)
     offenders = [t["name"] for t in toolkit.tools if promises_full_content.search(t["description"])]
     assert offenders == [], f"descriptions promising full page content: {offenders}"
+
+
+def test_fetch_market_data_tells_the_model_its_volume_is_filtered():
+    """Operator, 2026-10-03: TradingView's CLX6 bar carried 327.9K against IBKR's 242,152 with
+    identical prices — IBKR's historical volume excludes blocks, combos and derivative-priced
+    trades (its own page), CME's reported volume includes them. Said in the description so the
+    model never reports that gap as an error."""
+    from ibkr_core_mcp.claude_tools import TOOL_DEFINITIONS
+
+    text = next(t["description"] for t in TOOL_DEFINITIONS if t["name"] == "fetch_market_data")
+    assert "FILTERED" in text and "block trades" in text and "not an error" in text

@@ -9,8 +9,8 @@ from ibkr_core_mcp.auth import AuthStrategy, BrowserCookieAuth, NoAuth, TokenAut
 from ibkr_core_mcp.backtest import BacktestResult, run_backtest
 from ibkr_core_mcp.cache import GDriveCache
 from ibkr_core_mcp.claude_tools import ClaudeToolkit
-from ibkr_core_mcp.client import BracketPairing, IBKRClient, pair_bracket_response
-from ibkr_core_mcp.config import Config
+from ibkr_core_mcp.client import BracketPairing, IBKRClient, attached_entry, pair_bracket_response
+from ibkr_core_mcp.config import SECRET_NAMES, Config, EnvFile, load_env_file
 from ibkr_core_mcp.exceptions import (
     BacktestError,
     BacktestRuntimeError,
@@ -19,6 +19,8 @@ from ibkr_core_mcp.exceptions import (
     CacheMissError,
     CacheWriteError,
     ConfigError,
+    ConfirmationDeclinedError,
+    ConfirmationTimeoutError,
     FlexQueryError,
     GatewayError,
     HumanAuthError,
@@ -27,9 +29,11 @@ from ibkr_core_mcp.exceptions import (
     IBKRCoreError,
     IBKRRateLimitError,
     OrderValidationError,
+    ReplyNotConfirmedError,
     StoreError,
     StreamingError,
 )
+from ibkr_core_mcp.flex_dataset import FlexDataset
 from ibkr_core_mcp.flex_query import FlexQueryClient
 from ibkr_core_mcp.gateway import GatewayManager
 from ibkr_core_mcp.human_auth import require_touch_id
@@ -61,6 +65,7 @@ from ibkr_core_mcp.models import (
     bars_to_dataframe,
     json_default,
 )
+from ibkr_core_mcp.order_confirm import set_dialog_icon
 from ibkr_core_mcp.store import SQLiteStore
 from ibkr_core_mcp.streaming import (
     AlertManager,
@@ -80,15 +85,20 @@ except PackageNotFoundError:
 __all__ = [
     # Core
     "Config",
+    "EnvFile",
+    "load_env_file",
+    "SECRET_NAMES",
     "IBKRClient",
     "GDriveCache",
     "SQLiteStore",
     "ClaudeToolkit",
     "FlexQueryClient",
+    "FlexDataset",
     # Brackets — module-level, unlike the two bracket methods on IBKRClient. `client` is
     # not exported as a namespace, so these are reachable only from here.
     "pair_bracket_response",
     "BracketPairing",
+    "attached_entry",
     # Auth
     "AuthStrategy",
     "BrowserCookieAuth",
@@ -148,10 +158,14 @@ __all__ = [
     "BacktestRuntimeError",
     "ConfigError",
     "HumanAuthError",
+    "ConfirmationDeclinedError",
+    "ConfirmationTimeoutError",
+    "ReplyNotConfirmedError",
     "OrderValidationError",
     "FlexQueryError",
     "StreamingError",
     "require_touch_id",
+    "set_dialog_icon",
     # Gateway
     "GatewayManager",
     # Exceptions (continued)

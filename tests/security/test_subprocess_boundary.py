@@ -19,7 +19,9 @@ pytestmark = pytest.mark.security
 # Relative to the package directory. Each entry says what it spawns and why it is allowed.
 ALLOWED_SPAWN_MODULES = {
     "order_confirm.py",  # Gate 2: the AppKit dialog subprocess and the osascript fallback
-    "gateway/manager.py",  # docker CLI, `open -a Docker`, webbrowser for the login page
+    # docker CLI, `open -a Docker`, Chrome for the login window (F44), webbrowser as its fallback;
+    # the gateway's own log, read in-container (`docker exec … grep -rHF`, constants only; F45)
+    "gateway/manager.py",
     "backtest.py",  # the multiprocessing spawn context isolating strategy code
 }
 

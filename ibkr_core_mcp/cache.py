@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
+import stat
 import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -24,16 +26,31 @@ from typing import Any
 
 import pandas as pd
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from ibkr_core_mcp.config import Config
 from ibkr_core_mcp.exceptions import CacheMissError, CacheWriteError
-from ibkr_core_mcp.gdrive_auth import load_or_refresh_credentials, persist_credentials
+from ibkr_core_mcp.gdrive_auth import build_drive_service, load_or_refresh_credentials, persist_credentials
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_TTL = 60.0
+
+log = logging.getLogger(__name__)
+
+# The snapshot `upload_account_sqlite` writes beside the database it backs up. One definition
+# for writing it and for sweeping the ones a dead process left (`_sweep_stranded_snapshots`).
+_SNAPSHOT_PREFIX = "tmp"
+_SNAPSHOT_SUFFIX = ".upload.tmp"
+# Such a snapshot, or a sidecar SQLite left beside one: the prefix, `tempfile`'s random part
+# (lower-case letters, digits, `_` — `tempfile._RandomNameSequence`), the suffix, then at most
+# one of SQLite's own.
+_SNAPSHOT_NAME = re.compile(
+    rf"{re.escape(_SNAPSHOT_PREFIX)}[a-z0-9_]+{re.escape(_SNAPSHOT_SUFFIX)}(?:-journal|-wal|-shm)?"
+)
+# When this module was imported. Every snapshot this process writes is newer; every one an
+# earlier process left is older.
+_STARTED = time.time()
 
 _SAFE_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,20}$")
 _SAFE_PERIOD_RE = re.compile(r"^[A-Z0-9]{1,10}$")
@@ -53,6 +70,58 @@ def _validate_cache_inputs(symbol: str, timeframe: str, period: str, end: str) -
         raise CacheError(f"Invalid cache end date {end!r}. Expected YYYY-MM-DD.")
 
 
+def _sweep_stranded_snapshots(directory: Path) -> None:
+    """Remove the database snapshots an earlier process left in `directory`.
+
+    **Never raises** — housekeeping before a backup, never a reason to fail one.
+
+    `upload_account_sqlite` writes a full snapshot of the database beside it and removes it in
+    a `finally`. A process that dies mid-upload — a kill, a crash, a closed laptop — cannot
+    run that `finally`, so the snapshot stays: a private copy of the whole trade store
+    (~57 MB in 2026) that nothing reads and nothing removed. claudia_ui found six of its own
+    twin's on 2026-09-30, seven weeks' worth (its gap #90; register F31). Since 2.2.0 the
+    upload runs inside every pull that changes the dataset, whoever started it, so the
+    exposure is every such pull. SQLite opens the snapshot, so a death can strand a
+    `-journal`, `-wal` or `-shm` beside one as well.
+
+    **Only a snapshot older than this process is removed.** A host's startup pull and a
+    model-initiated one can run at once, so a snapshot written since this process started may
+    be another thread's upload in flight; an earlier process's predates this one. Ownership by
+    process id would need a liveness check, and `os.kill(pid, 0)` terminates the process on
+    Windows. Not covered: a second process on the same data directory — its upload in flight
+    could predate this process — which is not a supported setup.
+
+    Regular files only, matched by the whole name (`_SNAPSHOT_NAME`): the database's own
+    `-wal` holds committed rows and is never a candidate.
+    """
+    try:
+        candidates = [p for p in directory.iterdir() if _SNAPSHOT_NAME.fullmatch(p.name)]
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        log.warning("Could not list %s for leftover database snapshots: %s", directory, exc)
+        return
+    removed: list[str] = []
+    for path in candidates:
+        try:
+            st = path.lstat()
+            if not stat.S_ISREG(st.st_mode) or st.st_mtime >= _STARTED:
+                continue
+            path.unlink()
+        except OSError as exc:
+            log.warning("Could not remove %s, a leftover database snapshot: %s", path.name, exc)
+            continue
+        removed.append(path.name)
+    if removed:
+        log.warning(
+            "Removed %d leftover snapshot file(s) of database uploads from %s — an earlier "
+            "process stopped mid-upload: %s",
+            len(removed),
+            directory,
+            ", ".join(sorted(removed)),
+        )
+
+
 class GDriveCache:
     """Google Drive Parquet cache for OHLCV market data and account-level files.
 
@@ -69,7 +138,7 @@ class GDriveCache:
     at access time; reloaded from Drive on expiry.
 
     Source: https://developers.google.com/drive/api/reference/rest/v3
-    SDK: google-api-python-client (googleapiclient.discovery.build("drive", "v3", ...))
+    SDK: google-api-python-client, built by `gdrive_auth.build_drive_service`
     Auth: google-auth-oauthlib.flow.InstalledAppFlow for initial authorization,
           google.oauth2.credentials.Credentials for token refresh.
     """
@@ -119,7 +188,7 @@ class GDriveCache:
                 "GOOGLE_DRIVE_FOLDER_ID (or GDRIVE_CACHE_FOLDER_ID) is required for "
                 "Drive cache but is not set. Set it in .env or pass it to Config."
             )
-        self._service = build("drive", "v3", credentials=creds)
+        self._service = build_drive_service(creds)
         return self._service
 
     def _resolve_cache_folder(self, *, _retry: bool = True) -> str:
@@ -211,8 +280,17 @@ class GDriveCache:
         """
         self._resolved_cache_folder = ""
 
-    def _cache_key(self, symbol: str, timeframe: str, period: str, end: str) -> str:
-        return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}"
+    def _cache_key(self, symbol: str, timeframe: str, period: str, end: str, outside_rth: bool = False) -> str:
+        """`SYMBOL_BAR_PERIOD_END_RTH|ALL` — the hours are part of the key (2.2.0).
+
+        A regular-hours and an all-hours series of one contract are different data: IBKR's
+        daily stock bar changed on 20 of 20 days with the flag (measured 2026-10-03), so the
+        two must never share an entry. Written both ways, never implied: a key without the
+        suffix was written before 2.2.0 and this format cannot reach it (the operator flushed
+        the cache the same day). For a future the symbol is the contract's own — ESZ6 — so a
+        roll produces a new key by itself.
+        """
+        return f"{symbol.upper()}_{timeframe.upper()}_{period.upper()}_{end}_{'ALL' if outside_rth else 'RTH'}"
 
     def _filename(self, key: str) -> str:
         return f"{key}.parquet"
@@ -220,7 +298,8 @@ class GDriveCache:
     def _load_manifest(self) -> dict[str, Any]:
         """Load manifest.json from Drive, with a 60-second in-memory TTL.
 
-        The manifest maps cache_key → {symbol, timeframe, period, end, rows, cached_at}.
+        The manifest maps cache_key → {symbol, timeframe, period, end, outside_rth, rows,
+        cached_at, listing?}; a row without `outside_rth` was written before 2.2.0.
         On cache miss (no manifest.json in market_data/ folder), returns {}.
         Uses files.list then files.get_media for download.
         Source: https://developers.google.com/drive/api/reference/rest/v3/files/list
@@ -272,11 +351,11 @@ class GDriveCache:
             metadata = {"name": _MANIFEST_NAME, "parents": [folder_id]}
             svc.files().create(body=metadata, media_body=media, fields="id").execute()
 
-    def check(self, symbol: str, timeframe: str, period: str, end: str) -> bool:
+    def check(self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False) -> bool:
         """Return True if a fresh cached file exists for this key."""
         _validate_cache_inputs(symbol, timeframe, period, end)
         manifest = self._load_manifest()
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         entry = manifest.get(key)
         if not entry:
             return False
@@ -284,7 +363,7 @@ class GDriveCache:
         today = date.today()
         return cached_end >= today - timedelta(days=1) if end == str(today) else True
 
-    def load(self, symbol: str, timeframe: str, period: str, end: str) -> pd.DataFrame:
+    def load(self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False) -> pd.DataFrame:
         """Download and return cached parquet as DataFrame.
 
         Raises:
@@ -292,7 +371,7 @@ class GDriveCache:
             CacheError: on invalid input values (via _validate_cache_inputs).
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         fname = self._filename(key)
         svc = self._get_service()
         try:
@@ -320,15 +399,44 @@ class GDriveCache:
         buf.seek(0)
         return pd.read_parquet(buf)
 
-    def save(self, df: pd.DataFrame, symbol: str, timeframe: str, period: str, end: str) -> None:
+    def entry(
+        self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False
+    ) -> dict[str, Any] | None:
+        """The manifest row for one key, or None: what `save` recorded about those bars.
+
+        The key is the ticker, and a ticker is not a listing — IGV's Mexican bars in MXN
+        sat under the same key as the US ETF's. Since 2.2.0 a row carries `listing`
+        (`{conid, name, exchange, currency}`) when the bars were fetched through the
+        toolkit; a row saved before has none, and a reader says so rather than guessing.
+        """
+        _validate_cache_inputs(symbol, timeframe, period, end)
+        row = self._load_manifest().get(self._cache_key(symbol, timeframe, period, end, outside_rth))
+        return dict(row) if row else None
+
+    def save(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        timeframe: str,
+        period: str,
+        end: str,
+        *,
+        outside_rth: bool = False,
+        listing: dict[str, Any] | None = None,
+    ) -> None:
         """Upload DataFrame as parquet to Drive and update manifest.
+
+        `outside_rth` is part of the key and recorded on the row (see `_cache_key`).
+        `listing` names the contract the bars came from (`conid`, `name`, `exchange`,
+        `currency`, and `root` for a future) and is kept on the manifest row for `entry()`;
+        None records nothing.
 
         Raises:
             CacheWriteError: if the Drive upload fails.
             CacheError: on invalid input values (via _validate_cache_inputs).
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         fname = self._filename(key)
         svc = self._get_service()
         folder_id = self._resolve_cache_folder()
@@ -360,9 +468,12 @@ class GDriveCache:
             "timeframe": timeframe.upper(),
             "period": period,
             "end": end,
+            "outside_rth": outside_rth,
             "rows": len(df),
             "cached_at": datetime.now(tz=UTC).isoformat(),
         }
+        if listing is not None:
+            self._manifest[key]["listing"] = dict(listing)
         self._save_manifest()
 
     def download_account_files(self, extension: str = ".xml") -> list[tuple[str, bytes]]:
@@ -472,20 +583,28 @@ class GDriveCache:
         ``claudia_ui``'s GDriveSync.upload_db already does for claudia.db; store.db was
         being uploaded raw, which was survivable at 176 KB and is not at 50 MB.
 
+        The snapshot is written beside the database and removed in the `finally` below, which
+        a process that dies mid-upload cannot run. So the snapshots an earlier process left
+        are swept first, even when there is nothing to upload (`_sweep_stranded_snapshots`,
+        register F31).
+
+        Raises whatever the Drive upload raises — the caller decides what a failed backup
+        means (`FlexQueryClient._backup_if_changed` reports it and never fails the pull).
+
         Source: https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup
         """
-        import logging
         import sqlite3
         import tempfile
         from pathlib import Path as _Path
 
         source = _Path(local_path)
+        _sweep_stranded_snapshots(source.parent)
         if not source.exists():
-            logging.getLogger(__name__).warning("upload_account_sqlite: %s not found — nothing to upload", source)
+            log.warning("upload_account_sqlite: %s not found — nothing to upload", source)
             return
 
         handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
-            dir=source.parent, suffix=".upload.tmp", delete=False
+            dir=source.parent, prefix=_SNAPSHOT_PREFIX, suffix=_SNAPSHOT_SUFFIX, delete=False
         )
         handle.close()
         snapshot = _Path(handle.name)
@@ -578,14 +697,14 @@ class GDriveCache:
         manifest = self._load_manifest()
         return [{"key": k, **v} for k, v in manifest.items()]
 
-    def delete(self, symbol: str, timeframe: str, period: str, end: str) -> None:
+    def delete(self, symbol: str, timeframe: str, period: str, end: str, *, outside_rth: bool = False) -> None:
         """Remove a cached file and its manifest entry.
 
         Raises:
             CacheError: on invalid input values (via _validate_cache_inputs).
         """
         _validate_cache_inputs(symbol, timeframe, period, end)
-        key = self._cache_key(symbol, timeframe, period, end)
+        key = self._cache_key(symbol, timeframe, period, end, outside_rth)
         fname = self._filename(key)
         svc = self._get_service()
         folder_id = self._resolve_cache_folder()

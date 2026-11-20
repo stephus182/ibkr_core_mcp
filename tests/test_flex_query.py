@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 from ibkr_core_mcp.exceptions import FlexQueryError
 
@@ -80,7 +81,7 @@ def test_flex_query_error_exported_from_package():
 def flex_client(mock_config):
     from ibkr_core_mcp.flex_query import FlexQueryClient
 
-    mock_config.flex_token = "tok123"
+    mock_config.flex_token = SecretStr("tok123")
     mock_config.flex_query_id = "123456"
     store = MagicMock()
     cache = MagicMock()
@@ -445,6 +446,7 @@ def test_send_request_includes_fd_td_when_provided(flex_client):
     call_params = mock_get.call_args.kwargs["params"]
     assert call_params["fd"] == "20260101"
     assert call_params["td"] == "20260625"
+    assert call_params["t"] == "tok123"  # the token is unwrapped from its SecretStr at the request (F48)
 
 
 def test_send_request_omits_fd_td_when_none(flex_client):
@@ -600,3 +602,124 @@ def test_store_full_statement_records_its_result_on_the_client(archive_client, t
     assert archive_client.last_archive_result is not None
     assert archive_client.last_archive_result.ok is False
     assert archive_client.last_archive_result.kind == "schema-drift"
+
+
+# ── the store.db Drive backup belongs to the pull, whoever started it (2.2.0) ──────────
+#
+# Until 2.2.0 the host application made this backup after its own startup sync, so a pull
+# started by the model, the MCP server or a script left Drive a version behind (found live in
+# claudia_ui, 2026-08-05). These drive `fetch_trades` against a real store with only the two
+# network steps replaced.
+
+
+def _pull(client, xml):
+    with (
+        patch.object(client, "_send_request", return_value=("REF123", "https://example.com/Get")),
+        patch.object(client, "_get_statement", return_value=xml),
+    ):
+        return client.fetch_trades("U0000000")
+
+
+def test_a_pull_that_changes_the_dataset_backs_the_store_up(archive_client, mock_config):
+    from ibkr_core_mcp.flex_query import FlexBackupResult
+    from tests.flex_fixtures import statement, trade
+
+    trades = _pull(archive_client, statement(trade()))
+
+    assert len(trades) == 1
+    archive_client._cache.upload_account_sqlite.assert_called_once_with(mock_config.sqlite_path, "store.db")
+    # upload_account_sqlite, not upload_account_file: store.db runs in WAL mode, so a raw byte
+    # read would miss commits still in store.db-wal and could tear mid-checkpoint.
+    archive_client._cache.upload_account_file.assert_not_called()
+    assert archive_client.last_backup_result == FlexBackupResult("uploaded")
+
+
+def test_a_pull_that_brings_nothing_new_leaves_the_backup_alone(archive_client):
+    """Flex is T+1: a repeat pull returns the same statement. ~55 MB is not re-sent for it."""
+    from ibkr_core_mcp.flex_query import FlexBackupResult
+    from tests.flex_fixtures import statement, trade
+
+    xml = statement(trade())
+    _pull(archive_client, xml)
+    archive_client._cache.upload_account_sqlite.reset_mock()
+
+    _pull(archive_client, xml)
+
+    archive_client._cache.upload_account_sqlite.assert_not_called()
+    assert archive_client.last_backup_result == FlexBackupResult("unchanged")
+
+
+def test_a_statement_that_lands_on_a_live_placeholder_is_a_change(archive_client):
+    """The 2026-08-05 case: the row COUNT does not move when a statement merges onto a fill
+    captured live, and the backup is still due — the settled figures just arrived."""
+    from ibkr_core_mcp.flex_query import FlexBackupResult
+    from tests.flex_fixtures import statement, trade
+
+    archive_client._store.upsert_flex_trades_from_live(
+        [
+            {
+                "execution_id": "0000aaaa.60000001.01.01",
+                "symbol": "TEST",
+                "side": "B",
+                "size": 10,
+                "price": 100.5,
+                "time": "20260601-13:30:01",
+                "commission": 1.25,
+                "account": "U0000000",
+            }
+        ]
+    )
+
+    _pull(archive_client, statement(trade()))
+
+    archive_client._cache.upload_account_sqlite.assert_called_once()
+    assert archive_client.last_backup_result == FlexBackupResult("uploaded")
+
+
+def test_an_unknown_fingerprint_backs_up_rather_than_skipping(archive_client):
+    """Unknown is not "unchanged"."""
+    from tests.flex_fixtures import statement, trade
+
+    xml = statement(trade())
+    _pull(archive_client, xml)
+    archive_client._cache.upload_account_sqlite.reset_mock()
+
+    with patch("ibkr_core_mcp.flex_query.dataset_fingerprint", return_value=None):
+        _pull(archive_client, xml)
+
+    archive_client._cache.upload_account_sqlite.assert_called_once()
+
+
+def test_a_failed_backup_does_not_fail_the_pull_and_says_why(archive_client):
+    from tests.flex_fixtures import statement, trade
+
+    archive_client._cache.upload_account_sqlite.side_effect = RuntimeError("drive is down token=abc123secret")
+
+    trades = _pull(archive_client, statement(trade()))
+
+    assert len(trades) == 1, "the statement is in the store; the pull succeeded"
+    result = archive_client.last_backup_result
+    assert result is not None and result.status == "failed"
+    assert "RuntimeError" in (result.reason or "")
+    assert "abc123secret" not in (result.reason or ""), "the reason goes to a tool result — it is redacted"
+
+
+def test_without_a_drive_folder_there_is_no_backup_and_drive_is_not_asked(mock_config):
+    """No folder configured: nothing to back up, and asking Drive anyway would start the
+    interactive OAuth flow on a machine without a token, then fail — every pull."""
+    from dataclasses import replace
+
+    from ibkr_core_mcp.flex_query import FlexBackupResult, FlexQueryClient
+    from ibkr_core_mcp.store import SQLiteStore
+    from tests.flex_fixtures import statement, trade
+
+    config = replace(mock_config, gdrive_folder_id="", gdrive_account_folder_id="")
+    store = SQLiteStore(config)
+    store.initialize()
+    cache = MagicMock()
+    client = FlexQueryClient(config, store, cache)
+
+    _pull(client, statement(trade()))
+
+    cache.upload_account_sqlite.assert_not_called()
+    assert client.last_backup_result == FlexBackupResult("not-configured")

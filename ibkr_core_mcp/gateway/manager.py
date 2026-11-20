@@ -8,22 +8,26 @@ Quick start (CLI)::
 
     from ibkr_core_mcp.gateway import GatewayManager
     gm = GatewayManager()
-    gm.startup()          # interactive: starts container, opens browser, waits for auth
+    gm.startup()          # interactive: starts container, opens the login window, waits for auth
 
-Programmatic (non-interactive, e.g. from a web UI such as ClaudIA)::
+Programmatic (non-interactive, e.g. from a host application's own UI)::
 
     gm = GatewayManager()
-    gm.start()                    # build image + run container
+    gm.start()                    # restart the container in place, or build + run one
     gm.wait_for_gateway()         # wait up to 120s for Java process
-    gm.open_login_page()          # open https://localhost:5055 in browser
+    window = gm.open_login_page() # a small Chrome window of its own (a tab if no Chrome)
     # … user logs in …
-    gm.wait_for_auth(timeout=300) # poll until authenticated
+    if gm.wait_for_auth(timeout=300) and window is not None:  # poll until authenticated
+        window.close()            # the login's job is done; a failed one stays open
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import platform
+import shutil
 import subprocess
 import time
 import webbrowser
@@ -35,16 +39,30 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from ibkr_core_mcp.exceptions import GatewayError  # noqa: E402
+from ibkr_core_mcp.config import require_loopback_url  # noqa: E402
+from ibkr_core_mcp.exceptions import GatewayError, RestartRefusedError  # noqa: E402
+from ibkr_core_mcp.gateway.preflight import (  # noqa: E402
+    EXIT_FREE,
+    EXIT_READY,
+    EXIT_REFUSED,
+    EXIT_VALIDATING,
+    LOGIN_PHRASES,
+    LoginEvent,
+    login_events,
+    read_state,
+    refine_with_log,
+    verdict,
+)
+from ibkr_core_mcp.redaction import redact_error  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 _DOCKER_DIR = Path(__file__).resolve().parent
 """The Docker build context — **resolved through symlinks, and that is load-bearing.**
 
-`Path(__file__).parent` was wrong under the install this project mandates. A strict
-editable install (`--config-settings editable_mode=strict`, required for mypy — see
-claudia_ui/CLAUDE.md) puts a symlink farm at
+`Path(__file__).parent` was wrong under the install a consumer of this package works with. A
+strict editable install (`--config-settings editable_mode=strict`, which mypy needs to resolve
+an editable package — the consumer's developer guide says so) puts a symlink farm at
 `build/__editable__…/ibkr_core_mcp/gateway/`, so `__file__` lives there and its parent is
 that farm. Every entry in it, `Dockerfile` included, is a symlink to an absolute path
 outside the directory.
@@ -63,6 +81,249 @@ present since 2026-07-22 — which also meant the in-container tickler removed f
 `run_gateway.sh` on 2026-08-06 could never take effect. Two defects, one cause: nothing
 ever rebuilt, and nothing could have.
 """
+
+_RUN_OPTIONS_LABEL = "ibkr-core-mcp.run-options"
+"""The label `start()` records a container's run options under, so a later start can tell
+whether they changed (register F43). Docker's key format: lower case, `.`-separated namespaces,
+no reserved prefix (https://docs.docker.com/engine/manage-resources/labels/); the namespace is the
+package's name, there being no domain of ours to reverse ("Don't use a domain in your label key
+without the domain owner's permission", same page). A label is not visible to the process inside
+(https://docs.docker.com/reference/cli/docker/container/run/#label)."""
+
+_CHROME_INSTALLS: dict[str, tuple[str, ...]] = {
+    # Measured 2026-10-13 (Chrome 154, register F44).
+    "Darwin": ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",),
+    # Google's default system-wide and per-user installs — not measured here.
+    "Windows": (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    ),
+}
+_CHROME_COMMANDS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+
+LOGIN_WINDOW_SIZE = (540, 680)
+"""The gateway login frame, measured 2026-10-13 (operator: "smaller but still perfectly good")."""
+
+_LOGIN_WINDOW_ENV = (
+    "PATH",
+    "HOME",  # all a macOS Chrome needed (measured 2026-10-13)
+    "SystemRoot",  # Windows — Python's docs: to run a side-by-side assembly, `env` "must include a valid SystemRoot"
+    "LOCALAPPDATA",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+    "DISPLAY",  # Linux — a window needs a display; not measured here
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+)
+"""The only variables the login window's Chrome receives — a host's secrets stay in the host."""
+
+_KEEPAWAKE_ENV = ("PATH",)
+"""The only variable `caffeinate` receives (register F45, step 2)."""
+
+
+GATEWAY_LOG_DIR = "/app/api_gateway/logs"
+"""The gateway's real log, inside the container. `docker logs` shows only container start-up
+chatter and status codes — verified 2026-08-06 by probing `GET /` (HTTP 302) and finding no
+corresponding line. Every request the Java process serves is written here instead, which is
+where a failing login is actually visible (`gw.<UTC date>.log`)."""
+
+
+def _docker_env() -> dict[str, str]:
+    """The docker CLI's environment: PATH, HOME and any DOCKER_* variable — nothing else.
+
+    The explicit environment of the spawn recipe (`docs/security-architecture.md` § 10): nothing
+    of the host's, an API key included, reaches the child. Measured 2026-10-12: PATH alone runs
+    `docker exec`; HOME holds the CLI's own configuration (contexts), and DOCKER_* select a
+    daemon where one is configured that way.
+    """
+    return {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
+
+
+def read_login_events(timeout: float = 15.0) -> tuple[list[LoginEvent] | None, str]:
+    """The login events of the gateway's own log, or None and why they could not be read.
+
+    One command and no shell anywhere: `docker exec <CONTAINER_NAME> grep -rHF
+    --include=gw.[0-9]*.log -e <phrase>… <GATEWAY_LOG_DIR>`. grep's own `--include` picks the
+    dated files (the `gw.message.*` files are not read), and only the lines carrying one of
+    `LOGIN_PHRASES` leave the container, to be cut to time, event and code by `login_events`
+    before anything else sees them — the log carries the username, a numeric user id, session
+    cookies, a MAC address and device ids, verbatim. The command ends on its own over finite
+    files; the timeout is a backstop, because stopping a `docker exec` client leaves its command
+    running inside the container (measured 2026-10-12).
+
+    **No container parameter** (register F45, condition D): the container is the class
+    constant and the directory the module's, so nothing a caller passes can reach `docker exec`,
+    where a value beginning with `-` is read as an option. The environment is `_docker_env()`.
+
+    The exit rule, measured the same day against the real container: 0 → parse; 1 with an
+    empty stderr → no line matched, so no login is recorded; anything else → unreadable, the
+    first line of stderr the reason. Exit 1 alone cannot tell "no line matched" from "no such
+    container" — only stderr does — and a partial read (a file gone) prints lines AND exits 2;
+    those lines are never used, since what the missing file held is exactly what would make
+    the verdict answer about an older login. Never raises for any of it: the caller keeps the
+    HTTP verdict and says why the log could not help; an `OSError`'s text passes `redact_error`.
+
+    Returns:
+        `(events, "")` when read — an empty list when no login line exists — else
+        `(None, reason)`.
+    """
+    command = ["docker", "exec", GatewayManager.CONTAINER_NAME, "grep", "-rHF", "--include=gw.[0-9]*.log"]
+    for phrase in LOGIN_PHRASES:
+        command += ["-e", phrase]
+    command.append(GATEWAY_LOG_DIR)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=_docker_env())
+    except subprocess.TimeoutExpired:
+        return None, f"docker did not answer within {timeout:g} s"
+    except OSError as exc:
+        return None, f"docker could not be run: {redact_error(exc)}"
+    problem = result.stderr.strip()
+    if result.returncode == 0 or (result.returncode == 1 and not problem):
+        try:
+            return login_events(result.stdout), ""
+        except ValueError as exc:  # `login_events`' own format refusal; through the one redaction function (G)
+            return None, redact_error(exc)
+    return None, (problem.splitlines()[0][:200] if problem else f"docker exited {result.returncode}")
+
+
+_RESTART_REFUSED_CODES = frozenset({EXIT_READY, EXIT_REFUSED, EXIT_VALIDATING})
+"""The verdicts a restart must not be run against: it would destroy a working session, or help
+nothing — IBKR's refusal survived a restart on 2026-10-08 (started again 15:47:49 UTC, refused
+again 15:49:37), and a login IBKR is still answering would be cut off."""
+
+
+def restart_refusal(api_url: str) -> tuple[int, str] | None:
+    """Why a restart of the gateway must not happen now, or None when it may.
+
+    The reset rule, verbatim from the consumer's script, as a function `start()` applies before
+    touching Docker (register F45, step 2, condition F): read the session; a gateway that does
+    not answer has no session to protect (None — this is also `startup()`'s path to `start()`);
+    FREE is refined by the gateway's own log, the one reading the log can change; `EXIT_READY`,
+    `EXIT_REFUSED` and `EXIT_VALIDATING` refuse with the verdict's code and its headline and
+    guidance; FREE, BORROWED and CONTESTED let the restart go ahead. One more GET before a
+    restart that ends the session: it can preserve nothing the restart destroys.
+
+    Args:
+        api_url: The gateway's API base URL, loopback (`read_state` pins it).
+
+    Returns:
+        `(code, reason)` — the reason is the headline, a blank line, the guidance — or None.
+    """
+    state = read_state(api_url)
+    if not state.reachable:
+        return None
+    found = verdict(state)
+    if found[0] == EXIT_FREE:
+        found = refine_with_log(found, *read_login_events())
+    code, headline, guidance = found
+    if code in _RESTART_REFUSED_CODES:
+        return code, f"{headline}\n\n{guidance}"
+    return None
+
+
+def _flushed(line: str) -> None:
+    """Print one of the owner's lines and flush it: under a redirected shell stdout is
+    block-buffered, and a command silent for its whole wait reads as a hang."""
+    print(line, flush=True)
+
+
+def _find_chrome() -> str | None:
+    """The Chrome to open the login window with: a known install for this platform, else the
+    first Chrome or Chromium on `PATH`; `None` when there is none."""
+    for path in _CHROME_INSTALLS.get(platform.system(), ()):
+        if Path(path).is_file():
+            return path
+    for name in _CHROME_COMMANDS:
+        if found := shutil.which(name):
+            return found
+    return None
+
+
+class LoginWindow:
+    """The login window `GatewayManager.open_login_page()` opened: a Chrome process of its own.
+
+    Closing means ending that process (measured 2026-10-13: `terminate()` exits 0, Chrome records
+    a clean session end, and the next launch shows no restore prompt). It is the only control
+    there is — no debugging port, no pipe.
+    """
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        """Hold the process `open_login_page()` started."""
+        self._process = process
+
+    def close(self) -> bool:
+        """End the window's Chrome. `False` when that process had already exited by itself: the
+        operator quit it, or the launch was handed to an instance already running on the login
+        profile (measured: the new process exits rc 0 and the running one opens the window),
+        which this handle cannot reach."""
+        if self._process.poll() is not None:
+            return False
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+        return True
+
+
+class KeepAwake:
+    """A sleep-prevention assertion — `caffeinate -i` — held only while the gateway is reachable.
+
+    The keepalive loop (`session.keepalive_loop`) calls `hold()` on every OK tick and `release()`
+    on every WARN one, so a 24/7 launchd install does not keep the Mac awake for a gateway that
+    is not even up. One child at a time: `hold()` with a live child does nothing. `release()`
+    terminates the child and waits for it, as `LoginWindow.close()` does, so no zombie is left;
+    `__exit__` releases. The child gets `PATH` alone in its environment — a host's secrets stay
+    in the host. On a platform without `caffeinate` (Linux, Windows) both are no-ops, said once
+    at DEBUG. A spawn site in the one allowed module (`tests/security/test_subprocess_boundary.py`);
+    door 6 refuses the real command in a unit test (register F45, step 2).
+    """
+
+    def __init__(self) -> None:
+        """No assertion held yet."""
+        self._process: subprocess.Popen[bytes] | None = None
+        self._said_absent = False
+
+    def hold(self) -> None:
+        """Start `caffeinate -i` unless one of ours is already running."""
+        if self._process is not None and self._process.poll() is None:
+            return
+        path = shutil.which("caffeinate")
+        if path is None:
+            if not self._said_absent:
+                log.debug("No caffeinate on this platform — nothing holds the machine awake for the gateway")
+                self._said_absent = True
+            return
+        self._process = subprocess.Popen(
+            [path, "-i"],
+            env={name: os.environ[name] for name in _KEEPAWAKE_ENV if name in os.environ},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def release(self) -> None:
+        """End the assertion; idempotent."""
+        process, self._process = self._process, None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+    def __enter__(self) -> KeepAwake:
+        """Hand back the handle; `hold()` is the loop's to call."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Always release, including on the way out of a loop that was interrupted."""
+        self.release()
 
 
 class GatewayManager:
@@ -177,15 +438,79 @@ class GatewayManager:
             == 0
         )
 
-    def start(self) -> None:
-        """Build image if needed, then start the gateway container.
+    def _is_current(self, recorded: str) -> bool:
+        """True when the container runs the image the tag names now and was made with the run
+        options `recorded` — Docker Compose's rule, which recreates a container when "the
+        service's configuration or image was changed after the container's creation"
+        (https://docs.docker.com/reference/cli/docker/compose/up/).
 
-        Any existing container (running or stopped) is removed first so the
-        new container starts with a clean unauthenticated session.
+        The image by id, so a rebuild takes effect; the options by the label `start()` writes, so
+        a changed port, binding or variable does too. A container without that label — made
+        before 2.2.0, or by hand — is not current; nor is one when there is none.
         """
+        container = subprocess.run(
+            ["docker", "container", "inspect", self.CONTAINER_NAME], capture_output=True, text=True
+        )
+        if container.returncode != 0:
+            return False
+        image = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", self.IMAGE_NAME],
+            capture_output=True,
+            text=True,
+        )
+        made = json.loads(container.stdout)[0]
+        labels = made["Config"]["Labels"] or {}
+        return bool(made["Image"] == image.stdout.strip() and labels.get(_RUN_OPTIONS_LABEL) == recorded)
+
+    def start(self, *, force: bool = False) -> None:
+        """Start the gateway on a fresh Java process — so on a clean, unauthenticated session.
+
+        **Guarded** (register F45, condition F): before any Docker command the session is read,
+        and a LIVE, REFUSED or VALIDATING one raises `RestartRefusedError` with the verdict's
+        code and reason — `restart_refusal` is the rule. `force=True` skips the guard; a caller
+        that passes it intends to destroy the session.
+
+        A current container (`_is_current`) is restarted in place: `docker restart` starts a
+        stopped one and gives a running one a new process, and the container's own files — the
+        gateway's log, the one place a refused login shows — are kept (measured 2026-11-07 on a
+        throwaway container; register F43). Any other container is removed and a new one run,
+        the image built first if it is absent; so is one Docker will not restart.
+
+        Raises:
+            RestartRefusedError: The session must not be ended now, and nothing was run.
+            GatewayError: Docker could not run the container.
+        """
+        if not force:
+            refusal = restart_refusal(self._api_url)
+            if refusal is not None:
+                code, reason = refusal
+                raise RestartRefusedError(reason, code=code)
         self.ensure_docker_running()
+        options = [
+            "-p",
+            f"127.0.0.1:{self._port}:{self._port}",
+            # GATEWAY_PORT is the only variable anything in the image reads, and
+            # `healthcheck.sh` is the only reader — it builds the probe URL from
+            # it. `run_gateway.sh` never references the variable; its wait loop
+            # reaches the port only by calling that script.
+            # Three TICKLE_* variables were passed here until
+            # 2026-08-07, addressed to a tickler.sh that had been out of the
+            # image since 2026-08-06 and is now deleted outright. Do not add
+            # them back: session renewal is the caller's, because a loop inside
+            # the container cannot see the host-side suspend flag that
+            # coordinates a login. Guarded by a test asserting their absence.
+            "-e",
+            f"GATEWAY_PORT={self._port}",
+        ]
+        recorded = " ".join(options)
+        if self._is_current(recorded):
+            restarted = subprocess.run(["docker", "restart", self.CONTAINER_NAME], capture_output=True, text=True)
+            if restarted.returncode == 0:
+                log.info("Gateway container restarted in place: %s", self.CONTAINER_NAME)
+                return
+            log.warning("docker restart failed (%s) — recreating the container", restarted.stderr.strip())
         if self.container_exists():
-            log.info("Removing existing gateway container for clean restart")
+            log.info("Removing the existing gateway container")
             self.stop()
         if not self.image_exists():
             self.build_image()
@@ -198,20 +523,9 @@ class GatewayManager:
                     "-d",
                     "--name",
                     self.CONTAINER_NAME,
-                    "-p",
-                    f"127.0.0.1:{self._port}:{self._port}",
-                    # GATEWAY_PORT is the only variable anything in the image reads, and
-                    # `healthcheck.sh` is the only reader — it builds the probe URL from
-                    # it. `run_gateway.sh` never references the variable; its wait loop
-                    # reaches the port only by calling that script.
-                    # Three TICKLE_* variables were passed here until
-                    # 2026-08-07, addressed to a tickler.sh that had been out of the
-                    # image since 2026-08-06 and is now deleted outright. Do not add
-                    # them back: session renewal is the caller's, because a loop inside
-                    # the container cannot see the host-side suspend flag that
-                    # coordinates a login. Guarded by a test asserting their absence.
-                    "-e",
-                    f"GATEWAY_PORT={self._port}",
+                    "--label",
+                    f"{_RUN_OPTIONS_LABEL}={recorded}",
+                    *options,
                     self.IMAGE_NAME,
                 ],
                 check=True,
@@ -229,10 +543,11 @@ class GatewayManager:
         subprocess.run(["docker", "rm", self.CONTAINER_NAME], capture_output=True)
         log.info("Gateway container stopped: %s", self.CONTAINER_NAME)
 
-    def restart(self) -> None:
-        """Stop then start — resets to a clean unauthenticated session."""
-        self.stop()
-        self.start()
+    def restart(self, *, force: bool = False) -> None:
+        """`start(force=force)`, which already ends on a fresh process: a clean, unauthenticated
+        session, behind the same guard. A `stop()` first would remove the container — and its
+        log — for nothing (register F43)."""
+        self.start(force=force)
 
     # ── Gateway health ────────────────────────────────────────────────────────
 
@@ -251,9 +566,10 @@ class GatewayManager:
         Treating it as "down" told a user "start it first" about a gateway that was
         running perfectly (measured 2026-08-05).
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/ping-the-server.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/ping-the-server
         Endpoint: GET /tickle
         """
+        require_loopback_url(self._api_url)  # before `verify=False` (F45, condition C; test_tls_policy.py)
         try:
             resp = requests.get(
                 f"{self._api_url}/tickle",
@@ -262,18 +578,19 @@ class GatewayManager:
             )
             return 200 <= resp.status_code < 600
         except requests.exceptions.RequestException as exc:
-            log.debug("Gateway not reachable yet: %s", exc)
+            log.debug("Gateway not reachable yet: %s", redact_error(exc))
             return False
         except Exception as exc:
-            log.warning("Unexpected error checking gateway reachability: %s", exc)
+            log.warning("Unexpected error checking gateway reachability: %s", redact_error(exc))
             return False
 
     def is_authenticated(self) -> bool:
         """True if the gateway holds an active authenticated IBKR session.
 
-        Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/session/authentication-status.md
+        Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/session/authentication-status
         Endpoint: GET /iserver/auth/status
         """
+        require_loopback_url(self._api_url)  # before `verify=False` (F45, condition C; test_tls_policy.py)
         try:
             resp = requests.get(
                 f"{self._api_url}/iserver/auth/status",
@@ -281,10 +598,10 @@ class GatewayManager:
                 timeout=5,
             )
         except requests.exceptions.RequestException as exc:
-            log.debug("Auth status check failed (gateway unreachable): %s", exc)
+            log.debug("Auth status check failed (gateway unreachable): %s", redact_error(exc))
             return False
         except Exception as exc:
-            log.warning("Unexpected error checking auth status: %s", exc)
+            log.warning("Unexpected error checking auth status: %s", redact_error(exc))
             return False
 
         if resp.status_code != 200:
@@ -294,7 +611,7 @@ class GatewayManager:
         try:
             return bool(resp.json().get("authenticated", False))
         except Exception as exc:
-            log.warning("Auth status response was not valid JSON: %s", exc)
+            log.warning("Auth status response was not valid JSON: %s", redact_error(exc))
             return False
 
     # ── Polling helper ────────────────────────────────────────────────────────
@@ -363,84 +680,71 @@ class GatewayManager:
 
     # ── Auth flow ─────────────────────────────────────────────────────────────
 
-    def open_login_page(self) -> None:
-        """Open the IBKR Client Portal login page in the system default browser."""
-        log.info("Opening IBKR login page: %s", self._base_url)
+    def open_login_page(self) -> LoginWindow | None:
+        """Open the IBKR login in a small Chrome window of its own, and return its handle.
+
+        Its own profile (`~/.ibkr_core/login-chrome`), app mode (title bar only), sized to the
+        gateway's login frame, in front with focus — measured 2026-10-13, register F44. A caller
+        closes it with `LoginWindow.close()` once the session is authenticated; one that ignores
+        the result leaves it open, as a tab was. Nothing keeps a window on top: no browser or
+        Chrome switch can.
+
+        No Chrome, or one that will not start → the default browser's tab, as before, and `None`.
+        """
+        chrome = _find_chrome()
+        if chrome is None:
+            log.info("No Chrome found — opening the IBKR login page in the default browser")
+        else:
+            width, height = LOGIN_WINDOW_SIZE
+            args = [
+                chrome,
+                f"--user-data-dir={Path.home() / '.ibkr_core' / 'login-chrome'}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"--app={self._base_url}",
+                f"--window-size={width},{height}",
+            ]
+            env = {name: os.environ[name] for name in _LOGIN_WINDOW_ENV if name in os.environ}
+            try:
+                process = subprocess.Popen(
+                    args,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,  # the window outlives a terminal's Ctrl-C (POSIX; ignored on Windows)
+                )
+            except OSError as exc:
+                log.warning("Chrome would not start for the login window (%s) — opening a tab", redact_error(exc))
+            else:
+                log.info("Opening the IBKR login window: %s", self._base_url)
+                return LoginWindow(process)
         webbrowser.open(self._base_url)
+        return None
 
     # ── Full interactive startup ──────────────────────────────────────────────
 
     def startup(self) -> bool:
-        """Full interactive startup sequence for CLI use.
+        """Bring the session to LIVE through the owner, or say why it cannot get there.
 
-        Fast path (normal ClaudIA restart):
-          If the container is already running and authenticated, returns immediately.
-          The IBKR session is preserved — no login required.
+        `get_session().establish(self, url=…, emit=…, allow_restart=False)` — the one sequence the
+        command line (`python -m ibkr_core_mcp.gateway up`), a host's button and this method share
+        (register F45, step 2), so the three cannot drift: Docker up; the container started only
+        when none is running (a running one may hold a session, and only a read may say); the
+        gateway answering; the session read before anything is touched; a login page only from
+        FREE, with every tickler suspended by the lock, polled until authenticated, connected and
+        confirmed against a data endpoint, or the owner's 300 s timeout. A LIVE session is left
+        alone. CONTESTED and BORROWED are reported, never resolved from here (`up --allow-restart`
+        or `reset` clears a borrowed one). A login IBKR refused is named before the page opens —
+        the remedy is a website login, then one gateway login (operator rule, 2026-10-12). A login
+        IBKR is still validating gets no second page. The two `input()` prompts of the old body
+        are gone: the owner polls.
 
-        Full path (first start or after session loss):
-          1. Ensure Docker is running (launches Docker Desktop on macOS if needed)
-          2. Remove any existing container and start a fresh one
-          3. Wait for Java process to become reachable
-          4. Open login page in browser
-          5. Wait for user to complete login + 2FA
-          6. Verify authentication
-
-        Returns True if the session is authenticated and ready.
+        Returns:
+            True when the session is LIVE — authenticated, connected and serving data.
         """
-        print("▶ Ensuring Docker is running...")
-        self.ensure_docker_running()
+        # The owner imports this module (for `read_login_events`); a module-level import here
+        # would be circular.
+        from ibkr_core_mcp.gateway.session import SessionPhase, get_session
 
-        # If the gateway is already up and authenticated, nothing to do.
-        # This is the normal case when restarting ClaudIA without touching IB.
-        if self.is_running() and self.is_authenticated():
-            print("  ✔ IBKR gateway already running and authenticated — skipping startup.")
-            return True
-
-        print("▶ Starting IBKR gateway container...")
-        # Start ONLY when nothing is running. `start()` removes any existing container,
-        # which destroys whatever session it held — and until 2026-08-06 that ran on every
-        # launch where the gateway was not already authenticated, throwing away sessions
-        # that a pre-flight would have found perfectly usable and forcing a fresh 2FA.
-        #
-        # A container that is absent or stopped cannot hold a session (it lives in the
-        # Java process), so recreating one is free. A RUNNING container is left alone.
-        #
-        # NOTE: claudia_ui no longer calls this method at all — it goes through
-        # claudia.gateway_session, which owns the sequencing and pre-flights first. This
-        # guard exists so the CLI path here cannot destroy a session either.
-        if not self.is_running():
-            self.start()
-        else:
-            print("  ✔ Container already running — leaving it alone.")
-
-        print("▶ Waiting for gateway to be reachable...")
-        if not self.wait_for_gateway():
-            print("  ✕ Gateway did not start within timeout.")
-            return False
-
-        print("▶ Opening IBKR login page in browser...")
-        self.open_login_page()
-        print()
-        print("  Complete the login in your browser:")
-        print("    1. Enter your IBKR username and password")
-        print("    2. Complete 2FA (challenge code → IBKR Mobile → response code)")
-        print("    3. Wait for 'Client login succeeds'")
-        print()
-        input("Press Enter here once Chrome shows 'Client login succeeds'... ")
-        print()
-
-        print("▶ Verifying IBKR session...")
-        if self.wait_for_auth(timeout=60):
-            print("  ✔ IBKR session active and ready.")
-            return True
-
-        print("  ✕ Session not verified.")
-        print("    Reload the login page, log in again, then retry.")
-        input("Press Enter to retry verification... ")
-        if self.is_authenticated():
-            print("  ✔ IBKR session active.")
-            return True
-
-        print("  ✕ Still not authenticated.")
-        print("    Starting anyway — IBKR tools will error until you log in.")
-        return False
+        state = get_session().establish(self, url=self._api_url, emit=_flushed, allow_restart=False)
+        return state.phase is SessionPhase.LIVE

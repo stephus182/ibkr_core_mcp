@@ -3,7 +3,7 @@
 Run against a live, authenticated gateway. Writes the JSON consumed by
 `tests/test_models_live_shapes.py`:
 
-    source /path/to/.env
+    # a .env beside the package, or exported variables, configure Config.from_env()
     python scripts/audit/capture_live_response_shapes.py tests/fixtures/ibkr_live_shapes.json
 
 Everything the account holder can be identified by is stripped before the file is

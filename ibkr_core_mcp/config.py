@@ -2,8 +2,9 @@
 
 A single `Config` dataclass carries the gateway URL, Drive folder
 and credential paths, and SQLite location. `Config.from_env()` is the only intended
-constructor in application code; it reads a `.env` via python-dotenv and falls back
-to process environment variables.
+constructor in application code; it reads a `.env` through `load_env_file` — settings
+into the environment where unset, secrets into the `Config` as `SecretStr` and nowhere
+else — and falls back to process environment variables.
 
 Missing values resolve to empty strings rather than raising, which is deliberate:
 it lets a caller construct a partial `Config` and have the *feature* that needs a
@@ -29,13 +30,182 @@ than a deletion.
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, find_dotenv
+from pydantic import SecretStr
+
+from ibkr_core_mcp import secret_store
+from ibkr_core_mcp.exceptions import ConfigError
+from ibkr_core_mcp.redaction import collapse_home
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_CRAWL4AI_PROFILES_DIR = "~/.ibkr_core/crawl4ai_profiles"
+
+SECRET_NAMES: tuple[str, ...] = ("IBKR_FLEX_TOKEN", "FIRECRAWL_API_KEY")
+"""The variables this package reads as secrets.
+
+`load_env_file` never places one of these in the process environment: a child process
+inherits the whole environment (CWE-526), and nothing this package starts — the Gate 2
+dialog, `osascript`, the docker CLI — needs a token. A host adds its own names
+(`load_env_file(..., secret_names=SECRET_NAMES + (...,))`).
+"""
+
+# Our mask: any permission bit for group or others. OpenSSH's man page asks the same of a
+# private key file — "not accessible by others" — and ignores one that is.
+_OTHERS_MASK = 0o077
+
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+"""The hosts a request made with certificate verification off may be sent to.
+
+The Client Portal Gateway runs on this machine and serves a self-signed certificate, so every
+call to it disables verification — and that exemption must never apply to any other host: the
+session cookie would travel to it in clear. One definition (register F45, condition C): until
+2026-11-09 the tuple was written twice, in `IBKRClient.__init__` and `IBKRWebSocket.connect`,
+and the manager's two polls carried none. `tests/security/test_tls_policy.py` holds that every
+function in the package that disables verification calls one of the two helpers below on a
+line before it does.
+"""
+
+
+def is_loopback_url(url: str) -> bool:
+    """Whether `url` names one of `LOOPBACK_HOSTS` as its host.
+
+    The host is what `urlparse` reports — so `https://localhost@example.com/` is `example.com`,
+    `https:///x` has none, and an invalid IPv6 literal that makes `urlparse` raise is not
+    loopback either. Nothing else about the URL is judged here.
+    """
+    try:
+        return urlparse(url).hostname in LOOPBACK_HOSTS
+    except ValueError:  # an invalid IPv6 literal, e.g. "https://[::1:5055"
+        return False
+
+
+def require_loopback_url(url: str) -> str:
+    """`url`, unchanged, when `is_loopback_url(url)`; else `ConfigError`.
+
+    The message names the host and never the URL — a URL can carry userinfo, and this message is
+    one an operator pastes. Raised at the one place a certificate-exempt request is about to be
+    made, so a non-loopback gateway URL fails before any request, not inside one.
+
+    Args:
+        url: The gateway URL about to be used with verification off.
+
+    Returns:
+        The same URL, so a caller can pin inline: `base = require_loopback_url(url)`.
+
+    Raises:
+        ConfigError: The host is not `localhost`, `127.0.0.1` or `::1`.
+    """
+    if is_loopback_url(url):
+        return url
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        host = None
+    raise ConfigError(
+        f"verify=False is only permitted for localhost; got {host!r}. Set IBKR_GATEWAY_URL to a localhost address."
+    )
+
+
+@dataclass(frozen=True)
+class EnvFile:
+    """What `load_env_file` read: the file, the secrets it holds, and why they were refused.
+
+    `path` is None when no file was found. `secrets` is empty when the file holds none, or
+    when `refused` says why none were loaded. A `SecretStr` prints as `**********`; the value
+    is reached with `.get_secret_value()` at the one place that sends it.
+    """
+
+    path: Path | None
+    secrets: Mapping[str, SecretStr]
+    refused: str | None = None
+
+
+def _too_open(path: Path) -> str | None:
+    """The refusal message when `path` is accessible to group or others; None where it is not.
+
+    POSIX only: Windows synthesises these bits, so there the check would refuse every file.
+    """
+    if os.name != "posix":
+        return None  # pragma: no cover - Windows has no POSIX permission bits to read
+    mode = path.stat().st_mode
+    if not mode & _OTHERS_MASK:
+        return None
+    # A log line, and a sentence the operator will paste: the home directory is `~` in it,
+    # never the account name — `collapse_home`'s inventory (SEC-10) has this call site.
+    shown = collapse_home(str(path))
+    return (
+        f"{shown} is accessible to other users (mode {stat.filemode(mode)}), so its secrets "
+        f"were not loaded. Fix: chmod 600 {shown}"
+    )
+
+
+def _secret(from_environment: str | None, stored: SecretStr | None) -> SecretStr:
+    """A secret as `from_env` resolves it: the user's own environment first — the documented
+    contract for the MCP server and any other client — then the stores at rest in
+    `secret_store.resolve`'s order (the OS keychain, then the file), else empty."""
+    if from_environment:
+        return SecretStr(from_environment)
+    return stored if stored is not None else SecretStr("")
+
+
+def load_env_file(
+    dotenv_path: str | os.PathLike[str] | None = None,
+    *,
+    secret_names: Iterable[str] = SECRET_NAMES,
+) -> EnvFile:
+    """Read a `.env`: settings into `os.environ` where unset, secrets returned, never exported.
+
+    The one loader of this package (register F48, 2026-10-16). It replaced two calls of
+    `load_dotenv(override=False)`, which copied the whole file — `IBKR_FLEX_TOKEN` and
+    `FIRECRAWL_API_KEY` included — into the environment of this process and so of every
+    child it starts. For the non-secret entries nothing changes: each is set only where the
+    environment does not already hold it, as before. A secret entry comes back in
+    `EnvFile.secrets` as a `SecretStr` and is written nowhere.
+
+    With no `dotenv_path` the file is found as `load_dotenv` found it: python-dotenv's
+    `find_dotenv`, walking up from this package's directory. A host whose `.env` lies
+    elsewhere passes the path (claudia_ui does).
+
+    On POSIX a file accessible to group or others (any bit of 0o077) has its secrets
+    REFUSED, not loaded: `refused` carries the message, with `chmod 600 <path>`, and the
+    settings still load, so each feature needing the missing secret reports "not
+    configured" at its point of use. The message never carries a value.
+
+    Args:
+        dotenv_path: The file, or None for the default search.
+        secret_names: The names treated as secrets; `SECRET_NAMES` by default.
+
+    Returns:
+        An `EnvFile`; `path` None when no file was found.
+    """
+    found = os.fspath(dotenv_path) if dotenv_path is not None else find_dotenv()
+    if not found or not Path(found).is_file():
+        return EnvFile(path=None, secrets={})
+    path = Path(found)
+    secret = frozenset(secret_names)
+    secrets: dict[str, SecretStr] = {}
+    for name, value in dotenv_values(path).items():
+        if value is None:
+            continue
+        if name in secret:
+            if value:
+                secrets[name] = SecretStr(value)
+        elif name not in os.environ:
+            os.environ[name] = value
+    refused = _too_open(path)
+    if refused is not None:
+        log.warning(refused)
+        return EnvFile(path=path, secrets={}, refused=refused)
+    return EnvFile(path=path, secrets=secrets)
 
 
 def crawl4ai_profiles_dir_from_env(dotenv_path: str | None = None) -> Path:
@@ -51,7 +221,8 @@ def crawl4ai_profiles_dir_from_env(dotenv_path: str | None = None) -> Path:
 
     Reads the same `.env` and the same `CRAWL4AI_PROFILES_DIR` variable as
     `Config.crawl4ai_profiles_dir`, and shares its default, so the two can never
-    disagree about where profiles live.
+    disagree about where profiles live — through `load_env_file`, so a secret in that
+    file is never exported here either.
 
     Args:
         dotenv_path: Optional explicit `.env` to load, matching `Config.from_env()`.
@@ -59,7 +230,7 @@ def crawl4ai_profiles_dir_from_env(dotenv_path: str | None = None) -> Path:
     Returns:
         The profiles root, with `~` expanded. The directory is not created here.
     """
-    load_dotenv(dotenv_path, override=False)
+    load_env_file(dotenv_path)
     return Path(os.environ.get("CRAWL4AI_PROFILES_DIR", _DEFAULT_CRAWL4AI_PROFILES_DIR)).expanduser()
 
 
@@ -79,7 +250,7 @@ class Config:
     sqlite_path: Path
     gdrive_token_file: Path
     gdrive_credentials_file: Path
-    flex_token: str = field(default="", repr=False)
+    flex_token: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
     flex_query_id: str = ""
     # Optional dedicated folder for OHLCV Parquet cache files.
     # If empty, GDriveCache auto-creates a 'market_data/' subfolder inside gdrive_folder_id.
@@ -94,7 +265,7 @@ class Config:
     # available" error string to the LLM rather than raising. It is the ONLY tool that
     # needs a key: fetch_page, crawl_site and search_site are a local browser and
     # public sitemaps.
-    firecrawl_api_key: str = field(default="", repr=False)
+    firecrawl_api_key: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
     # Drive folder ID to use as the web_docs/ root. Auto-creates 'web_docs/' under
     # gdrive_folder_id if empty.
     gdrive_web_docs_folder_id: str = ""
@@ -102,9 +273,26 @@ class Config:
     # sites). One subfolder per domain, created via `python -m ibkr_core_mcp.local_browser
     # create-profile <url>`.
     crawl4ai_profiles_dir: Path = field(default_factory=lambda: crawl4ai_profiles_dir_from_env())
+    # Where the audit record — one redacted line per tool call and per order or session write —
+    # is appended (`audit.py`; MCP security checklist 8.1, 2026-11-09). A host passes it to
+    # `audit.configure()` once at start; the package's default is beside the trade store.
+    audit_log_path: Path = field(default_factory=lambda: Path("~/.ibkr_core/audit.jsonl").expanduser())
+
+    def __post_init__(self) -> None:
+        """A plain string given for a secret field becomes a `SecretStr`.
+
+        The fields are typed `SecretStr` (register F48), and the two consumers unwrap them
+        with `.get_secret_value()`; a `Config` built by hand with a string would otherwise
+        fail at the Flex request or the Firecrawl client, far from the construction. A
+        dataclass validates nothing, so this is where the type is made true.
+        """
+        for name in ("flex_token", "firecrawl_api_key"):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                setattr(self, name, SecretStr(value))
 
     @classmethod
-    def from_env(cls, dotenv_path: str | None = None) -> Config:
+    def from_env(cls, dotenv_path: str | None = None, *, secret_names: Iterable[str] = SECRET_NAMES) -> Config:
         """Load configuration from environment variables (with optional .env file).
 
         Environment variable → field mapping:
@@ -121,12 +309,20 @@ class Config:
           FIRECRAWL_API_KEY          → firecrawl_api_key       (optional; enables web scraper)
           GDRIVE_WEB_DOCS_FOLDER_ID  → gdrive_web_docs_folder_id (optional; auto-created as web_docs/)
           CRAWL4AI_PROFILES_DIR      → crawl4ai_profiles_dir   (default: ~/.ibkr_core/crawl4ai_profiles)
+          IBKR_AUDIT_LOG             → audit_log_path          (default: ~/.ibkr_core/audit.jsonl)
 
         Raises nothing: every value resolves to a default or an empty string, and the
         feature that needs one reports "not configured" at the point of use. `ANTHROPIC_API_KEY`
         was the single exception until 2026-09-17 — see the module docstring (TOOL-07).
+
+        A secret (`IBKR_FLEX_TOKEN`, `FIRECRAWL_API_KEY`) is read from the environment if the
+        user set it there, else from the OS keychain (`secret_store`, since 2026-11-09), else
+        from the file, and is never written to the environment (register F48). A host with secrets of its own in the same file passes their names in
+        `secret_names` (its own list, which should include `SECRET_NAMES`), so that none of
+        them is exported as a setting either — claudia_ui's `ANTHROPIC_API_KEY` was, the
+        moment its toolkit's `Config` was built, until 2026-10-16.
         """
-        load_dotenv(dotenv_path, override=False)
+        env = load_env_file(dotenv_path, secret_names=secret_names)
 
         return cls(
             gateway_url=os.environ.get("IBKR_GATEWAY_URL", "https://localhost:5055/v1/api"),
@@ -136,12 +332,20 @@ class Config:
             gdrive_credentials_file=Path(
                 os.environ.get("GDRIVE_CREDENTIALS_FILE", "~/.ibkr_core/credentials.json")
             ).expanduser(),
-            flex_token=os.environ.get("IBKR_FLEX_TOKEN", ""),
+            # A secret: the environment the user set (the documented contract), then the OS keychain
+            # (`secret_store`, 2026-11-09), then the file — never written back anywhere. The
+            # environment is read here by literal name, as every variable is (test_no_live_io).
+            flex_token=_secret(os.environ.get("IBKR_FLEX_TOKEN"), secret_store.resolve("IBKR_FLEX_TOKEN", env)),
             flex_query_id=os.environ.get("IBKR_FLEX_QUERY_ID", ""),
             gdrive_cache_folder_id=os.environ.get("GDRIVE_CACHE_FOLDER_ID", ""),
             gdrive_db_folder_id=os.environ.get("GDRIVE_DB_FOLDER_ID", ""),
             gdrive_account_folder_id=os.environ.get("GDRIVE_ACCOUNT_FOLDER_ID", ""),
-            firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
+            firecrawl_api_key=_secret(
+                os.environ.get("FIRECRAWL_API_KEY"), secret_store.resolve("FIRECRAWL_API_KEY", env)
+            ),
             gdrive_web_docs_folder_id=os.environ.get("GDRIVE_WEB_DOCS_FOLDER_ID", ""),
-            crawl4ai_profiles_dir=crawl4ai_profiles_dir_from_env(dotenv_path),
+            crawl4ai_profiles_dir=Path(
+                os.environ.get("CRAWL4AI_PROFILES_DIR", _DEFAULT_CRAWL4AI_PROFILES_DIR)
+            ).expanduser(),
+            audit_log_path=Path(os.environ.get("IBKR_AUDIT_LOG", "~/.ibkr_core/audit.jsonl")).expanduser(),
         )

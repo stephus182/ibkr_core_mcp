@@ -7,8 +7,8 @@ reflexive acceptance, so it requires a pointed, explicit action. Any cancellatio
 or timeout raises `HumanAuthError` and the IBKR endpoint is never contacted.
 
 Three backends, but never three in one sequence — the platform picks the pair. On macOS:
-an AppKit `NSAlert` run in a subprocess (colour-coded by side; see `_order_dialog.py` for
-why it must be a subprocess), falling back to an AppleScript `display dialog` if that
+the core's own AppKit modal window run in a subprocess (one layout at every height, colour-coded
+by side; see `_order_dialog.py` for why it must be a subprocess), falling back to an AppleScript `display dialog` if that
 subprocess fails. Everywhere else: a tkinter modal, which macOS never reaches. A host with
 no backend available fails closed rather than proceeding unconfirmed. This paragraph read
 "tried in order: ... AppKit, a tkinter modal, and an AppleScript fallback" until 2026-09-17,
@@ -25,6 +25,7 @@ import math
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from decimal import Decimal, DecimalException, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -33,9 +34,27 @@ try:
     import tkinter as tk
 except ImportError:  # Python without Tk support (CI, headless, Python 3.14 Homebrew)
     tk = None  # type: ignore[assignment]
-from ibkr_core_mcp.exceptions import HumanAuthError
+from ibkr_core_mcp._order_dialog import (
+    CANCELLED,
+    CONFIRMED,
+    TIMED_OUT,
+)
+from ibkr_core_mcp.exceptions import ConfirmationDeclinedError, ConfirmationTimeoutError, HumanAuthError
 
-_DIALOG_TIMEOUT_S = 60  # auto-cancels if unattended
+_DIALOG_TIMEOUT_S = 60  # the dialog dismisses itself unattended; nothing is sent, the order is as it was
+
+
+def _timed_out_message(detail: str = "") -> str:
+    """What a timeout leaves, never what it did: nothing was sent, the order is as it was.
+
+    Operator rule (claudia_ui 2026-09-24, gap #67): a timeout is described by what it leaves in
+    place. "Order cancelled by user" for a timed-out CANCEL ORDER dialog told the user the order
+    was cancelled when the timeout had kept it (register F21, 2026-09-25).
+    """
+    return (
+        f"Confirmation dialog timed out after {_DIALOG_TIMEOUT_S} s with no decision — "
+        f"nothing was sent to IBKR; the order is as it was{detail}"
+    )
 
 
 def _quantity_text(qty: Any) -> str:
@@ -94,6 +113,16 @@ def _asset_class(sec_type: Any) -> str:
         The asset class in upper case, or `""` when the field is absent or empty.
     """
     return re.split(r"[:@]", str(sec_type or "").strip().upper())[-1]
+
+
+# The asset classes whose money figure is price x quantity x a CONTRACT MULTIPLIER, so that
+# price x quantity alone is not an estimate of anything. FUT and FOP since 2026-09-21. OPT
+# joined 2026-11-12: IBKR's own worked example of `/iserver/secdef/info` is an AAPL put with
+# `"secType": "OPT"` and `"multiplier": "100"`, and the dialog printed `Total (est.): 25.00 USD`
+# for ten contracts at 2.50 — 2,500 in fact. The list is the classes IBKR's pages were read
+# for, not every class with a multiplier: a warrant or a bond is not in it and is not claimed.
+# Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-sec-def-information-by-conid.md
+MULTIPLIER_ASSET_CLASSES = frozenset({"FUT", "FOP", "OPT"})
 
 
 # Body keys `_order_rows` already reads into a typed row, in every spelling it accepts. A key
@@ -224,7 +253,9 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
     order_type_str = str(order_type) if order_type is not None else "— (not sent)"
     price = order.get("price")
     aux_price = order.get("auxPrice")
-    tif = order.get("tif", order.get("timeInForce", "DAY"))
+    # An absent time in force is shown as absent, like an absent order type: until 2.2.0 it
+    # rendered "DAY", an unknown shown as a value on the last screen before a write (F10).
+    tif = order.get("tif", order.get("timeInForce")) or "— (not sent)"
     multiplier = order.get("_multiplier")
     # Currency is displayed only when the caller established one, and always as an ISO
     # code. Until 2026-08-13 this rendered f"${price}" and a hardcoded "USD": "$" is
@@ -274,9 +305,13 @@ def _order_rows(order: dict[str, Any], account_id: str) -> dict[str, str]:
         price_str = "MARKET"
     else:
         price_str = "— (no price sent)"
+    # An option needs its multiplier for the total exactly as a future does, but it is not
+    # folded into `is_future`: that flag also takes the currency off the Price row, which is
+    # the futures rule about index points and says nothing about an option's premium.
+    needs_multiplier = is_future or _asset_class(order.get("secType")) in MULTIPLIER_ASSET_CLASSES
     try:
-        if order.get("_multiplier_unknown") or (is_future and multiplier is None):
-            # A futures order whose multiplier the caller could not learn. price × qty here
+        if order.get("_multiplier_unknown") or (needs_multiplier and multiplier is None):
+            # An order whose multiplier the caller could not learn. price × qty here
             # is not an estimate, it is wrong by the multiplier — live 2026-09-04 it printed
             # 7,735.00 for one ES contract standing for 386,750 USD. Say so instead.
             total_str = "— (contract multiplier unknown; not price × quantity)"
@@ -478,7 +513,7 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
     Futures notional uses the _multiplier display field: price × qty × multiplier. When the
     caller sets _multiplier_unknown instead, no number is printed at all (2026-09-04).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/place-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/place-order
     """
     _show_confirm_dialog(
         title="⚠  LIVE ORDER CONFIRMATION",
@@ -489,6 +524,7 @@ def confirm_order_dialog(order: dict[str, Any], account_id: str) -> None:
         ),
         confirm_label="SEND TO IBKR",
         abandon_label="DO NOT SEND",
+        abandon_message=_NOT_SENT,
     )
 
 
@@ -516,7 +552,7 @@ _CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", 
 # does not inherit the class is described differently from its own parent.
 #
 # Added 2026-09-21 with the signals themselves. Without them one ES bracket rendered
-# `Parent — Price 7,300.00` beside `Profit taker — Price 7,400.00 USD` — index points
+# the Parent section's Price `7,300.00` beside the Profit taker's `7,400.00 USD` — index points
 # labelled as dollars on the leg the human has never seen before, which is the divergence
 # the list above exists to prevent and which the comment above claimed was measured not to
 # happen. That measurement was taken with `_multiplier` set, before these two doors existed.
@@ -537,79 +573,39 @@ _CONTRACT_DISPLAY_KEYS = ("_companyName", "_multiplier", "_multiplier_unknown", 
 # inheriting the label asserts nothing that was not already enforced.
 _CONTRACT_CLASS_KEYS = ("secType", "manualIndicator", "ticker")
 
-_HELD_UNTIL_PARENT_FILLS = "held by IBKR until the parent fills"
+# The first row of every child section: what IBKR does with the leg until the parent fills.
+_HELD_ROW = ("Held by IBKR", "until the parent fills")
+
+# IBKR's rule for an attached order's time in force — TWS guide, Using the Orders Panel
+# (https://www.ibkrguides.com/traderworkstation/using-the-orders-panel.htm, read 2026-10-18):
+# "You must set the TIF for a child order equal to or shorter than that of the parent.
+# Otherwise, the TIF of the parent order will override that of the child order." Ranked by
+# duration from the guide's own Times in Force: IOC cancels what does not fill at once, OPG
+# lives to the open, DAY to the session's end, GTC "until the order fills or is canceled". A
+# TIF outside these four (GTD, FOK, …) is not ranked and not compared — both legs' TIF rows are
+# on the dialog regardless.
+TIF_DURATION_RANK: dict[str, int] = {"IOC": 0, "OPG": 1, "DAY": 2, "GTC": 3}
 
 
-def _multi_child_disclosure(parent: dict[str, Any], children: list[dict[str, Any]]) -> str | None:
-    """What a human seeing several full-size children against one parent is not being told.
+def child_tif_defect(parent: Mapping[str, Any], child: Mapping[str, Any]) -> str | None:
+    """Why a child's TIF is refused against its parent's, or None. Pure, no network.
 
-    A two-child bracket renders two full-size SELLs under a one-lot BUY. Nothing on the
-    screen says only one of them can fill, so the arithmetic reads as an instruction to sell
-    twice what is being bought — the alarming reading, and the wrong one.
-
-    **This is a DISCLOSURE, never a guardrail.** The legs are supposed to total more than the
-    parent: IBKR's own published bracket is a full-size profit taker AND a full-size stop on
-    one position (50/50/50), so refusing the aggregate would refuse the standard shape. H1 is
-    enforced per child, and `_bracket_tickets`' docstring records why.
-
-    What is said, and the standing of each claim:
-
-    - The arithmetic is CERTAIN. It comes from the dialog's own inputs and needs nothing from
-      IBKR.
-    - The grouping is MEASURED, dated, and stated as an observation rather than a guarantee:
-      on 2026-09-22, two resting brackets each reported `oca_group_id` equal to the parent's
-      own order id with `oca_group_type: "ReduceOnFillNonBlock"`. **This dialog cannot verify
-      the link for the order about to be submitted** — `oca_group_id` exists only after IBKR
-      has accepted the tickets — so the sentence says what was seen before, not what will be.
-    - The partial-fill case is stated as UNKNOWN, because it is. The children are sized to the
-      full parent quantity and IBKR documents nothing about what becomes of them if the parent
-      fills only partially. Deliberately not policed: core could only correct an oversized
-      child by issuing a `modify_order`, and an invariant that only an order write can repair
-      is not enforceable from here.
-
-    Args:
-        parent: The parent ticket.
-        children: Its child tickets.
-
-    Returns:
-        The disclosure, or None when there is at most one child, or when the children are
-        stated and do not exceed the parent (a scale-out, where the alarming reading does
-        not arise).
+    Only a STATED pair is compared: a child carrying no TIF takes the parent's downstream
+    (`client._complete_child` on an attach, the caller's own builder on a bracket), and an
+    unranked TIF on either leg cannot be ordered. A longer child is refused before any gate
+    rather than rewritten by IBKR after the human approved what the screen said (claudia_ui
+    gap #36, operator rule 2026-10-18). `_bracket_tickets` raises `ValueError` on it for the
+    place, attach and preview paths; `confirm_bracket_dialog` repeats it as `HumanAuthError`.
     """
-    if len(children) < 2:
+    child_tif = str(child.get("tif") or "").strip().upper()
+    parent_tif = str(parent.get("tif") or "").strip().upper()
+    # An absent TIF ranks as nothing, exactly like an unranked one: one lookup covers both.
+    child_rank, parent_rank = TIF_DURATION_RANK.get(child_tif), TIF_DURATION_RANK.get(parent_tif)
+    if child_rank is None or parent_rank is None or child_rank <= parent_rank:
         return None
-    parent_qty = _as_float_or_none(parent.get("quantity"))
-    # An absent child quantity is DERIVED from the parent (`_bracket_tickets` says so), so it
-    # counts as a full-size leg rather than as zero — counting it as zero would suppress the
-    # disclosure on exactly the all-derived bracket that most needs it.
-    child_total = 0.0
-    for child in children:
-        qty = _as_float_or_none(child.get("quantity"))
-        if qty is None:
-            qty = parent_qty
-        if qty is None:
-            child_total = math.nan
-            break
-        child_total += qty
-    if parent_qty is not None and math.isfinite(child_total):
-        if child_total <= parent_qty:
-            return None  # a genuine scale-out: the legs do not oversubscribe the parent
-        known = True
-    else:
-        known = False
-    totals = (
-        f"These {len(children)} children total {_quantity_text(child_total)} "
-        f"against a parent of {_quantity_text(parent_qty)}. "
-        if known
-        else f"These {len(children)} children are each sized to the full parent quantity. "
-    )
     return (
-        totals + "They are exits for ONE position, not additional orders: IBKR groups a "
-        "parent's children so that one filling cancels the others (observed 2026-09-22 on "
-        "resting brackets, which reported an OCA group of type ReduceOnFillNonBlock; this "
-        "dialog cannot verify the link for the order about to be submitted, because IBKR "
-        "assigns it only after accepting the tickets). IBKR does not document what becomes "
-        "of the children if the parent fills only PARTIALLY."
+        f"a child's TIF ({child_tif}) must be equal to or shorter than the parent's ({parent_tif}): "
+        "IBKR overrides a longer one with the parent's"
     )
 
 
@@ -620,6 +616,30 @@ def _as_float_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _partial_fill_warning(parent: dict[str, Any]) -> str | None:
+    """The one line a multi-lot parent without all-or-none must show (operator, 2026-10-17).
+
+    All-or-none makes a partial fill impossible, and IBKR offers it on stocks, ETFs, options,
+    bonds and EFPs only — never on futures (refused on CME, NYMEX and COMEX, measured
+    2026-09-21 and 2026-10-17). A parent of 1 cannot partially fill. So the line is keyed on
+    the ATTRIBUTE and the quantity, never on the instrument: right by construction on every
+    product, with no copy of IBKR's product list here. The partial-fill behaviour itself is
+    deliberately unmeasured and uncorrected (design 2026-10-17, A3): this says so, in ONE
+    sentence — the operator's rule after the first live bracket (2026-10-19): "just state what
+    is needed: partial fill risk only; too long text is NOT explicit and loses impact". The
+    `Children together` paragraph that used to follow the legs was withdrawn the same day.
+
+    Rendered red and bold by the dialog, as every row whose key starts with `⚠` is.
+    """
+    quantity = _as_float_or_none(parent.get("quantity"))
+    if quantity is None or quantity <= 1 or parent.get("allOrNone") is True:
+        return None
+    return (
+        f"Parent {quantity:g} lots without All-or-None: it can fill in part, and IBKR does not "
+        f"document what becomes of the {quantity:g}-lot children."
+    )
 
 
 def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]], account_id: str) -> None:
@@ -638,6 +658,14 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
     The child is shown as **held**, never as working. `PreSubmitted` is a working state for a
     single order and a held one for a bracket child, and the difference is the only thing the
     human needs to understand about the second leg.
+
+    Two rows since 2026-10-17 (claudia_ui gap #36): the Parent section's `At IBKR` row when the parent is an
+    order already working at IBKR (an attach, `client.attach_order_and_confirm`) rather than
+    a ticket about to be sent; and `⚠ Partial fill`, red and bold, when the parent is above
+    one lot and carries no `allOrNone: true` (`_partial_fill_warning`). On an attach the
+    title reads ATTACHED ORDER, the Action row and the banner are the CHILD's side — the
+    order being sent — and the disclaimer says the parent is already working and not sent
+    again (measured live 2026-10-18).
 
     Exactly one notional row is shown and it names whose it is. A bracket's legs are opposite,
     so a row called `Total` would be read as their sum; the child's notional is left off
@@ -664,8 +692,8 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
             rule missing from one of the two is enforced on neither path when the other is
             taken. Three of them had an escape clause here and not there until 2026-09-21.
 
-    Sources: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups.md,
-        https://ibkrcampus.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value.md
+    Sources: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/bracket-orders-oca-groups,
+        https://www.interactivebrokers.com/docs/web-api/v1/endpoints/order-monitoring/order-status-value
     """
     if not children:
         raise HumanAuthError("Bracket confirmation refused: no child order in the bracket")
@@ -686,16 +714,31 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         )
     inherited = {key: parent[key] for key in (*_CONTRACT_DISPLAY_KEYS, *_CONTRACT_CLASS_KEYS) if key in parent}
 
+    # Three sections, each titled once — Parent, then one per child — above which only the
+    # dialog's own rows sit: the account, and the Action that decides the banner (operator
+    # design 2026-10-19, after the first live bracket: "3 distinct sections, do not repeat the
+    # title each time, separate for better readability"). A section is a dict value; every
+    # renderer draws it as a blank line, the title, then its rows indented (`_detail_lines`).
     parent_rows = _order_rows(parent, account_id)
     details: dict[str, Any] = {
         "Account": parent_rows.pop("Account"),
-        "Action": parent_rows.pop("Action"),  # the PARENT's side — it decides the banner colour
+        "Action": parent_rows["Action"],  # the PARENT's side — it decides the banner colour
     }
     notional = parent_rows.pop("Total (est.)", None)
-    for key, value in parent_rows.items():
-        details[f"Parent — {key}"] = value
+    # The parent's own Action stays in its section: on an attach the top-level Action is the
+    # CHILD's (below), and until 2026-10-19 the parent's side appeared nowhere on that dialog.
+    parent_section: dict[str, Any] = dict(parent_rows)
     if notional is not None:
-        details["Parent notional (est.)"] = notional
+        parent_section["Notional (est.)"] = notional
+    # An attach: the parent is IBKR's, not a ticket about to be sent. `client._parent_from_status`
+    # sets the key; a bracket placed at entry carries none and shows no such row.
+    working = parent.get("_working_at_ibkr")
+    if working:
+        parent_section["At IBKR"] = str(working)
+    warning = _partial_fill_warning(parent)
+    if warning:
+        parent_section["⚠ Partial fill"] = warning
+    details["Parent"] = parent_section
 
     seen: dict[str, int] = {}
     for child in children:
@@ -719,7 +762,7 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
             raise HumanAuthError("Bracket confirmation refused: a child's parentId does not name this parent")
         # IBKR: a cOID "should not be set for the child of a bracket order". `_bracket_tickets`
         # refuses one; this did not, so the rule held on one of two reachable paths.
-        # Source: https://ibkrcampus.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order.md
+        # Source: https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order
         if child.get("cOID"):
             raise HumanAuthError(
                 "Bracket confirmation refused: a child carries its own cOID, which IBKR forbids on a bracket child"
@@ -789,6 +832,12 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
                 ) from None
             if oversized:
                 raise HumanAuthError("Bracket confirmation refused: a child is larger than the parent")
+        # The child's TIF is equal to or shorter than the parent's — IBKR's rule, quoted on
+        # `child_tif_defect`. Repeated here as well as in `client._bracket_tickets` for the reason
+        # the rules above are: this dialog is public API, and the last screen before the send.
+        tif_defect = child_tif_defect(parent, child)
+        if tif_defect:
+            raise HumanAuthError(f"Bracket confirmation refused: {tif_defect}")
         # LMT reads as the profit taker; anything else is the protective leg. The label is
         # cosmetic — the link and the side are what were just checked.
         kind = "Profit taker" if str(child.get("orderType") or "").strip().upper() in ("LMT", "LIMIT") else "Stop loss"
@@ -801,28 +850,35 @@ def confirm_bracket_dialog(parent: dict[str, Any], children: list[dict[str, Any]
         rows = _order_rows({**inherited, **child}, account_id)
         rows.pop("Account", None)
         rows.pop("Total (est.)", None)
-        details[kind] = _HELD_UNTIL_PARENT_FILLS
-        for key, value in rows.items():
-            details[f"{kind} — {key}"] = value
-
-    disclosure = _multi_child_disclosure(parent, children)
-    if disclosure:
-        details["Children together"] = disclosure
+        details[kind] = {_HELD_ROW[0]: _HELD_ROW[1], **rows}
 
     # No `action=`: a bracket IS a placement, so the banner stays the parent's side and colour
     # — the exposure being opened — exactly as the place dialog's does. `_banner` special-cases
     # only CANCEL and MODIFY, the two acts whose verb must beat the side. The word BRACKET is
     # carried by the title, and each leg is named on its own rows.
+    # An attach sends the CHILD, never the parent (`_working_at_ibkr` is set only by the attach
+    # write): the Action row — which decides the banner — is the side being sent, and the title
+    # and disclaimer say the parent is already working. Live 2026-10-18 the bracket wording read
+    # "The parent order is sent to Interactive Brokers now" under a green BUY banner while a
+    # SELL stop was being sent — the last screen before a write must not state a falsehood.
+    attach = bool(parent.get("_working_at_ibkr"))
+    if attach:
+        details["Action"] = str(children[0].get("side", "")).strip().upper()
     _show_confirm_dialog(
-        title="⚠  LIVE BRACKET ORDER CONFIRMATION",
+        title="⚠  LIVE ATTACHED ORDER CONFIRMATION" if attach else "⚠  LIVE BRACKET ORDER CONFIRMATION",
         details=details,
         disclaimer=(
-            "This is a LIVE bracket. The parent order is sent to Interactive Brokers now; "
+            "This is a LIVE attached order. The parent is already working at Interactive Brokers "
+            "and is not sent again; the child is sent now and held by IBKR until the parent fills. "
+            "Real financial transactions may result that cannot be undone."
+            if attach
+            else "This is a LIVE bracket. The parent order is sent to Interactive Brokers now; "
             "each child becomes live the moment the parent fills. Real financial transactions "
             "may result that cannot be undone."
         ),
         confirm_label="SEND TO IBKR",
         abandon_label="DO NOT SEND",
+        abandon_message=_NOT_SENT,
     )
 
 
@@ -838,7 +894,7 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
     (claudia_ui gap #40). The side is read as `side`, so the banner colour is right for
     SELL modifies (before 2026-09 every SELL modify rendered green).
 
-    Source: https://ibkrcampus.com/docs/web-api/v1/endpoints/orders/modify-order.md
+    Source: https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order
     """
     details = _order_rows(order, account_id)
     details["Order ID"] = order_id
@@ -862,6 +918,7 @@ def confirm_modify_dialog(order_id: str, order: dict[str, Any], account_id: str)
         confirm_label="MODIFY ORDER",
         abandon_label="LEAVE UNCHANGED",
         action="MODIFY",
+        abandon_message="Left unchanged — the order is as it was.",
     )
 
 
@@ -895,8 +952,10 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
                 "CANCEL THE OTHER ORDERS IN THAT GROUP — for a bracket, the other exit leg. "
                 "Measured 2026-09-22 on a held bracket: cancelling ONE child removed the "
                 "SIBLING as well, while the parent stayed working — so the position would "
-                "later open with no protection at all. IBKR documents none of this, so treat "
-                "it as a warning rather than a promise."
+                "later open with no protection at all. IBKR's TWS guide documents the group "
+                "rule (Order Types, One-Cancels-All, read 2026-10-18): a member the client "
+                "cancels takes the rest of the group; one the system rejects or cancels does "
+                "not. The field names themselves are on no page."
             )
         # The other end of the same relationship, and deliberately a DIFFERENT field: a
         # bracket parent carries no `oca_group_id`, so nothing is inferred for it from an
@@ -920,9 +979,12 @@ def confirm_cancel_dialog(order_id: str, account_id: str, order: dict[str, Any] 
         title="⚠  CANCEL ORDER CONFIRMATION",
         details=details,
         disclaimer="This will CANCEL a live order at Interactive Brokers.",
-        confirm_label="CANCEL ORDER",
-        abandon_label="KEEP ORDER",
+        # The banner says CANCEL ORDER; the buttons say what the click does to that request
+        # (operator, 2026-10-01: a blue `CANCEL ORDER` over a red `KEEP ORDER` was "ambiguous").
+        confirm_label="VALIDATE",
+        abandon_label="DISCARD",
         action="CANCEL",
+        abandon_message="Kept — the order is still working.",
     )
 
 
@@ -932,8 +994,18 @@ def confirm_reply_dialog(
     options: list[str] | None = None,
     *,
     order_label: str | None = None,
+    modifies: bool | None = None,
 ) -> None:
     """Gate 2 for reply_order. Shows the ACTUAL IBKR warning text, not just the reply_id.
+
+    **The buttons read `CONFIRM` / `CANCEL`, and the sentence under IBKR's message says what
+    each does for the write the question belongs to** (register F35, settled with the
+    operator on the rendered dialogs, 2026-10-02; they read `CONFIRM REPLY` / `DO NOT REPLY`).
+    `modifies` False — a new order: "CONFIRM sends the order. CANCEL: the order is not
+    placed." `modifies` True — a change to a live order: "CONFIRM applies the change. CANCEL:
+    the order stays as it was.", because on that dialog CANCEL leaves a live order working
+    and must not read as cancelling it. None — the standalone `reply_order()` path, which
+    knows neither: the sentence and the abandon message stay as they were.
 
     `message` defaults to "" so the standalone reply_order() call site (which only ever
     had a bare reply_id to work with) keeps showing a blank message exactly as before —
@@ -961,12 +1033,19 @@ def confirm_reply_dialog(
     if message:
         details["Message"] = reply_message_text(message)
     title = "⚠  CONFIRM ORDER REPLY" + (f" — {order_label}" if order_label else "")
+    if modifies is None:
+        sentence, left = "This will CONFIRM a pending order at Interactive Brokers.", _NOT_PLACED
+    elif modifies:
+        sentence, left = "CONFIRM applies the change. CANCEL: the order stays as it was.", _NOT_CHANGED
+    else:
+        sentence, left = "CONFIRM sends the order. CANCEL: the order is not placed.", _NOT_PLACED
     _show_confirm_dialog(
         title=title,
         details=details,
-        disclaimer="This will CONFIRM a pending order at Interactive Brokers.",
-        confirm_label="CONFIRM REPLY",
-        abandon_label="DO NOT REPLY",
+        disclaimer=sentence,
+        confirm_label="CONFIRM",
+        abandon_label="CANCEL",
+        abandon_message=left,
     )
 
 
@@ -1012,6 +1091,26 @@ def reply_message_text(message: str) -> str:
 _SIDE_KEYS = ("Action", "side", "Side")
 
 
+def _detail_lines(details: Mapping[str, Any]) -> list[str]:
+    """The rows as plain text, one shape for every renderer (2026-10-19): a flat row is
+    `key: value`; a section — a dict value, the bracket dialog's Parent / Profit taker / Stop
+    loss — is a blank line, its title once, then its rows indented beneath it; a flat row
+    after a section gets a blank line before it. The AppKit renderer draws the same shape
+    with the title in bold (`_order_dialog._run_alert`)."""
+    lines: list[str] = []
+    after_section = False
+    for key, value in details.items():
+        if isinstance(value, dict):
+            lines.extend(["", str(key), *(f"    {k}: {v}" for k, v in value.items())])
+            after_section = True
+        else:
+            if after_section:
+                lines.append("")
+                after_section = False
+            lines.append(f"{key}: {value}")
+    return lines
+
+
 def _extract_side(details: dict[str, Any]) -> str | None:
     """Return the order side from whichever key carries it, or None if none does.
 
@@ -1041,6 +1140,35 @@ def _extract_side(details: dict[str, Any]) -> str | None:
     return None
 
 
+# What an abandon leaves, where two dialogs share the sentence, and the fallback a renderer
+# called on its own uses. None says "cancelled": on the cancel dialog the abandon button KEEPS
+# the order, and "Order cancelled by user" — every dialog's message until 2.2.0 — said the
+# opposite (register F6; the operator agreed the four sentences 2026-10-01).
+_NOT_SENT = "Not sent — nothing reached IBKR."
+# What a CANCEL on the reply dialog leaves, by the write the question belonged to (F35).
+_NOT_PLACED = "Not confirmed — the order was not placed."
+_NOT_CHANGED = "Not confirmed — the order is as it was."
+_DECLINED = "Declined at the confirmation dialog — nothing was sent to IBKR."
+
+# The icon a host application gives the Gate 2 dialogs, or None for the system's default.
+_dialog_icon: str | None = None
+
+
+def set_dialog_icon(path: str | Path | None) -> None:
+    """Set the image the Gate 2 dialogs show as their icon, or clear it with None.
+
+    A host's own mark, set once at startup, drawn as it is (a logo keeps its colours). Without
+    one the dialog shows the package's own generic exchange glyph (`assets/exchange-icon.png`,
+    since 2026-11-07, as a template image tinted to the label colour) — no broker's logo: it is
+    not a broker's product. The file is read by the dialog when it opens; one that cannot be read
+    falls back to the glyph, and the glyph to the application's icon, and never fails a
+    confirmation. The icon is 56 pt, centred over the title (`_order_dialog._build_dialog`).
+    AppKit dialogs only: the osascript and tkinter fallbacks draw none.
+    """
+    global _dialog_icon  # one process-wide setting, like the dialogs themselves
+    _dialog_icon = None if path is None else str(path)
+
+
 def _show_confirm_dialog(
     title: str,
     details: dict[str, Any],
@@ -1048,8 +1176,15 @@ def _show_confirm_dialog(
     confirm_label: str,
     abandon_label: str,
     action: str | None = None,
+    *,
+    abandon_message: str,
 ) -> None:
     """Render a modal confirmation dialog. Raises HumanAuthError if user cancels or closes.
+
+    `abandon_message` is required, for the reason `abandon_label` is (below): this renderer is
+    shared by every Gate 2 dialog, and a default would hand one dialog's meaning to the next
+    that forgets to state its own. It is what `ConfirmationDeclinedError` says when the abandon
+    button is pressed — what that click leaves in place.
 
     macOS primary path: AppKit colored dialog (green BUY, red SELL, amber when the side
     is unknown) via subprocess.
@@ -1068,15 +1203,26 @@ def _show_confirm_dialog(
     if sys.platform == "darwin":
         side = _extract_side(details)
         try:
-            _show_appkit_dialog(title, details, disclaimer, confirm_label, side, abandon_label, action)
+            _show_appkit_dialog(
+                title,
+                details,
+                disclaimer,
+                confirm_label,
+                side,
+                abandon_label,
+                action,
+                abandon_message=abandon_message,
+            )
             return
         except HumanAuthError:
             raise  # user decision — do not fall back
         except Exception:  # noqa: S110 - AppKit subprocess failed; fall back to plain osascript
             pass
-        _show_osascript_dialog(title, details, disclaimer, confirm_label, abandon_label)
+        _show_osascript_dialog(
+            title, details, disclaimer, confirm_label, abandon_label, abandon_message=abandon_message
+        )
     elif tk is not None:
-        _show_tkinter_dialog(title, details, disclaimer, confirm_label, abandon_label)
+        _show_tkinter_dialog(title, details, disclaimer, confirm_label, abandon_label, abandon_message=abandon_message)
     else:
         raise HumanAuthError("No GUI dialog available: not on macOS and tkinter is not installed.")
 
@@ -1089,6 +1235,8 @@ def _show_appkit_dialog(
     side: str | None,
     abandon_label: str,
     action: str | None = None,
+    *,
+    abandon_message: str = _DECLINED,
 ) -> None:
     """Colored macOS confirmation dialog via AppKit, run as a subprocess.
 
@@ -1100,7 +1248,11 @@ def _show_appkit_dialog(
     cancel and reply dialogs genuinely have no side, and colouring those green would
     assert something no caller established.
 
-    Raises HumanAuthError if user cancels/times out.
+    Raises ConfirmationDeclinedError (a HumanAuthError) with `abandon_message` when the human
+    abandons the dialog — what that click leaves in place, never "cancelled" — and ConfirmationTimeoutError
+    (a HumanAuthError) when the dialog dismisses itself with no decision — two outcomes,
+    because the second leaves the order exactly as it was and must not be reported as a
+    cancellation (register F21). The tokens are `_order_dialog`'s own constants.
     Raises RuntimeError if the subprocess itself fails (caller falls back to osascript).
     """
     payload = _json.dumps(
@@ -1112,6 +1264,7 @@ def _show_appkit_dialog(
             "abandon_label": abandon_label,
             "side": side,
             "action": action,
+            "icon_path": _dialog_icon,
             "timeout_s": _DIALOG_TIMEOUT_S,
         }
     )
@@ -1125,18 +1278,30 @@ def _show_appkit_dialog(
             timeout=_DIALOG_TIMEOUT_S + 10,
         )
     except subprocess.TimeoutExpired as exc:
-        raise HumanAuthError("Confirmation dialog timed out") from exc
+        raise ConfirmationTimeoutError(_timed_out_message(" (the dialog process did not return)")) from exc
 
     if proc.returncode != 0:
         raise RuntimeError(f"AppKit dialog failed: {proc.stderr.strip() or 'unknown error'}")
 
     output = proc.stdout.strip()
-    if output != "CONFIRMED":
-        raise HumanAuthError("Order cancelled by user")
+    if output == CONFIRMED:
+        return
+    if output == TIMED_OUT:
+        raise ConfirmationTimeoutError(_timed_out_message())
+    if output == CANCELLED:  # the abandon button, or the panel dismissed some other way
+        raise ConfirmationDeclinedError(abandon_message)
+    # Not one of the script's three words: nothing was sent, and the reader says what it saw.
+    raise HumanAuthError(f"Unexpected dialog response: {output!r}")
 
 
 def _show_osascript_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+    title: str,
+    details: dict[str, Any],
+    disclaimer: str,
+    confirm_label: str,
+    abandon_label: str,
+    *,
+    abandon_message: str = _DECLINED,
 ) -> None:
     """Native macOS confirmation dialog via osascript.
 
@@ -1145,7 +1310,7 @@ def _show_osascript_dialog(
 
     Source: https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_cmds.html#//apple_ref/doc/uid/TP40000983-CH216-SW12
     """
-    detail_lines = "\n".join(f"{k}: {v}" for k, v in details.items())
+    detail_lines = "\n".join(_detail_lines(details))
     message = f"{detail_lines}\n\n{disclaimer}"
 
     script = (
@@ -1172,8 +1337,10 @@ def _show_osascript_dialog(
         raise HumanAuthError(f"Confirmation dialog failed: {exc}") from exc
 
     output = proc.stdout.strip()
-    if proc.returncode != 0 or output in ("", "timeout", abandon_label):
-        raise HumanAuthError("Order cancelled by user")
+    if output == "timeout":  # `gave up of dlg` — the dialog dismissed itself, no decision
+        raise ConfirmationTimeoutError(_timed_out_message())
+    if proc.returncode != 0 or output in ("", abandon_label):
+        raise ConfirmationDeclinedError(abandon_message)
     if output != confirm_label:
         raise HumanAuthError(f"Unexpected dialog response: {output!r}")
 
@@ -1185,11 +1352,19 @@ def _as_str(text: str) -> str:
 
 
 def _show_tkinter_dialog(
-    title: str, details: dict[str, Any], disclaimer: str, confirm_label: str, abandon_label: str
+    title: str,
+    details: dict[str, Any],
+    disclaimer: str,
+    confirm_label: str,
+    abandon_label: str,
+    *,
+    abandon_message: str = _DECLINED,
 ) -> None:
     """Fallback tkinter dialog for non-macOS environments.
 
-    Must be called from the main thread. Auto-cancels after _DIALOG_TIMEOUT_S seconds.
+    Must be called from the main thread. Dismisses itself after _DIALOG_TIMEOUT_S seconds,
+    raising ConfirmationTimeoutError — nothing sent, the order as it was — never the abandon
+    button's error (register F21).
 
     Security note: on_confirm runs inside the same process as all pip dependencies.
     A compromised dependency with access to tk._default_root could call root.after(0, on_confirm)
@@ -1197,6 +1372,7 @@ def _show_tkinter_dialog(
     this dialog, providing defense-in-depth.
     """
     confirmed: dict[str, Any] = {"value": False}
+    timed_out: dict[str, Any] = {"value": False}
 
     root = tk.Tk()
     root.withdraw()
@@ -1219,11 +1395,19 @@ def _show_tkinter_dialog(
 
     detail_frame = tk.Frame(dialog, padx=20, pady=10)
     detail_frame.pack(fill="x")
-    for i, (key, val) in enumerate(details.items()):
+    for i, line in enumerate(_detail_lines(details)):
+        # A section title (no colon) in bold across both columns; a row split at its colon;
+        # a blank line as an empty row — the shape `_detail_lines` gives every renderer.
+        key, sep, val = line.partition(": ")
+        if not sep:
+            tk.Label(detail_frame, text=key, font=("Helvetica", 11, "bold"), anchor="w").grid(
+                row=i, column=0, columnspan=2, sticky="w", pady=2
+            )
+            continue
         tk.Label(detail_frame, text=f"{key}:", font=("Helvetica", 11, "bold"), anchor="w").grid(
             row=i, column=0, sticky="w", pady=2
         )
-        tk.Label(detail_frame, text=str(val), font=("Helvetica", 11), anchor="w").grid(
+        tk.Label(detail_frame, text=val, font=("Helvetica", 11), anchor="w").grid(
             row=i, column=1, sticky="w", padx=(10, 0), pady=2
         )
 
@@ -1275,15 +1459,16 @@ def _show_tkinter_dialog(
         font=("Helvetica", 11, "bold"),
     ).pack(side="left", padx=10)
 
-    countdown_var = tk.StringVar(value=f"Auto-cancels in {remaining['secs']}s")
+    countdown_var = tk.StringVar(value=f"Dismisses itself in {remaining['secs']}s — nothing is sent")
     tk.Label(dialog, textvariable=countdown_var, fg="#888888", font=("Helvetica", 9)).pack(pady=(0, 6))
 
     def _tick() -> None:
         remaining["secs"] -= 1
         if remaining["secs"] <= 0:
+            timed_out["value"] = True
             on_cancel()
         else:
-            countdown_var.set(f"Auto-cancels in {remaining['secs']}s")
+            countdown_var.set(f"Dismisses itself in {remaining['secs']}s — nothing is sent")
             _after_id["id"] = dialog.after(1000, _tick)
 
     _after_id["id"] = dialog.after(1000, _tick)
@@ -1295,5 +1480,7 @@ def _show_tkinter_dialog(
     dialog.geometry(f"+{x}+{y}")
     root.mainloop()
 
+    if timed_out["value"]:
+        raise ConfirmationTimeoutError(_timed_out_message())
     if not confirmed["value"]:
-        raise HumanAuthError("Order cancelled by user")
+        raise ConfirmationDeclinedError(abandon_message)

@@ -11,7 +11,7 @@ count: a live partial session (this runs fine mid-session) would make any absolu
 expectation wrong, and that would look like a defect in the code rather than in the test.
 
 Run:
-    set -a; source /path/to/.env; set +a
+    # a .env beside the package, or exported variables, configure Config.from_env()
     .venv/bin/python scripts/audit/market_data_live_evidence.py
 
 Results are recorded in docs/audits/live-test-log.md and summarised in

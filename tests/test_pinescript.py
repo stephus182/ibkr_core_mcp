@@ -98,6 +98,30 @@ def test_indicator_script_includes_bb():
     assert "bollinger" in script.lower() or "bb" in script.lower() or "ta.bb" in script
 
 
+@pytest.mark.parametrize(
+    ("indicator", "source_input", "call"),
+    [
+        ("rsi", 'rsiSource = input.source(close, "RSI Source")', "ta.rsi(rsiSource, rsiLength)"),
+        ("macd", 'macdSource = input.source(close, "MACD Source")', "ta.macd(macdSource, 12, 26, 9)"),
+        ("bollinger_bands", 'bbSource = input.source(close, "BB Source")', "ta.bb(bbSource, bbLength, bbMult)"),
+        ("ema", 'emaSource = input.source(close, "EMA Source")', "ta.ema(emaSource, emaLength)"),
+        ("sma", 'smaSource = input.source(close, "SMA Source")', "ta.sma(smaSource, smaLength)"),
+    ],
+)
+def test_each_generated_indicator_reads_a_source_the_chart_can_change(indicator, source_input, call):
+    """The study wrote `close` into every call, so an average of (high + low)/2 meant editing
+    the script. Each indicator that takes a source declares it as a TradingView input —
+    `input.source(close, "…")`, the widget TradingView's own indicators use — so the default
+    stays `close` and hl2 is one choice in the script's settings (operator, 2026-10-05). The
+    indicator's own call must read that input, or the dropdown would change nothing."""
+    from ibkr_core_mcp.pinescript import indicator_script
+
+    script = indicator_script("Study", [indicator], {})
+
+    assert source_input in script, script
+    assert call in script, script
+
+
 def test_strategy_from_backtest_returns_string(backtest_result, ohlcv):
     from ibkr_core_mcp.pinescript import strategy_from_backtest
 

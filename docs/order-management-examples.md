@@ -12,13 +12,18 @@ cfg        = Config.from_env()
 client     = IBKRClient(cfg)
 account_id = client.get_accounts()[0]["accountId"]
 
-contracts = client.search_contract("AAPL")
+# A ticker is not a listing, and this conid is what the order buys. Resolve a stock through
+# /trsrv/stocks and its `isUS` flag and stop when it is not unique — never the first match of a
+# symbol search, whose order IBKR does not document (for IGV it is the Mexican listing, in MXN).
+us = [c for r in client.get_stocks(["AAPL"]) for c in r["contracts"] if c.get("isUS")]
+if len(us) != 1:
+    raise SystemExit(f"AAPL: {len(us)} US listings — name the exchange rather than pick one")
 order = {
-    "conid":     contracts[0]["conid"],
+    "conid":     int(us[0]["conid"]),
     "ticker":    "AAPL",
     "side":      "BUY",
     "quantity":  10,
-    "orderType": "LIMIT",
+    "orderType": "LMT",
     "price":     182.50,
     "tif":       "DAY",
 }
@@ -46,9 +51,11 @@ try:
     # terminal response. One fingerprint, one dialog per reply.
     # Verified live 2026-07-06: a single order needed 3 sequential replies
     # (price-band %, no-market-data, mandatory-cap-price) before Submitted.
-    # Declining any reply mid-chain POSTs {"confirmed": False} to IBKR before
-    # raising HumanAuthError — unlike bare reply_order() below, which raises
-    # without ever telling IBKR, leaving the order ambiguous on IBKR's side.
+    # A reply that is not confirmed — declined, or nobody answered the dialog —
+    # POSTs {"confirmed": False} to IBKR before raising ReplyNotConfirmedError
+    # (a HumanAuthError; its message says which, and quotes IBKR's question) —
+    # unlike bare reply_order() below, which raises without ever telling IBKR,
+    # leaving the order ambiguous on IBKR's side.
     result = client.place_order_and_confirm(account_id, order)
 except HumanAuthError as e:
     print(f"Order not sent: {e}")
@@ -79,17 +86,25 @@ order placed in Q3 returned "will be automatically canceled at 20261231 16:00:00
 EST" (end of Q4), matching IBKR's documented convention exactly. Source:
 https://www.interactivebrokers.com/campus/trading-lessons/mosaic-good-till-cancelled-gtc-order-type/
 
-**Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does (not yet live-verified to require chained replies, but shares `modify_order`'s response shape); cancel has no reply chain:**
+**Modify — `modify_order_and_confirm()` resolves any reply chain the same way `place_order_and_confirm()` does; cancel has no reply chain.** Live 2026-11-12: a modify drew IBKR's Total Value Limit precaution, shown in its own dialog and answered under the one Touch ID (`docs/audits/live-test-log.md`, run 2026-11-12). Send the **whole order** with the one field changed — IBKR: "The content should mirror the content of the original order" ([Modify Order](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/modify-order)):
 ```python
 order_id = result[0]["order_id"]  # from a previously placed order, e.g. result above
 
 try:
-    client.modify_order_and_confirm(account_id, order_id, {"price": 180.00, "tif": "DAY"})
+    # The order placed above, with only the price changed.
+    client.modify_order_and_confirm(account_id, order_id, {**order, "price": 180.00})
 except HumanAuthError as e:
     print(f"Modification not sent: {e}")
 
 try:
     client.cancel_order(account_id, order_id)
+except HumanAuthError as e:
+    print(f"Cancellation not sent: {e}")
+
+# A futures or futures-option cancel made by a person: state the CME Rule 536-B tag,
+# as the place and modify bodies do with "manualIndicator": True.
+try:
+    client.cancel_order(account_id, futures_order_id, manual_indicator=True)
 except HumanAuthError as e:
     print(f"Cancellation not sent: {e}")
 ```
@@ -175,6 +190,143 @@ Note that a preview cannot substitute for these checks: measured live 2026-09-20
 a *different instrument* returns a whatif response byte-identical to a valid one, because
 IBKR previews the first ticket and discards the rest. **A mismatched bracket previews clean.**
 
+```python
+# Attach ONE child to an order already working — IBKR's sequential bracket form (2026-10-17).
+# The parent is read from IBKR and refused unless working, BEFORE Touch ID; the child takes
+# the parent's contract, size and opposite side from that record, never from here.
+from ibkr_core_mcp import attached_entry
+
+try:
+    entries = client.attach_order_and_confirm(
+        account_id,
+        parent_order_id,  # IBKR's own order id — the bracket's parent above, or any working order
+        {"orderType": "STP", "price": 172.00, "tif": "GTC"},  # a protective stop
+    )
+except ValueError as e:
+    # Refused BEFORE Touch ID: the parent is not working, or the pair fails a bracket rule.
+    print(f"Nothing attached, nothing sent: {e}")
+except HumanAuthError as e:
+    print(f"Not sent: {e}")
+else:
+    child = attached_entry(parent_order_id, entries)
+    if child is None:
+        # Logged at ERROR by the method itself; never report this as success.
+        print(f"IBKR's response does not report a child attached to {parent_order_id}: {entries}")
+```
+
+A second child — a profit taker on the same parent — is a second call: one child per write,
+one Touch ID per write, as IBKR documents the sequential form.
+
+## Time in force — what IBKR accepts, where it says so, and what this package does with it
+
+Read from IBKR's own pages and from its contract rules on 2026-09-24 (read-only), for
+claudia_ui gap #70. **The values come from three places, and the three do not agree** — so no
+single list here is "the" list, and the authority for one order is that contract's own rules.
+
+**1. Where IBKR states TIF values**
+
+| Where | Values | Source |
+|---|---|---|
+| The order body's `tif` — "Time in force of the order ticket", an enum, required | `DAY`, `IOC`, `GTC`, `OPG`, `PAX` (on `PAX`, see below) | [submit-new-order](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order); the same five on [get-order-status](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/get-order-status) and in IBKR's OpenAPI document (v2.40.0) |
+| Overnight orders — "submitting the affiliated Time-In-Force value" | `OVT` (Overnight), `OND` (Overnight + DAY) | [overnight-order-submission](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/orders/overnight-order-submission). **Not in the enum above** |
+| Per contract — `POST /iserver/contract/rules`, `tifTypes`: "Indicates allowed tif types supported for the contract" | Whatever that contract accepts — measured below. Includes `GTD`, **which is in neither list above** | [search-contract-rules](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/contract/search-contract-rules) |
+
+**2. What two contracts return** — `tifTypes`, both sides identical, 2026-09-24:
+
+| TIF | F — a US stock (conid 9599491) | ES Dec-26 — a CME future (conid 515416632) |
+|---|---|---|
+| `DAY` | ✅ | ✅ |
+| `GTC` | ✅ | ✅ |
+| `IOC` | ✅ | ✅ |
+| `GTD` | ✅ | ✅ |
+| `OPG` | ✅ `OPG/LIMIT,MARKET,a` | — |
+| `OVT` | ✅ `OVT/o,a,LIMIT` | — |
+| `OND` | ✅ `OND/o,a,LIMIT` | — |
+
+Each entry is the TIF, a slash, and a list (`"GTC/o,a"`, `"OND/o,a,LIMIT"`). IBKR's page does
+not define the list; in the measured values it names order types and the letters `o` and `a`.
+**Two contracts are two measurements, not a rule per asset class** — read the rules of the
+contract in hand: `client.get_contract_rules(conid, is_buy)["tifTypes"]`.
+
+**3. Reading a TIF back**
+
+| Endpoint | Field | What it returned for a DAY order |
+|---|---|---|
+| `/iserver/account/order/status/{id}` | `tif` — "Returns the time in force of the order." | `DAY` |
+| `/iserver/account/orders` | `timeInForce` — "Returns the time in force (tif) of the order." | **`CLOSE`** — a stock and a future alike; `GTC` orders read `GTC`. `CLOSE` is in none of the lists above and does **not** mean a closing-auction order (`docs/ibkr-api-behaviors-reference.md`) |
+| same | `orderDesc` | IBKR's own sentence, which states it: `Buy 1 F Limit 5.10, Day` |
+
+**4. What this package does**
+
+| Surface | Behaviour |
+|---|---|
+| `place_order`, `modify_order` and their `_and_confirm` forms | Send the body's `tif` **exactly as given**. No list is applied and no default is added: a value IBKR does not accept is answered by IBKR. |
+| Gate 2 dialog | Shows the `tif` being sent; a body with none shows `— (not sent)`, never `DAY`. |
+| `get_contract_rules` | Returns the contract's `tifTypes` (typed as `tif_types`), entries as IBKR sends them. **No `ClaudeToolkit` tool exposes it.** |
+| `preview_order` (tool) | Offers `DAY`, `GTC`, `IOC`, `OPG` — four of the enum's five, and exactly the four IBKR's own reference defines (the `PAX` table below). `PAX`, `GTD`, `OVT` and `OND` cannot be previewed through it, although a contract's rules may accept the last three. Left out, the preview is for `DAY` and says so. It does not read the contract's rules: `OPG` on a contract that does not list it is answered by IBKR's preview, not refused here. |
+| `get_live_orders` (tool) | Quotes `orderDesc`; never prints the row's `timeInForce` as the TIF. |
+| `get_order_status` (tool) | Returns the status endpoint's `tif`. |
+| Price alerts | A different vocabulary: `GTC` or `GTD` only — IBKR documents no `DAY` for an alert (`docs/tools-reference.md`, `create_price_alert`). |
+
+**5. Auction orders — the close is an order type, the open is a TIF**
+
+| Order | Body, per IBKR's order-type pages | Here |
+|---|---|---|
+| Market-on-open | `orderType: "MKT"`, `tif: "OPG"` ([MOO](https://www.interactivebrokers.com/docs/general/order-types/market-orders/market-on-open)) | Expressible; `preview_order` takes it |
+| Limit-on-open | `orderType: "LMT"` + `price`, `tif: "OPG"` ([LOO](https://www.interactivebrokers.com/docs/general/order-types/basic-orders/limit-orders/limit-on-open)) | Expressible; `preview_order` takes it |
+| Market-on-close | `orderType: "MOC"`, `tif: "DAY"` ([MOC](https://www.interactivebrokers.com/docs/general/order-types/market-orders/market-on-close)) | The client sends a body as given; `preview_order` does not offer `MOC` |
+| Limit-on-close | `orderType: "LOC"` + `price` ([LOC](https://www.interactivebrokers.com/docs/general/order-types/basic-orders/limit-orders/limit-on-close)) | Same; `preview_order` does not offer `LOC` |
+
+`MOC` and `LOC` are **documented for the Web API on those pages and absent from the OpenAPI
+`orderType` enum** (`MKT`, `LMT`, `STP`, `STOP_LIMIT`, `MIDPRICE`, `TRAIL`, `TRAILLMT`). F's
+rules list them (`marketonclose`, `limitonclose` in `orderTypes`); ES's rules list neither,
+although IBKR's MOC page names FUT among its products.
+
+**`PAX` — listed by IBKR, defined by IBKR nowhere found.** Researched 2026-10-05 at the
+operator's question ("what is it?"):
+
+| Where it was looked for | What is there |
+|---|---|
+| IBKR's OpenAPI document (v2.40.0) | `PAX` is the fifth value of the `tif` enum of the order ticket (`singleOrderSubmissionRequest` — submit and modify) and of `orderStatus`. The description is "Time in force of the order ticket."; no value is described. A third order endpoint in the same document, *Submit New Model Portfolio Order*, lists four: `DAY`, `GTC`, `OPG`, `IOC` |
+| [submit-new-order](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/submit-new-order), [get-order-status](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-orders/get-order-status) | "Allowed values: `DAY`, `IOC`, `GTC`, `OPG`, `PAX`" — the list, no definitions |
+| IBKR's legacy Client Portal Web API reference (v1.0.0, https://www.interactivebrokers.com/api/doc.json) | Defines four and has no `PAX`: "GTC - use Good-Till-Cancel for orders to remain active until it executes or cancelled. OPG - use Open-Price-Guarantee for Limit-On-Open (LOO) or Market-On-Open (MOO) orders. DAY - if not executed a Day order will automatically cancel at the end of the markets regular trading hours. IOC - any portion of an Immediate-or-Cancel order that is not filled as soon as it becomes available in the market is cancelled." |
+| IBKR Campus Web API pages ([trading](https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-trading/), [documentation](https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-doc/)) | No `PAX` |
+| [TWS API order reference](https://interactivebrokers.github.io/tws-api/classIBApi_1_1Order.html) | `DAY`, `GTC`, `IOC`, `GTD`, `OPG`, `FOK`, `DTC` — no `PAX` |
+| Contract rules, measured (part 2) | Neither F's nor ES's `tifTypes` lists `PAX` |
+| IBKR's [Cryptocurrency Trading](https://www.interactivebrokers.com/docs/general/order-types/notes-limitations/cryptocurrency-trading) page | In the pages read, the letters occur otherwise only in **PAXOS**, one of the two venues IBKR's cryptocurrency orders are routed to. That page lists the times in force of a cryptocurrency order — `DAY`, `GTC`, `IOC` for a limit order, `IOC` only for a market order, "Minutes" on the TWS API — and `PAX` is not among them |
+
+So: **what `PAX` does is not established.** That it belongs to orders routed to PAXOS is a
+guess from the name, which IBKR's own cryptocurrency page does not support, and it is not
+stated here as more than that. What is established is narrower and enough to act on: the
+stock and the future measured do not accept it. **This package** sends a body's `tif` as
+given, so a caller can send `PAX`; `preview_order` does not offer it — a tool that offered it
+would be naming a time in force nobody here can describe, for contracts whose rules do not
+list it. **Decided 2026-10-05 (operator): not added** — the four values offered are the four IBKR
+defines, and `PAX` is looked at again only if cryptocurrency ever comes into scope. One read-only
+call would settle where it applies: the contract rules of a contract that lists `PAX` in `tifTypes`.
+
+**Not established** — stated rather than guessed:
+
+- What `PAX` is (above).
+- What `o` and `a` mean in a `tifTypes` entry.
+- Whether the gateway accepts `MOC` / `LOC` on place (never sent; a `whatif` would settle it
+  without a write).
+- How a `GTD` order's expiry is given: contract rules return `GTD`, and neither of IBKR's two
+  place-order pages (`v1/endpoints/orders/place-order`, `api-reference/…/submit-new-order`)
+  mentions the value or a field for its date.
+- When an Overnight + Day order ends. IBKR's
+  [lesson](https://www.interactivebrokers.com/campus/trading-lessons/overnight-trading-using-limit-order/)
+  says of "Overnight + Day": "stay active until either filled or 4pm the next day"; its
+  [overnight page](https://www.interactivebrokers.com/en/trading/us-overnight-trading.php)
+  says "the SMART + OVERNIGHT order type keeps your orders working from the overnight session
+  through 8:00 PM the next day". Whether those describe the same order is not stated either.
+
+Evidence: scrapes and read-only captures of 2026-09-24 in
+`claudia_ui/.firecrawl/order-tif/` (git-ignored; `SOURCES.md` indexes them); the `CLOSE`
+readings are dated in `docs/ibkr-api-behaviors-reference.md`.
+
 **IBKR order constraints:**
 - Trade history via API limited to last 7 days (current + 6 previous) — `SQLiteStore` persists indefinitely
-- Orders require `conid` — resolve via `client.search_contract(symbol)`
+- Orders require `conid` — for a stock, resolve it through `client.get_stocks` and its `isUS`
+  flag, as in Setup. Never take the first match of `client.search_contract(symbol)`: its order is
+  undocumented and it carries neither `isUS` nor a currency (`docs/symbology-reference.md` § 2)

@@ -26,6 +26,7 @@ import defusedxml.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ibkr_core_mcp.flex_dataset import open_read_only
 from ibkr_core_mcp.flex_import import STATEMENT_CODES, parse_notes
 from ibkr_core_mcp.flex_schema import ELEMENTS
 from ibkr_core_mcp.flex_store import table_columns
@@ -217,8 +218,7 @@ def source_truth(src: Path) -> dict[str, Any]:
 
 def run_gate(db_path: Path, src: Path) -> int:
     """Run every check against db_path. Returns 1 if any failed, else 0."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = open_read_only(db_path)  # read-only, rows by name; safe on any path
     q = conn.execute
     truth = source_truth(src)
     gate = Gate(expected=EXPECTED_CHECKS, families=FAMILY_CHECKS)

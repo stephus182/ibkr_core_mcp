@@ -102,7 +102,78 @@ from every surface — so the warning cannot outlive the block.
 
 ---
 
-<a id="run-2026-09-21-1"></a>
+<a id="run-2026-11-12-2"></a>
+## Run: 2026-11-12 (second) — IBKR's cancel-all order id `-1`: refused here before any gate, and IBKR's claim measured true (register F51)
+
+| Field | Value |
+|---|---|
+| Purpose | IBKR's Cancel Order page: "Submitting '-1' will cancel all open orders". Check that `cancel_order` refuses that id on the real code path, against a live session, before any gate. |
+| Branch | `release/2.2.0` at `db4dc25` plus the uncommitted F51 test; pre-flight `[OK] Session is LIVE` before the run |
+| Method | Scripted, not a pytest run, in two parts. **C1–C3:** the order book read, `cancel_order(account, "-1")` and `cancel_order(account, -1)` with `manual_indicator=True`, the book read again. Gate 1, Gate 2 and the session's `delete`/`post` were patched to raise if reached, so no fingerprint, dialog or write was possible even had the validator failed. **C4–C6, on the operator's word ("I give you a green light to test it"):** IBKR's own claim. The script aborted before any gate unless the working orders were exactly the pinned test orders, then ran Touch ID, then the core's cancel dialog, then ONE raw `DELETE …/order/-1` sent around this package's guard, with no retry. |
+| Cost | **Zero.** C1–C3 attempted no write. C4–C6 cancelled three test orders the operator had placed far from the market (7–51 % below the last price); nothing filled. |
+
+| # | Question | Result |
+|---|---|---|
+| C1 | Is `"-1"` refused before any gate? | **YES.** `ConfigError`: "Invalid order_id/alert_id '-1': must be a non-negative integer." |
+| C2 | Is the integer `-1` refused the same way? | **YES.** The same `ConfigError`. |
+| C3 | Was any gate or write reached, and did the book change? | **No gate, no write.** The order book read identically before and after. |
+| C4 | (Set-up) The operator had also placed a CME future, out of scope. Cancelled first through `cancel_order` with `manual_indicator=True`? | **YES.** `{"msg": "Request was submitted", "order_id": <int>, "conid": -1, "account": null}`, read back `Cancelled`. That left exactly two working orders, both stocks: one placed through this package, one placed on IBKR Mobile. |
+| C5 | Does IBKR accept `DELETE …/order/-1`? | **YES.** HTTP 200, `{"msg": "Request was submitted", "order_id": null, "conid": -1, "account": null}`. Note `order_id` `null`, not `-1`. |
+| C6 | Does it cancel **every** open order, whoever placed it? | **YES.** Three seconds later both orders read `Cancelled`, each with `cannot_cancel_order` / `order_not_editable` `true`. The other three rows (all already `Cancelled`) were unchanged and no row appeared. A second read of the book 48 s later, a separate process through the same API, agreed: no working order. |
+
+**So IBKR's page is right:** `-1` cancels every open order on the account, across origins, in one request.
+That is what the guard keeps out. The unit test that pins it,
+`test_cancel_order_refuses_ibkrs_cancel_all_id_before_any_gate`, is red against a rule loosened to admit a
+sign in the code and SECURITY.md's quote together, a change the rest of the suite passed (2,723 passed,
+2026-11-12). Not tested: `-1` with a futures order working, which would need the CME tag.
+
+**Witnessed out of band the same day.** Every read above went through the IBKR API, the system under test.
+The operator then closed the gateway and looked at IBKR Mobile's order list at 13:44 EST (screenshots
+of the Orders panel on each instrument's quote page, kept outside this repository; no account number
+on them). The cancel-all's two orders ("Buy 100 F Limit 10.00, GTC" and "Buy 1 AAPL Limit 175.00, GTC") and C4's
+future ("Buy 1 ES Dec18'26 Limit 7100.00, GTC") each show Mobile's red ✕ status mark and "Filled: -- @ --":
+not working, never filled. The panel does not print the word "Cancelled"; the ✕ is read as Mobile's
+cancelled mark, and it agrees with the API's `Cancelled` on every order.
+
+---
+
+<a id="run-2026-11-12-1"></a>
+## Run: 2026-11-12 — orders placed on IBKR Mobile, modified and cancelled through the API (register F47)
+
+| Field | Value |
+|---|---|
+| Purpose | Test a claim the `get_live_orders` description had made since 2026-06-25 with no source and no measurement: "orders placed via mobile or TWS CANNOT be modified or cancelled by the API". |
+| Branch | `release/2.2.0` at `511111e`; the gateway logged in through `python -m ibkr_core_mcp.gateway up`, pre-flight `[OK] Session is LIVE` before the first read |
+| Method | Scripted, not a pytest run. A read-only probe (`get_orders_raw`, `get_order_status`) ran before the first write and after each one. The four writes were run by the operator from a Terminal, through `modify_order_and_confirm` and `cancel_order`, each behind Touch ID and Gate 2. The scripts are in claudia_ui's local probe folder. |
+| Cost | **Zero.** Two orders placed by the operator on IBKR Mobile, a stock limit (F) and a CME future limit (ES), both GTC buys about 17 % and 8 % below the last price read just before. Nothing filled; both ended `Cancelled`. A third, pre-existing working order, placed through this package, was left untouched by the writes and moved later on IBKR Mobile by the operator (O6). |
+
+**No order ids, account number or balances below — this repository is public.**
+
+| # | Question | Result |
+|---|---|---|
+| O1 | Does IBKR accept a **modify** of a FUT order placed on IBKR Mobile? | **YES.** The limit moved further from the market; `PreSubmitted`, then read back at the new limit. The **modify reply chain ran live for the first time**: IBKR's Total Value Limit precaution was shown in its own dialog, confirmed, and resolved under the one Touch ID. |
+| O2 | A **cancel** of that FUT order, with `manualIndicator=true`? | **YES.** "Request was submitted", read back `Cancelled`. |
+| O3 | A **modify** of a STK order placed on IBKR Mobile? | **YES.** Read back at the new limit; no precaution. |
+| O4 | A **cancel** of that STK order? | **YES.** Read back `Cancelled`. |
+| O5 | What do the origin fields read? | `clientId` **absent** on every row, this package's own included; `order_ref` absent on the Mobile orders. `cannot_cancel_order` / `order_not_editable` read `false` while working and `true` once cancelled. |
+| O6 | The reverse: does an order placed **through this package** keep its reference when it is modified **on IBKR Mobile**? | **YES.** Later the same day, with the gateway stopped, the operator moved the third order's limit on IBKR Mobile (a stock buy, GTC). After the next login, read back through the API at `db4dc25`: the same order id, the new limit, `order_ref` still `CLAUDIA-…`, `_own_origin` → `ClaudIA-staged`, both flags `false`; the limit 51 % below the last price. |
+
+**What it changed:**
+- **The claim was false, and it is gone.** The description now sends the model to
+  `get_order_status`'s two flags; the external label no longer says "read-only via API"; two
+  `clientId` notes and the modify-reply docstring are corrected. Two tests pin it, each red against
+  the old text. `docs/ibkr-api-behaviors-reference.md` § An order placed on IBKR Mobile can be
+  modified and cancelled through this API.
+- **Witnessed out of band the same day:** IBKR Mobile's order list at 13:44 EST (the operator's
+  screenshots, kept outside this repository; no account number on them). It shows
+  "Buy 1 ES Dec18'26 Limit 6990.00, GTC" and "Buy 1 F Limit 9.90, GTC", each with Mobile's red ✕ status mark and "Filled: -- @ --". **Both orders
+  carry the limit the API modify set**, not the one placed on the phone, so the modifies landed at IBKR,
+  and neither order is working. The word "Cancelled" is not printed on that panel; the ✕ is read as
+  Mobile's cancelled mark, agreeing with the API's `Cancelled`.
+- **Not covered:** an order placed in TWS.
+
+---
+
 ## Run: 2026-09-22 (second) — the four remaining gaps, at zero cost
 
 | Field | Value |
@@ -194,6 +265,7 @@ boolean. Retention on a working order remains open.
 
 ---
 
+<a id="run-2026-09-21-1"></a>
 ## Run: 2026-09-21 — full suite before the `2.1.0` bracket release; `get_bracket_preview` live-proven for the first time
 
 | Field | Value |
@@ -830,3 +902,43 @@ Gateway as published. Evidence and the full elimination table:
 `docs/ibkr-api-behaviors-reference.md` § Price alerts. The entries above are left as
 written, because they record what was observed on their dates.
 
+## Run: 2026-10-18 — attach a child to a working order, through the seam (claudia_ui #36)
+
+**Branch:** `release/2.2.0` (A1–A4 at `e4c2549`, the live fixes uncommitted at the time of the run).
+**Gateway:** the operator's, logged in by the operator; preflight `FREE` before, `LIVE` after.
+**Instrument:** Ford (conid 9599491, SMART, USD), a Saturday — the market closed, every order
+PreSubmitted, prices at 60 % and 150 % of the last so nothing could fill. **Account and order
+ids are not reproduced here** (public repository); the operator's record is in claudia_ui's
+git-ignored probe folder `docs/plans/probes/2026-10-17-bracket-live/`.
+
+### Results
+
+| Step | Result |
+|---|---|
+| `place_order_and_confirm`, a BUY 1 LMT parent | PASS — one Touch ID, the single-order dialog, one precaution reply confirmed through its dialog |
+| `attach_order_and_confirm`, a SELL STP child | PASS — one Touch ID, the bracket dialog with `Parent — At IBKR: order … · PreSubmitted · 0 attached`, one precaution reply; the response carried `parent_order_id`; `attached_entry` found it |
+| a second child (SELL LMT), then on the second parent a third (SELL STP) | PASS — `1 attached`, then `2 attached` on the dialog; the parent's `children_order_ids` read `id;id;id` |
+| the raw live-orders feed | each child's row carries `parentId` (int) and `ocaGroupId` (int) equal to the parent's `orderId`; the parent's row carries neither, and `order_ref` only |
+| each child's status | `parent_order_id` = `oca_group_id` = the parent's id, `oca_group_type` ReduceOnFillNonBlock, side `S`, the parent's TIF as a literal, `total_size` `"1.0"` |
+| PROBE: two children in ONE request, posted directly (the one gate bypass of the session, on the operator's word) | accepted as a shape up to a precaution reply ("Confirm Mandatory Cap Price"), deliberately left unanswered; the parent then counted four children. Conditional on the closed market |
+| `cancel_order` on the parent, twice (two parents) | PASS — the cancel dialog's `⚠ Attached orders` row red bold; the parent `Cancelled`, `children_order_ids` empty; the first parent's children lingered as `Inactive` feed rows still carrying `parentId`, the second parent's were gone within 3 s |
+| `confirm_bracket_dialog` from the shell, a 2-lot parent, no client | the `⚠ Partial fill` row red bold; nothing connected |
+
+### Found and fixed the same day (test-first, mutations red)
+
+1. `children_order_ids` is **semicolon**-separated; a comma split counted two children as one
+   (`_children_count`, `docs/ibkr-api-behaviors-reference.md`).
+2. The attach write's authorization label named the PARENT, so the reply dialogs of a SELL stop
+   were titled `BUY 1 F`; it now names the child it sends, `SELL 1 F (attached to order …)`.
+3. The reused bracket dialog said the parent "is sent to Interactive Brokers now" under the
+   parent's banner; on an attach it is now titled ATTACHED ORDER, its banner and Action row the
+   child's side, its disclaimer saying the parent is already working. The parent's rows carry the
+   company name and currency the status read reports.
+
+### Open
+
+- The unanswered precaution reply of the probe (two orders that no longer exist): declined later the
+  same day through the gated `reply_order(…, ibkr_confirmed=False)` — IBKR answered HTTP 503, the
+  documented fate of a reply left unanswered once another request has been made. Nothing pending.
+- A child's lingering as `Inactive` after the parent cancel was seen once and not seen once;
+  the cause was not established.

@@ -178,6 +178,26 @@ def test_run_backtest_syntax_error_detail_reaches_llm(toolkit):
     assert "line" in text.lower()  # position detail present
 
 
+def test_run_backtest_import_refusal_reaches_llm_whole(toolkit):
+    """A real backtest began `import numpy as np` (July 2026), and the model was told
+    `ImportError: __import__ not found`. It must be told what to do instead, in full."""
+    toolkit._cache.check.return_value = True
+    toolkit._cache.load.return_value = _ohlcv_df()
+    text, _ = toolkit.execute(
+        "run_backtest",
+        {
+            "symbol": "AAPL",
+            "timeframe": "1D",
+            "period": "6M",
+            "end": "2026-07-01",
+            "code": "import numpy as np\ndf['signal'] = 0",
+        },
+    )
+    assert text.startswith("Backtest failed: ")
+    assert "Line 1: import statements are not available to strategy code; pd and np are already provided." in text
+    assert "__import__" not in text
+
+
 def test_run_backtest_missing_signal_shows_contract(toolkit):
     toolkit._cache.check.return_value = True
     toolkit._cache.load.return_value = _ohlcv_df()

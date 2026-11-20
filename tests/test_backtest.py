@@ -180,12 +180,16 @@ def test_sandbox_cannot_mutate_shared_pd_namespace(ohlcv):
 
 
 def test_sandbox_cannot_import_os(ohlcv):
-    """import os is transformed by RestrictedPython but __import__ is not in sandbox namespace."""
+    """`import os` is refused before the strategy is compiled, in a sentence (2026-11-17).
+
+    Until then it compiled and failed when it ran, with CPython's `__import__ not found`.
+    That refusal is still underneath: the sandbox's builtins hold no `__import__`.
+    `tests/security/test_sandbox_cold_path.py` holds both."""
     from ibkr_core_mcp.backtest import run_backtest
-    from ibkr_core_mcp.exceptions import BacktestRuntimeError
+    from ibkr_core_mcp.exceptions import BacktestSyntaxError
 
     code = "import os\ndf['signal'] = 0"
-    with pytest.raises(BacktestRuntimeError, match="__import__"):
+    with pytest.raises(BacktestSyntaxError, match="Line 1: import statements are not available"):
         run_backtest(code, ohlcv)
 
 

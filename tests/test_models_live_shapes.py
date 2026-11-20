@@ -491,7 +491,26 @@ def test_contract_rules_keeps_ibkr_enum_ints_and_string_lists(live):
     assert rules.size_increment == raw["sizeIncrement"]
     assert rules.algo_eligible is raw["algoEligible"]
     assert rules.error == "", "a null error must read as empty, not None"
+    # The per-contract fractional rule (register F27; claudia_ui #18): IBKR's "permitted order types
+    # for use with fractional trading" and "decimal places for fractional order size" (archived
+    # reference, docs/audits/audit-evidence/scrapes/cpapi-v1.md). Measured 2026-09-28: EUR.USD and
+    # EUR.CHF carry all nine order types and 2 decimals, CHF.USD `[]` and 0 — per contract, not per
+    # asset class. Until 2026-11-07 neither had a typed field (the raw mapping served them).
+    assert rules.fractional_order_types == raw["fraqTypes"]
+    assert rules.fractional_digits == raw["fraqInt"]
     assert dict(rules) == raw
+
+
+def test_contract_rules_without_the_fractional_fields_read_as_no_fractions(live):
+    """A reply that omits `fraqTypes` / `fraqInt` fails closed: no order type permits a fraction
+    and zero decimals are allowed — the reading CHF.USD gives explicitly (measured 2026-09-28)."""
+    from ibkr_core_mcp.models import ContractRules
+
+    raw = {k: v for k, v in _first(live, "contract_rules").items() if k not in ("fraqTypes", "fraqInt")}
+    rules = ContractRules.model_validate(raw)
+
+    assert rules.fractional_order_types == []
+    assert rules.fractional_digits == 0
 
 
 def test_future_contract_validates_a_real_future(live):

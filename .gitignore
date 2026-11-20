@@ -57,3 +57,9 @@ docs/plans/
 # Firecrawl CLI scratch output — search caches, not evidence. Committed evidence
 # belongs under docs/audits/audit-evidence/.
 .firecrawl/
+
+# The operator's MCP security checklist as a spreadsheet — its text lives in
+# docs/audits/mcp-security-checklist-2026-11-09.md (appendix); the file itself, and the
+# lock file an office suite leaves beside it, stay out (operator, 2026-11-11).
+security/*.xlsx
+security/.~lock.*

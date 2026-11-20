@@ -5,6 +5,21 @@
 # Enabled per clone by `git config core.hooksPath .githooks` (Dev Setup, CLAUDE.md).
 # Bypass for a deliberate push of red work: `git push --no-verify`.
 set -u
+# The environment must not change what the gates check (register F59): pytest prepends
+# PYTEST_ADDOPTS to its command line, loads PYTEST_PLUGINS and honours PYTEST_DISABLE_PLUGIN_AUTOLOAD,
+# so a value left in a shell could narrow the run, switch the suite's guards off, or (`--help`) make
+# pytest collect nothing and exit 0, and this hook would still print green. Refused here, before any
+# gate, where no pytest option reaches. Each value is read as the shell holds it: no external
+# command, and no command substitution, which would drop a value made only of newlines.
+refuse_if_set() {
+    if [ -n "$2" ]; then
+        echo "pre-push: $1 is set in the environment, and would change what the gates check — push refused. Unset it." >&2
+        exit 1
+    fi
+}
+refuse_if_set PYTEST_ADDOPTS "${PYTEST_ADDOPTS-}"
+refuse_if_set PYTEST_PLUGINS "${PYTEST_PLUGINS-}"
+refuse_if_set PYTEST_DISABLE_PLUGIN_AUTOLOAD "${PYTEST_DISABLE_PLUGIN_AUTOLOAD-}"
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 venv="$root/.venv/bin"

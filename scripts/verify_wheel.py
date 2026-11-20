@@ -63,6 +63,8 @@ DATA_FILES: tuple[str, ...] = (
     "gateway/conf.yaml",  # COPY'd by the Dockerfile
     "gateway/run_gateway.sh",  # COPY'd by the Dockerfile; the container's ENTRYPOINT
     "gateway/healthcheck.sh",  # COPY'd by the Dockerfile
+    "assets/exchange-icon.png",  # the Gate 2 dialog's default icon (_order_dialog._DEFAULT_ICON, read at click time)
+    "assets/exchange-icon.svg",  # its vector source, kept beside it for a Windows .ico
 )
 _MAY_BE_EMPTY = frozenset({"py.typed"})
 
